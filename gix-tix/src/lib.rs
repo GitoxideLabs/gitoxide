@@ -916,7 +916,7 @@ fn event_loop(
     app.set_worktree_head_unborn(worktree_head_unborn);
     app.commit_pane_background = commit_pane_background;
     if recovered_at_startup {
-        app.leave_message("worktree removed; using the common repository without worktree changes");
+        app.leave_attention("worktree removed; using the common repository without worktree changes");
     }
     let mut lane_receiver = None;
     let mut refresh_receiver: Option<mpsc::Receiver<(RefreshKind, HistoryGraph, Result<history::Refresh>)>> = None;
@@ -1030,7 +1030,7 @@ fn event_loop(
                 }
             };
             ref_watch_set_changed = false;
-            app.leave_message("worktree removed; using the common repository without worktree changes");
+            app.leave_attention("worktree removed; using the common repository without worktree changes");
             if history_graph.is_some() {
                 refresh_pending = true;
                 refresh_from_filesystem = true;
@@ -1593,7 +1593,7 @@ fn event_loop(
                             Ok(pins) if !pins.is_empty() => {
                                 app.select_commit_after_refresh(pins[0].id);
                                 return_to_history_after_refresh = Some(pins[0].id);
-                                app.leave_message(if pins.len() == 1 {
+                                app.leave_success(if pins.len() == 1 {
                                     "pinned selected reference".into()
                                 } else {
                                     format!("pinned {} selected references", pins.len())
@@ -1601,8 +1601,10 @@ fn event_loop(
                                 refresh_pending = true;
                                 refresh_expand_hidden = true;
                             }
-                            Ok(_) => ref_tree.leave_message("selected references changed before they could be pinned"),
-                            Err(err) => ref_tree.leave_message(format!("pin selected references: {err:#}")),
+                            Ok(_) => {
+                                ref_tree.leave_attention("selected references changed before they could be pinned");
+                            }
+                            Err(err) => ref_tree.leave_error(format!("pin selected references: {err:#}")),
                         }
                         dirty = true;
                         urgent = true;
@@ -1613,7 +1615,7 @@ fn event_loop(
                             Ok(repository) => {
                                 ref_tree.set_remote_deletions(ref_tree::resolve_remote_deletions(&repository, names));
                             }
-                            Err(err) => ref_tree.leave_message(format!("remote edit: {err:#}")),
+                            Err(err) => ref_tree.leave_error(format!("remote edit: {err:#}")),
                         }
                         dirty = true;
                         urgent = true;
@@ -1635,19 +1637,23 @@ fn event_loop(
                         match open_repository(&repository_path, repository_is_bare, false) {
                             Ok(mut repository) => match repository.delete_local_branches(names) {
                                 Ok(()) => {
-                                    ref_tree.leave_message(format!("deleted {label}"));
+                                    ref_tree.leave_success(format!("deleted {label}"));
                                     deleted = true;
                                     refresh_pending = true;
                                 }
                                 Err(err) => {
                                     let changed =
                                         matches!(&err, gix::repository::branch::delete::Error::Cleanup { .. });
-                                    ref_tree.leave_message(format!("delete {label}: {err}"));
+                                    if changed {
+                                        ref_tree.leave_attention(format!("delete {label}: {err}"));
+                                    } else {
+                                        ref_tree.leave_error(format!("delete {label}: {err}"));
+                                    }
                                     deleted = changed;
                                     refresh_pending |= changed;
                                 }
                             },
-                            Err(err) => ref_tree.leave_message(format!("delete {label}: {err:#}")),
+                            Err(err) => ref_tree.leave_error(format!("delete {label}: {err:#}")),
                         }
                         if deleted {
                             ref_tree.select_after_reference_deletion(fallback);
@@ -1670,15 +1676,16 @@ fn event_loop(
                                     outcome.deleted,
                                     if outcome.deleted == 1 { "" } else { "s" }
                                 );
-                                ref_tree.leave_message(if outcome.failures.is_empty() {
-                                    deleted
+                                if outcome.failures.is_empty() {
+                                    ref_tree.leave_success(deleted);
                                 } else if outcome.deleted == 0 {
-                                    format!("delete on remote: {}", outcome.failures.join("; "))
+                                    ref_tree.leave_error(format!("delete on remote: {}", outcome.failures.join("; ")));
                                 } else {
-                                    format!("{deleted}; failed: {}", outcome.failures.join("; "))
-                                });
+                                    ref_tree
+                                        .leave_attention(format!("{deleted}; failed: {}", outcome.failures.join("; ")));
+                                }
                             }
-                            Err(err) => ref_tree.leave_message(format!("delete on remote: {err:#}")),
+                            Err(err) => ref_tree.leave_error(format!("delete on remote: {err:#}")),
                         }
                         dirty = true;
                         urgent = true;
@@ -1815,13 +1822,13 @@ fn event_loop(
                     Ok((notice, id)) => {
                         tracing::info!(commit_id = %original, rewritten_id = %id, "accepted suspended rebase conflict");
                         app.begin_conflict_resolution();
-                        app.leave_message(notice);
+                        app.leave_attention(notice);
                         app.select_commit_after_refresh(id);
                     }
                     Err(err) => {
                         tracing::warn!(commit_id = %original, error = %err, "suspended rebase conflict checkout failed");
                         app.clear_rebase_conflict();
-                        app.leave_message(format!("conflict checkout: {err:#}"));
+                        app.leave_error(format!("conflict checkout: {err:#}"));
                     }
                 }
                 sync_line_diff_pool(
@@ -1872,12 +1879,12 @@ fn event_loop(
                         pending_todo_rebase_plan = Some(plan);
                         app.begin_conflict_resolution();
                         app.arm_rebase_continuation();
-                        app.leave_message(format!("{notice}; resolve the index, then press <enter>"));
+                        app.leave_attention(format!("{notice}; resolve the index, then press <enter>"));
                         app.select_commit_after_refresh(id);
                     }
                     Err(err) => {
                         app.clear_rebase_conflict();
-                        app.leave_message(format!("conflict checkout: {err:#}"));
+                        app.leave_error(format!("conflict checkout: {err:#}"));
                     }
                 }
                 invalidate_worktree_changes(&mut worktree_changes);
@@ -1902,7 +1909,7 @@ fn event_loop(
         {
             drop(pending_todo_rebase_plan.take());
             app.clear_rebase_continuation();
-            app.leave_message("stopped rebase continuation; the partially applied repository remains unchanged");
+            app.leave_attention("stopped rebase continuation; the partially applied repository remains unchanged");
             tracing::info!("stopped materialized rebase continuation without rolling back repository state");
             dirty = true;
             urgent = true;
@@ -1941,11 +1948,10 @@ fn event_loop(
                     app.clear_rebase_conflict();
                     app.clear_rebase_continuation();
                     app.set_worktree_conflicted(false);
-                    app.leave_message(
-                        notice
-                            .unwrap_or_else(|err| Some(format!("rebase applied, checkout failed: {err:#}")))
-                            .unwrap_or_else(|| "rebased history".into()),
-                    );
+                    match notice {
+                        Ok(notice) => app.leave_success(notice.unwrap_or_else(|| "rebased history".into())),
+                        Err(err) => app.leave_attention(format!("rebase applied, checkout failed: {err:#}")),
+                    }
                     refresh_pending = true;
                 }
                 Ok(edit::rebase::PlanPerform::Conflict(conflict)) => {
@@ -1963,7 +1969,7 @@ fn event_loop(
                 }
                 Err(err) => {
                     pending_todo_rebase_plan = Some(plan);
-                    app.leave_message(format!("continue rebase: {err:#}"));
+                    app.leave_error(format!("continue rebase: {err:#}"));
                 }
             }
             invalidate_worktree_changes(&mut worktree_changes);
@@ -2109,7 +2115,7 @@ fn event_loop(
                         .and_then(|diff| show_commit_diff(terminal, diff, enhanced_keyboard));
                     match result {
                         Ok(true) => app.focus_history(),
-                        Err(err) => app.leave_message(format!("diff: {err:#}")),
+                        Err(err) => app.leave_error(format!("diff: {err:#}")),
                         Ok(false) => {}
                     }
                 }
@@ -2129,7 +2135,7 @@ fn event_loop(
                         });
                     match result {
                         Ok(Some(new_id)) => {
-                            app.leave_message(format!(
+                            app.leave_success(format!(
                                 "reworded {} as {}",
                                 id.to_hex_with_len(7),
                                 new_id.to_hex_with_len(7)
@@ -2138,7 +2144,7 @@ fn event_loop(
                             refresh_pending = true;
                         }
                         Ok(None) => {}
-                        Err(err) => app.leave_message(format!("reword: {err:#}")),
+                        Err(err) => app.leave_error(format!("reword: {err:#}")),
                     }
                 }
                 Effect::NewCommit { parent, empty } => {
@@ -2162,12 +2168,12 @@ fn event_loop(
                         });
                     match result {
                         Ok(Some(new_id)) => {
-                            app.leave_message(format!("created {}", new_id.to_hex_with_len(7)));
+                            app.leave_success(format!("created {}", new_id.to_hex_with_len(7)));
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
-                        Ok(None) => app.leave_message("no commit created: no input was provided"),
-                        Err(err) => app.leave_message(format!("new commit: {err:#}")),
+                        Ok(None) => app.leave_attention("no commit created: no input was provided"),
+                        Err(err) => app.leave_error(format!("new commit: {err:#}")),
                     }
                 }
                 Effect::ForkCommit(parent) => {
@@ -2207,7 +2213,7 @@ fn event_loop(
                                 });
                             match travel {
                                 Ok(edit::time_travel::Perform::Complete(notice)) => {
-                                    app.leave_message(notice.map_or_else(
+                                    app.leave_success(notice.map_or_else(
                                         || format!("created fork {}", new_id.to_hex_with_len(7)),
                                         |notice| format!("created fork {}; {notice}", new_id.to_hex_with_len(7)),
                                     ));
@@ -2222,7 +2228,7 @@ fn event_loop(
                                     pending_rebase_conflict = Some(conflict);
                                 }
                                 Err(err) => {
-                                    app.leave_message(format!(
+                                    app.leave_attention(format!(
                                         "created fork {}, but checkout failed: {err:#}",
                                         new_id.to_hex_with_len(7)
                                     ));
@@ -2230,8 +2236,8 @@ fn event_loop(
                                 }
                             }
                         }
-                        Ok(None) => app.leave_message("no fork created: no input was provided"),
-                        Err(err) => app.leave_message(format!("fork: {err:#}")),
+                        Ok(None) => app.leave_attention("no fork created: no input was provided"),
+                        Err(err) => app.leave_error(format!("fork: {err:#}")),
                     }
                 }
                 Effect::Split(id) => {
@@ -2245,7 +2251,7 @@ fn event_loop(
                         });
                     match result {
                         Ok(Some(new_id)) => {
-                            app.leave_message(format!(
+                            app.leave_success(format!(
                                 "split {} as {}",
                                 id.to_hex_with_len(7),
                                 new_id.to_hex_with_len(7)
@@ -2254,8 +2260,8 @@ fn event_loop(
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
-                        Ok(None) => app.leave_message("no split performed: no input was provided"),
-                        Err(err) => app.leave_message(format!("split: {err:#}")),
+                        Ok(None) => app.leave_attention("no split performed: no input was provided"),
+                        Err(err) => app.leave_error(format!("split: {err:#}")),
                     }
                 }
                 edit @ (Effect::Amend(id) | Effect::Spill(id)) => {
@@ -2312,7 +2318,7 @@ fn event_loop(
                         });
                     match result {
                         Ok(Some(new_id)) => {
-                            app.leave_message(format!(
+                            app.leave_success(format!(
                                 "{verb}ed {} as {}",
                                 id.to_hex_with_len(7),
                                 new_id.to_hex_with_len(7)
@@ -2321,8 +2327,8 @@ fn event_loop(
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
-                        Ok(None) => app.leave_message(format!("nothing to {verb}")),
-                        Err(err) => app.leave_message(format!("{verb}: {err:#}")),
+                        Ok(None) => app.leave_attention(format!("nothing to {verb}")),
+                        Err(err) => app.leave_error(format!("{verb}: {err:#}")),
                     }
                 }
                 Effect::Stash(id) => {
@@ -2330,12 +2336,12 @@ fn event_loop(
                     fill_repository.retained = None;
                     match edit::stash::save_manual(&repository_path, repository_is_bare, id) {
                         Ok(notice) => {
-                            app.leave_message(notice);
+                            app.leave_success(notice);
                             app.select_commit_after_refresh(id);
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
-                        Err(err) => app.leave_message(format!("stash: {err:#}")),
+                        Err(err) => app.leave_error(format!("stash: {err:#}")),
                     }
                 }
                 Effect::Unstash(id) => {
@@ -2343,12 +2349,12 @@ fn event_loop(
                     fill_repository.retained = None;
                     match edit::stash::restore_manual(&repository_path, repository_is_bare, id) {
                         Ok(notice) => {
-                            app.leave_message(notice);
+                            app.leave_success(notice);
                             app.select_commit_after_refresh(id);
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
-                        Err(err) => app.leave_message(format!("unstash: {err:#}")),
+                        Err(err) => app.leave_error(format!("unstash: {err:#}")),
                     }
                 }
                 Effect::Forget(id) => {
@@ -2371,14 +2377,14 @@ fn event_loop(
                             });
                             match returned.transpose() {
                                 Ok(Some((selected, _))) => {
-                                    app.leave_message("cancelled review");
+                                    app.leave_attention("cancelled review");
                                     app.select_commit_after_refresh(selected);
                                 }
                                 Err(err) => {
-                                    app.leave_message(format!("review cancelled, return checkout failed: {err:#}"));
+                                    app.leave_attention(format!("review cancelled, return checkout failed: {err:#}"));
                                 }
                                 Ok(None) => {
-                                    app.leave_message(format!("forgot {}", id.to_hex_with_len(7)));
+                                    app.leave_success(format!("forgot {}", id.to_hex_with_len(7)));
                                     if let Some(selected) = outcome.selected {
                                         app.select_commit(selected);
                                     }
@@ -2387,7 +2393,7 @@ fn event_loop(
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
-                        Err(err) => app.leave_message(format!("forget: {err:#}")),
+                        Err(err) => app.leave_error(format!("forget: {err:#}")),
                     }
                 }
                 Effect::Rebase { base, onto, commits } => {
@@ -2438,13 +2444,13 @@ fn event_loop(
                             };
                             match notice {
                                 Ok(notice) => {
-                                    app.leave_message(notice.unwrap_or_else(|| "rebased history".to_owned()));
+                                    app.leave_success(notice.unwrap_or_else(|| "rebased history".to_owned()));
                                     app.select_commit_after_refresh(base);
                                     invalidate_worktree_changes(&mut worktree_changes);
                                     refresh_pending = true;
                                 }
                                 Err(err) => {
-                                    app.leave_message(format!("rebase applied, checkout failed: {err:#}"));
+                                    app.leave_attention(format!("rebase applied, checkout failed: {err:#}"));
                                     invalidate_worktree_changes(&mut worktree_changes);
                                     refresh_pending = true;
                                 }
@@ -2463,8 +2469,8 @@ fn event_loop(
                             app.select_commit(id);
                             pending_todo_rebase_conflict = Some(conflict);
                         }
-                        Ok(None) => app.leave_message("no rebase performed: the todo was unchanged"),
-                        Err(err) => app.leave_message(format!("rebase: {err:#}")),
+                        Ok(None) => app.leave_attention("no rebase performed: the todo was unchanged"),
+                        Err(err) => app.leave_error(format!("rebase: {err:#}")),
                     }
                 }
                 Effect::StartReview { tip, base } => {
@@ -2476,7 +2482,7 @@ fn event_loop(
                         .and_then(|graph| edit::review::start(&repository_path, repository_is_bare, graph, tip, base));
                     match result {
                         Ok(started) => {
-                            app.leave_message(format!(
+                            app.leave_success(format!(
                                 "started review {} at {}",
                                 started.reference.shorten(),
                                 started.commit.to_hex_with_len(7)
@@ -2485,7 +2491,7 @@ fn event_loop(
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
-                        Err(err) => app.leave_message(format!("review: {err:#}")),
+                        Err(err) => app.leave_error(format!("review: {err:#}")),
                     }
                 }
                 Effect::FinishReview { review: id, return_to } => {
@@ -2510,12 +2516,12 @@ fn event_loop(
                                 false,
                             );
                             match checkout {
-                                Ok(_) => app.leave_message(format!(
+                                Ok(_) => app.leave_success(format!(
                                     "finished review as {}",
                                     finished.commit.to_hex_with_len(7)
                                 )),
                                 Err(err) => {
-                                    app.leave_message(format!("review applied, return checkout failed: {err:#}"));
+                                    app.leave_attention(format!("review applied, return checkout failed: {err:#}"));
                                 }
                             }
                             app.select_commit_after_refresh(finished.outcome.selected.unwrap_or(finished.commit));
@@ -2523,17 +2529,13 @@ fn event_loop(
                             refresh_pending = true;
                         }
                         Ok(edit::review::Finish::SelectReturn { tip }) => {
-                            if app.select_review_return(id, tip) {
-                                app.leave_message(
-                                    "review return is missing · j/k select commit · <enter> finish detached · Esc cancel",
-                                );
-                            } else {
-                                app.leave_message(
+                            if !app.select_review_return(id, tip) {
+                                app.leave_error(
                                     "finish review: no visible return commit descends from the reviewed tip",
                                 );
                             }
                         }
-                        Err(err) => app.leave_message(format!("finish review: {err:#}")),
+                        Err(err) => app.leave_error(format!("finish review: {err:#}")),
                     }
                 }
                 Effect::TimeTravel(id) => {
@@ -2557,7 +2559,7 @@ fn event_loop(
                     match result {
                         Ok(edit::time_travel::Perform::Complete(Some(notice))) => {
                             tracing::info!(selected = %id, %notice, "completed time-travel action");
-                            app.leave_message(notice);
+                            app.leave_success(notice);
                             if let Ok(head) = open_repository(&repository_path, repository_is_bare, false)
                                 .and_then(|repo| Ok(repo.head_id()?.detach()))
                             {
@@ -2574,7 +2576,7 @@ fn event_loop(
                             pending_rebase_conflict = Some(conflict);
                         }
                         Err(err) => {
-                            app.leave_message(format!("time-travel: {err:#}"));
+                            app.leave_error(format!("time-travel: {err:#}"));
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
@@ -2584,13 +2586,13 @@ fn event_loop(
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     match edit::time_travel::remove_pins(&repository_path, repository_is_bare, id) {
-                        Ok(0) => app.leave_message("no pins removed"),
+                        Ok(0) => app.leave_attention("no pins removed"),
                         Ok(count) => {
-                            app.leave_message(format!("removed {count} pin{}", if count == 1 { "" } else { "s" }));
+                            app.leave_success(format!("removed {count} pin{}", if count == 1 { "" } else { "s" }));
                             app.select_commit_after_refresh(id);
                             refresh_pending = true;
                         }
-                        Err(err) => app.leave_message(format!("unpin: {err:#}")),
+                        Err(err) => app.leave_error(format!("unpin: {err:#}")),
                     }
                 }
                 Effect::VerifySignatures(ids) => {

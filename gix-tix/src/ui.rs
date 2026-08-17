@@ -11,7 +11,7 @@ use crate::{
     BuiltInDiff,
     app::{
         App, AttributionKind, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesLayout, ChangesMode, CommitRow,
-        CopyKind, DateMode, IdMode, NameMode, RefMode, SelectionRelation, SignatureState, State,
+        CopyKind, DateMode, IdMode, NameMode, Notice, NoticeKind, RefMode, SelectionRelation, SignatureState, State,
     },
     history::{DecorationKind, Decorations},
 };
@@ -21,6 +21,43 @@ const COMMIT_PANE_WIDTH: u16 = 84;
 const FILESYSTEM_NOTIFICATION_COLOR: Color = Color::Rgb(255, 165, 0);
 const NOTE_COLOR: Color = Color::LightMagenta;
 const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
+
+pub(crate) fn notice_area(notice: &Notice, horizontal: Rect, top: u16, bottom: u16) -> Option<Rect> {
+    if horizontal.width == 0 || top >= bottom {
+        return None;
+    }
+    let height = u16::try_from(
+        Paragraph::new(notice.text.as_str())
+            .wrap(Wrap { trim: false })
+            .line_count(horizontal.width),
+    )
+    .unwrap_or(u16::MAX)
+    .max(1)
+    .min(bottom.saturating_sub(top));
+    Some(Rect::new(
+        horizontal.x,
+        bottom.saturating_sub(height),
+        horizontal.width,
+        height,
+    ))
+}
+
+pub(crate) fn render_notice(frame: &mut Frame<'_>, area: Rect, notice: &Notice) {
+    let background = match notice.kind {
+        NoticeKind::Success => Color::Green,
+        NoticeKind::Attention => Color::Yellow,
+        NoticeKind::Error => Color::LightRed,
+    };
+    frame.render_widget(
+        Paragraph::new(notice.text.as_str()).wrap(Wrap { trim: false }).style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(background)
+                .add_modifier(Modifier::BOLD),
+        ),
+        area,
+    );
+}
 
 pub(crate) fn draw_rebase_progress(frame: &mut Frame<'_>, progress: crate::edit::rebase::PlanProgress) {
     let area = frame.area();
@@ -286,6 +323,25 @@ pub(crate) fn draw_with_worktree(
             )
         }),
     );
+    let notice = app.notice();
+    let worktree_pane = changes_panes.iter().find(|pane| pane.pane == ChangePane::Worktree);
+    let notice_horizontal = worktree_pane.map_or(body, |pane| pane.outer);
+    let notice_bottom = worktree_pane.map_or_else(
+        || {
+            changes_panes
+                .iter()
+                .map(|pane| pane.outer.y)
+                .min()
+                .unwrap_or(body.bottom())
+        },
+        |pane| pane.outer.y,
+    );
+    let notice_area = notice
+        .as_ref()
+        .and_then(|notice| notice_area(notice, notice_horizontal, body.y, notice_bottom));
+    if let Some(notice_area) = notice_area {
+        body.height = notice_area.y.saturating_sub(body.y);
+    }
     let worktree_dirty = worktree_changes.is_some_and(|changes| !changes.paths.is_empty())
         && changes_panes
             .iter()
@@ -360,6 +416,7 @@ pub(crate) fn draw_with_worktree(
     app.viewport_rows = changes_panes
         .iter()
         .map(|pane| pane.outer.y.saturating_sub(body.y))
+        .chain(notice_area.map(|area| area.y.saturating_sub(body.y)))
         .min()
         .unwrap_or(body.height)
         .max(1) as usize;
@@ -772,17 +829,6 @@ pub(crate) fn draw_with_worktree(
         State::Cancelled => " · cancelled",
     };
     let mut footer_spans = vec![Span::raw(status)];
-    if app.review_return_selection_active() {
-        footer_spans.push(Span::styled(
-            " · review return (<enter> finish detached · Esc cancel)",
-            Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
-        ));
-    } else if app.review_selection_active() {
-        footer_spans.push(Span::styled(
-            " · review base (<enter> start · Esc cancel)",
-            Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
-        ));
-    }
     let mut time_travel = None;
     let mut edit_prefix_spans = Vec::new();
     if app.changes_focus != Some(ChangePane::Worktree) || app.can_amend() {
@@ -854,11 +900,7 @@ pub(crate) fn draw_with_worktree(
                 options.push(("split", 'p'));
             }
             if app.changes_focus.is_none() && app.can_forget() {
-                options.push(if app.forget_confirmation_visible() {
-                    ("d again forget", 'd')
-                } else {
-                    ("d forget", 'd')
-                });
+                options.push(("d forget", 'd'));
             }
             if app.changes_focus.is_none()
                 && app
@@ -1014,37 +1056,20 @@ pub(crate) fn draw_with_worktree(
         footer_spans.push(Span::raw(" · "));
         footer_spans.extend(shortcut("quit", 'q', true));
     }
-    let mut footer_style = Style::default();
-    if app.rebase_continuation_pending() {
-        footer_spans = vec![Span::raw(if app.rebase_continuation_conflicted() {
-            "REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop"
-        } else {
-            "REBASE PAUSED · <enter> continue · Esc stop"
-        })];
-        if let Some(message) = app.message() {
-            footer_spans.push(Span::raw(format!(" · {message}")));
-        }
-        footer_style = Style::default()
-            .fg(Color::Black)
-            .bg(if app.rebase_continuation_conflicted() {
-                Color::LightRed
-            } else {
-                Color::Yellow
-            })
-            .add_modifier(Modifier::BOLD);
-    } else if let Some(message) = app.message() {
-        footer_spans = vec![Span::raw(message)];
-    }
-    if app.unseen_filesystem_redraw && !app.rebase_continuation_pending() {
+    if app.unseen_filesystem_redraw {
         footer_spans = notification_discs(footer_spans);
     }
-    frame.render_widget(Paragraph::new(Line::from(footer_spans)).style(footer_style), footer);
+    frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+    if let (Some(area), Some(notice)) = (notice_area, notice.as_ref()) {
+        render_notice(frame, area, notice);
+    }
     FrameLayout {
         history: body,
         overlays: changes_panes
             .iter()
             .map(|pane| pane.outer)
             .chain(commit_pane.map(|(outer, _)| outer))
+            .chain(notice_area)
             .collect(),
         rows,
     }
@@ -2273,40 +2298,49 @@ mod tests {
     }
 
     #[test]
-    fn materialized_rebase_continuation_replaces_the_footer_until_cleared() -> Result<(), Box<dyn std::error::Error>> {
+    fn materialized_rebase_continuation_uses_a_persistent_notice_above_the_footer()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
         complete(&mut app);
         app.arm_rebase_continuation();
         app.set_worktree_conflicted(true);
-        app.leave_message("materialized conflict");
-        let mut terminal = Terminal::new(TestBackend::new(120, 1))?;
+        app.leave_attention("materialized conflict");
+        let mut terminal = Terminal::new(TestBackend::new(120, 3))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        let footer = rendered_line(&terminal, 0);
+        let notice = rendered_line(&terminal, 1);
         assert!(
-            footer.starts_with("REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop"),
-            "an unresolved continuation owns the footer: {footer:?}"
+            notice.starts_with("REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop"),
+            "an unresolved continuation owns the notice: {notice:?}"
         );
         assert!(
-            footer.contains("materialized conflict"),
-            "messages cannot replace the mode"
+            notice.contains("materialized conflict"),
+            "operation context is retained beside the persistent prompt"
         );
-        assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::LightRed);
+        assert_eq!(terminal.backend().buffer()[(0, 1)].bg, Color::Yellow);
+        assert!(
+            rendered_line(&terminal, 2).contains("view"),
+            "the ordinary footer remains visible"
+        );
 
         app.update(Action::MoveDown);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 0).starts_with("REBASE PAUSED"),
+            rendered_line(&terminal, 1).starts_with("REBASE PAUSED"),
             "navigation cannot dismiss the continuation"
         );
+        app.leave_error("continue failed");
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(terminal.backend().buffer()[(0, 1)].bg, Color::LightRed);
+        app.update(Action::MoveDown);
         app.set_worktree_conflicted(false);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::Yellow);
-        assert!(rendered_line(&terminal, 0).starts_with("REBASE PAUSED · <enter> continue · Esc stop"));
+        assert_eq!(terminal.backend().buffer()[(0, 1)].bg, Color::Yellow);
+        assert!(rendered_line(&terminal, 1).starts_with("REBASE PAUSED · <enter> continue · Esc stop"));
 
         app.clear_rebase_continuation();
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(!rendered_line(&terminal, 0).contains("REBASE PAUSED"));
+        assert!(!(0..3).any(|y| rendered_line(&terminal, y).contains("REBASE PAUSED")));
         Ok(())
     }
 
@@ -2890,17 +2924,23 @@ mod tests {
         );
         app.unseen_filesystem_redraw = false;
 
-        app.leave_message("worktree removed; using common repository");
+        app.leave_attention("worktree removed; using common repository");
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert_eq!(
-            rendered_line(&terminal, 1).trim(),
+            rendered_line(&terminal, 0).trim(),
             "worktree removed; using common repository",
-            "recovery information replaces the status until the next action"
+            "recovery information uses the body row above the status"
+        );
+        assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::Yellow);
+        assert_eq!(
+            rendered_line(&terminal, 1).trim(),
+            footer_text,
+            "the status remains visible"
         );
 
         app.history_display_expanded = true;
         app.update(Action::ToggleMailmap);
-        assert!(app.message().is_none(), "the next action restores the normal status");
+        assert!(app.notice().is_none(), "the next action clears the notice");
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
             rendered_row(&terminal).contains(" author subject"),
@@ -2908,13 +2948,16 @@ mod tests {
         );
         assert!(footer_is_dim(&terminal, "mailmap"), "disabled mailmap is dimmed");
 
-        app.leave_message("no commit created: no input was provided");
+        app.leave_attention("no commit created: no input was provided");
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert_eq!(
-            rendered_line(&terminal, 1).trim(),
+            rendered_line(&terminal, 0).trim(),
             "no commit created: no input was provided",
             "an unchanged new-commit editor explains why nothing happened"
         );
+        app.leave_error("operation failed");
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
+        assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::LightRed);
         app.update(Action::ToggleMailmap);
 
         app.update(Action::ToggleDate);
@@ -4814,6 +4857,37 @@ mod tests {
         assert_eq!(buffer[(60, 6)].symbol(), "├");
         assert_eq!(buffer[(60, 7)].symbol(), "│");
         assert_eq!(buffer[(60, 8)].symbol(), "│");
+
+        app.leave_success(
+            "success success success success success success success success success success success success",
+        );
+        let mut notice_layout = None;
+        terminal.draw(|frame| {
+            notice_layout = Some(super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&tree),
+                Some(&worktree),
+            ));
+        })?;
+        let notice = Rect::new(60, 4, 60, 2);
+        assert_eq!(terminal.backend().buffer()[(60, 4)].bg, Color::Green);
+        assert_eq!(terminal.backend().buffer()[(59, 4)].bg, Color::Reset);
+        assert_eq!(
+            terminal.backend().buffer()[(60, 9)].bg,
+            Color::Reset,
+            "the footer is never covered"
+        );
+        assert!(
+            notice_layout
+                .expect("drawing returns its layout")
+                .overlays
+                .contains(&notice),
+            "animation treats the wrapped notice as reserved space"
+        );
         Ok(())
     }
 

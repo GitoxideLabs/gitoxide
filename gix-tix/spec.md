@@ -641,8 +641,8 @@ space first; changes blocks adapt within the remaining history width.
 - A checked-out unresolved index keeps `C` at `@`, overrides dirty `D`, and
   disables time travel until all conflict stages are resolved. The worktree
   changes block is shown for resolution.
-- A materialized todo conflict keeps a high-contrast `REBASE PAUSED` footer until
-  its in-memory continuation is consumed. The footer changes when the index is
+- A materialized todo conflict keeps a high-contrast `REBASE PAUSED` attention notice until
+  its in-memory continuation is consumed. The notice changes when the index is
   resolved but always advertises `<enter>` to continue and `Esc` to stop. History,
   changes-pane navigation, display toggles, copying, and path-diff inspection stay
   available; repository-changing actions and refresh are blocked. Pane-local
@@ -709,7 +709,7 @@ space first; changes blocks adapt within the remaining history width.
 
 - `e`, then `d`, is available after history completion for a selected non-merge
   commit with no known merge descendant. The first `d` arms a
-  `d again forget` confirmation; the second performs it. Navigation, refresh,
+  yellow notice asking for `d` again; the second performs it. Navigation, refresh,
   cancellation, selection changes, and other commands disarm confirmation.
 - Forgetting does not require a worktree. Linear descendants are reparented with
   unchanged trees and marked for lazy replay; mutable refs throughout the
@@ -943,7 +943,7 @@ space first; changes blocks adapt within the remaining history width.
   working directory may have disappeared. Before processing filesystem events or
   redrawing, it lexically normalizes and enters the common repository, reopens it
   as bare, drops worktree state, keeps tree/history views live, and reports recovery
-  in the status line. If recovery fails, terminal state is restored and the
+  in the attention notice. If recovery fails, terminal state is restored and the
   contextual error is returned.
 
 ## Resource and responsiveness invariants
@@ -966,9 +966,15 @@ space first; changes blocks adapt within the remaining history width.
 - Main status remains readable regardless of pane focus. Errors are surfaced in
   the nearest relevant status line; diagnostics never replace user-visible
   errors.
-- Global command and recovery feedback uses one transient message channel. A
-  message replaces the main status line until the next recognized user action;
-  pane-specific errors remain in their pane status line.
+- Global command and recovery feedback uses one transient notice channel in the
+  history and ref-tree views. It reserves a wrapped, content-height block above
+  worktree changes until the next recognized user action, matching that pane's
+  horizontal bounds when visible and otherwise using the main view. It never
+  covers the main or pane-local status lines. Green indicates success, yellow
+  indicates attention, no-op, recovery, partial success, or an armed prompt, and
+  red indicates failure. Forget, review selection and recovery, suspended
+  conflicts, and paused rebases retain their notice until resolved; pane-specific
+  errors remain in their pane status line.
 - Closing the new-commit editor without changing its prepared buffer leaves the
   repository untouched and reports `no commit created: no input was provided`.
 
