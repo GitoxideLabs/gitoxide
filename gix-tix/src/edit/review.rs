@@ -24,6 +24,11 @@ pub(crate) struct Finished {
     pub outcome: super::rebase::Outcome,
 }
 
+pub(crate) enum Finish {
+    Complete(Finished),
+    SelectReturn { tip: ObjectId },
+}
+
 pub(crate) fn reference(commit: &gix::objs::Commit) -> Result<Option<gix::refs::FullName>> {
     commit
         .extra_headers
@@ -205,7 +210,12 @@ pub(crate) fn start(
 }
 
 #[tracing::instrument(skip_all, fields(%review))]
-pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, review: ObjectId) -> Result<Finished> {
+pub(crate) fn finish(
+    repo: gix::Repository,
+    graph: &history::HistoryGraph,
+    review: ObjectId,
+    fallback: Option<ObjectId>,
+) -> Result<Finish> {
     let workdir = repo
         .workdir()
         .context("finishing review requires a worktree")?
@@ -231,27 +241,39 @@ pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, revie
         .context("the review reference does not resolve")?
         .detach();
     let delete_refs = resources(&repo, review_ref.clone())?;
-    let return_to = return_to(&commit)?.or(legacy_reattach);
-    let checkout = return_to
-        .map(|name| {
-            let mut reference = repo
-                .find_reference(name.as_ref())
-                .context("the review return reference is missing")?;
-            let checkout_reference = if name.as_bstr().starts_with(history::PIN_PREFIX) {
-                reference.target().try_name().map(ToOwned::to_owned)
-            } else {
-                Some(name)
-            };
-            let id = reference
-                .peel_to_id()
-                .context("the review return reference does not resolve")?
-                .detach();
-            if !graph.is_ancestor(tip, id) {
-                anyhow::bail!("the review return reference no longer descends from the reviewed commit");
-            }
-            Ok((id, checkout_reference))
-        })
-        .transpose()?;
+    let return_name = return_to(&commit)?.or(legacy_reattach);
+    let has_return = return_name.is_some();
+    let checkout = if let Some(id) = fallback {
+        if !graph.is_ancestor(tip, id) {
+            anyhow::bail!("the selected review return commit does not descend from the reviewed commit");
+        }
+        Some((id, None))
+    } else {
+        return_name
+            .map(|name| {
+                let Some(mut reference) = repo.try_find_reference(name.as_ref())? else {
+                    return Ok(None);
+                };
+                let checkout_reference = if name.as_bstr().starts_with(history::PIN_PREFIX) {
+                    reference.target().try_name().map(ToOwned::to_owned)
+                } else {
+                    Some(name)
+                };
+                let id = reference
+                    .peel_to_id()
+                    .context("the review return reference does not resolve")?
+                    .detach();
+                if !graph.is_ancestor(tip, id) {
+                    anyhow::bail!("the review return reference no longer descends from the reviewed commit");
+                }
+                Ok(Some((id, checkout_reference)))
+            })
+            .transpose()?
+            .flatten()
+    };
+    if fallback.is_none() && has_return && checkout.is_none() {
+        return Ok(Finish::SelectReturn { tip });
+    }
     for (label, id) in [("reviewed commit", tip), ("review base", base)] {
         let endpoint = repo.find_commit(id)?.decode()?.into_owned()?;
         if super::rebase::is_pending(&endpoint) {
@@ -262,10 +284,10 @@ pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, revie
     let finished = outcome
         .map(review)
         .context("finishing review did not produce a commit")?;
-    Ok(Finished {
+    Ok(Finish::Complete(Finished {
         commit: finished,
         outcome,
-    })
+    }))
 }
 
 pub(super) fn ensure_clean(workdir: &Path) -> Result<()> {
@@ -486,20 +508,48 @@ mod tests {
             ],
         )?;
         drop(repo);
+        run(
+            fixture.path(),
+            &[
+                "update-ref",
+                "--no-deref",
+                "-d",
+                pins[0].name.as_bstr().to_str_lossy().as_ref(),
+            ],
+        )?;
         let repo = crate::test_repository::open_with(
             fixture.path(),
             ["user.name=reviewer", "user.email=reviewer@example.com"],
         )?;
         let graph = super::super::loaded_graph(&repo)?;
-        let finished = finish(repo, &graph, amended)?;
+        let Finish::SelectReturn { tip: return_tip } = finish(repo, &graph, amended, None)? else {
+            panic!("the deleted return pin requires replacement selection")
+        };
+        assert_eq!(return_tip, tip, "fallback checkout must descend from the reviewed tip");
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            ["user.name=reviewer", "user.email=reviewer@example.com"],
+        )?;
+        assert!(
+            repo.try_find_reference(started.reference.as_ref())?.is_some(),
+            "asking for a replacement leaves the review untouched"
+        );
+        let Finish::Complete(finished) = finish(repo, &graph, amended, Some(tip))? else {
+            panic!("the selected descendant completes the review")
+        };
         assert_eq!(
             finished
                 .outcome
                 .checkout_reference
                 .as_ref()
                 .map(gix::refs::FullName::as_bstr),
-            Some(BStr::new(b"refs/heads/main")),
-            "finishing retains the branch named by the symbolic departure pin"
+            None,
+            "a selected replacement commit is checked out detached"
+        );
+        assert_eq!(
+            finished.outcome.selected,
+            Some(finished.commit),
+            "the reviewed tip maps to the newly finished review commit"
         );
         super::super::time_travel::checkout_plan(fixture.path(), false, &finished.outcome, &[], false)?;
         let finished = finished.commit;
@@ -507,8 +557,8 @@ mod tests {
         assert_eq!(repo.head_id()?.detach(), finished);
         assert_eq!(
             repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
-            Some(BStr::new(b"refs/heads/main")),
-            "finishing reattaches HEAD to the branch saved by the review resource"
+            None,
+            "replacement commit selection deliberately leaves HEAD detached"
         );
         assert_eq!(
             repo.find_commit(finished)?.parent_ids().next().map(gix::Id::detach),
@@ -631,7 +681,9 @@ mod tests {
 
         let repo = open()?;
         let graph = super::super::loaded_graph(&repo)?;
-        let finished = finish(repo, &graph, review)?;
+        let Finish::Complete(finished) = finish(repo, &graph, review, None)? else {
+            panic!("the recorded return pin exists")
+        };
         super::super::time_travel::checkout_plan(fixture.path(), false, &finished.outcome, &[], false)?;
         let finished = finished.commit;
         let repo = open()?;
