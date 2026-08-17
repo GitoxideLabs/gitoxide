@@ -136,6 +136,20 @@ struct ChangesPaneArea {
     outer: Rect,
 }
 
+fn index_separator(pane: ChangePane, changes: &Changes) -> Option<usize> {
+    if pane != ChangePane::Worktree {
+        return None;
+    }
+    let index = changes
+        .paths
+        .iter()
+        .position(|change| change.group == ChangeGroup::Unstaged)?;
+    changes.paths[..index]
+        .iter()
+        .any(|change| change.group == ChangeGroup::Staged)
+        .then_some(index)
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FrameLayout {
     pub history: Rect,
@@ -329,19 +343,27 @@ pub(crate) fn draw_with_worktree(
         });
         (message, content)
     });
-    let pane_height = |changes: &Changes| u16::try_from(changes.paths.len()).unwrap_or(u16::MAX).saturating_add(2);
+    let pane_height = |pane, changes: &Changes| {
+        u16::try_from(changes.paths.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(u16::from(index_separator(pane, changes).is_some()))
+            .saturating_add(2)
+    };
     let (changes_layout, changes_panes, _) = changes_pane_areas(
         body,
         frame.area().height / 2,
         tree_shown.then(|| {
             (
-                pane_height(tree_changes.expect("visible tree changes exist")),
+                pane_height(ChangePane::Tree, tree_changes.expect("visible tree changes exist")),
                 tree_summary.as_ref().map_or(0, Line::width),
             )
         }),
         worktree_shown.then(|| {
             (
-                pane_height(worktree_changes.expect("visible worktree changes exist")),
+                pane_height(
+                    ChangePane::Worktree,
+                    worktree_changes.expect("visible worktree changes exist"),
+                ),
                 worktree_summary.as_ref().map_or(0, Line::width),
             )
         }),
@@ -1227,21 +1249,38 @@ fn push_selection_span(spans: &mut Vec<Span<'static>>, span: Span<'static>) {
     spans.push(span);
 }
 
+fn index_divider(width: u16) -> Line<'static> {
+    const LABEL: &str = " ↑ index ↑ ";
+    let width = usize::from(width);
+    if width < LABEL.chars().count() {
+        return Line::styled("─".repeat(width), color(Color::Green));
+    }
+    let rails = width - LABEL.chars().count();
+    let left = rails / 2;
+    Line::from(vec![
+        Span::styled("─".repeat(left), color(Color::Green)),
+        Span::styled(LABEL, Style::default().add_modifier(Modifier::DIM)),
+        Span::styled("─".repeat(rails - left), color(Color::Green)),
+    ])
+}
+
 fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: ChangePane, app: &mut App) {
     if area.height == 0 {
-        app.set_changes_bounds(pane, 0, 0, area.width as usize, 0);
+        app.set_changes_bounds(pane, 0, 0, None, area.width as usize, 0);
         return;
     }
     let focused = app.changes_focus == Some(pane);
     let selected_index = app.changes(pane).selected.min(changes.paths.len().saturating_sub(1));
+    let separator = index_separator(pane, changes);
+    let display_len = changes.paths.len() + usize::from(separator.is_some());
     let path_capacity = usize::from(area.height);
-    let overflow = changes.paths.len() > 1 && changes.paths.len() > path_capacity;
-    let visible_paths = if overflow {
+    let overflow = display_len > 1 && display_len > path_capacity;
+    let visible_rows = if overflow {
         path_capacity.saturating_sub(1)
     } else {
-        path_capacity.min(changes.paths.len())
+        path_capacity.min(display_len)
     };
-    let lines: Vec<_> = changes
+    let mut lines: Vec<_> = changes
         .paths
         .iter()
         .enumerate()
@@ -1282,6 +1321,9 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
             Line::from(spans)
         })
         .collect();
+    if let Some(separator) = separator {
+        lines.insert(separator, index_divider(area.width));
+    }
     let horizontal_max = lines
         .iter()
         .map(Line::width)
@@ -1290,27 +1332,35 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
         .saturating_sub(area.width as usize);
     app.set_changes_bounds(
         pane,
-        visible_paths,
+        visible_rows,
         changes.paths.len(),
+        separator,
         area.width as usize,
         horizontal_max,
     );
     let offset = app.changes(pane).offset;
     let horizontal_offset = app.changes(pane).horizontal_offset;
-    let path_area = Rect::new(
-        area.x,
-        area.y,
-        area.width,
-        u16::try_from(visible_paths).unwrap_or(u16::MAX),
-    );
-    frame.render_widget(
-        Paragraph::new(Text::from(
-            lines.into_iter().skip(offset).take(visible_paths).collect::<Vec<_>>(),
-        ))
-        .scroll((0, u16::try_from(horizontal_offset).unwrap_or(u16::MAX))),
-        path_area,
-    );
-    let hidden = changes.paths.len().saturating_sub(offset.saturating_add(visible_paths));
+    for (row, line) in lines.into_iter().skip(offset).take(visible_rows).enumerate() {
+        let display_index = offset + row;
+        let horizontal_offset = if separator == Some(display_index) {
+            0
+        } else {
+            horizontal_offset
+        };
+        frame.render_widget(
+            Paragraph::new(line).scroll((0, u16::try_from(horizontal_offset).unwrap_or(u16::MAX))),
+            Rect::new(
+                area.x,
+                area.y.saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
+                area.width,
+                1,
+            ),
+        );
+    }
+    let visible_end = offset.saturating_add(visible_rows);
+    let hidden = (0..changes.paths.len())
+        .filter(|index| *index + usize::from(separator.is_some_and(|separator| *index >= separator)) >= visible_end)
+        .count();
     if overflow && hidden > 0 {
         frame.render_widget(
             Paragraph::new(Line::styled(
@@ -4906,6 +4956,7 @@ mod tests {
     fn summarizes_staged_and_unstaged_changes_in_the_top_border() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
         app.changes_mode = Some(ChangesMode::Both);
+        app.changes_focus = Some(ChangePane::Worktree);
         let changes = Changes {
             paths: vec![
                 crate::app::PathChange {
@@ -4927,7 +4978,7 @@ mod tests {
             lines_removed: 1,
             ..Changes::default()
         };
-        let mut terminal = Terminal::new(TestBackend::new(80, 8))?;
+        let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
         terminal.draw(|frame| {
             super::draw_with_worktree(
                 frame,
@@ -4940,7 +4991,7 @@ mod tests {
             );
         })?;
 
-        let (header_y, header) = (0..8)
+        let (header_y, header) = (0..12)
             .map(|y| (y, rendered_line(&terminal, y)))
             .find(|(_, line)| line.contains("Worktree"))
             .expect("the worktree border is visible");
@@ -4949,13 +5000,58 @@ mod tests {
             "the border distinguishes staged and unstaged rows: {header:?}"
         );
         let staged_y = header_y + 1;
-        let unstaged_y = header_y + 2;
+        let divider_y = header_y + 2;
+        let unstaged_y = header_y + 3;
+        let divider = rendered_line(&terminal, divider_y);
+        let label_x = divider[..divider.find("↑ index ↑").expect("the index label is visible")]
+            .chars()
+            .count() as u16;
+        assert_eq!(label_x, (80 - 9) / 2, "the index label is centered");
+        assert_eq!(terminal.backend().buffer()[(2, divider_y)].fg, Color::Green);
+        assert!(
+            !terminal.backend().buffer()[(2, divider_y)]
+                .modifier
+                .contains(Modifier::DIM),
+            "the colored divider rail is not dimmed"
+        );
+        assert_eq!(terminal.backend().buffer()[(label_x, divider_y)].fg, Color::Reset);
+        assert!(
+            terminal.backend().buffer()[(label_x, divider_y)]
+                .modifier
+                .contains(Modifier::DIM),
+            "the centered label uses dimmed normal text"
+        );
         let staged_x = rendered_line(&terminal, staged_y).find('A').expect("staged letter") as u16;
         let unstaged_x = rendered_line(&terminal, unstaged_y).find('M').expect("unstaged letter") as u16;
         assert_eq!(terminal.backend().buffer()[(staged_x, staged_y)].fg, Color::Green);
         assert_eq!(
             terminal.backend().buffer()[(unstaged_x, unstaged_y)].fg,
             Color::LightRed
+        );
+
+        let staged_only = Changes {
+            paths: vec![changes.paths[0].clone()],
+            ..Changes::default()
+        };
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&staged_only),
+            );
+        })?;
+        assert!(
+            !(0..12).any(|y| rendered_line(&terminal, y).contains("index")),
+            "a single change group has no divider"
+        );
+        assert_eq!(
+            index_divider(5).to_string(),
+            "─────",
+            "narrow panes retain only the rail"
         );
 
         let modified = Changes {
@@ -4993,18 +5089,18 @@ mod tests {
                 Some(&Changes::default()),
             );
         })?;
-        let (clean_y, clean_header) = (0..8)
+        let (clean_y, clean_header) = (0..12)
             .map(|y| (y, rendered_line(&terminal, y)))
             .find(|(_, line)| line.contains("Worktree clean"))
             .expect("an enabled clean worktree remains visible as an empty block");
         let clean_x = clean_header.find("clean").expect("clean label") as u16;
         assert_eq!(terminal.backend().buffer()[(clean_x, clean_y)].fg, Color::Green);
         assert!(
-            !(0..8).any(|y| rendered_line(&terminal, y).contains("+0") || rendered_line(&terminal, y).contains("-0")),
+            !(0..12).any(|y| rendered_line(&terminal, y).contains("+0") || rendered_line(&terminal, y).contains("-0")),
             "a clean worktree omits empty diff counts"
         );
         assert!(
-            !(0..8).any(|y| rendered_line(&terminal, y).contains("= 0")),
+            !(0..12).any(|y| rendered_line(&terminal, y).contains("= 0")),
             "a clean worktree has no empty aggregate"
         );
         assert!(!app.worktree_changes_visible, "an empty block is not focusable");
@@ -5020,13 +5116,80 @@ mod tests {
                 Some(&Changes::default()),
             );
         })?;
-        let (clean_y, clean_tree) = (0..8)
+        let (clean_y, clean_tree) = (0..12)
             .map(|y| (y, rendered_line(&terminal, y)))
             .find(|(_, line)| line.contains("Tree ------- clean"))
             .expect("an empty tree remains visible and says it is clean");
         let clean_x = clean_tree.find("clean").expect("clean tree label") as u16;
         assert_eq!(terminal.backend().buffer()[(clean_x, clean_y)].fg, Color::Green);
         assert!(!app.tree_changes_visible, "an empty tree block is not focusable");
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_index_divider_scrolls_with_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.changes_mode = Some(ChangesMode::Both);
+        app.changes_focus = Some(ChangePane::Worktree);
+        let changes = Changes {
+            paths: [
+                ChangeGroup::Staged,
+                ChangeGroup::Staged,
+                ChangeGroup::Unstaged,
+                ChangeGroup::Unstaged,
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, group)| crate::app::PathChange {
+                kind: ChangeKind::Modified,
+                group,
+                source: None,
+                path: format!("file-{index}").into(),
+                lines: None,
+            })
+            .collect(),
+            ..Changes::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&changes),
+            );
+        })?;
+
+        app.update(Action::MoveDown);
+        app.update(Action::MoveDown);
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&changes),
+            );
+        })?;
+
+        let divider_y = (0..10)
+            .find(|y| rendered_line(&terminal, *y).contains("↑ index ↑"))
+            .expect("the boundary scrolls into view");
+        assert!(rendered_line(&terminal, divider_y + 1).contains("M file-2"));
+        assert!(
+            rendered_line(&terminal, divider_y + 2).contains("… 1 line not shown"),
+            "the overflow count excludes the divider"
+        );
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![crate::app::Effect::OpenDiff(ChangePane::Worktree, 2)],
+            "the selected row after the divider retains its path index"
+        );
         Ok(())
     }
 
