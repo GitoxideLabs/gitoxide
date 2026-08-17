@@ -215,6 +215,8 @@ without trading responsiveness for metadata that is not visible.
 - The ref-tree orders tips above roots and renders one retained or boundary
   node per row. Rounded ancestry lanes precede aligned counts and labels; their
   `●` disk is the node marker, while the smaller `•` is the commit-count unit.
+  Referenced or raw-tip nodes whose commits are present in history use the
+  current-history cyan; other linked-worktree nodes use dark green.
   Selection emphasizes the label without inverting the disk, while a selected
   synthetic node inverts its otherwise-unlabelled disk.
 - Rendering clips lanes and node labels to the viewport.
