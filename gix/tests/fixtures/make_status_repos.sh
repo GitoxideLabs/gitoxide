@@ -31,6 +31,16 @@ git init racy-git
   echo ha >file
 )
 
+git init index-changed-outside-subdir
+(cd index-changed-outside-subdir
+  echo hi >file
+  mkdir subdir
+  >subdir/tracked
+  git add . && git commit -m "init"
+
+  echo ho >file && git add file
+)
+
 git init untracked-unborn
 (cd untracked-unborn
   touch untracked
