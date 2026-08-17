@@ -27,6 +27,8 @@ without trading responsiveness for metadata that is not visible.
   rules. Replay conflicts change nothing unless explicitly materialized; an
   accepted conflict writes the checkout and unmerged index, then exits with an
   error so resolution cannot be mistaken for completion.
+- `tix stash` saves the index and worktree state at `HEAD` through the same
+  commit-stash operation as the TUI.
 - `tix reword REVSPEC [--author "Name <email>"] [-m MESSAGE ... | -f FILE]`
   applies the same signing,
   lazy-rebase, mutable-ref, and worktree-safety rules as the TUI. Without either
@@ -326,9 +328,8 @@ without trading responsiveness for metadata that is not visible.
 | `@` | Time-travel to the selected commit, or return through its tix pin. Terminals reporting the base key as `Shift-2` are also accepted. |
 
 Alignment uses only rows in the current viewport to determine widths and starts
-in title mode. Title alignment keeps titles fixed while horizontal navigation
-pans graph overflow. Full-column alignment pans the complete padded row so
-clipped fields can be reached.
+in title mode. Horizontal navigation pans the complete padded row in title and
+full-column alignment so clipped fields can be reached.
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. The `?` group similarly remains open
@@ -418,6 +419,7 @@ The Enter key is written as `<enter>` throughout.
   query. Saving uses Git with `--include-untracked`, leaves ignored files alone,
   preserves the ordinary stash stack, and records the stash commit at
   `refs/tix/stash/<full-commit-id>`. A commit can retain only one such stash.
+  `tix stash` performs this operation directly at `HEAD` with the same checks.
 - A commit stash is shown as a bright `🎁` beside any `📌`, directly after the
   hash and outside reference visibility. Time travel back to that exact commit
   restores it with `git stash apply --index` and consumes its companion ref after
@@ -888,15 +890,12 @@ space first; changes blocks adapt within the remaining history width.
   the index tree, including additional staged changes, becomes the resolved tree.
   There is no hidden sequencer state or separate continue/abort command.
 - Interactive todo application and time travel run on a scoped worker so the
-  terminal can remain renderable without cloning the cached history graph. If
-  either operation is still running after 300 ms, a modal gauge shows processed
-  versus total source commits and live cherry-pick and signature counts with
-  their cumulative durations. `pick`, `squash`, and `empty` commands each
-  contribute to a todo total; time travel counts every commit in its pending
-  replay and accumulates work when another replay batch is discovered. Squash
-  sources advance separately while their combined commit is signed once. Fast
-  operations and command-line `tix rebase apply` and `tix travel` do not show
-  progress.
+  terminal can remain renderable without cloning the cached history graph.
+  Todo application shows its modal gauge after 300 ms. During TUI time travel,
+  the history selection instead follows each pending commit after it is rebased.
+  The first and latest rows are drawn even for fast multi-commit operations;
+  intermediate rows may be coalesced to keep drawing at or below 60 fps.
+  Command-line `tix rebase apply` and `tix travel` do not animate.
 - Displayed mutable refs follow their explicit locations in the edited todo;
   omission deletes them and newly named refs require nonexistence. Refs checked
   out by linked worktrees are displayed normally and may move, with their index

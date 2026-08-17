@@ -57,7 +57,7 @@ use ratatui::{backend::CrosstermBackend, text::Line};
 const EVENT_BATCH_SIZE: usize = 256;
 const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
-const REBASE_PROGRESS_DELAY: Duration = Duration::from_millis(300);
+const TODO_PROGRESS_DELAY: Duration = Duration::from_millis(300);
 const HISTORY_STATUS_DELAY: Duration = Duration::from_millis(500);
 const REPEAT_IDLE: Duration = Duration::from_millis(75);
 const WORKTREE_EVENT_IDLE: Duration = Duration::from_millis(75);
@@ -2553,18 +2553,43 @@ fn event_loop(
                         .as_ref()
                         .context("time-travel requires a completed history graph")
                         .and_then(|graph| {
-                            run_with_rebase_progress(terminal, |report| {
-                                edit::time_travel::perform_with_progress(
-                                    &repository_path,
-                                    repository_is_bare,
-                                    id,
-                                    graph,
-                                    &review_roots,
-                                    &revisions,
-                                    false,
-                                    report,
-                                )
-                            })
+                            run_with_rebase_selection(
+                                |report| {
+                                    edit::time_travel::perform_reporting_rebased(
+                                        &repository_path,
+                                        repository_is_bare,
+                                        id,
+                                        graph,
+                                        &review_roots,
+                                        &revisions,
+                                        false,
+                                        report,
+                                    )
+                                },
+                                |id| {
+                                    app.select_commit(id);
+                                    let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
+                                    let tree = tree_changes.as_ref().map(|(_, changes)| changes);
+                                    let worktree = worktree_changes
+                                        .as_ref()
+                                        .filter(|(marker, _)| *marker != usize::MAX)
+                                        .map(|(_, changes)| changes);
+                                    terminal
+                                        .draw(|frame| {
+                                            ui::draw_with_worktree(
+                                                frame,
+                                                &mut app,
+                                                &decorations,
+                                                &mailmap,
+                                                message,
+                                                tree,
+                                                worktree,
+                                            );
+                                        })
+                                        .context("could not draw time-travel animation")?;
+                                    Ok(())
+                                },
+                            )
                         });
                     match result {
                         Ok(edit::time_travel::Perform::Complete(Some(notice))) => {
@@ -3834,20 +3859,94 @@ enum RebaseWorkerEvent<T> {
     Complete(Result<T>),
 }
 
+enum TravelWorkerEvent<T> {
+    Rebased(gix::ObjectId),
+    Complete(Result<T>),
+}
+
+fn run_with_rebase_selection<T: Send>(
+    operation: impl FnOnce(&mut dyn FnMut(gix::ObjectId)) -> Result<T> + Send,
+    mut render: impl FnMut(gix::ObjectId) -> Result<()>,
+) -> Result<T> {
+    std::thread::scope(|scope| {
+        let (sender, receiver) = mpsc::channel();
+        let worker = scope.spawn(move || {
+            let mut report = |id| {
+                let _ = sender.send(TravelWorkerEvent::Rebased(id));
+            };
+            let result = operation(&mut report);
+            let _ = sender.send(TravelWorkerEvent::Complete(result));
+        });
+        let mut last_draw: Option<Instant> = None;
+        let mut latest = None;
+        let mut rendered = None;
+        let mut complete = None;
+        let result = loop {
+            let event = if complete.is_some() {
+                None
+            } else if latest != rendered
+                && let Some(last_draw) = last_draw
+            {
+                match receiver.recv_timeout(FRAME_INTERVAL.saturating_sub(last_draw.elapsed())) {
+                    Ok(event) => Some(event),
+                    Err(mpsc::RecvTimeoutError::Timeout) => None,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        break Err(anyhow::anyhow!("time-travel worker stopped unexpectedly"));
+                    }
+                }
+            } else {
+                match receiver.recv() {
+                    Ok(event) => Some(event),
+                    Err(_) => break Err(anyhow::anyhow!("time-travel worker stopped unexpectedly")),
+                }
+            };
+            match event {
+                Some(TravelWorkerEvent::Rebased(id)) => latest = Some(id),
+                Some(TravelWorkerEvent::Complete(result)) => complete = Some(result),
+                None => {}
+            }
+            if latest != rendered
+                && (last_draw.is_none()
+                    || last_draw.is_some_and(|last_draw| last_draw.elapsed() >= FRAME_INTERVAL)
+                    || complete.is_some())
+            {
+                if complete.is_some()
+                    && let Some(last_draw) = last_draw
+                {
+                    std::thread::sleep(FRAME_INTERVAL.saturating_sub(last_draw.elapsed()));
+                }
+                let id = latest.expect("a changed rebased commit is available");
+                if let Err(err) = render(id) {
+                    break Err(err);
+                }
+                rendered = latest;
+                last_draw = Some(Instant::now());
+            }
+            if let Some(result) = complete.take() {
+                break result;
+            }
+        };
+        if worker.join().is_err() {
+            return Err(anyhow::anyhow!("time-travel worker panicked"));
+        }
+        result
+    })
+}
+
 fn run_rebase_plan(
     terminal: &mut ratatui::DefaultTerminal,
     repository: gix::ThreadSafeRepository,
     graph: &HistoryGraph,
     plan: edit::rebase::Plan,
 ) -> Result<edit::rebase::PlanPerform> {
-    run_with_rebase_progress(terminal, move |report| {
+    run_with_todo_progress(terminal, move |report| {
         let mut repository = repository.to_thread_local();
         repository.object_cache_size(None);
         edit::rebase::perform_plan_with_progress(&repository, graph, plan, report)
     })
 }
 
-fn run_with_rebase_progress<T: Send>(
+fn run_with_todo_progress<T: Send>(
     terminal: &mut ratatui::DefaultTerminal,
     operation: impl FnOnce(&mut dyn FnMut(edit::rebase::Progress)) -> Result<T> + Send,
 ) -> Result<T> {
@@ -3866,8 +3965,8 @@ fn run_with_rebase_progress<T: Send>(
         let mut rendered = None;
         let result = loop {
             let now = Instant::now();
-            let timeout = if now.duration_since(started) < REBASE_PROGRESS_DELAY {
-                Some(REBASE_PROGRESS_DELAY.saturating_sub(now.duration_since(started)))
+            let timeout = if now.duration_since(started) < TODO_PROGRESS_DELAY {
+                Some(TODO_PROGRESS_DELAY.saturating_sub(now.duration_since(started)))
             } else if latest != rendered {
                 Some(FRAME_INTERVAL.saturating_sub(now.duration_since(last_draw)))
             } else {
@@ -3892,12 +3991,12 @@ fn run_with_rebase_progress<T: Send>(
                 None => {}
             }
             let now = Instant::now();
-            if rebase_progress_visible(now.duration_since(started))
+            if todo_progress_visible(now.duration_since(started))
                 && latest != rendered
                 && now.duration_since(last_draw) >= FRAME_INTERVAL
             {
                 let progress = latest.expect("a changed progress snapshot is available");
-                if let Err(err) = terminal.draw(|frame| ui::draw_rebase_progress(frame, progress)) {
+                if let Err(err) = terminal.draw(|frame| ui::draw_todo_progress(frame, progress)) {
                     break Err(err).context("could not draw rebase progress");
                 }
                 rendered = latest;
@@ -3911,8 +4010,8 @@ fn run_with_rebase_progress<T: Send>(
     })
 }
 
-fn rebase_progress_visible(elapsed: Duration) -> bool {
-    elapsed >= REBASE_PROGRESS_DELAY
+fn todo_progress_visible(elapsed: Duration) -> bool {
+    elapsed >= TODO_PROGRESS_DELAY
 }
 
 #[derive(Clone, Copy)]
@@ -6503,9 +6602,61 @@ mod tests {
     }
 
     #[test]
-    fn rebase_progress_appears_at_three_hundred_milliseconds() {
-        assert!(!rebase_progress_visible(Duration::from_millis(299)));
-        assert!(rebase_progress_visible(REBASE_PROGRESS_DELAY));
+    fn todo_progress_appears_at_three_hundred_milliseconds() {
+        assert!(!todo_progress_visible(Duration::from_millis(299)));
+        assert!(todo_progress_visible(TODO_PROGRESS_DELAY));
+    }
+
+    #[test]
+    fn fast_time_travel_draws_the_first_and_latest_rebased_commits() -> Result<()> {
+        let ids = [
+            gix::ObjectId::Sha1([1; 20]),
+            gix::ObjectId::Sha1([2; 20]),
+            gix::ObjectId::Sha1([3; 20]),
+        ];
+        let mut rendered = Vec::new();
+
+        run_with_rebase_selection(
+            |report| {
+                for id in ids {
+                    report(id);
+                }
+                Ok(())
+            },
+            |id| {
+                rendered.push(id);
+                Ok(())
+            },
+        )?;
+
+        assert_eq!(rendered, [ids[0], ids[2]], "fast intermediate commits are coalesced");
+        Ok(())
+    }
+
+    #[test]
+    fn slow_time_travel_only_draws_rebased_selections() -> Result<()> {
+        let ids = [gix::ObjectId::Sha1([1; 20]), gix::ObjectId::Sha1([2; 20])];
+        let mut rendered = Vec::new();
+
+        run_with_rebase_selection(
+            |report| {
+                for id in ids {
+                    report(id);
+                    std::thread::sleep(FRAME_INTERVAL * 2);
+                }
+                Ok(())
+            },
+            |id| {
+                rendered.push(id);
+                Ok(())
+            },
+        )?;
+
+        assert_eq!(
+            rendered, ids,
+            "slow travel has no rendering mode besides selection frames"
+        );
+        Ok(())
     }
 
     #[test]
