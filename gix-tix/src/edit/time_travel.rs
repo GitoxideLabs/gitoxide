@@ -962,6 +962,18 @@ mod tests {
 
         perform(&repository_path, false, tip, &graph, &[started.commit], &[], false)?.complete()?;
         let repo = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            repo.head_name()?.map(|name| name.as_bstr().to_owned()),
+            Some(b"refs/heads/main".into()),
+            "leaving the review returns to the attached branch"
+        );
+        let snapshot = history::snapshot(&repo, &[], &[], false)?;
+        assert_eq!(snapshot.pins.len(), 1, "only the review-tree departure remains pinned");
+        assert_eq!(snapshot.pins[0].id, child);
+        assert!(
+            snapshot.view_tips.contains(&child),
+            "a fresh attached-HEAD snapshot retains the review-tree leaf"
+        );
         assert!(repo.try_find_reference(stash_name.as_ref())?.is_some());
         assert_eq!(repo.find_reference("refs/stash")?.id().detach(), existing_stash);
         assert!(
@@ -977,6 +989,10 @@ mod tests {
             "returning through any review descendant restores exact review state"
         );
         let repo = crate::test_repository::open(fixture.path())?;
+        assert!(
+            history::all_pins(&repo)?.iter().all(history::Pin::is_head),
+            "returning consumes the ordinary review-tree pin"
+        );
         assert!(repo.try_find_reference(stash_name.as_ref())?.is_none());
         assert_eq!(repo.find_reference("refs/stash")?.id().detach(), existing_stash);
         Ok(())

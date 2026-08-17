@@ -1490,14 +1490,7 @@ pub(crate) fn applicable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
     }
     Ok(pins
         .into_iter()
-        .filter(|pin| {
-            !pin.is_head()
-                && pin.id != head_id
-                && (pin.target.try_name().is_some()
-                    || repo
-                        .merge_base(head_id, pin.id)
-                        .is_ok_and(|base| base.as_ref() == head_id))
-        })
+        .filter(|pin| !pin.is_head() && pin.id != head_id)
         .collect())
 }
 
