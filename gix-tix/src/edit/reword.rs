@@ -8,6 +8,8 @@ const AUTHOR_DATE: &[u8] = b"AuthorDate: ";
 const COMMITTER: &[u8] = b"Committer: ";
 const COMMITTER_DATE: &[u8] = b"CommitterDate: ";
 const COMMENT_CHAR: &[u8] = b"CommentChar: ";
+const MESSAGE: &[u8] = b"Message:";
+const TODO: &[u8] = b"Todo";
 pub(super) const DEFAULT_COMMENT_CHAR: &[u8] = b";";
 pub(super) const WIP_AUTHOR: &[u8] = b"\xf0\x9f\x9a\xa7WIP\xf0\x9f\x9a\xa7 <wip@invalid>";
 pub(super) const ASSISTED_BY: &[u8] = b"Assisted-by: GPT 5.6";
@@ -19,6 +21,12 @@ pub(super) struct Edit<'a> {
     pub committer: &'a [u8],
     pub committer_time: gix::date::Time,
     pub message: BString,
+    pub enrichment: crate::enrich::Headers,
+}
+
+pub(crate) struct Outcome {
+    pub commit: Option<gix::ObjectId>,
+    pub enrichment: Option<crate::enrich::Enrichment>,
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -48,9 +56,10 @@ pub(crate) fn document_with_author(
         .context("could not resolve the Git committer")?
         .to_owned()
         .context("could not own the Git committer")?;
+    let enrichment = crate::enrich::load(&mut crate::enrich::open(repo)?, crate::change_id::for_commit(repo, id)?)?;
 
     let mut out = Vec::new();
-    write_headers(&mut out, &commit.author, &committer, None)?;
+    write_headers(&mut out, &commit.author, &committer, None, &enrichment)?;
     out.push(b'\n');
     out.extend_from_slice(&commit.message);
     if !out.ends_with(b"\n") {
@@ -91,7 +100,7 @@ pub(crate) fn apply(
     graph: &crate::history::HistoryGraph,
     old_id: gix::ObjectId,
     edited: &[u8],
-) -> Result<Option<gix::ObjectId>> {
+) -> Result<Outcome> {
     let edit = parse(edited)?;
     if edit.message.is_empty() {
         anyhow::bail!("the edited commit message is empty");
@@ -104,10 +113,18 @@ pub(crate) fn apply(
         .context("could not decode commit after editing")?
         .into_owned()
         .context("could not own commit after editing")?;
-    commit.author = actor(edit.author, edit.author_time, "author")?;
-    commit.committer = actor(edit.committer, edit.committer_time, "committer")?;
-    commit.message = edit.message;
-    apply_commit(&repo, graph, old_id, commit)
+    let author = actor(edit.author, edit.author_time, "author")?;
+    let commit_changed = author != commit.author || edit.message != commit.message;
+    let commit = if commit_changed {
+        commit.author = author;
+        commit.committer = actor(edit.committer, edit.committer_time, "committer")?;
+        commit.message = edit.message;
+        apply_commit(&repo, graph, old_id, commit)?
+    } else {
+        None
+    };
+    let enrichment = crate::enrich::apply_headers(&repo, commit.unwrap_or(old_id), &edit.enrichment)?;
+    Ok(Outcome { commit, enrichment })
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %old_id))]
@@ -164,6 +181,7 @@ pub(super) fn write_headers(
     author: &gix::actor::Signature,
     committer: &gix::actor::Signature,
     alternative_author: Option<&[u8]>,
+    enrichment: &crate::enrich::Enrichment,
 ) -> Result<()> {
     write_actor(out, AUTHOR, author);
     if let Some(alternative_author) = alternative_author {
@@ -177,6 +195,20 @@ pub(super) fn write_headers(
     write_date(out, COMMITTER_DATE, committer.time)?;
     out.extend_from_slice(COMMENT_CHAR);
     out.extend_from_slice(DEFAULT_COMMENT_CHAR);
+    out.push(b'\n');
+    if !enrichment.todo {
+        out.extend_from_slice(DEFAULT_COMMENT_CHAR);
+    }
+    out.extend_from_slice(TODO);
+    out.push(b'\n');
+    if enrichment.note.is_none() {
+        out.extend_from_slice(DEFAULT_COMMENT_CHAR);
+    }
+    out.extend_from_slice(MESSAGE);
+    if let Some(note) = enrichment.note.as_deref() {
+        out.push(b' ');
+        out.extend_from_slice(gix::objs::commit::MessageRef::from_bytes(note).summary().as_ref());
+    }
     out.push(b'\n');
     Ok(())
 }
@@ -211,7 +243,7 @@ pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
                     .strip_prefix(DEFAULT_COMMENT_CHAR)
                     .is_some_and(|line| line.starts_with(AUTHOR))
         });
-    let mut parts = input.splitn(7 + usize::from(has_alternative_author), |byte| *byte == b'\n');
+    let mut parts = input.splitn(6 + usize::from(has_alternative_author), |byte| *byte == b'\n');
     let mut author = header(parts.next(), AUTHOR)?;
     let mut line = parts.next();
     if line
@@ -231,11 +263,42 @@ pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
     if comment_char.contains(&b'\r') {
         anyhow::bail!("CommentChar must not contain a line ending");
     }
-    if parts.next().map(trim_cr) != Some(&[][..]) {
-        anyhow::bail!("expected an empty line after the commit headers");
+    let remainder = parts.next().context("the enrichment headers are missing")?;
+    let mut enrichment = crate::enrich::Headers::default();
+    let mut todo_seen = false;
+    let mut message_seen = false;
+    let mut message_offset = None;
+    let mut consumed = 0;
+    for line in remainder.lines_with_terminator() {
+        consumed += line.len();
+        let line = trim_cr(line.strip_suffix(b"\n").unwrap_or(line));
+        if line.is_empty() {
+            message_offset = Some(consumed);
+            break;
+        }
+        if line.starts_with(comment_char) {
+            continue;
+        }
+        if line == TODO {
+            if std::mem::replace(&mut todo_seen, true) {
+                anyhow::bail!("duplicate Todo header");
+            }
+            enrichment.todo = true;
+        } else if let Some(title) = line.strip_prefix(MESSAGE) {
+            if std::mem::replace(&mut message_seen, true) {
+                anyhow::bail!("duplicate Message header");
+            }
+            let title = title.trim();
+            enrichment.message = (!title.is_empty()).then(|| title.into());
+        } else {
+            anyhow::bail!("unknown commit header: {}", line.as_bstr());
+        }
     }
+    let message_offset = message_offset.context("expected an empty line after the commit headers")?;
     let message = cleanup_message(
-        parts.next().context("the commit message is missing")?,
+        remainder
+            .get(message_offset..)
+            .context("the commit message is missing")?,
         Some(comment_char),
     );
     Ok(Edit {
@@ -244,6 +307,7 @@ pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
         committer,
         committer_time,
         message,
+        enrichment,
     })
 }
 
@@ -387,9 +451,9 @@ mod tests {
         );
         assert!(
             document
-                .windows(b"CommentChar: ;\n\n".len())
-                .any(|line| line == b"CommentChar: ;\n\n"),
-            "the template declares its default comment prefix"
+                .windows(b"CommentChar: ;\n;Todo\n;Message:\n\n".len())
+                .any(|line| line == b"CommentChar: ;\n;Todo\n;Message:\n\n"),
+            "the template declares its comment prefix and inactive enrichments"
         );
         assert!(
             !document
@@ -399,6 +463,86 @@ mod tests {
                     .windows(b";Co-authored-by:".len())
                     .any(|line| line == b";Co-authored-by:"),
             "existing trailer keys suppress model-specific suggestions regardless of their values"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parses_bare_todo_and_single_line_message_headers() -> gix_testtools::Result {
+        let document = |headers: &str| {
+            format!(
+                "Author: A <a@example.com>\n\
+                 AuthorDate: 2026-08-12 10:20:30 +0200\n\
+                 Committer: C <c@example.com>\n\
+                 CommitterDate: 2026-08-12 11:20:30 +0200\n\
+                 CommentChar: ;\n{headers}\n\n\
+                 title\n"
+            )
+        };
+
+        let active_document = document("Todo\nMessage: enrichment title");
+        let edit = parse(active_document.as_bytes())?;
+        assert_eq!(
+            edit.enrichment,
+            crate::enrich::Headers {
+                todo: true,
+                message: Some("enrichment title".into()),
+            }
+        );
+        assert_eq!(
+            parse(document(";Todo\n;Message:").as_bytes())?.enrichment,
+            Default::default()
+        );
+        assert_eq!(parse(document("Message:").as_bytes())?.enrichment, Default::default());
+        assert!(
+            parse(document("Todo\nTodo").as_bytes()).is_err(),
+            "duplicate Todo is rejected"
+        );
+        assert!(
+            parse(document("Message: one\nMessage: two").as_bytes()).is_err(),
+            "duplicate Message is rejected"
+        );
+        assert!(
+            parse(document("Todo: true").as_bytes()).is_err(),
+            "Todo has no value syntax"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn enrichment_only_edits_do_not_rewrite_the_commit() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open_with(
+            fixture.path(),
+            [
+                "committer.name=Current Committer",
+                "committer.email=current@example.com",
+            ],
+        )?;
+        let id = repository.head_id()?.detach();
+        crate::enrich::toggle(&repository, id)?;
+        crate::enrich::set_note(&repository, id, Some(b"Existing title\n\nexisting body\n"))?;
+        let (_, document) = document(&repository, id)?;
+        assert!(
+            document
+                .windows(b"Todo\nMessage: Existing title\n\n".len())
+                .any(|window| { window == b"Todo\nMessage: Existing title\n\n" }),
+            "active enrichments are shown before the commit message"
+        );
+
+        let edited = document.replacen(b"Message: Existing title", b"Message: New title", 1);
+        let graph = super::super::loaded_graph(&repository)?;
+        let outcome = apply(repository.clone(), &graph, id, &edited)?;
+        assert!(
+            outcome.commit.is_none(),
+            "enrichment changes leave the commit object untouched"
+        );
+        assert_eq!(repository.head_id()?.detach(), id);
+        let enrichment = outcome.enrichment.expect("the enrichment changed");
+        assert!(enrichment.todo);
+        assert_eq!(
+            enrichment.note.as_ref().map(|note| note.as_bstr()),
+            Some(b"New title\n\nexisting body\n".as_bstr())
         );
         Ok(())
     }
@@ -457,7 +601,9 @@ mod tests {
             )
             .replacen(b"\nmiddle\n", b"\nrewritten middle\n", 1);
         let graph = super::super::loaded_graph(&repository)?;
-        let new_middle = apply(repository.clone(), &graph, middle, &edited)?.expect("the message changed");
+        let new_middle = apply(repository.clone(), &graph, middle, &edited)?
+            .commit
+            .expect("the message changed");
         let new_tip = repository.head_id()?.detach();
         let rewritten = repository.find_commit(new_middle)?.decode()?.into_owned()?;
         assert_eq!(rewritten.committer.name, b"Current Committer".as_bstr());
@@ -500,7 +646,9 @@ mod tests {
         let (_, document) = document(&repository, middle)?;
         let edited = document.replacen(b"\nmiddle\n", b"\nrewritten middle\n", 1);
         let graph = super::super::loaded_graph(&repository)?;
-        let rewritten = apply(repository.clone(), &graph, middle, &edited)?.expect("the message changed");
+        let rewritten = apply(repository.clone(), &graph, middle, &edited)?
+            .commit
+            .expect("the message changed");
         assert!(
             repository
                 .find_commit(rewritten)?
@@ -561,7 +709,9 @@ mod tests {
                        \n\
                        rewritten title\n\nrewritten body\n\nAssisted-by: GPT 5.6\n;Co-authored-by: GPT 5.6 <codex@openai.com>\n";
         let graph = super::super::loaded_graph(&repository)?;
-        let new_id = apply(repository.clone(), &graph, old_id, edited)?.expect("the edited commit differs");
+        let new_id = apply(repository.clone(), &graph, old_id, edited)?
+            .commit
+            .expect("the edited commit differs");
         let commit = repository.find_commit(new_id)?;
         let decoded = commit.decode()?;
         assert_eq!(

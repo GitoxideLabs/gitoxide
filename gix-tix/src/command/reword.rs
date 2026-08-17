@@ -88,7 +88,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let mut repository = crate::open_repository(&repository_path, bare, false)
         .context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    finish(crate::edit::reword::apply(repository, &graph, target, &edited)?)
+    finish_editor(crate::edit::reword::apply(repository, &graph, target, &edited)?, target)
 }
 
 fn explicit_message(args: &Args, mut stdin: impl Read) -> Result<Option<Vec<u8>>> {
@@ -125,6 +125,15 @@ fn finish(outcome: Option<gix::ObjectId>) -> Result<()> {
     match outcome {
         Some(id) => println!("{}", id.to_hex_with_len(7)),
         None => println!("no reword performed: the edited commit was unchanged"),
+    }
+    Ok(())
+}
+
+fn finish_editor(outcome: crate::edit::reword::Outcome, original: gix::ObjectId) -> Result<()> {
+    match (outcome.commit, outcome.enrichment) {
+        (Some(id), _) => println!("{}", id.to_hex_with_len(7)),
+        (None, Some(_)) => println!("{}", original.to_hex_with_len(7)),
+        (None, None) => println!("no reword performed: the edited commit was unchanged"),
     }
     Ok(())
 }
@@ -195,6 +204,10 @@ mod tests {
     #[test]
     fn message_bypasses_the_editor_and_rewords_head() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let original = repository.head_id()?.detach();
+        crate::enrich::toggle(&repository, original)?;
+        crate::enrich::set_note(&repository, original, Some(b"kept\n\nbody"))?;
         let mut initial = args("HEAD");
         initial.message = vec!["replacement title".into(), ";literal body".into()];
         initial.author = Some("Agent <agent@example.com>".into());
@@ -209,6 +222,19 @@ mod tests {
             git(fixture.path(), &["log", "-1", "--format=%an <%ae>"])?,
             b"Agent <agent@example.com>\n",
             "an explicit message applies the author without opening an editor"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        let head = repository.head_id()?.detach();
+        assert_eq!(
+            crate::enrich::load(
+                &mut crate::enrich::open(&repository)?,
+                crate::change_id::for_commit(&repository, head)?
+            )?,
+            crate::enrich::Enrichment {
+                todo: true,
+                note: Some("kept\n\nbody".into()),
+            },
+            "explicit messages preserve enrichments"
         );
         let rewritten = git(fixture.path(), &["rev-parse", "HEAD"])?;
         let mut same = args("HEAD");
