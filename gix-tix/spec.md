@@ -644,12 +644,14 @@ space first; changes blocks adapt within the remaining history width.
   files, and non-pending reviewed-tip and base commits. Only after confirmation,
   tix creates the first unused direct `refs/worktree/tix/review/N` ref at the
   reviewed tip and an unsigned ordinary `review` commit at the base with
-  `tix-rebase: onto refs/worktree/tix/review/N`. Starting always creates or reuses
-  a normal worktree-local tix pin for the departure, symbolic for an attached
+  `tix-rebase: onto refs/worktree/tix/review/N`. Starting always creates a
+  dedicated worktree-local tix pin for the departure, symbolic for an attached
   branch and direct for a detached checkout, and names it in the
   `tix-review-return-to` header. HEAD is detached at the review commit,
   its base tree fills the index, and the reviewed tip tree remains in the worktree
   as unstaged changes. The pin keeps the departure and its ancestry visible.
+  Reviews never share return pins, even when they depart from the same ref or
+  commit, so finishing one cannot consume another review's return path.
   Finishing maps the recorded return target through the rewrite and uses normal
   time-travel checkout semantics to restore attached or detached HEAD and consume
   its pin. Existing symbolic review refs remain readable.
