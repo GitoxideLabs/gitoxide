@@ -1749,6 +1749,7 @@ fn metadata_line<'a>(
     let mut labels = row_decorations
         .iter()
         .filter(|decoration| !matches!(decoration.kind, DecorationKind::Pin | DecorationKind::Stash))
+        .filter(|decoration| decoration.kind != DecorationKind::CurrentWorktreeDetached)
         .filter(|decoration| match ref_mode {
             _ if decoration.kind == DecorationKind::Head => false,
             _ if decoration.kind == DecorationKind::Review => true,
@@ -3294,6 +3295,10 @@ mod tests {
                     kind: DecorationKind::WorktreeDetached,
                 },
                 Decoration {
+                    name: "current-detached".into(),
+                    kind: DecorationKind::CurrentWorktreeDetached,
+                },
+                Decoration {
                     name: "HEAD".into(),
                     kind: DecorationKind::Head,
                 },
@@ -3305,6 +3310,10 @@ mod tests {
         assert!(row.contains("@current"));
         assert!(row.contains("main@"));
         assert!(row.contains("detached@"));
+        assert!(
+            !row.contains("current-detached"),
+            "the graph @ already identifies the current detached worktree"
+        );
         assert!(!row.contains("HEAD"), "a worktree label replaces textual HEAD");
         let x = row.find("main@").expect("the worktree label is visible") as u16;
         assert_eq!(terminal.backend().buffer()[(x, 0)].fg, Color::LightBlue);
