@@ -37,6 +37,8 @@ enum Command {
     Spill,
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
     Split,
+    /// Save index and worktree changes at HEAD.
+    Stash,
     /// Pin one or more commits as persistent history tips.
     Pin(Pin),
     /// Travel to a commit while preserving reachable history through tix pins.
@@ -148,6 +150,16 @@ impl Platform {
             Command::Split => {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
                 split(repository, &graph)?;
+            }
+            Command::Stash => {
+                let id = repository
+                    .head_id()
+                    .context("stashing changes requires a born HEAD")?
+                    .detach();
+                println!(
+                    "{}",
+                    crate::edit::stash::save_manual(repository.git_dir(), repository.is_bare(), id)?
+                );
             }
             Command::Pin(args) => pin(&repository, args)?,
             Command::Travel(args) => return travel::run(repository, args),
@@ -505,6 +517,13 @@ mod tests {
                 .command,
             Some(Command::Split)
         ));
+        assert!(matches!(
+            Cli::try_parse_from(["tix", "stash"])
+                .expect("stash parses")
+                .platform
+                .command,
+            Some(Command::Stash)
+        ));
         let pin = Cli::try_parse_from(["tix", "pin", "main", "HEAD~2"])
             .expect("one or more pin revisions parse")
             .platform
@@ -623,6 +642,7 @@ mod tests {
             &["amend"],
             &["spill"],
             &["split"],
+            &["stash"],
             &["pin"],
             &["travel"],
             &["reword"],

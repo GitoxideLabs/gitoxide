@@ -84,7 +84,7 @@ pub(crate) fn render_notice(frame: &mut Frame<'_>, area: Rect, notice: &Notice) 
     );
 }
 
-pub(crate) fn draw_rebase_progress(frame: &mut Frame<'_>, progress: crate::edit::rebase::Progress) {
+pub(crate) fn draw_todo_progress(frame: &mut Frame<'_>, progress: crate::edit::rebase::Progress) {
     let area = frame.area();
     frame.render_widget(Clear, area);
     let width = area.width.min(72);
@@ -569,7 +569,6 @@ pub(crate) fn draw_with_worktree(
             HistoryAlignment::Columns => (metadata.align_columns(column_widths), max_lane_width),
         })
         .collect();
-    let graph_max_offset = max_lane_width.saturating_sub(content.width as usize);
     let max_offset = match alignment {
         HistoryAlignment::None => lanes
             .iter()
@@ -578,8 +577,7 @@ pub(crate) fn draw_with_worktree(
             .max()
             .unwrap_or_default()
             .saturating_sub(content.width as usize),
-        HistoryAlignment::Title => graph_max_offset,
-        HistoryAlignment::Columns => metadata
+        HistoryAlignment::Title | HistoryAlignment::Columns => metadata
             .iter()
             .map(|(metadata, metadata_x)| metadata_x.saturating_add(metadata.width()))
             .max()
@@ -588,11 +586,6 @@ pub(crate) fn draw_with_worktree(
     }
     .min(u16::MAX as usize);
     let horizontal_offset = app.horizontal_offset.min(max_offset);
-    let graph_offset = if alignment == HistoryAlignment::Title {
-        horizontal_offset.min(graph_max_offset)
-    } else {
-        horizontal_offset
-    };
     let selection_info = selection_info_line(
         app.changes_visible()
             .then_some(tree_changes)
@@ -636,8 +629,7 @@ pub(crate) fn draw_with_worktree(
                 .count()
                 .saturating_add(metadata_width)
                 .saturating_sub(horizontal_offset),
-            HistoryAlignment::Title => metadata_x.saturating_add(metadata_width),
-            HistoryAlignment::Columns => metadata_x
+            HistoryAlignment::Title | HistoryAlignment::Columns => metadata_x
                 .saturating_add(metadata_width)
                 .saturating_sub(horizontal_offset),
         };
@@ -703,51 +695,25 @@ pub(crate) fn draw_with_worktree(
         );
 
         let row_area = Rect::new(content.x, y, content.width, 1);
-        if alignment == HistoryAlignment::Title {
-            frame.render_widget(
-                Paragraph::new(lane).style(style).scroll((0, graph_offset as u16)),
-                row_area,
-            );
-            color_graph(
-                frame,
-                row_area,
-                lane,
-                graph_offset,
-                highlight,
-                visible_rows[index].signature,
-                head_state,
-            );
-            let aligned = Rect::new(
-                content.x.saturating_add(u16::try_from(metadata_x).unwrap_or(u16::MAX)),
-                y,
-                content
-                    .width
-                    .saturating_sub(u16::try_from(metadata_x).unwrap_or(u16::MAX)),
-                1,
-            );
-            frame.render_widget(Clear, aligned);
-            frame.render_widget(Paragraph::new(metadata), aligned);
-        } else {
-            let mut spans = Vec::with_capacity(metadata.spans.len() + 2);
-            spans.push(Span::styled(lane, style));
-            if alignment == HistoryAlignment::Columns {
-                spans.push(Span::raw(" ".repeat(metadata_x.saturating_sub(lane.chars().count()))));
-            }
-            spans.extend(metadata.spans);
-            frame.render_widget(
-                Paragraph::new(Line::from(spans)).scroll((0, horizontal_offset as u16)),
-                row_area,
-            );
-            color_graph(
-                frame,
-                row_area,
-                lane,
-                horizontal_offset,
-                highlight,
-                visible_rows[index].signature,
-                head_state,
-            );
+        let mut spans = Vec::with_capacity(metadata.spans.len() + 2);
+        spans.push(Span::styled(lane, style));
+        if alignment != HistoryAlignment::None {
+            spans.push(Span::raw(" ".repeat(metadata_x.saturating_sub(lane.chars().count()))));
         }
+        spans.extend(metadata.spans);
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).scroll((0, horizontal_offset as u16)),
+            row_area,
+        );
+        color_graph(
+            frame,
+            row_area,
+            lane,
+            horizontal_offset,
+            highlight,
+            visible_rows[index].signature,
+            head_state,
+        );
         if selected && app.show_selection_tail && body.width > 0 {
             let marker_limit = hidden_branch_marker
                 .as_ref()
@@ -2495,10 +2461,10 @@ mod tests {
     }
 
     #[test]
-    fn renders_rebase_progress_with_operation_counts_and_times() -> Result<(), Box<dyn std::error::Error>> {
+    fn renders_todo_progress_with_operation_counts_and_times() -> Result<(), Box<dyn std::error::Error>> {
         let mut terminal = Terminal::new(TestBackend::new(80, 8))?;
         terminal.draw(|frame| {
-            draw_rebase_progress(
+            draw_todo_progress(
                 frame,
                 crate::edit::rebase::Progress {
                     total: 100,
@@ -6155,6 +6121,19 @@ mod tests {
             column(&rendered_line(&terminal, 1), "1970-01-01"),
             "title mode leaves earlier fields at natural positions"
         );
+
+        let mut narrow_title = Terminal::new(TestBackend::new(40, 3))?;
+        narrow_title.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let before = rendered_line(&narrow_title, 0);
+        app.update(Action::ScrollRight);
+        assert!(
+            app.horizontal_offset > 0,
+            "title-aligned rows expose their clipped width"
+        );
+        narrow_title.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert_ne!(rendered_line(&narrow_title, 0), before, "l pans the title-aligned row");
+        app.update(Action::ScrollLeft);
+        assert_eq!(app.horizontal_offset, 0, "h returns to the title-aligned row start");
 
         app.update(Action::ToggleAlign);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;

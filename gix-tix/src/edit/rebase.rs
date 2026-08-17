@@ -427,13 +427,13 @@ pub(crate) fn perform(
     perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), None, |_| {})
 }
 
-pub(crate) fn perform_with_progress(
+pub(crate) fn perform_reporting_rebased(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     edit: Edit,
     signature: Signature,
     tree_mode: Tree,
-    report: impl FnMut(Progress),
+    report: impl FnMut(ObjectId),
 ) -> Result<Perform> {
     perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), None, report)
 }
@@ -462,7 +462,7 @@ pub(super) fn perform_deleting_refs(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "shared edit preparation plus progress reporting"
+    reason = "shared edit preparation plus rebased-commit reporting"
 )]
 fn perform_inner(
     repo: &gix::Repository,
@@ -472,7 +472,7 @@ fn perform_inner(
     tree_mode: Tree,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     reset_index_paths: Option<Vec<BString>>,
-    mut report: impl FnMut(Progress),
+    mut report: impl FnMut(ObjectId),
 ) -> Result<Perform> {
     let mut repo = repo.clone();
     let repeat_checkout = match &edit {
@@ -507,11 +507,6 @@ fn perform_inner(
             .context("the edited commit is not in the loaded history")?,
         None => Vec::new(),
     };
-    let mut progress = Progress {
-        total: affected.len(),
-        ..Progress::default()
-    };
-    report(progress);
     validate(&repo, graph, &affected, removed, repeat, tree_mode)?;
 
     let signing = repo
@@ -603,7 +598,6 @@ fn perform_inner(
         } else {
             tree_mode
         };
-        let cherry_pick_started = (commit_tree_mode == Tree::CherryPick).then(Instant::now);
         let rewritten_tree = rewritten_tree(
             &repo,
             &commit,
@@ -623,10 +617,6 @@ fn perform_inner(
                 ours
             }
         };
-        if let Some(started) = cherry_pick_started.filter(|_| new_conflict.is_none()) {
-            progress.cherry_picked += 1;
-            progress.cherry_pick_time += started.elapsed();
-        }
         commit.parents = new_parents.into_iter().collect();
         let pending = commit_tree_mode == Tree::LeaveAsIsAndMark
             || (commit_tree_mode == Tree::LeaveAsIsAndMarkDescendants && Some(old_id) != root)
@@ -647,14 +637,8 @@ fn perform_inner(
         } else {
             CommitState::Unmarked(signature)
         };
-        let (new_id, signing_time) =
-            write_commit_timed(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
-        if let Some(elapsed) = signing_time {
-            progress.signed += 1;
-            progress.signing_time += elapsed;
-        }
-        progress.processed += 1;
-        report(progress);
+        let new_id = write_commit(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
+        report(old_id);
         rewritten.insert(old_id, Some(new_id));
         if let Some((tree, conflicts)) = new_conflict {
             conflict = Some((old_id, tree, conflicts, new_id));
