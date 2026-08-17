@@ -259,7 +259,15 @@ pub(crate) struct Outcome {
     pub selected: Option<ObjectId>,
     pub checkout_reference: Option<gix::refs::FullName>,
     pub deferred_ref_deletions: Vec<(gix::refs::FullName, ObjectId)>,
+    pub ref_rewrites: Vec<RefRewrite>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RefRewrite {
+    pub name: gix::refs::FullName,
+    pub old: ObjectId,
+    pub new: ObjectId,
 }
 
 impl Outcome {
@@ -303,6 +311,7 @@ impl Conflict {
             merged_tree: self.merged_tree,
             commit: self.commit,
             deferred_ref_deletions: outcome.deferred_ref_deletions,
+            ref_rewrites: outcome.ref_rewrites,
             rewritten: outcome.rewritten,
         })
     }
@@ -314,6 +323,7 @@ pub(crate) struct PersistedConflict {
     merged_tree: ObjectId,
     pub(crate) commit: ObjectId,
     pub(crate) deferred_ref_deletions: Vec<(gix::refs::FullName, ObjectId)>,
+    pub(crate) ref_rewrites: Vec<RefRewrite>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
 }
 
@@ -1315,7 +1325,7 @@ impl Prepared {
                 !defer
             });
         }
-        let rollback_refs = update_refs(
+        let updated_refs = update_refs(
             &self.repo,
             &self.rewritten,
             self.root.is_none(),
@@ -1332,7 +1342,7 @@ impl Prepared {
                     &self.repo,
                     &self.committer,
                     &transitions[..transitioned],
-                    &rollback_refs,
+                    &updated_refs.rollback,
                     err,
                 );
             }
@@ -1345,13 +1355,14 @@ impl Prepared {
                         err = err.context(format!("index rollback failed: {restore}"));
                     }
                 }
-                return rollback(&self.repo, &self.committer, &transitions, &rollback_refs, err);
+                return rollback(&self.repo, &self.committer, &transitions, &updated_refs.rollback, err);
             }
         }
         Ok(Outcome {
             selected: self.selected,
             checkout_reference: self.checkout_reference.clone(),
             deferred_ref_deletions,
+            ref_rewrites: updated_refs.rewritten,
             rewritten: std::mem::take(&mut self.rewritten),
         })
     }
@@ -1892,10 +1903,11 @@ fn update_refs(
     expected_refs: Option<Vec<ExpectedRef>>,
     resources: (&[ObjectId], &[(gix::refs::FullName, Target)]),
     stash_edits: super::stash::RewriteEdits,
-) -> Result<Vec<RefEdit>> {
+) -> Result<UpdatedRefs> {
     let (pins, delete_refs) = resources;
     let mut edits = stash_edits.forward;
     let mut rollback = stash_edits.rollback;
+    let mut ref_rewrites = Vec::new();
     if let Some(expected_refs) = expected_refs {
         for ExpectedRef { name, old, new, .. } in expected_refs {
             if delete_refs.iter().any(|(delete, _)| delete == &name) {
@@ -1903,6 +1915,13 @@ fn update_refs(
             }
             if old == new {
                 continue;
+            }
+            if let (Some(old), Some(new)) = (old, new) {
+                ref_rewrites.push(RefRewrite {
+                    name: name.clone(),
+                    old,
+                    new,
+                });
             }
             edits.push(ref_edit(name.clone(), old, new));
             rollback.push(ref_edit(name, new, old));
@@ -1928,6 +1947,13 @@ fn update_refs(
             if delete_refs.iter().any(|(delete, _)| delete == &name) {
                 continue;
             }
+            if let Some(new) = *new {
+                ref_rewrites.push(RefRewrite {
+                    name: name.clone(),
+                    old,
+                    new,
+                });
+            }
             edits.push(ref_edit(name.clone(), Some(old), *new));
             rollback.push(ref_edit(name, *new, Some(old)));
         }
@@ -1936,6 +1962,13 @@ fn update_refs(
             && let Some(new) = rewritten.get(&old)
         {
             let name = head.name().to_owned();
+            if let Some(new) = *new {
+                ref_rewrites.push(RefRewrite {
+                    name: name.clone(),
+                    old,
+                    new,
+                });
+            }
             edits.push(ref_edit(name.clone(), Some(old), *new));
             rollback.push(ref_edit(name, *new, Some(old)));
         }
@@ -2007,12 +2040,23 @@ fn update_refs(
         });
     }
     if edits.is_empty() {
-        return Ok(Vec::new());
+        return Ok(UpdatedRefs::default());
     }
     let mut time = gix::date::parse::TimeBuf::default();
     repo.edit_references_as(edits, Some(committer.to_ref(&mut time)))
         .context("could not update references after rebasing")?;
-    Ok(rollback)
+    ref_rewrites.sort_by(|a, b| a.name.cmp(&b.name));
+    ref_rewrites.dedup();
+    Ok(UpdatedRefs {
+        rollback,
+        rewritten: ref_rewrites,
+    })
+}
+
+#[derive(Default)]
+struct UpdatedRefs {
+    rollback: Vec<RefEdit>,
+    rewritten: Vec<RefRewrite>,
 }
 
 fn pin_name(
@@ -2127,6 +2171,12 @@ mod tests {
         let new_middle = outcome.selected.expect("replacement selects the rewritten commit");
         let new_tip = repo.head_id()?.detach();
         assert_ne!(new_tip, old_tip, "the descendant is rewritten");
+        assert!(
+            outcome.ref_rewrites.iter().any(|rewrite| {
+                rewrite.name.as_bstr() == b"refs/heads/main" && rewrite.old == old_tip && rewrite.new == new_tip
+            }),
+            "the successful branch transaction reports its old and final descendant IDs"
+        );
         assert_eq!(
             repo.find_commit(new_tip)?.parent_ids().next().map(gix::Id::detach),
             Some(new_middle),

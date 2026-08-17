@@ -137,12 +137,21 @@ impl Platform {
             Command::Amend(args) => {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
                 let amended = if args.index {
-                    crate::edit::head::amend_index(repository, &graph)?
+                    crate::edit::head::amend_index_reporting(repository, &graph)?
                 } else {
-                    crate::edit::head::perform(repository, &graph, crate::edit::head::Kind::Amend, None)?
+                    crate::edit::head::perform_reporting(repository, &graph, crate::edit::head::Kind::Amend)?
                 };
                 match amended {
-                    Some(id) => println!("{}", id.to_hex_with_len(7)),
+                    Some(outcome) => {
+                        println!(
+                            "{}",
+                            outcome
+                                .selected
+                                .context("amending did not produce a selection")?
+                                .to_hex_with_len(7)
+                        );
+                        print_ref_rewrites(&outcome.ref_rewrites);
+                    }
                     None => println!("nothing to amend"),
                 }
             }
@@ -380,8 +389,17 @@ fn edit_head(
     kind: crate::edit::head::Kind,
     verb: &str,
 ) -> Result<()> {
-    match crate::edit::head::perform(repository, graph, kind, None)? {
-        Some(id) => println!("{}", id.to_hex_with_len(7)),
+    match crate::edit::head::perform_reporting(repository, graph, kind)? {
+        Some(outcome) => {
+            println!(
+                "{}",
+                outcome
+                    .selected
+                    .context("editing HEAD did not produce a selection")?
+                    .to_hex_with_len(7)
+            );
+            print_ref_rewrites(&outcome.ref_rewrites);
+        }
         None => println!("nothing to {verb}"),
     }
     Ok(())
@@ -403,9 +421,39 @@ fn split(repository: gix::Repository, graph: &crate::history::HistoryGraph) -> R
     let mut repository = crate::open_repository(&repository_path, bare, false)
         .context("could not reopen repository after editing split")?;
     repository.object_cache_size(None);
-    let id = crate::edit::split::apply(repository, graph, prepared, &edited)?;
-    println!("{}", id.to_hex_with_len(7));
+    let outcome = crate::edit::split::apply_reporting(repository, graph, prepared, &edited)?;
+    println!(
+        "{}",
+        outcome
+            .selected
+            .context("splitting did not produce a selection")?
+            .to_hex_with_len(7)
+    );
+    print_ref_rewrites(&outcome.ref_rewrites);
     Ok(())
+}
+
+fn print_ref_rewrites(rewrites: &[crate::edit::rebase::RefRewrite]) {
+    for line in ref_rewrite_lines(rewrites) {
+        println!("{line}");
+    }
+}
+
+fn ref_rewrite_lines(rewrites: &[crate::edit::rebase::RefRewrite]) -> Vec<String> {
+    let mut rewrites = rewrites.to_vec();
+    rewrites.sort_by(|a, b| a.name.cmp(&b.name));
+    rewrites.dedup();
+    rewrites
+        .into_iter()
+        .map(|rewrite| {
+            format!(
+                "{}: {} -> {}",
+                rewrite.name,
+                rewrite.old.to_hex_with_len(7),
+                rewrite.new.to_hex_with_len(7)
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -415,6 +463,32 @@ mod tests {
     use clap::{CommandFactory, error::ErrorKind};
 
     use super::*;
+
+    #[test]
+    fn rewritten_ref_lines_are_sorted_and_show_the_commit_mapping() {
+        let old: gix::ObjectId = "1111111111111111111111111111111111111111"
+            .parse()
+            .expect("valid object ID");
+        let new: gix::ObjectId = "2222222222222222222222222222222222222222"
+            .parse()
+            .expect("valid object ID");
+        let branch = crate::edit::rebase::RefRewrite {
+            name: "refs/heads/z".try_into().expect("valid ref name"),
+            old,
+            new,
+        };
+        let first = crate::edit::rebase::RefRewrite {
+            name: "refs/heads/a".try_into().expect("valid ref name"),
+            old,
+            new,
+        };
+        assert_eq!(
+            ref_rewrite_lines(&[branch.clone(), first, branch]),
+            ["refs/heads/a: 1111111 -> 2222222", "refs/heads/z: 1111111 -> 2222222"],
+            "ref mappings are stable and duplicate-free"
+        );
+        assert!(ref_rewrite_lines(&[]).is_empty(), "unchanged refs add no output");
+    }
 
     #[test]
     fn clap_definition_is_valid() {

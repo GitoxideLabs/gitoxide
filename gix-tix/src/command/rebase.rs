@@ -249,6 +249,7 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
             } else {
                 println!("rebased history");
             }
+            super::print_ref_rewrites(&outcome.ref_rewrites);
             Ok(())
         }
         rebase::PlanPerform::Conflict(conflict) => {
@@ -287,7 +288,7 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
             }
             let materialized =
                 edit::time_travel::materialize_plan_conflict(conflict, &repository_path, bare, &revisions, false);
-            let (notice, _) = match materialized {
+            let (notice, _, ref_rewrites) = match materialized {
                 Ok(materialized) => materialized,
                 Err(err) => {
                     if destination != Path::new("-") {
@@ -296,6 +297,7 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
                     return Err(err);
                 }
             };
+            super::print_ref_rewrites(&ref_rewrites);
             eprintln!("{notice}; continue with `tix rebase apply {}`", destination.display());
             anyhow::bail!("rebase stopped at a materialized conflict")
         }

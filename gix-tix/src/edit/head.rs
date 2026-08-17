@@ -17,11 +17,27 @@ pub fn perform(
     kind: Kind,
     selected_path: Option<(&PathChange, Option<ObjectId>)>,
 ) -> Result<Option<ObjectId>> {
-    perform_inner(repo, graph, kind, selected_path, false)
+    Ok(perform_inner(repo, graph, kind, selected_path, false)?.and_then(|outcome| outcome.selected))
+}
+
+pub(crate) fn perform_reporting(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    kind: Kind,
+) -> Result<Option<rebase::Outcome>> {
+    perform_inner(repo, graph, kind, None, false)
 }
 
 #[tracing::instrument(skip_all)]
+#[cfg(test)]
 pub fn amend_index(repo: gix::Repository, graph: &crate::history::HistoryGraph) -> Result<Option<ObjectId>> {
+    Ok(perform_inner(repo, graph, Kind::Amend, None, true)?.and_then(|outcome| outcome.selected))
+}
+
+pub(crate) fn amend_index_reporting(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+) -> Result<Option<rebase::Outcome>> {
     perform_inner(repo, graph, Kind::Amend, None, true)
 }
 
@@ -31,7 +47,7 @@ fn perform_inner(
     kind: Kind,
     selected_path: Option<(&PathChange, Option<ObjectId>)>,
     index_only: bool,
-) -> Result<Option<ObjectId>> {
+) -> Result<Option<rebase::Outcome>> {
     let head = repo
         .head_id()
         .context("editing requires an existing HEAD commit")?
@@ -118,7 +134,7 @@ fn perform_inner(
         }
         _ => rebase::perform(&repo, graph, edit, signature, tree_mode)?,
     };
-    Ok(performed.complete()?.selected)
+    Ok(Some(performed.complete()?))
 }
 
 fn amend_path_tree(
