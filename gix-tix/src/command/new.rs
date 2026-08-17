@@ -3,11 +3,14 @@ use anyhow::{Context, Result};
 #[derive(Debug, clap::Args)]
 pub(super) struct Args {
     /// Take changes only from the index.
-    #[arg(long, conflicts_with = "worktree")]
+    #[arg(long, conflicts_with_all = ["worktree", "worktree_untracked"])]
     pub(super) index: bool,
     /// Take only tracked worktree changes, ignoring staged-only changes.
-    #[arg(long, conflicts_with = "index")]
+    #[arg(long, conflicts_with_all = ["index", "worktree_untracked"])]
     pub(super) worktree: bool,
+    /// Take worktree changes and untracked files, ignoring staged-only changes.
+    #[arg(long, conflicts_with_all = ["index", "worktree"])]
+    pub(super) worktree_untracked: bool,
     /// Create the commit even when the selected tree is unchanged.
     #[arg(long)]
     pub(super) allow_empty: bool,
@@ -24,6 +27,8 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let graph = crate::edit::loaded_graph(&repository)?;
     let source = if args.index {
         crate::edit::create::Source::Index
+    } else if args.worktree_untracked {
+        crate::edit::create::Source::WorktreeUntracked
     } else if args.worktree {
         crate::edit::create::Source::Worktree
     } else {
@@ -78,6 +83,7 @@ mod tests {
         Args {
             index: false,
             worktree: false,
+            worktree_untracked: false,
             allow_empty: false,
             edit: super::super::reword::MessageArgs {
                 message: vec!["new title".into(), "new body".into()],
@@ -131,12 +137,31 @@ mod tests {
         run(crate::test_repository::open(fixture.path())?, worktree)?;
         assert_eq!(git(fixture.path(), &["show", "HEAD:tracked"])?, b"unstaged\n");
         assert!(git(fixture.path(), &["cat-file", "-e", "HEAD:staged-only"]).is_err());
+        assert!(git(fixture.path(), &["cat-file", "-e", "HEAD:untracked"]).is_err());
 
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
         let mut index = args();
         index.index = true;
         run(crate::test_repository::open(fixture.path())?, index)?;
         assert_eq!(git(fixture.path(), &["show", "HEAD:tracked"])?, b"staged\n");
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_untracked_includes_untracked_but_not_staged_or_ignored_files() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        std::fs::write(fixture.path().join("staged-only"), b"staged only\n")?;
+        git(fixture.path(), &["add", "staged-only"])?;
+        std::fs::write(fixture.path().join(".git/info/exclude"), b"ignored\n")?;
+        std::fs::write(fixture.path().join("ignored"), b"ignored\n")?;
+        let mut worktree = args();
+        worktree.worktree_untracked = true;
+        run(crate::test_repository::open(fixture.path())?, worktree)?;
+
+        assert_eq!(git(fixture.path(), &["show", "HEAD:tracked"])?, b"unstaged\n");
+        assert_eq!(git(fixture.path(), &["show", "HEAD:untracked"])?, b"untracked\n");
+        assert!(git(fixture.path(), &["cat-file", "-e", "HEAD:staged-only"]).is_err());
+        assert!(git(fixture.path(), &["cat-file", "-e", "HEAD:ignored"]).is_err());
         Ok(())
     }
 
@@ -179,6 +204,26 @@ mod tests {
 
         assert_eq!(git(fixture.path(), &["rev-list", "--count", "HEAD"])?, b"1\n");
         assert_eq!(git(fixture.path(), &["ls-tree", "HEAD"])?, b"");
+        Ok(())
+    }
+
+    #[test]
+    fn unchanged_worktree_untracked_requires_allow_empty() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        git(fixture.path(), &["clean", "-fdq"])?;
+        git(fixture.path(), &["checkout", "--", "tracked"])?;
+        let parent = git(fixture.path(), &["rev-parse", "HEAD^{tree}"])?;
+        let mut selected = args();
+        selected.worktree_untracked = true;
+        let err = run(crate::test_repository::open(fixture.path())?, selected)
+            .expect_err("an unchanged worktree including untracked files is rejected");
+        assert!(format!("{err:#}").contains("--allow-empty"));
+
+        let mut empty = args();
+        empty.worktree_untracked = true;
+        empty.allow_empty = true;
+        run(crate::test_repository::open(fixture.path())?, empty)?;
+        assert_eq!(git(fixture.path(), &["rev-parse", "HEAD^{tree}"])?, parent);
         Ok(())
     }
 
