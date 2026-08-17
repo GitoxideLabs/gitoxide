@@ -32,7 +32,7 @@ enum Command {
     /// Print the complete ref-tree without opening the terminal UI.
     RefTree(RefTree),
     /// Add staged changes, or worktree changes when nothing is staged, to HEAD.
-    Amend,
+    Amend(Amend),
     /// Move the changes introduced by HEAD into the worktree.
     Spill,
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
@@ -65,6 +65,13 @@ struct RefTree {
     /// Revisions to traverse instead of all normal references.
     #[arg(value_name = "REVSPEC")]
     revisions: Vec<OsString>,
+}
+
+#[derive(Debug, clap::Args)]
+struct Amend {
+    /// Amend only staged index changes, without falling back to worktree changes.
+    #[arg(long)]
+    index: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -113,9 +120,17 @@ impl Platform {
         let _log_guard = crate::logging::init().context("could not initialize tix diagnostics")?;
         match command {
             Command::RefTree(_) => unreachable!("ref-tree commands return before logging"),
-            Command::Amend => {
+            Command::Amend(args) => {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
-                edit_head(repository, &graph, crate::edit::head::Kind::Amend, "amend")?;
+                let amended = if args.index {
+                    crate::edit::head::amend_index(repository, &graph)?
+                } else {
+                    crate::edit::head::perform(repository, &graph, crate::edit::head::Kind::Amend, None)?
+                };
+                match amended {
+                    Some(id) => println!("{}", id.to_hex_with_len(7)),
+                    None => println!("nothing to amend"),
+                }
             }
             Command::Spill => {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
@@ -305,13 +320,19 @@ mod tests {
         );
         assert_eq!(old_name.revisions, ["tree"]);
 
-        assert!(matches!(
-            Cli::try_parse_from(["tix", "amend"])
-                .expect("amend parses")
-                .platform
-                .command,
-            Some(Command::Amend)
-        ));
+        let amend = Cli::try_parse_from(["tix", "amend", "--index"])
+            .expect("index-only amend parses")
+            .platform
+            .command;
+        let Some(Command::Amend(amend)) = amend else {
+            panic!("amend was expected")
+        };
+        assert!(amend.index);
+        let amend = Cli::try_parse_from(["tix", "amend"])
+            .expect("default amend parses")
+            .platform
+            .command;
+        assert!(matches!(amend, Some(Command::Amend(Amend { index: false }))));
         assert!(matches!(
             Cli::try_parse_from(["tix", "spill"])
                 .expect("spill parses")
