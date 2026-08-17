@@ -1,6 +1,24 @@
+use std::path::{Path, PathBuf};
+
+pub(super) struct CurrentDir(PathBuf);
+
+/// This is a copy from the respective type in `gix-testtools` - deduplicate if it can ever be a dependency again.
+impl CurrentDir {
+    pub(super) fn set(path: impl AsRef<Path>) -> std::io::Result<Self> {
+        let previous = std::env::current_dir()?;
+        std::env::set_current_dir(path)?;
+        Ok(CurrentDir(previous))
+    }
+}
+
+impl Drop for CurrentDir {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.0).expect("previous current directory is still accessible");
+    }
+}
+
 mod system_prefix {
-    use super::super::system_prefix_from_exepath_var;
-    use gix_testtools::tempfile;
+    use super::{super::system_prefix_from_exepath_var, CurrentDir};
     use serial_test::serial;
     use std::{ffi::OsString, path::PathBuf};
 
@@ -116,7 +134,7 @@ mod system_prefix {
         for name in ["mingw32", "mingw64", "clangarm64"] {
             let exepath = ExePath::new();
             exepath.create_subdir(name);
-            let _cwd = gix_testtools::set_current_dir(&exepath.path).expect("can change to test dir");
+            let _cwd = CurrentDir::set(&exepath.path).expect("can change to test dir");
             let outcome = system_prefix_from_exepath_var(|key| if_exepath(key, ""));
             assert_eq!(outcome, None);
         }
@@ -133,7 +151,7 @@ mod system_prefix {
                 .expect("path to the new directory works")
                 .join("dir");
             std::fs::create_dir_all(parent.join(name)).expect("can create directories");
-            let _cwd = gix_testtools::set_current_dir(grandparent.path()).expect("can change to test dir");
+            let _cwd = CurrentDir::set(grandparent.path()).expect("can change to test dir");
             let outcome = system_prefix_from_exepath_var(|key| if_exepath(key, "dir"));
             assert_eq!(outcome, None);
         }

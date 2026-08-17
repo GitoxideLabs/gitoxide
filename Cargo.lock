@@ -2267,10 +2267,10 @@ name = "gix-path"
 version = "0.12.4"
 dependencies = [
  "bstr",
- "gix-testtools",
  "gix-trace",
  "gix-validate",
  "serial_test",
+ "tempfile",
  "thiserror 2.0.18",
  "windows 0.62.2",
  "winreg",

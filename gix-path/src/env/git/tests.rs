@@ -740,12 +740,75 @@ mod locations {
 }
 
 mod exe_info {
-    use std::path::{Path, PathBuf};
+    use std::{
+        ffi::{OsStr, OsString},
+        path::{Path, PathBuf},
+        process::Command,
+    };
 
-    use gix_testtools::tempfile;
     use serial_test::serial;
 
-    use crate::env::git::{NULL_DEVICE, exe_info};
+    use crate::env::{
+        git::{NULL_DEVICE, exe_info},
+        tests::CurrentDir,
+    };
+
+    /// This is a copy from the respective type in `gix-testtools` - deduplicate if it can ever be a dependency again.
+    struct Env(Vec<(OsString, Option<OsString>)>);
+
+    impl Env {
+        fn new() -> Self {
+            Env(Vec::new())
+        }
+
+        fn set(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
+            let key = key.as_ref().to_owned();
+            self.0.push((key.clone(), std::env::var_os(&key)));
+            // SAFETY: All tests which mutate the process environment are serialized.
+            unsafe { std::env::set_var(key, value) };
+            self
+        }
+
+        fn unset(mut self, key: impl AsRef<OsStr>) -> Self {
+            let key = key.as_ref().to_owned();
+            self.0.push((key.clone(), std::env::var_os(&key)));
+            // SAFETY: All tests which mutate the process environment are serialized.
+            unsafe { std::env::remove_var(key) };
+            self
+        }
+    }
+
+    impl Drop for Env {
+        fn drop(&mut self) {
+            for (key, value) in self.0.drain(..).rev() {
+                // SAFETY: All tests which mutate the process environment are serialized.
+                unsafe {
+                    if let Some(value) = value {
+                        std::env::set_var(key, value);
+                    } else {
+                        std::env::remove_var(key);
+                    }
+                }
+            }
+        }
+    }
+
+    fn local_config_repo() -> tempfile::TempDir {
+        let repo = tempfile::tempdir().expect("can create repository directory");
+        let status = Command::new(crate::env::exe_invocation())
+            .args(["init", "-q"])
+            .current_dir(repo.path())
+            .status()
+            .expect("can launch Git");
+        assert!(status.success(), "Git initializes the test repository");
+        let status = Command::new(crate::env::exe_invocation())
+            .args(["config", "--local", "foo.bar", "baz"])
+            .current_dir(repo.path())
+            .status()
+            .expect("can launch Git");
+        assert!(status.success(), "Git writes local test configuration");
+        repo
+    }
 
     /// Wrapper for a valid path to a plausible location, kept from accidentally existing (until drop).
     #[derive(Debug)]
@@ -777,10 +840,10 @@ mod exe_info {
         }
     }
 
-    fn set_temp_env_vars<'a>(path: &Path) -> gix_testtools::Env<'a> {
+    fn set_temp_env_vars(path: &Path) -> Env {
         let path_str = path.to_str().expect("valid Unicode");
 
-        let env = gix_testtools::Env::new()
+        let env = Env::new()
             .set("TMPDIR", path_str) // Mainly for Unix.
             .set("TMP", path_str) // Mainly for Windows.
             .set("TEMP", path_str); // Mainly for Windows, too.
@@ -794,8 +857,8 @@ mod exe_info {
         env
     }
 
-    fn unset_windows_directory_vars<'a>() -> gix_testtools::Env<'a> {
-        gix_testtools::Env::new().unset("windir").unset("SystemRoot")
+    fn unset_windows_directory_vars() -> Env {
+        Env::new().unset("windir").unset("SystemRoot")
     }
 
     fn check_exe_info() {
@@ -839,7 +902,7 @@ mod exe_info {
     #[test]
     #[serial]
     fn tolerates_git_config_env_var() {
-        let _env = gix_testtools::Env::new().set("GIT_CONFIG", NULL_DEVICE);
+        let _env = Env::new().set("GIT_CONFIG", NULL_DEVICE);
         check_exe_info();
     }
 
@@ -876,7 +939,7 @@ mod exe_info {
         let with_unmodified_env = exe_info();
 
         let with_git_config_env_var = {
-            let _env = gix_testtools::Env::new().set("GIT_CONFIG", NULL_DEVICE);
+            let _env = Env::new().set("GIT_CONFIG", NULL_DEVICE);
             exe_info()
         };
 
@@ -887,10 +950,10 @@ mod exe_info {
     #[serial]
     #[cfg(not(target_os = "macos"))] // Assumes no higher "unknown" scope. The `nosystem` case works.
     fn never_from_local_scope() {
-        let repo = gix_testtools::scripted_fixture_read_only("local_config.sh").expect("script succeeds");
+        let repo = local_config_repo();
 
-        let _cwd = gix_testtools::set_current_dir(repo).expect("can change to repo dir");
-        let _env = gix_testtools::Env::new()
+        let _cwd = CurrentDir::set(repo.path()).expect("can change to repo dir");
+        let _env = Env::new()
             .set("GIT_CONFIG_SYSTEM", NULL_DEVICE)
             .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
 
@@ -904,10 +967,10 @@ mod exe_info {
     #[test]
     #[serial]
     fn never_from_local_scope_nosystem() {
-        let repo = gix_testtools::scripted_fixture_read_only("local_config.sh").expect("script succeeds");
+        let repo = local_config_repo();
 
-        let _cwd = gix_testtools::set_current_dir(repo).expect("can change to repo dir");
-        let _env = gix_testtools::Env::new()
+        let _cwd = CurrentDir::set(repo.path()).expect("can change to repo dir");
+        let _env = Env::new()
             .set("GIT_CONFIG_NOSYSTEM", "1")
             .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
 
@@ -922,13 +985,11 @@ mod exe_info {
     #[serial]
     #[cfg(not(target_os = "macos"))] // Assumes no higher "unknown" scope. The `nosystem` case works.
     fn never_from_local_scope_even_if_temp_is_here() {
-        let repo = gix_testtools::scripted_fixture_read_only("local_config.sh")
-            .expect("script succeeds")
-            .canonicalize()
-            .expect("repo path is valid and exists");
+        let repo = local_config_repo();
+        let repo_path = repo.path().canonicalize().expect("repo path is valid and exists");
 
-        let _cwd = gix_testtools::set_current_dir(&repo).expect("can change to repo dir");
-        let _env = set_temp_env_vars(&repo)
+        let _cwd = CurrentDir::set(&repo_path).expect("can change to repo dir");
+        let _env = set_temp_env_vars(&repo_path)
             .set("GIT_CONFIG_SYSTEM", NULL_DEVICE)
             .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
 
@@ -942,13 +1003,11 @@ mod exe_info {
     #[test]
     #[serial]
     fn never_from_local_scope_even_if_temp_is_here_nosystem() {
-        let repo = gix_testtools::scripted_fixture_read_only("local_config.sh")
-            .expect("script succeeds")
-            .canonicalize()
-            .expect("repo path is valid and exists");
+        let repo = local_config_repo();
+        let repo_path = repo.path().canonicalize().expect("repo path is valid and exists");
 
-        let _cwd = gix_testtools::set_current_dir(&repo).expect("can change to repo dir");
-        let _env = set_temp_env_vars(&repo)
+        let _cwd = CurrentDir::set(&repo_path).expect("can change to repo dir");
+        let _env = set_temp_env_vars(&repo_path)
             .set("GIT_CONFIG_NOSYSTEM", "1")
             .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
 
@@ -962,19 +1021,19 @@ mod exe_info {
     #[test]
     #[serial]
     fn never_from_git_config_env_var() {
-        let repo = gix_testtools::scripted_fixture_read_only("local_config.sh").expect("script succeeds");
+        let repo = local_config_repo();
 
         // Get an absolute path to a config file that is non-UNC if possible so any Git accepts it.
         let config_path = std::env::current_dir()
             .expect("got CWD")
-            .join(repo)
+            .join(repo.path())
             .join(".git")
             .join("config")
             .to_str()
             .expect("valid UTF-8")
             .to_owned();
 
-        let _env = gix_testtools::Env::new()
+        let _env = Env::new()
             .set("GIT_CONFIG_NOSYSTEM", "1")
             .set("GIT_CONFIG_GLOBAL", NULL_DEVICE)
             .set("GIT_CONFIG", config_path);
