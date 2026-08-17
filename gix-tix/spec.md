@@ -42,7 +42,12 @@ without trading responsiveness for metadata that is not visible.
   current-worktree tix pin at that commit or a descendant;
   every such covering pin participates so retained forks are rewritten together.
   Eligibility is checked before the editor opens, and an unchanged document is
-  an explicit no-op.
+  an explicit no-op. Editor documents also contain commented `Todo` and
+  `Message:` enrichment headers. An uncommented bare `Todo` enables the flag;
+  commenting or deleting it disables the flag. `Message:` accepts one title
+  line. Editing that title preserves an existing message body byte-for-byte,
+  while commenting, deleting, or emptying the header removes the whole message.
+  Explicit `-m` and `-f` messages preserve enrichments.
 - `-x/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
 - `-h/--help` prints Clap's standard help for `tix` and every subcommand.
@@ -604,8 +609,8 @@ space first; changes blocks adapt within the remaining history width.
   boundary or merge commit. It requires completed history and a live,
   conflict-free worktree, but unlike `e n` it is not restricted by descendants
   because it rewrites none of them. It is unavailable for unborn history.
-- Fork preparation reuses the new-commit editor, candidate-tree, identity, and
-  signing rules. Saving writes only the new commit and a temporary direct
+- Fork preparation reuses the new-commit editor, candidate-tree, identity,
+  signing, and enrichment-header rules. Saving writes only the new commit and a temporary direct
   `refs/worktree/tix/pins/*` ref; existing refs, descendants, indexes, and
   worktrees do not move during creation.
 - Tix immediately time-travels to the new fork. A successful checkout consumes
@@ -644,7 +649,7 @@ space first; changes blocks adapt within the remaining history width.
 - `tix split` performs the same split at `HEAD`: worktree changes are amended
   into the source commit and staged index changes become the new commit on top.
   Its upper-commit editor offers the same commented WIP author override as the
-  new-commit editor.
+  new-commit editor, including its enrichment headers.
 - A successful split leaves the worktree bytes untouched and resets the index to
   the new upper commit. The rewritten source retains its message and ancestry;
   the upper commit receives the edited message. Their final trees and ancestry

@@ -15,6 +15,12 @@ pub(crate) struct Enrichment {
     pub note: Option<BString>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Headers {
+    pub todo: bool,
+    pub message: Option<BString>,
+}
+
 pub(crate) fn marker(todo: bool, note: bool) -> &'static str {
     match (todo, note) {
         (true, true) => "🚧📝",
@@ -87,6 +93,59 @@ pub(crate) fn set_note(repo: &gix::Repository, commit_id: ObjectId, note: Option
         }
         Ok(())
     })
+}
+
+pub(crate) fn apply_headers(
+    repo: &gix::Repository,
+    commit_id: ObjectId,
+    headers: &Headers,
+) -> Result<Option<Enrichment>> {
+    let current = load(&mut open(repo)?, crate::change_id::for_commit(repo, commit_id)?)?;
+    let note = match (
+        headers.message.as_ref().map(|message| message.as_bstr()),
+        current.note.as_ref().map(|note| note.as_bstr()),
+    ) {
+        (None, _) => None,
+        (Some(title), Some(existing)) => {
+            let parsed = gix::objs::commit::MessageRef::from_bytes(existing);
+            if parsed.summary().as_ref() == title {
+                Some(existing.to_owned())
+            } else {
+                let mut message = BString::from(title);
+                if let Some(body) = parsed.body {
+                    message.extend_from_slice(b"\n\n");
+                    message.extend_from_slice(body);
+                }
+                Some(message)
+            }
+        }
+        (Some(title), None) => Some(title.to_owned()),
+    };
+    let desired = Enrichment {
+        todo: headers.todo,
+        note,
+    };
+    if desired == current {
+        return Ok(None);
+    }
+    update(repo, commit_id, |config| {
+        let mut section = config
+            .section_mut_or_create_new("commit", None)
+            .context("could not create the commit enrichment section")?;
+        section
+            .set("todo", if desired.todo { "true" } else { "false" })
+            .context("could not update commit.todo")?;
+        match desired.note.as_ref().map(|note| note.as_bstr()) {
+            Some(note) => {
+                section.set("note", note).context("could not update commit.note")?;
+            }
+            None => {
+                section.remove("note");
+            }
+        }
+        Ok(())
+    })
+    .map(Some)
 }
 
 fn update(
@@ -193,6 +252,46 @@ mod tests {
         let enrichment = set_note(&repo, id, None)?;
         assert!(enrichment.todo, "emptying the editor preserves todo");
         assert!(enrichment.note.is_none(), "emptying the editor deletes the note");
+        Ok(())
+    }
+
+    #[test]
+    fn commit_headers_edit_only_the_message_title() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            ["user.name=header author", "user.email=header@example.com"],
+        )?;
+        let id = repo.head_id()?.detach();
+        set_note(&repo, id, Some(b"Old title\n\nbody stays byte-for-byte\n"))?;
+
+        let unchanged = apply_headers(
+            &repo,
+            id,
+            &Headers {
+                todo: false,
+                message: Some("Old title".into()),
+            },
+        )?;
+        assert!(unchanged.is_none(), "an unchanged title preserves the complete message");
+        let changed = apply_headers(
+            &repo,
+            id,
+            &Headers {
+                todo: true,
+                message: Some("New title".into()),
+            },
+        )?
+        .expect("the title and todo changed");
+        assert!(changed.todo);
+        assert_eq!(
+            changed.note.as_ref().map(|note| note.as_bstr()),
+            Some(b"New title\n\nbody stays byte-for-byte\n".as_bstr())
+        );
+
+        let removed = apply_headers(&repo, id, &Headers::default())?.expect("removing the title changes the message");
+        assert!(!removed.todo);
+        assert!(removed.note.is_none(), "removing the title removes its body as well");
         Ok(())
     }
 

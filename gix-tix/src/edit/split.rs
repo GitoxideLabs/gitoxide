@@ -73,11 +73,13 @@ pub(crate) fn apply(
     mut prepared: Prepared,
     edited: &[u8],
 ) -> Result<ObjectId> {
+    let repository_path = repo.git_dir().to_owned();
+    let bare = repo.is_bare();
     repo.objects
         .set_object_memory(std::mem::take(&mut prepared.create.objects));
-    let mut upper = create::commit_from_edit(&prepared.create, edited)?;
+    let (mut upper, enrichment) = create::commit_from_edit(&prepared.create, edited)?;
     upper.tree = prepared.tree;
-    rebase::perform(
+    let id = rebase::perform(
         &repo,
         graph,
         rebase::Edit::Split {
@@ -90,7 +92,11 @@ pub(crate) fn apply(
     )?
     .complete()?
     .selected
-    .context("splitting HEAD did not produce a selection")
+    .context("splitting HEAD did not produce a selection")?;
+    drop(repo);
+    crate::enrich::apply_headers(&crate::open_repository(&repository_path, bare, false)?, id, &enrichment)
+        .context("the commit was split, but its enrichment could not be saved")?;
+    Ok(id)
 }
 
 #[cfg(test)]
@@ -154,10 +160,23 @@ mod tests {
             "preparing both cherry-picks leaves the repository unchanged"
         );
 
-        let edited = prepared.document.replacen(b"what\n\nwhy", b"upper\n\nreason", 1);
+        let edited = prepared
+            .document
+            .replacen(b"what\n\nwhy", b"upper\n\nreason", 1)
+            .replacen(b";Todo\n;Message:", b"Todo\nMessage: split enrichment", 1);
         let graph = super::super::loaded_graph(&open(fixture.path())?)?;
         let upper = apply(open(fixture.path())?, &graph, prepared, &edited)?;
         let repository = open(fixture.path())?;
+        assert_eq!(
+            crate::enrich::load(
+                &mut crate::enrich::open(&repository)?,
+                crate::change_id::for_commit(&repository, upper)?
+            )?,
+            crate::enrich::Enrichment {
+                todo: true,
+                note: Some("split enrichment".into()),
+            }
+        );
         let source = repository
             .find_commit(upper)?
             .parent_ids()

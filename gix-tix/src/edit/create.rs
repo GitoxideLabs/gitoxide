@@ -99,7 +99,13 @@ fn prepare_inner(mut repo: gix::Repository, parent: Option<ObjectId>, empty: boo
     )?;
     let line_counts = add_line_counts(&repo, &mut changes)?;
     let mut document = Vec::new();
-    reword::write_headers(&mut document, &author, &committer, Some(reword::WIP_AUTHOR))?;
+    reword::write_headers(
+        &mut document,
+        &author,
+        &committer,
+        Some(reword::WIP_AUTHOR),
+        &crate::enrich::Enrichment::default(),
+    )?;
     document.extend_from_slice(b"\nwhat\n\nwhy\n");
     for trailer in reword::missing_agent_trailers(b"what\n\nwhy\n").into_iter().flatten() {
         document.extend_from_slice(b"\n;");
@@ -242,9 +248,11 @@ pub(crate) fn apply(
     mut prepared: Prepared,
     edited: &[u8],
 ) -> Result<ObjectId> {
+    let repository_path = repo.git_dir().to_owned();
+    let bare = repo.is_bare();
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
-    let commit = commit_from_edit(&prepared, edited)?;
-    rebase::perform(
+    let (commit, enrichment) = commit_from_edit(&prepared, edited)?;
+    let id = rebase::perform(
         &repo,
         graph,
         rebase::Edit::Insert {
@@ -257,7 +265,11 @@ pub(crate) fn apply(
     )?
     .complete()?
     .selected
-    .context("inserting a commit did not produce a selection")
+    .context("inserting a commit did not produce a selection")?;
+    drop(repo);
+    crate::enrich::apply_headers(&crate::open_repository(&repository_path, bare, false)?, id, &enrichment)
+        .context("the commit was created, but its enrichment could not be saved")?;
+    Ok(id)
 }
 
 #[tracing::instrument(skip_all, fields(parent = ?prepared.parent))]
@@ -267,10 +279,12 @@ pub(crate) fn apply_fork(
     mut prepared: Prepared,
     edited: &[u8],
 ) -> Result<ObjectId> {
+    let repository_path = repo.git_dir().to_owned();
+    let bare = repo.is_bare();
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
     let parent = prepared.parent.context("a fork commit requires a parent")?;
-    let commit = commit_from_edit(&prepared, edited)?;
-    rebase::perform(
+    let (commit, enrichment) = commit_from_edit(&prepared, edited)?;
+    let id = rebase::perform(
         &repo,
         graph,
         rebase::Edit::Fork { anchor: parent, commit },
@@ -279,23 +293,33 @@ pub(crate) fn apply_fork(
     )?
     .complete()?
     .selected
-    .context("forking a commit did not produce a selection")
+    .context("forking a commit did not produce a selection")?;
+    drop(repo);
+    crate::enrich::apply_headers(&crate::open_repository(&repository_path, bare, false)?, id, &enrichment)
+        .context("the fork was created, but its enrichment could not be saved")?;
+    Ok(id)
 }
 
-pub(super) fn commit_from_edit(prepared: &Prepared, edited: &[u8]) -> Result<gix::objs::Commit> {
+pub(super) fn commit_from_edit(
+    prepared: &Prepared,
+    edited: &[u8],
+) -> Result<(gix::objs::Commit, crate::enrich::Headers)> {
     let edit = reword::parse(edited)?;
     if edit.message.is_empty() {
         anyhow::bail!("the edited commit message is empty");
     }
-    Ok(gix::objs::Commit {
-        message: edit.message,
-        tree: prepared.tree,
-        author: reword::actor(edit.author, edit.author_time, "author")?,
-        committer: reword::actor(edit.committer, edit.committer_time, "committer")?,
-        encoding: None,
-        parents: prepared.parent.into_iter().collect(),
-        extra_headers: Vec::new(),
-    })
+    Ok((
+        gix::objs::Commit {
+            message: edit.message,
+            tree: prepared.tree,
+            author: reword::actor(edit.author, edit.author_time, "author")?,
+            committer: reword::actor(edit.committer, edit.committer_time, "committer")?,
+            encoding: None,
+            parents: prepared.parent.into_iter().collect(),
+            extra_headers: Vec::new(),
+        },
+        edit.enrichment,
+    ))
 }
 
 #[cfg(test)]
@@ -373,7 +397,10 @@ mod tests {
             "a ref may appear while the editor is open"
         );
 
-        let edited = prepared.document.replacen(b"what\n\nwhy", b"title\n\nbody", 1);
+        let edited = prepared
+            .document
+            .replacen(b"what\n\nwhy", b"title\n\nbody", 1)
+            .replacen(b";Todo\n;Message:", b"Todo\nMessage: created enrichment", 1);
         let graph = super::super::loaded_graph(&open(fixture.path())?)?;
         let new_id = apply(open(fixture.path())?, &graph, prepared, &edited)?;
         let after = gix_testtools::repository::snapshot(fixture.path())?;
@@ -387,6 +414,16 @@ mod tests {
         );
         let repository = open(fixture.path())?;
         let commit = repository.find_commit(new_id)?;
+        assert_eq!(
+            crate::enrich::load(
+                &mut crate::enrich::open(&repository)?,
+                crate::change_id::for_commit(&repository, new_id)?
+            )?,
+            crate::enrich::Enrichment {
+                todo: true,
+                note: Some("created enrichment".into()),
+            }
+        );
         assert_eq!(commit.parent_ids().next().map(gix::Id::detach), Some(parent));
         assert_eq!(commit.message_raw()?, b"title\n\nbody\n".as_bstr());
         assert_eq!(
@@ -401,8 +438,8 @@ mod tests {
         );
         assert_eq!(
             after.commits.len(),
-            before.commits.len() + 1,
-            "exactly one reachable commit is added"
+            before.commits.len() + 2,
+            "the history commit and its enrichment note commit are added"
         );
         for name in ["refs/heads/main", "refs/patches/create", "refs/patches/late"] {
             assert_eq!(
@@ -466,11 +503,24 @@ mod tests {
         let parent = main;
         let before = gix_testtools::repository::snapshot(fixture.path())?;
         let prepared = prepare(open(fixture.path())?, Some(parent))?;
-        let edited = prepared.document.replacen(b"what\n\nwhy", b"fork\n\nreason", 1);
+        let edited = prepared
+            .document
+            .replacen(b"what\n\nwhy", b"fork\n\nreason", 1)
+            .replacen(b";Todo\n;Message:", b"Todo\nMessage: fork enrichment", 1);
         let graph = super::super::loaded_graph(&open(fixture.path())?)?;
         let fork = apply_fork(open(fixture.path())?, &graph, prepared, &edited)?;
 
         let repository = open(fixture.path())?;
+        assert_eq!(
+            crate::enrich::load(
+                &mut crate::enrich::open(&repository)?,
+                crate::change_id::for_commit(&repository, fork)?
+            )?,
+            crate::enrich::Enrichment {
+                todo: true,
+                note: Some("fork enrichment".into()),
+            }
+        );
         assert_eq!(repository.head_id()?.detach(), main, "forking does not move HEAD");
         assert_eq!(
             repository.find_reference("refs/heads/main")?.id().detach(),

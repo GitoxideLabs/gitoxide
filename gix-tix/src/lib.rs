@@ -2141,7 +2141,9 @@ fn event_loop(
                             )
                         });
                     match result {
-                        Ok(Some(new_id)) => {
+                        Ok(Some(edit::reword::Outcome {
+                            commit: Some(new_id), ..
+                        })) => {
                             app.leave_success(format!(
                                 "reworded {} as {}",
                                 id.to_hex_with_len(7),
@@ -2150,7 +2152,16 @@ fn event_loop(
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
+                        Ok(Some(edit::reword::Outcome {
+                            enrichment: Some(enrichment),
+                            ..
+                        })) => {
+                            app.clear_enrichments();
+                            app.set_enrichment(id, enrichment);
+                            app.leave_success("updated enrichment");
+                        }
                         Ok(None) => {}
+                        Ok(Some(_)) => {}
                         Err(err) => app.leave_error(format!("reword: {err:#}")),
                     }
                 }
@@ -3725,7 +3736,7 @@ fn reword_commit(
     graph: &HistoryGraph,
     id: gix::ObjectId,
     enhanced_keyboard: bool,
-) -> Result<Option<gix::ObjectId>> {
+) -> Result<Option<edit::reword::Outcome>> {
     let (editor, document) = {
         let mut repository =
             open_repository(repository_path, bare, false).context("could not open repository before editing commit")?;
@@ -3746,7 +3757,7 @@ fn reword_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    edit::reword::apply(repository, graph, id, &edited)
+    edit::reword::apply(repository, graph, id, &edited).map(Some)
 }
 
 #[tracing::instrument(skip_all, fields(base = %base, commits = commits.len()))]
