@@ -1,4 +1,4 @@
-use std::{collections::HashSet, ffi::OsString};
+use std::{collections::HashSet, ffi::OsString, io::Write, sync::atomic::AtomicBool};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -31,6 +31,9 @@ pub struct Platform {
 enum Command {
     /// Print the complete ref-tree without opening the terminal UI.
     RefTree(RefTree),
+    /// Print the complete history view without opening the terminal UI.
+    #[command(disable_help_flag = true)]
+    Show(Show),
     /// Add staged changes, or worktree changes when nothing is staged, to HEAD.
     Amend(Amend),
     /// Move the changes introduced by HEAD into the worktree.
@@ -64,6 +67,19 @@ struct RefTree {
     unicode: bool,
     /// Revisions to traverse instead of all normal references.
     #[arg(value_name = "REVSPEC")]
+    revisions: Vec<OsString>,
+}
+
+#[derive(Debug, clap::Args)]
+struct Show {
+    /// Print help.
+    #[arg(long, action = clap::ArgAction::HelpLong)]
+    help: Option<bool>,
+    /// Hide this revision and every commit reachable from it.
+    #[arg(short = 'h', long, required = true, value_name = "REVSPEC")]
+    hide: Vec<OsString>,
+    /// Visible traversal tips, or HEAD if omitted.
+    #[arg(value_name = "TIP")]
     revisions: Vec<OsString>,
 }
 
@@ -115,11 +131,12 @@ impl Platform {
         let repository = repository.to_thread_local();
         let command = match command {
             Command::RefTree(args) => return print_ref_tree(&repository, args),
+            Command::Show(args) => return show(&repository, args),
             command => command,
         };
         let _log_guard = crate::logging::init().context("could not initialize tix diagnostics")?;
         match command {
-            Command::RefTree(_) => unreachable!("ref-tree commands return before logging"),
+            Command::RefTree(_) | Command::Show(_) => unreachable!("display commands return before logging"),
             Command::Amend(args) => {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
                 let amended = if args.index {
@@ -158,6 +175,93 @@ fn print_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<()> {
     let rendered = crate::ref_tree::render_full(repository, &revisions, &args.hide, !args.no_tags, args.unicode)?;
     std::io::Write::write_all(&mut std::io::stdout().lock(), rendered.as_bytes())
         .context("could not write ref-tree")?;
+    Ok(())
+}
+
+fn show(repository: &gix::Repository, args: Show) -> Result<()> {
+    let (hide, unavailable) = crate::history::available_hidden_revisions(repository, &args.hide)?;
+    for (revision, err) in unavailable {
+        eprintln!(
+            "warning: ignoring unavailable hidden revision {}: {err}",
+            revision.to_string_lossy()
+        );
+    }
+    write_history(repository, &args.revisions, &hide, std::io::stdout().lock())
+}
+
+fn write_history(
+    repository: &gix::Repository,
+    revisions: &[OsString],
+    hide: &[OsString],
+    mut out: impl Write,
+) -> Result<()> {
+    let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
+        crate::history::Authors::default(),
+    ));
+    let refs = crate::history::snapshot(repository, revisions, hide, false)?;
+    let mut app = crate::app::App::new(usize::MAX);
+    let mut decorations = crate::history::Decorations::default();
+    let mut history_graph = None;
+    crate::history::load(
+        repository,
+        revisions,
+        hide,
+        false,
+        &authors,
+        &AtomicBool::new(false),
+        |event| {
+            match event {
+                crate::history::Event::Decorations(value) => decorations = value,
+                crate::history::Event::Commits(rows) => app.extend_commits(rows),
+                crate::history::Event::HiddenCommits(rows) => app.extend_hidden_commits(rows),
+                crate::history::Event::Complete(graph) => history_graph = Some(graph),
+                crate::history::Event::VisibleComplete | crate::history::Event::Cancelled => {}
+            }
+            true
+        },
+    )?;
+    let graph = history_graph.context("history traversal did not complete")?;
+    let rows = app
+        .start_lane_computation()
+        .context("history rows were unavailable for lane computation")?;
+    let (rows, lanes, elapsed) = crate::app::compute_lanes(rows);
+    app.finish_lane_computation(rows, lanes, elapsed);
+    crate::update_hidden_branch_updates(&mut app, Some(&graph), &refs);
+
+    for index in 0..app.rows.len() {
+        if app.rows[index].metadata_loaded {
+            continue;
+        }
+        let id = app.rows[index].id;
+        let (metadata, attributions) =
+            crate::history::load_metadata(repository, id, &authors).context("could not load displayed commit")?;
+        app.set_metadata(index, metadata, attributions);
+    }
+
+    let mut note_ids = HashSet::new();
+    let mut notes = repository
+        .notes()
+        .context("could not open Git notes")?;
+    for row in &app.rows {
+        if !notes
+            .get(row.id)
+            .context("could not load displayed commit notes")?
+            .is_empty()
+        {
+            note_ids.insert(row.id);
+        }
+    }
+
+    let mailmap = repository.open_mailmap();
+    let lanes = app.render_lanes(0..app.rows.len());
+    for (index, row) in app.rows.iter().enumerate() {
+        let metadata = crate::ui::plain_history_metadata(&app, row, &decorations, &mailmap, note_ids.contains(&row.id));
+        write!(out, "{}{}", lanes.lane(index), metadata).context("could not write history row")?;
+        if let Some(behind) = app.hidden_branch_behind(row.id) {
+            write!(out, " ⇣{behind}").context("could not write hidden-branch status")?;
+        }
+        writeln!(out).context("could not finish history row")?;
+    }
     Ok(())
 }
 
@@ -297,6 +401,17 @@ mod tests {
         assert_eq!(ref_tree.hide, ["private"]);
         assert!(ref_tree.unicode);
         assert_eq!(ref_tree.revisions, ["main", "topic"]);
+
+        let show = Cli::try_parse_from(["tix", "show", "-h", "main", "--hide", "tag", "topic"])
+            .expect("show options parse")
+            .platform
+            .command;
+        let Some(Command::Show(show)) = show else {
+            panic!("show was expected")
+        };
+        assert!(show.help.is_none());
+        assert_eq!(show.hide, ["main", "tag"]);
+        assert_eq!(show.revisions, ["topic"]);
 
         assert!(
             Cli::try_parse_from(["tix", "--worktrees"]).is_err(),
@@ -470,6 +585,18 @@ mod tests {
             ErrorKind::InvalidValue
         );
         assert_eq!(
+            Cli::try_parse_from(["tix", "show", "topic"])
+                .expect_err("show requires a hidden revision")
+                .kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+        assert_eq!(
+            Cli::try_parse_from(["tix", "show", "--help"])
+                .expect_err("show has long help")
+                .kind(),
+            ErrorKind::DisplayHelp
+        );
+        assert_eq!(
             Cli::try_parse_from(["tix", "amend", "topic"])
                 .expect_err("commands reject TUI arguments")
                 .kind(),
@@ -556,6 +683,39 @@ mod tests {
             .find(|pin| pin.name == pins[0].name)
             .context("the symbolic pin remains")?;
         assert_eq!(followed.id, parent, "the symbolic pin follows the moved branch");
+        Ok(())
+    }
+
+    #[test]
+    fn show_prints_the_complete_plain_history_view() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        create_pins(&repository, &[OsString::from("topic")])?;
+
+        let mut output = Vec::new();
+        write_history(&repository, &[], &[OsString::from("v1")], &mut output)?;
+        let output = String::from_utf8(output)?;
+
+        assert_eq!(output.lines().count(), 5, "the complete projected history is printed");
+        assert!(output.contains('●'), "history graph lanes are rendered");
+        assert!(output.contains("📌"), "applicable pins are decorated and traversed");
+        assert!(
+            output.contains("topic"),
+            "a pinned tip outside HEAD history is included"
+        );
+        assert!(
+            output.contains("Mailmapped Author"),
+            "default mailmap formatting is retained"
+        );
+        assert!(
+            output.contains("Co: Human Coauthor"),
+            "default trailer attribution is retained"
+        );
+        assert!(
+            output.contains("v1") && output.contains("root"),
+            "the hidden boundary row is included"
+        );
+        assert!(!output.contains('\u{1b}'), "plain output contains no terminal escapes");
         Ok(())
     }
 
