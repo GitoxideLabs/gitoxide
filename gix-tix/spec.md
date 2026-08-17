@@ -465,7 +465,9 @@ space first; changes blocks adapt within the remaining history width.
   `clean` in green, and are not focusable.
 - Tree paths preserve tree-diff order. Worktree paths show staged entries first in
   green and unstaged/untracked/conflicted entries second in bright red, sorted by
-  raw path within each group.
+  raw path within each group. When both groups exist, a non-selectable `↑ index ↑`
+  divider scrolls between them; its green horizontal rails span the inset content
+  width while its centered label uses dimmed normal text.
 - Path kinds are `A`, `M`, `D`, `R`, `C`, `T`, and `U`. The selected path is
   subtly inverted and appends its already-computed non-zero line counts.
 - Blocks are side by side when both condensed titles fit, otherwise Worktree is
