@@ -358,7 +358,11 @@ fn classify_reference_path(path: &Path, git_dir: &Path, common_dir: &Path) -> Tr
     }
 }
 
-pub(crate) fn init() -> Result<tracing::subscriber::DefaultGuard> {
+pub(crate) fn init() -> Option<tracing::subscriber::DefaultGuard> {
+    try_init().ok()
+}
+
+fn try_init() -> Result<tracing::subscriber::DefaultGuard> {
     let directory = log_directory().context("could not determine the platform log directory")?;
     fs::create_dir_all(&directory)
         .with_context(|| format!("could not create log directory at {}", directory.display()))?;

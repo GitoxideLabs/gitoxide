@@ -793,13 +793,7 @@ fn shade_terminal_background((red, green, blue): (u8, u8, u8), dark: bool) -> (u
 
 /// Run the interactive commit graph for `repository`.
 pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut options: Options) -> Result<()> {
-    let _log_guard = match logging::init() {
-        Ok(guard) => Some(guard),
-        Err(err) => {
-            eprintln!("warning: could not initialize tix diagnostics: {err:#}");
-            None
-        }
-    };
+    let _log_guard = logging::init();
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (validation_repository, _) = open_history_repository(&mut repository_path, &common_dir)?;
