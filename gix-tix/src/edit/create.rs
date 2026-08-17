@@ -25,6 +25,7 @@ pub(crate) enum Source {
     Default,
     Index,
     Worktree,
+    WorktreeUntracked,
 }
 
 #[tracing::instrument(skip_all, fields(parent = ?parent))]
@@ -112,6 +113,7 @@ fn prepare_inner(
             Source::Default if index_tree != baseline.id => index_tree,
             Source::Default | Source::Worktree => worktree_tree_tracked(&repo, &baseline, &index)?,
             Source::Index => index_tree,
+            Source::WorktreeUntracked => worktree_tree(&repo, &baseline)?,
         }
     };
 

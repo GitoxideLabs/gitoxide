@@ -600,9 +600,12 @@ mod tests {
         };
         assert!(new.index);
         assert!(!new.worktree);
+        assert!(!new.worktree_untracked);
         assert!(new.allow_empty);
         assert_eq!(new.edit.message, ["title"]);
         assert!(Cli::try_parse_from(["tix", "new", "--index", "--worktree", "-m", "title"]).is_err());
+        assert!(Cli::try_parse_from(["tix", "new", "--index", "--worktree-untracked", "-m", "title"]).is_err());
+        assert!(Cli::try_parse_from(["tix", "new", "--worktree", "--worktree-untracked", "-m", "title"]).is_err());
         assert!(Cli::try_parse_from(["tix", "new", "HEAD", "-m", "title"]).is_err());
         assert!(matches!(
             Cli::try_parse_from([
