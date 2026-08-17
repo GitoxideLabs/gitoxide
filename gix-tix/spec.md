@@ -13,7 +13,7 @@ without trading responsiveness for metadata that is not visible.
 
 - `tix [REVISION]...` shows commits reachable from the supplied revisions, or
   from `HEAD` when none are supplied.
-- `tix show [-h HIDDEN...] [--no-auto-hide] [TIP...]` prints the complete
+- `tix show [-x HIDDEN...] [--no-auto-hide] [TIP...]` prints the complete
   history view without opening a terminal UI. Tips default to `HEAD`, and
   applicable pins participate exactly as they do in the history view. Output
   uses the history view's graph lanes and default metadata, without colors,
@@ -41,11 +41,12 @@ without trading responsiveness for metadata that is not visible.
   every such covering pin participates so retained forks are rewritten together.
   Eligibility is checked before the editor opens, and an unchanged document is
   an explicit no-op.
-- `-h/--hide REVSPEC` excludes the revision and its reachable ancestry. The
+- `-x/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
+- `-h/--help` prints Clap's standard help for `tix` and every subcommand.
 - `--quit-on-finish` exits after traversal and lane computation, for measurement
   and non-interactive use.
-- `tix rebase todo [-h HIDDEN...] [--no-auto-hide] [--onto REV] [TIP...]`
+- `tix rebase todo [-x HIDDEN...] [--no-auto-hide] [--onto REV] [TIP...]`
   writes a self-contained Markdown history-rebase plan to stdout. Visible tips
   default to `HEAD`, and an ambiguous derived fork point is an error.
   `--edit-and-apply` opens the same plan with Git's configured editor and applies
@@ -288,8 +289,9 @@ without trading responsiveness for metadata that is not visible.
   It traverses
   all normal references by default; positional revisions scope traversal.
 - Worktree traversal is always enabled. `--no-tags` and repeatable
-  `--hide <revision>` match the corresponding ref-tree inputs. Output uses ASCII lines and `o` nodes by default;
-  `--unicode` uses the interactive ref-tree's rounded line and node glyphs.
+  `-x/--hide <revision>` match the corresponding ref-tree inputs. Output uses
+  ASCII lines and `o` nodes by default; `--unicode` uses the interactive
+  ref-tree's rounded line and node glyphs.
 
 ## Interaction
 
