@@ -360,7 +360,10 @@ pub(crate) enum Effect {
         tip: ObjectId,
         base: ObjectId,
     },
-    FinishReview(ObjectId),
+    FinishReview {
+        review: ObjectId,
+        return_to: Option<ObjectId>,
+    },
     TimeTravel(ObjectId),
     Unpin(ObjectId),
     VerifySignatures(Vec<ObjectId>),
@@ -431,6 +434,7 @@ pub(crate) struct App {
     pub(crate) show_selection_tail: bool,
     reachability_anchor: Option<ObjectId>,
     review_tip: Option<ObjectId>,
+    review_return: Option<(ObjectId, ObjectId)>,
     reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
     pub(crate) focus_feedback: Option<&'static str>,
@@ -522,6 +526,7 @@ impl App {
             show_selection_tail: true,
             reachability_anchor: None,
             review_tip: None,
+            review_return: None,
             reachable_rows: None,
             copy_feedback: None,
             focus_feedback: None,
@@ -1023,6 +1028,22 @@ impl App {
                 changes.error = None;
                 return vec![Effect::OpenDiff(pane, changes.selected)];
             }
+            Action::OpenDiff if self.review_return.is_some() => {
+                let (review, _) = self.review_return.expect("review return selection is active");
+                let Some(return_to) = self
+                    .selected
+                    .filter(|index| self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
+                    .and_then(|index| self.rows.get(index))
+                    .map(|row| row.id)
+                else {
+                    return Vec::new();
+                };
+                self.clear_review_selection();
+                return vec![Effect::FinishReview {
+                    review,
+                    return_to: Some(return_to),
+                }];
+            }
             Action::OpenDiff if self.review_tip.is_some() => {
                 let tip = self.review_tip.expect("review selection has a tip");
                 let Some(base) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) else {
@@ -1110,9 +1131,10 @@ impl App {
                 }];
             }
             Action::Review if self.can_finish_review() => {
-                return vec![Effect::FinishReview(
-                    self.rows[self.selected.expect("finishing review requires a selection")].id,
-                )];
+                return vec![Effect::FinishReview {
+                    review: self.rows[self.selected.expect("finishing review requires a selection")].id,
+                    return_to: None,
+                }];
             }
             Action::Review if self.can_review() => {
                 let tip = self.rows[self.selected.expect("review requires a selection")].id;
@@ -1164,7 +1186,9 @@ impl App {
                 }
             }
             Action::ForceQuit => return vec![Effect::Quit],
-            Action::Cancel if self.review_tip.is_some() => self.clear_review_selection(),
+            Action::Cancel if self.review_tip.is_some() || self.review_return.is_some() => {
+                self.clear_review_selection()
+            }
             Action::Cancel | Action::Quit if self.changes_focus.is_some() => self.focus_history(),
             Action::Cancel if self.state == State::Loading => {
                 self.state = State::Cancelling;
@@ -1520,8 +1544,38 @@ impl App {
 
     fn clear_review_selection(&mut self) {
         self.review_tip = None;
+        self.review_return = None;
         self.reachability_anchor = None;
         self.reachable_rows = None;
+    }
+
+    pub(crate) fn select_review_return(&mut self, review: ObjectId, tip: ObjectId) -> bool {
+        let reachable: Vec<_> = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| !row.is_review && !self.is_row_hidden(index) && self.is_known_ancestor(tip, row.id))
+            .collect();
+        let current = self.selected.unwrap_or_default();
+        let selected = self
+            .rows
+            .iter()
+            .position(|row| row.id == tip)
+            .filter(|index| reachable[*index])
+            .or_else(|| {
+                reachable
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, reachable)| reachable.then_some(index))
+                    .min_by_key(|index| index.abs_diff(current))
+            });
+        let Some(selected) = selected else { return false };
+        self.review_tip = None;
+        self.review_return = Some((review, tip));
+        self.reachability_anchor = None;
+        self.reachable_rows = Some(reachable);
+        self.select(selected);
+        true
     }
 
     pub(crate) fn focus_history(&mut self) {
@@ -1796,6 +1850,10 @@ impl App {
 
     pub(crate) fn review_selection_active(&self) -> bool {
         self.review_tip.is_some()
+    }
+
+    pub(crate) fn review_return_selection_active(&self) -> bool {
+        self.review_return.is_some()
     }
 
     fn can_edit_head(&self) -> bool {
@@ -2768,13 +2826,60 @@ mod tests {
         app.set_head_edit_availability(false, false, false, false, true, false, false);
         complete(&mut app);
 
-        assert_eq!(app.update(Action::Review), vec![Effect::FinishReview(id(2))]);
+        assert_eq!(
+            app.update(Action::Review),
+            vec![Effect::FinishReview {
+                review: id(2),
+                return_to: None,
+            }]
+        );
 
         app.set_worktree_head(Some(id(4)), false);
         assert!(
             app.update(Action::Review).is_empty(),
             "an unrelated checkout cannot finish the selected review"
         );
+    }
+
+    #[test]
+    fn a_missing_review_return_can_select_a_detached_checkout() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(6, &[4]),
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[1]),
+            row_with_parents(2, &[1]),
+            row_with_parents(3, &[1]),
+            row(1),
+        ]);
+        std::sync::Arc::make_mut(&mut app.rows[3]).is_review = true;
+        app.hidden_rows.insert(id(6));
+        app.selected = Some(3);
+        complete(&mut app);
+
+        assert!(app.select_review_return(id(2), id(4)));
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(4)));
+        assert!(!app.is_row_reachable(0), "hidden descendants are not return candidates");
+        assert!(!app.is_row_reachable(3), "review commits are not return candidates");
+        assert!(!app.is_row_reachable(4), "unrelated commits are not return candidates");
+        app.update(Action::MoveUp);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(5)),
+            "navigation skips ineligible rows"
+        );
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::FinishReview {
+                review: id(2),
+                return_to: Some(id(5)),
+            }]
+        );
+        assert!(!app.review_return_selection_active());
+
+        assert!(app.select_review_return(id(2), id(4)));
+        assert!(app.update(Action::Cancel).is_empty());
+        assert!(!app.review_return_selection_active());
     }
 
     #[test]

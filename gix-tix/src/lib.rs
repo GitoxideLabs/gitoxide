@@ -2449,7 +2449,7 @@ fn event_loop(
                         Err(err) => app.leave_message(format!("review: {err:#}")),
                     }
                 }
-                Effect::FinishReview(id) => {
+                Effect::FinishReview { review: id, return_to } => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let result = history_graph
@@ -2459,10 +2459,10 @@ fn event_loop(
                             let mut repo = open_repository(&repository_path, repository_is_bare, false)
                                 .context("could not open repository to finish review")?;
                             repo.object_cache_size(None);
-                            edit::review::finish(repo, graph, id)
+                            edit::review::finish(repo, graph, id, return_to)
                         });
                     match result {
-                        Ok(finished) => {
+                        Ok(edit::review::Finish::Complete(finished)) => {
                             let checkout = edit::time_travel::checkout_plan(
                                 &repository_path,
                                 repository_is_bare,
@@ -2482,6 +2482,17 @@ fn event_loop(
                             app.select_commit_after_refresh(finished.outcome.selected.unwrap_or(finished.commit));
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
+                        }
+                        Ok(edit::review::Finish::SelectReturn { tip }) => {
+                            if app.select_review_return(id, tip) {
+                                app.leave_message(
+                                    "review return is missing · j/k select commit · <enter> finish detached · Esc cancel",
+                                );
+                            } else {
+                                app.leave_message(
+                                    "finish review: no visible return commit descends from the reviewed tip",
+                                );
+                            }
                         }
                         Err(err) => app.leave_message(format!("finish review: {err:#}")),
                     }
