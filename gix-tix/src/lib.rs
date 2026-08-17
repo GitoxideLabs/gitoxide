@@ -2546,15 +2546,18 @@ fn event_loop(
                         .as_ref()
                         .context("time-travel requires a completed history graph")
                         .and_then(|graph| {
-                            edit::time_travel::perform(
-                                &repository_path,
-                                repository_is_bare,
-                                id,
-                                graph,
-                                &review_roots,
-                                &revisions,
-                                false,
-                            )
+                            run_with_rebase_progress(terminal, |report| {
+                                edit::time_travel::perform_with_progress(
+                                    &repository_path,
+                                    repository_is_bare,
+                                    id,
+                                    graph,
+                                    &review_roots,
+                                    &revisions,
+                                    false,
+                                    report,
+                                )
+                            })
                         });
                     match result {
                         Ok(edit::time_travel::Perform::Complete(Some(notice))) => {
@@ -3730,9 +3733,9 @@ fn preview_todo_rebase_conflict(
     Ok(())
 }
 
-enum RebaseWorkerEvent {
-    Progress(edit::rebase::PlanProgress),
-    Complete(Result<edit::rebase::PlanPerform>),
+enum RebaseWorkerEvent<T> {
+    Progress(edit::rebase::Progress),
+    Complete(Result<T>),
 }
 
 fn run_rebase_plan(
@@ -3741,14 +3744,24 @@ fn run_rebase_plan(
     graph: &HistoryGraph,
     plan: edit::rebase::Plan,
 ) -> Result<edit::rebase::PlanPerform> {
+    run_with_rebase_progress(terminal, move |report| {
+        let mut repository = repository.to_thread_local();
+        repository.object_cache_size(None);
+        edit::rebase::perform_plan_with_progress(&repository, graph, plan, report)
+    })
+}
+
+fn run_with_rebase_progress<T: Send>(
+    terminal: &mut ratatui::DefaultTerminal,
+    operation: impl FnOnce(&mut dyn FnMut(edit::rebase::Progress)) -> Result<T> + Send,
+) -> Result<T> {
     std::thread::scope(|scope| {
         let (sender, receiver) = mpsc::sync_channel(1);
         let worker = scope.spawn(move || {
-            let mut repository = repository.to_thread_local();
-            repository.object_cache_size(None);
-            let result = edit::rebase::perform_plan_with_progress(&repository, graph, plan, |progress| {
+            let mut report = |progress| {
                 let _ = sender.try_send(RebaseWorkerEvent::Progress(progress));
-            });
+            };
+            let result = operation(&mut report);
             let _ = sender.send(RebaseWorkerEvent::Complete(result));
         });
         let started = Instant::now();

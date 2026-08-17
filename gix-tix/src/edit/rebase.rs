@@ -118,7 +118,7 @@ pub(crate) struct Plan {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlanProgress {
+pub(crate) struct Progress {
     pub total: usize,
     pub processed: usize,
     pub cherry_picked: usize,
@@ -127,11 +127,11 @@ pub(crate) struct PlanProgress {
     pub signing_time: Duration,
 }
 
-impl PlanProgress {
-    fn new(plan: &Plan) -> Self {
-        PlanProgress {
+impl Progress {
+    fn for_plan(plan: &Plan) -> Self {
+        Progress {
             total: plan.steps.len() + plan.steps.iter().map(|step| step.squash.len()).sum::<usize>(),
-            ..PlanProgress::default()
+            ..Progress::default()
         }
     }
 }
@@ -424,7 +424,18 @@ pub(crate) fn perform(
     signature: Signature,
     tree_mode: Tree,
 ) -> Result<Perform> {
-    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), None)
+    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), None, |_| {})
+}
+
+pub(crate) fn perform_with_progress(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    edit: Edit,
+    signature: Signature,
+    tree_mode: Tree,
+    report: impl FnMut(Progress),
+) -> Result<Perform> {
+    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), None, report)
 }
 
 pub(super) fn perform_resetting_index_paths(
@@ -435,7 +446,7 @@ pub(super) fn perform_resetting_index_paths(
     tree_mode: Tree,
     paths: Vec<BString>,
 ) -> Result<Perform> {
-    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), Some(paths))
+    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), Some(paths), |_| {})
 }
 
 pub(super) fn perform_deleting_refs(
@@ -446,9 +457,13 @@ pub(super) fn perform_deleting_refs(
     tree_mode: Tree,
     deletions: Vec<(gix::refs::FullName, Target)>,
 ) -> Result<Perform> {
-    perform_inner(repo, graph, edit, signature, tree_mode, deletions, None)
+    perform_inner(repo, graph, edit, signature, tree_mode, deletions, None, |_| {})
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared edit preparation plus progress reporting"
+)]
 fn perform_inner(
     repo: &gix::Repository,
     graph: &HistoryGraph,
@@ -457,6 +472,7 @@ fn perform_inner(
     tree_mode: Tree,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     reset_index_paths: Option<Vec<BString>>,
+    mut report: impl FnMut(Progress),
 ) -> Result<Perform> {
     let mut repo = repo.clone();
     let repeat_checkout = match &edit {
@@ -491,6 +507,11 @@ fn perform_inner(
             .context("the edited commit is not in the loaded history")?,
         None => Vec::new(),
     };
+    let mut progress = Progress {
+        total: affected.len(),
+        ..Progress::default()
+    };
+    report(progress);
     validate(&repo, graph, &affected, removed, repeat, tree_mode)?;
 
     let signing = repo
@@ -582,6 +603,7 @@ fn perform_inner(
         } else {
             tree_mode
         };
+        let cherry_pick_started = (commit_tree_mode == Tree::CherryPick).then(Instant::now);
         let rewritten_tree = rewritten_tree(
             &repo,
             &commit,
@@ -601,6 +623,10 @@ fn perform_inner(
                 ours
             }
         };
+        if let Some(started) = cherry_pick_started.filter(|_| new_conflict.is_none()) {
+            progress.cherry_picked += 1;
+            progress.cherry_pick_time += started.elapsed();
+        }
         commit.parents = new_parents.into_iter().collect();
         let pending = commit_tree_mode == Tree::LeaveAsIsAndMark
             || (commit_tree_mode == Tree::LeaveAsIsAndMarkDescendants && Some(old_id) != root)
@@ -621,7 +647,14 @@ fn perform_inner(
         } else {
             CommitState::Unmarked(signature)
         };
-        let new_id = write_commit(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
+        let (new_id, signing_time) =
+            write_commit_timed(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
+        if let Some(elapsed) = signing_time {
+            progress.signed += 1;
+            progress.signing_time += elapsed;
+        }
+        progress.processed += 1;
+        report(progress);
         rewritten.insert(old_id, Some(new_id));
         if let Some((tree, conflicts)) = new_conflict {
             conflict = Some((old_id, tree, conflicts, new_id));
@@ -840,9 +873,9 @@ pub(crate) fn perform_plan_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     mut plan: Plan,
-    mut report: impl FnMut(PlanProgress),
+    mut report: impl FnMut(Progress),
 ) -> Result<PlanPerform> {
-    let mut progress = PlanProgress::new(&plan);
+    let mut progress = Progress::for_plan(&plan);
     report(progress);
     let mut repo = repo.clone();
     let signing = repo

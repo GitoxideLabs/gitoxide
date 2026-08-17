@@ -855,13 +855,16 @@ space first; changes blocks adapt within the remaining history width.
   requires only that `HEAD` names a commit and the index has no unresolved stages;
   the index tree, including additional staged changes, becomes the resolved tree.
   There is no hidden sequencer state or separate continue/abort command.
-- Interactive todo application runs on a scoped worker so the terminal can
-  remain renderable without cloning the cached history graph. If application is
-  still running after 300 ms, a modal gauge shows processed versus total todo
-  source commits and live cherry-pick and signature counts with their cumulative
-  durations. `pick`, `squash`, and `empty` commands each contribute to the total;
-  squash sources advance separately while their combined commit is signed once.
-  Fast operations and command-line `tix rebase apply` do not show progress.
+- Interactive todo application and time travel run on a scoped worker so the
+  terminal can remain renderable without cloning the cached history graph. If
+  either operation is still running after 300 ms, a modal gauge shows processed
+  versus total source commits and live cherry-pick and signature counts with
+  their cumulative durations. `pick`, `squash`, and `empty` commands each
+  contribute to a todo total; time travel counts every commit in its pending
+  replay and accumulates work when another replay batch is discovered. Squash
+  sources advance separately while their combined commit is signed once. Fast
+  operations and command-line `tix rebase apply` and `tix travel` do not show
+  progress.
 - Displayed mutable refs follow their explicit locations in the edited todo;
   omission deletes them and newly named refs require nonexistence. Refs checked
   out by linked worktrees are displayed normally and may move, with their index
