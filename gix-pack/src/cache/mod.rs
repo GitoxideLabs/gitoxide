@@ -51,8 +51,38 @@ pub mod lru;
 
 pub mod object;
 
+/// Index-less parallel pack traversal.
 ///
-pub(crate) mod delta;
+/// Build a delta [`delta::Tree`] directly from a streaming pack scan with
+/// [`delta::Tree::from_offsets_in_pack()`] — no pre-built `.idx` — then resolve every
+/// object in parallel with [`delta::Tree::traverse()`]. This is the index-less companion
+/// to the idx-verified [`crate::index::File::traverse_with_index()`]; [`delta::traverse::Context`] and
+/// [`delta::traverse::Options`] configure the traversal.
+///
+/// ```no_run
+/// use gix_pack::cache::delta::Tree;
+/// use std::sync::atomic::AtomicBool;
+///
+/// # fn build_index_less(
+/// #     pack_path: &std::path::Path,
+/// #     offsets: Vec<gix_pack::data::Offset>,
+/// # ) -> Result<(), Box<dyn std::error::Error>> {
+/// // Build the delta tree straight from the pack — no `.idx` required:
+/// let tree = Tree::from_offsets_in_pack(
+///     pack_path,
+///     offsets.into_iter(),
+///     &|offset| *offset,
+///     &|_id| None,                     // self-contained pack: no ref-delta lookups
+///     &mut gix_features::progress::Discard,
+///     &AtomicBool::default(),
+///     gix_hash::Kind::default(),
+/// )?;
+/// // `tree.traverse(resolve, &pack, pack_end, inspect, Options { .. })` then
+/// // resolves every object in parallel across threads.
+/// let _ = tree;
+/// # Ok(()) }
+/// ```
+pub mod delta;
 
 /// Replaces content of the given `Vec` with the slice. The vec will have the same length
 /// as the slice. The vec can be either `&mut Vec` or `Vec`.
