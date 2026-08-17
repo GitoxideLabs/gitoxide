@@ -16,9 +16,9 @@ use ratatui::{
 };
 
 use crate::{
-    app::LaneState,
+    app::{LaneState, Notice, NoticeKind},
     history::{CommitIndex, Decoration, DecorationKind, Decorations, HistoryGraph, RefSnapshot},
-    ui::decoration_style,
+    ui::{decoration_style, notice_area, render_notice},
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -165,7 +165,7 @@ pub(crate) struct Tree {
     hide_tags: bool,
     edit_expanded: bool,
     remote_deletions: Vec<RemoteDeletion>,
-    message: Option<String>,
+    notice: Option<Notice>,
     history_commits: HashSet<ObjectId>,
 }
 
@@ -188,8 +188,23 @@ impl Tree {
         self.edit_expanded = false;
     }
 
-    pub(crate) fn leave_message(&mut self, message: impl Into<String>) {
-        self.message = Some(message.into());
+    pub(crate) fn leave_attention(&mut self, message: impl Into<String>) {
+        self.leave_notice(NoticeKind::Attention, message);
+    }
+
+    pub(crate) fn leave_success(&mut self, message: impl Into<String>) {
+        self.leave_notice(NoticeKind::Success, message);
+    }
+
+    pub(crate) fn leave_error(&mut self, message: impl Into<String>) {
+        self.leave_notice(NoticeKind::Error, message);
+    }
+
+    fn leave_notice(&mut self, kind: NoticeKind, message: impl Into<String>) {
+        self.notice = Some(Notice {
+            kind,
+            text: message.into(),
+        });
     }
 
     pub(crate) fn set_history_commits(&mut self, commits: impl IntoIterator<Item = ObjectId>) {
@@ -262,7 +277,7 @@ impl Tree {
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> Input {
-        self.message = None;
+        self.notice = None;
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
             || key.code == KeyCode::Char('q')
         {
@@ -282,7 +297,7 @@ impl Tree {
             if key.code == KeyCode::Char('d') && key.modifiers.is_empty() {
                 let branches = self.selected_local_branches();
                 if branches.is_empty() {
-                    self.message = Some("no deletable local branches at the selected node".into());
+                    self.leave_attention("no deletable local branches at the selected node");
                     return Input::Handled;
                 }
                 return Input::DeleteLocalBranches {
@@ -408,8 +423,15 @@ impl Tree {
                 .as_ref()
                 .map(|overview| Overlay::new(graph, overview, selected));
         }
-        let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+        let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
         frame.render_widget(Clear, frame.area());
+        let notice = self.notice.clone();
+        let notice_area = notice
+            .as_ref()
+            .and_then(|notice| notice_area(notice, body, body.y, body.bottom()));
+        if let Some(notice_area) = notice_area {
+            body.height = notice_area.y.saturating_sub(body.y);
+        }
         let Some(overview) = self.overview.as_ref() else {
             frame.render_widget(Paragraph::new("ref-tree overview unavailable"), body);
             return;
@@ -466,9 +488,7 @@ impl Tree {
             &self.choices,
             &self.history_commits,
         );
-        let footer_text = if let Some(message) = &self.message {
-            message.clone()
-        } else if self.edit_expanded {
+        let footer_text = if self.edit_expanded {
             let branches = self.selected_local_branches();
             if branches.is_empty() && self.remote_deletions.is_empty() {
                 "ref-tree · e edit (no actions)".into()
@@ -503,6 +523,9 @@ impl Tree {
             Paragraph::new(footer_text).style(Style::default().add_modifier(Modifier::DIM)),
             footer,
         );
+        if let (Some(area), Some(notice)) = (notice_area, notice.as_ref()) {
+            render_notice(frame, area, notice);
+        }
     }
 
     fn selected_local_branches(&self) -> Vec<gix::refs::FullName> {
@@ -1823,7 +1846,7 @@ mod tests {
             Input::Handled
         );
         assert_eq!(
-            tree.message.as_deref(),
+            tree.notice.as_ref().map(|notice| notice.text.as_str()),
             Some("no deletable local branches at the selected node")
         );
     }
@@ -2424,6 +2447,23 @@ mod tests {
                 .modifier
                 .contains(Modifier::REVERSED),
             "a selected synthetic node keeps its disk inverted"
+        );
+        tree.leave_error("remote deletion failed");
+        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        assert_eq!(terminal.backend().buffer()[(0, 16)].bg, Color::LightRed);
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .chunks(100)
+                .last()
+                .expect("the terminal has a footer")
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+                .contains("ref-tree"),
+            "ref-tree notices leave its footer visible"
         );
         Ok(())
     }
