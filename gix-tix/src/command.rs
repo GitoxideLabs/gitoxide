@@ -76,8 +76,11 @@ struct Show {
     #[arg(long, action = clap::ArgAction::HelpLong)]
     help: Option<bool>,
     /// Hide this revision and every commit reachable from it.
-    #[arg(short = 'h', long, required = true, value_name = "REVSPEC")]
+    #[arg(short = 'h', long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
+    /// Do not infer hidden local branches from remote HEADs.
+    #[arg(long)]
+    no_auto_hide: bool,
     /// Visible traversal tips, or HEAD if omitted.
     #[arg(value_name = "TIP")]
     revisions: Vec<OsString>,
@@ -179,7 +182,10 @@ fn print_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<()> {
 }
 
 fn show(repository: &gix::Repository, args: Show) -> Result<()> {
-    let (hide, unavailable) = crate::history::available_hidden_revisions(repository, &args.hide)?;
+    let (hide, unavailable) = crate::history::available_hidden_revisions(repository, &args.hide, !args.no_auto_hide)?;
+    if hide.is_empty() {
+        anyhow::bail!("show requires at least one -h/--hide revision when no remote HEAD maps to a local branch");
+    }
     for (revision, err) in unavailable {
         eprintln!(
             "warning: ignoring unavailable hidden revision {}: {err}",
@@ -239,9 +245,7 @@ fn write_history(
     }
 
     let mut note_ids = HashSet::new();
-    let mut notes = repository
-        .notes()
-        .context("could not open Git notes")?;
+    let mut notes = repository.notes().context("could not open Git notes")?;
     for row in &app.rows {
         if !notes
             .get(row.id)
@@ -411,7 +415,18 @@ mod tests {
         };
         assert!(show.help.is_none());
         assert_eq!(show.hide, ["main", "tag"]);
+        assert!(!show.no_auto_hide);
         assert_eq!(show.revisions, ["topic"]);
+
+        let show = Cli::try_parse_from(["tix", "show", "--no-auto-hide", "topic"])
+            .expect("show can disable automatic hiding")
+            .platform
+            .command;
+        let Some(Command::Show(show)) = show else {
+            panic!("show was expected")
+        };
+        assert!(show.no_auto_hide);
+        assert!(show.hide.is_empty());
 
         assert!(
             Cli::try_parse_from(["tix", "--worktrees"]).is_err(),
@@ -521,6 +536,7 @@ mod tests {
                 "tix",
                 "rebase",
                 "todo",
+                "--no-auto-hide",
                 "-h",
                 "main",
                 "--onto",
@@ -583,12 +599,6 @@ mod tests {
                 .expect_err("hide requires a value")
                 .kind(),
             ErrorKind::InvalidValue
-        );
-        assert_eq!(
-            Cli::try_parse_from(["tix", "show", "topic"])
-                .expect_err("show requires a hidden revision")
-                .kind(),
-            ErrorKind::MissingRequiredArgument
         );
         assert_eq!(
             Cli::try_parse_from(["tix", "show", "--help"])
@@ -690,6 +700,17 @@ mod tests {
     fn show_prints_the_complete_plain_history_view() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
+        let err = show(
+            &repository,
+            Show {
+                help: None,
+                hide: Vec::new(),
+                no_auto_hide: true,
+                revisions: Vec::new(),
+            },
+        )
+        .expect_err("disabling auto-hide requires an explicit hidden revision");
+        assert!(format!("{err:#}").contains("at least one -h/--hide"));
         create_pins(&repository, &[OsString::from("topic")])?;
 
         let mut output = Vec::new();

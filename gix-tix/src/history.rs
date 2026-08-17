@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering as CmpOrdering,
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     ffi::OsString,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -1654,11 +1654,16 @@ fn resolve_tips(repo: &gix::Repository, revisions: &[OsString]) -> Result<Option
 pub(crate) fn available_hidden_revisions(
     repo: &gix::Repository,
     revisions: &[OsString],
+    auto_hide: bool,
 ) -> Result<(Vec<OsString>, Vec<(OsString, String)>)> {
+    let mut revisions = revisions.to_vec();
+    if auto_hide {
+        revisions.extend(auto_hidden_revisions(repo)?);
+    }
     let mut available = Vec::new();
     let mut unavailable = Vec::new();
     let mut first_error = None;
-    for revision in revisions {
+    for revision in &revisions {
         match resolve_revisions(repo, std::slice::from_ref(revision), "hidden ") {
             Ok(_) => available.push(revision.clone()),
             Err(err) => {
@@ -1673,6 +1678,40 @@ pub(crate) fn available_hidden_revisions(
         return Err(err);
     }
     Ok((available, unavailable))
+}
+
+fn auto_hidden_revisions(repo: &gix::Repository) -> Result<Vec<OsString>> {
+    let mut branches = BTreeSet::new();
+    for remote_name in repo.remote_names() {
+        let mut head = BString::from("refs/remotes/");
+        head.extend_from_slice(&remote_name);
+        head.extend_from_slice(b"/HEAD");
+        let Ok(Some(reference)) = repo.try_find_reference(head.as_bstr()) else {
+            continue;
+        };
+        let target = reference.target();
+        let Some(tracking) = target.try_name() else { continue };
+        let Ok(Some((upstream, remote))) = repo.upstream_branch_and_remote_for_tracking_branch(tracking) else {
+            continue;
+        };
+        if remote.name().map(gix::remote::Name::as_bstr) != Some(remote_name.as_bstr()) {
+            continue;
+        }
+        let Ok(Some(mut local)) = repo.try_find_reference(upstream.as_ref()) else {
+            continue;
+        };
+        let Ok(id) = local.peel_to_id() else { continue };
+        if repo
+            .find_header(id)
+            .is_ok_and(|header| header.kind() == gix::object::Kind::Commit)
+        {
+            branches.insert(upstream);
+        }
+    }
+    Ok(branches
+        .into_iter()
+        .map(|name| gix::path::from_bstr(name.as_bstr()).into_owned().into_os_string())
+        .collect())
 }
 
 fn attribution_kind(trailer: &gix::objs::commit::message::body::TrailerRef<'_>) -> Option<AttributionKind> {
@@ -2038,12 +2077,75 @@ mod tests {
         let repo = crate::test_repository::open(&fixture)?;
         let revisions = ["unknown".into(), "main".into()];
 
-        let (available, unavailable) = available_hidden_revisions(&repo, &revisions)?;
+        let (available, unavailable) = available_hidden_revisions(&repo, &revisions, false)?;
         assert_eq!(available, [OsString::from("main")]);
         assert_eq!(unavailable.len(), 1);
         assert!(
-            available_hidden_revisions(&repo, &[OsString::from("unknown")]).is_err(),
+            available_hidden_revisions(&repo, &[OsString::from("unknown")], false).is_err(),
             "all missing hidden revisions retain the previous fatal behavior"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn remote_heads_infer_existing_local_hidden_branches() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let path = fixture.path();
+        let git = |args: &[&str]| -> gix_testtools::Result {
+            let output = Command::new("git").current_dir(path).args(args).output()?;
+            assert!(
+                output.status.success(),
+                "git {args:?} prepares remote HEADs: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(())
+        };
+        git(&["branch", "trunk", "main"])?;
+        for (remote, fetch, tracking) in [
+            (
+                "origin",
+                "+refs/heads/*:refs/remotes/origin/*",
+                "refs/remotes/origin/main",
+            ),
+            (
+                "backup",
+                "+refs/heads/*:refs/remotes/backup/*",
+                "refs/remotes/backup/main",
+            ),
+            (
+                "team",
+                "+refs/heads/trunk:refs/remotes/team/default",
+                "refs/remotes/team/default",
+            ),
+            (
+                "stale",
+                "+refs/heads/missing:refs/remotes/stale/default",
+                "refs/remotes/stale/default",
+            ),
+        ] {
+            git(&["config", &format!("remote.{remote}.url"), "https://example.com/repo"])?;
+            git(&["config", &format!("remote.{remote}.fetch"), fetch])?;
+            git(&["update-ref", tracking, "main"])?;
+            git(&["symbolic-ref", &format!("refs/remotes/{remote}/HEAD"), tracking])?;
+        }
+        git(&["config", "remote.direct.url", "https://example.com/repo"])?;
+        git(&["config", "remote.direct.fetch", "+refs/heads/*:refs/remotes/direct/*"])?;
+        git(&["update-ref", "refs/remotes/direct/HEAD", "main"])?;
+
+        let repo = crate::test_repository::open(path)?;
+        assert_eq!(
+            auto_hidden_revisions(&repo)?,
+            [OsString::from("refs/heads/main"), OsString::from("refs/heads/trunk")],
+            "remote defaults are reverse-mapped, deduplicated, and limited to existing local branches"
+        );
+        assert_eq!(
+            available_hidden_revisions(&repo, &[OsString::from("topic")], true)?.0,
+            [
+                OsString::from("topic"),
+                OsString::from("refs/heads/main"),
+                OsString::from("refs/heads/trunk")
+            ],
+            "explicit and inferred hidden revisions are combined"
         );
         Ok(())
     }
