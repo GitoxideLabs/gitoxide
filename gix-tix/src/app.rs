@@ -115,7 +115,9 @@ pub(crate) struct ChangesView {
     pub horizontal_offset: usize,
     pub error: Option<String>,
     page: usize,
+    len: usize,
     max: usize,
+    separator: Option<usize>,
     horizontal_page: usize,
     horizontal_max: usize,
 }
@@ -128,10 +130,37 @@ impl Default for ChangesView {
             horizontal_offset: 0,
             error: None,
             page: 1,
+            len: 0,
             max: 0,
+            separator: None,
             horizontal_page: 1,
             horizontal_max: 0,
         }
+    }
+}
+
+impl ChangesView {
+    fn display_index(&self, path_index: usize) -> usize {
+        path_index + usize::from(self.separator.is_some_and(|separator| path_index >= separator))
+    }
+
+    fn ensure_visible(&mut self) {
+        let selected = self.display_index(self.selected);
+        if selected < self.offset {
+            self.offset = selected;
+        } else if selected >= self.offset.saturating_add(self.page) {
+            self.offset = selected + 1 - self.page;
+        }
+        let display_len = self.len + usize::from(self.separator.is_some());
+        self.offset = self.offset.min(display_len.saturating_sub(self.page));
+    }
+
+    fn visible_paths(&self) -> usize {
+        let end = self.offset.saturating_add(self.page);
+        self.page.saturating_sub(usize::from(
+            self.separator
+                .is_some_and(|separator| separator >= self.offset && separator < end),
+        ))
     }
 }
 
@@ -1026,13 +1055,17 @@ impl App {
                 }
             }
             Action::HalfPageUp if self.changes_focus.is_some() => {
-                self.move_changes((self.focused_changes().page / 2).max(1), false);
+                self.move_changes((self.focused_changes().visible_paths() / 2).max(1), false);
             }
             Action::HalfPageDown if self.changes_focus.is_some() => {
-                self.move_changes((self.focused_changes().page / 2).max(1), true);
+                self.move_changes((self.focused_changes().visible_paths() / 2).max(1), true);
             }
-            Action::PageUp if self.changes_focus.is_some() => self.move_changes(self.focused_changes().page, false),
-            Action::PageDown if self.changes_focus.is_some() => self.move_changes(self.focused_changes().page, true),
+            Action::PageUp if self.changes_focus.is_some() => {
+                self.move_changes(self.focused_changes().visible_paths().max(1), false);
+            }
+            Action::PageDown if self.changes_focus.is_some() => {
+                self.move_changes(self.focused_changes().visible_paths().max(1), true);
+            }
             Action::PageUp if self.show_commit && self.commit_max > 0 => {
                 self.commit_offset = self.commit_offset.saturating_sub(self.commit_page);
             }
@@ -1750,15 +1783,7 @@ impl App {
     }
 
     fn ensure_changes_visible(&mut self) {
-        let changes = self.focused_changes_mut();
-        if changes.selected < changes.offset {
-            changes.offset = changes.selected;
-        } else if changes.selected >= changes.offset.saturating_add(changes.page) {
-            changes.offset = changes.selected + 1 - changes.page;
-        }
-        changes.offset = changes
-            .offset
-            .min(changes.max.saturating_add(1).saturating_sub(changes.page));
+        self.focused_changes_mut().ensure_visible();
     }
 
     fn pan_changes(&mut self, right: bool) {
@@ -2181,25 +2206,21 @@ impl App {
         pane: ChangePane,
         page: usize,
         len: usize,
+        separator: Option<usize>,
         horizontal_page: usize,
         horizontal_max: usize,
     ) {
         let changes = self.changes_mut(pane);
         changes.page = page.max(1);
+        changes.len = len;
         changes.max = len.saturating_sub(1);
+        changes.separator = separator.filter(|separator| *separator > 0 && *separator < len);
         if len == 0 {
             changes.selected = 0;
             changes.offset = 0;
         } else {
             changes.selected = changes.selected.min(changes.max);
-            if changes.selected < changes.offset {
-                changes.offset = changes.selected;
-            } else if changes.selected >= changes.offset.saturating_add(changes.page) {
-                changes.offset = changes.selected + 1 - changes.page;
-            }
-            changes.offset = changes
-                .offset
-                .min(changes.max.saturating_add(1).saturating_sub(changes.page));
+            changes.ensure_visible();
         }
         changes.horizontal_page = horizontal_page.max(1);
         changes.horizontal_max = horizontal_max;
@@ -3611,7 +3632,7 @@ mod tests {
         assert_eq!(app.commit_offset, 6);
 
         app.changes_focus = Some(ChangePane::Tree);
-        app.set_changes_bounds(ChangePane::Tree, 2, 5, 1, 0);
+        app.set_changes_bounds(ChangePane::Tree, 2, 5, None, 1, 0);
         app.update(Action::PageDown);
         assert_eq!(app.tree_changes.selected, 2, "focused changes retain paging priority");
         assert_eq!(app.commit_offset, 6);
@@ -3654,7 +3675,7 @@ mod tests {
     fn focused_changes_redirect_navigation_to_the_path_viewport() {
         let mut app = App::new(2);
         app.extend_commits((1..=3).map(row).collect::<Vec<_>>());
-        app.set_changes_bounds(ChangePane::Tree, 4, 10, 20, 45);
+        app.set_changes_bounds(ChangePane::Tree, 4, 10, None, 20, 45);
         show_tree_changes(&mut app);
         app.update(Action::ToggleChangesFocus);
         assert_eq!(app.changes_focus, Some(ChangePane::Tree));
@@ -3943,8 +3964,8 @@ mod tests {
     fn cycles_changes_focus_in_visual_order_and_keeps_navigation_independent() {
         let mut app = App::new(1);
         app.changes_mode = Some(ChangesMode::Both);
-        app.set_changes_bounds(ChangePane::Tree, 2, 4, 10, 20);
-        app.set_changes_bounds(ChangePane::Worktree, 2, 4, 10, 20);
+        app.set_changes_bounds(ChangePane::Tree, 2, 4, None, 10, 20);
+        app.set_changes_bounds(ChangePane::Worktree, 2, 4, None, 10, 20);
         app.set_changes_layout(ChangesLayout::SideBySide, true, true);
 
         app.update(Action::ToggleChangesFocus);
@@ -3972,6 +3993,32 @@ mod tests {
         assert_eq!(app.changes_focus, Some(ChangePane::Worktree));
         app.set_changes_layout(ChangesLayout::Stacked, false, false);
         assert_eq!(app.changes_focus, None);
+    }
+
+    #[test]
+    fn changes_navigation_skips_display_separators() {
+        let mut app = App::new(1);
+        app.changes_focus = Some(ChangePane::Worktree);
+        app.set_changes_bounds(ChangePane::Worktree, 3, 5, Some(2), 10, 0);
+
+        app.update(Action::PageDown);
+        assert_eq!(app.worktree_changes.selected, 2, "page movement counts only paths");
+        assert_eq!(
+            app.worktree_changes.offset, 1,
+            "the divider remains in the display viewport"
+        );
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::OpenDiff(ChangePane::Worktree, 2)],
+            "actions retain path indices"
+        );
+
+        app.update(Action::Last);
+        assert_eq!(app.worktree_changes.selected, 4);
+        assert_eq!(
+            app.worktree_changes.offset, 3,
+            "the display offset includes the divider row"
+        );
     }
 
     #[test]
@@ -4065,7 +4112,7 @@ mod tests {
         complete(&mut app);
         app.update(Action::MoveDown);
         let selected = app.rows[app.selected.expect("a row is selected")].id;
-        app.set_changes_bounds(ChangePane::Tree, 1, 3, 1, 2);
+        app.set_changes_bounds(ChangePane::Tree, 1, 3, None, 1, 2);
         show_tree_changes(&mut app);
         app.update(Action::ToggleChangesFocus);
         app.update(Action::MoveDown);

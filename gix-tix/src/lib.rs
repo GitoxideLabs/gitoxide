@@ -5051,7 +5051,7 @@ mod tests {
     fn copies_the_selected_path_from_the_focused_changes_block() {
         let mut app = App::new(1);
         app.changes_focus = Some(ChangePane::Tree);
-        app.set_changes_bounds(ChangePane::Tree, 2, 2, 80, 0);
+        app.set_changes_bounds(ChangePane::Tree, 2, 2, None, 80, 0);
         drop(app.update(Action::MoveDown));
         let changes = Changes {
             paths: ["first", "dir/second"]
