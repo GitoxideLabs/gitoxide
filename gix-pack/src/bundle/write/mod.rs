@@ -52,7 +52,8 @@ impl crate::Bundle {
     /// * `should_interrupt` is checked regularly and when true, the whole operation will stop.
     /// * `thin_pack_base_object_lookup` If set, we expect to see a thin-pack with objects that reference their base object by object id which is
     ///   expected to exist in the object database the bundle is contained within.
-    ///   `options` further configure how the task is performed.
+    /// * `object_hash` specifies the hash to use for writing the bundle.
+    /// * `options` further configure how the task is performed.
     ///
     /// # Note
     ///
@@ -65,6 +66,7 @@ impl crate::Bundle {
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
         thin_pack_base_object_lookup: Option<impl gix_object::Find>,
+        object_hash: gix_hash::Kind,
         options: Options,
     ) -> Result<Outcome, Error> {
         let _span = gix_features::trace::coarse!("gix_pack::Bundle::write_to_directory()");
@@ -75,7 +77,6 @@ impl crate::Bundle {
             progress: progress::ThroughputOnDrop::new(read_progress),
         };
 
-        let object_hash = options.object_hash;
         let data_file = Arc::new(parking_lot::Mutex::new(io::BufWriter::with_capacity(
             64 * 1024,
             match directory.as_ref() {
@@ -145,6 +146,7 @@ impl crate::Bundle {
         } = crate::Bundle::inner_write(
             directory,
             progress,
+            object_hash,
             options,
             data_file,
             pack_entries_iter,
@@ -169,6 +171,7 @@ impl crate::Bundle {
     /// As it sends portions of the input to a thread it requires the 'static lifetime for the interrupt flags. This can only
     /// be satisfied by a static `AtomicBool` which is only suitable for programs that only run one of these operations at a time
     /// or don't mind that all of them abort when the flag is set.
+    #[expect(clippy::too_many_arguments)]
     pub fn write_to_directory_eagerly(
         pack: Box<dyn io::Read + Send + 'static>,
         pack_size: Option<u64>,
@@ -176,6 +179,7 @@ impl crate::Bundle {
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &'static AtomicBool,
         thin_pack_base_object_lookup: Option<impl gix_object::Find + Send + 'static>,
+        object_hash: gix_hash::Kind,
         options: Options,
     ) -> Result<Outcome, Error> {
         let _span = gix_features::trace::coarse!("gix_pack::Bundle::write_to_directory_eagerly()");
@@ -190,7 +194,6 @@ impl crate::Bundle {
             Some(directory) => gix_tempfile::new(directory, ContainingDirectory::Exists, AutoRemove::Tempfile)?,
             None => gix_tempfile::new(std::env::temp_dir(), ContainingDirectory::Exists, AutoRemove::Tempfile)?,
         })));
-        let object_hash = options.object_hash;
         let eight_pages = 4096 * 8;
         let (pack_entries_iter, pack_version): (
             Box<dyn Iterator<Item = Result<data::input::Entry, data::input::Error>> + Send + 'static>,
@@ -246,6 +249,7 @@ impl crate::Bundle {
         } = crate::Bundle::inner_write(
             directory,
             progress,
+            object_hash,
             options,
             data_file,
             Box::new(pack_entries_iter),
@@ -263,14 +267,15 @@ impl crate::Bundle {
         })
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn inner_write<'a>(
         directory: Option<impl AsRef<Path>>,
         progress: &mut dyn DynNestedProgress,
+        object_hash: gix_hash::Kind,
         Options {
             thread_limit,
             iteration_mode: _,
             index_version: index_kind,
-            object_hash,
             alloc_limit_bytes,
             compression: _,
         }: Options,

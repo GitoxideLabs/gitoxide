@@ -81,7 +81,6 @@ pub fn from_pack(
         thread_limit: ctx.thread_limit,
         iteration_mode: ctx.iteration_mode.into(),
         index_version: pack::index::Version::default(),
-        object_hash: ctx.object_hash,
         alloc_limit_bytes: None,
         compression: gix::zlib::Compression::BEST_SPEED,
     };
@@ -98,6 +97,7 @@ pub fn from_pack(
                 &mut progress,
                 ctx.should_interrupt,
                 None::<gix::objs::find::Never>,
+                ctx.object_hash,
                 options,
             )
         }
@@ -108,6 +108,7 @@ pub fn from_pack(
             &mut progress,
             ctx.should_interrupt,
             None::<gix::objs::find::Never>,
+            ctx.object_hash,
             options,
         ),
     }

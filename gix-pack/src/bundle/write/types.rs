@@ -12,8 +12,6 @@ pub struct Options {
     pub iteration_mode: crate::data::input::Mode,
     /// The version of pack index to write, should be [`crate::index::Version::default()`]
     pub index_version: crate::index::Version,
-    /// The kind of hash to use when writing the bundle.
-    pub object_hash: gix_hash::Kind,
     /// If `Some`, rejects individual allocations above the given number of bytes while resolving streamed pack
     /// entries into decoded object and delta result buffers to write the index.
     /// `Some(0)` rejects all non-empty allocations.
@@ -33,7 +31,6 @@ impl Default for Options {
             thread_limit: None,
             iteration_mode: crate::data::input::Mode::Verify,
             index_version: Default::default(),
-            object_hash: Default::default(),
             alloc_limit_bytes: None,
             compression: gix_zlib::Compression::BEST_SPEED,
         }

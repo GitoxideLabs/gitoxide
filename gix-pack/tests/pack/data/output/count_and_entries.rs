@@ -517,10 +517,8 @@ fn write_and_verify(
                 &mut progress::Discard,
                 &should_interrupt,
                 Some(&_db),
-                pack::bundle::write::Options {
-                    object_hash,
-                    ..Default::default()
-                },
+                object_hash,
+                Default::default(),
             )?
             .data_path
             .ok_or("pack data directory should be set")?,

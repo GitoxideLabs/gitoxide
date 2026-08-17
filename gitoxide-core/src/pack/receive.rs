@@ -288,7 +288,6 @@ fn receive_pack_blocking(
         thread_limit,
         index_version: pack::index::Version::V2,
         iteration_mode: pack::data::input::Mode::Verify,
-        object_hash,
         alloc_limit_bytes: None,
         compression: gix::zlib::Compression::BEST_SPEED,
     };
@@ -298,6 +297,7 @@ fn receive_pack_blocking(
         progress,
         should_interrupt,
         None::<gix::objs::find::Never>,
+        object_hash,
         options,
     )
     .map_err(io::Error::other)?;
