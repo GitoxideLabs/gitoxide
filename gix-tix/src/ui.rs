@@ -59,7 +59,7 @@ pub(crate) fn render_notice(frame: &mut Frame<'_>, area: Rect, notice: &Notice) 
     );
 }
 
-pub(crate) fn draw_rebase_progress(frame: &mut Frame<'_>, progress: crate::edit::rebase::PlanProgress) {
+pub(crate) fn draw_rebase_progress(frame: &mut Frame<'_>, progress: crate::edit::rebase::Progress) {
     let area = frame.area();
     frame.render_widget(Clear, area);
     let width = area.width.min(72);
@@ -2198,7 +2198,7 @@ mod tests {
         terminal.draw(|frame| {
             draw_rebase_progress(
                 frame,
-                crate::edit::rebase::PlanProgress {
+                crate::edit::rebase::Progress {
                     total: 100,
                     processed: 42,
                     cherry_picked: 31,

@@ -295,8 +295,30 @@ where
     Ok(Some(notice))
 }
 
-#[tracing::instrument(skip_all, fields(commit_id = %selected))]
 pub(crate) fn perform(
+    repository_path: &Path,
+    bare: bool,
+    selected: ObjectId,
+    graph: &history::HistoryGraph,
+    review_roots: &[ObjectId],
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<Perform> {
+    perform_with_progress(
+        repository_path,
+        bare,
+        selected,
+        graph,
+        review_roots,
+        revisions,
+        include_worktrees,
+        |_| {},
+    )
+}
+
+#[tracing::instrument(skip_all, fields(commit_id = %selected))]
+#[expect(clippy::too_many_arguments, reason = "time travel context plus progress reporting")]
+pub(crate) fn perform_with_progress(
     repository_path: &Path,
     bare: bool,
     mut selected: ObjectId,
@@ -304,6 +326,7 @@ pub(crate) fn perform(
     review_roots: &[ObjectId],
     revisions: &[OsString],
     include_worktrees: bool,
+    mut report: impl FnMut(super::rebase::Progress),
 ) -> Result<Perform> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository for time-travel")?;
@@ -324,9 +347,12 @@ pub(crate) fn perform(
         anyhow::bail!("cannot time-travel with unresolved index conflicts");
     }
     let mut completed_graph = None;
+    let mut completed_progress = super::rebase::Progress::default();
     let mut review_roots = review_roots.to_vec();
     while let Some(base) = pending_base(&repository, selected)? {
-        let outcome = super::rebase::perform(
+        let previous = completed_progress;
+        let mut latest = previous;
+        let outcome = super::rebase::perform_with_progress(
             &repository,
             completed_graph.as_ref().unwrap_or(graph),
             super::rebase::Edit::Repeat {
@@ -335,7 +361,12 @@ pub(crate) fn perform(
             },
             super::rebase::Signature::RedoIfNeeded,
             super::rebase::Tree::CherryPick,
+            |progress| {
+                latest = append_progress(previous, progress);
+                report(latest);
+            },
         )?;
+        completed_progress = latest;
         let outcome = match outcome {
             super::rebase::Perform::Complete(outcome) => outcome,
             super::rebase::Perform::Conflict(rebase) => {
@@ -421,6 +452,17 @@ pub(crate) fn perform(
         );
     }
     Ok(Perform::Complete(notice))
+}
+
+fn append_progress(previous: super::rebase::Progress, batch: super::rebase::Progress) -> super::rebase::Progress {
+    super::rebase::Progress {
+        total: previous.processed + batch.total,
+        processed: previous.processed + batch.processed,
+        cherry_picked: previous.cherry_picked + batch.cherry_picked,
+        signed: previous.signed + batch.signed,
+        cherry_pick_time: previous.cherry_pick_time + batch.cherry_pick_time,
+        signing_time: previous.signing_time + batch.signing_time,
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -823,6 +865,35 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use super::*;
+
+    #[test]
+    fn progress_accumulates_when_travel_discovers_another_replay_batch() {
+        let previous = super::super::rebase::Progress {
+            total: 2,
+            processed: 2,
+            cherry_picked: 1,
+            signed: 1,
+            cherry_pick_time: std::time::Duration::from_millis(3),
+            signing_time: std::time::Duration::from_millis(5),
+        };
+        let progress = append_progress(
+            previous,
+            super::super::rebase::Progress {
+                total: 3,
+                processed: 1,
+                cherry_picked: 1,
+                signed: 1,
+                cherry_pick_time: std::time::Duration::from_millis(7),
+                signing_time: std::time::Duration::from_millis(11),
+            },
+        );
+        assert_eq!(progress.total, 5);
+        assert_eq!(progress.processed, 3);
+        assert_eq!(progress.cherry_picked, 2);
+        assert_eq!(progress.signed, 2);
+        assert_eq!(progress.cherry_pick_time, std::time::Duration::from_millis(10));
+        assert_eq!(progress.signing_time, std::time::Duration::from_millis(16));
+    }
 
     fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
         let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
@@ -1614,7 +1685,31 @@ mod tests {
         let graph = super::super::loaded_graph(&repository)?;
         drop(repository);
 
-        perform(&repository_path, false, pending_middle, &graph, &[], &[], false)?.complete()?;
+        let mut middle_progress = Vec::new();
+        perform_with_progress(
+            &repository_path,
+            false,
+            pending_middle,
+            &graph,
+            &[],
+            &[],
+            false,
+            |progress| middle_progress.push(progress),
+        )?
+        .complete()?;
+        let progress = middle_progress.last().context("time-travel progress is reported")?;
+        assert_eq!(
+            progress.total, 2,
+            "the selected commit and its pending descendant are processed"
+        );
+        assert_eq!(progress.processed, 2);
+        assert_eq!(
+            progress.cherry_picked, 1,
+            "only the selected ancestry is replayed eagerly"
+        );
+        assert_eq!(progress.signed, 1, "the selected commit is signed");
+        assert!(progress.cherry_pick_time > std::time::Duration::ZERO);
+        assert!(progress.signing_time > std::time::Duration::ZERO);
 
         let repository = open()?;
         let materialized_middle = repository.head_id()?.detach();
@@ -1645,7 +1740,21 @@ mod tests {
         let graph = super::super::loaded_graph(&repository)?;
         drop(repository);
 
-        perform(&repository_path, false, still_pending_tip, &graph, &[], &[], false)?.complete()?;
+        let mut tip_progress = Vec::new();
+        perform_with_progress(
+            &repository_path,
+            false,
+            still_pending_tip,
+            &graph,
+            &[],
+            &[],
+            false,
+            |progress| tip_progress.push(progress),
+        )?
+        .complete()?;
+        let progress = tip_progress.last().context("tip time-travel progress is reported")?;
+        assert_eq!((progress.total, progress.processed), (1, 1));
+        assert_eq!((progress.cherry_picked, progress.signed), (1, 1));
         let repository = open()?;
         let tip_commit = repository.find_commit(repository.head_id()?)?;
         assert!(!super::super::rebase::is_pending(&tip_commit.decode()?.into_owned()?));
