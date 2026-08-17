@@ -2450,7 +2450,7 @@ mod tests {
         );
         tree.leave_error("remote deletion failed");
         terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
-        assert_eq!(terminal.backend().buffer()[(0, 16)].bg, Color::LightRed);
+        assert_eq!(terminal.backend().buffer()[(2, 16)].bg, Color::LightRed);
         assert!(
             terminal
                 .backend()

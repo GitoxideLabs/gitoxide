@@ -127,7 +127,19 @@ impl Platform {
         data: impl AsRef<[u8]>,
     ) -> Result<Option<gix_hash::ObjectId>, Error> {
         let notes_ref = expand_notes_ref(notes_ref.into())?;
-        let (root, parent) = self.edit_root(notes_ref.as_ref())?;
+        self.add_to_ref(notes_ref.as_ref(), object, data)
+    }
+
+    /// Add or replace a note in the fully qualified `notes_ref`, returning the previous note id.
+    ///
+    /// Unlike [`Platform::add()`], this does not apply Git's `refs/notes/` shorthand expansion.
+    pub fn add_to_ref(
+        &mut self,
+        notes_ref: &gix_ref::FullNameRef,
+        object: impl Into<gix_hash::ObjectId>,
+        data: impl AsRef<[u8]>,
+    ) -> Result<Option<gix_hash::ObjectId>, Error> {
+        let (root, parent) = self.edit_root(notes_ref)?;
         let object = object.into();
         let note = self
             .repo
@@ -136,7 +148,7 @@ impl Platform {
             .detach();
         let edit = gix_note::add(root, object, note, &self.repo, &mut self.cache)
             .or_raise(|| message!("Could not add note for {object}"))?;
-        self.commit_edit(notes_ref, parent, edit, "Notes added by gitoxide")?;
+        self.commit_edit(notes_ref.to_owned(), parent, edit, "Notes added by gitoxide")?;
         Ok(edit.previous)
     }
 

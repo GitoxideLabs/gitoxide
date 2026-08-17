@@ -18,14 +18,16 @@ pub(crate) fn effective<'a>(commit_id: ObjectId, mut values: impl Iterator<Item 
         .unwrap_or_else(|| commit_id.into())
 }
 
-pub(crate) fn inherit(repo: &gix::Repository, commit: &mut gix::objs::Commit, predecessor: ObjectId) -> Result<()> {
+pub(crate) fn for_commit(repo: &gix::Repository, id: ObjectId) -> Result<ChangeId> {
     let object = repo
-        .find_commit(predecessor)
-        .context("could not read predecessor while preserving its change ID")?;
-    let decoded = object
-        .decode()
-        .context("could not decode predecessor while preserving its change ID")?;
-    let change_id = effective(predecessor, decoded.extra_headers().find_all(HEADER));
+        .find_commit(id)
+        .context("could not read commit for its change ID")?;
+    let commit = object.decode().context("could not decode commit for its change ID")?;
+    Ok(effective(id, commit.extra_headers().find_all(HEADER)))
+}
+
+pub(crate) fn inherit(repo: &gix::Repository, commit: &mut gix::objs::Commit, predecessor: ObjectId) -> Result<()> {
+    let change_id = for_commit(repo, predecessor).context("could not preserve predecessor change ID")?;
     store(commit, change_id);
     Ok(())
 }
