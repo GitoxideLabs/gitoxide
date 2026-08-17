@@ -290,8 +290,8 @@ pub(crate) fn draw_with_worktree(
     } else {
         None
     };
-    let tree_visible = app.changes_visible() && tree_changes.is_some_and(Changes::is_visible);
-    let worktree_visible =
+    let tree_shown = app.changes_visible() && tree_changes.is_some();
+    let worktree_shown =
         app.changes_visible() && app.changes_mode == Some(ChangesMode::Both) && worktree_changes.is_some();
     let tree_summary = tree_changes.map(|changes| changes_summary(ChangePane::Tree, app, changes));
     let worktree_summary = worktree_changes.map(|changes| changes_summary(ChangePane::Worktree, app, changes));
@@ -310,13 +310,13 @@ pub(crate) fn draw_with_worktree(
     let (changes_layout, changes_panes, _) = changes_pane_areas(
         body,
         frame.area().height / 2,
-        tree_visible.then(|| {
+        tree_shown.then(|| {
             (
                 pane_height(tree_changes.expect("visible tree changes exist")),
                 tree_summary.as_ref().map_or(0, Line::width),
             )
         }),
-        worktree_visible.then(|| {
+        worktree_shown.then(|| {
             (
                 pane_height(worktree_changes.expect("visible worktree changes exist")),
                 worktree_summary.as_ref().map_or(0, Line::width),
@@ -406,7 +406,8 @@ pub(crate) fn draw_with_worktree(
             changes_layout,
             changes_panes
                 .iter()
-                .any(|pane| pane.pane == ChangePane::Tree && pane.outer.height > 0),
+                .any(|pane| pane.pane == ChangePane::Tree && pane.outer.height > 0)
+                && tree_changes.is_some_and(Changes::is_visible),
             changes_panes
                 .iter()
                 .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0)
@@ -1436,7 +1437,13 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
                 },
                 |range| format!("{}..{}", range.base.to_hex_with_len(7), range.tip.to_hex_with_len(7)),
             );
-            vec![Span::raw(format!("─ Tree {label} ── "))]
+            let mut spans = vec![Span::raw(format!("─ Tree {label} "))];
+            if changes.paths.is_empty() {
+                spans.push(Span::styled("clean", color(Color::Green)));
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::raw("── "));
+            spans
         }
         ChangePane::Worktree if changes.paths.is_empty() => vec![
             Span::raw("─ Worktree "),
@@ -4771,6 +4778,25 @@ mod tests {
             "a clean worktree has no empty aggregate"
         );
         assert!(!app.worktree_changes_visible, "an empty block is not focusable");
+
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&Changes::default()),
+                Some(&Changes::default()),
+            );
+        })?;
+        let (clean_y, clean_tree) = (0..8)
+            .map(|y| (y, rendered_line(&terminal, y)))
+            .find(|(_, line)| line.contains("Tree ------- clean"))
+            .expect("an empty tree remains visible and says it is clean");
+        let clean_x = clean_tree.find("clean").expect("clean tree label") as u16;
+        assert_eq!(terminal.backend().buffer()[(clean_x, clean_y)].fg, Color::Green);
+        assert!(!app.tree_changes_visible, "an empty tree block is not focusable");
         Ok(())
     }
 
