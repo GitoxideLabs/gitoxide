@@ -12,10 +12,25 @@ pub enum Kind {
 
 #[tracing::instrument(skip_all, fields(?kind))]
 pub fn perform(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    kind: Kind,
+    selected_path: Option<(&PathChange, Option<ObjectId>)>,
+) -> Result<Option<ObjectId>> {
+    perform_inner(repo, graph, kind, selected_path, false)
+}
+
+#[tracing::instrument(skip_all)]
+pub fn amend_index(repo: gix::Repository, graph: &crate::history::HistoryGraph) -> Result<Option<ObjectId>> {
+    perform_inner(repo, graph, Kind::Amend, None, true)
+}
+
+fn perform_inner(
     mut repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     kind: Kind,
     selected_path: Option<(&PathChange, Option<ObjectId>)>,
+    index_only: bool,
 ) -> Result<Option<ObjectId>> {
     let head = repo
         .head_id()
@@ -59,7 +74,7 @@ pub fn perform(
                     anyhow::bail!("review commits can amend only staged paths");
                 }
                 amend_path_tree(&repo, old_tree, path, &index)?
-            } else if review {
+            } else if review || index_only {
                 let index_tree = create::index_tree(&repo, &index)?;
                 if index_tree == old_tree {
                     return Ok(None);
@@ -247,7 +262,7 @@ mod tests {
         let repo = open(fixture.path())?;
         let old = repo.head_id()?.detach();
         let graph = super::super::loaded_graph(&repo)?;
-        let new = perform(repo, &graph, Kind::Amend, None)?.expect("staged changes amend HEAD");
+        let new = amend_index(repo, &graph)?.expect("staged changes amend HEAD");
         assert_ne!(new, old);
         assert_eq!(std::fs::read(fixture.path().join("tracked"))?, b"unstaged\n");
         assert_eq!(git(fixture.path(), &["show", "HEAD:tracked"])?, b"staged\n");
@@ -259,6 +274,29 @@ mod tests {
         assert!(
             !super::super::rebase::is_pending(&commit),
             "an unsigned amended commit already has its final tree and parent"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn index_only_amend_does_not_fall_back_to_worktree_changes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        git(fixture.path(), &["reset", "-q", "HEAD", "--", "tracked"])?;
+        let repo = open(fixture.path())?;
+        let old = repo.head_id()?.detach();
+        let graph = super::super::loaded_graph(&repo)?;
+
+        assert!(amend_index(repo, &graph)?.is_none(), "an unchanged index is a no-op");
+        let repo = open(fixture.path())?;
+        assert_eq!(repo.head_id()?.detach(), old, "HEAD remains unchanged");
+        assert!(
+            git(fixture.path(), &["diff", "--cached", "--name-only"])?.is_empty(),
+            "the index remains clean"
+        );
+        assert_eq!(
+            git(fixture.path(), &["diff", "--name-only"])?,
+            b"tracked\n",
+            "worktree-only changes remain uncommitted"
         );
         Ok(())
     }
