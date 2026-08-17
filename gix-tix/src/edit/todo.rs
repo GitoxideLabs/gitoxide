@@ -6,6 +6,7 @@ use gix::{
     bstr::{BString, ByteSlice},
     prelude::ObjectIdExt,
 };
+use ratatui::text::Line;
 
 use super::rebase;
 
@@ -14,13 +15,13 @@ const HELP: &str = r#"
 <!--
 # Rebase todo help
 
-- Each fork section lists a stack from its oldest commit to its newest. Blank lines are ignored.
+- Read the editable plan from bottom to top. Each fork separator is the base of the stack above it. Blank lines are ignored.
 - `pick <id>` keeps a commit. Delete its line to drop it, or move the line to reorder it. Each listed commit may be picked only once.
-- `squash <id>` folds a commit into the preceding command in the same fork. Its full message is retained with a source heading, and additional authors become `Co-authored-by` trailers.
-- `## fork <id>` starts a stack at an existing commit or an earlier picked commit. The selected hidden boundary is labelled `(base)` with its title; a newer hidden tip used by rebase-update is `(updated-base)`, and an explicit command-line target is `(onto)`. Other fork headings stay terse. Delete a fork heading to continue its commits on the preceding stack; add one to create a fork. A listed commit must be picked before it can be a fork target.
+- `squash <id>` folds a commit into the following command below it in the same fork. Its full message is retained with a source heading, and additional authors become `Co-authored-by` trailers.
+- A centered `fork <id>` separator starts the stack above it at an existing commit or a commit picked below it. The selected hidden boundary is labelled `(base)` with its title; a newer hidden tip used by rebase-update is `(updated-base)`, and an explicit command-line target is `(onto)`. Other fork separators stay terse. Delete a separator to continue its commits on the stack below; add one to create a fork. A listed commit must be picked below before it can be a fork target.
 - `empty <title>` creates an empty commit with the text after the command as its title.
 - Commands may be plain text or enclosed in backticks. Text after a backticked command and text after a fork ID is display-only context.
-- Prefix `pick`, `squash`, or `empty` with `@` to choose the post-rebase checkout. Reference lines like `(main, topic)` point refs at the preceding fork or command; moving, adding, or removing names moves, creates, or deletes refs, including existing editable refs outside the generated todo. The current attached ref stays attached while it remains at the `@` command. Prefix one editable ref with `@` to attach HEAD to it explicitly; it must point to the `@` command.
+- Prefix `pick`, `squash`, or `empty` with `@` to choose the post-rebase checkout. Reference lines like `(main, topic)` point refs at the following separator or command below them; moving, adding, or removing names moves, creates, or deletes refs, including existing editable refs outside the generated todo. The current attached ref stays attached while it remains at the `@` command. Prefix one editable ref with `@` to attach HEAD to it explicitly; it must point to the `@` command.
 - Saving an unchanged document in the history-view editor is a no-op unless the ancestry ending at `@` has a pending rebase. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. Unchanged picks whose parent stays unchanged retain their IDs; replay starts at the first pending or structurally changed commit. Changed commits through `@` are cherry-picked and re-signed, while descendants and other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Tix pins, stashes, and review refs, tags, remote-tracking refs, and symbolic refs stay unchanged and hidden. A ref checked out by another worktree may be moved but not deleted. New unreferenced leaves are pinned.
 - A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts [CONTINUE]` and writes a continuation todo. Resolve the ordinary unmerged index, then apply that todo. Concurrent ref changes still abort the update.
@@ -28,7 +29,7 @@ const HELP: &str = r#"
 -->
 "#;
 
-const STATE_START: &str = "<!-- tix-rebase-state-v1\n";
+const STATE_START: &str = "<!-- tix-rebase-state-v2\n";
 const STATE_END: &str = "-->";
 const STATE_CLOSE: &str = "\n-->";
 
@@ -195,18 +196,19 @@ pub(crate) fn prepare(
         }
     };
     let anchor_title = anchor_title(repo, onto)?;
+    let mut body = Vec::new();
     for (section_index, section) in sections.iter().enumerate() {
         if section_index > 0 {
-            document.push(b'\n');
+            body.push(b'\n');
         }
         write_fork_heading(
-            &mut document,
+            &mut body,
             repo,
             section.parent,
             (section.parent == onto).then_some((anchor_kind, anchor_title.as_str())),
         )?;
         if !scope_set.contains(&section.parent) {
-            write_refs_at(&mut document, &state.expected_refs, section.parent)?;
+            write_refs_at(&mut body, &state.expected_refs, section.parent)?;
         }
         for id in &section.commits {
             let commit = by_id[id];
@@ -216,7 +218,7 @@ pub(crate) fn prepare(
                 "pick"
             };
             let states = commit_states(repo, *id)?;
-            document.extend_from_slice(
+            body.extend_from_slice(
                 format!(
                     "`{verb} {}` {states}{}\n",
                     short(repo, *id)?,
@@ -224,13 +226,14 @@ pub(crate) fn prepare(
                 )
                 .as_bytes(),
             );
-            write_refs_at(&mut document, &state.expected_refs, *id)?;
+            write_refs_at(&mut body, &state.expected_refs, *id)?;
         }
     }
     if sections.is_empty() {
-        write_fork_heading(&mut document, repo, onto, Some((anchor_kind, anchor_title.as_str())))?;
-        write_refs_at(&mut document, &state.expected_refs, onto)?;
+        write_fork_heading(&mut body, repo, onto, Some((anchor_kind, anchor_title.as_str())))?;
+        write_refs_at(&mut body, &state.expected_refs, onto)?;
     }
+    write_bottom_up(&mut document, &body)?;
     document.extend_from_slice(HELP.as_bytes());
     write_state(&mut document, &state);
     Ok(Prepared {
@@ -261,12 +264,13 @@ pub(crate) fn prepare_continuation(
         resolved,
         continuation_sources: plan.steps.iter().flat_map(|step| step.squash.iter().copied()).collect(),
     };
-    let mut document = b"<!-- Rebase help follows. Saving unchanged continues the materialized rebase; empty this file or remove the tix-rebase-state-v1 comment to cancel. -->\n# Continue materialized rebase\n\n".to_vec();
+    let mut document = b"<!-- Rebase help follows. Saving unchanged continues the materialized rebase; empty this file or remove the tix-rebase-state-v2 comment to cancel. -->\n# Continue materialized rebase\n\n".to_vec();
+    let mut body = Vec::new();
     for (index, step) in plan.steps.iter().enumerate() {
         let continues = matches!(step.parent, rebase::PlanParent::Step(parent) if parent + 1 == index);
         if !continues {
             if index > 0 {
-                document.push(b'\n');
+                body.push(b'\n');
             }
             let parent = match step.parent {
                 rebase::PlanParent::Existing(id) => id,
@@ -282,13 +286,13 @@ pub(crate) fn prepare_continuation(
                 .transpose()?
                 .unwrap_or_default();
             write_fork_heading(
-                &mut document,
+                &mut body,
                 repo,
                 parent,
                 (parent == plan.base).then_some(("base", base_title.as_str())),
             )?;
             if matches!(step.parent, rebase::PlanParent::Existing(_)) {
-                write_plan_refs_at(&mut document, &plan.expected_refs, step.parent)?;
+                write_plan_refs_at(&mut body, &plan.expected_refs, step.parent)?;
             }
         }
         let marker = if plan
@@ -308,7 +312,7 @@ pub(crate) fn prepare_continuation(
                     short(repo, id)?
                 };
                 let title = anchor_title(repo, id)?;
-                document.extend_from_slice(
+                body.extend_from_slice(
                     format!(
                         "`{marker}pick {value}` {}{}\n",
                         commit_states(repo, id)?,
@@ -318,12 +322,12 @@ pub(crate) fn prepare_continuation(
                 );
             }
             rebase::PlanCommit::Empty(ref title) => {
-                document.extend_from_slice(format!("`{marker}empty {}`\n", title.to_str_lossy()).as_bytes());
+                body.extend_from_slice(format!("`{marker}empty {}`\n", title.to_str_lossy()).as_bytes());
             }
         }
         for id in &step.squash {
             let title = anchor_title(repo, *id)?;
-            document.extend_from_slice(
+            body.extend_from_slice(
                 format!(
                     "`squash {}` {}{}\n",
                     short(repo, *id)?,
@@ -333,8 +337,9 @@ pub(crate) fn prepare_continuation(
                 .as_bytes(),
             );
         }
-        write_plan_refs_at(&mut document, &plan.expected_refs, rebase::PlanParent::Step(index))?;
+        write_plan_refs_at(&mut body, &plan.expected_refs, rebase::PlanParent::Step(index))?;
     }
+    write_bottom_up(&mut document, &body)?;
     document.extend_from_slice(HELP.as_bytes());
     write_state(&mut document, &state);
     Ok(Prepared {
@@ -346,16 +351,16 @@ pub(crate) fn prepare_continuation(
 fn unchanged_notice(base_updated: bool, has_pending: bool) -> &'static str {
     match (base_updated, has_pending) {
         (false, false) => {
-            "<!-- Rebase help follows. Saving unchanged is a no-op; empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
+            "<!-- Rebase help follows. Saving unchanged is a no-op; empty this file or remove the tix-rebase-state-v2 comment to cancel. -->"
         }
         (false, true) => {
-            "<!-- Rebase help follows. Pending commits on the @ ancestry make saving unchanged apply this todo: that ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
+            "<!-- Rebase help follows. Pending commits on the @ ancestry make saving unchanged apply this todo: that ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v2 comment to cancel. -->"
         }
         (true, false) => {
-            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base; empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
+            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base; empty this file or remove the tix-rebase-state-v2 comment to cancel. -->"
         }
         (true, true) => {
-            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base and applies pending commits on the @ ancestry: that ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
+            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base and applies pending commits on the @ ancestry: that ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v2 comment to cancel. -->"
         }
     }
 }
@@ -529,11 +534,36 @@ fn write_fork_heading(
     id: ObjectId,
     annotation: Option<(&str, &str)>,
 ) -> Result<()> {
-    out.extend_from_slice(format!("## fork {}", short(repo, id)?).as_bytes());
+    out.extend_from_slice(format!("fork {}", short(repo, id)?).as_bytes());
     if let Some((kind, title)) = annotation {
         out.extend_from_slice(format!(" ({kind}) {}", escape_markdown(title)).as_bytes());
     }
     out.push(b'\n');
+    Ok(())
+}
+
+fn write_bottom_up(out: &mut Vec<u8>, body: &[u8]) -> Result<()> {
+    let body = std::str::from_utf8(body).context("generated rebase todo is not UTF-8")?;
+    let width = body
+        .lines()
+        .map(|line| {
+            let width = Line::raw(line).width();
+            if line.starts_with("fork ") { width + 10 } else { width }
+        })
+        .max()
+        .unwrap_or_default();
+    for line in body.lines().rev() {
+        if line.starts_with("fork ") {
+            let label_width = Line::raw(line).width();
+            let rails = width.saturating_sub(label_width + 2).max(8);
+            let left = rails / 2;
+            let right = rails - left;
+            out.extend_from_slice(format!("{} {line} {}\n", "─".repeat(left), "─".repeat(right)).as_bytes());
+        } else {
+            out.extend_from_slice(line.as_bytes());
+            out.push(b'\n');
+        }
+    }
     Ok(())
 }
 
@@ -766,7 +796,7 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
     let mut section_has_commit = false;
     let mut section_last_step = None;
     let mut in_comment = false;
-
+    let mut editable = Vec::new();
     for raw in input.lines() {
         let line = raw.trim();
         if in_comment {
@@ -782,7 +812,16 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
         if line.is_empty() || line.starts_with("# ") {
             continue;
         }
-        if let Some(target) = line.strip_prefix("## fork ") {
+        editable.push(line);
+    }
+
+    for line in editable.into_iter().rev() {
+        if line.starts_with('─') && line.ends_with('─') {
+            let target = line
+                .trim_matches('─')
+                .trim()
+                .strip_prefix("fork ")
+                .context("a fork separator needs a fork ID")?;
             if sections > 0 && !section_has_commit {
                 anyhow::bail!("a fork section contains no commits");
             }
@@ -1126,7 +1165,7 @@ mod tests {
             let notice = unchanged_notice(updated, pending);
             assert!(notice.contains(expected), "the notice explains its execution mode");
             assert!(
-                notice.contains("remove the tix-rebase-state-v1 comment to cancel"),
+                notice.contains("remove the tix-rebase-state-v2 comment to cancel"),
                 "every notice explains explicit cancellation"
             );
         }
@@ -1173,11 +1212,14 @@ mod tests {
         let document = std::str::from_utf8(&prepared.document).expect("generated todo is UTF-8");
         let start = document.find(STATE_START).expect("generated todo has state");
         let end = document[start..].find(STATE_CLOSE).expect("generated state is closed") + start + STATE_CLOSE.len();
-        format!("{}\n{commands}", &document[start..end]).into_bytes()
+        let mut bottom_up = Vec::new();
+        write_bottom_up(&mut bottom_up, commands.as_bytes()).expect("test todo commands are UTF-8");
+        let bottom_up = std::str::from_utf8(&bottom_up).expect("rendered test todo is UTF-8");
+        format!("{}\n{bottom_up}", &document[start..end]).into_bytes()
     }
 
     #[test]
-    fn markdown_flows_from_base_to_tip_and_uses_repository_abbreviations() -> gix_testtools::Result {
+    fn markdown_flows_from_tip_to_base_and_uses_repository_abbreviations() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
         repo.reference(
@@ -1195,10 +1237,34 @@ mod tests {
         );
         assert!(document.contains(STATE_START), "the todo carries its transaction state");
         assert!(document.contains(&format!("# Rebase from `{}`", base.to_hex_with_len(7))));
-        assert!(document.contains(&format!("## fork {} (base) base", base.to_hex_with_len(7))));
+        assert!(document.contains(&format!("fork {} (base) base", base.to_hex_with_len(7))));
         let middle = document.find("`pick ").expect("the oldest pick is shown");
         let tip = document.find("`@pick ").expect("HEAD is marked");
-        assert!(middle < tip, "the todo grows from the base towards the tip");
+        let base = document.find("fork ").expect("the base separator is shown");
+        assert!(tip < middle && middle < base, "the todo grows upward from its base");
+        let separator = document
+            .lines()
+            .find(|line| line.contains("fork "))
+            .expect("separator is present");
+        assert!(separator.starts_with('─') && separator.ends_with('─'));
+        let plan = &document[..document.find("# Rebase todo help").expect("help is present")];
+        let width = plan
+            .lines()
+            .filter(|line| line.starts_with('`') || line.starts_with('(') || line.starts_with('─'))
+            .map(|line| Line::raw(line).width())
+            .max()
+            .expect("the editable plan has lines");
+        assert_eq!(
+            Line::raw(separator).width(),
+            width,
+            "the separator spans the widest plan line"
+        );
+        let left = separator.chars().take_while(|ch| *ch == '─').count();
+        let right = separator.chars().rev().take_while(|ch| *ch == '─').count();
+        assert!(
+            left >= 4 && right >= 4 && left.abs_diff(right) <= 1,
+            "the label is centered"
+        );
         assert!(
             document.contains("middle \\* markdown"),
             "metadata is escaped for Markdown"
@@ -1271,6 +1337,12 @@ mod tests {
         );
         let parsed = parse_state(&repo, &document)?.context("state is present")?;
         assert_eq!(parsed.expected_refs[0].name, name, "quoted names round-trip losslessly");
+        let old = document.replacen("tix-rebase-state-v2", "tix-rebase-state-v1", 1);
+        let err = match parse_state(&repo, &old) {
+            Ok(_) => panic!("v1 order would be ambiguous under v2 semantics"),
+            Err(err) => err,
+        };
+        assert!(format!("{err:#}").contains("unsupported state version"));
         assert_eq!(
             parsed.head_ref,
             Some(name),
@@ -1401,9 +1473,9 @@ mod tests {
 
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         let document = String::from_utf8(prepared.document.clone())?;
-        assert!(document.contains(&format!("## fork {} (base) base", base.to_hex_with_len(7))));
+        assert!(document.contains(&format!("fork {} (base) base", base.to_hex_with_len(7))));
         assert!(
-            document.contains(&format!("## fork {}\n", middle.to_hex_with_len(7))),
+            document.contains(&format!("fork {} ", middle.to_hex_with_len(7))),
             "a fork within the editable tree has no external-anchor annotation"
         );
         let plan = parse_plan(&repo, document.as_bytes())?;
@@ -1441,7 +1513,7 @@ mod tests {
         );
         assert!(
             document.contains(&format!(
-                "## fork {} (updated-base) \\[A\\] \\[N\\] updated \\* hidden base",
+                "fork {} (updated-base) \\[A\\] \\[N\\] updated \\* hidden base",
                 onto.to_hex_with_len(7)
             )),
             "the unfamiliar fork target carries its escaped UI title"
@@ -1475,7 +1547,7 @@ mod tests {
         let (base, middle, tip, commits) = commits(&repo)?;
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         let edited = format!(
-            "# Rebase\n\n## fork {}\n`pick {}` ignored\n@empty a new checkpoint\n\n## fork {}\n@pick {}\n",
+            "# Rebase\n\nfork {}\n`pick {}` ignored\n@empty a new checkpoint\n\nfork {}\n@pick {}\n",
             base.to_hex_with_len(7),
             tip.to_hex_with_len(7),
             tip.to_hex_with_len(7),
@@ -1487,7 +1559,7 @@ mod tests {
 
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         let edited = format!(
-            "## fork {}\npick {} ignored display metadata\nempty a new checkpoint\n\n## fork {}\n@pick {}\n",
+            "fork {}\npick {} ignored display metadata\nempty a new checkpoint\n\nfork {}\n@pick {}\n",
             base.to_hex_with_len(7),
             tip.to_hex_with_len(7),
             tip.to_hex_with_len(7),
@@ -1506,14 +1578,14 @@ mod tests {
     }
 
     #[test]
-    fn squash_folds_into_the_previous_command_and_may_carry_checkout() -> gix_testtools::Result {
+    fn squash_above_a_command_folds_into_it_and_may_carry_checkout() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         let edited = with_state(
             &prepared,
             &format!(
-                "## fork {}\npick {}\n`@squash {}` ignored display metadata\n\n## fork {}\nempty side\n",
+                "fork {}\npick {}\n`@squash {}` ignored display metadata\n\nfork {}\nempty side\n",
                 base.to_hex_with_len(7),
                 middle.to_hex_with_len(7),
                 tip.to_hex_with_len(7),
@@ -1537,7 +1609,7 @@ mod tests {
         let invalid = with_state(
             &prepared,
             &format!(
-                "## fork {}\n@squash {}\npick {}\n",
+                "fork {}\n@squash {}\npick {}\n",
                 base.to_hex_with_len(7),
                 tip.to_hex_with_len(7),
                 middle.to_hex_with_len(7),
@@ -1618,7 +1690,7 @@ mod tests {
         let (_fixture, repo) = repo()?;
         let (base, _middle, tip, commits) = commits(&repo)?;
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
-        let edited = format!("## fork {}\n", base.to_hex_with_len(7));
+        let edited = format!("fork {}\n", base.to_hex_with_len(7));
         let edited = with_state(&prepared, &edited);
         let err = parse(&repo, &edited).expect_err("HEAD must be moved before its pick is dropped");
         assert!(format!("{err:#}").contains("checkout marker"));
@@ -1657,7 +1729,7 @@ mod tests {
         let mismatched = with_state(
             &prepared,
             &format!(
-                "## fork {}\npick {}\n(@main)\n@pick {}\n",
+                "fork {}\npick {}\n(@main)\n@pick {}\n",
                 base.to_hex_with_len(7),
                 middle.to_hex_with_len(7),
                 tip.to_hex_with_len(7),
@@ -1669,7 +1741,7 @@ mod tests {
         let edited = with_state(
             &prepared,
             &format!(
-                "## fork {}\npick {}\n(new-1, main)\n@pick {}\n",
+                "fork {}\npick {}\n(new-1, main)\n@pick {}\n",
                 base.to_hex_with_len(7),
                 middle.to_hex_with_len(7),
                 tip.to_hex_with_len(7),
@@ -1690,7 +1762,7 @@ mod tests {
         assert_eq!(
             repo.find_reference("refs/heads/new-1")?.id().detach(),
             outcome.map(middle).context("the middle commit is retained")?,
-            "the new branch points at its preceding command"
+            "the new branch line points at the following command below it"
         );
         assert!(
             repo.try_find_reference("refs/patches/middle")?.is_none()
@@ -1721,7 +1793,7 @@ mod tests {
         let edited = with_state(
             &prepared,
             &format!(
-                "## fork {}\npick {}\n(outside)\n@pick {}\n(@refs/patches/attach)\n",
+                "fork {}\npick {}\n(outside)\n@pick {}\n(@refs/patches/attach)\n",
                 base.to_hex_with_len(7),
                 middle.to_hex_with_len(7),
                 tip.to_hex_with_len(7),
@@ -1778,7 +1850,7 @@ mod tests {
         let edited = with_state(
             &prepared,
             &format!(
-                "## fork {}\n@pick {}\n(main, refs/patches/tip)\n",
+                "fork {}\n@pick {}\n(main, refs/patches/tip)\n",
                 base.to_hex_with_len(7),
                 tip.to_hex_with_len(7),
             ),
@@ -1810,11 +1882,7 @@ mod tests {
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         let edited = with_state(
             &prepared,
-            &format!(
-                "## fork {}\n@pick {}\n",
-                base.to_hex_with_len(7),
-                tip.to_hex_with_len(7)
-            ),
+            &format!("fork {}\n@pick {}\n", base.to_hex_with_len(7), tip.to_hex_with_len(7)),
         );
         let plan = parse_plan(&repo, &edited)?;
         let graph = super::super::loaded_graph(&repo)?;
