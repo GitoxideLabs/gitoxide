@@ -307,7 +307,7 @@ without trading responsiveness for metadata that is not visible.
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
 | `?` | Toggle the information key group. Its actions remain direct shortcuts. |
 | `t` | Toggle the rounded ref-tree overview. |
-| `[` | Toggle graph/metadata alignment. |
+| `[` | Cycle viewport-local title alignment, full-column alignment, and no alignment. |
 | `v` | Toggle the history-display key group. Pressing `v` again closes it. |
 | `v d` | Cycle author dates, committer dates, and no dates. |
 | `v e` | Toggle full actors/emails and titles. |
@@ -324,6 +324,11 @@ without trading responsiveness for metadata that is not visible.
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
 | `@` | Time-travel to the selected commit, or return through its tix pin. Terminals reporting the base key as `Shift-2` are also accepted. |
+
+Alignment uses only rows in the current viewport to determine widths and starts
+in title mode. Title alignment keeps titles fixed while horizontal navigation
+pans graph overflow. Full-column alignment pans the complete padded row so
+clipped fields can be reached.
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. The `?` group similarly remains open

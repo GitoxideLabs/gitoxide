@@ -6023,6 +6023,7 @@ mod tests {
             action(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE)),
             Some(Action::ToggleAlign)
         );
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::NONE)), None);
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE)),
             Some(Action::ToggleCommit)
