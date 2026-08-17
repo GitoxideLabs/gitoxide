@@ -2420,8 +2420,8 @@ mod tests {
         let row = terminal.backend().buffer();
         assert_eq!(row[(0, 0)].symbol(), "🚧", "todo leads the row");
         assert_eq!(row[(2, 0)].symbol(), "📝", "note directly follows todo");
-        assert_eq!(row[(5, 0)].symbol(), ">", "selection retains its own field");
-        assert_eq!(row[(7, 0)].symbol(), "●", "the graph remains separate");
+        assert_eq!(row[(4, 0)].symbol(), ">", "selection directly follows enrichments");
+        assert_eq!(row[(6, 0)].symbol(), "●", "the graph remains separate");
         assert!(
             rendered_line(&terminal, 0).contains("follow-up title"),
             "the selected todo displays its note title"
@@ -2463,8 +2463,8 @@ mod tests {
             "a note replaces the selected title independently of todo"
         );
         assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "📝");
-        assert_eq!(terminal.backend().buffer()[(3, 0)].symbol(), ">");
-        assert_eq!(terminal.backend().buffer()[(5, 0)].symbol(), "●");
+        assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), ">");
+        assert_eq!(terminal.backend().buffer()[(4, 0)].symbol(), "●");
         Ok(())
     }
 
