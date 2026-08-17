@@ -218,14 +218,7 @@ pub(crate) fn prepare(
                 "pick"
             };
             let states = commit_states(repo, *id)?;
-            body.extend_from_slice(
-                format!(
-                    "`{verb} {}` {states}{}\n",
-                    short(repo, *id)?,
-                    escape_markdown(&commit.info)
-                )
-                .as_bytes(),
-            );
+            body.extend_from_slice(format!("`{verb} {}` {states}{}\n", short(repo, *id)?, commit.info).as_bytes());
             write_refs_at(&mut body, &state.expected_refs, *id)?;
         }
     }
@@ -313,12 +306,7 @@ pub(crate) fn prepare_continuation(
                 };
                 let title = anchor_title(repo, id)?;
                 body.extend_from_slice(
-                    format!(
-                        "`{marker}pick {value}` {}{}\n",
-                        commit_states(repo, id)?,
-                        escape_markdown(&title)
-                    )
-                    .as_bytes(),
+                    format!("`{marker}pick {value}` {}{}\n", commit_states(repo, id)?, title).as_bytes(),
                 );
             }
             rebase::PlanCommit::Empty(ref title) => {
@@ -332,7 +320,7 @@ pub(crate) fn prepare_continuation(
                     "`squash {}` {}{}\n",
                     short(repo, *id)?,
                     commit_states(repo, *id)?,
-                    escape_markdown(&title)
+                    title
                 )
                 .as_bytes(),
             );
@@ -536,7 +524,7 @@ fn write_fork_heading(
 ) -> Result<()> {
     out.extend_from_slice(format!("fork {}", short(repo, id)?).as_bytes());
     if let Some((kind, title)) = annotation {
-        out.extend_from_slice(format!(" ({kind}) {}", escape_markdown(title)).as_bytes());
+        out.extend_from_slice(format!(" ({kind}) {title}").as_bytes());
     }
     out.push(b'\n');
     Ok(())
@@ -591,17 +579,6 @@ fn short(repo: &gix::Repository, id: ObjectId) -> Result<String> {
         .shorten()
         .context("could not shorten a rebase todo ID")?
         .to_string())
-}
-
-fn escape_markdown(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if matches!(ch, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>') {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
@@ -1188,7 +1165,7 @@ mod tests {
                 Commit {
                     id: middle,
                     parents: vec![base],
-                    info: "2000-01-02 author middle * markdown".into(),
+                    info: "2000-01-02 author middle * _ [markdown] <view> `code` \\ raw".into(),
                 },
             ],
         ))
@@ -1266,8 +1243,8 @@ mod tests {
             "the label is centered"
         );
         assert!(
-            document.contains("middle \\* markdown"),
-            "metadata is escaped for Markdown"
+            document.contains("middle * _ [markdown] <view> `code` \\ raw"),
+            "display metadata is emitted verbatim"
         );
         assert!(
             document.find("# Rebase todo help").expect("help is present") > tip,
@@ -1489,7 +1466,7 @@ mod tests {
         let (base, middle, tip, commits) = commits(&repo)?;
         let mut commit = repo.find_commit(base)?.decode()?.into_owned()?;
         commit.parents = [base].into_iter().collect();
-        commit.message = "updated * hidden base\n\n<!-- agent -->".into();
+        commit.message = "updated * _ [hidden] <base> `raw` \\ base\n\n<!-- agent -->".into();
         let onto = repo.write_object(&commit)?.detach();
         repo.notes()?.replace("refs/notes/commits", onto, "anchor note")?;
 
@@ -1513,13 +1490,13 @@ mod tests {
         );
         assert!(
             document.contains(&format!(
-                "fork {} (updated-base) \\[A\\] \\[N\\] updated \\* hidden base",
+                "fork {} (updated-base) [A] [N] updated * _ [hidden] <base> `raw` \\ base",
                 onto.to_hex_with_len(7)
             )),
-            "the unfamiliar fork target carries its escaped UI title"
+            "the unfamiliar fork target carries its raw UI title"
         );
         assert_eq!(
-            document.matches("updated \\* hidden base").count(),
+            document.matches("updated * _ [hidden] <base> `raw` \\ base").count(),
             1,
             "only the new update target is labelled"
         );

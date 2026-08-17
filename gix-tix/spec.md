@@ -746,14 +746,14 @@ space first; changes blocks adapt within the remaining history width.
   `──── fork <id> ────` separator below its oldest command.
   IDs are shortened through repository configuration; metadata repeats the
   information visible in history and always includes the subject. Base-level
-  stacks end with `fork <id> (base) <title>` in the separator, using the
-  Markdown-escaped title exactly as displayed in history. Fork points within the editable tree
+  stacks end with `fork <id> (base) <title>` in the separator, using the title
+  exactly as displayed in history without Markdown escaping. Fork points within the editable tree
   remain plain `fork <id>` separators. Every separator is centered with at least
   four `─` characters per side, and all span the widest editable line.
 - When that boundary shows `⇣N`, `e u` opens the same editor with each base-level
   stack rooted at the corresponding hidden branch tip. Its otherwise unfamiliar
-  separator is `fork <id> (updated-base) <title>`, with the Markdown-escaped
-  title exactly as shown in history, including `[A]` and `[N]`. The hidden branch
+  separator is `fork <id> (updated-base) <title>`, with the raw title exactly as
+  shown in history, including `[A]` and `[N]`. The hidden branch
   itself is not moved.
 - Pick lines may be reordered or removed. `squash <id>` folds an existing
   non-merge commit into the following `pick` or `empty` below it in the same
@@ -763,7 +763,7 @@ space first; changes blocks adapt within the remaining history width.
   adding and removing separators creates
   and joins branches. `empty <title>` inserts an empty commit. Markdown code
   spans and equivalent plain commands are accepted; display text after an ID is
-  informational.
+  informational and emitted verbatim without Markdown escaping.
 - Squash groups are materialized eagerly on every fork by applying their source
   deltas in bottom-to-top todo order. The result retains the first member's author, author
   time, encoding, extra headers, and message, receives the operation's committer,
