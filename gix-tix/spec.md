@@ -195,8 +195,8 @@ without trading responsiveness for metadata that is not visible.
   change ID share it as well. Malformed enrichments are ignored for display and
   diagnosed, while mutation refuses to overwrite them.
 - Todo and note enrichments receive a leading `🚧` and `📝` respectively before
-  the graph, with no gap between them when both are present. The dedicated field
-  remains visible alongside selection, dirty-worktree, and conflict markers.
+  the graph, with no gap between them or the following status field. The dedicated
+  field remains visible alongside selection, dirty-worktree, and conflict markers.
   `tix show` emits the same field and aligns unmarked rows when any displayed
   commit has either enrichment.
 - Only the selected history row replaces its commit title with its note title,
