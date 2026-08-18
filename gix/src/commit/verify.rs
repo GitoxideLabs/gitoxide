@@ -2,7 +2,7 @@ use std::{ffi::OsString, path::PathBuf};
 
 use crate::config::tree::{Gpg, Key, gpg};
 
-pub use gix_object::commit::signature::{
+pub use gix_object::signature::{
     Format,
     verify::{Outcome, Status, TrustLevel},
 };
@@ -22,7 +22,7 @@ pub enum Error {
     #[error("gpg.ssh.allowedSignersFile must be configured for SSH signature verification")]
     MissingAllowedSigners,
     #[error(transparent)]
-    Verify(#[from] gix_object::commit::signature::verify::Error),
+    Verify(#[from] gix_object::signature::verify::Error),
 }
 
 pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, Error> {
@@ -35,10 +35,9 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, Erro
         .map(|value| Gpg::MIN_TRUST_LEVEL.try_into_trust_level(value))
         .transpose()?
         .unwrap_or_default();
-    let format =
-        Format::from_signature(&signature).ok_or(gix_object::commit::signature::verify::Error::UnsupportedFormat)?;
+    let format = Format::from_signature(&signature).ok_or(gix_object::signature::verify::Error::UnsupportedFormat)?;
     let options = match format {
-        Format::OpenPgp => gix_object::commit::signature::verify::Options::OpenPgp {
+        Format::OpenPgp => gix_object::signature::verify::Options::OpenPgp {
             program: config
                 .trusted_program(gpg::OpenPgp::PROGRAM)
                 .or_else(|| config.trusted_program(Gpg::PROGRAM))
@@ -47,7 +46,7 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, Erro
             environment: Vec::new(),
             minimum_trust,
         },
-        Format::X509 => gix_object::commit::signature::verify::Options::X509 {
+        Format::X509 => gix_object::signature::verify::Options::X509 {
             program: config
                 .trusted_program(gpg::X509::PROGRAM)
                 .unwrap_or_else(|| default_program(&gpg::X509::PROGRAM)),
@@ -62,7 +61,7 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, Erro
             let revocation_file = config
                 .trusted_path(gpg::Ssh::REVOCATION_FILE)?
                 .filter(|path| path.exists());
-            gix_object::commit::signature::verify::Options::Ssh {
+            gix_object::signature::verify::Options::Ssh {
                 program: config
                     .trusted_program(gpg::Ssh::PROGRAM)
                     .unwrap_or_else(|| default_program(&gpg::Ssh::PROGRAM)),

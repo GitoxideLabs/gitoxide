@@ -5,8 +5,8 @@ use crate::{
     config::tree::{Gpg, Key, User, gpg},
 };
 
-use gix_object::commit::signature::sign::is_literal_ssh_key;
-pub use gix_object::commit::signature::{Format, sign::Options};
+use gix_object::signature::sign::is_literal_ssh_key;
+pub use gix_object::signature::{Format, sign::Options};
 
 /// Errors encountered when applying resolved signing options to a commit.
 #[derive(Debug, thiserror::Error)]
@@ -17,7 +17,7 @@ pub enum Error {
     #[error(transparent)]
     Decode(#[from] gix_object::decode::Error),
     #[error(transparent)]
-    Sign(#[from] gix_object::commit::signature::sign::Error),
+    Sign(#[from] gix_object::signature::sign::Error),
     #[error(transparent)]
     WriteObject(#[from] crate::object::write::Error),
     #[error(transparent)]

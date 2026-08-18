@@ -29,11 +29,11 @@ impl MinTrustLevel {
     pub fn try_into_trust_level(
         &'static self,
         value: impl gix_utils::AsBStr,
-    ) -> Result<gix_object::commit::signature::verify::TrustLevel, config::key::GenericErrorWithValue> {
+    ) -> Result<gix_object::signature::verify::TrustLevel, config::key::GenericErrorWithValue> {
         use crate::bstr::ByteSlice;
 
         let value = value.as_bstr();
-        gix_object::commit::signature::verify::TrustLevel::from_bytes(value.trim())
+        gix_object::signature::verify::TrustLevel::from_bytes(value.trim())
             .ok_or_else(|| config::key::GenericErrorWithValue::from_value(self, value.into()))
     }
 }

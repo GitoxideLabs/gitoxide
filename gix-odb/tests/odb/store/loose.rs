@@ -336,7 +336,7 @@ mod find {
             name: b"1.0.0".as_bstr(),
             target_kind: Kind::Commit,
             message: b"for the signature".as_bstr(),
-            pgp_signature: Some(
+            signature: Some(
                 b"-----BEGIN PGP SIGNATURE-----
 Comment: GPGTools - https://gpgtools.org
 

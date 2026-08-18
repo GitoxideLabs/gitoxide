@@ -70,7 +70,7 @@ pub fn list(repo: gix::Repository, out: &mut dyn std::io::Write, format: OutputF
                         "tag name: {}",
                         if name == tag_ref.name { "*".into() } else { tag_ref.name }
                     ));
-                    if tag_ref.pgp_signature.is_some() {
+                    if tag_ref.signature.is_some() {
                         fields.push("signed".into());
                     }
 

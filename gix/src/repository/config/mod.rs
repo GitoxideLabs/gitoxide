@@ -54,7 +54,7 @@ impl crate::Repository {
     #[cfg(feature = "command")]
     pub fn commit_signing_options(
         &self,
-    ) -> Result<gix_object::commit::signature::sign::Options, crate::commit::sign::options::Error> {
+    ) -> Result<gix_object::signature::sign::Options, crate::commit::sign::options::Error> {
         crate::commit::sign::signing_options(self)
     }
 
@@ -64,7 +64,7 @@ impl crate::Repository {
     #[cfg(feature = "command")]
     pub fn commit_signing_options_if_enabled(
         &self,
-    ) -> Result<Option<gix_object::commit::signature::sign::Options>, crate::commit::sign::options::Error> {
+    ) -> Result<Option<gix_object::signature::sign::Options>, crate::commit::sign::options::Error> {
         crate::commit::sign::signing_options_if_enabled(self)
     }
 
