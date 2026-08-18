@@ -1138,6 +1138,10 @@ pub(crate) fn draw_with_worktree(
         ordered.push(Span::raw(" · "));
         ordered.extend(shortcut(label, '@', true));
     }
+    if app.can_cycle_duplicate() {
+        ordered.push(Span::raw(" · "));
+        ordered.extend(shortcut("next duplicate", 'x', true));
+    }
     ordered.push(Span::raw(" · "));
     ordered.extend(shortcut("copy", 'y', true));
     ordered.push(Span::raw(" · "));
@@ -6077,8 +6081,9 @@ mod tests {
     #[test]
     fn hides_ids_by_default_and_marks_duplicate_change_ids() -> Result<(), Box<dyn std::error::Error>> {
         let id = gix::ObjectId::Sha1([1; 20]);
+        let duplicate_id = gix::ObjectId::Sha1([2; 20]);
         let mut app = App::new(1);
-        app.extend_commits(vec![Commit {
+        let commit = Commit {
             id,
             parent_ids: Default::default(),
             author_time: gix::date::Time::default(),
@@ -6090,7 +6095,15 @@ mod tests {
             has_agent_marker: false,
             is_review: false,
             signature: SignatureState::Unsigned,
-        }]);
+        };
+        app.extend_commits(vec![
+            commit.clone(),
+            Commit {
+                id: duplicate_id,
+                title: "duplicate".into(),
+                ..commit
+            },
+        ]);
         let row = &app.rows[0];
         let plain = plain_history_metadata(
             &app,
@@ -6102,10 +6115,10 @@ mod tests {
         );
         assert!(!plain.contains("0101010"), "history rows hide IDs by default");
 
-        let change_id = gix::hash::ChangeId::from(gix::ObjectId::Sha1([2; 20]));
+        let change_id = gix::hash::ChangeId::from(duplicate_id);
         app.set_change_ids(
             std::collections::HashMap::from([(id, change_id)]),
-            std::collections::HashSet::from([id]),
+            std::collections::HashSet::from([id, duplicate_id]),
         );
         let row = &app.rows[0];
         let decorations = Decorations::new();
@@ -6151,6 +6164,10 @@ mod tests {
             rendered_line(&terminal, 0).starts_with("👯‍♂️ > "),
             "the ambiguity gutter does not replace selection: {:?}",
             rendered_line(&terminal, 0)
+        );
+        assert!(
+            rendered_line(&terminal, 1).contains("next duplicate"),
+            "the footer advertises duplicate cycling for the selected commit"
         );
         Ok(())
     }
