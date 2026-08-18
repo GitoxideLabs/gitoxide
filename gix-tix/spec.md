@@ -606,9 +606,7 @@ space first; changes blocks adapt within the remaining history width.
   to its parent; `new-empty` deliberately reuses it.
 - The Markdown editor buffer contains editable identities and dates, a `what`
   title, a `why` body, optional attribution trailers, and a commented Git-style
-  per-path diffstat with signed net line counts. A commented
-  `Author: 🚧WIP🚧 <wip@invalid>` directly below the configured author can be
-  uncommented to select it instead. Commit hooks are not run.
+  per-path diffstat with signed net line counts. Commit hooks are not run.
 - After editing, tix revalidates the destination, applies configured signing,
   marks linear descendants for lazy replay, persists the prepared objects, and atomically
   advances mutable refs throughout the rewritten stack. This includes local
@@ -667,8 +665,7 @@ space first; changes blocks adapt within the remaining history width.
   changes abort without writing objects or changing refs, the index, or files.
 - `tix split` performs the same split at `HEAD`: worktree changes are amended
   into the source commit and staged index changes become the new commit on top.
-  Its upper-commit editor offers the same commented WIP author override as the
-  new-commit editor, including its enrichment headers.
+  Its upper-commit editor uses the same enrichment headers as the new-commit editor.
 - A successful split leaves the worktree bytes untouched and resets the index to
   the new upper commit. The rewritten source retains its message and ancestry;
   the upper commit receives the edited message. Their final trees and ancestry

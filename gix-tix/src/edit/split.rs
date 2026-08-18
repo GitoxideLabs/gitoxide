@@ -143,12 +143,14 @@ mod tests {
         }
         let before = gix_testtools::repository::snapshot(fixture.path())?;
         let prepared = prepare(open(fixture.path())?)?;
-        assert!(
+        assert_eq!(
             prepared
                 .document
-                .windows(b";Author: \xf0\x9f\x9a\xa7WIP\xf0\x9f\x9a\xa7 <wip@invalid>".len())
-                .any(|window| window == b";Author: \xf0\x9f\x9a\xa7WIP\xf0\x9f\x9a\xa7 <wip@invalid>"),
-            "split editors offer the provisional author"
+                .split(|byte| *byte == b'\n')
+                .filter(|line| line.strip_prefix(b";").unwrap_or(line).starts_with(b"Author: "))
+                .count(),
+            1,
+            "split editors contain only the configured author"
         );
         assert!(
             prepared
