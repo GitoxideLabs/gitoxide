@@ -375,6 +375,7 @@ pub(crate) enum Action {
     Forget,
     Rebase,
     RebaseUpdate,
+    Squash,
     Review,
     TimeTravel,
     AttachedTimeTravel,
@@ -413,6 +414,10 @@ pub(crate) enum Effect {
         base: ObjectId,
         onto: ObjectId,
         commits: Vec<ObjectId>,
+    },
+    Squash {
+        source: ObjectId,
+        target: ObjectId,
     },
     StartReview {
         tip: ObjectId,
@@ -508,6 +513,7 @@ pub(crate) struct App {
     reachability_anchor: Option<ObjectId>,
     review_tip: Option<ObjectId>,
     review_return: Option<(ObjectId, ObjectId)>,
+    squash_source: Option<ObjectId>,
     reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
     pub(crate) focus_feedback: Option<&'static str>,
@@ -606,6 +612,7 @@ impl App {
             reachability_anchor: None,
             review_tip: None,
             review_return: None,
+            squash_source: None,
             reachable_rows: None,
             copy_feedback: None,
             focus_feedback: None,
@@ -713,6 +720,8 @@ impl App {
             Some("review return is missing · j/k select commit · <enter> finish detached · Esc cancel")
         } else if self.review_selection_active() {
             Some("review base · j/k select ancestor · <enter> start · Esc cancel")
+        } else if self.squash_selection_active() {
+            Some("squash target · j/k select ancestor · <enter> squash · Esc cancel")
         } else if self.forget_confirmation_visible() {
             Some("forget commit · d again confirm · any other action cancel")
         } else {
@@ -1042,6 +1051,7 @@ impl App {
                 | Action::Forget
                 | Action::Rebase
                 | Action::RebaseUpdate
+                | Action::Squash
                 | Action::Review
                 | Action::TimeTravel
                 | Action::AttachedTimeTravel
@@ -1261,7 +1271,7 @@ impl App {
                 else {
                     return Vec::new();
                 };
-                self.clear_review_selection();
+                self.clear_reachability_selection();
                 return vec![Effect::FinishReview {
                     review,
                     return_to: Some(return_to),
@@ -1273,9 +1283,22 @@ impl App {
                     return Vec::new();
                 };
                 if base != tip && self.selected.is_some_and(|index| self.is_row_reachable(index)) {
-                    self.clear_review_selection();
+                    self.clear_reachability_selection();
                     return vec![Effect::StartReview { tip, base }];
                 }
+            }
+            Action::OpenDiff if self.squash_source.is_some() => {
+                let source = self.squash_source.expect("squash selection has a source");
+                let Some(target) = self
+                    .selected
+                    .filter(|index| self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
+                    .and_then(|index| self.rows.get(index))
+                    .map(|row| row.id)
+                else {
+                    return Vec::new();
+                };
+                self.clear_reachability_selection();
+                return vec![Effect::Squash { source, target }];
             }
             Action::OpenDiff => {
                 if let Some(target) = self.selected_tree_diff_target() {
@@ -1353,6 +1376,24 @@ impl App {
                     commits: self.hidden_descendants(base),
                 }];
             }
+            Action::Squash if self.can_squash() => {
+                let source = self.rows[self.selected.expect("squash requires a selection")].id;
+                self.squash_source = Some(source);
+                self.reachability_anchor = Some(source);
+                self.compute_reachable_rows();
+                let mut targets = self
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, row)| {
+                        row.id != source && self.is_row_reachable(*index) && self.reachable_row_selectable(*index)
+                    })
+                    .map(|(_, row)| row.id);
+                if let Some(target) = targets.next().filter(|_| targets.next().is_none()) {
+                    self.clear_reachability_selection();
+                    return vec![Effect::Squash { source, target }];
+                }
+            }
             Action::Review if self.can_finish_review() => {
                 return vec![Effect::FinishReview {
                     review: self.rows[self.selected.expect("finishing review requires a selection")].id,
@@ -1373,7 +1414,7 @@ impl App {
                     })
                     .map(|(_, row)| row.id);
                 if let Some(base) = bases.next().filter(|_| bases.next().is_none()) {
-                    self.clear_review_selection();
+                    self.clear_reachability_selection();
                     return vec![Effect::StartReview { tip, base }];
                 }
             }
@@ -1430,8 +1471,10 @@ impl App {
                 }
             }
             Action::ForceQuit => return vec![Effect::Quit],
-            Action::Cancel if self.review_tip.is_some() || self.review_return.is_some() => {
-                self.clear_review_selection()
+            Action::Cancel
+                if self.review_tip.is_some() || self.review_return.is_some() || self.squash_source.is_some() =>
+            {
+                self.clear_reachability_selection();
             }
             Action::Cancel | Action::Quit if self.changes_focus.is_some() => self.focus_history(),
             Action::Cancel if self.state == State::Loading => {
@@ -1758,7 +1801,7 @@ impl App {
         self.pending_initial_selection = None;
         self.selection_after_refresh = None;
         self.update_worktree_head_descendants();
-        self.clear_review_selection();
+        self.clear_reachability_selection();
         self.signature_failures = 0;
         self.signature_verification_running = false;
     }
@@ -1793,9 +1836,10 @@ impl App {
         self.ensure_changes_visible();
     }
 
-    fn clear_review_selection(&mut self) {
+    fn clear_reachability_selection(&mut self) {
         self.review_tip = None;
         self.review_return = None;
+        self.squash_source = None;
         self.reachability_anchor = None;
         self.reachable_rows = None;
     }
@@ -1951,12 +1995,25 @@ impl App {
     }
 
     fn reachable_row_selectable(&self, index: usize) -> bool {
+        if self.squash_source.is_some() {
+            return self
+                .rows
+                .get(index)
+                .is_some_and(|row| Some(row.id) != self.squash_source)
+                && self.is_squash_target(index);
+        }
         !self.is_row_hidden(index)
             || (self.review_tip.is_some()
                 && self
                     .rows
                     .get(index)
                     .is_some_and(|row| self.hidden_rebase_bases.contains(&row.id)))
+    }
+
+    fn is_squash_target(&self, index: usize) -> bool {
+        self.rows.get(index).is_some_and(|row| {
+            !self.is_row_hidden(index) && row.parent_ids.len() == 1 && !self.known_merge_descendants.contains(&row.id)
+        })
     }
 
     fn select(&mut self, selected: usize) {
@@ -2075,6 +2132,25 @@ impl App {
                 .is_some_and(|row| self.hidden_branch_updates.contains_key(&row.id))
     }
 
+    pub(crate) fn can_squash(&self) -> bool {
+        self.state == State::Complete
+            && self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|source| {
+                    !self.hidden_rows.contains(&source.id)
+                        && source.parent_ids.len() == 1
+                        && !self.known_merge_descendants.contains(&source.id)
+                        && self.rows.iter().enumerate().any(|(index, target)| {
+                            target.id != source.id
+                                && self.is_squash_target(index)
+                                && self.is_known_ancestor(target.id, source.id)
+                        })
+                })
+    }
+
     pub(crate) fn can_review(&self) -> bool {
         self.state == State::Complete
             && self.worktree_changes_available
@@ -2105,6 +2181,10 @@ impl App {
 
     pub(crate) fn review_selection_active(&self) -> bool {
         self.review_tip.is_some()
+    }
+
+    pub(crate) fn squash_selection_active(&self) -> bool {
+        self.squash_source.is_some()
     }
 
     pub(crate) fn review_return_selection_active(&self) -> bool {
@@ -3593,6 +3673,66 @@ mod tests {
             "the sole strict ancestor needs no separate selection step"
         );
         assert!(!app.review_selection_active());
+    }
+
+    #[test]
+    fn squash_selects_a_visible_strict_ancestor_and_can_be_cancelled() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(6, &[1]),
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.selected = app.rows.iter().position(|row| row.id == id(5));
+
+        assert!(app.can_squash());
+        assert!(app.update(Action::Squash).is_empty());
+        assert!(app.squash_selection_active());
+        app.update(Action::MoveDown);
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(4)));
+        app.update(Action::MoveDown);
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(3)));
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some("squash target · j/k select ancestor · <enter> squash · Esc cancel".into())
+        );
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::Squash {
+                source: id(5),
+                target: id(3),
+            }]
+        );
+        assert!(!app.squash_selection_active());
+
+        app.selected = app.rows.iter().position(|row| row.id == id(5));
+        assert!(app.update(Action::Squash).is_empty());
+        assert!(app.update(Action::Cancel).is_empty());
+        assert!(!app.squash_selection_active());
+    }
+
+    #[test]
+    fn squash_starts_immediately_with_one_eligible_target() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+        app.selected = app.rows.iter().position(|row| row.id == id(3));
+
+        assert_eq!(
+            app.update(Action::Squash),
+            vec![Effect::Squash {
+                source: id(3),
+                target: id(2),
+            }]
+        );
+        assert!(!app.squash_selection_active());
+
+        app.hidden_rows.insert(id(2));
+        assert!(!app.can_squash(), "hidden commits cannot be squash targets");
     }
 
     #[test]
