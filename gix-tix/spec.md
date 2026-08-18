@@ -714,7 +714,7 @@ space first; changes blocks adapt within the remaining history width.
   has its final tree and unchanged parent, so an empty signature field alone keeps
   a formerly signed commit pending. Reparented descendants additionally carry
   `tix-rebase-parent`, retaining the original parent needed for later replay. Both
-  pending forms use a bright-cyan commit marker.
+  pending forms use a grey commit marker so they remain distinct from unsigned blue.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
   targets are trees, blobs, or other non-commit objects.
 - Time travel toward a pending destination cherry-picks and signs only the pending
