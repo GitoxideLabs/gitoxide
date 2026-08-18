@@ -311,6 +311,7 @@ fn write_history(
         })
         .max()
         .unwrap_or_default();
+    let ambiguity_gutter = (!change_ids.ambiguous.is_empty()).then(|| Line::raw("💥").width());
     for (index, row) in app.rows.iter().enumerate() {
         let metadata = crate::ui::plain_history_metadata(
             &app,
@@ -318,7 +319,7 @@ fn write_history(
             &decorations,
             &mailmap,
             note_ids.contains(&row.id),
-            change_ids.get(&row.id).copied(),
+            change_ids.values.get(&row.id).copied(),
         );
         if enrichment_gutter != 0 {
             let marker = crate::enrich::marker(todo_ids.contains(&row.id), enrichment_note_ids.contains(&row.id));
@@ -328,6 +329,19 @@ fn write_history(
                 " ".repeat(enrichment_gutter.saturating_sub(Line::raw(marker).width()))
             )
             .context("could not write enrichment marker")?;
+        }
+        if let Some(width) = ambiguity_gutter {
+            let marker = if change_ids.ambiguous.contains(&row.id) {
+                "💥"
+            } else {
+                ""
+            };
+            write!(
+                out,
+                "{marker}{}",
+                " ".repeat(width.saturating_sub(Line::raw(marker).width()))
+            )
+            .context("could not write change ID ambiguity marker")?;
         }
         write!(out, "{}{}", lanes.lane(index), metadata).context("could not write history row")?;
         if let Some(behind) = app.hidden_branch_behind(row.id) {
@@ -938,7 +952,30 @@ mod tests {
         .expect_err("disabling auto-hide requires an explicit hidden revision");
         assert!(format!("{err:#}").contains("at least one -x/--hide"));
         create_pins(&repository, &[OsString::from("topic")])?;
-        let head = repository.head_id()?.detach();
+        let old_head = repository.head_id()?.detach();
+        let parent = repository
+            .find_commit(old_head)?
+            .parent_ids()
+            .next()
+            .context("the fixture head has a parent")?
+            .detach();
+        let mut commit = repository.find_commit(old_head)?.decode()?.into_owned()?;
+        commit.extra_headers.push((
+            crate::change_id::HEADER.into(),
+            crate::change_id::for_commit(&repository, parent)?.to_string().into(),
+        ));
+        let head = repository.write_object(&commit)?.detach();
+        let head_ref = repository
+            .head()?
+            .referent_name()
+            .context("the fixture head is attached")?
+            .to_owned();
+        repository.reference(
+            head_ref,
+            head,
+            gix::refs::transaction::PreviousValue::ExistingMustMatch(gix::refs::Target::Object(old_head)),
+            "test ambiguous change ID",
+        )?;
         let head_change_id = crate::change_id::for_commit(&repository, head)?;
         assert!(crate::enrich::toggle(&repository, head)?.todo);
 
@@ -953,11 +990,21 @@ mod tests {
                 head.to_hex_with_len(7),
                 head_change_id.to_reverse_hex_with_len(7)
             )),
-            "an unambiguous change ID follows its commit hash: {output:?}"
+            "a change ID follows its commit hash even when ambiguous: {output:?}"
         );
+        for id in [head, parent] {
+            let line = output
+                .lines()
+                .find(|line| line.contains(&id.to_hex_with_len(7).to_string()))
+                .context("the ambiguous commit is shown")?;
+            assert!(
+                line.contains('💥'),
+                "ambiguous change IDs are marked in the gutter: {line:?}"
+            );
+        }
         assert!(output.contains('●'), "history graph lanes are rendered");
         assert!(
-            output.lines().any(|line| line.starts_with("🚧├")),
+            output.lines().any(|line| line.starts_with("🚧💥├")),
             "todos directly lead their rows: {output:?}"
         );
         assert!(output.contains("📌"), "applicable pins are decorated and traversed");
