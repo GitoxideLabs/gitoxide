@@ -28,7 +28,7 @@ pub(super) enum Command {
 
 #[derive(Debug, clap::Args)]
 #[command(
-    after_long_help = "Without --edit-and-apply, the todo is written to stdout. With it, Git's normal editor selection is used; GIT_EDITOR=<command> overrides it.\n\nExamples:\n  tix rebase todo -x main topic >todo.md\n  ${GIT_EDITOR:-editor} todo.md\n  tix rebase apply todo.md\n  tix rebase todo --edit-and-apply -x main topic"
+    after_long_help = "Without --edit-and-apply, the todo is written to stdout. With it, Git's normal editor selection is used; GIT_EDITOR=<command> overrides it.\n\nExamples:\n  tix rebase todo -x main topic >todo.md\n  ${GIT_EDITOR:-editor} todo.md\n  tix rebase apply todo.md\n  tix rebase todo --edit-and-apply -x main topic\n  tix rebase todo --edit-and-apply --materialize-conflicts todo.continue.md -x main topic"
 )]
 pub(super) struct Todo {
     /// Hide this revision and derive the editable fork point from it.
@@ -46,6 +46,15 @@ pub(super) struct Todo {
     /// Open the todo in Git's editor and apply it after the editor exits.
     #[arg(long)]
     edit_and_apply: bool,
+    /// On conflict, materialize it and write a continuation todo to FILE, or stdout if omitted or '-'.
+    #[arg(
+        long,
+        value_name = "CONTINUE",
+        num_args = 0..=1,
+        default_missing_value = "-",
+        requires = "edit_and_apply"
+    )]
+    materialize_conflicts: Option<PathBuf>,
     /// Visible traversal tips, or HEAD if omitted.
     #[arg(value_name = "TIP")]
     tips: Vec<OsString>,
@@ -84,7 +93,7 @@ fn todo(repo: gix::Repository, args: Todo) -> Result<()> {
         &format!("tix-rebase-{}.md", std::process::id()),
     )?
     .unwrap_or(prepared.document);
-    apply_document(repo, &edited, None)
+    apply_document(repo, &edited, args.materialize_conflicts.as_deref())
 }
 
 fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
@@ -347,6 +356,7 @@ mod tests {
                 onto: None,
                 update_base: false,
                 edit_and_apply: false,
+                materialize_conflicts: None,
                 tips: Vec::new(),
             },
         )?;
@@ -375,6 +385,7 @@ mod tests {
                 onto: None,
                 update_base: false,
                 edit_and_apply: false,
+                materialize_conflicts: None,
                 tips: Vec::new(),
             },
         )
@@ -412,6 +423,7 @@ mod tests {
                 onto: None,
                 update_base: false,
                 edit_and_apply: false,
+                materialize_conflicts: None,
                 tips: Vec::new(),
             },
         )?;
@@ -464,6 +476,7 @@ mod tests {
                 onto: None,
                 update_base: true,
                 edit_and_apply: false,
+                materialize_conflicts: None,
                 tips: Vec::new(),
             },
         )?;
@@ -485,6 +498,7 @@ mod tests {
                 onto: None,
                 update_base: true,
                 edit_and_apply: false,
+                materialize_conflicts: None,
                 tips: Vec::new(),
             },
         )
@@ -604,6 +618,7 @@ mod tests {
                 onto: None,
                 update_base: false,
                 edit_and_apply: false,
+                materialize_conflicts: None,
                 tips: Vec::new(),
             },
         )?;

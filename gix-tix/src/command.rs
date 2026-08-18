@@ -742,6 +742,8 @@ mod tests {
                 "--onto",
                 "next",
                 "--edit-and-apply",
+                "--materialize-conflicts",
+                "continue.md",
                 "topic"
             ])
             .expect("rebase todo parses")
@@ -759,6 +761,10 @@ mod tests {
         assert!(
             Cli::try_parse_from(["tix", "rebase", "todo", "-x", "main", "--onto", "next", "--update-base"]).is_err(),
             "explicit and inferred rebase targets are mutually exclusive"
+        );
+        assert!(
+            Cli::try_parse_from(["tix", "rebase", "todo", "-x", "main", "--materialize-conflicts"]).is_err(),
+            "todo conflict materialization requires immediate editing and application"
         );
         assert!(matches!(
             Cli::try_parse_from(["tix", "rebase", "apply", "-"])
