@@ -376,7 +376,6 @@ without trading responsiveness for metadata that is not visible.
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
 | `@` | Time-travel to the selected commit, or return through its tix pin. Terminals reporting the base key as `Shift-2` are also accepted. |
-| `#` | Time-travel to the selected commit while keeping the current or remembered branch attached. Terminals reporting the base key as `Shift-3` are also accepted. |
 | `x` | Select the next visible commit with the same change ID, wrapping at the end. |
 
 Alignment uses only rows in the current viewport to determine widths and starts
@@ -394,9 +393,8 @@ terminal-theme-independent cue. While active, `view (` contains
 every applicable display option and a closing `)` so direct shortcuts remain visibly
 outside the prefix. The history status starts with the history position, then the
 `v`, `c`, and `a` prefixes when they are addressable. Remaining history-level
-actions end at the information prefix while it is closed. Available direct
-detached and attached time-travel actions follow the shortcut groups beside each other,
-and duplicate cycling follows them when
+actions end at the information prefix while it is closed. An available direct
+time-travel action follows the shortcut groups, and duplicate cycling follows it when
 the selected commit has duplicates, and copy follows these actions; the reference toggle immediately precedes
 the `?` group; quit is always last.
 All status lines embed and underline a shortcut character in its action label when
@@ -407,30 +405,23 @@ The Enter key is written as `<enter>` throughout.
 
 - On a completed, focused history in a worktree repository, `@` on a non-`HEAD`
   row runs `git checkout --detach <commit>` without forcing local changes.
-- On a completed, focused history in a worktree repository, `#` moves the
-  current attached local branch, or the local branch named by a detached
-  `refs/worktree/tix/pins/HEAD`, to the selected commit and checks it out so
-  `HEAD` ends attached. The action is unavailable and does nothing without such
-  a branch. It is also a no-op when `HEAD` is already attached there.
-- Attached travel refuses a remembered branch checked out by another worktree.
-  Its checkout preflights local changes, atomically moves the branch and
-  `HEAD`, and rolls those references back if applying the worktree transition
-  fails. Newly created recovery pins are removed only when the move did not
-  commit or reference rollback succeeded. It otherwise reuses ordinary time
-  travel's pending-rebase animation and conflict acceptance, including
-  review-tree stash transitions.
-- Attached travel uses normal pin reconciliation. Its actual departure and,
-  when starting detached, the remembered branch's old tip are deduplicated as
-  candidate direct pins; the destination and its ancestors are omitted, and
-  provisional pins still reachable from another view tip are removed after
-  success. Both pins may remain when the histories are unrelated. Successful
-  travel consumes an ordinary destination pin and removes the HEAD pin.
+- `a f` is available while `HEAD` is detached with a valid symbolic HEAD pin.
+  It atomically moves the remembered local branch to the current `HEAD` commit
+  and attaches `HEAD` without changing the index or worktree. The symbolic HEAD
+  pin remains and follows the moved branch. The branch's previous tip receives
+  an ordinary pin only when no other normal view tip still reaches it; an
+  ordinary destination pin is consumed normally.
+- Forkpoint refuses a remembered branch checked out by another worktree. It is
+  unavailable during conflicts or incomplete history, but otherwise permits
+  dirty index and worktree state because the operation changes only refs.
 - When tix detaches an attached local branch, it records that branch symbolically
   in the singleton `refs/worktree/tix/pins/HEAD` ref. Git stores this HEAD pin
   privately for the current worktree, and later branch advances move its tip.
   Further detached travel preserves the singleton. After each successful tix
   checkout, landing on the remembered branch tip reattaches `HEAD` to that branch
   and removes the HEAD pin; explicitly attaching another branch also removes it.
+  Forkpoint is the exception: it deliberately retains the symbolic HEAD pin
+  after attaching its remembered branch.
   A failed automatic reattachment leaves both detached `HEAD` and the HEAD pin
   intact and reports a warning. External Git checkouts do not reconcile it.
 - Other departures are provisionally retained with ordinary
@@ -990,13 +981,14 @@ space first; changes blocks adapt within the remaining history width.
   changes at `@`, `c s` spills `@`, `c p` splits staged from unstaged changes,
   and `c d d` confirms forgetting a top commit when each action is available.
 - `a` toggles the actions shortcut group. `a r` starts or finishes a review and
-  `a s` squashes the selected commit when available.
+  `a s` squashes the selected commit, and `a f` establishes the remembered
+  branch's forkpoint at detached `HEAD` when available.
 - Squash accepts any visible strict ancestor whose affected descendants contain no merges. With one eligible
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
   forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
-- `@` and `#` invoke detached and attached time travel directly, outside both
-  groups. Invoking either leaves an already expanded commit group open.
+- `@` invokes time travel directly, outside both groups. Invoking it leaves an
+  already expanded commit group open.
 - Commit and action shortcuts keep their respective group open. Navigation or
   another recognized command closes it, matching the `v` display shortcut group.
   Plain `r` does not mutate the repository, and plain `t` has no action.

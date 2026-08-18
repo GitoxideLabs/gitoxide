@@ -2531,7 +2531,18 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("finish review: {err:#}")),
                     }
                 }
-                Effect::TimeTravel { id, mode } => {
+                Effect::Forkpoint => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    match edit::time_travel::forkpoint(&repository_path, repository_is_bare, &revisions, false) {
+                        Ok(notice) => {
+                            app.leave_success(notice);
+                            refresh_pending = true;
+                        }
+                        Err(err) => app.leave_error(format!("forkpoint: {err:#}")),
+                    }
+                }
+                Effect::TimeTravel(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let review_roots: Vec<_> = app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
@@ -2549,7 +2560,6 @@ fn event_loop(
                                         &review_roots,
                                         &revisions,
                                         false,
-                                        mode,
                                         report,
                                     )
                                 },
@@ -4986,6 +4996,9 @@ fn action_with_shortcut_groups(
         }
         KeyCode::Char('r') if actions_expanded => Some(Action::Review),
         KeyCode::Char('s') if actions_expanded => Some(Action::Squash),
+        KeyCode::Char('f') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::Forkpoint)
+        }
         KeyCode::Char('p') => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
@@ -5026,8 +5039,6 @@ fn action_with_shortcut_groups(
         KeyCode::Char('o') if enrich_expanded => Some(Action::EditNote),
         KeyCode::Char('@') => Some(Action::TimeTravel),
         KeyCode::Char('2') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::TimeTravel),
-        KeyCode::Char('#') => Some(Action::AttachedTimeTravel),
-        KeyCode::Char('3') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::AttachedTimeTravel),
         KeyCode::Char('m') => Some(Action::ToggleCommit),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
@@ -6190,21 +6201,6 @@ mod tests {
             "an unshifted 2 has no time-travel behavior"
         );
         assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE)),
-            Some(Action::AttachedTimeTravel),
-            "the terminal's direct hash event invokes attached time travel"
-        );
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::SHIFT)),
-            Some(Action::AttachedTimeTravel),
-            "terminals which preserve the base character map Shift-3 to attached time travel"
-        );
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE)),
-            None,
-            "an unshifted 3 has no attached-time-travel behavior"
-        );
-        assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
             Some(Action::Refresh),
             "terminals which preserve lowercase shifted letters map Shift-R to refresh"
@@ -6296,7 +6292,7 @@ mod tests {
                 "{key} is available after the commit prefix"
             );
         }
-        for (key, expected) in [('r', Action::Review), ('s', Action::Squash)] {
+        for (key, expected) in [('r', Action::Review), ('s', Action::Squash), ('f', Action::Forkpoint)] {
             assert_eq!(
                 action_with_shortcut_groups(
                     KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
@@ -6333,18 +6329,6 @@ mod tests {
             ),
             Some(Action::TimeTravel),
             "the direct time-travel key remains available while commit is expanded"
-        );
-        assert_eq!(
-            action_with_shortcut_groups(
-                KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE),
-                false,
-                true,
-                false,
-                false,
-                false
-            ),
-            Some(Action::AttachedTimeTravel),
-            "the direct attached-time-travel key remains available while commit is expanded"
         );
         assert_eq!(
             action_with_shortcut_groups(
@@ -6518,7 +6502,6 @@ mod tests {
             Action::Amend,
             Action::Rebase,
             Action::TimeTravel,
-            Action::AttachedTimeTravel,
             Action::VerifySignatures,
             Action::Quit,
         ] {
