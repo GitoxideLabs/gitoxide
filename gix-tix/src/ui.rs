@@ -941,13 +941,15 @@ pub(crate) fn draw_with_worktree(
     };
     let mut footer_spans = vec![Span::raw(status)];
     let mut time_travel = None;
+    let mut attached_time_travel = false;
     let mut edit_prefix_spans = Vec::new();
     if app.changes_focus != Some(ChangePane::Worktree) || app.can_amend() {
+        let head_visible = decorations
+            .values()
+            .flatten()
+            .any(|decoration| decoration.kind == DecorationKind::Head);
         time_travel = if app.time_travel_shortcut_visible()
-            && decorations
-                .values()
-                .flatten()
-                .any(|decoration| decoration.kind == DecorationKind::Head)
+            && head_visible
             && let Some(selected) = app.selected.and_then(|index| app.rows.get(index))
         {
             let selected_refs = decorations.get(&selected.id).map(Vec::as_slice).unwrap_or_default();
@@ -971,6 +973,7 @@ pub(crate) fn draw_with_worktree(
         } else {
             None
         };
+        attached_time_travel = head_visible && app.attached_time_travel_shortcut_visible();
         if app.edit_expanded {
             let mut options = Vec::new();
             if app.can_rebase() {
@@ -1133,6 +1136,10 @@ pub(crate) fn draw_with_worktree(
     if let Some(label) = time_travel {
         ordered.push(Span::raw(" · "));
         ordered.extend(shortcut(label, '@', true));
+    }
+    if attached_time_travel {
+        ordered.push(Span::raw(" · "));
+        ordered.extend(shortcut("# attach", '#', true));
     }
     if app.can_cycle_duplicate() {
         ordered.push(Span::raw(" · "));
@@ -3486,7 +3493,7 @@ mod tests {
     }
 
     #[test]
-    fn advertises_travel_and_return_for_non_head_rows() -> Result<(), Box<dyn std::error::Error>> {
+    fn advertises_detached_and_attached_travel() -> Result<(), Box<dyn std::error::Error>> {
         let selected = gix::ObjectId::Sha1([1; 20]);
         let head = gix::ObjectId::Sha1([2; 20]);
         let mut app = App::new(2);
@@ -3505,6 +3512,7 @@ mod tests {
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
+        app.set_worktree_branch(Some((head, false)));
         let mut decorations = Decorations::from([
             (
                 selected,
@@ -3531,7 +3539,7 @@ mod tests {
                 }],
             ),
         ]);
-        let mut terminal = Terminal::new(TestBackend::new(140, 2))?;
+        let mut terminal = Terminal::new(TestBackend::new(160, 2))?;
         app.edit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let row = rendered_row(&terminal);
@@ -3569,15 +3577,16 @@ mod tests {
             "hiding refs retains resource markers: {row:?}"
         );
         assert!(
-            rendered_line(&terminal, 1)
-                .contains("edit (reword · new · new-empty · fork · d forget · unpin) · enrich · @ return · copy"),
-            "time travel stays outside the active edit prefix"
+            rendered_line(&terminal, 1).contains(
+                "edit (reword · new · new-empty · fork · d forget · unpin) · enrich · @ return · # attach · copy"
+            ),
+            "both travel actions stay outside the active edit prefix"
         );
         assert!(!rendered_line(&terminal, 1).contains(" · edit ·"));
 
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
-        assert!(rendered_line(&terminal, 1).contains(" · @ travel · copy"));
+        assert!(rendered_line(&terminal, 1).contains(" · @ travel · # attach · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
 
         app.ref_mode = RefMode::Default;
@@ -3588,6 +3597,7 @@ mod tests {
                 kind: DecorationKind::HeadPinBranch,
             }],
         );
+        app.set_worktree_branch(Some((selected, false)));
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let row = rendered_row(&terminal);
         assert!(
@@ -3597,6 +3607,28 @@ mod tests {
         assert!(!row.contains("📌"), "the HEAD pin is not an ordinary pin: {row:?}");
         assert!(rendered_line(&terminal, 1).contains(" · @ travel · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
+
+        app.set_worktree_branch(Some((selected, true)));
+        decorations.remove(&head);
+        decorations.insert(
+            selected,
+            vec![
+                Decoration {
+                    name: "HEAD".into(),
+                    kind: DecorationKind::Head,
+                },
+                Decoration {
+                    name: "main".into(),
+                    kind: DecorationKind::HeadPinBranch,
+                },
+            ],
+        );
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let footer = rendered_line(&terminal, 1);
+        assert!(
+            footer.contains(" · # attach · copy") && !footer.contains("@ travel") && !footer.contains("@ return"),
+            "a detached worktree can reattach at its remembered branch tip: {footer}"
+        );
         Ok(())
     }
 

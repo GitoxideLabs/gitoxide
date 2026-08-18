@@ -917,6 +917,7 @@ fn event_loop(
 
     let mut app = App::new(1);
     app.set_worktree_head_unborn(worktree_head_unborn);
+    app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
     app.commit_pane_background = commit_pane_background;
     if recovered_at_startup {
         app.leave_attention("worktree removed; using the common repository without worktree changes");
@@ -1010,6 +1011,7 @@ fn event_loop(
             fill_repository.retain = false;
             fill_repository.retained = None;
             app.set_worktree_changes_available(false);
+            app.set_worktree_branch(None);
             worktree_watcher = None;
             worktree_refresh_deadline = None;
             worktree_watch_set_changed = false;
@@ -1299,6 +1301,11 @@ fn event_loop(
                     app.set_known_descendants(graph.commits_with_descendants());
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
                     let result = result?;
+                    app.set_worktree_branch(
+                        (!repository_is_bare)
+                            .then(|| current_worktree_branch(&result.refs))
+                            .flatten(),
+                    );
                     ref_tree.rebuild(&graph, &result.refs, &result.decorations);
                     history_graph = Some(graph);
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
@@ -1418,6 +1425,7 @@ fn event_loop(
                 "compared reference snapshot"
             );
             ref_snapshot = next;
+            app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
             refresh_pending = false;
             let hidden = if app.show_hidden { Vec::new() } else { hide.clone() };
             let expand = if refresh_expand_hidden || hidden_changed {
@@ -2561,7 +2569,7 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("finish review: {err:#}")),
                     }
                 }
-                Effect::TimeTravel(id) => {
+                Effect::TimeTravel { id, mode } => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let review_roots: Vec<_> = app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
@@ -2579,6 +2587,7 @@ fn event_loop(
                                         &review_roots,
                                         &revisions,
                                         false,
+                                        mode,
                                         report,
                                     )
                                 },
@@ -2981,6 +2990,19 @@ fn decoration_head(decorations: &Decorations) -> Option<gix::ObjectId> {
             .any(|decoration| decoration.kind == history::DecorationKind::Head)
             .then_some(*id)
     })
+}
+
+fn current_worktree_branch(refs: &history::RefSnapshot) -> Option<(gix::ObjectId, bool)> {
+    refs.worktrees
+        .iter()
+        .find(|worktree| {
+            worktree.is_current
+                && worktree
+                    .reference
+                    .as_ref()
+                    .is_some_and(|reference| reference.as_bstr().starts_with(b"refs/heads/"))
+        })
+        .map(|worktree| (worktree.label_id, worktree.is_detached))
 }
 
 fn decoration_successor(selected: gix::ObjectId, current: &Decorations, next: &Decorations) -> Option<gix::ObjectId> {
@@ -5053,6 +5075,8 @@ fn action_with_shortcut_groups(
         KeyCode::Char('o') if enrich_expanded => Some(Action::EditNote),
         KeyCode::Char('@') => Some(Action::TimeTravel),
         KeyCode::Char('2') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::TimeTravel),
+        KeyCode::Char('#') => Some(Action::AttachedTimeTravel),
+        KeyCode::Char('3') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::AttachedTimeTravel),
         KeyCode::Char('m') => Some(Action::ToggleCommit),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
@@ -5170,6 +5194,36 @@ mod tests {
         let next = Decorations::from([(new, vec![decoration])]);
 
         assert_eq!(decoration_successor(old, &current, &next), Some(new));
+    }
+
+    #[test]
+    fn finds_the_current_worktree_branch_in_attached_and_remembered_states() {
+        let id = gix::ObjectId::Sha1([1; 20]);
+        let mut refs = history::RefSnapshot {
+            view: Default::default(),
+            hidden: Default::default(),
+            view_tips: Vec::new(),
+            hidden_tips: Vec::new(),
+            pins: Vec::new(),
+            worktrees: vec![history::WorktreeCheckout {
+                id,
+                label_id: id,
+                checkout_name: "main".into(),
+                reference: Some("refs/heads/main".try_into().expect("valid branch name")),
+                is_current: true,
+                is_detached: false,
+            }],
+        };
+        assert_eq!(current_worktree_branch(&refs), Some((id, false)));
+
+        refs.worktrees[0].is_detached = true;
+        assert_eq!(current_worktree_branch(&refs), Some((id, true)));
+        refs.worktrees[0].reference = None;
+        assert_eq!(
+            current_worktree_branch(&refs),
+            None,
+            "manual detachment has no branch to move"
+        );
     }
 
     #[test]
@@ -6186,6 +6240,21 @@ mod tests {
             "an unshifted 2 has no time-travel behavior"
         );
         assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE)),
+            Some(Action::AttachedTimeTravel),
+            "the terminal's direct hash event invokes attached time travel"
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::SHIFT)),
+            Some(Action::AttachedTimeTravel),
+            "terminals which preserve the base character map Shift-3 to attached time travel"
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE)),
+            None,
+            "an unshifted 3 has no attached-time-travel behavior"
+        );
+        assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
             Some(Action::Refresh),
             "terminals which preserve lowercase shifted letters map Shift-R to refresh"
@@ -6291,6 +6360,16 @@ mod tests {
             ),
             Some(Action::TimeTravel),
             "the direct time-travel key remains available while edit is expanded"
+        );
+        assert_eq!(
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE),
+                false,
+                true,
+                false
+            ),
+            Some(Action::AttachedTimeTravel),
+            "the direct attached-time-travel key remains available while edit is expanded"
         );
         assert_eq!(
             action_with_shortcut_groups(
@@ -6446,6 +6525,7 @@ mod tests {
             Action::Amend,
             Action::Rebase,
             Action::TimeTravel,
+            Action::AttachedTimeTravel,
             Action::VerifySignatures,
             Action::Quit,
         ] {
