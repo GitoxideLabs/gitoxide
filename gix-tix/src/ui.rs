@@ -1014,17 +1014,14 @@ pub(crate) fn draw_with_worktree(
                 options.push(("d forget", 'd'));
             }
             if app.changes_focus.is_none()
-                && app
-                    .selected
-                    .and_then(|index| app.rows.get(index))
-                    .and_then(|row| decorations.get(&row.id))
-                    .is_some_and(|decorations| {
-                        decorations
-                            .iter()
-                            .any(|decoration| decoration.kind == DecorationKind::Pin)
-                    })
+                && let Some(selected) = app.selected.and_then(|index| app.rows.get(index))
             {
-                options.push(("unpin", 'i'));
+                let pinned = decorations.get(&selected.id).is_some_and(|decorations| {
+                    decorations
+                        .iter()
+                        .any(|decoration| decoration.kind == DecorationKind::Pin)
+                });
+                options.push((if pinned { "unpin" } else { "pin" }, 'i'));
             }
             edit_prefix_spans.push(Span::raw(" · "));
             edit_prefix_spans.push(Span::styled("e", Style::default().add_modifier(Modifier::UNDERLINED)));
@@ -5960,7 +5957,7 @@ mod tests {
         let mut actions = Terminal::new(TestBackend::new(120, 3))?;
         actions.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&actions, 2).contains("edit (rebase · rebase-update · fork)"),
+            rendered_line(&actions, 2).contains("edit (rebase · rebase-update · fork · pin)"),
             "the selected hidden base offers independent edits: {:?}",
             rendered_line(&actions, 2)
         );

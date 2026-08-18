@@ -440,8 +440,10 @@ The Enter key is written as `<enter>` throughout.
 - The HEAD pin instead marks its target branch as `★branch` in the local-branch
   style. It has no `📌`, is never selected as a return destination, and does not
   offer `unpin`; its branch keeps normal tracking-relation behavior.
-- The edit menu offers `unpin` on a pinned row. It atomically removes every pin
-  for that commit in the current worktree and retains that row's selection.
+- The edit menu offers `pin` on an unpinned row and `unpin` on a pinned row,
+  both on `e i`. Pin creates or reuses a direct current-worktree pin for the
+  selected commit. Unpin atomically removes every non-HEAD pin for that commit;
+  both operations retain that row's selection.
 - `tix pin <REVSPEC>...` resolves every argument before writing and deduplicates
   pin targets in argument order. A direct reference name creates or reuses a
   symbolic current-worktree pin so it follows later reference updates; derived

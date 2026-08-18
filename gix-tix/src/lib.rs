@@ -2635,17 +2635,21 @@ fn event_loop(
                         }
                     }
                 }
-                Effect::Unpin(id) => {
+                Effect::TogglePin(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
-                    match edit::time_travel::remove_pins(&repository_path, repository_is_bare, id) {
-                        Ok(0) => app.leave_attention("no pins removed"),
-                        Ok(count) => {
+                    match edit::time_travel::toggle_pin(&repository_path, repository_is_bare, id) {
+                        Ok(edit::time_travel::PinToggle::Removed(count)) => {
                             app.leave_success(format!("removed {count} pin{}", if count == 1 { "" } else { "s" }));
                             app.select_commit_after_refresh(id);
                             refresh_pending = true;
                         }
-                        Err(err) => app.leave_error(format!("unpin: {err:#}")),
+                        Ok(edit::time_travel::PinToggle::Created) => {
+                            app.leave_success("pinned selected commit");
+                            app.select_commit_after_refresh(id);
+                            refresh_pending = true;
+                        }
+                        Err(err) => app.leave_error(format!("toggle pin: {err:#}")),
                     }
                 }
                 Effect::ToggleTodo(id) => {
@@ -5043,7 +5047,7 @@ fn action_with_shortcut_groups(
         KeyCode::Char('a') if edit_expanded => Some(Action::Amend),
         KeyCode::Char('s') if edit_expanded => Some(Action::Spill),
         KeyCode::Char('d') if edit_expanded => Some(Action::Forget),
-        KeyCode::Char('i') if edit_expanded => Some(Action::Unpin),
+        KeyCode::Char('i') if edit_expanded => Some(Action::TogglePin),
         KeyCode::Char('v') if edit_expanded => Some(Action::Review),
         KeyCode::Char('t') if enrich_expanded => Some(Action::ToggleTodo),
         KeyCode::Char('o') if enrich_expanded => Some(Action::EditNote),
@@ -6255,7 +6259,7 @@ mod tests {
             ('s', Action::Spill),
             ('p', Action::Split),
             ('d', Action::Forget),
-            ('i', Action::Unpin),
+            ('i', Action::TogglePin),
         ] {
             assert_eq!(
                 action_with_shortcut_groups(
