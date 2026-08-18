@@ -1031,6 +1031,9 @@ space first; changes blocks adapt within the remaining history width.
 
 - No `gix::Repository`, commit-graph, object platform, notes platform, or other
   repository-owning value may remain in idle application/event-loop state.
+- Hidden-revision startup validation returns only detached revision and warning
+  data; its temporary repository is dropped before terminal initialization and
+  the event loop.
 - View population opens a fresh non-isolated repository so mailmap, notes, diff
   drivers, pagers, signing, and other Git configuration are current. It starts
   without an object cache; bounded diff operations may enable one temporarily and
