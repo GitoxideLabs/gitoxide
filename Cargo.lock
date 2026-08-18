@@ -2171,6 +2171,7 @@ dependencies = [
  "gix-hashtable",
  "gix-object",
  "gix-odb",
+ "gix-path",
  "gix-tempfile",
  "gix-testtools",
  "gix-utils",

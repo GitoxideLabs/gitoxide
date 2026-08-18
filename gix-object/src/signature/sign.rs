@@ -7,11 +7,11 @@ use std::{
 
 use bstr::{BString, ByteSlice};
 
-use crate::{Commit, CommitRef, WriteTo};
+use crate::{Commit, CommitRef, Tag, TagRef, WriteTo};
 
 use super::Format;
 
-/// Options for signing a commit.
+/// Fully resolved options for signing a commit or annotated tag.
 #[derive(Clone, Debug)]
 pub struct Options {
     /// The signature format.
@@ -28,7 +28,7 @@ pub struct Options {
     pub environment: Vec<(OsString, OsString)>,
 }
 
-/// The error returned when signing a commit.
+/// The error returned when signing an object.
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]
 pub enum Error {
@@ -68,18 +68,44 @@ impl CommitRef<'_> {
 }
 
 impl Commit {
-    /// Return this commit with its active signature replaced by a newly created one.
+    /// Return this commit with its active signature replaced by a newly created one according to `options`.
     pub fn sign(mut self, options: Options) -> Result<Commit, Error> {
         let signature_field = crate::commit::signature_field_name(self.tree.kind());
         self.extra_headers.retain(|(name, _)| name != signature_field);
         let mut payload = Vec::new();
         self.write_to(&mut payload)?;
-        let signature = match options.format {
-            Format::OpenPgp | Format::X509 => sign_gpg(&payload, &options)?,
-            Format::Ssh => sign_ssh(&payload, &options)?,
-        };
+        let signature = sign(&payload, &options)?;
         self.extra_headers.push((signature_field.into(), signature));
         Ok(self)
+    }
+}
+
+impl TagRef<'_> {
+    /// Return an owned copy of this annotated tag with its in-body signature replaced by a newly created one
+    /// according to `options`.
+    pub fn sign(self, options: Options) -> Result<Tag, Error> {
+        self.into_owned()?.sign(options)
+    }
+}
+
+impl Tag {
+    /// Return this annotated tag with its in-body signature replaced by a newly created one according to `options`.
+    pub fn sign(mut self, options: Options) -> Result<Tag, Error> {
+        self.signature = None;
+        let mut payload = Vec::new();
+        self.write_to(&mut payload)?;
+        // Tag signatures follow the message in the object body, separated by a newline which is itself signed. This
+        // differs from commit signatures, which are inserted as a header after signing the commit without that header.
+        payload.push(b'\n');
+        self.signature = Some(sign(&payload, &options)?);
+        Ok(self)
+    }
+}
+
+fn sign(payload: &[u8], options: &Options) -> Result<BString, Error> {
+    match options.format {
+        Format::OpenPgp | Format::X509 => sign_gpg(payload, options),
+        Format::Ssh => sign_ssh(payload, options),
     }
 }
 

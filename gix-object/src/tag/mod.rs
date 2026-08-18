@@ -1,5 +1,7 @@
-use crate::TagRef;
+use bstr::ByteSlice;
+
 use crate::parse::parse_signature;
+use crate::{Tag, TagRef};
 
 mod decode;
 
@@ -32,8 +34,25 @@ impl<'a> TagRef<'a> {
             .map(|signature| signature.trim()))
     }
 
+    /// Return the in-body cryptographic signature and its detected format.
+    pub fn signature(&self) -> Option<crate::signature::SignatureRef<'a>> {
+        self.signature.and_then(|data| {
+            crate::signature::Format::from_signature(data).map(|format| crate::signature::SignatureRef { format, data })
+        })
+    }
+
     /// Copy all data into a fully-owned instance.
     pub fn into_owned(self) -> Result<crate::Tag, crate::decode::Error> {
         self.try_into()
+    }
+}
+
+impl Tag {
+    /// Return the in-body cryptographic signature and its detected format.
+    pub fn signature(&self) -> Option<crate::signature::SignatureRef<'_>> {
+        self.signature.as_ref().and_then(|data| {
+            let data = data.as_bstr();
+            crate::signature::Format::from_signature(data).map(|format| crate::signature::SignatureRef { format, data })
+        })
     }
 }

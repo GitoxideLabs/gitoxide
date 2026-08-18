@@ -26,7 +26,7 @@ path = "./benches/edit_tree.rs"
 
 
 [features]
-## Enable commit signing and signature verification with external programs.
+## Enable commit and annotated-tag signing and signature verification with external programs.
 signature = ["dep:gix-command", "dep:gix-tempfile"]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
@@ -73,6 +73,7 @@ pretty_assertions = "1.0.0"
 insta = "1.46.3"
 gix-testtools = { path = "../tests/tools", default-features = false }
 gix-odb = { path = "../gix-odb" }
+gix-path = { path = "../gix-path" }
 termtree = "1.0.0"
 
 [package.metadata.docs.rs]

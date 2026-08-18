@@ -35,7 +35,7 @@ impl crate::WriteTo for Tag {
             out.write_all(NL)?;
         }
         out.write_all(self.message.as_ref())?;
-        if let Some(message) = &self.pgp_signature {
+        if let Some(message) = &self.signature {
             out.write_all(NL)?;
             out.write_all(message.as_ref())?;
         }
@@ -55,7 +55,7 @@ impl crate::WriteTo for Tag {
             .as_ref()
             .map_or(0, |t| b"tagger".len() + 1 /* space */ + t.size() + 1 /* nl */)
             + if self.message.iter().all(|b| *b == b'\n') { 0 } else { 1 /* nl */ } + self.message.len()
-            + self.pgp_signature.as_ref().map_or(0, |m| 1 /* nl */ + m.len())) as u64
+            + self.signature.as_ref().map_or(0, |m| 1 /* nl */ + m.len())) as u64
     }
 }
 
@@ -72,7 +72,7 @@ impl crate::WriteTo for TagRef<'_> {
             out.write_all(NL)?;
         }
         out.write_all(self.message)?;
-        if let Some(message) = self.pgp_signature {
+        if let Some(message) = self.signature {
             out.write_all(NL)?;
             out.write_all(message)?;
         }
@@ -91,7 +91,7 @@ impl crate::WriteTo for TagRef<'_> {
                 .tagger
                 .map_or(0, |raw| b"tagger".len() + 1 /* space */ + raw.len() + 1 /* nl */)
             + if self.message.iter().all(|b| *b == b'\n') { 0 } else { 1 /* nl */ } + self.message.len()
-            + self.pgp_signature.as_ref().map_or(0, |m| 1 /* nl */ + m.len())) as u64
+            + self.signature.as_ref().map_or(0, |m| 1 /* nl */ + m.len())) as u64
     }
 }
 

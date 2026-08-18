@@ -1,6 +1,6 @@
 use gix_object::{
     Commit, WriteTo,
-    commit::signature::{
+    signature::{
         Format,
         sign::Options,
         verify::{Options as VerifyOptions, TrustLevel},
@@ -167,7 +167,7 @@ fn commit() -> Commit {
     }
 }
 
-fn verify(commit: &Commit, options: VerifyOptions) -> Result<gix_object::commit::signature::verify::Outcome> {
+fn verify(commit: &Commit, options: VerifyOptions) -> Result<gix_object::signature::verify::Outcome> {
     let mut data = Vec::new();
     commit.write_to(&mut data)?;
     let (signature, signed) =
@@ -175,7 +175,7 @@ fn verify(commit: &Commit, options: VerifyOptions) -> Result<gix_object::commit:
     Ok(signed.verify(&signature, options)?)
 }
 
-fn verify_ssh(commit: &Commit) -> Result<gix_object::commit::signature::verify::Outcome> {
+fn verify_ssh(commit: &Commit) -> Result<gix_object::signature::verify::Outcome> {
     verify(
         commit,
         VerifyOptions::Ssh {

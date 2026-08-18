@@ -8,11 +8,11 @@ use std::{
 
 use bstr::{BStr, BString, ByteSlice};
 
-use crate::commit::SignedData;
+use super::SignedData;
 
 use super::Format;
 
-/// Options for verifying a commit signature.
+/// Fully resolved options for verifying a commit or annotated-tag signature.
 #[derive(Clone, Debug)]
 pub enum Options {
     /// Verify an OpenPGP signature.
@@ -109,7 +109,7 @@ pub enum TrustLevel {
     Ultimate,
 }
 
-/// The complete result of verifying a commit signature.
+/// The complete result of verifying a commit or annotated-tag signature.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Outcome {
     /// The detected signature format and therefore the verifier whose output populated the remaining fields.
@@ -160,7 +160,7 @@ impl Outcome {
     }
 }
 
-/// The error returned when verifying a commit signature.
+/// The error returned when verifying an object signature.
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]
 pub enum Error {
@@ -177,12 +177,12 @@ pub enum Error {
     Spawn { program: OsString, source: std::io::Error },
     #[error("Could not communicate with signature verifier {program:?}")]
     Communicate { program: OsString, source: std::io::Error },
-    #[error("Commit time could not be formatted for SSH verification")]
+    #[error("Signature time could not be formatted for SSH verification")]
     CommitTime(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl SignedData<'_> {
-    /// Verify `signature` over this commit data with fully resolved `options`.
+    /// Verify `signature` over these exact object bytes with fully resolved `options`.
     pub fn verify(&self, signature: &BStr, options: Options) -> Result<Outcome, Error> {
         let format = Format::from_signature(signature).ok_or(Error::UnsupportedFormat)?;
         match options {
@@ -262,10 +262,7 @@ impl SignedData<'_> {
         }
         let command = command.args(["--status-fd=1", "--verify"]).arg(path);
         let output = if format == Format::X509 {
-            let mut signed_file = temporary_file([
-                &self.data[..self.signature_range.start],
-                &self.data[self.signature_range.end..],
-            ])?;
+            let mut signed_file = temporary_file(self.segments())?;
             let signed_path = signature_path(&mut signed_file)?;
             run_without_input(
                 command
@@ -399,10 +396,8 @@ impl SignedData<'_> {
             source,
         })?;
         let mut stdin = child.stdin.take().expect("configured as piped");
-        if let Err(source) = stdin
-            .write_all(&self.data[..self.signature_range.start])
-            .and_then(|_| stdin.write_all(&self.data[self.signature_range.end..]))
-        {
+        let [before, after] = self.segments();
+        if let Err(source) = stdin.write_all(before).and_then(|_| stdin.write_all(after)) {
             // A verifier may reject the invocation and exit without consuming all input. Its status and output are
             // still authoritative, whereas other write failures indicate an actual communication problem.
             if source.kind() != std::io::ErrorKind::BrokenPipe {
@@ -687,10 +682,7 @@ mod tests {
 
     #[test]
     fn rejects_good_ssh_output_from_a_failed_verifier() -> Result<(), Error> {
-        let signed = SignedData {
-            data: b"payloadsignature",
-            signature_range: 7..16,
-        };
+        let signed = SignedData::new(b"payloadsignature", 7..16);
         let outcome = signed.verify(
             BStr::new(b"-----BEGIN SSH SIGNATURE-----\n"),
             Options::Ssh {
@@ -734,10 +726,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_and_mismatched_formats_before_running_a_program() {
-        let signed = SignedData {
-            data: b"payloadsignature",
-            signature_range: 7..16,
-        };
+        let signed = SignedData::new(b"payloadsignature", 7..16);
         let options = Options::X509 {
             program: "must-not-run".into(),
             program_arguments: Vec::new(),

@@ -6,8 +6,9 @@ use gix_hash::{ObjectId, oid};
 use crate::{
     CommitRefIter,
     bstr::ByteSlice,
-    commit::{SignedData, decode, signature_field_name},
+    commit::{decode, signature_field_name},
     parse,
+    signature::SignedData,
 };
 
 #[derive(Copy, Clone)]
@@ -73,7 +74,7 @@ impl<'a> CommitRefIter<'a> {
             }
         }
 
-        Ok(signature_and_range.map(|(sig, signature_range)| (sig, SignedData { data, signature_range })))
+        Ok(signature_and_range.map(|(sig, signature_range)| (sig, SignedData::new(data, signature_range))))
     }
 
     /// Returns the object id of this commits tree if it is the first function called and if there is no error in decoding

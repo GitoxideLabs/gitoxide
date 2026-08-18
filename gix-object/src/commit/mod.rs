@@ -1,6 +1,4 @@
-use std::ops::Range;
-
-use bstr::{BStr, BString, ByteSlice};
+use bstr::{BStr, ByteSlice};
 
 use crate::parse::parse_signature;
 use crate::{Commit, CommitRef, TagRef};
@@ -23,8 +21,6 @@ pub fn signature_field_name(hash_kind: gix_hash::Kind) -> &'static str {
 mod decode;
 ///
 pub mod message;
-#[cfg(feature = "signature")]
-pub mod signature;
 
 /// A parsed commit message that assumes a title separated from the body by two consecutive newlines.
 ///
@@ -39,34 +35,6 @@ pub struct MessageRef<'a> {
     ///
     /// The body is `None` if there was now title separation or the body was empty after the separator.
     pub body: Option<&'a BStr>,
-}
-
-/// The raw commit data, parseable by [`CommitRef`] or [`Commit`], which was fed into a program to produce a signature.
-///
-/// See [`extract_signature()`](crate::CommitRefIter::signature()) for how to obtain it.
-// TODO: implement `std::io::Read` to avoid allocations
-#[derive(PartialEq, Eq, Debug, Hash, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SignedData<'a> {
-    /// The raw commit data that includes the signature.
-    data: &'a [u8],
-    /// The byte range at which we find the signature. All but the signature is the data that was signed.
-    signature_range: Range<usize>,
-}
-
-impl SignedData<'_> {
-    /// Convenience method to obtain a copy of the signed data.
-    pub fn to_bstring(&self) -> BString {
-        let mut buf = BString::from(&self.data[..self.signature_range.start]);
-        buf.extend_from_slice(&self.data[self.signature_range.end..]);
-        buf
-    }
-}
-
-impl From<SignedData<'_>> for BString {
-    fn from(value: SignedData<'_>) -> Self {
-        value.to_bstring()
-    }
 }
 
 ///
