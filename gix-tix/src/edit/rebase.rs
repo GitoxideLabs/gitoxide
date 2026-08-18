@@ -384,6 +384,7 @@ struct Prepared {
     skip_worktree_transitions: bool,
     selected: Option<ObjectId>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
+    note_rewrites: Vec<(ObjectId, ObjectId)>,
     stash_rewritten: HashMap<ObjectId, Option<ObjectId>>,
     removed: HashSet<ObjectId>,
     committer: gix::actor::Signature,
@@ -535,6 +536,7 @@ fn perform_inner(
     repo = repo.with_object_memory();
 
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
+    let mut note_rewrites = Vec::new();
     let mut selected = None;
     let mut conflict = None;
     if inserted || forked {
@@ -653,6 +655,9 @@ fn perform_inner(
         };
         let new_id = write_commit(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
         report(old_id);
+        if new_id != old_id {
+            note_rewrites.push((old_id, new_id));
+        }
         rewritten.insert(old_id, Some(new_id));
         if let Some((tree, conflicts)) = new_conflict {
             conflict = Some((old_id, tree, conflicts, new_id));
@@ -688,6 +693,7 @@ fn perform_inner(
             || forked
             || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed),
         selected,
+        note_rewrites,
         stash_rewritten: rewritten.clone(),
         rewritten,
         removed: if removed {
@@ -761,6 +767,7 @@ pub(super) fn finish_review(
     }
 
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
+    let mut note_rewrites = Vec::new();
     let mut finished_review = None;
     for old in &review_ids {
         let old_parents = graph.parents_of(*old).context("a review descendant is incomplete")?;
@@ -789,6 +796,9 @@ pub(super) fn finish_review(
             CommitState::Unmarked(Signature::RedoIfNeeded),
             signing.clone(),
         )?;
+        if new != *old {
+            note_rewrites.push((*old, new));
+        }
         rewritten.insert(*old, Some(new));
         if *old == review {
             finished_review = Some(new);
@@ -836,6 +846,9 @@ pub(super) fn finish_review(
             },
             signing.clone(),
         )?;
+        if new != old {
+            note_rewrites.push((old, new));
+        }
         rewritten.insert(old, Some(new));
     }
 
@@ -849,6 +862,7 @@ pub(super) fn finish_review(
         reset_index_paths: None,
         skip_worktree_transitions: false,
         selected: Some(selected),
+        note_rewrites,
         stash_rewritten: rewritten.clone(),
         rewritten,
         removed: HashSet::new(),
@@ -923,6 +937,7 @@ pub(crate) fn perform_plan_with_progress(
     }
 
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
+    let mut note_rewrites = Vec::new();
     let mut produced = Vec::with_capacity(plan.steps.len());
     let mut delete_refs = Vec::new();
     let mut conflict = None;
@@ -1045,8 +1060,8 @@ pub(crate) fn perform_plan_with_progress(
             );
             squashed.push((*id, source, replay_parents));
         }
+        let mut applied_squash = 0;
         if !squashed.is_empty() && conflict.is_none() && step_conflict.is_none() {
-            let mut applied = 0;
             for (squash_index, (id, source, replay_parents)) in squashed.iter().enumerate() {
                 let old_base = parent_tree(&repo, replay_parents.first().copied())?;
                 let started = Instant::now();
@@ -1061,7 +1076,7 @@ pub(crate) fn perform_plan_with_progress(
                         ours
                     }
                 };
-                applied += 1;
+                applied_squash += 1;
                 if step_conflict.is_some() {
                     break;
                 }
@@ -1071,7 +1086,7 @@ pub(crate) fn perform_plan_with_progress(
                 report(progress);
                 delete_refs.extend(super::review::deletions(&repo, source)?);
             }
-            squash_message(&repo, &mut commit, &squashed[..applied])?;
+            squash_message(&repo, &mut commit, &squashed[..applied_squash])?;
         }
         commit.parents = [parent].into_iter().collect();
         let state = if step_conflict.is_some() {
@@ -1100,8 +1115,17 @@ pub(crate) fn perform_plan_with_progress(
         report(progress);
         if let PlanCommit::Pick(old_id) | PlanCommit::Resolved(old_id) = step.commit {
             rewritten.insert(old_id, Some(new_id));
+            if old_id != new_id {
+                note_rewrites.push((old_id, new_id));
+            }
         }
-        for old_id in &step.squash {
+        for old_id in step.squash.iter().take(applied_squash) {
+            rewritten.insert(*old_id, Some(new_id));
+            if *old_id != new_id {
+                note_rewrites.push((*old_id, new_id));
+            }
+        }
+        for old_id in step.squash.iter().skip(applied_squash) {
             rewritten.insert(*old_id, Some(new_id));
         }
         produced.push(new_id);
@@ -1206,6 +1230,7 @@ pub(crate) fn perform_plan_with_progress(
         reset_index_paths: None,
         skip_worktree_transitions: false,
         selected,
+        note_rewrites,
         rewritten: rewritten.clone(),
         stash_rewritten: rewritten.clone(),
         removed,
@@ -1296,7 +1321,10 @@ impl Prepared {
     }
 
     fn finish(&mut self) -> Result<Outcome> {
-        let stash_edits = super::stash::rewrite_edits(&self.repo, &self.stash_rewritten, &self.removed)?;
+        let mut resource_edits = super::stash::rewrite_edits(&self.repo, &self.stash_rewritten, &self.removed)?;
+        let note_edits = note_rewrite_edits(&self.repo, &self.note_rewrites, &self.committer)?;
+        resource_edits.forward.extend(note_edits.forward);
+        resource_edits.rollback.extend(note_edits.rollback);
         self.persist_objects()?;
         let _ = self
             .repo
@@ -1348,7 +1376,7 @@ impl Prepared {
             &self.committer,
             self.expected_refs.take(),
             (&self.pins, &self.delete_refs),
-            stash_edits,
+            resource_edits,
         )?;
         for (transitioned, transition) in transitions.iter().enumerate() {
             if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.old, transition.new)
@@ -1381,6 +1409,83 @@ impl Prepared {
             rewritten: std::mem::take(&mut self.rewritten),
         })
     }
+}
+
+fn note_rewrite_edits(
+    repo: &gix::Repository,
+    rewrites: &[(ObjectId, ObjectId)],
+    committer: &gix::actor::Signature,
+) -> Result<super::stash::RewriteEdits> {
+    let empty = || super::stash::RewriteEdits {
+        forward: Vec::new(),
+        rollback: Vec::new(),
+    };
+    if rewrites.is_empty() {
+        return Ok(empty());
+    }
+    let notes = repo.notes().map_err(gix::Exn::into_error)?;
+    let Some(name) = notes.default_ref().map(ToOwned::to_owned) else {
+        return Ok(empty());
+    };
+    let (original_root, parent) = match repo.try_find_reference(name.as_ref())? {
+        Some(mut reference) => {
+            let parent = reference
+                .try_id()
+                .context("the default Git notes reference must be direct")?
+                .detach();
+            let root = reference
+                .peel_to_tree()
+                .context("could not read the default Git notes tree")?
+                .id;
+            (root, Some(parent))
+        }
+        None => (ObjectId::empty_tree(repo.object_hash()), None),
+    };
+    let mut root = original_root;
+    let mut cache = gix::note::Cache::default();
+    for &(old, new) in rewrites {
+        let Some(source) = gix::note::get(original_root, &old, repo, &mut cache)
+            .map_err(gix::Exn::into_error)
+            .context("could not find a Git note to copy")?
+        else {
+            continue;
+        };
+        let source = repo.find_blob(source).context("could not read a Git note to copy")?;
+        let destination = gix::note::get(root, &new, repo, &mut cache)
+            .map_err(gix::Exn::into_error)
+            .context("could not inspect the successor Git note")?;
+        let data = match destination {
+            Some(destination) => {
+                let destination = repo
+                    .find_blob(destination)
+                    .context("could not read the successor Git note")?;
+                let mut data = destination.data.clone();
+                data.extend_from_slice(b"\n\n");
+                data.extend_from_slice(&source.data);
+                data
+            }
+            None => source.data.clone(),
+        };
+        let note = repo.write_blob(data)?.detach();
+        root = gix::note::add(root, new, note, repo, &mut cache)
+            .map_err(gix::Exn::into_error)
+            .context("could not copy a Git note onto its successor")?
+            .tree;
+    }
+    if root == original_root {
+        return Ok(empty());
+    }
+
+    let mut time = gix::date::parse::TimeBuf::default();
+    let actor = committer.to_ref(&mut time);
+    let commit = repo
+        .new_commit_as(actor, actor, "Notes copied by tix", root, parent)
+        .context("could not prepare the rewritten Git notes commit")?
+        .id;
+    Ok(super::stash::RewriteEdits {
+        forward: vec![ref_edit(name.clone(), parent, Some(commit))],
+        rollback: vec![ref_edit(name, Some(commit), parent)],
+    })
 }
 
 fn rollback<T>(
@@ -2160,8 +2265,38 @@ mod tests {
     fn open(path: &Path) -> gix_testtools::Result<gix::Repository> {
         Ok(crate::test_repository::open_with(
             path,
-            ["user.name=rebasing committer", "user.email=rebasing@example.com"],
+            [
+                "user.name=rebasing committer",
+                "user.email=rebasing@example.com",
+                "core.notesRef=refs/notes/review",
+            ],
         )?)
+    }
+
+    fn set_git_note(repo: &gix::Repository, id: ObjectId, data: &[u8]) -> gix_testtools::Result {
+        let mut notes = repo.notes().map_err(gix::Exn::into_error)?;
+        let reference = notes
+            .default_ref()
+            .expect("the test repository has a default notes ref")
+            .to_owned();
+        notes
+            .add_to_ref(reference.as_ref(), id, data)
+            .map_err(gix::Exn::into_error)?;
+        Ok(())
+    }
+
+    fn git_note(repo: &gix::Repository, id: ObjectId) -> gix_testtools::Result<Option<Vec<u8>>> {
+        let notes = repo.notes().map_err(gix::Exn::into_error)?;
+        let reference = notes
+            .default_ref()
+            .expect("the test repository has a default notes ref")
+            .to_owned();
+        let mut notes = notes.with_refs([reference.as_bstr()]).map_err(gix::Exn::into_error)?;
+        Ok(notes
+            .get(id)
+            .map_err(gix::Exn::into_error)?
+            .first()
+            .map(|note| note.blob.data.clone()))
     }
 
     #[test]
@@ -2230,6 +2365,50 @@ mod tests {
     }
 
     #[test]
+    fn git_notes_follow_each_actual_rewritten_successor() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let old_tip = repo.head_id()?.detach();
+        set_git_note(&repo, middle, b"middle note")?;
+        set_git_note(&repo, old_tip, b"tip note")?;
+        let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
+        commit.message = "rewritten middle".into();
+
+        let outcome = perform(
+            &repo,
+            &graph,
+            Edit::Replace { target: middle, commit },
+            Signature::RedoIfNeeded,
+            Tree::LeaveAsIs,
+        )?
+        .complete()?;
+        let new_middle = outcome.selected.context("the replacement is selected")?;
+        let new_tip = repo.head_id()?.detach();
+        for (old, new, note) in [
+            (middle, new_middle, b"middle note".as_slice()),
+            (old_tip, new_tip, b"tip note".as_slice()),
+        ] {
+            assert_eq!(
+                git_note(&repo, old)?.as_deref(),
+                Some(note),
+                "the predecessor retains its Git note"
+            );
+            assert_eq!(
+                git_note(&repo, new)?.as_deref(),
+                Some(note),
+                "the rewritten successor receives the Git note"
+            );
+        }
+        assert!(
+            repo.try_find_reference("refs/notes/review")?.is_some(),
+            "the configured default notes ref is updated"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn rewriting_a_stashed_commit_moves_its_stash_association() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
@@ -2268,6 +2447,7 @@ mod tests {
         let base = repo.rev_parse_single("HEAD~2")?.detach();
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
         let old_tip_tree = repo.find_commit(repo.head_id()?)?.tree_id()?.detach();
+        set_git_note(&repo, middle, b"removed note")?;
 
         let outcome = perform(
             &repo,
@@ -2288,6 +2468,12 @@ mod tests {
             repo.find_commit(tip)?.tree_id()?.detach(),
             old_tip_tree,
             "the removed commit's tree contribution is absent"
+        );
+        assert_eq!(git_note(&repo, middle)?.as_deref(), Some(b"removed note".as_slice()));
+        assert_eq!(
+            git_note(&repo, tip)?,
+            None,
+            "a dropped commit does not donate its Git note"
         );
         Ok(())
     }
@@ -2843,6 +3029,8 @@ mod tests {
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
         let tip = repo.head_id()?.detach();
         let tip_tree = repo.find_commit(tip)?.tree_id()?.detach();
+        set_git_note(&repo, middle, b"middle note")?;
+        set_git_note(&repo, tip, b"tip note")?;
 
         let mut progress = Vec::new();
         let outcome = perform_plan_with_progress(
@@ -2894,6 +3082,11 @@ mod tests {
             repo.find_reference("refs/patches/middle")?.id().detach(),
             combined,
             "a ref on the first source follows the combined commit"
+        );
+        assert_eq!(
+            git_note(&repo, combined)?.as_deref(),
+            Some(b"middle note\n\ntip note".as_slice()),
+            "squashed Git notes concatenate in source order"
         );
         Ok(())
     }
@@ -3181,6 +3374,8 @@ mod tests {
         let base = repo.rev_parse_single("HEAD~2")?.detach();
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
         let tip = repo.head_id()?.detach();
+        set_git_note(&repo, tip, b"atomic note")?;
+        let notes_before = repo.find_reference("refs/notes/review")?.id().detach();
         let expected_refs = capture_refs(&repo, &[middle, tip], &[tip])?;
         assert!(
             Command::new("git")
@@ -3214,6 +3409,11 @@ mod tests {
             repo.find_reference("refs/heads/main")?.id().detach(),
             base,
             "a concurrent branch update wins"
+        );
+        assert_eq!(
+            repo.find_reference("refs/notes/review")?.id().detach(),
+            notes_before,
+            "a failed branch transaction cannot partially advance the notes ref"
         );
         assert!(
             format!("{err:#}").contains("reference"),

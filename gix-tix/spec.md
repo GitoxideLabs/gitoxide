@@ -221,6 +221,16 @@ without trading responsiveness for metadata that is not visible.
   purple `[A]` before its title.
 - A commit with notes in the configured notes ref receives a matching `[N]`.
   Notes are loaded lazily for visible commits.
+- `n g` edits the selected commit's note in `core.notesRef`, or
+  `refs/notes/commits` when it is unset. The action is available on every
+  selected commit, including immutable hidden boundaries. Empty content removes
+  the note and unchanged content is a no-op.
+- Every operation that actually rewrites a commit copies its default-ref Git
+  note to the successor while retaining the predecessor note. Notes that converge
+  through a squash are concatenated in source order with a blank line. A split
+  copies the source note only to its rewritten lower identity; inserted and
+  dropped commits do not propagate notes. The notes ref changes atomically with
+  the other rebase refs and participates in rollback.
 - Tix enrichments are stored separately as Git notes headed at the worktree-local
   `refs/worktree/tix/enrich` ref. Enrichments are keyed by the commit's effective
   change ID and use human-readable Git config. Independent `[commit]` keys store
@@ -979,7 +989,8 @@ space first; changes blocks adapt within the remaining history width.
 - The `n` in `enrich` toggles its shortcut group. On any commit eligible for rewording,
   `n t` toggles `[commit] todo`, preserving a saved note, and `n o` opens
   `[commit] note` in Git's editor as Markdown. Saving or removing a note preserves
-  the todo flag, and toggling todo preserves the note. The group is mutually
+  the todo flag, and toggling todo preserves the note. `n g` edits the real Git
+  note and remains available when the Tix-specific actions are not. The group is mutually
   exclusive with the view, edit, and information groups and otherwise follows
   their closing behavior.
 
