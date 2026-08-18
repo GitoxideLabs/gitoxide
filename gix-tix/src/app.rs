@@ -377,8 +377,8 @@ pub(crate) enum Action {
     RebaseUpdate,
     Squash,
     Review,
+    Forkpoint,
     TimeTravel,
-    AttachedTimeTravel,
     TogglePin,
     VerifySignatures,
     Cancel,
@@ -426,10 +426,8 @@ pub(crate) enum Effect {
         review: ObjectId,
         return_to: Option<ObjectId>,
     },
-    TimeTravel {
-        id: ObjectId,
-        mode: crate::edit::time_travel::TravelMode,
-    },
+    Forkpoint,
+    TimeTravel(ObjectId),
     TogglePin(ObjectId),
     ToggleTodo(ObjectId),
     EditNote(ObjectId),
@@ -1053,12 +1051,14 @@ impl App {
                 | Action::Rebase
                 | Action::RebaseUpdate
                 | Action::TimeTravel
-                | Action::AttachedTimeTravel
                 | Action::TogglePin
         ) {
             self.commit_expanded = false;
         }
-        if !matches!(&action, Action::ToggleActions | Action::Squash | Action::Review) {
+        if !matches!(
+            &action,
+            Action::ToggleActions | Action::Squash | Action::Review | Action::Forkpoint
+        ) {
             self.actions_expanded = false;
         }
         if !matches!(
@@ -1416,17 +1416,11 @@ impl App {
                     return vec![Effect::StartReview { tip, base }];
                 }
             }
+            Action::Forkpoint if self.can_forkpoint() => return vec![Effect::Forkpoint],
             Action::TimeTravel if self.time_travel_shortcut_visible() => {
-                return vec![Effect::TimeTravel {
-                    id: self.rows[self.selected.expect("time-travel requires a selection")].id,
-                    mode: crate::edit::time_travel::TravelMode::Detached,
-                }];
-            }
-            Action::AttachedTimeTravel if self.attached_time_travel_shortcut_visible() => {
-                return vec![Effect::TimeTravel {
-                    id: self.rows[self.selected.expect("attached time-travel requires a selection")].id,
-                    mode: crate::edit::time_travel::TravelMode::Attached,
-                }];
+                return vec![Effect::TimeTravel(
+                    self.rows[self.selected.expect("time-travel requires a selection")].id,
+                )];
             }
             Action::TogglePin => {
                 if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
@@ -2166,6 +2160,17 @@ impl App {
             })
     }
 
+    pub(crate) fn can_forkpoint(&self) -> bool {
+        self.state == State::Complete
+            && self.worktree_changes_available
+            && !self.worktree_conflicted
+            && self.pending_rebase_conflict.is_none()
+            && self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.worktree_head.is_some()
+            && self.worktree_branch.is_some_and(|(_, detached)| detached)
+    }
+
     pub(crate) fn review_selection_active(&self) -> bool {
         self.review_tip.is_some()
     }
@@ -2274,13 +2279,6 @@ impl App {
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && self.selected.and_then(|index| self.rows.get(index)).is_some()
-    }
-
-    pub(crate) fn attached_time_travel_shortcut_visible(&self) -> bool {
-        self.time_travel_shortcut_visible()
-            && self.worktree_branch.is_some_and(|(tip, detached)| {
-                detached || self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) != Some(tip)
-            })
     }
 
     fn last_selectable(&self) -> Option<usize> {
@@ -3410,44 +3408,15 @@ mod tests {
         let mut app = App::new(10);
         app.extend_commits(vec![row(1)]);
         assert!(app.update(Action::TimeTravel).is_empty());
-        assert!(app.update(Action::AttachedTimeTravel).is_empty());
         complete(&mut app);
-        assert_eq!(
-            app.update(Action::TimeTravel),
-            vec![Effect::TimeTravel {
-                id: id(1),
-                mode: crate::edit::time_travel::TravelMode::Detached,
-            }]
-        );
-        assert!(
-            app.update(Action::AttachedTimeTravel).is_empty(),
-            "attached travel requires a current-worktree branch"
-        );
-        app.set_worktree_branch(Some((id(2), false)));
-        assert_eq!(
-            app.update(Action::AttachedTimeTravel),
-            vec![Effect::TimeTravel {
-                id: id(1),
-                mode: crate::edit::time_travel::TravelMode::Attached,
-            }]
-        );
-        app.set_worktree_branch(Some((id(1), false)));
-        assert!(
-            app.update(Action::AttachedTimeTravel).is_empty(),
-            "moving the branch to its current tip is not offered"
-        );
+        assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(1))]);
         app.set_worktree_branch(Some((id(1), true)));
-        assert_eq!(
-            app.update(Action::AttachedTimeTravel),
-            vec![Effect::TimeTravel {
-                id: id(1),
-                mode: crate::edit::time_travel::TravelMode::Attached,
-            }],
-            "a detached worktree may reattach without moving its remembered branch"
-        );
+        app.set_worktree_head(Some(id(1)), false);
+        assert!(app.can_forkpoint());
+        assert_eq!(app.update(Action::Forkpoint), vec![Effect::Forkpoint]);
         app.set_worktree_changes_available(false);
         assert!(app.update(Action::TimeTravel).is_empty());
-        assert!(app.update(Action::AttachedTimeTravel).is_empty());
+        assert!(app.update(Action::Forkpoint).is_empty());
         assert_eq!(app.update(Action::TogglePin), vec![Effect::TogglePin(id(1))]);
     }
 
@@ -3456,29 +3425,23 @@ mod tests {
         let mut app = App::new(2);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         app.set_worktree_head(Some(id(2)), false);
-        app.set_worktree_branch(Some((id(2), false)));
         complete(&mut app);
         app.update(Action::MoveDown);
         assert!(app.time_travel_shortcut_visible());
-        assert!(app.attached_time_travel_shortcut_visible());
 
         app.set_worktree_conflicted(true);
         assert!(!app.time_travel_shortcut_visible());
-        assert!(!app.attached_time_travel_shortcut_visible());
         assert!(app.update(Action::TimeTravel).is_empty());
-        assert!(app.update(Action::AttachedTimeTravel).is_empty());
         app.set_worktree_conflicted(false);
         assert!(app.changes_visible(), "changes are normally shown while enabled");
         app.arm_rebase_conflict(id(1));
         assert!(!app.time_travel_shortcut_visible());
-        assert!(!app.attached_time_travel_shortcut_visible());
         assert!(
             !app.changes_visible(),
             "an in-memory conflict preview cannot be loaded by an on-disk changes view"
         );
         app.clear_rebase_conflict();
         assert!(app.time_travel_shortcut_visible());
-        assert!(app.attached_time_travel_shortcut_visible());
         assert!(app.changes_visible(), "clearing the preview restores the changes view");
     }
 
@@ -3858,13 +3821,7 @@ mod tests {
         assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(id(4))]);
         assert!(!app.can_reword());
         assert!(!app.can_forget());
-        assert_eq!(
-            app.update(Action::TimeTravel),
-            vec![Effect::TimeTravel {
-                id: id(4),
-                mode: crate::edit::time_travel::TravelMode::Detached,
-            }]
-        );
+        assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(4))]);
         assert!(
             app.update(Action::VerifySignatures).is_empty(),
             "hidden signatures are not actionable"
@@ -4183,7 +4140,6 @@ mod tests {
         app.update(Action::Rebase);
         app.update(Action::RebaseUpdate);
         app.update(Action::TimeTravel);
-        app.update(Action::AttachedTimeTravel);
         assert!(app.commit_expanded, "grouped commit commands keep the group open");
 
         app.update(Action::MoveDown);
