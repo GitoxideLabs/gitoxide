@@ -59,13 +59,17 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .context("author is not valid UTF-8")?;
 
     if let Some(message) = explicit_message(&args.edit, std::io::stdin())? {
-        return finish(crate::edit::reword::apply_message_reporting(
-            repository,
-            &graph,
-            target,
-            &message,
-            author.map(AsRef::as_ref),
-        )?);
+        let output_repository = repository.clone();
+        return finish(
+            &output_repository,
+            crate::edit::reword::apply_message_reporting(
+                repository,
+                &graph,
+                target,
+                &message,
+                author.map(AsRef::as_ref),
+            )?,
+        );
     }
 
     let repository_path = repository.git_dir().to_owned();
@@ -89,7 +93,12 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let mut repository = crate::open_repository(&repository_path, bare, false)
         .context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    finish_editor(crate::edit::reword::apply(repository, &graph, target, &edited)?, target)
+    let output_repository = repository.clone();
+    finish_editor(
+        &output_repository,
+        crate::edit::reword::apply(repository, &graph, target, &edited)?,
+        target,
+    )
 }
 
 pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Result<Option<Vec<u8>>> {
@@ -122,22 +131,26 @@ pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Resu
     }
 }
 
-fn finish(outcome: crate::edit::reword::Outcome) -> Result<()> {
+fn finish(repository: &gix::Repository, outcome: crate::edit::reword::Outcome) -> Result<()> {
     match outcome.commit {
-        Some(id) => println!("{}", id.to_hex_with_len(7)),
+        Some(id) => println!("{}", crate::change_id::display(repository, id, 7)?),
         None => println!("no reword performed: the edited commit was unchanged"),
     }
-    super::print_ref_rewrites(&outcome.ref_rewrites);
+    super::print_ref_rewrites(repository, &outcome.ref_rewrites)?;
     Ok(())
 }
 
-fn finish_editor(outcome: crate::edit::reword::Outcome, original: gix::ObjectId) -> Result<()> {
+fn finish_editor(
+    repository: &gix::Repository,
+    outcome: crate::edit::reword::Outcome,
+    original: gix::ObjectId,
+) -> Result<()> {
     match (outcome.commit, outcome.enrichment) {
-        (Some(id), _) => println!("{}", id.to_hex_with_len(7)),
-        (None, Some(_)) => println!("{}", original.to_hex_with_len(7)),
+        (Some(id), _) => println!("{}", crate::change_id::display(repository, id, 7)?),
+        (None, Some(_)) => println!("{}", crate::change_id::display(repository, original, 7)?),
         (None, None) => println!("no reword performed: the edited commit was unchanged"),
     }
-    super::print_ref_rewrites(&outcome.ref_rewrites);
+    super::print_ref_rewrites(repository, &outcome.ref_rewrites)?;
     Ok(())
 }
 

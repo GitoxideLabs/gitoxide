@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use gix::prelude::{ObjectIdExt, ReferenceExt};
+use gix::prelude::ReferenceExt;
 use ratatui::text::Line;
 
 mod new;
@@ -148,6 +148,7 @@ impl Platform {
             Command::RefTree(_) | Command::Show(_) => unreachable!("display commands return before logging"),
             Command::Amend(args) => {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
+                let output_repository = repository.clone();
                 let amended = if args.index {
                     crate::edit::head::amend_index_reporting(repository, &graph)?
                 } else {
@@ -155,14 +156,9 @@ impl Platform {
                 };
                 match amended {
                     Some(outcome) => {
-                        println!(
-                            "{}",
-                            outcome
-                                .selected
-                                .context("amending did not produce a selection")?
-                                .to_hex_with_len(7)
-                        );
-                        print_ref_rewrites(&outcome.ref_rewrites);
+                        let selected = outcome.selected.context("amending did not produce a selection")?;
+                        println!("{}", crate::change_id::display(&output_repository, selected, 7)?);
+                        print_ref_rewrites(&output_repository, &outcome.ref_rewrites)?;
                     }
                     None => println!("nothing to amend"),
                 }
@@ -180,10 +176,8 @@ impl Platform {
                     .head_id()
                     .context("stashing changes requires a born HEAD")?
                     .detach();
-                println!(
-                    "{}",
-                    crate::edit::stash::save_manual(repository.git_dir(), repository.is_bare(), id)?
-                );
+                let notice = crate::edit::stash::save_manual(repository.git_dir(), repository.is_bare(), id)?;
+                println!("{}", notice_with_change_id(&repository, &notice, id)?);
             }
             Command::Pin(args) => pin(&repository, args)?,
             Command::Travel(args) => return travel::run(repository, args),
@@ -462,10 +456,7 @@ fn display_pin(repository: &gix::Repository, pin: &crate::history::Pin) -> Resul
     Ok(format!(
         "{} {}",
         crate::edit::time_travel::pin_label(pin),
-        pin.id
-            .attach(repository)
-            .shorten()
-            .context("could not shorten pinned commit ID")?
+        crate::change_id::display_short(repository, pin.id)?
     ))
 }
 
@@ -475,16 +466,12 @@ fn edit_head(
     kind: crate::edit::head::Kind,
     verb: &str,
 ) -> Result<()> {
+    let output_repository = repository.clone();
     match crate::edit::head::perform_reporting(repository, graph, kind)? {
         Some(outcome) => {
-            println!(
-                "{}",
-                outcome
-                    .selected
-                    .context("editing HEAD did not produce a selection")?
-                    .to_hex_with_len(7)
-            );
-            print_ref_rewrites(&outcome.ref_rewrites);
+            let selected = outcome.selected.context("editing HEAD did not produce a selection")?;
+            println!("{}", crate::change_id::display(&output_repository, selected, 7)?);
+            print_ref_rewrites(&output_repository, &outcome.ref_rewrites)?;
         }
         None => println!("nothing to {verb}"),
     }
@@ -508,38 +495,44 @@ fn split(repository: gix::Repository, graph: &crate::history::HistoryGraph, args
         .context("could not reopen repository after editing split")?;
     repository.object_cache_size(None);
     let outcome = crate::edit::split::apply_reporting(repository, graph, prepared, &edited)?;
-    println!(
-        "{}",
-        outcome
-            .selected
-            .context("splitting did not produce a selection")?
-            .to_hex_with_len(7)
-    );
-    print_ref_rewrites(&outcome.ref_rewrites);
+    let output_repository =
+        crate::open_repository(&repository_path, bare, false).context("could not reopen repository after splitting")?;
+    let selected = outcome.selected.context("splitting did not produce a selection")?;
+    println!("{}", crate::change_id::display(&output_repository, selected, 7)?);
+    print_ref_rewrites(&output_repository, &outcome.ref_rewrites)?;
     Ok(())
 }
 
-fn print_ref_rewrites(rewrites: &[crate::edit::rebase::RefRewrite]) {
-    for line in ref_rewrite_lines(rewrites) {
+fn print_ref_rewrites(repository: &gix::Repository, rewrites: &[crate::edit::rebase::RefRewrite]) -> Result<()> {
+    for line in ref_rewrite_lines(repository, rewrites)? {
         println!("{line}");
     }
+    Ok(())
 }
 
-fn ref_rewrite_lines(rewrites: &[crate::edit::rebase::RefRewrite]) -> Vec<String> {
+fn ref_rewrite_lines(
+    repository: &gix::Repository,
+    rewrites: &[crate::edit::rebase::RefRewrite],
+) -> Result<Vec<String>> {
     let mut rewrites = rewrites.to_vec();
     rewrites.sort_by(|a, b| a.name.cmp(&b.name));
     rewrites.dedup();
     rewrites
         .into_iter()
         .map(|rewrite| {
-            format!(
+            Ok(format!(
                 "{}: {} -> {}",
                 rewrite.name,
-                rewrite.old.to_hex_with_len(7),
-                rewrite.new.to_hex_with_len(7)
-            )
+                crate::change_id::display(repository, rewrite.old, 7)?,
+                crate::change_id::display(repository, rewrite.new, 7)?
+            ))
         })
         .collect()
+}
+
+fn notice_with_change_id(repository: &gix::Repository, notice: &str, id: gix::ObjectId) -> Result<String> {
+    let hash = id.to_hex_with_len(7).to_string();
+    Ok(notice.replacen(&hash, &crate::change_id::display(repository, id, 7)?, 1))
 }
 
 #[cfg(test)]
@@ -551,13 +544,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rewritten_ref_lines_are_sorted_and_show_the_commit_mapping() {
-        let old: gix::ObjectId = "1111111111111111111111111111111111111111"
-            .parse()
-            .expect("valid object ID");
-        let new: gix::ObjectId = "2222222222222222222222222222222222222222"
-            .parse()
-            .expect("valid object ID");
+    fn rewritten_ref_lines_are_sorted_and_show_the_commit_mapping() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let old = repository.rev_parse_single("main~1")?.detach();
+        let new = repository.rev_parse_single("main")?.detach();
         let branch = crate::edit::rebase::RefRewrite {
             name: "refs/heads/z".try_into().expect("valid ref name"),
             old,
@@ -569,11 +560,44 @@ mod tests {
             new,
         };
         assert_eq!(
-            ref_rewrite_lines(&[branch.clone(), first, branch]),
-            ["refs/heads/a: 1111111 -> 2222222", "refs/heads/z: 1111111 -> 2222222"],
+            ref_rewrite_lines(&repository, &[branch.clone(), first, branch])?,
+            [
+                format!(
+                    "refs/heads/a: {} -> {}",
+                    crate::change_id::display(&repository, old, 7)?,
+                    crate::change_id::display(&repository, new, 7)?
+                ),
+                format!(
+                    "refs/heads/z: {} -> {}",
+                    crate::change_id::display(&repository, old, 7)?,
+                    crate::change_id::display(&repository, new, 7)?
+                )
+            ],
             "ref mappings are stable and duplicate-free"
         );
-        assert!(ref_rewrite_lines(&[]).is_empty(), "unchanged refs add no output");
+        assert!(
+            ref_rewrite_lines(&repository, &[])?.is_empty(),
+            "unchanged refs add no output"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn commit_notices_pair_their_hash_with_the_change_id() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let id = repository.head_id()?.detach();
+        let notice = format!("stashed changes at {}; retained warning", id.to_hex_with_len(7));
+
+        assert_eq!(
+            notice_with_change_id(&repository, &notice, id)?,
+            format!(
+                "stashed changes at {}; retained warning",
+                crate::change_id::display(&repository, id, 7)?
+            ),
+            "the change ID stays adjacent to the hash without disturbing later text"
+        );
+        Ok(())
     }
 
     #[test]
@@ -955,12 +979,12 @@ mod tests {
         assert_eq!(repeated[0].name, pins[0].name, "an existing symbolic pin is reused");
         assert_eq!(crate::history::all_pins(&repository)?.len(), 4);
         let display = display_pin(&repository, &pins[0])?;
-        let (label, short_id) = display.split_once(' ').context("pin output has a label and ID")?;
+        let (label, ids) = display.split_once(' ').context("pin output has a label and IDs")?;
         assert!(label.starts_with("pin:"), "output names the pin");
         assert_eq!(
-            short_id,
-            main.attach(&repository).shorten()?.to_string(),
-            "output uses the repository's abbreviated ID"
+            ids,
+            crate::change_id::display_short(&repository, main)?,
+            "output uses matching repository-abbreviated commit and change IDs"
         );
         repository.reference(
             "refs/heads/main",

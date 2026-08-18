@@ -84,6 +84,7 @@ pub(crate) fn prepare(
     commits: &[Commit],
     resolved_tips: &[ObjectId],
     onto_kind: OntoKind,
+    show_change_ids: bool,
 ) -> Result<Prepared> {
     repo.find_commit(base)
         .context("could not find the selected rebase base")?;
@@ -160,11 +161,14 @@ pub(crate) fn prepare(
     ref_points.dedup();
     let expected_refs = rebase::capture_refs(repo, &ref_points, &tips)?;
 
-    let source = short(repo, base)?;
+    let source = short(repo, base, show_change_ids)?;
     let title = if base == onto {
         format!("# Rebase from `{source}`")
     } else {
-        format!("# Rebase from `{source}` onto `{}`", short(repo, onto)?)
+        format!(
+            "# Rebase from `{source}` onto `{}`",
+            short(repo, onto, show_change_ids)?
+        )
     };
     let state = State {
         base,
@@ -206,6 +210,7 @@ pub(crate) fn prepare(
             repo,
             section.parent,
             (section.parent == onto).then_some((anchor_kind, anchor_title.as_str())),
+            show_change_ids,
         )?;
         if !scope_set.contains(&section.parent) {
             write_refs_at(&mut body, &state.expected_refs, section.parent)?;
@@ -218,12 +223,25 @@ pub(crate) fn prepare(
                 "pick"
             };
             let states = commit_states(repo, *id)?;
-            body.extend_from_slice(format!("`{verb} {}` {states}{}\n", short(repo, *id)?, &commit.info).as_bytes());
+            body.extend_from_slice(
+                format!(
+                    "`{verb} {}` {states}{}\n",
+                    short(repo, *id, show_change_ids)?,
+                    &commit.info
+                )
+                .as_bytes(),
+            );
             write_refs_at(&mut body, &state.expected_refs, *id)?;
         }
     }
     if sections.is_empty() {
-        write_fork_heading(&mut body, repo, onto, Some((anchor_kind, anchor_title.as_str())))?;
+        write_fork_heading(
+            &mut body,
+            repo,
+            onto,
+            Some((anchor_kind, anchor_title.as_str())),
+            show_change_ids,
+        )?;
         write_refs_at(&mut body, &state.expected_refs, onto)?;
     }
     write_bottom_up(&mut document, &body)?;
@@ -239,6 +257,7 @@ pub(crate) fn prepare_continuation(
     repo: &gix::Repository,
     plan: &rebase::Plan,
     tips: Vec<ObjectId>,
+    show_change_ids: bool,
 ) -> Result<Prepared> {
     let resolved = plan.steps.iter().find_map(|step| match step.commit {
         rebase::PlanCommit::Resolved(id) => Some(id),
@@ -283,6 +302,7 @@ pub(crate) fn prepare_continuation(
                 repo,
                 parent,
                 (parent == plan.base).then_some(("base", base_title.as_str())),
+                show_change_ids,
             )?;
             if matches!(step.parent, rebase::PlanParent::Existing(_)) {
                 write_plan_refs_at(&mut body, &plan.expected_refs, step.parent)?;
@@ -300,9 +320,17 @@ pub(crate) fn prepare_continuation(
         match step.commit {
             rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Resolved(id) => {
                 let value = if matches!(step.commit, rebase::PlanCommit::Resolved(_)) {
-                    ObjectId::null(id.kind()).to_string()
+                    let hash = ObjectId::null(id.kind()).to_string();
+                    if show_change_ids {
+                        format!(
+                            "{hash} {}",
+                            crate::change_id::for_commit(repo, id)?.to_reverse_hex_with_len(hash.len())
+                        )
+                    } else {
+                        hash
+                    }
                 } else {
-                    short(repo, id)?
+                    short(repo, id, show_change_ids)?
                 };
                 let title = anchor_title(repo, id)?;
                 body.extend_from_slice(
@@ -318,7 +346,7 @@ pub(crate) fn prepare_continuation(
             body.extend_from_slice(
                 format!(
                     "`squash {}` {}{}\n",
-                    short(repo, *id)?,
+                    short(repo, *id, show_change_ids)?,
                     commit_states(repo, *id)?,
                     title
                 )
@@ -528,8 +556,9 @@ fn write_fork_heading(
     repo: &gix::Repository,
     id: ObjectId,
     annotation: Option<(&str, &str)>,
+    show_change_ids: bool,
 ) -> Result<()> {
-    out.extend_from_slice(format!("fork {}", short(repo, id)?).as_bytes());
+    out.extend_from_slice(format!("fork {}", short(repo, id, show_change_ids)?).as_bytes());
     if let Some((kind, title)) = annotation {
         out.extend_from_slice(format!(" ({kind}) {title}").as_bytes());
     }
@@ -580,12 +609,16 @@ fn walk(id: ObjectId, children: &HashMap<ObjectId, Vec<ObjectId>>, section: &mut
     }
 }
 
-fn short(repo: &gix::Repository, id: ObjectId) -> Result<String> {
-    Ok(id
-        .attach(repo)
-        .shorten()
-        .context("could not shorten a rebase todo ID")?
-        .to_string())
+fn short(repo: &gix::Repository, id: ObjectId, show_change_id: bool) -> Result<String> {
+    if show_change_id {
+        crate::change_id::display_short(repo, id).context("could not format a rebase todo ID")
+    } else {
+        Ok(id
+            .attach(repo)
+            .shorten()
+            .context("could not shorten a rebase todo ID")?
+            .to_string())
+    }
 }
 
 fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
@@ -1185,7 +1218,7 @@ mod tests {
         commits: &[Commit],
         _head: Option<ObjectId>,
     ) -> Result<Prepared> {
-        prepare(repo, base, onto, commits, &[], OntoKind::UpdatedBase)
+        prepare(repo, base, onto, commits, &[], OntoKind::UpdatedBase, true)
     }
 
     fn parse_plan(repo: &gix::Repository, document: &[u8]) -> Result<rebase::Plan> {
@@ -1220,8 +1253,14 @@ mod tests {
             "the first line explains that saving unchanged is a no-op"
         );
         assert!(document.contains(STATE_START), "the todo carries its transaction state");
-        assert!(document.contains(&format!("# Rebase from `{}`", base.to_hex_with_len(7))));
-        assert!(document.contains(&format!("fork {} (base) base", base.to_hex_with_len(7))));
+        assert!(document.contains(&format!(
+            "# Rebase from `{}`",
+            crate::change_id::display_short(&repo, base)?
+        )));
+        assert!(document.contains(&format!(
+            "fork {} (base) base",
+            crate::change_id::display_short(&repo, base)?
+        )));
         let middle = document.find("`pick ").expect("the oldest pick is shown");
         let tip = document.find("`@pick ").expect("HEAD is marked");
         let base = document.find("fork ").expect("the base separator is shown");
@@ -1457,9 +1496,12 @@ mod tests {
 
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         let document = String::from_utf8(prepared.document.clone())?;
-        assert!(document.contains(&format!("fork {} (base) base", base.to_hex_with_len(7))));
+        assert!(document.contains(&format!(
+            "fork {} (base) base",
+            crate::change_id::display_short(&repo, base)?
+        )));
         assert!(
-            document.contains(&format!("fork {} ", middle.to_hex_with_len(7))),
+            document.contains(&format!("fork {} ", crate::change_id::display_short(&repo, middle)?)),
             "a fork within the editable tree has no external-anchor annotation"
         );
         let plan = parse_plan(&repo, document.as_bytes())?;
@@ -1493,15 +1535,15 @@ mod tests {
         assert!(
             document.contains(&format!(
                 "# Rebase from `{}` onto `{}`",
-                base.to_hex_with_len(7),
-                onto.to_hex_with_len(7)
+                crate::change_id::display_short(&repo, base)?,
+                crate::change_id::display_short(&repo, onto)?
             )),
             "the update target is explicit in the document title"
         );
         assert!(
             document.contains(&format!(
                 "fork {} (updated-base) [A] [N] updated * _ [hidden] <base> `raw` \\ base",
-                onto.to_hex_with_len(7)
+                crate::change_id::display_short(&repo, onto)?
             )),
             "the unfamiliar fork target carries its raw UI title"
         );
@@ -1637,6 +1679,7 @@ mod tests {
                 }],
             },
             vec![middle],
+            true,
         )?;
         assert!(
             prepared
@@ -1652,7 +1695,7 @@ mod tests {
         );
         assert!(document.contains(&"0".repeat(40)), "the conflict uses the full null ID");
         assert!(
-            document.contains(&format!("`squash {}`", tip.to_hex_with_len(7))),
+            document.contains(&format!("`squash {}`", crate::change_id::display_short(&repo, tip)?)),
             "unapplied squash sources remain editable"
         );
         let plan = parse_plan(&repo, &prepared.document)?;

@@ -22,7 +22,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let detached = head.is_detached();
     drop(head);
     if selected == head_id {
-        println!("already at {}", selected.to_hex_with_len(7));
+        println!("already at {}", crate::change_id::display(&repository, selected, 7)?);
         return Ok(());
     }
 
@@ -51,16 +51,28 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let bare = repository.is_bare();
     drop(repository);
     match crate::edit::time_travel::perform(&repository_path, bare, selected, &graph, &reviews, &[], false)? {
-        crate::edit::time_travel::Perform::Complete { notice, ref_rewrites } => {
+        crate::edit::time_travel::Perform::Complete {
+            notice,
+            selected,
+            ref_rewrites,
+        } => {
+            let repository = crate::open_repository(&repository_path, bare, false)
+                .context("could not reopen repository after time-travel")?;
             println!(
                 "{}",
-                notice.unwrap_or_else(|| format!("already at {}", selected.to_hex_with_len(7)))
+                super::notice_with_change_id(
+                    &repository,
+                    &notice.unwrap_or_else(|| format!("already at {}", selected.to_hex_with_len(7))),
+                    selected,
+                )?
             );
-            super::print_ref_rewrites(&ref_rewrites);
+            super::print_ref_rewrites(&repository, &ref_rewrites)?;
         }
         crate::edit::time_travel::Perform::Conflict(conflict) if args.materialize_conflicts => {
             let (notice, _, ref_rewrites) = conflict.accept()?;
-            super::print_ref_rewrites(&ref_rewrites);
+            let repository = crate::open_repository(&repository_path, bare, false)
+                .context("could not reopen repository after materializing time-travel")?;
+            super::print_ref_rewrites(&repository, &ref_rewrites)?;
             anyhow::bail!("{notice}");
         }
         crate::edit::time_travel::Perform::Conflict(_) => {
