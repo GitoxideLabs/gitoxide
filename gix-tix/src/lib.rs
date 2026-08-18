@@ -4092,7 +4092,7 @@ fn split_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before splitting HEAD")?;
     repository.object_cache_size(None);
-    let prepared = edit::split::prepare(repository)?;
+    let prepared = edit::split::prepare(repository, false)?;
     let Some(edited) = edit::edit_document(
         terminal,
         &prepared.editor,

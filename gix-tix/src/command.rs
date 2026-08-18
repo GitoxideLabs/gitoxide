@@ -42,7 +42,7 @@ enum Command {
     /// Move the changes introduced by HEAD into the worktree.
     Spill,
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
-    Split,
+    Split(Split),
     /// Save index and worktree changes at HEAD.
     Stash,
     /// Pin one or more commits as persistent history tips.
@@ -92,6 +92,13 @@ struct Amend {
     /// Amend only staged index changes, without falling back to worktree changes.
     #[arg(long)]
     index: bool,
+}
+
+#[derive(Debug, clap::Args)]
+struct Split {
+    /// Mark the new upper commit as TODO.
+    #[arg(long)]
+    todo: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -164,9 +171,9 @@ impl Platform {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
                 edit_head(repository, &graph, crate::edit::head::Kind::Spill, "spill")?;
             }
-            Command::Split => {
+            Command::Split(args) => {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
-                split(repository, &graph)?;
+                split(repository, &graph, args)?;
             }
             Command::Stash => {
                 let id = repository
@@ -480,10 +487,10 @@ fn edit_head(
     Ok(())
 }
 
-fn split(repository: gix::Repository, graph: &crate::history::HistoryGraph) -> Result<()> {
+fn split(repository: gix::Repository, graph: &crate::history::HistoryGraph, args: Split) -> Result<()> {
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
-    let prepared = crate::edit::split::prepare(repository)?;
+    let prepared = crate::edit::split::prepare(repository, args.todo)?;
     let Some(edited) = crate::edit::edit_document_without_terminal(
         &prepared.editor,
         &prepared.document,
@@ -672,7 +679,14 @@ mod tests {
                 .expect("split parses")
                 .platform
                 .command,
-            Some(Command::Split)
+            Some(Command::Split(Split { todo: false }))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["tix", "split", "--todo"])
+                .expect("TODO split parses")
+                .platform
+                .command,
+            Some(Command::Split(Split { todo: true }))
         ));
         assert!(matches!(
             Cli::try_parse_from(["tix", "stash"])
@@ -740,6 +754,7 @@ mod tests {
             "new",
             "--index",
             "--allow-empty",
+            "--todo",
             "--author",
             "Agent <agent@example.com>",
             "-m",
@@ -755,6 +770,7 @@ mod tests {
         assert!(!new.worktree);
         assert!(!new.worktree_untracked);
         assert!(new.allow_empty);
+        assert!(new.todo);
         assert_eq!(new.edit.message, ["title"]);
         assert!(Cli::try_parse_from(["tix", "new", "--index", "--worktree", "-m", "title"]).is_err());
         assert!(Cli::try_parse_from(["tix", "new", "--index", "--worktree-untracked", "-m", "title"]).is_err());
@@ -1097,13 +1113,34 @@ mod tests {
         let repository =
             crate::test_repository::open_with(fixture.path(), ["core.editor=sed -i.bak -e 's/^what$/split/'"])?;
         let graph = crate::edit::loaded_view_graph(&repository)?;
-        split(repository, &graph)?;
+        let original = repository.head_id()?.detach();
+        crate::enrich::set_note(&repository, original, Some(b"source marker"))?;
+        split(repository, &graph, Split { todo: true })?;
 
         assert_eq!(git(fixture.path(), &["log", "-1", "--format=%s"])?, b"split\n");
         assert_eq!(git(fixture.path(), &["show", "HEAD^:unstaged"])?, b"worktree\n");
         assert_eq!(git(fixture.path(), &["show", "HEAD:staged"])?, b"staged\n");
         assert!(git(fixture.path(), &["diff", "--exit-code"])?.is_empty());
         assert!(git(fixture.path(), &["diff", "--cached", "--exit-code"])?.is_empty());
+        let repository = crate::test_repository::open(fixture.path())?;
+        let upper = repository.head_id()?.detach();
+        let lower = repository
+            .find_commit(upper)?
+            .parent_ids()
+            .next()
+            .expect("split has a lower commit")
+            .detach();
+        let mut enrichments = crate::enrich::open(&repository)?;
+        assert_eq!(
+            crate::enrich::load(&mut enrichments, crate::change_id::for_commit(&repository, upper)?)?,
+            crate::enrich::Enrichment { todo: true, note: None },
+            "--todo marks only the new upper commit"
+        );
+        assert_eq!(
+            crate::enrich::load(&mut enrichments, crate::change_id::for_commit(&repository, lower)?)?.note,
+            Some("source marker".into()),
+            "the original enrichment remains with the rewritten lower identity"
+        );
         Ok(())
     }
 }

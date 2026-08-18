@@ -30,12 +30,12 @@ pub(crate) enum Source {
 
 #[tracing::instrument(skip_all, fields(parent = ?parent))]
 pub(crate) fn prepare(repo: gix::Repository, parent: Option<ObjectId>) -> Result<Prepared> {
-    prepare_inner(repo, parent, false, Source::Default, None)
+    prepare_inner(repo, parent, false, Source::Default, None, false)
 }
 
 #[tracing::instrument(skip_all, fields(parent = ?parent))]
 pub(crate) fn prepare_empty(repo: gix::Repository, parent: Option<ObjectId>) -> Result<Prepared> {
-    prepare_inner(repo, parent, true, Source::Default, None)
+    prepare_inner(repo, parent, true, Source::Default, None, false)
 }
 
 pub(crate) fn prepare_from(
@@ -43,8 +43,9 @@ pub(crate) fn prepare_from(
     parent: Option<ObjectId>,
     source: Source,
     author: Option<&gix::bstr::BStr>,
+    todo: bool,
 ) -> Result<Prepared> {
-    prepare_inner(repo, parent, false, source, author)
+    prepare_inner(repo, parent, false, source, author, todo)
 }
 
 fn prepare_inner(
@@ -53,6 +54,7 @@ fn prepare_inner(
     empty: bool,
     source: Source,
     author_override: Option<&gix::bstr::BStr>,
+    todo: bool,
 ) -> Result<Prepared> {
     repo.workdir().context("creating a commit requires a worktree")?;
     let head = repo.head().context("could not read HEAD before creating a commit")?;
@@ -130,7 +132,10 @@ fn prepare_inner(
         &mut document,
         &author,
         &committer,
-        &crate::enrich::Enrichment::default(),
+        &crate::enrich::Enrichment {
+            todo,
+            ..Default::default()
+        },
     )?;
     document.extend_from_slice(b"\nwhat\n\nwhy\n");
     for trailer in reword::missing_agent_trailers(b"what\n\nwhy\n").into_iter().flatten() {
