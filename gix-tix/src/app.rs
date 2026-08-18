@@ -683,6 +683,7 @@ impl App {
         self.duplicate_change_ids = duplicates;
     }
 
+    #[cfg(test)]
     fn clear_change_ids(&mut self) {
         self.change_ids.clear();
         self.duplicate_change_ids.clear();
@@ -1642,7 +1643,6 @@ impl App {
         select_top: bool,
     ) -> Option<Vec<SharedCommitRow>> {
         self.forget_confirmation = None;
-        self.clear_change_ids();
         drop(self.store_commits(commits));
 
         let visible = self.reachable_from(view_tips);
@@ -2999,6 +2999,29 @@ mod tests {
                 .iter()
                 .all(|row| Arc::ptr_eq(row, app.all_rows.get(&row.id).expect("visible rows remain cached"))),
             "the active projection shares its immutable rows with the append-only cache"
+        );
+    }
+
+    #[test]
+    fn refresh_keeps_change_ids_until_the_replacement_projection_is_ready() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+        let change_id = ChangeId::from(id(9));
+        app.set_change_ids(HashMap::from([(id(2), change_id)]), HashSet::from([id(1), id(2)]));
+
+        let _rows = app
+            .start_refresh(vec![row_with_parents(3, &[2])].into(), &[id(3)], &[], false)
+            .expect("the refresh starts lane computation");
+
+        assert_eq!(
+            app.change_id(id(2)),
+            change_id,
+            "the current frame retains its change ID during refresh"
+        );
+        assert!(
+            app.has_duplicate_change_id(id(1)) && app.has_duplicate_change_id(id(2)),
+            "the duplicate gutter remains stable until rows and IDs are replaced together"
         );
     }
 
