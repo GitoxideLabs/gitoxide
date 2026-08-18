@@ -6710,7 +6710,7 @@ mod tests {
                 .get(app.selected.expect("the conflict is selected"))
                 .map(|row| row.id),
             Some(conflict.commit()),
-            "the displayed red-C row is the prepared result, not its original source"
+            "the displayed conflict row is the prepared result, not its original source"
         );
         Ok(())
     }
