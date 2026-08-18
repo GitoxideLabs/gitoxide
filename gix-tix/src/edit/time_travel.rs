@@ -30,6 +30,19 @@ pub(crate) enum Perform {
     Conflict(Conflict),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TravelMode {
+    Detached,
+    Attached,
+}
+
+#[derive(Clone, Debug)]
+struct AttachedTravel {
+    branch: gix::refs::FullName,
+    branch_tip: ObjectId,
+    head: ObjectId,
+}
+
 impl Perform {
     #[cfg(test)]
     pub(crate) fn complete(self) -> Result<Option<String>> {
@@ -47,6 +60,7 @@ pub(crate) struct Conflict {
     revisions: Vec<OsString>,
     include_worktrees: bool,
     ref_rewrites: Vec<super::rebase::RefRewrite>,
+    attached: Option<AttachedTravel>,
 }
 
 impl Conflict {
@@ -56,18 +70,41 @@ impl Conflict {
 
     #[tracing::instrument(skip_all, fields(commit_id = %self.rebase.original()))]
     pub(crate) fn accept(self) -> Result<(String, ObjectId, Vec<super::rebase::RefRewrite>)> {
+        if let Some(attached) = self.attached.as_ref() {
+            let repository = open_repository(&self.repository_path, self.bare, false)
+                .context("could not reopen repository before accepting attached time-travel")?;
+            validate_attached_travel(&repository, attached)?;
+        }
         let mut conflict = self.rebase.persist()?;
         let mut ref_rewrites = self.ref_rewrites;
         ref_rewrites.append(&mut conflict.ref_rewrites);
-        let notice = move_head_to(
-            &self.repository_path,
-            self.bare,
-            conflict.commit,
-            None,
-            &self.revisions,
-            self.include_worktrees,
-            |id| conflict.map(id),
-        )?
+        let notice = match self.attached {
+            Some(mut attached) => {
+                attached.head = conflict
+                    .map(attached.head)
+                    .context("HEAD disappeared while preparing the time-travel conflict")?;
+                attached.branch_tip = conflict
+                    .map(attached.branch_tip)
+                    .context("the worktree branch disappeared while preparing the time-travel conflict")?;
+                move_attached_head_to(
+                    &self.repository_path,
+                    self.bare,
+                    conflict.commit,
+                    attached,
+                    &self.revisions,
+                    self.include_worktrees,
+                )?
+            }
+            None => move_head_to(
+                &self.repository_path,
+                self.bare,
+                conflict.commit,
+                None,
+                &self.revisions,
+                self.include_worktrees,
+                |id| conflict.map(id),
+            )?,
+        }
         .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
         delete_deferred_refs(&self.repository_path, self.bare, &conflict.deferred_ref_deletions)?;
         conflict.materialize()?;
@@ -312,6 +349,326 @@ where
     Ok(Some(notice))
 }
 
+fn resolve_attached_travel(
+    repository: &gix::Repository,
+    head_reference: Option<gix::refs::FullName>,
+    head: ObjectId,
+) -> Result<AttachedTravel> {
+    match head_reference {
+        Some(branch) => {
+            if !branch.as_bstr().starts_with(b"refs/heads/") {
+                anyhow::bail!("attached time-travel requires HEAD to point to a local branch");
+            }
+            Ok(AttachedTravel {
+                branch,
+                branch_tip: head,
+                head,
+            })
+        }
+        None => {
+            let pin = history::all_pins(repository)?
+                .into_iter()
+                .find(history::Pin::is_head)
+                .context("attached time-travel from detached HEAD requires a valid HEAD pin")?;
+            let branch = pin
+                .target
+                .try_name()
+                .context("the HEAD pin must point to a local branch")?
+                .to_owned();
+            if !branch.as_bstr().starts_with(b"refs/heads/") {
+                anyhow::bail!("the HEAD pin must point to a local branch");
+            }
+            Ok(AttachedTravel {
+                branch,
+                branch_tip: pin.id,
+                head,
+            })
+        }
+    }
+}
+
+fn validate_attached_travel(repository: &gix::Repository, attached: &AttachedTravel) -> Result<bool> {
+    if !attached.branch.as_bstr().starts_with(b"refs/heads/") {
+        anyhow::bail!("attached time-travel requires a local branch");
+    }
+    let head = repository
+        .head()
+        .context("could not read HEAD before attached time-travel")?;
+    let head_id = head
+        .id()
+        .map(gix::Id::detach)
+        .context("cannot time-travel from an unborn HEAD")?;
+    if head_id != attached.head {
+        anyhow::bail!("HEAD changed while preparing attached time-travel");
+    }
+    let head_reference = head.referent_name().map(ToOwned::to_owned);
+    drop(head);
+    let head_is_detached = match head_reference {
+        Some(reference) if reference == attached.branch => false,
+        Some(reference) => anyhow::bail!(
+            "HEAD changed from {} to {} while preparing attached time-travel",
+            attached.branch.shorten(),
+            reference.shorten()
+        ),
+        None => {
+            let pin = history::all_pins(repository)?
+                .into_iter()
+                .find(history::Pin::is_head)
+                .context("the HEAD pin disappeared while preparing attached time-travel")?;
+            if pin.target.try_name() != Some(attached.branch.as_ref()) || pin.id != attached.branch_tip {
+                anyhow::bail!("the HEAD pin changed while preparing attached time-travel");
+            }
+            true
+        }
+    };
+    let branch_id = repository
+        .find_reference(attached.branch.as_ref())
+        .context("the worktree branch disappeared while preparing attached time-travel")?
+        .try_id()
+        .context("the worktree branch must be a direct reference")?
+        .detach();
+    if branch_id != attached.branch_tip {
+        anyhow::bail!("the worktree branch changed while preparing attached time-travel");
+    }
+    ensure_branch_is_available(repository, attached.branch.as_ref())?;
+    Ok(head_is_detached)
+}
+
+fn move_attached_head_to(
+    repository_path: &Path,
+    bare: bool,
+    selected: ObjectId,
+    attached: AttachedTravel,
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<Option<String>> {
+    let repository = open_repository(repository_path, bare, false)
+        .context("could not open repository for attached time-travel checkout")?;
+    let workdir = repository
+        .workdir()
+        .context("time-travel requires a worktree")?
+        .to_owned();
+    let head_is_detached = validate_attached_travel(&repository, &attached)?;
+    if !head_is_detached && selected == attached.head {
+        return Ok(None);
+    }
+
+    let destination_pin = selected_pin(&repository, selected)?;
+    let old_tree = repository
+        .find_commit(attached.head)
+        .context("could not find the attached time-travel departure")?
+        .tree_id()
+        .context("could not read the attached time-travel departure tree")?
+        .detach();
+    let new_tree = repository
+        .find_commit(selected)
+        .context("could not find the attached time-travel destination")?
+        .tree_id()
+        .context("could not read the attached time-travel destination tree")?
+        .detach();
+    if old_tree != new_tree {
+        super::forget::preflight_tree_transition(&repository, &workdir, old_tree, new_tree)
+            .context("local changes conflict with attached time-travel")?;
+    }
+
+    let mut provisional = Vec::new();
+    for departure in [attached.head, attached.branch_tip] {
+        if departure == selected
+            || provisional
+                .iter()
+                .any(|(pin, _): &(history::Pin, bool)| pin.id == departure)
+            || contains(&repository, departure, selected)
+        {
+            continue;
+        }
+        match create_or_reuse_pin(
+            &repository,
+            Target::Object(departure),
+            departure,
+            "tix attached time-travel",
+        ) {
+            Ok(pin) => provisional.push(pin),
+            Err(err) => {
+                return Err(cleanup_new_pins(&repository, &provisional, err));
+            }
+        }
+    }
+
+    let mut forward = Vec::new();
+    let mut rollback = Vec::new();
+    if attached.branch_tip != selected {
+        forward.push(attached_ref_edit(
+            attached.branch.clone(),
+            Target::Object(attached.branch_tip),
+            Target::Object(selected),
+        ));
+        rollback.push(attached_ref_edit(
+            attached.branch.clone(),
+            Target::Object(selected),
+            Target::Object(attached.branch_tip),
+        ));
+    }
+    if head_is_detached {
+        let head: gix::refs::FullName = "HEAD".try_into().expect("valid reference name");
+        forward.push(attached_ref_edit(
+            head.clone(),
+            Target::Object(attached.head),
+            Target::Symbolic(attached.branch.clone()),
+        ));
+        rollback.push(attached_ref_edit(
+            head,
+            Target::Symbolic(attached.branch.clone()),
+            Target::Object(attached.head),
+        ));
+    }
+    if let Err(err) = repository
+        .edit_references(forward)
+        .context("could not move the worktree branch for attached time-travel")
+    {
+        return Err(cleanup_new_pins(&repository, &provisional, err));
+    }
+    if old_tree != new_tree
+        && let Err(err) = super::forget::apply_tree_transition(&workdir, old_tree, new_tree)
+            .context("could not update the worktree for attached time-travel")
+    {
+        if let Err(rollback_err) = repository
+            .edit_references(rollback)
+            .context("could not roll back attached time-travel references")
+        {
+            return Err(err.context(format!(
+                "reference rollback failed: {rollback_err:#}; provisional pins retained"
+            )));
+        }
+        return Err(cleanup_new_pins(&repository, &provisional, err));
+    }
+
+    let mut notice = if attached.branch_tip == selected {
+        format!("reattached HEAD to {}", attached.branch.shorten())
+    } else {
+        format!("moved {} to {}", attached.branch.shorten(), selected.to_hex_with_len(7))
+    };
+    if let Some(pin) = destination_pin
+        && let Err(err) = delete_pin(&repository, &pin)
+    {
+        notice = format!("{notice}; destination pin remains: {err:#}");
+    }
+    match reconcile_head_pin(&repository, &workdir) {
+        Ok(Some(addition)) => notice = format!("{notice}; {addition}"),
+        Ok(None) => {}
+        Err(err) => notice = format!("{notice}; HEAD pin reconciliation failed: {err:#}"),
+    }
+    for (pin, _) in provisional {
+        let snapshot = match history::snapshot_ignoring_pin(
+            &repository,
+            revisions,
+            &[],
+            include_worktrees,
+            Some(pin.name.as_bstr()),
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                notice = format!(
+                    "{notice}; kept {} because reachability could not be checked: {err:#}",
+                    pin_label(&pin)
+                );
+                continue;
+            }
+        };
+        if snapshot
+            .view_tips
+            .iter()
+            .copied()
+            .any(|tip| contains(&repository, pin.id, tip))
+        {
+            if let Err(err) = delete_pin(&repository, &pin) {
+                notice = format!("{notice}; redundant {} remains: {err:#}", pin_label(&pin));
+            }
+        } else {
+            notice = format!("{notice}; saved {}", pin_label(&pin));
+        }
+    }
+    Ok(Some(notice))
+}
+
+fn attached_ref_edit(name: gix::refs::FullName, old: Target, new: Target) -> RefEdit {
+    RefEdit {
+        name,
+        deref: false,
+        change: Change::Update {
+            log: LogChange {
+                mode: RefLog::AndReference,
+                force_create_reflog: false,
+                message: "tix attached time-travel".into(),
+            },
+            expected: PreviousValue::MustExistAndMatch(old),
+            new,
+        },
+    }
+}
+
+fn cleanup_new_pins(
+    repository: &gix::Repository,
+    pins: &[(history::Pin, bool)],
+    mut cause: anyhow::Error,
+) -> anyhow::Error {
+    let edits: Vec<_> = pins
+        .iter()
+        .filter(|(_, created)| *created)
+        .map(|(pin, _)| delete_pin_edit(pin))
+        .collect();
+    if !edits.is_empty()
+        && let Err(err) = repository
+            .edit_references(edits)
+            .context("could not remove provisional attached time-travel pins")
+    {
+        cause = cause.context(format!("provisional pin cleanup failed: {err:#}"));
+    }
+    cause
+}
+
+fn ensure_branch_is_available(repository: &gix::Repository, branch: &gix::refs::FullNameRef) -> Result<()> {
+    let current = repository
+        .worktree()
+        .context("attached time-travel requires a current worktree")?;
+    let current_id = current.id().map(ToOwned::to_owned);
+    if current_id.is_some() {
+        ensure_worktree_does_not_own_branch(
+            repository
+                .main_repo()
+                .context("could not open the main worktree while checking the attached branch")?,
+            branch,
+        )?;
+    }
+    for proxy in repository
+        .worktrees()
+        .context("could not enumerate worktrees while checking the attached branch")?
+    {
+        if current_id
+            .as_ref()
+            .is_some_and(|current| current.as_slice() == proxy.id().as_bytes())
+        {
+            continue;
+        }
+        ensure_worktree_does_not_own_branch(
+            proxy
+                .into_repo_with_possibly_inaccessible_worktree()
+                .context("could not inspect a linked worktree while checking the attached branch")?,
+            branch,
+        )?;
+    }
+    Ok(())
+}
+
+fn ensure_worktree_does_not_own_branch(worktree: gix::Repository, branch: &gix::refs::FullNameRef) -> Result<()> {
+    let head = worktree
+        .head()
+        .context("could not inspect another worktree HEAD while checking the attached branch")?;
+    if head.referent_name() == Some(branch) {
+        anyhow::bail!("{} is checked out in another worktree", branch.shorten());
+    }
+    Ok(())
+}
+
 pub(crate) fn perform(
     repository_path: &Path,
     bare: bool,
@@ -329,6 +686,7 @@ pub(crate) fn perform(
         review_roots,
         revisions,
         include_worktrees,
+        TravelMode::Detached,
         |_| {},
     )
 }
@@ -346,6 +704,7 @@ pub(crate) fn perform_reporting_rebased(
     review_roots: &[ObjectId],
     revisions: &[OsString],
     include_worktrees: bool,
+    mode: TravelMode,
     mut report: impl FnMut(ObjectId),
 ) -> Result<Perform> {
     let mut repository =
@@ -356,7 +715,18 @@ pub(crate) fn perform_reporting_rebased(
         anyhow::bail!("cannot time-travel from an unborn HEAD");
     };
     let head_was_detached = head.is_detached();
+    let mut attached = match mode {
+        TravelMode::Detached => None,
+        TravelMode::Attached => Some(resolve_attached_travel(
+            &repository,
+            head.referent_name().map(ToOwned::to_owned),
+            head_id,
+        )?),
+    };
     drop(head);
+    if let Some(attached) = attached.as_ref() {
+        validate_attached_travel(&repository, attached)?;
+    }
     if repository
         .index_or_empty()
         .context("could not inspect the index before time-travel")?
@@ -397,6 +767,7 @@ pub(crate) fn perform_reporting_rebased(
                     revisions: revisions.to_vec(),
                     include_worktrees,
                     ref_rewrites,
+                    attached,
                 }));
             }
         };
@@ -412,6 +783,14 @@ pub(crate) fn perform_reporting_rebased(
         head_id = outcome
             .map(head_id)
             .context("HEAD disappeared while completing its rebase")?;
+        if let Some(attached) = &mut attached {
+            attached.head = outcome
+                .map(attached.head)
+                .context("HEAD disappeared while completing its attached time-travel rebase")?;
+            attached.branch_tip = outcome
+                .map(attached.branch_tip)
+                .context("the worktree branch disappeared while completing its rebase")?;
+        }
         review_roots = review_roots.into_iter().filter_map(|id| outcome.map(id)).collect();
         repository = open_repository(repository_path, bare, false)
             .context("could not reopen repository after completing a pending rebase")?;
@@ -437,17 +816,22 @@ pub(crate) fn perform_reporting_rebased(
     } else {
         None
     };
-    let moved = move_head_to(
-        repository_path,
-        bare,
-        selected,
-        None,
-        revisions,
-        include_worktrees,
-        |actual| {
-            if head_was_detached { Some(head_id) } else { Some(actual) }
-        },
-    );
+    let moved = match attached {
+        Some(attached) => {
+            move_attached_head_to(repository_path, bare, selected, attached, revisions, include_worktrees)
+        }
+        None => move_head_to(
+            repository_path,
+            bare,
+            selected,
+            None,
+            revisions,
+            include_worktrees,
+            |actual| {
+                if head_was_detached { Some(head_id) } else { Some(actual) }
+            },
+        ),
+    };
     let mut notice = match moved {
         Ok(notice) => notice,
         Err(err) => {
@@ -970,6 +1354,47 @@ mod tests {
         graph.context("history traversal did not produce a graph")
     }
 
+    fn pending_conflict_fixture() -> gix_testtools::Result<(
+        gix_testtools::tempfile::TempDir,
+        PathBuf,
+        ObjectId,
+        ObjectId,
+        history::HistoryGraph,
+    )> {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        git(
+            fixture.path(),
+            &["config", "gitoxide.commit.committerDate", "2001-01-01T00:00:00 +0000"],
+        )?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        std::fs::write(fixture.path().join("after"), "after\n")?;
+        git(fixture.path(), &["add", "after"])?;
+        let commit = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["commit", "-q", "-m", "after"])
+            .env("GIT_AUTHOR_DATE", "2000-01-04T00:00:00 +0000")
+            .env("GIT_COMMITTER_DATE", "2000-01-04T00:00:00 +0000")
+            .status()?;
+        assert!(commit.success(), "the fixture descendant commit is created");
+        let graph = super::super::loaded_graph(&repository)?;
+        super::super::rebase::perform(
+            &repository,
+            &graph,
+            super::super::rebase::Edit::Remove { target: middle },
+            super::super::rebase::Signature::RedoIfNeeded,
+            super::super::rebase::Tree::LeaveAsIsAndMark,
+        )?
+        .complete()?;
+        let graph = super::super::loaded_graph(&repository)?;
+        let root = repository.rev_parse_single("HEAD~2")?.detach();
+        let tip = repository.find_reference("refs/heads/main")?.id().detach();
+        drop(repository);
+        Ok((fixture, repository_path, root, tip, graph))
+    }
+
     #[test]
     fn review_state_is_stashed_only_when_crossing_its_tree_boundary() -> gix_testtools::Result {
         let fixture = gix_testtools::tempfile::tempdir()?;
@@ -1263,6 +1688,388 @@ mod tests {
     }
 
     #[test]
+    fn attached_travel_moves_the_branch_and_preserves_its_departure() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let root = repository.rev_parse_single("main~2")?.detach();
+        let main = repository.rev_parse_single("main")?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        create_pin(&repository, Target::Object(root), root, "test attached destination")?;
+        drop(repository);
+
+        let notice = perform_reporting_rebased(
+            &repository_path,
+            false,
+            root,
+            &graph,
+            &[],
+            &[],
+            false,
+            TravelMode::Attached,
+            |_| {},
+        )?
+        .complete()?
+        .context("attached travel changes the branch")?;
+        assert!(notice.contains("moved main"), "{notice}");
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
+            Some(b"refs/heads/main".into()),
+            "attached travel keeps HEAD on its local branch"
+        );
+        assert_eq!(
+            repository.find_reference("refs/heads/main")?.id().detach(),
+            root,
+            "attached travel moves the worktree branch to the selected commit"
+        );
+        let pins = history::all_pins(&repository)?;
+        assert_eq!(
+            pins.len(),
+            1,
+            "the destination pin is consumed and the departure is retained"
+        );
+        assert_eq!(pins[0].id, main, "the old branch tip remains reachable");
+        assert!(
+            pins[0].target.try_name().is_none(),
+            "a moved branch tip needs a direct pin which does not follow the branch"
+        );
+        assert!(
+            fixture.path().join("root").is_file(),
+            "the destination tree is checked out"
+        );
+        assert!(
+            !fixture.path().join("main").exists(),
+            "files beyond the destination are removed"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn attached_travel_from_detached_head_retains_only_the_outer_departure() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let root = repository.rev_parse_single("main~2")?.detach();
+        let middle = repository.rev_parse_single("main~1")?.detach();
+        let main = repository.rev_parse_single("main")?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        drop(repository);
+
+        perform(&repository_path, false, middle, &graph, &[], &[], false)?.complete()?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert!(repository.head()?.is_detached(), "ordinary travel detaches HEAD first");
+        assert!(
+            history::all_pins(&repository)?.iter().any(history::Pin::is_head),
+            "ordinary travel remembers the worktree branch"
+        );
+        drop(repository);
+
+        perform_reporting_rebased(
+            &repository_path,
+            false,
+            root,
+            &graph,
+            &[],
+            &[],
+            false,
+            TravelMode::Attached,
+            |_| {},
+        )?
+        .complete()?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
+            Some(b"refs/heads/main".into()),
+            "attached travel reattaches the remembered branch"
+        );
+        assert_eq!(
+            repository.head_id()?.detach(),
+            root,
+            "HEAD lands at the selected commit"
+        );
+        let pins = history::all_pins(&repository)?;
+        assert_eq!(
+            pins.len(),
+            1,
+            "the old branch tip makes its ancestor departure redundant"
+        );
+        assert_eq!(pins[0].id, main, "the moved branch tip remains pinned directly");
+        assert!(
+            pins.iter().all(|pin| !pin.is_head() && pin.id != middle),
+            "the HEAD pin is consumed and the inner detached departure is removed"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn attached_travel_rejects_a_branch_owned_by_another_worktree() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let root = repository.rev_parse_single("main~2")?.detach();
+        let middle = repository.rev_parse_single("main~1")?.detach();
+        let main = repository.rev_parse_single("main")?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        drop(repository);
+
+        perform(&repository_path, false, middle, &graph, &[], &[], false)?.complete()?;
+        let linked = fixture.path().join("main-wt");
+        let worktree = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["worktree", "add", "-q"])
+            .arg(&linked)
+            .arg("main")
+            .status()?;
+        assert!(worktree.success(), "the remembered branch moves to another worktree");
+
+        let err = perform_reporting_rebased(
+            &repository_path,
+            false,
+            root,
+            &graph,
+            &[],
+            &[],
+            false,
+            TravelMode::Attached,
+            |_| {},
+        )
+        .and_then(Perform::complete)
+        .expect_err("a branch cannot become attached in two worktrees");
+        assert!(
+            format!("{err:#}").contains("checked out in another worktree"),
+            "{err:#}"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert!(
+            repository.head()?.is_detached(),
+            "failed attached travel retains detached HEAD"
+        );
+        assert_eq!(
+            repository.head_id()?.detach(),
+            middle,
+            "failed travel retains its departure"
+        );
+        assert_eq!(
+            repository.find_reference("refs/heads/main")?.id().detach(),
+            main,
+            "the other worktree's branch is not moved"
+        );
+        let pins = history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 1, "failure creates no provisional pins");
+        assert!(pins[0].is_head(), "the remembered branch remains available");
+        Ok(())
+    }
+
+    #[test]
+    fn attached_travel_accepts_the_branch_of_the_current_linked_worktree() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let linked = fixture.path().join("topic-wt");
+        let worktree = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["worktree", "add", "-q"])
+            .arg(&linked)
+            .arg("topic")
+            .status()?;
+        assert!(worktree.success(), "the linked worktree checks out topic");
+        let git_dir = crate::test_repository::open(&linked)?.git_dir().to_owned();
+        let repository = open_repository(&git_dir, false, false)?;
+        let branch = repository.find_reference("refs/heads/topic")?.name().to_owned();
+        let root = repository.rev_parse_single("topic~1")?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        drop(repository);
+
+        perform(&git_dir, false, root, &graph, &[], &[], false)?.complete()?;
+        let repository = open_repository(&git_dir, false, false)?;
+        assert!(
+            repository.head()?.is_detached(),
+            "ordinary travel detaches the linked worktree"
+        );
+        assert!(
+            history::all_pins(&repository)?.iter().any(history::Pin::is_head),
+            "ordinary travel remembers the linked worktree branch"
+        );
+        drop(repository);
+
+        perform_reporting_rebased(
+            &git_dir,
+            false,
+            root,
+            &graph,
+            &[],
+            &[],
+            false,
+            TravelMode::Attached,
+            |_| {},
+        )?
+        .complete()?;
+        let repository = open_repository(&git_dir, false, false)?;
+        assert_eq!(
+            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
+            Some(branch.as_bstr().to_owned()),
+            "attached travel reattaches the current linked worktree branch"
+        );
+        assert_eq!(
+            repository.find_reference(branch.as_ref())?.id().detach(),
+            root,
+            "attached travel moves the linked worktree branch"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_attached_ref_update_restores_only_new_departure_pins() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let root = repository.rev_parse_single("main~2")?.detach();
+        let middle = repository.rev_parse_single("main~1")?.detach();
+        let main = repository.rev_parse_single("main")?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        drop(repository);
+
+        perform(&repository_path, false, middle, &graph, &[], &[], false)?.complete()?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        create_pin(&repository, Target::Object(root), root, "test attached destination")?;
+        let index_before = std::fs::read(repository.index_path())?;
+        let snapshot_before = gix_testtools::repository::snapshot(fixture.path())?;
+        let branch_lock = repository.git_dir().join("refs/heads/main.lock");
+        std::fs::write(&branch_lock, b"locked")?;
+        drop(repository);
+
+        let err = perform_reporting_rebased(
+            &repository_path,
+            false,
+            root,
+            &graph,
+            &[],
+            &[],
+            false,
+            TravelMode::Attached,
+            |_| {},
+        )
+        .and_then(Perform::complete)
+        .expect_err("the branch lock rejects the attached ref transaction");
+        std::fs::remove_file(branch_lock)?;
+        assert!(
+            format!("{err:#}").contains("could not move the worktree branch"),
+            "{err:#}"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            snapshot_before,
+            "a failed ref transaction leaves repository references and the worktree unchanged"
+        );
+        assert_eq!(
+            std::fs::read(repository.index_path())?,
+            index_before,
+            "a failed ref transaction leaves the index unchanged"
+        );
+        assert!(
+            repository.head()?.is_detached(),
+            "failed attached travel retains detached HEAD"
+        );
+        assert_eq!(
+            repository.head_id()?.detach(),
+            middle,
+            "failed travel retains its departure"
+        );
+        assert_eq!(
+            repository.find_reference("refs/heads/main")?.id().detach(),
+            main,
+            "the locked branch remains unchanged"
+        );
+        let pins = history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 2, "only the HEAD and destination pins remain");
+        assert!(pins.iter().any(history::Pin::is_head), "the HEAD pin survives failure");
+        assert!(
+            pins.iter().any(|pin| !pin.is_head() && pin.id == root),
+            "the destination pin survives failure"
+        );
+        assert!(
+            pins.iter()
+                .all(|pin| pin.is_head() || pin.id != middle && pin.id != main),
+            "new direct departure pins are cleaned up"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_attached_worktree_update_rolls_back_refs_and_new_pins() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let root = repository.rev_parse_single("main~2")?.detach();
+        let middle = repository.rev_parse_single("main~1")?.detach();
+        let main = repository.rev_parse_single("main")?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        drop(repository);
+
+        perform(&repository_path, false, middle, &graph, &[], &[], false)?.complete()?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        create_pin(&repository, Target::Object(root), root, "test attached destination")?;
+        let index_before = std::fs::read(repository.index_path())?;
+        let snapshot_before = gix_testtools::repository::snapshot(fixture.path())?;
+        let index_lock = repository.index_path().with_file_name("index.lock");
+        std::fs::write(&index_lock, b"locked")?;
+        drop(repository);
+
+        let err = perform_reporting_rebased(
+            &repository_path,
+            false,
+            root,
+            &graph,
+            &[],
+            &[],
+            false,
+            TravelMode::Attached,
+            |_| {},
+        )
+        .and_then(Perform::complete)
+        .expect_err("the index lock rejects the worktree transition after refs move");
+        std::fs::remove_file(index_lock)?;
+        assert!(format!("{err:#}").contains("could not update the worktree"), "{err:#}");
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            snapshot_before,
+            "a failed worktree transition rolls HEAD, the branch, and worktree back"
+        );
+        assert_eq!(
+            std::fs::read(repository.index_path())?,
+            index_before,
+            "a failed worktree transition leaves the index unchanged"
+        );
+        assert!(repository.head()?.is_detached(), "rollback restores detached HEAD");
+        assert_eq!(
+            repository.head_id()?.detach(),
+            middle,
+            "rollback restores HEAD's commit"
+        );
+        assert_eq!(
+            repository.find_reference("refs/heads/main")?.id().detach(),
+            main,
+            "rollback restores the remembered branch"
+        );
+        let pins = history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 2, "only the pre-existing HEAD and destination pins remain");
+        assert!(pins.iter().any(history::Pin::is_head), "the HEAD pin survives rollback");
+        assert!(
+            pins.iter().any(|pin| !pin.is_head() && pin.id == root),
+            "the destination pin survives rollback"
+        );
+        assert!(
+            pins.iter()
+                .all(|pin| pin.is_head() || pin.id != middle && pin.id != main),
+            "new direct departure pins are removed after successful rollback"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn explicit_attachment_clears_the_head_pin() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -1527,51 +2334,63 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_pending_rebases_are_unobservable_until_accepted() -> gix_testtools::Result {
-        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
-        assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
-                .args(["config", "gitoxide.commit.committerDate", "2001-01-01T00:00:00 +0000",])
-                .status()?
-                .success()
-        );
-        let repository = crate::test_repository::open(fixture.path())?;
-        let repository_path = repository.git_dir().to_owned();
-        let middle = repository.rev_parse_single("HEAD~1")?.detach();
-        std::fs::write(fixture.path().join("after"), "after\n")?;
-        assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
-                .args(["add", "after"])
-                .status()?
-                .success()
-        );
-        assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
-                .args(["commit", "-q", "-m", "after"])
-                .env("GIT_AUTHOR_DATE", "2000-01-04T00:00:00 +0000")
-                .env("GIT_COMMITTER_DATE", "2000-01-04T00:00:00 +0000")
-                .status()?
-                .success()
-        );
-        let graph = super::super::loaded_graph(&repository)?;
-        super::super::rebase::perform(
-            &repository,
+    fn attached_pending_travel_checks_branch_ownership_before_replay() -> gix_testtools::Result {
+        let (fixture, repository_path, root, tip, graph) = pending_conflict_fixture()?;
+        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
+        let linked = fixture.path().join("main-wt");
+        let worktree = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["worktree", "add", "-q"])
+            .arg(&linked)
+            .arg("main")
+            .status()?;
+        assert!(worktree.success(), "another worktree checks out the pending branch");
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let linked_before = gix_testtools::repository::snapshot(&linked)?;
+
+        let err = perform_reporting_rebased(
+            &repository_path,
+            false,
+            tip,
             &graph,
-            super::super::rebase::Edit::Remove { target: middle },
-            super::super::rebase::Signature::RedoIfNeeded,
-            super::super::rebase::Tree::LeaveAsIsAndMark,
-        )?
-        .complete()?;
-        let graph = super::super::loaded_graph(&repository)?;
-        let root = repository.rev_parse_single("HEAD~2")?.detach();
-        let tip = repository.find_reference("refs/heads/main")?.id().detach();
-        drop(repository);
+            &[],
+            &[],
+            false,
+            TravelMode::Attached,
+            |_| {},
+        )
+        .and_then(Perform::complete)
+        .expect_err("another worktree must be rejected before pending commits are replayed");
+        assert!(
+            format!("{err:#}").contains("checked out in another worktree"),
+            "{err:#}"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "branch ownership rejection leaves the detached source untouched"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(&linked)?,
+            linked_before,
+            "branch ownership rejection does not replay the other worktree"
+        );
+        assert!(
+            super::super::rebase::is_pending(
+                &crate::test_repository::open(fixture.path())?
+                    .find_commit(tip)?
+                    .decode()?
+                    .into_owned()?
+            ),
+            "the pending destination remains unchanged"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn conflicting_pending_rebases_are_unobservable_until_accepted() -> gix_testtools::Result {
+        let (fixture, repository_path, root, tip, graph) = pending_conflict_fixture()?;
         perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
         let repository = crate::test_repository::open(fixture.path())?;
         let graph = super::super::loaded_graph(&repository)?;
@@ -1639,6 +2458,143 @@ mod tests {
             .and_then(Perform::complete)
             .expect_err("time-travel is disabled until the index conflict is resolved");
         assert!(format!("{err:#}").contains("unresolved index conflicts"));
+        Ok(())
+    }
+
+    #[test]
+    fn attached_travel_conflict_moves_and_keeps_the_worktree_branch() -> gix_testtools::Result {
+        let (fixture, repository_path, _root, tip, graph) = pending_conflict_fixture()?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let Perform::Conflict(conflict) = perform_reporting_rebased(
+            &repository_path,
+            false,
+            tip,
+            &graph,
+            &[],
+            &[],
+            false,
+            TravelMode::Attached,
+            |_| {},
+        )?
+        else {
+            return Err("attached travel should suspend at its conflicting cherry-pick".into());
+        };
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "preparing an attached conflict changes no repository state"
+        );
+
+        let (_notice, conflict_id, _) = conflict.accept()?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
+            Some(b"refs/heads/main".into()),
+            "materializing an attached conflict keeps HEAD on its worktree branch"
+        );
+        assert_eq!(
+            repository.find_reference("refs/heads/main")?.id().detach(),
+            conflict_id,
+            "the worktree branch moves to the conflicting destination"
+        );
+        assert!(
+            history::all_pins(&repository)?.iter().all(|pin| !pin.is_head()),
+            "an attached conflict leaves no HEAD pin"
+        );
+        assert!(
+            repository
+                .index_or_empty()?
+                .entries()
+                .iter()
+                .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted),
+            "the attached conflict materializes unresolved index stages"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn attached_conflict_rechecks_branch_ownership_before_persisting() -> gix_testtools::Result {
+        let (fixture, repository_path, root, tip, graph) = pending_conflict_fixture()?;
+        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
+        let Perform::Conflict(conflict) = perform_reporting_rebased(
+            &repository_path,
+            false,
+            tip,
+            &graph,
+            &[],
+            &[],
+            false,
+            TravelMode::Attached,
+            |_| {},
+        )?
+        else {
+            return Err("attached travel should suspend at its conflicting cherry-pick".into());
+        };
+        let linked = fixture.path().join("main-wt");
+        let worktree = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["worktree", "add", "-q"])
+            .arg(&linked)
+            .arg("main")
+            .status()?;
+        assert!(
+            worktree.success(),
+            "another worktree claims the branch before acceptance"
+        );
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let linked_before = gix_testtools::repository::snapshot(&linked)?;
+
+        let err = conflict
+            .accept()
+            .expect_err("conflict acceptance must recheck branch ownership before persisting");
+        assert!(
+            format!("{err:#}").contains("checked out in another worktree"),
+            "{err:#}"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "failed acceptance leaves the detached source untouched"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(&linked)?,
+            linked_before,
+            "failed acceptance leaves the owning worktree untouched"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn attached_conflict_rechecks_current_head_before_persisting() -> gix_testtools::Result {
+        let (fixture, repository_path, root, tip, graph) = pending_conflict_fixture()?;
+        let Perform::Conflict(conflict) = perform_reporting_rebased(
+            &repository_path,
+            false,
+            tip,
+            &graph,
+            &[],
+            &[],
+            false,
+            TravelMode::Attached,
+            |_| {},
+        )?
+        else {
+            return Err("attached travel should suspend at its conflicting cherry-pick".into());
+        };
+        git(fixture.path(), &["branch", "other", &root.to_string()])?;
+        git(fixture.path(), &["checkout", "-q", "other"])?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+
+        let err = conflict
+            .accept()
+            .expect_err("conflict acceptance must recheck HEAD before persisting");
+        assert!(format!("{err:#}").contains("HEAD changed"), "{err:#}");
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "a changed HEAD rejects the stale conflict without rewriting its former branch"
+        );
         Ok(())
     }
 
@@ -1728,9 +2684,19 @@ mod tests {
         drop(repository);
 
         let mut rebased = Vec::new();
-        perform_reporting_rebased(&repository_path, false, pending_middle, &graph, &[], &[], false, |id| {
-            rebased.push(id);
-        })?
+        perform_reporting_rebased(
+            &repository_path,
+            false,
+            pending_middle,
+            &graph,
+            &[],
+            &[],
+            false,
+            TravelMode::Detached,
+            |id| {
+                rebased.push(id);
+            },
+        )?
         .complete()?;
         assert_eq!(
             rebased,
@@ -1776,6 +2742,7 @@ mod tests {
             &[],
             &[],
             false,
+            TravelMode::Detached,
             |id| rebased.push(id),
         )?
         .complete()?;
