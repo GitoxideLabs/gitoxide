@@ -359,6 +359,7 @@ without trading responsiveness for metadata that is not visible.
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
 | `@` | Time-travel to the selected commit, or return through its tix pin. Terminals reporting the base key as `Shift-2` are also accepted. |
+| `x` | Select the next visible commit with the same change ID, wrapping at the end. |
 
 Alignment uses only rows in the current viewport to determine widths and starts
 in title mode. Horizontal navigation pans the complete padded row in title and
@@ -377,7 +378,8 @@ every applicable display option and a closing `)` so direct shortcuts remain vis
 outside the prefix. The history status starts with the history position, then the
 `v` prefix and the `e` prefix when it is addressable. Remaining history-level
 actions end at the information prefix while it is closed. An available direct
-time-travel action follows the edit group, and copy follows time travel; the reference toggle immediately precedes
+time-travel action follows the edit group, duplicate cycling follows time travel when
+the selected commit has duplicates, and copy follows these actions; the reference toggle immediately precedes
 the `?` group; quit is always last.
 All status lines embed and underline a shortcut character in its action label when
 possible; keys that cannot be expressed naturally in the label remain explicit.

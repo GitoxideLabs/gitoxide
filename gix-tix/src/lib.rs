@@ -4852,6 +4852,7 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::MoveDown
                 | Action::MoveUpBy(_)
                 | Action::MoveDownBy(_)
+                | Action::CycleDuplicate
                 | Action::ScrollLeft
                 | Action::ScrollRight
                 | Action::HalfPageUp
@@ -4911,6 +4912,7 @@ fn action_with_shortcut_groups(
         KeyCode::Esc => Some(Action::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::MoveDown),
+        KeyCode::Char('x') => Some(Action::CycleDuplicate),
         KeyCode::Char('h') if edit_expanded => Some(Action::Stash),
         KeyCode::Char('h') if history_display_expanded => Some(Action::ToggleHidden),
         KeyCode::Char('h') => Some(Action::ScrollLeft),
@@ -6161,7 +6163,10 @@ mod tests {
             action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Some(Action::ForceQuit)
         );
-        assert_eq!(action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)), None);
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            Some(Action::CycleDuplicate)
+        );
     }
 
     #[test]
@@ -6238,6 +6243,7 @@ mod tests {
     fn materialized_rebases_allow_inspection_but_block_repository_changes() {
         for action in [
             Action::MoveDown,
+            Action::CycleDuplicate,
             Action::ToggleChangesFocus,
             Action::ToggleCommit,
             Action::Copy,
