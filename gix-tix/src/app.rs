@@ -352,7 +352,8 @@ pub(crate) enum Action {
     ToggleHidden,
     ToggleHistoryDisplay,
     ToggleRefTree,
-    ToggleEdit,
+    ToggleCommitGroup,
+    ToggleActions,
     ToggleEnrich,
     ToggleTodo,
     EditNote,
@@ -367,7 +368,6 @@ pub(crate) enum Action {
     Reword,
     NewCommit,
     NewEmptyCommit,
-    ForkCommit,
     Amend,
     Stash,
     Spill,
@@ -403,7 +403,6 @@ pub(crate) enum Effect {
         parent: Option<ObjectId>,
         empty: bool,
     },
-    ForkCommit(ObjectId),
     Amend(ObjectId),
     Stash(ObjectId),
     Unstash(ObjectId),
@@ -520,7 +519,8 @@ pub(crate) struct App {
     notice: Option<Notice>,
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
-    pub(crate) edit_expanded: bool,
+    pub(crate) commit_expanded: bool,
+    pub(crate) actions_expanded: bool,
     pub(crate) enrich_expanded: bool,
     pub(crate) information_expanded: bool,
     forget_confirmation: Option<ObjectId>,
@@ -619,7 +619,8 @@ impl App {
             notice: None,
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
-            edit_expanded: false,
+            commit_expanded: false,
+            actions_expanded: false,
             enrich_expanded: false,
             information_expanded: false,
             forget_confirmation: None,
@@ -1040,11 +1041,10 @@ impl App {
         }
         if !matches!(
             &action,
-            Action::ToggleEdit
+            Action::ToggleCommitGroup
                 | Action::Reword
                 | Action::NewCommit
                 | Action::NewEmptyCommit
-                | Action::ForkCommit
                 | Action::Amend
                 | Action::Stash
                 | Action::Spill
@@ -1052,13 +1052,14 @@ impl App {
                 | Action::Forget
                 | Action::Rebase
                 | Action::RebaseUpdate
-                | Action::Squash
-                | Action::Review
                 | Action::TimeTravel
                 | Action::AttachedTimeTravel
                 | Action::TogglePin
         ) {
-            self.edit_expanded = false;
+            self.commit_expanded = false;
+        }
+        if !matches!(&action, Action::ToggleActions | Action::Squash | Action::Review) {
+            self.actions_expanded = false;
         }
         if !matches!(
             &action,
@@ -1191,7 +1192,8 @@ impl App {
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
             Action::ToggleHistoryDisplay => self.history_display_expanded = !self.history_display_expanded,
-            Action::ToggleEdit => self.edit_expanded = !self.edit_expanded,
+            Action::ToggleCommitGroup => self.commit_expanded = !self.commit_expanded,
+            Action::ToggleActions => self.actions_expanded = !self.actions_expanded,
             Action::ToggleEnrich => self.enrich_expanded = !self.enrich_expanded,
             Action::ToggleInformation => self.information_expanded = !self.information_expanded,
             Action::CycleRefs => {
@@ -1322,11 +1324,6 @@ impl App {
                     parent: self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id),
                     empty: true,
                 }];
-            }
-            Action::ForkCommit if self.can_fork_commit() => {
-                return vec![Effect::ForkCommit(
-                    self.rows[self.selected.expect("fork requires a selection")].id,
-                )];
             }
             Action::Amend if self.can_amend() => {
                 return vec![Effect::Amend(
@@ -2090,16 +2087,6 @@ impl App {
                 self.new_empty_commit_available = true;
             }
         }
-    }
-
-    pub(crate) fn can_fork_commit(&self) -> bool {
-        self.state == State::Complete
-            && self.worktree_changes_available
-            && !self.worktree_conflicted
-            && self.pending_rebase_conflict.is_none()
-            && self.changes_focus.is_none()
-            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self.selected.and_then(|index| self.rows.get(index)).is_some()
     }
 
     pub(crate) fn can_forget(&self) -> bool {
@@ -3356,8 +3343,6 @@ mod tests {
             !app.can_create_commit(),
             "a merge descendant outside the visible projection prevents a child"
         );
-        assert!(app.can_fork_commit(), "a fork does not rewrite merge descendants");
-        assert_eq!(app.update(Action::ForkCommit), vec![Effect::ForkCommit(id(2))]);
 
         let mut unborn = App::new(10);
         unborn.set_worktree_head_unborn(true);
@@ -3373,7 +3358,6 @@ mod tests {
                 empty: false,
             }]
         );
-        assert!(!unborn.can_fork_commit(), "a fork requires a selected parent");
     }
 
     #[test]
@@ -3874,8 +3858,6 @@ mod tests {
         assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(id(4))]);
         assert!(!app.can_reword());
         assert!(!app.can_forget());
-        assert!(app.can_fork_commit());
-        assert_eq!(app.update(Action::ForkCommit), vec![Effect::ForkCommit(id(4))]);
         assert_eq!(
             app.update(Action::TimeTravel),
             vec![Effect::TimeTravel {
@@ -4190,11 +4172,11 @@ mod tests {
     }
 
     #[test]
-    fn edit_group_stays_open_only_for_grouped_actions() {
+    fn commit_and_actions_groups_stay_open_only_for_their_actions() {
         let mut app = App::new(1);
 
-        app.update(Action::ToggleEdit);
-        assert!(app.edit_expanded);
+        app.update(Action::ToggleCommitGroup);
+        assert!(app.commit_expanded);
         app.update(Action::Reword);
         app.update(Action::NewCommit);
         app.update(Action::Forget);
@@ -4202,24 +4184,30 @@ mod tests {
         app.update(Action::RebaseUpdate);
         app.update(Action::TimeTravel);
         app.update(Action::AttachedTimeTravel);
-        assert!(app.edit_expanded, "grouped edit commands keep the group open");
+        assert!(app.commit_expanded, "grouped commit commands keep the group open");
 
         app.update(Action::MoveDown);
-        assert!(!app.edit_expanded, "navigation collapses the group");
+        assert!(!app.commit_expanded, "navigation collapses the group");
 
-        app.update(Action::ToggleEdit);
+        app.update(Action::ToggleCommitGroup);
         app.update(Action::ToggleHistoryDisplay);
-        assert!(!app.edit_expanded, "opening the view group closes the edit group");
+        assert!(!app.commit_expanded, "opening the view group closes the commit group");
         assert!(app.history_display_expanded);
 
-        app.update(Action::ToggleEdit);
-        assert!(app.edit_expanded);
+        app.update(Action::ToggleCommitGroup);
+        assert!(app.commit_expanded);
         assert!(
             !app.history_display_expanded,
-            "opening the edit group closes the view group"
+            "opening the commit group closes the view group"
         );
-        app.update(Action::ToggleEdit);
-        assert!(!app.edit_expanded, "the prefix key toggles the group");
+        app.update(Action::ToggleActions);
+        assert!(!app.commit_expanded, "opening actions closes commit");
+        assert!(app.actions_expanded);
+        app.update(Action::Review);
+        app.update(Action::Squash);
+        assert!(app.actions_expanded, "grouped actions keep the group open");
+        app.update(Action::ToggleActions);
+        assert!(!app.actions_expanded, "the prefix key toggles the group");
     }
 
     #[test]
@@ -4250,8 +4238,8 @@ mod tests {
         app.update(Action::MoveDown);
         assert!(!app.enrich_expanded, "navigation closes enrich");
         app.update(Action::ToggleEnrich);
-        app.update(Action::ToggleEdit);
-        assert!(!app.enrich_expanded, "opening edit closes enrich");
+        app.update(Action::ToggleCommitGroup);
+        assert!(!app.enrich_expanded, "opening commit closes enrich");
 
         app.hidden_rows.insert(id(1));
         app.update(Action::ToggleEnrich);
@@ -4292,8 +4280,8 @@ mod tests {
         assert!(!app.information_expanded, "opening view closes information");
         app.update(Action::ToggleInformation);
         assert!(!app.history_display_expanded, "opening information closes view");
-        app.update(Action::ToggleEdit);
-        assert!(!app.information_expanded, "opening edit closes information");
+        app.update(Action::ToggleCommitGroup);
+        assert!(!app.information_expanded, "opening commit closes information");
     }
 
     #[test]

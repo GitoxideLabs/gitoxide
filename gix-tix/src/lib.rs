@@ -1688,8 +1688,10 @@ fn event_loop(
                 let action = action_with_shortcut_groups(
                     key,
                     app.history_display_expanded,
-                    app.edit_expanded,
+                    app.commit_expanded,
+                    app.actions_expanded,
                     app.enrich_expanded,
+                    app.information_expanded,
                 );
                 let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
                 (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
@@ -2171,70 +2173,6 @@ fn event_loop(
                         }
                         Ok(None) => app.leave_attention("no commit created: no input was provided"),
                         Err(err) => app.leave_error(format!("new commit: {err:#}")),
-                    }
-                }
-                Effect::ForkCommit(parent) => {
-                    fill_repository.retain = false;
-                    fill_repository.retained = None;
-                    let created = history_graph
-                        .as_ref()
-                        .context("creating a fork requires a completed history graph")
-                        .and_then(|graph| {
-                            create_commit(
-                                terminal,
-                                &repository_path,
-                                repository_is_bare,
-                                graph,
-                                Some(parent),
-                                CreateMode::Fork,
-                                enhanced_keyboard,
-                            )
-                        });
-                    match created {
-                        Ok(Some(new_id)) => {
-                            let review_roots: Vec<_> =
-                                app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
-                            let travel = open_repository(&repository_path, repository_is_bare, false)
-                                .context("could not reopen repository before travelling to fork")
-                                .and_then(|repository| edit::loaded_graph(&repository))
-                                .and_then(|graph| {
-                                    edit::time_travel::perform(
-                                        &repository_path,
-                                        repository_is_bare,
-                                        new_id,
-                                        &graph,
-                                        &review_roots,
-                                        &revisions,
-                                        false,
-                                    )
-                                });
-                            match travel {
-                                Ok(edit::time_travel::Perform::Complete { notice, .. }) => {
-                                    app.leave_success(notice.map_or_else(
-                                        || format!("created fork {}", new_id.to_hex_with_len(7)),
-                                        |notice| format!("created fork {}; {notice}", new_id.to_hex_with_len(7)),
-                                    ));
-                                    app.select_commit_after_refresh(new_id);
-                                    invalidate_worktree_changes(&mut worktree_changes);
-                                    refresh_pending = true;
-                                }
-                                Ok(edit::time_travel::Perform::Conflict(conflict)) => {
-                                    let original = conflict.original();
-                                    app.arm_rebase_conflict(original);
-                                    app.select_commit(original);
-                                    pending_rebase_conflict = Some(conflict);
-                                }
-                                Err(err) => {
-                                    app.leave_attention(format!(
-                                        "created fork {}, but checkout failed: {err:#}",
-                                        new_id.to_hex_with_len(7)
-                                    ));
-                                    refresh_pending = true;
-                                }
-                            }
-                        }
-                        Ok(None) => app.leave_attention("no fork created: no input was provided"),
-                        Err(err) => app.leave_error(format!("fork: {err:#}")),
                     }
                 }
                 Effect::Split(id) => {
@@ -4175,10 +4113,9 @@ fn todo_progress_visible(elapsed: Duration) -> bool {
 enum CreateMode {
     Insert,
     InsertEmpty,
-    Fork,
 }
 
-#[tracing::instrument(skip_all, fields(parent = ?parent, fork = matches!(mode, CreateMode::Fork)))]
+#[tracing::instrument(skip_all, fields(parent = ?parent))]
 fn create_commit(
     terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
@@ -4212,10 +4149,7 @@ fn create_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    let id = match mode {
-        CreateMode::Insert | CreateMode::InsertEmpty => edit::create::apply(repository, graph, prepared, &edited)?,
-        CreateMode::Fork => edit::create::apply_fork(repository, graph, prepared, &edited)?,
-    };
+    let id = edit::create::apply(repository, graph, prepared, &edited)?;
     Ok(Some(id))
 }
 
@@ -4991,7 +4925,7 @@ fn poll_timeout(
 }
 
 fn action(key: KeyEvent) -> Option<Action> {
-    action_with_shortcut_groups(key, false, false, false)
+    action_with_shortcut_groups(key, false, false, false, false, false)
 }
 
 fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_focused: bool) -> bool {
@@ -5038,8 +4972,10 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
 fn action_with_shortcut_groups(
     key: KeyEvent,
     history_display_expanded: bool,
-    edit_expanded: bool,
+    commit_expanded: bool,
+    actions_expanded: bool,
     enrich_expanded: bool,
+    information_expanded: bool,
 ) -> Option<Action> {
     if key.kind == KeyEventKind::Release {
         return None;
@@ -5048,23 +4984,21 @@ fn action_with_shortcut_groups(
         KeyCode::Tab => Some(Action::ToggleChangesFocus),
         KeyCode::Enter => Some(Action::OpenDiff),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
-        KeyCode::Char('c') => Some(Action::ToggleChanges),
-        KeyCode::Char('p') if edit_expanded => Some(Action::Split),
-        KeyCode::Char('q') if edit_expanded => Some(Action::Squash),
-        KeyCode::Char('b') if edit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Rebase),
-        KeyCode::Char('u') if edit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('c') if information_expanded => Some(Action::ToggleChanges),
+        KeyCode::Char('p') if commit_expanded => Some(Action::Split),
+        KeyCode::Char('b') if commit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Rebase),
+        KeyCode::Char('u') if commit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::RebaseUpdate)
         }
-        KeyCode::Char('f') if edit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(Action::ForkCommit)
-        }
+        KeyCode::Char('r') if actions_expanded => Some(Action::Review),
+        KeyCode::Char('s') if actions_expanded => Some(Action::Squash),
         KeyCode::Char('p') => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::MoveDown),
         KeyCode::Char('x') => Some(Action::CycleDuplicate),
-        KeyCode::Char('h') if edit_expanded => Some(Action::Stash),
+        KeyCode::Char('h') if commit_expanded => Some(Action::Stash),
         KeyCode::Char('h') if history_display_expanded => Some(Action::ToggleHidden),
         KeyCode::Char('h') => Some(Action::ScrollLeft),
         KeyCode::Char('l') => Some(Action::ScrollRight),
@@ -5087,14 +5021,13 @@ fn action_with_shortcut_groups(
         KeyCode::Char('R') => Some(Action::Refresh),
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Refresh),
         KeyCode::Char('r') if history_display_expanded => Some(Action::CycleRefs),
-        KeyCode::Char('o') if edit_expanded => Some(Action::Reword),
-        KeyCode::Char('n') if edit_expanded => Some(Action::NewCommit),
-        KeyCode::Char('m') if edit_expanded => Some(Action::NewEmptyCommit),
-        KeyCode::Char('a') if edit_expanded => Some(Action::Amend),
-        KeyCode::Char('s') if edit_expanded => Some(Action::Spill),
-        KeyCode::Char('d') if edit_expanded => Some(Action::Forget),
-        KeyCode::Char('i') if edit_expanded => Some(Action::TogglePin),
-        KeyCode::Char('v') if edit_expanded => Some(Action::Review),
+        KeyCode::Char('o') if commit_expanded => Some(Action::Reword),
+        KeyCode::Char('n') if commit_expanded => Some(Action::NewCommit),
+        KeyCode::Char('m') if commit_expanded => Some(Action::NewEmptyCommit),
+        KeyCode::Char('a') if commit_expanded => Some(Action::Amend),
+        KeyCode::Char('s') if commit_expanded => Some(Action::Spill),
+        KeyCode::Char('d') if commit_expanded => Some(Action::Forget),
+        KeyCode::Char('i') if commit_expanded => Some(Action::TogglePin),
         KeyCode::Char('t') if enrich_expanded => Some(Action::ToggleTodo),
         KeyCode::Char('o') if enrich_expanded => Some(Action::EditNote),
         KeyCode::Char('@') => Some(Action::TimeTravel),
@@ -5106,7 +5039,8 @@ fn action_with_shortcut_groups(
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('t') => Some(Action::ToggleRefTree),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
-        KeyCode::Char('e') => Some(Action::ToggleEdit),
+        KeyCode::Char('c') => Some(Action::ToggleCommitGroup),
+        KeyCode::Char('a') => Some(Action::ToggleActions),
         KeyCode::Char('n') => Some(Action::ToggleEnrich),
         KeyCode::Char('?') => Some(Action::ToggleInformation),
         KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleInformation),
@@ -6192,9 +6126,14 @@ mod tests {
             "terminals that report shifted letters in lowercase still map Shift-G to the first commit"
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)), None);
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)), None);
         assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
-            Some(Action::ToggleEdit)
+            action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
+            Some(Action::ToggleCommitGroup)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            Some(Action::ToggleActions)
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)),
@@ -6205,7 +6144,9 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
                 false,
                 false,
-                true
+                false,
+                true,
+                false
             ),
             Some(Action::ToggleTodo)
         );
@@ -6214,7 +6155,9 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
                 false,
                 false,
-                true
+                false,
+                true,
+                false
             ),
             Some(Action::EditNote)
         );
@@ -6223,7 +6166,9 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
                 false,
                 false,
-                true
+                false,
+                true,
+                false
             ),
             Some(Action::EditGitNote)
         );
@@ -6232,7 +6177,9 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
                 false,
                 false,
-                true
+                false,
+                true,
+                false
             ),
             Some(Action::ToggleEnrich)
         );
@@ -6324,6 +6271,8 @@ mod tests {
                     KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
                     true,
                     false,
+                    false,
+                    false,
                     false
                 ),
                 Some(expected),
@@ -6334,6 +6283,8 @@ mod tests {
             action_with_shortcut_groups(
                 KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
                 true,
+                false,
+                false,
                 false,
                 false
             ),
@@ -6346,12 +6297,10 @@ mod tests {
             ('o', Action::Reword),
             ('n', Action::NewCommit),
             ('m', Action::NewEmptyCommit),
-            ('f', Action::ForkCommit),
             ('a', Action::Amend),
             ('h', Action::Stash),
             ('s', Action::Spill),
             ('p', Action::Split),
-            ('q', Action::Squash),
             ('d', Action::Forget),
             ('i', Action::TogglePin),
         ] {
@@ -6360,10 +6309,26 @@ mod tests {
                     KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
                     false,
                     true,
+                    false,
+                    false,
                     false
                 ),
                 Some(expected),
-                "{key} is available after the edit prefix"
+                "{key} is available after the commit prefix"
+            );
+        }
+        for (key, expected) in [('r', Action::Review), ('s', Action::Squash)] {
+            assert_eq!(
+                action_with_shortcut_groups(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    false,
+                    false,
+                    true,
+                    false,
+                    false
+                ),
+                Some(expected),
+                "{key} is available after the actions prefix"
             );
         }
         assert_eq!(
@@ -6371,50 +6336,60 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
                 false,
                 true,
+                false,
+                false,
                 false
             ),
             Some(Action::ToggleRefTree),
-            "the direct ref-tree key remains available while edit is expanded"
+            "the direct ref-tree key remains available while commit is expanded"
         );
         assert_eq!(
             action_with_shortcut_groups(
                 KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE),
                 false,
                 true,
+                false,
+                false,
                 false
             ),
             Some(Action::TimeTravel),
-            "the direct time-travel key remains available while edit is expanded"
+            "the direct time-travel key remains available while commit is expanded"
         );
         assert_eq!(
             action_with_shortcut_groups(
                 KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE),
                 false,
                 true,
+                false,
+                false,
                 false
             ),
             Some(Action::AttachedTimeTravel),
-            "the direct attached-time-travel key remains available while edit is expanded"
+            "the direct attached-time-travel key remains available while commit is expanded"
         );
         assert_eq!(
             action_with_shortcut_groups(
                 KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
                 false,
                 true,
+                false,
+                false,
                 false
             ),
             Some(Action::PageUp),
-            "navigation keeps priority over the edit shortcut"
+            "navigation keeps priority over the commit shortcut"
         );
         assert_eq!(
             action_with_shortcut_groups(
-                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
                 false,
                 true,
+                false,
+                false,
                 false
             ),
-            Some(Action::ToggleEdit),
-            "e closes the edit shortcut group"
+            Some(Action::ToggleCommitGroup),
+            "c closes the commit shortcut group"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)),
@@ -6435,10 +6410,12 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
                 false,
                 true,
+                false,
+                false,
                 false
             ),
             Some(Action::ToggleRefs),
-            "the old edit shortcut retains its direct reference-toggle behavior"
+            "plain r retains its direct reference-toggle behavior"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
@@ -6446,7 +6423,19 @@ mod tests {
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
-            Some(Action::ToggleChanges)
+            Some(Action::ToggleCommitGroup)
+        );
+        assert_eq!(
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+                false,
+                false,
+                false,
+                false,
+                true
+            ),
+            Some(Action::ToggleChanges),
+            "changes is scoped to the information prefix"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT)),
@@ -6466,12 +6455,12 @@ mod tests {
     fn tree_is_direct_while_trailers_remain_scoped_to_the_view_prefix() {
         let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE);
         assert_eq!(
-            action_with_shortcut_groups(key, true, false, false),
+            action_with_shortcut_groups(key, true, false, false, false, false),
             Some(Action::ToggleTrailers),
             "v t retains its trailer action"
         );
         assert_eq!(
-            action_with_shortcut_groups(key, false, false, false),
+            action_with_shortcut_groups(key, false, false, false, false, false),
             Some(Action::ToggleRefTree),
             "plain t toggles the ref-tree"
         );
@@ -6546,7 +6535,7 @@ mod tests {
         }
         for action in [
             Action::Refresh,
-            Action::ToggleEdit,
+            Action::ToggleCommitGroup,
             Action::Amend,
             Action::Rebase,
             Action::TimeTravel,

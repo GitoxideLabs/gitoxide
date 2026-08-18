@@ -38,7 +38,7 @@ without trading responsiveness for metadata that is not visible.
 - `tix new [--index | --worktree | --worktree-untracked] [--allow-empty] [--todo]
   [--author "Name <email>"] [-m MESSAGE ... | -f FILE]` creates a child of `HEAD`, or a root commit for
   unborn `HEAD`, with the same signing, editor, enrichment, lazy-rebase, and
-  worktree-safety rules as `e n`. By default a changed index wins and tracked
+  worktree-safety rules as `c n`. By default a changed index wins and tracked
   worktree changes are used only when the index is unchanged. `--index` uses
   only the index delta; `--worktree` applies only unstaged tracked-worktree
   changes to the `HEAD` tree and omits staged-only changes. `--worktree-untracked`
@@ -357,7 +357,7 @@ without trading responsiveness for metadata that is not visible.
 | `Ctrl-u`/`Ctrl-d` | Move half a page. |
 | `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move a page; scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
-| `?` | Toggle the information key group. Its actions remain direct shortcuts. |
+| `?` | Toggle the information key group. |
 | `t` | Toggle the rounded ref-tree overview. |
 | `[` | Cycle viewport-local title alignment, full-column alignment, and no alignment. |
 | `v` | Toggle the history-display key group. Pressing `v` again closes it. |
@@ -370,7 +370,7 @@ without trading responsiveness for metadata that is not visible.
 | `v h` | Show or hide configured hidden ancestry. |
 | `r` | Hide reference labels or restore the mode visible when they were hidden. |
 | `m`/`]` | Toggle the commit-message view. |
-| `c` | Cycle the tree/worktree changes display. |
+| `? c` | Cycle the tree/worktree changes display. |
 | `Shift-R` | Explicitly refresh the revision view and visible worktree status. |
 | `y` | Copy the selected commit ID, or the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
@@ -385,8 +385,7 @@ full-column alignment so clipped fields can be reached.
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. The `?` group similarly remains open
-for signature verification, alignment, message, and changes actions, but these
-actions retain their direct shortcuts while the group is closed. While expanded,
+for signature verification, alignment, message, and changes actions. While expanded,
 the group visually contains every following status action through `<enter> diff`,
 including pane switching and navigation; none of those hints is visible while
 the group is closed, and quit remains outside it. The footer underlines the `v`
@@ -394,9 +393,9 @@ in `view`; an open prefix reverses its complete expanded group for a strong,
 terminal-theme-independent cue. While active, `view (` contains
 every applicable display option and a closing `)` so direct shortcuts remain visibly
 outside the prefix. The history status starts with the history position, then the
-`v` prefix and the `e` prefix when it is addressable. Remaining history-level
+`v`, `c`, and `a` prefixes when they are addressable. Remaining history-level
 actions end at the information prefix while it is closed. Available direct
-detached and attached time-travel actions follow the edit group beside each other,
+detached and attached time-travel actions follow the shortcut groups beside each other,
 and duplicate cycling follows them when
 the selected commit has duplicates, and copy follows these actions; the reference toggle immediately precedes
 the `?` group; quit is always last.
@@ -461,7 +460,7 @@ The Enter key is written as `<enter>` throughout.
   style. It has no `📌`, is never selected as a return destination, and does not
   offer `unpin`; its branch keeps normal tracking-relation behavior.
 - The edit menu offers `pin` on an unpinned row and `unpin` on a pinned row,
-  both on `e i`. Pin creates or reuses a direct current-worktree pin for the
+  both on `c i`. Pin creates or reuses a direct current-worktree pin for the
   selected commit. Unpin atomically removes every non-HEAD pin for that commit;
   both operations retain that row's selection.
 - `tix pin <REVSPEC>...` resolves every argument before writing and deduplicates
@@ -638,12 +637,12 @@ space first; changes blocks adapt within the remaining history width.
 
 ### New commits
 
-- `e n` creates a child of the selected commit from tracked changes, or a root
+- `c n` creates a child of the selected commit from tracked changes, or a root
   commit for an unborn `HEAD`. A changed index wins; otherwise, tracked worktree
   changes are used. Untracked files never enter an implicit new commit and remain
   untracked. It is available only with a live worktree, after history completion,
   and when the selected parent has no known merge descendant.
-- `e m` creates an explicit empty commit which reuses the selected parent's tree,
+- `c m` creates an explicit empty commit which reuses the selected parent's tree,
   or the empty tree for an unborn history. Existing index and worktree state is
   preserved exactly. Both forms reject unresolved index conflicts.
 - A current worktree-changes cache controls which actions are advertised without
@@ -670,24 +669,10 @@ space first; changes blocks adapt within the remaining history width.
   tags and remote-tracking refs. Checked-out affected worktrees are preflighted;
   inaccessible or conflicting affected worktrees abort safely.
 
-### Fork commits
-
-- `e f` creates an independent child of any selected commit, including a hidden
-  boundary or merge commit. It requires completed history and a live,
-  conflict-free worktree, but unlike `e n` it is not restricted by descendants
-  because it rewrites none of them. It is unavailable for unborn history.
-- Fork preparation reuses the new-commit editor, candidate-tree, identity,
-  signing, and enrichment-header rules. Saving writes only the new commit and a temporary direct
-  `refs/worktree/tix/pins/*` ref; existing refs, descendants, indexes, and
-  worktrees do not move during creation.
-- Tix immediately time-travels to the new fork. A successful checkout consumes
-  its temporary pin and reconciles the departed `HEAD` through the standard pin
-  primitive. If checkout fails, the fork remains pinned and visible.
-
 ### Amend, spill, and split
 
-- `e a` amends the current worktree's `@` commit with the changed index, or
-  worktree changes when the index already matches `HEAD`. `e s` spills that
+- `c a` amends the current worktree's `@` commit with the changed index, or
+  worktree changes when the index already matches `HEAD`. `c s` spills that
   commit's tree delta into the worktree by replacing its tree with its first
   parent's tree, or the empty tree for a root commit. Clean operations are
   unavailable and report a no-op through `tix amend|spill`.
@@ -704,17 +689,17 @@ space first; changes blocks adapt within the remaining history width.
   IDs use the same seven-character display as other command results. Ref
   creations, deletions, unchanged refs, and unreferenced replayed commits add no
   mapping line.
-- With a path selected in the focused tree-changes block, the main `e` prefix
-  offers `spill` and `e s` spills only that path against the displayed parent.
+- With a path selected in the focused tree-changes block, the main `c` prefix
+  offers `spill` and `c s` spills only that path against the displayed parent.
   The CLI intentionally supports only whole-commit spilling.
-- With a path selected in the focused worktree-changes block, the main `e`
-  prefix offers `amend` and `e a` amends only that path. A staged row uses its
+- With a path selected in the focused worktree-changes block, the main `c`
+  prefix offers `amend` and `c a` amends only that path. A staged row uses its
   index version; an unstaged row uses its filtered worktree version. If both
   rows exist for one path, the selected row determines the version. Review
   commits accept only staged rows, and unresolved indexes cannot be amended.
   Unrelated staged entries retain their index state. The CLI intentionally
   supports only whole-commit amending.
-- `e p` is offered at `@` only when both staged and unstaged changes exist. It
+- `c p` is offered at `@` only when both staged and unstaged changes exist. It
   amends the unstaged changes into the source commit, then creates a new upper
   commit from the staged delta using the standard Markdown editor buffer. Both
   deltas are three-way applied in memory before the editor opens, so overlapping
@@ -766,7 +751,7 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Reviews
 
-- `e v` starts a review from any non-boundary commit without merge descendants.
+- `a r` starts a review from any non-boundary commit without merge descendants.
   If exactly one selectable strict ancestor can be the review base, review starts
   with it immediately. Otherwise tix limits navigation to the selected commit's
   ancestry; the connected hidden base remains selectable, `<enter>` confirms it,
@@ -796,7 +781,7 @@ space first; changes blocks adapt within the remaining history width.
 - At a checked-out review commit, amend is offered only for staged changes and
   consumes only the index tree. It leaves worktree bytes and the review header
   intact, removes signatures, and marks only affected descendants for lazy replay.
-- `e v` finishes a selected review when status is completely clean and the current
+- `a r` finishes a selected review when status is completely clean and the current
   worktree HEAD is the review commit or one of its successors. The
   review commit is inserted after its reviewed tip with its exact tree, review
   header removed, updated committer, and configured signature. Review-side
@@ -871,7 +856,7 @@ space first; changes blocks adapt within the remaining history width.
 
 ### History rebase editor
 
-- Selecting an eligible hidden boundary and pressing `e b` opens a Markdown
+- Selecting an eligible hidden boundary and pressing `c b` opens a Markdown
   `.md` todo. Its editable plan is read bottom-to-top like the history view:
   newest commands and refs are highest, and each stack ends in a centered
   `──── fork <id> ────` separator below its oldest command.
@@ -881,7 +866,7 @@ space first; changes blocks adapt within the remaining history width.
   exactly as displayed in history without Markdown escaping. Fork points within the editable tree
   remain plain `fork <id>` separators. Every separator is centered with at least
   four `─` characters per side, and all span the widest editable line.
-- When that boundary shows `⇣N`, `e u` opens the same editor with each base-level
+- When that boundary shows `⇣N`, `c u` opens the same editor with each base-level
   stack rooted at the corresponding hidden branch tip. Its otherwise unfamiliar
   separator is `fork <id> (updated-base) <title>`, with the raw title exactly as
   shown in history, including `[A]` and `[N]`. The hidden branch
@@ -997,25 +982,27 @@ space first; changes blocks adapt within the remaining history width.
   the file or removing the `tix-rebase-state-v2` comment cancels. Continuation
   todos likewise state that saving unchanged continues the materialized rebase.
 
-### Editing shortcuts
+### Commit and action shortcuts
 
-- `e` toggles the edit shortcut group. `e b` rebases an eligible hidden base and
-  `e u` rebases it onto the newer hidden branch tip when available,
-  `e o` rewords, `e n` creates a rebased child, `e f` forks an independent child,
-  `e a` amends `@`, `e h` stashes changes at `@`, `e s` spills `@`, `e p` splits staged from unstaged changes,
-  `e q` squashes the selected commit, and `e d d` confirms forgetting a top commit when each action is available.
+- `c` toggles the commit shortcut group. `c b` rebases an eligible hidden base and
+  `c u` rebases it onto the newer hidden branch tip when available,
+  `c o` rewords, `c n` creates a rebased child, `c a` amends `@`, `c h` stashes
+  changes at `@`, `c s` spills `@`, `c p` splits staged from unstaged changes,
+  and `c d d` confirms forgetting a top commit when each action is available.
+- `a` toggles the actions shortcut group. `a r` starts or finishes a review and
+  `a s` squashes the selected commit when available.
 - Squash accepts any visible strict ancestor whose affected descendants contain no merges. With one eligible
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
   forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
-- `@` and `#` invoke detached and attached time travel directly, outside the edit
-  group. Invoking either leaves an already expanded edit group open.
-- Edit shortcuts keep the group open. Navigation or another recognized command
-  closes it, matching the `v` display shortcut group. Plain `r` does not mutate
-  the repository, and plain `t` has no action.
-- The footer underlines the `e` in `edit`; while active, `edit (` contains only the
-  actions available for the current selection, followed by `)`. An empty group
-  says `no actions`.
+- `@` and `#` invoke detached and attached time travel directly, outside both
+  groups. Invoking either leaves an already expanded commit group open.
+- Commit and action shortcuts keep their respective group open. Navigation or
+  another recognized command closes it, matching the `v` display shortcut group.
+  Plain `r` does not mutate the repository, and plain `t` has no action.
+- The footer underlines `c` in `commit` and `a` in `actions`; an expanded group
+  contains only the operations available for the current selection. An empty
+  group says `no actions`.
 - While the `v` group is open, `d`, `e`, `r`, and `t` retain their display
   meanings for dates, emails, references, and trailers.
 - The `n` in `enrich` toggles its shortcut group. On any commit eligible for rewording,
@@ -1023,7 +1010,7 @@ space first; changes blocks adapt within the remaining history width.
   `[commit] note` in Git's editor as Markdown. Saving or removing a note preserves
   the todo flag, and toggling todo preserves the note. `n g` edits the real Git
   note and remains available when the Tix-specific actions are not. The group is mutually
-  exclusive with the view, edit, and information groups and otherwise follows
+  exclusive with the view, commit, actions, and information groups and otherwise follows
   their closing behavior.
 
 ## Refresh, focus, and diagnostics
