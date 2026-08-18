@@ -72,14 +72,13 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         repository.object_cache_size(None);
         crate::edit::create::apply_reporting(repository, &graph, prepared, &edited)?
     };
-    println!(
-        "{}",
-        outcome
-            .selected
-            .context("creating a commit did not produce a selection")?
-            .to_hex_with_len(7)
-    );
-    super::print_ref_rewrites(&outcome.ref_rewrites);
+    let repository = crate::open_repository(&repository_path, bare, false)
+        .context("could not reopen repository after creating commit")?;
+    let selected = outcome
+        .selected
+        .context("creating a commit did not produce a selection")?;
+    println!("{}", crate::change_id::display(&repository, selected, 7)?);
+    super::print_ref_rewrites(&repository, &outcome.ref_rewrites)?;
     Ok(())
 }
 

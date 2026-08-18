@@ -67,6 +67,12 @@ without trading responsiveness for metadata that is not visible.
   line. Editing that title preserves an existing message body byte-for-byte,
   while commenting, deleting, or emptying the header removes the whole message.
   Explicit `-m` and `-f` messages preserve enrichments.
+- Primary command output follows every displayed abbreviated commit hash with
+  its reverse-hex change ID. The two abbreviations have equal widths. This
+  applies to mutation results, rewritten-ref mappings, pins, stash and travel
+  notices, raw commit labels in `ref-tree`, and visible commit identifiers in
+  rebase todos. Diagnostics on stderr and the full object IDs in the hidden
+  `tix-rebase-state-v2` block remain unchanged.
 - `-x/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
 - `-h/--help` prints Clap's standard help for `tix` and every subcommand.

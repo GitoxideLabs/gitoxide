@@ -9,6 +9,7 @@ use gix::{
     ObjectId,
     bstr::{BStr, BString},
     hash::ChangeId,
+    prelude::ObjectIdExt,
 };
 
 pub(crate) const HEADER: &str = "change-id";
@@ -25,6 +26,26 @@ pub(crate) fn for_commit(repo: &gix::Repository, id: ObjectId) -> Result<ChangeI
         .context("could not read commit for its change ID")?;
     let commit = object.decode().context("could not decode commit for its change ID")?;
     Ok(effective(id, commit.extra_headers().find_all(HEADER)))
+}
+
+pub(crate) fn display(repo: &gix::Repository, id: ObjectId, len: usize) -> Result<String> {
+    Ok(format!(
+        "{} {}",
+        id.to_hex_with_len(len),
+        for_commit(repo, id)?.to_reverse_hex_with_len(len)
+    ))
+}
+
+pub(crate) fn display_short(repo: &gix::Repository, id: ObjectId) -> Result<String> {
+    let hash = id
+        .attach(repo)
+        .shorten()
+        .context("could not shorten commit ID")?
+        .to_string();
+    Ok(format!(
+        "{hash} {}",
+        for_commit(repo, id)?.to_reverse_hex_with_len(hash.len())
+    ))
 }
 
 pub(crate) fn abbreviations(
