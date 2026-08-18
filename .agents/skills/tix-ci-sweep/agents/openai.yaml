@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tix CI Sweep"
+  short_description: "Repair every Tix commit against local CI."
+  default_prompt: "Use $tix-ci-sweep to visit and repair every commit in the current Tix stack until the local CI gate passes."
