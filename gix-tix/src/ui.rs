@@ -482,11 +482,37 @@ pub(crate) fn draw_with_worktree(
         .map(|row| Line::raw(crate::enrich::marker(app.todo(row.id), app.note(row.id).is_some())).width())
         .max()
         .unwrap_or_default() as u16;
-    let status_x = body.x.saturating_add(enrichment_gutter);
+    let change_id_gutter = visible_rows
+        .iter()
+        .any(|row| app.has_duplicate_change_id(row.id))
+        .then(|| Line::raw("👯‍♂️").width() as u16)
+        .unwrap_or_default();
+    let conflict_gutter = visible_rows
+        .iter()
+        .any(|row| {
+            let head = decorations.get(&row.id).is_some_and(|decorations| {
+                decorations
+                    .iter()
+                    .any(|decoration| decoration.kind == DecorationKind::Head)
+            });
+            app.conflict_marker(row.id, head)
+        })
+        .then(|| Line::raw("💥").width() as u16)
+        .unwrap_or_default();
+    let status_x = body
+        .x
+        .saturating_add(enrichment_gutter)
+        .saturating_add(change_id_gutter)
+        .saturating_add(conflict_gutter);
     let content = Rect::new(
         status_x.saturating_add(2),
         body.y,
-        body.width.saturating_sub(enrichment_gutter.saturating_add(2)),
+        body.width.saturating_sub(
+            enrichment_gutter
+                .saturating_add(change_id_gutter)
+                .saturating_add(conflict_gutter)
+                .saturating_add(2),
+        ),
         body.height,
     );
     let rendered_lane_width = lanes
@@ -528,7 +554,6 @@ pub(crate) fn draw_with_worktree(
                     date_mode,
                     id_mode,
                     change_id: app.change_id(row.id),
-                    duplicate_change_id: app.has_duplicate_change_id(row.id),
                     show_author_name,
                     show_emails: app.show_emails,
                     show_trailers,
@@ -674,23 +699,34 @@ pub(crate) fn draw_with_worktree(
                 Rect::new(body.x, y, enrichment_gutter, 1),
             );
         }
+        if app.has_duplicate_change_id(visible_rows[index].id) {
+            frame.render_widget(
+                Paragraph::new("👯‍♂️"),
+                Rect::new(body.x.saturating_add(enrichment_gutter), y, change_id_gutter, 1),
+            );
+        }
+        if conflict {
+            frame.render_widget(
+                Paragraph::new("💥").style(color(Color::LightRed).add_modifier(Modifier::SLOW_BLINK)),
+                Rect::new(
+                    body.x
+                        .saturating_add(enrichment_gutter)
+                        .saturating_add(change_id_gutter),
+                    y,
+                    conflict_gutter,
+                    1,
+                ),
+            );
+        }
         frame.render_widget(
-            Paragraph::new(if conflict {
-                "C "
-            } else if head && worktree_dirty {
+            Paragraph::new(if head && worktree_dirty {
                 "D "
             } else if selected {
                 "> "
             } else {
                 "  "
             })
-            .style(if conflict {
-                color(Color::LightRed).add_modifier(Modifier::SLOW_BLINK)
-            } else if selected {
-                style
-            } else {
-                Style::default()
-            }),
+            .style(if selected { style } else { Style::default() }),
             Rect::new(status_x, y, body.right().saturating_sub(status_x).min(2), 1),
         );
 
@@ -1914,7 +1950,6 @@ struct MetadataOptions {
     date_mode: DateMode,
     id_mode: IdMode,
     change_id: gix::hash::ChangeId,
-    duplicate_change_id: bool,
     show_author_name: bool,
     show_emails: bool,
     show_trailers: bool,
@@ -1973,7 +2008,6 @@ fn metadata_columns<'a>(
         date_mode,
         id_mode,
         change_id,
-        duplicate_change_id,
         show_author_name,
         show_emails,
         show_trailers,
@@ -2003,16 +2037,6 @@ fn metadata_columns<'a>(
             row.id.to_hex_with_len(7).to_string(),
             selected_style(commit_style),
         )),
-        IdMode::Change if duplicate_change_id => {
-            id.push(Span::styled(
-                change_id.to_reverse_hex_with_len(4).to_string(),
-                selected_style(change_style),
-            ));
-            id.push(Span::styled(
-                row.id.to_hex_with_len(3).to_string(),
-                selected_style(commit_style),
-            ));
-        }
         IdMode::Change => id.push(Span::styled(
             change_id.to_reverse_hex_with_len(7).to_string(),
             selected_style(change_style),
@@ -2245,7 +2269,6 @@ pub(crate) fn plain_history_metadata(
             date_mode: app.date_mode,
             id_mode: app.effective_id_mode(),
             change_id: app.change_id(row.id),
-            duplicate_change_id: app.has_duplicate_change_id(row.id),
             show_author_name: app.name_mode != NameMode::None,
             show_emails: app.show_emails,
             show_trailers: app.name_mode == NameMode::All && app.show_trailers,
@@ -2277,7 +2300,6 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
             date_mode: app.date_mode,
             id_mode: IdMode::Off,
             change_id: row.id.into(),
-            duplicate_change_id: false,
             show_author_name: app.name_mode != crate::app::NameMode::None,
             show_emails: app.show_emails,
             show_trailers: app.name_mode == crate::app::NameMode::All && app.show_trailers,
@@ -4130,9 +4152,10 @@ mod tests {
     #[test]
     fn marks_dirty_head_independently_of_history_selection() -> Result<(), Box<dyn std::error::Error>> {
         let head = gix::ObjectId::Sha1([1; 20]);
+        let other = gix::ObjectId::Sha1([2; 20]);
         let mut app = App::new(5);
         app.extend_commits(
-            [head, gix::ObjectId::Sha1([2; 20])]
+            [head, other]
                 .into_iter()
                 .map(|id| Commit {
                     id,
@@ -4230,7 +4253,11 @@ mod tests {
                 Some(&conflicted),
             );
         })?;
-        assert!(rendered_line(&terminal, 0).starts_with("C @"));
+        assert!(
+            rendered_line(&terminal, 0).starts_with("💥 D @"),
+            "the conflict gutter precedes the ordinary status: {:?}",
+            rendered_line(&terminal, 0)
+        );
         assert_eq!(terminal.backend().buffer()[(0, 0)].fg, Color::LightRed);
         assert!(
             terminal.backend().buffer()[(0, 0)]
@@ -4254,6 +4281,27 @@ mod tests {
             rendered_line(&terminal, 0).starts_with("D @"),
             "resolving the index restores the ordinary dirty marker"
         );
+
+        app.arm_rebase_conflict(other);
+        app.selected = Some(1);
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&dirty),
+            );
+        })?;
+        assert!(
+            rendered_line(&terminal, 1).starts_with("💥 > ●"),
+            "the conflict gutter does not replace selection: {:?}",
+            rendered_line(&terminal, 1)
+        );
+        app.clear_rebase_conflict();
+        app.selected = Some(0);
 
         app.changes_mode = Some(ChangesMode::Tree);
         terminal.draw(|frame| {
@@ -5918,7 +5966,6 @@ mod tests {
                 date_mode: DateMode::Committer,
                 id_mode: IdMode::Commit,
                 change_id: row.id.into(),
-                duplicate_change_id: false,
                 show_author_name: true,
                 show_emails: false,
                 show_trailers: true,
@@ -5974,7 +6021,7 @@ mod tests {
     }
 
     #[test]
-    fn hides_ids_by_default_and_color_splits_duplicate_change_ids() {
+    fn hides_ids_by_default_and_marks_duplicate_change_ids() -> Result<(), Box<dyn std::error::Error>> {
         let id = gix::ObjectId::Sha1([1; 20]);
         let mut app = App::new(1);
         app.extend_commits(vec![Commit {
@@ -6019,7 +6066,6 @@ mod tests {
                 date_mode: DateMode::None,
                 id_mode: app.effective_id_mode(),
                 change_id: app.change_id(id),
-                duplicate_change_id: app.has_duplicate_change_id(id),
                 show_author_name: false,
                 show_emails: false,
                 show_trailers: false,
@@ -6031,13 +6077,28 @@ mod tests {
                 copy_feedback: None,
             },
         );
-        assert_eq!(line.spans[0].content, change_id.to_reverse_hex_with_len(4).to_string());
+        assert_eq!(line.spans[0].content, change_id.to_reverse_hex_with_len(7).to_string());
         assert_eq!(
             line.spans[0].style,
             color(Color::LightCyan).add_modifier(Modifier::BOLD)
         );
-        assert_eq!(line.spans[1].content, id.to_hex_with_len(3).to_string());
-        assert_eq!(line.spans[1].style, color(Color::Magenta).add_modifier(Modifier::BOLD));
+        assert!(
+            line.spans
+                .iter()
+                .all(|span| span.style != color(Color::Magenta).add_modifier(Modifier::BOLD)),
+            "the commit ID is not mixed into an ambiguous change ID"
+        );
+
+        complete(&mut app);
+        app.selected = Some(0);
+        let mut terminal = Terminal::new(TestBackend::new(80, 2))?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_line(&terminal, 0).starts_with("👯‍♂️ > "),
+            "the ambiguity gutter does not replace selection: {:?}",
+            rendered_line(&terminal, 0)
+        );
+        Ok(())
     }
 
     #[test]

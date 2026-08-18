@@ -31,12 +31,17 @@ pub(crate) fn abbreviations(
     repo: &gix::Repository,
     ids: impl IntoIterator<Item = ObjectId>,
     len: usize,
-) -> Result<HashMap<ObjectId, ChangeId>> {
+) -> Result<Abbreviations> {
     let values = ids
         .into_iter()
         .map(|id| Ok((id, for_commit(repo, id)?)))
         .collect::<Result<Vec<_>>>()?;
-    Ok(unique_abbreviations(values, len))
+    Ok(collect_abbreviations(values, len))
+}
+
+pub(crate) struct Abbreviations {
+    pub values: HashMap<ObjectId, ChangeId>,
+    pub ambiguous: HashSet<ObjectId>,
 }
 
 pub(crate) fn resolve_prefix(
@@ -63,19 +68,19 @@ pub(crate) fn resolve_prefix(
     Ok(found)
 }
 
-fn unique_abbreviations(
-    values: impl IntoIterator<Item = (ObjectId, ChangeId)>,
-    len: usize,
-) -> HashMap<ObjectId, ChangeId> {
-    let mut by_prefix = HashMap::<String, Option<(ObjectId, ChangeId)>>::new();
+fn collect_abbreviations(values: impl IntoIterator<Item = (ObjectId, ChangeId)>, len: usize) -> Abbreviations {
+    let mut by_prefix = HashMap::new();
+    let mut all = HashMap::new();
+    let mut ambiguous = HashSet::new();
     for (id, change_id) in values {
         let prefix = change_id.to_reverse_hex_with_len(len).to_string();
-        by_prefix
-            .entry(prefix)
-            .and_modify(|entry| *entry = None)
-            .or_insert(Some((id, change_id)));
+        if let Some(first) = by_prefix.insert(prefix, id) {
+            ambiguous.insert(first);
+            ambiguous.insert(id);
+        }
+        all.insert(id, change_id);
     }
-    by_prefix.into_values().flatten().collect()
+    Abbreviations { values: all, ambiguous }
 }
 
 pub(crate) fn inherit(repo: &gix::Repository, commit: &mut gix::objs::Commit, predecessor: ObjectId) -> Result<()> {
@@ -157,24 +162,26 @@ mod tests {
     }
 
     #[test]
-    fn abbreviates_only_unique_prefixes() -> gix_testtools::Result {
+    fn marks_ambiguous_abbreviations_without_omitting_them() -> gix_testtools::Result {
         let shared_a = ChangeId::from_reverse_hex(format!("zzzzzzz{}", "k".repeat(33)).as_bytes())?;
         let shared_b = ChangeId::from_reverse_hex(format!("zzzzzzz{}", "l".repeat(33)).as_bytes())?;
         let duplicate = ChangeId::from_reverse_hex(format!("yyyyyyy{}", "m".repeat(33)).as_bytes())?;
         let unique = ChangeId::from_reverse_hex(format!("xxxxxxx{}", "n".repeat(33)).as_bytes())?;
+        let abbreviations = collect_abbreviations(
+            [
+                (id(1), shared_a),
+                (id(2), shared_b),
+                (id(3), duplicate),
+                (id(4), duplicate),
+                (id(5), unique),
+            ],
+            7,
+        );
+        assert_eq!(abbreviations.values.len(), 5, "every change ID remains visible");
         assert_eq!(
-            unique_abbreviations(
-                [
-                    (id(1), shared_a),
-                    (id(2), shared_b),
-                    (id(3), duplicate),
-                    (id(4), duplicate),
-                    (id(5), unique),
-                ],
-                7,
-            ),
-            HashMap::from([(id(5), unique)]),
-            "prefix collisions and complete duplicates are omitted"
+            abbreviations.ambiguous,
+            HashSet::from([id(1), id(2), id(3), id(4)]),
+            "prefix collisions and complete duplicates are marked"
         );
         Ok(())
     }
