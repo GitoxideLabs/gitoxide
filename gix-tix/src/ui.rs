@@ -1052,6 +1052,9 @@ pub(crate) fn draw_with_worktree(
             if app.can_squash() {
                 options.push(("squash", 's'));
             }
+            if app.can_move() {
+                options.push(("cherry-move", 'm'));
+            }
             if app.can_forkpoint() {
                 options.push(("forkpoint", 'f'));
             }
