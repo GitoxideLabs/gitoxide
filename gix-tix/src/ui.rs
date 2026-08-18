@@ -2233,8 +2233,9 @@ pub(crate) fn plain_history_metadata(
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
     has_notes: bool,
+    change_id: Option<gix::hash::ChangeId>,
 ) -> String {
-    metadata_line(
+    let mut line = metadata_line(
         row,
         app.title(row),
         app.attributions(row),
@@ -2255,11 +2256,12 @@ pub(crate) fn plain_history_metadata(
             selected: false,
             copy_feedback: None,
         },
-    )
-    .spans
-    .into_iter()
-    .map(|span| span.content.into_owned())
-    .collect()
+    );
+    if let Some(change_id) = change_id {
+        line.spans
+            .insert(1, Span::raw(format!(" {}", change_id.to_reverse_hex_with_len(7))));
+    }
+    line.spans.into_iter().map(|span| span.content.into_owned()).collect()
 }
 
 pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::Snapshot) -> String {
@@ -5995,6 +5997,7 @@ mod tests {
             &Decorations::new(),
             &gix::mailmap::Snapshot::default(),
             false,
+            None,
         );
         assert!(!plain.contains("0101010"), "history rows hide IDs by default");
 

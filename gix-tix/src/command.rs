@@ -1,4 +1,9 @@
-use std::{collections::HashSet, ffi::OsString, io::Write, sync::atomic::AtomicBool};
+use std::{
+    collections::HashSet,
+    ffi::{OsStr, OsString},
+    io::Write,
+    sync::atomic::AtomicBool,
+};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -294,6 +299,8 @@ fn write_history(
         }
     }
 
+    let change_ids = crate::change_id::abbreviations(repository, app.rows.iter().map(|row| row.id), 7)?;
+
     let mailmap = repository.open_mailmap();
     let lanes = app.render_lanes(0..app.rows.len());
     let enrichment_gutter = app
@@ -309,7 +316,14 @@ fn write_history(
         .max()
         .unwrap_or_default();
     for (index, row) in app.rows.iter().enumerate() {
-        let metadata = crate::ui::plain_history_metadata(&app, row, &decorations, &mailmap, note_ids.contains(&row.id));
+        let metadata = crate::ui::plain_history_metadata(
+            &app,
+            row,
+            &decorations,
+            &mailmap,
+            note_ids.contains(&row.id),
+            change_ids.get(&row.id).copied(),
+        );
         if enrichment_gutter != 0 {
             let marker = crate::enrich::marker(todo_ids.contains(&row.id), enrichment_note_ids.contains(&row.id));
             write!(
@@ -326,6 +340,38 @@ fn write_history(
         writeln!(out).context("could not finish history row")?;
     }
     Ok(())
+}
+
+fn resolve_commit(
+    repository: &gix::Repository,
+    revision: &OsStr,
+    description: &str,
+) -> Result<(gix::ObjectId, Option<crate::history::HistoryGraph>)> {
+    let revision = gix::path::os_str_into_bstr(revision)
+        .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
+    match repository.rev_parse_single(revision) {
+        Ok(id) => {
+            let id = id
+                .object()
+                .with_context(|| format!("could not read {description}"))?
+                .peel_to_commit()
+                .with_context(|| format!("{description} does not resolve to a commit"))?
+                .id;
+            Ok((id, None))
+        }
+        Err(revision_error) => {
+            let graph = crate::edit::loaded_view_graph(repository)?;
+            let resolved = std::str::from_utf8(revision)
+                .ok()
+                .map(|prefix| crate::change_id::resolve_prefix(repository, prefix, graph.commit_ids()))
+                .transpose()?
+                .flatten();
+            match resolved {
+                Some(id) => Ok((id, Some(graph))),
+                None => Err(revision_error).with_context(|| format!("could not resolve {description} {revision:?}")),
+            }
+        }
+    }
 }
 
 fn pin(repository: &gix::Repository, args: Pin) -> Result<()> {
@@ -880,6 +926,7 @@ mod tests {
         assert!(format!("{err:#}").contains("at least one -x/--hide"));
         create_pins(&repository, &[OsString::from("topic")])?;
         let head = repository.head_id()?.detach();
+        let head_change_id = crate::change_id::for_commit(&repository, head)?;
         assert!(crate::enrich::toggle(&repository, head)?.todo);
 
         let mut output = Vec::new();
@@ -887,6 +934,14 @@ mod tests {
         let output = String::from_utf8(output)?;
 
         assert_eq!(output.lines().count(), 5, "the complete projected history is printed");
+        assert!(
+            output.contains(&format!(
+                "{} {}",
+                head.to_hex_with_len(7),
+                head_change_id.to_reverse_hex_with_len(7)
+            )),
+            "an unambiguous change ID follows its commit hash: {output:?}"
+        );
         assert!(output.contains('●'), "history graph lanes are rendered");
         assert!(
             output.lines().any(|line| line.starts_with("🚧├")),

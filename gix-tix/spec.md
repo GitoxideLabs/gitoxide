@@ -17,16 +17,20 @@ without trading responsiveness for metadata that is not visible.
   history view without opening a terminal UI. Tips default to `HEAD`, and
   applicable pins participate exactly as they do in the history view. Output
   uses the history view's graph lanes and default metadata, without colors,
-  selection, clipping, or a footer.
+  selection, clipping, or a footer. Each seven-character commit hash is followed
+  by its seven-character reverse-hex change ID when that prefix identifies
+  exactly one commit in this invocation; colliding or duplicated change IDs are
+  omitted.
 - `tix travel [--materialize-conflicts] REVSPEC` performs the same detached
   checkout, pending-rebase replay, stash handling, and pin reconciliation as
-  TUI time travel. Travelling to the current `HEAD` is a no-op. A detached
-  source may travel to a descendant without a pin, but travelling to an ancestor
-  or unrelated commit requires an existing current-worktree pin at `HEAD` or a
-  descendant. An attached source is preserved through the singleton HEAD-pin
-  rules. Replay conflicts change nothing unless explicitly materialized; an
-  accepted conflict writes the checkout and unmerged index, then exits with an
-  error so resolution cannot be mistaken for completion.
+  TUI time travel. Its target may also be an unambiguous reverse-hex change-ID
+  prefix from the default Tix view. Travelling to the current `HEAD` is a no-op.
+  A detached source may travel to a descendant without a pin, but travelling to
+  an ancestor or unrelated commit requires an existing current-worktree pin at
+  `HEAD` or a descendant. An attached source is preserved through the singleton
+  HEAD-pin rules. Replay conflicts change nothing unless explicitly
+  materialized; an accepted conflict writes the checkout and unmerged index,
+  then exits with an error so resolution cannot be mistaken for completion.
 - `tix stash` saves the index and worktree state at `HEAD` through the same
   commit-stash operation as the TUI.
 - `tix new [--index | --worktree | --worktree-untracked] [--allow-empty]
@@ -50,7 +54,8 @@ without trading responsiveness for metadata that is not visible.
   actor while preserving its date. Without an explicit message it prefills the
   normal editor document; with one it is applied non-interactively. An attached
   `HEAD` may reword itself without a pin. Every other target requires an existing
-  current-worktree tix pin at that commit or a descendant;
+  current-worktree tix pin at that commit or a descendant. As with `tix travel`,
+  an unambiguous default-view change-ID prefix may replace the Git revspec;
   every such covering pin participates so retained forks are rewritten together.
   Eligibility is checked before the editor opens, and an unchanged document is
   an explicit no-op. Editor documents also contain commented `Todo` and
