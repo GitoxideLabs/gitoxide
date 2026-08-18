@@ -130,7 +130,6 @@ fn prepare_inner(
         &mut document,
         &author,
         &committer,
-        Some(reword::WIP_AUTHOR),
         &crate::enrich::Enrichment::default(),
     )?;
     document.extend_from_slice(b"\nwhat\n\nwhy\n");
@@ -429,12 +428,14 @@ mod tests {
         let before = gix_testtools::repository::snapshot(fixture.path())?;
         let objects_before = object_count(fixture.path())?;
         let prepared = prepare(open(fixture.path())?, Some(parent))?;
-        assert!(
+        assert_eq!(
             prepared
                 .document
-                .windows(b";Author: \xf0\x9f\x9a\xa7WIP\xf0\x9f\x9a\xa7 <wip@invalid>".len())
-                .any(|window| window == b";Author: \xf0\x9f\x9a\xa7WIP\xf0\x9f\x9a\xa7 <wip@invalid>"),
-            "new-commit editors offer the provisional author"
+                .split(|byte| *byte == b'\n')
+                .filter(|line| line.strip_prefix(b";").unwrap_or(line).starts_with(b"Author: "))
+                .count(),
+            1,
+            "new-commit editors contain only the configured author"
         );
         assert!(
             prepared
