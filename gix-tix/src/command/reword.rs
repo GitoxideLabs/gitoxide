@@ -29,16 +29,7 @@ pub(super) struct Args {
 }
 
 pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
-    let revision = gix::path::os_str_into_bstr(&args.revision)
-        .with_context(|| format!("revision {} is not valid UTF-8", args.revision.to_string_lossy()))?;
-    let target = repository
-        .rev_parse_single(revision)
-        .with_context(|| format!("could not resolve revision {revision:?}"))?
-        .object()
-        .context("could not read reword target")?
-        .peel_to_commit()
-        .context("reword target does not resolve to a commit")?
-        .id;
+    let (target, resolved_graph) = super::resolve_commit(&repository, &args.revision, "reword target")?;
     let head = repository.head().context("could not read HEAD before rewording")?;
     let head_id = head.id().map(gix::Id::detach).context("cannot reword an unborn HEAD")?;
     let attached_head = !head.is_detached() && target == head_id;
@@ -50,7 +41,10 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         pins.iter()
             .map(|pin| gix::path::from_bstr(pin.name.as_bstr()).into_owned().into_os_string()),
     );
-    let graph = crate::edit::loaded_view_graph_with(&repository, &revisions)?;
+    let graph = match resolved_graph {
+        Some(graph) => graph,
+        None => crate::edit::loaded_view_graph_with(&repository, &revisions)?,
+    };
     let covering_pin = pins.iter().any(|pin| graph.is_ancestor(target, pin.id));
     if !attached_head && !covering_pin {
         anyhow::bail!("the reword target or one of its descendants must be pinned");
@@ -332,10 +326,13 @@ mod tests {
             gix::refs::transaction::PreviousValue::MustNotExist,
             "test pin",
         )?;
+        let change_id = crate::change_id::for_commit(&repository, repository.rev_parse_single("HEAD~1")?.detach())?
+            .to_reverse_hex_with_len(7)
+            .to_string();
         drop(repository);
         run(
             open(path, "sed -i.bak -e 's/^middle$/rewritten middle/'")?,
-            args("HEAD~1"),
+            args(&change_id),
         )?;
 
         let repository = crate::test_repository::open(path)?;
