@@ -41,6 +41,9 @@ Features or other changes that are visible and people should know about look lik
   And here is how it's used and some more details.
 - fix: don't panic when calling `foo()` in a bare repository. (#456)
 
+When a changelog-worthy commit touches multiple crates, use the crate that should receive the changelog entry as the conventional
+commit _scope_, for example `feat(gix-odb)!: add a new object lookup API` or `fix(gix-ref)!: reject invalid reference names`.
+
 Everything else, particularly refactors or chores, don't use _conventional commits_ as these don't affect users of the API.
 Examples could be:
 
@@ -57,14 +60,11 @@ are breaking so would be seen with their _exclamation mark_ suffix, like `change
 Commit messages are used for guiding `cargo smart-release` to do most of the release work for us. This includes changelog generation
 as well as picking the right version bump for each crate.
 
-## Commit splitting on breaking changes.
+## Commit self-containment
 
-Knowing that `cargo smart-release` is driven by commit messages and affects their versions with per-crate granularity, it becomes important
-to split edits into multiple commits to clearly indicate which crate is actually broken.
-
-Typical patterns include making a breaking change in one crate and then fix all others to work with it. For changelogs to look proper
-and version bumps to be correct, the first commit would contain only the breaking changes themselves,
-like "rename: `foo()` to `bar()`", and the second commit would contain all changes to adapt to that and look like "adapt to changes in `<crate name>`".
+Every commit must be self-contained and pass CI independently. Keep a breaking change and all adaptations required to build and test the
+workspace in the same commit. Do not split them merely to route changelog entries. If that commit touches multiple crates, use the
+conventional commit _scope_ to name the crate whose changelog should receive the entry, as described above.
 
 ## Commit History
 

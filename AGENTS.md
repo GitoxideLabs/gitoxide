@@ -59,13 +59,16 @@ uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns bel
 Follow "purposeful conventional commits" style:
 
 - Use conventional commit prefixes ONLY if message should appear in changelog
-- Breaking changes MUST use suffix `!`: `change!:`, `remove!:`, `rename!:`
+- Breaking changes MUST use `!` before the colon: `change!:`, `remove!:`, `rename!:`, or _scoped_ forms like `feat(gix-odb)!:`
 - Features/fixes visible to users: `feat:`, `fix:`
+- For a changelog-worthy commit touching multiple crates, _scope_ it to the crate that should receive the changelog entry, like `feat!(gix-ref)`.
 - Refactors/chores: no prefix (don't affect users)
 - Examples:
   - `feat: add Repository::foo() to do great things. (#234)`
   - `fix: don't panic when calling foo() in a bare repository. (#456)`
   - `change!: rename Foo to Bar. (#123)`
+  - `feat(gix-odb)!: add a new object lookup API`
+  - `fix(gix-ref)!: reject invalid reference names`
 
 ### Code Style
 
@@ -146,8 +149,10 @@ Follow "purposeful conventional commits" style:
 
 - Ubuntu-latest git version is the compatibility target
 - `cargo smart-release` for releases (driven by commit messages)
-- Split breaking changes into separate commits per affected crate if one commit-message wouldn't be suitable for all changed crates.
-- First commit: breaking change only; second commit: adaptations
+- Every commit must be self-contained and pass CI independently
+   - Feel free to run `etc/scripts/ci-check-local.sh` until it passes as proxy, as running every commit against CI isn't feasible.
+- Keep breaking changes and all adaptations required to build and test the workspace in the same commit
+- When such a commit touches multiple crates, _scope_ its conventional commit message to the crate whose changelog should receive the entry
 
 ## When Suggesting Changes
 
