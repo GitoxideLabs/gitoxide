@@ -1,7 +1,6 @@
 use std::{
     cmp::Ordering as CmpOrdering,
     collections::{HashMap, HashSet},
-    sync::atomic::{AtomicBool, Ordering},
 };
 
 use anyhow::{Context, Result};
@@ -117,19 +116,17 @@ fn store(commit: &mut gix::objs::Commit, change_id: ChangeId) {
         .push((HEADER.into(), BString::from(change_id.to_string())));
 }
 
+#[derive(Default)]
 pub(crate) struct Scan {
     pub overrides: HashMap<ObjectId, ChangeId>,
     pub duplicates: HashSet<ObjectId>,
 }
 
-pub(crate) fn scan(repo: &gix::Repository, ids: &[ObjectId], cancelled: &AtomicBool) -> Result<Option<Scan>> {
+pub(crate) fn scan(repo: &gix::Repository, ids: &[ObjectId]) -> Result<Scan> {
     let mut overrides = HashMap::new();
     let mut first_by_change = HashMap::new();
     let mut duplicates = HashSet::new();
     for &id in ids {
-        if cancelled.load(Ordering::Relaxed) {
-            return Ok(None);
-        }
         let object = repo
             .find_commit(id)
             .context("could not read commit while scanning change IDs")?;
@@ -145,7 +142,7 @@ pub(crate) fn scan(repo: &gix::Repository, ids: &[ObjectId], cancelled: &AtomicB
             duplicates.insert(id);
         }
     }
-    Ok(Some(Scan { overrides, duplicates }))
+    Ok(Scan { overrides, duplicates })
 }
 
 #[cfg(test)]
@@ -243,8 +240,7 @@ mod tests {
             "later rewrites inherit the stored identity from their predecessor"
         );
 
-        let scan =
-            scan(&repo, &[predecessor, duplicate], &AtomicBool::new(false))?.expect("the scan was not cancelled");
+        let scan = scan(&repo, &[predecessor, duplicate])?;
         assert_eq!(
             scan.duplicates,
             HashSet::from([predecessor, duplicate]),

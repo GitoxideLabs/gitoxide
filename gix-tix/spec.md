@@ -1091,8 +1091,9 @@ space first; changes blocks adapt within the remaining history width.
   must drop their repository when finished. Lane, verification, and line-diff
   workers exist only for active work and do not form persistent pools.
 - Change IDs are scanned only while configured hidden tips are actively excluded.
-  Unrestricted and explicitly expanded views perform no scan; expanding or
-  refreshing a view cancels any scan for its previous projection.
+  Unrestricted and explicitly expanded views perform no scan. A refresh keeps
+  the current projection's IDs until it has synchronously scanned the replacement,
+  then publishes rows, IDs, duplicate markers, and gutter width together.
 - Redraw is reactive and capped at approximately 60 frames per second while
   streaming. Mouse events are drained and coalesced in bounded batches so input
   storms cannot starve the main loop.

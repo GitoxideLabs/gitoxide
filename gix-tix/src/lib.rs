@@ -74,17 +74,6 @@ struct FillRepository {
     retain: bool,
 }
 
-struct ChangeIdWorker {
-    cancelled: Arc<AtomicBool>,
-    results: mpsc::Receiver<Result<Option<change_id::Scan>>>,
-}
-
-impl Drop for ChangeIdWorker {
-    fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Relaxed);
-    }
-}
-
 struct WorktreeWatcher {
     _watcher: RecommendedWatcher,
     events: mpsc::Receiver<notify::Result<notify::Event>>,
@@ -922,7 +911,7 @@ fn event_loop(
     if recovered_at_startup {
         app.leave_attention("worktree removed; using the common repository without worktree changes");
     }
-    let mut lane_receiver = None;
+    let mut lane_receiver: Option<mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)>> = None;
     let mut refresh_receiver: Option<mpsc::Receiver<(RefreshKind, HistoryGraph, Result<history::Refresh>)>> = None;
     let mut refresh_pending = false;
     let mut ref_tree_refresh_pending = false;
@@ -931,7 +920,6 @@ fn event_loop(
     let mut ref_refresh_deadline: Option<Instant> = None;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
-    let mut change_id_worker: Option<ChangeIdWorker> = None;
     let mut commit_message = None;
     let mut tree_changes = TreeChangesCache::default();
     let mut worktree_changes = None;
@@ -1240,29 +1228,17 @@ fn event_loop(
                 }
             }
         }
-        if let Some(result) = change_id_worker.as_ref().map(|worker| worker.results.try_recv()) {
-            match result {
-                Ok(Ok(Some(scan))) => {
-                    app.set_change_ids(scan.overrides, scan.duplicates);
-                    change_id_worker = None;
-                    dirty = true;
-                }
-                Ok(Ok(None)) => change_id_worker = None,
-                Ok(Err(err)) => {
-                    tracing::warn!(error = %err, "change ID scan failed");
-                    change_id_worker = None;
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    tracing::warn!("change ID scan worker stopped unexpectedly");
-                    change_id_worker = None;
-                }
-            }
-        }
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((rows, graph, lane_time)) => {
+                    let scan =
+                        scan_change_ids(&repository_path, repository_is_bare, change_id_scan_needed(&app), &rows)
+                            .unwrap_or_else(|err| {
+                                tracing::warn!(error = %err, "change ID scan failed");
+                                change_id::Scan::default()
+                            });
                     app.finish_lane_computation(rows, graph, lane_time);
+                    app.set_change_ids(scan.overrides, scan.duplicates);
                     ref_tree.set_history_commits(app.rows.iter().map(|row| row.id));
                     if return_to_history_after_refresh.take().is_some() {
                         ref_tree.leave();
@@ -1280,13 +1256,6 @@ fn event_loop(
                     dirty = true;
                     if quit_on_finish {
                         return Ok(app.lane_time);
-                    }
-                    if change_id_scan_needed(&app) {
-                        change_id_worker = Some(start_change_id_scan(
-                            repository_path.clone(),
-                            repository_is_bare,
-                            app.rows.iter().map(|row| row.id).collect(),
-                        ));
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -1376,7 +1345,6 @@ fn event_loop(
             && history_graph.is_some()
             && matches!(app.state, State::Complete | State::Cancelled)
         {
-            change_id_worker = None;
             ref_tree_refresh_pending = false;
             refresh_receiver = Some(start_history_refresh(
                 repository_path.clone(),
@@ -1400,7 +1368,6 @@ fn event_loop(
             && history_graph.is_some()
             && matches!(app.state, State::Complete | State::Cancelled)
         {
-            change_id_worker = None;
             let refresh_started = Instant::now();
             let response_ids = filesystem_responses.begin_reference_refresh();
             let repository = match open_repository(&repository_path, repository_is_bare, true) {
@@ -2090,7 +2057,6 @@ fn event_loop(
                     execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(actor))?;
                 }
                 Effect::Reload(show_hidden) => {
-                    change_id_worker = None;
                     app.show_hidden = show_hidden;
                     refresh_pending = true;
                     refresh_expand_hidden = true;
@@ -2786,18 +2752,18 @@ fn start_lane_worker(rows: Vec<SharedCommitRow>) -> mpsc::Receiver<(Vec<SharedCo
     receiver
 }
 
-fn start_change_id_scan(repository_path: PathBuf, bare: bool, ids: Vec<gix::ObjectId>) -> ChangeIdWorker {
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let worker_cancelled = Arc::clone(&cancelled);
-    let (sender, results) = mpsc::channel();
-    std::thread::spawn(move || {
-        let result = open_repository(&repository_path, bare, false).and_then(|mut repository| {
-            repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
-            change_id::scan(&repository, &ids, &worker_cancelled)
-        });
-        let _ = sender.send(result);
-    });
-    ChangeIdWorker { cancelled, results }
+fn scan_change_ids(
+    repository_path: &Path,
+    bare: bool,
+    enabled: bool,
+    rows: &[SharedCommitRow],
+) -> Result<change_id::Scan> {
+    if !enabled {
+        return Ok(change_id::Scan::default());
+    }
+    let mut repository = open_repository(repository_path, bare, false)?;
+    repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
+    change_id::scan(&repository, &rows.iter().map(|row| row.id).collect::<Vec<_>>())
 }
 
 fn change_id_scan_needed(app: &App) -> bool {
