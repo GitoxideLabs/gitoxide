@@ -14,6 +14,9 @@ pub(super) struct Args {
     /// Create the commit even when the selected tree is unchanged.
     #[arg(long)]
     pub(super) allow_empty: bool,
+    /// Mark the new commit as TODO.
+    #[arg(long)]
+    pub(super) todo: bool,
     #[command(flatten)]
     pub(super) edit: super::reword::MessageArgs,
 }
@@ -43,7 +46,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .context("author is not valid UTF-8")?;
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
-    let prepared = crate::edit::create::prepare_from(repository, parent, source, author.as_deref())?;
+    let prepared = crate::edit::create::prepare_from(repository, parent, source, author.as_deref(), args.todo)?;
     if prepared.is_empty && !args.allow_empty {
         anyhow::bail!("the new commit would be empty; use --allow-empty to create it anyway");
     }
@@ -92,6 +95,7 @@ mod tests {
             worktree: false,
             worktree_untracked: false,
             allow_empty: false,
+            todo: false,
             edit: super::super::reword::MessageArgs {
                 message: vec!["new title".into(), "new body".into()],
                 file: None,
@@ -131,6 +135,51 @@ mod tests {
             b"New Author <new@example.com>\n"
         );
         assert_eq!(std::fs::read(fixture.path().join("tracked"))?, b"unstaged\n");
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_message_can_mark_the_new_commit_as_todo() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let mut input = args();
+        input.todo = true;
+        run(crate::test_repository::open(fixture.path())?, input)?;
+
+        let repository = crate::test_repository::open(fixture.path())?;
+        let id = repository.head_id()?.detach();
+        assert!(
+            crate::enrich::load(
+                &mut crate::enrich::open(&repository)?,
+                crate::change_id::for_commit(&repository, id)?,
+            )?
+            .todo,
+            "--todo marks a non-interactive new commit"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn editor_can_clear_the_prefilled_todo() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let mut input = args();
+        input.todo = true;
+        input.edit.message.clear();
+        input.edit.author = None;
+        run(
+            crate::test_repository::open_with(fixture.path(), ["core.editor=sed -i.bak -e 's/^Todo$/;Todo/'"])?,
+            input,
+        )?;
+
+        let repository = crate::test_repository::open(fixture.path())?;
+        let id = repository.head_id()?.detach();
+        assert!(
+            !crate::enrich::load(
+                &mut crate::enrich::open(&repository)?,
+                crate::change_id::for_commit(&repository, id)?,
+            )?
+            .todo,
+            "commenting the prefilled header overrides --todo"
+        );
         Ok(())
     }
 

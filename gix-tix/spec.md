@@ -35,7 +35,7 @@ without trading responsiveness for metadata that is not visible.
   then exits with an error so resolution cannot be mistaken for completion.
 - `tix stash` saves the index and worktree state at `HEAD` through the same
   commit-stash operation as the TUI.
-- `tix new [--index | --worktree | --worktree-untracked] [--allow-empty]
+- `tix new [--index | --worktree | --worktree-untracked] [--allow-empty] [--todo]
   [--author "Name <email>"] [-m MESSAGE ... | -f FILE]` creates a child of `HEAD`, or a root commit for
   unborn `HEAD`, with the same signing, editor, enrichment, lazy-rebase, and
   worktree-safety rules as `e n`. By default a changed index wins and tracked
@@ -45,7 +45,8 @@ without trading responsiveness for metadata that is not visible.
   additionally includes non-ignored untracked files. An unchanged selected tree
   is rejected unless `--allow-empty` is given. Message files,
   repeated messages, standard input, editor bypass, and `--author` follow
-  `tix reword`; the author uses the prepared new-commit date.
+  `tix reword`; the author uses the prepared new-commit date. `--todo` enables
+  the new commit's editable Todo header.
 - `tix reword REVSPEC [--author "Name <email>"] [-m MESSAGE ... | -f FILE]`
   applies the same signing,
   lazy-rebase, mutable-ref, and worktree-safety rules as the TUI. Without either
@@ -680,9 +681,11 @@ space first; changes blocks adapt within the remaining history width.
   commit from the staged delta using the standard Markdown editor buffer. Both
   deltas are three-way applied in memory before the editor opens, so overlapping
   changes abort without writing objects or changing refs, the index, or files.
-- `tix split` performs the same split at `HEAD`: worktree changes are amended
+- `tix split [--todo]` performs the same split at `HEAD`: worktree changes are amended
   into the source commit and staged index changes become the new commit on top.
-  Its upper-commit editor uses the same enrichment headers as the new-commit editor.
+  Its upper-commit editor uses the same enrichment headers as the new-commit
+  editor; `--todo` enables its Todo header. Existing source enrichments stay
+  with the rewritten lower commit.
 - A successful split leaves the worktree bytes untouched and resets the index to
   the new upper commit. The rewritten source retains its message and ancestry;
   the upper commit receives the edited message. Their final trees and ancestry
