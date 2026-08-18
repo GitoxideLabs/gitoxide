@@ -17,10 +17,12 @@ without trading responsiveness for metadata that is not visible.
   history view without opening a terminal UI. Tips default to `HEAD`, and
   applicable pins participate exactly as they do in the history view. Output
   uses the history view's graph lanes and default metadata, without colors,
-  selection, clipping, or a footer. Each seven-character commit hash is followed
-  by its seven-character reverse-hex change ID when that prefix identifies
-  exactly one commit in this invocation; colliding or duplicated change IDs are
-  omitted.
+  selection, clipping, or a footer. Each visible root replaces its ordinary row
+  with a centered `──── base <metadata> ────` separator; distinct roots therefore
+  delineate their trees while retaining the commit's markers and metadata. Each
+  seven-character commit hash is followed by its seven-character reverse-hex
+  change ID. Colliding or duplicated prefixes remain visible and receive a `💥`
+  gutter marker.
 - `tix travel [--materialize-conflicts] REVSPEC` performs the same detached
   checkout, pending-rebase replay, stash handling, and pin reconciliation as
   TUI time travel. Its target may also be an unambiguous reverse-hex change-ID
@@ -114,8 +116,9 @@ without trading responsiveness for metadata that is not visible.
 
 - Traversal streams commits before graph-lane computation finishes. The footer
   reports the number received while loading and switches to the selected row
-  number after completion. Rows are numbered from the bottom, so the oldest row
-  is `#1` and the newest row is `#N`.
+  number after completion. Every visible root starts at `#0`; descendants use
+  their on-screen row distance from that root. A merge reachable from multiple
+  visible roots uses the visually closest root, so only one count is shown.
 - Commit topology, commit time, and generation are loaded through the same
   commit-graph-or-ODB lookup model as `gix-traverse`. A small object cache avoids
   repeated ODB decoding during a walk.

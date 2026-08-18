@@ -316,7 +316,7 @@ fn write_history(
         .max()
         .unwrap_or_default();
     let ambiguity_gutter = (!change_ids.ambiguous.is_empty()).then(|| Line::raw("💥").width());
-    for (index, row) in app.rows.iter().enumerate() {
+    let render_line = |index: usize, row: &crate::app::SharedCommitRow| {
         let metadata = crate::ui::plain_history_metadata(
             &app,
             row,
@@ -325,33 +325,52 @@ fn write_history(
             note_ids.contains(&row.id),
             change_ids.values.get(&row.id).copied(),
         );
+        let enrichment_marker =
+            crate::enrich::marker(todo_ids.contains(&row.id), enrichment_note_ids.contains(&row.id));
+        let ambiguity_marker = if change_ids.ambiguous.contains(&row.id) {
+            "💥"
+        } else {
+            ""
+        };
+        let mut gutter = String::new();
         if enrichment_gutter != 0 {
-            let marker = crate::enrich::marker(todo_ids.contains(&row.id), enrichment_note_ids.contains(&row.id));
-            write!(
-                out,
-                "{marker}{}",
-                " ".repeat(enrichment_gutter.saturating_sub(Line::raw(marker).width()))
-            )
-            .context("could not write enrichment marker")?;
+            gutter.push_str(enrichment_marker);
+            gutter.push_str(&" ".repeat(enrichment_gutter.saturating_sub(Line::raw(enrichment_marker).width())));
         }
         if let Some(width) = ambiguity_gutter {
-            let marker = if change_ids.ambiguous.contains(&row.id) {
-                "💥"
-            } else {
-                ""
-            };
-            write!(
-                out,
-                "{marker}{}",
-                " ".repeat(width.saturating_sub(Line::raw(marker).width()))
-            )
-            .context("could not write change ID ambiguity marker")?;
+            gutter.push_str(ambiguity_marker);
+            gutter.push_str(&" ".repeat(width.saturating_sub(Line::raw(ambiguity_marker).width())));
         }
-        write!(out, "{}{}", lanes.lane(index), metadata).context("could not write history row")?;
-        if let Some(behind) = app.hidden_branch_behind(row.id) {
-            write!(out, " ⇣{behind}").context("could not write hidden-branch status")?;
+        let behind = app
+            .hidden_branch_behind(row.id)
+            .map(|behind| format!(" ⇣{behind}"))
+            .unwrap_or_default();
+        let line = format!("{gutter}{}{metadata}{behind}", lanes.lane(index));
+        let base = (app.visual_count(index) == Some(0))
+            .then(|| format!("base {enrichment_marker}{ambiguity_marker}{metadata}{behind}"));
+        (line, base)
+    };
+    let width = app
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let (line, base) = render_line(index, row);
+            base.as_ref()
+                .map_or_else(|| Line::raw(&line).width(), |base| Line::raw(base).width() + 10)
+        })
+        .max()
+        .unwrap_or_default();
+    for (index, row) in app.rows.iter().enumerate() {
+        let (line, base) = render_line(index, row);
+        if let Some(base) = base {
+            let rails = width.saturating_sub(Line::raw(&base).width() + 2).max(8);
+            let left = rails / 2;
+            writeln!(out, "{} {base} {}", "─".repeat(left), "─".repeat(rails - left))
+                .context("could not write history base")?;
+        } else {
+            writeln!(out, "{line}").context("could not write history row")?;
         }
-        writeln!(out).context("could not finish history row")?;
     }
     Ok(())
 }
@@ -980,6 +999,11 @@ mod tests {
             gix::refs::transaction::PreviousValue::ExistingMustMatch(gix::refs::Target::Object(old_head)),
             "test ambiguous change ID",
         )?;
+        let mut orphan = repository.find_commit(parent)?.decode()?.into_owned()?;
+        orphan.parents.clear();
+        orphan.message = "orphan base".into();
+        let orphan = repository.write_object(&orphan)?.detach();
+        create_pins(&repository, &[OsString::from(orphan.to_string())])?;
         let head_change_id = crate::change_id::for_commit(&repository, head)?;
         assert!(crate::enrich::toggle(&repository, head)?.todo);
 
@@ -987,7 +1011,33 @@ mod tests {
         write_history(&repository, &[], &[OsString::from("v1")], &mut output)?;
         let output = String::from_utf8(output)?;
 
-        assert_eq!(output.lines().count(), 5, "the complete projected history is printed");
+        assert_eq!(output.lines().count(), 6, "the complete projected history is printed");
+        let bases = output
+            .lines()
+            .filter(|line| line.contains(" base "))
+            .collect::<Vec<_>>();
+        assert_eq!(bases.len(), 2, "each distinct visible root becomes a base separator");
+        assert!(
+            bases
+                .iter()
+                .all(|line| line.starts_with("────") && line.ends_with("────")),
+            "base separators use the rebase-todo rails: {bases:?}"
+        );
+        assert!(
+            bases
+                .iter()
+                .any(|line| line.contains(&orphan.to_hex_with_len(7).to_string()) && line.contains("orphan base")),
+            "a base separator retains commit metadata: {bases:?}"
+        );
+        assert_eq!(
+            bases
+                .iter()
+                .map(|line| Line::raw(*line).width())
+                .collect::<HashSet<_>>()
+                .len(),
+            1,
+            "all base separators span the same display width"
+        );
         assert!(
             output.contains(&format!(
                 "{} {}",

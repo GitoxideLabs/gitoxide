@@ -1212,9 +1212,12 @@ pub(crate) fn draw_with_worktree(
 }
 
 fn history_position(app: &App) -> String {
-    match (app.deferred_history_state.unwrap_or(app.state), app.selected) {
-        (State::Complete, Some(selected)) => format!("#{}", app.rows.len().saturating_sub(selected)),
-        _ => format!("{} commits", app.rows.len()),
+    if let (State::Complete, Some(selected)) = (app.deferred_history_state.unwrap_or(app.state), app.selected)
+        && let Some(count) = app.visual_count(selected)
+    {
+        format!("#{count}")
+    } else {
+        format!("{} commits", app.rows.len())
     }
 }
 
@@ -2512,12 +2515,15 @@ mod tests {
 
     #[test]
     fn counts_commits_until_the_graph_is_complete_then_tracks_the_selected_row() {
+        let ids = [1, 2, 3].map(|byte| gix::ObjectId::Sha1([byte; 20]));
         let mut app = App::new(3);
         app.extend_commits(
-            (1..=3)
-                .map(|byte| Commit {
-                    id: gix::ObjectId::Sha1([byte; 20]),
-                    parent_ids: Default::default(),
+            ids.into_iter()
+                .rev()
+                .enumerate()
+                .map(|(index, id)| Commit {
+                    id,
+                    parent_ids: (index < 2).then(|| ids[1 - index]).into_iter().collect(),
                     author_time: gix::date::Time::default(),
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
@@ -2539,11 +2545,59 @@ mod tests {
         let (rows, lanes, lane_time) = crate::app::compute_lanes(rows);
         app.finish_lane_computation(rows, lanes, lane_time);
 
-        assert_eq!(history_position(&app), "#3");
-        app.update(Action::MoveDown);
         assert_eq!(history_position(&app), "#2");
         app.update(Action::MoveDown);
         assert_eq!(history_position(&app), "#1");
+        app.update(Action::MoveDown);
+        assert_eq!(history_position(&app), "#0");
+    }
+
+    #[test]
+    fn visual_counts_restart_at_each_root_and_merges_choose_the_closest() {
+        let ids = [2, 3, 4, 5, 6, 7, 8].map(|byte| gix::ObjectId::Sha1([byte; 20]));
+        let parents = [
+            &[ids[5], ids[3]][..],
+            &[ids[2]][..],
+            &[ids[2]][..],
+            &[ids[1]][..],
+            &[][..],
+            &[ids[0]][..],
+            &[][..],
+        ];
+        let mut app = App::new(ids.len());
+        app.extend_commits(
+            ids.into_iter()
+                .rev()
+                .zip(parents)
+                .map(|(id, parents)| Commit {
+                    id,
+                    parent_ids: parents.iter().copied().collect(),
+                    author_time: gix::date::Time::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: "subject".into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    is_review: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+
+        let expected = [ids[6], ids[5], ids[3], ids[1], ids[0], ids[4], ids[2]];
+        assert_eq!(app.rows.iter().map(|row| row.id).collect::<Vec<_>>(), expected);
+        app.selected = Some(0);
+        assert_eq!(
+            history_position(&app),
+            "#4",
+            "the merge uses its visually closest root and counts an interleaved row"
+        );
+        app.selected = Some(4);
+        assert_eq!(history_position(&app), "#0", "the first root starts at zero");
+        app.selected = Some(6);
+        assert_eq!(history_position(&app), "#0", "the second root restarts at zero");
     }
 
     #[test]
@@ -3218,7 +3272,7 @@ mod tests {
             "todo commit metadata uses the author date and excludes separately represented refs"
         );
 
-        let footer_text = "#1 · view · edit · enrich · copy · refs · ? · quit";
+        let footer_text = "#0 · view · edit · enrich · copy · refs · ? · quit";
         let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
