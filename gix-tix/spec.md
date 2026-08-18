@@ -981,12 +981,22 @@ space first; changes blocks adapt within the remaining history width.
   changes at `@`, `c s` spills `@`, `c p` splits staged from unstaged changes,
   and `c d d` confirms forgetting a top commit when each action is available.
 - `a` toggles the actions shortcut group. `a r` starts or finishes a review and
-  `a s` squashes the selected commit, and `a f` establishes the remembered
-  branch's forkpoint at detached `HEAD` when available.
+  `a s` squashes the selected commit, `a m` cherry-moves current `HEAD` directly
+  above the selected commit, and `a f` establishes the remembered branch's
+  forkpoint at detached `HEAD` when available.
 - Squash accepts any visible strict ancestor whose affected descendants contain no merges. With one eligible
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
   forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
+- Cherry-move requires a non-root, single-parent `HEAD`. It removes `HEAD` from
+  its old position, reconnects its former children to its parent, inserts its
+  rewritten change above the selected target, and reparents every former direct
+  child of the target above it. The target may be an ancestor, descendant, or in
+  unrelated history; selecting `HEAD` or its current parent is a no-op. An
+  unchanged merge target is permitted, but any move that would rewrite a merge
+  is unavailable. Mutable refs, pins, Git notes, enrichments, review resources,
+  and attached or detached checkout state follow their rewritten commits.
+  Cherry-move uses the history-todo conflict and continuation rules.
 - `@` invokes time travel directly, outside both groups. Invoking it leaves an
   already expanded commit group open.
 - Commit and action shortcuts keep their respective group open. Navigation or

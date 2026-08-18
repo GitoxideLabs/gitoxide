@@ -2466,6 +2466,55 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("squash: {err:#}")),
                     }
                 }
+                Effect::Move { source, target } => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let result = (|| {
+                        let graph = history_graph
+                            .as_ref()
+                            .context("moving HEAD requires a completed history graph")?;
+                        let mut repository = open_repository(&repository_path, repository_is_bare, false)
+                            .context("could not open repository to move HEAD")?;
+                        repository.object_cache_size(None);
+                        let plan = edit::rebase::cherry_move_plan(&repository, graph, source, target)?;
+                        run_rebase_plan(terminal, repository.into_sync(), graph, plan)
+                    })();
+                    match result {
+                        Ok(edit::rebase::PlanPerform::Complete(outcome)) => {
+                            let moved = outcome.map(source).unwrap_or(source);
+                            let notice = edit::time_travel::checkout_plan(
+                                &repository_path,
+                                repository_is_bare,
+                                &outcome,
+                                &revisions,
+                                false,
+                            );
+                            match notice {
+                                Ok(notice) => app.leave_success(notice.unwrap_or_else(|| {
+                                    format!("moved {} above {}", moved.to_hex_with_len(7), target.to_hex_with_len(7))
+                                })),
+                                Err(err) => app.leave_attention(format!("move applied, checkout failed: {err:#}")),
+                            }
+                            app.select_commit_after_refresh(moved);
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
+                        }
+                        Ok(edit::rebase::PlanPerform::Conflict(conflict)) => {
+                            let id = conflict.commit();
+                            preview_todo_rebase_conflict(
+                                &mut app,
+                                &conflict,
+                                &authors,
+                                &ref_snapshot.view_tips,
+                                &ref_snapshot.hidden_tips,
+                            )?;
+                            app.arm_rebase_conflict(id);
+                            app.select_commit(id);
+                            pending_todo_rebase_conflict = Some(conflict);
+                        }
+                        Err(err) => app.leave_error(format!("move: {err:#}")),
+                    }
+                }
                 Effect::StartReview { tip, base } => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
@@ -4996,6 +5045,7 @@ fn action_with_shortcut_groups(
         }
         KeyCode::Char('r') if actions_expanded => Some(Action::Review),
         KeyCode::Char('s') if actions_expanded => Some(Action::Squash),
+        KeyCode::Char('m') if actions_expanded => Some(Action::Move),
         KeyCode::Char('f') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::Forkpoint)
         }
@@ -6292,7 +6342,12 @@ mod tests {
                 "{key} is available after the commit prefix"
             );
         }
-        for (key, expected) in [('r', Action::Review), ('s', Action::Squash), ('f', Action::Forkpoint)] {
+        for (key, expected) in [
+            ('r', Action::Review),
+            ('s', Action::Squash),
+            ('m', Action::Move),
+            ('f', Action::Forkpoint),
+        ] {
             assert_eq!(
                 action_with_shortcut_groups(
                     KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
