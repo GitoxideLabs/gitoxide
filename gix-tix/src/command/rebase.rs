@@ -511,13 +511,13 @@ mod tests {
     #[test]
     fn materialized_conflicts_emit_an_applicable_continuation_todo() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
-        // This descendant is rewritten into object memory after the earlier commit conflicts.
-        std::fs::write(fixture.path().join("after"), b"after\n")?;
+        // This descendant is rewritten into object memory and conflicts after the earlier conflict is resolved.
+        std::fs::write(fixture.path().join("file"), b"after\n")?;
         assert!(
             Command::new("git")
                 .arg("-C")
                 .arg(fixture.path())
-                .args(["add", "after"])
+                .args(["add", "file"])
                 .status()?
                 .success()
         );
@@ -609,7 +609,7 @@ mod tests {
             "the materialized conflict commit records the ours tree"
         );
 
-        std::fs::write(fixture.path().join("file"), b"resolved\n")?;
+        std::fs::write(fixture.path().join("file"), b"base\n")?;
         assert!(
             Command::new("git")
                 .arg("-C")
@@ -622,7 +622,27 @@ mod tests {
             fixture.path(),
             ["user.name=todo author", "user.email=todo@example.com"],
         )?;
-        apply_document(repo, &continuation, None)?;
+        let next_output = output_dir.path().join("continue-again.md");
+        let err = apply_document(repo, &continuation, Some(&next_output))
+            .expect_err("the descendant conflict stops the continuation");
+        assert!(
+            format!("{err:#}").contains("materialized conflict"),
+            "the second conflict is materialized: {err:#}"
+        );
+        std::fs::write(fixture.path().join("file"), b"resolved again\n")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["add", "file"])
+                .status()?
+                .success()
+        );
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            ["user.name=todo author", "user.email=todo@example.com"],
+        )?;
+        apply_document(repo, &std::fs::read(next_output)?, None)?;
         assert!(
             Command::new("git")
                 .arg("-C")
@@ -632,6 +652,10 @@ mod tests {
                 .stdout
                 .is_empty(),
             "the continuation consumes the resolved index"
+        );
+        assert!(
+            crate::history::all_pins(&crate::test_repository::open(fixture.path())?)?.is_empty(),
+            "successive materialized conflicts do not leave departure pins"
         );
         Ok(())
     }
