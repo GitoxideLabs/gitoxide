@@ -11,7 +11,6 @@ const COMMENT_CHAR: &[u8] = b"CommentChar: ";
 const MESSAGE: &[u8] = b"Message:";
 const TODO: &[u8] = b"Todo";
 pub(super) const DEFAULT_COMMENT_CHAR: &[u8] = b";";
-pub(super) const WIP_AUTHOR: &[u8] = b"\xf0\x9f\x9a\xa7WIP\xf0\x9f\x9a\xa7 <wip@invalid>";
 pub(super) const ASSISTED_BY: &[u8] = b"Assisted-by: GPT 5.6";
 pub(super) const CO_AUTHORED_BY: &[u8] = b"Co-authored-by: GPT 5.6 <codex@openai.com>";
 
@@ -60,7 +59,7 @@ pub(crate) fn document_with_author(
     let enrichment = crate::enrich::load(&mut crate::enrich::open(repo)?, crate::change_id::for_commit(repo, id)?)?;
 
     let mut out = Vec::new();
-    write_headers(&mut out, &commit.author, &committer, None, &enrichment)?;
+    write_headers(&mut out, &commit.author, &committer, &enrichment)?;
     out.push(b'\n');
     out.extend_from_slice(&commit.message);
     if !out.ends_with(b"\n") {
@@ -197,16 +196,9 @@ pub(super) fn write_headers(
     out: &mut Vec<u8>,
     author: &gix::actor::Signature,
     committer: &gix::actor::Signature,
-    alternative_author: Option<&[u8]>,
     enrichment: &crate::enrich::Enrichment,
 ) -> Result<()> {
     write_actor(out, AUTHOR, author);
-    if let Some(alternative_author) = alternative_author {
-        out.extend_from_slice(DEFAULT_COMMENT_CHAR);
-        out.extend_from_slice(AUTHOR);
-        out.extend_from_slice(alternative_author);
-        out.push(b'\n');
-    }
     write_date(out, AUTHOR_DATE, author.time)?;
     write_actor(out, COMMITTER, committer);
     write_date(out, COMMITTER_DATE, committer.time)?;
@@ -250,30 +242,9 @@ fn write_date(out: &mut Vec<u8>, label: &[u8], time: gix::date::Time) -> Result<
 }
 
 pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
-    let has_alternative_author = input
-        .splitn(3, |byte| *byte == b'\n')
-        .nth(1)
-        .map(trim_cr)
-        .is_some_and(|line| {
-            line.starts_with(AUTHOR)
-                || line
-                    .strip_prefix(DEFAULT_COMMENT_CHAR)
-                    .is_some_and(|line| line.starts_with(AUTHOR))
-        });
-    let mut parts = input.splitn(6 + usize::from(has_alternative_author), |byte| *byte == b'\n');
-    let mut author = header(parts.next(), AUTHOR)?;
-    let mut line = parts.next();
-    if line
-        .map(trim_cr)
-        .and_then(|line| line.strip_prefix(DEFAULT_COMMENT_CHAR))
-        .is_some_and(|line| line.starts_with(AUTHOR))
-    {
-        line = parts.next();
-    } else if line.map(trim_cr).is_some_and(|line| line.starts_with(AUTHOR)) {
-        author = header(line, AUTHOR)?;
-        line = parts.next();
-    }
-    let author_time = date(header(line, AUTHOR_DATE)?, "author")?;
+    let mut parts = input.splitn(6, |byte| *byte == b'\n');
+    let author = header(parts.next(), AUTHOR)?;
+    let author_time = date(header(parts.next(), AUTHOR_DATE)?, "author")?;
     let committer = header(parts.next(), COMMITTER)?;
     let committer_time = date(header(parts.next(), COMMITTER_DATE)?, "committer")?;
     let comment_char = header(parts.next(), COMMENT_CHAR)?;
@@ -415,31 +386,6 @@ mod tests {
         assert_eq!(
             edit.message, b"title\n\nbody\n",
             "the message is preserved byte-for-byte"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn a_commented_alternative_author_can_be_selected_by_uncommenting_it() -> gix_testtools::Result {
-        let input = b"Author: Default <default@example.com>\n\
-                      ;Author: \xf0\x9f\x9a\xa7WIP\xf0\x9f\x9a\xa7 <wip@invalid>\n\
-                      AuthorDate: 2026-08-12 10:20:30 +0200\n\
-                      Committer: C <c@example.com>\n\
-                      CommitterDate: 2026-08-12 11:20:30 +0200\n\
-                      CommentChar: ;\n\
-                      \n\
-                      title\n";
-
-        assert_eq!(
-            parse(input)?.author,
-            b"Default <default@example.com>",
-            "the commented alternative leaves the configured author active"
-        );
-        let selected = input.replacen(b";Author: ", b"Author: ", 1);
-        assert_eq!(
-            parse(&selected)?.author,
-            "🚧WIP🚧 <wip@invalid>".as_bytes(),
-            "uncommenting the offered author is sufficient to select it"
         );
         Ok(())
     }
