@@ -113,6 +113,99 @@ impl<'repo> SnapshotMut<'repo> {
         self.commit_inner(repo)
     }
 
+    /// Write all sections with exactly `metadata` to its designated file and apply the entire snapshot in memory.
+    ///
+    /// The file must be one of the file-backed sources observed when the repository configuration was last loaded.
+    /// API, environment, and command-line overrides are never written. A lock is acquired before checking that an
+    /// existing file still has its cached modification time; a deleted file is recreated instead of being considered
+    /// stale. The metadata path is locked as-is, without resolving symlinks. On failure, none of the snapshot is applied
+    /// in memory.
+    pub fn commit_to_file(
+        mut self,
+        metadata: gix_config::file::Metadata,
+    ) -> Result<&'repo mut crate::Repository, crate::config::commit_to_file::Error> {
+        use crate::config::commit_to_file::Error;
+
+        let repo = self.repo.take().expect("always present here");
+        let config = std::mem::take(&mut self.config);
+        match metadata.source {
+            gix_config::Source::GitInstallation
+            | gix_config::Source::System
+            | gix_config::Source::Git
+            | gix_config::Source::User
+            | gix_config::Source::Local
+            | gix_config::Source::Worktree => {}
+            kind => return Err(Error::Source { kind }),
+        }
+        let path = metadata.path.clone().ok_or(Error::PathMissing)?;
+        if repo.config.resolved.meta() != &metadata
+            && !repo
+                .config
+                .resolved
+                .sections()
+                .any(|section| section.meta() == &metadata)
+        {
+            return Err(Error::UnknownMetadata { metadata });
+        }
+        let expected = repo
+            .config
+            .config_files
+            .get(&path)
+            .copied()
+            .ok_or_else(|| Error::UnknownFile { path: path.clone() })?;
+
+        let mut target = gix_config::File::new(metadata.clone());
+        for section in config.sections().filter(|section| section.meta() == &metadata) {
+            target.push_section(section.to_owned())?;
+        }
+
+        let config: crate::Config = config.into();
+        let mut validated_cache = repo.config.clone();
+        validated_cache.reread_values_and_clear_caches_replacing_config(OwnShared::clone(&config))?;
+
+        let mut lock = gix_lock::File::acquire_to_update_resource(&path, gix_lock::acquire::Fail::Immediately, None)?;
+        match std::fs::metadata(&path) {
+            Ok(file_meta) => {
+                let actual = file_meta.modified().map_err(|source| Error::Metadata {
+                    source,
+                    path: path.clone(),
+                })?;
+                if expected != Some(actual) {
+                    return Err(Error::Stale { path, expected, actual });
+                }
+                lock.with_mut(|file| file.set_permissions(file_meta.permissions()))
+                    .map_err(|source| Error::Write {
+                        source,
+                        path: path.clone(),
+                    })?;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(Error::Metadata {
+                    source,
+                    path: path.clone(),
+                });
+            }
+        }
+
+        target.write_to(&mut lock).map_err(|source| Error::Write {
+            source,
+            path: path.clone(),
+        })?;
+        let written_mtime = lock
+            .with_mut(|file| file.metadata()?.modified())
+            .map_err(|source| Error::Write {
+                source,
+                path: path.clone(),
+            })?;
+        lock.commit()?;
+
+        repo.reread_values_and_clear_caches_replacing_config(config)
+            .expect("configuration was validated before acquiring the lock");
+        repo.config.config_files.insert(path, Some(written_mtime));
+        Ok(repo)
+    }
+
     /// Set the value at `key` to `new_value`, possibly creating the section if it doesn't exist yet, or overriding the most recent existing
     /// value, which will be returned.
     pub fn set_value(

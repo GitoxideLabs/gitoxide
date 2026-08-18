@@ -388,3 +388,235 @@ fn config_mut_preserves_runtime_api_sections_without_duplicating_open_overrides(
     );
     Ok(())
 }
+
+mod commit_to_file {
+    use super::{options_with_includes, write_config_with_new_mtime};
+    use crate::repo_rw_opts;
+    use gix::config::tree::Core;
+
+    fn metadata_for(config: &gix_config::File, filename: &str) -> gix_config::file::Metadata {
+        config
+            .sections()
+            .find(|section| {
+                section
+                    .meta()
+                    .path
+                    .as_deref()
+                    .and_then(std::path::Path::file_name)
+                    .is_some_and(|name| name == filename)
+            })
+            .unwrap_or_else(|| panic!("fixture has a section from {filename}"))
+            .meta()
+            .clone()
+    }
+
+    fn set_a_value(
+        config: &mut gix_config::File,
+        target: &gix_config::file::Metadata,
+        name: &str,
+        value: &str,
+    ) -> crate::Result {
+        config
+            .section_mut_filter("a", None, |meta| meta == target)?
+            .expect("fixture has an [a] section with the requested designation")
+            .set(name, value)?;
+        Ok(())
+    }
+
+    #[test]
+    fn writes_only_the_designated_file_and_lock_contention_is_safe() -> crate::Result {
+        let options = options_with_includes()
+            .strict_config(true)
+            .config_overrides(["writeback.open-api=open-api"]);
+        let (mut repo, _tmp) = repo_rw_opts("make_config_repo.sh", options)?;
+        let root_path = repo.git_dir().join("config");
+        let root_before = std::fs::read(&root_path)?;
+
+        let mut config = repo.config_snapshot_mut();
+        let target = metadata_for(&config, "a.config");
+        let target_path = target.path.clone().expect("file-backed metadata");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        let root = metadata_for(&config, "config");
+        set_a_value(&mut config, &target, "local-override", "selected-file")?;
+        set_a_value(&mut config, &root, "local-override", "root-in-memory-only")?;
+        config.append_config(["writeback.api=api-only"], gix_config::Source::Api)?;
+        config.append_config(["writeback.env=env-only"], gix_config::Source::Env)?;
+        config.commit_to_file(target.clone())?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&target_path)?.permissions().mode() & 0o777,
+                0o600,
+                "writing preserves file permissions"
+            );
+        }
+        assert_eq!(std::fs::read(&root_path)?, root_before, "the main config is untouched");
+        let written = gix_config::File::from_path_no_includes(target_path.clone(), gix_config::Source::Local)?;
+        assert_eq!(
+            written.string("a.local-override").expect("selected value was written"),
+            "selected-file"
+        );
+        assert!(
+            written.string("core.autocrlf").is_none(),
+            "sections from another file aren't written"
+        );
+        assert!(written.string("writeback.api").is_none(), "API sections aren't written");
+        assert!(
+            written.string("writeback.env").is_none(),
+            "environment sections aren't written"
+        );
+
+        let target_before = std::fs::read(&target_path)?;
+        let mut forged = target.clone();
+        forged.level += 1;
+        let err = match repo.config_snapshot_mut().commit_to_file(forged) {
+            Ok(_) => panic!("unknown metadata must not designate a file"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, gix::config::commit_to_file::Error::UnknownMetadata { .. }),
+            "the complete designation is validated: {err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&target_path)?,
+            target_before,
+            "forged metadata must not truncate the file"
+        );
+
+        let mut invalid = repo.config_snapshot_mut();
+        set_a_value(&mut invalid, &target, "local-override", "must-not-commit")?;
+        invalid.set_raw_value(Core::ABBREV, "invalid")?;
+        let err = match invalid.commit_to_file(target.clone()) {
+            Ok(_) => panic!("invalid configuration must not be written"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, gix::config::commit_to_file::Error::Config(_)),
+            "configuration is validated before writing: {err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&target_path)?,
+            target_before,
+            "invalid configuration leaves the file unchanged"
+        );
+
+        let lock =
+            gix::lock::File::acquire_to_update_resource(&target_path, gix::lock::acquire::Fail::Immediately, None)?;
+        let mut config = repo.config_snapshot_mut();
+        set_a_value(&mut config, &target, "local-override", "must-not-commit")?;
+        let err = match config.commit_to_file(target) {
+            Ok(_) => panic!("an already-held lock must prevent writing"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, gix::config::commit_to_file::Error::AcquireLock(_)),
+            "lock contention is reported: {err:?}"
+        );
+        drop(lock);
+        assert_eq!(
+            std::fs::read(&target_path)?,
+            target_before,
+            "failed writes leave disk unchanged"
+        );
+        assert_eq!(
+            repo.config_snapshot()
+                .string("a.local-override")
+                .expect("value remains present"),
+            "selected-file",
+            "failed writes don't auto-commit the mutable snapshot"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_deleted_file_is_recreated_and_its_new_mtime_is_remembered() -> crate::Result {
+        let (mut repo, _tmp) = repo_rw_opts("make_config_repo.sh", options_with_includes())?;
+        let mut config = repo.config_snapshot_mut();
+        let target = metadata_for(&config, "a.config");
+        let target_path = target.path.clone().expect("file-backed metadata");
+        set_a_value(&mut config, &target, "local-override", "recreated")?;
+        std::fs::remove_file(&target_path)?;
+        config.commit_to_file(target.clone())?;
+
+        let recreated = gix_config::File::from_path_no_includes(target_path.clone(), gix_config::Source::Local)?;
+        assert_eq!(
+            recreated.string("a.local-override").expect("value was recreated"),
+            "recreated"
+        );
+
+        let mut config = repo.config_snapshot_mut();
+        set_a_value(&mut config, &target, "local-override", "written-again")?;
+        config.commit_to_file(target)?;
+        let written_again = gix_config::File::from_path_no_includes(target_path, gix_config::Source::Local)?;
+        assert_eq!(
+            written_again
+                .string("a.local-override")
+                .expect("second value was written"),
+            "written-again",
+            "a successful write updates the cached mtime baseline"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stale_files_require_a_refresh_before_retrying() -> crate::Result {
+        let (mut repo, _tmp) = repo_rw_opts("make_config_repo.sh", options_with_includes())?;
+        let mut config = repo.config_snapshot_mut();
+        let target = metadata_for(&config, "a.config");
+        let target_path = target.path.clone().expect("file-backed metadata");
+        set_a_value(&mut config, &target, "local-override", "stale-snapshot")?;
+
+        let mut external = gix_config::File::from_path_no_includes(target_path.clone(), gix_config::Source::Local)?;
+        external.set_raw_value("a.local-override", "external")?;
+        external.set_raw_value("external.marker", "preserve-me")?;
+        write_config_with_new_mtime(&target_path, &external)?;
+        let external_bytes = std::fs::read(&target_path)?;
+
+        let err = match config.commit_to_file(target) {
+            Ok(_) => panic!("a stale snapshot must not overwrite an external edit"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, gix::config::commit_to_file::Error::Stale { .. }),
+            "staleness is reported: {err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&target_path)?,
+            external_bytes,
+            "the external edit is preserved"
+        );
+        assert_eq!(
+            repo.config_snapshot()
+                .string("a.local-override")
+                .expect("original snapshot value"),
+            "from-a.config",
+            "the failed snapshot isn't auto-committed"
+        );
+
+        let mut config = repo.config_mut()?;
+        assert_eq!(
+            config.string("external.marker").expect("external edit was refreshed"),
+            "preserve-me"
+        );
+        let refreshed_target = metadata_for(&config, "a.config");
+        set_a_value(&mut config, &refreshed_target, "local-override", "after-refresh")?;
+        config.commit_to_file(refreshed_target)?;
+
+        let retried = gix_config::File::from_path_no_includes(target_path, gix_config::Source::Local)?;
+        assert_eq!(
+            retried.string("a.local-override").expect("retry was written"),
+            "after-refresh"
+        );
+        assert_eq!(
+            retried.string("external.marker").expect("external value was retained"),
+            "preserve-me"
+        );
+        Ok(())
+    }
+}

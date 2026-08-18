@@ -22,7 +22,8 @@ pub struct Snapshot<'repo> {
 
 /// A platform to access configuration values and modify them in memory, while making them available when this platform is dropped
 /// as form of auto-commit.
-/// Note that the values will only affect this instance of the parent repository, and not other clones that may exist.
+/// Unless [`commit_to_file()`][SnapshotMut::commit_to_file()] is used, values only affect this instance of the parent
+/// repository, and not other clones that may exist.
 ///
 /// Use [`forget()`][Self::forget()] to not apply any of the changes.
 pub struct SnapshotMut<'repo> {
@@ -61,6 +62,49 @@ pub mod set_value {
         SubSectionRequired,
         #[error("The key must not be used with a subsection")]
         SubSectionForbidden,
+    }
+}
+
+///
+pub mod commit_to_file {
+    /// The error produced when calling [`SnapshotMut::commit_to_file()`][crate::config::SnapshotMut::commit_to_file()].
+    #[derive(Debug, thiserror::Error)]
+    #[expect(missing_docs)]
+    pub enum Error {
+        #[error("Configuration from {kind:?} cannot be written to a file")]
+        Source { kind: gix_config::Source },
+        #[error("The configuration metadata has no file path")]
+        PathMissing,
+        #[error("The configuration metadata {metadata:?} wasn't part of the repository configuration")]
+        UnknownMetadata { metadata: gix_config::file::Metadata },
+        #[error("The configuration file at {path:?} wasn't part of the repository configuration")]
+        UnknownFile { path: std::path::PathBuf },
+        #[error("Could not acquire the lock for the configuration file")]
+        AcquireLock(#[from] gix_lock::acquire::Error),
+        #[error("Could not read metadata of the configuration file at {path:?}")]
+        Metadata {
+            source: std::io::Error,
+            path: std::path::PathBuf,
+        },
+        #[error(
+            "The configuration file at {path:?} changed since it was loaded (expected {expected:?}, actual {actual:?})"
+        )]
+        Stale {
+            path: std::path::PathBuf,
+            expected: Option<std::time::SystemTime>,
+            actual: std::time::SystemTime,
+        },
+        #[error("Could not prepare configuration sections for writing")]
+        Span(#[from] gix_config::parse::span::Error),
+        #[error("Could not write the configuration file at {path:?}")]
+        Write {
+            source: std::io::Error,
+            path: std::path::PathBuf,
+        },
+        #[error("Could not commit the configuration file lock")]
+        CommitLock(#[from] gix_lock::commit::Error<gix_lock::File>),
+        #[error("The changed configuration could not be applied")]
+        Config(#[from] crate::config::Error),
     }
 }
 
