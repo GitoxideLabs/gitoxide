@@ -1013,6 +1013,9 @@ pub(crate) fn draw_with_worktree(
             if app.can_split() {
                 options.push(("split", 'p'));
             }
+            if app.can_squash() {
+                options.push(("squash", 'q'));
+            }
             if app.changes_focus.is_none() && app.can_forget() {
                 options.push(("d forget", 'd'));
             }

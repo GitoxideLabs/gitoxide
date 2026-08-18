@@ -431,6 +431,109 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[O
     Ok(out)
 }
 
+pub(crate) fn squash_plan(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    source: ObjectId,
+    target: ObjectId,
+) -> Result<Plan> {
+    if source == target || !graph.is_ancestor(target, source) {
+        anyhow::bail!("the squash target must be a strict ancestor of the source");
+    }
+    let source_parents = graph
+        .parents_of(source)
+        .context("the squash source is not in the loaded history")?;
+    let [source_parent] = source_parents.as_slice() else {
+        anyhow::bail!("the squash source must have exactly one parent");
+    };
+    let source_parent = *source_parent;
+    let target_parents = graph
+        .parents_of(target)
+        .context("the squash target is not in the loaded history")?;
+    let [base] = target_parents.as_slice() else {
+        anyhow::bail!("the squash target must have exactly one parent");
+    };
+    let base = *base;
+    let scope = graph
+        .descendants_in_parent_order(target)
+        .context("the squash target is not in the loaded history")?;
+    let scope_set: HashSet<_> = scope.iter().copied().collect();
+    let mut non_leaves = HashSet::new();
+    for id in &scope {
+        let parents = graph
+            .parents_of(*id)
+            .context("an affected squash commit is incomplete")?;
+        if parents.len() > 1 {
+            anyhow::bail!("descendant merge commits cannot be squashed");
+        }
+        non_leaves.extend(parents.into_iter().filter(|parent| scope_set.contains(parent)));
+    }
+    let tips: Vec<_> = scope.iter().copied().filter(|id| !non_leaves.contains(id)).collect();
+    let mut steps = Vec::with_capacity(scope.len().saturating_sub(1));
+    let mut step_by_id = HashMap::new();
+    for id in scope.iter().copied().filter(|id| *id != source) {
+        let original_parent = graph
+            .parents_of(id)
+            .and_then(|parents| parents.first().copied())
+            .context("an affected squash commit has no parent")?;
+        let parent = if original_parent == source {
+            source_parent
+        } else {
+            original_parent
+        };
+        let parent = step_by_id
+            .get(&parent)
+            .copied()
+            .map_or(PlanParent::Existing(parent), PlanParent::Step);
+        let index = steps.len();
+        steps.push(PlanStep {
+            parent,
+            commit: PlanCommit::Pick(id),
+            squash: (id == target).then_some(source).into_iter().collect(),
+        });
+        step_by_id.insert(id, index);
+    }
+    let target_step = *step_by_id.get(&target).context("the squash target has no plan step")?;
+    step_by_id.insert(source, target_step);
+
+    let mut expected_refs = capture_refs(repo, &scope, &tips)?;
+    let source_tip_target = PlanParent::Step(step_by_id[&source_parent]);
+    for expected in &mut expected_refs {
+        if expected.target == source && expected.follows_tip {
+            expected.placement = Some(source_tip_target);
+        }
+    }
+    let head = repo.head()?;
+    let checkout = head
+        .id()
+        .map(gix::Id::detach)
+        .filter(|id| scope_set.contains(id))
+        .map(|id| {
+            let reference = head
+                .referent_name()
+                .filter(|name| name.category() == Some(Category::LocalBranch))
+                .map(ToOwned::to_owned);
+            let target = reference
+                .as_ref()
+                .and_then(|name| {
+                    expected_refs
+                        .iter()
+                        .find(|expected| expected.name == *name)
+                        .and_then(|expected| expected.placement)
+                })
+                .unwrap_or(PlanParent::Step(step_by_id[&id]));
+            PlanCheckout { target, reference }
+        });
+
+    Ok(Plan {
+        base,
+        scope,
+        steps,
+        checkout,
+        expected_refs,
+    })
+}
+
 #[tracing::instrument(skip_all, fields(signature = ?signature, tree = ?tree_mode))]
 pub(crate) fn perform(
     repo: &gix::Repository,
@@ -2807,6 +2910,46 @@ mod tests {
     }
 
     #[test]
+    fn a_conflicting_squash_plan_produces_a_materializable_continuation() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        std::fs::write(fixture.path().join("file"), b"source\n")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["commit", "-qam", "source"])
+                .status()?
+                .success()
+        );
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let target = repo.rev_parse_single("HEAD~2")?.detach();
+        let source = repo.head_id()?.detach();
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+
+        let PlanPerform::Conflict(conflict) = perform_plan(&repo, &graph, squash_plan(&repo, &graph, source, target)?)?
+        else {
+            return Err("the non-adjacent squash should suspend on its conflicting source delta".into());
+        };
+        assert_eq!(conflict.original(), source);
+        assert!(
+            conflict
+                .continuation_plan()
+                .steps
+                .iter()
+                .any(|step| matches!(step.commit, PlanCommit::Resolved(_))),
+            "the ordinary todo continuation can resume the squash"
+        );
+        drop(conflict);
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "an unmaterialized squash conflict leaves the repository unchanged"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn a_todo_rebase_eagerly_replays_only_the_checkout_ancestry_and_keeps_the_branch_at_the_leaf()
     -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
@@ -3088,6 +3231,125 @@ mod tests {
             Some(b"middle note\n\ntip note".as_slice()),
             "squashed Git notes concatenate in source order"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn squash_plan_moves_a_non_adjacent_source_into_its_target() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        std::fs::write(fixture.path().join("upper"), b"upper\n")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["add", "upper"])
+                .status()?
+                .success(),
+            "the extra source file is staged"
+        );
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["commit", "-q", "-m", "upper"])
+                .status()?
+                .success(),
+            "the non-adjacent squash source is committed"
+        );
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "-q", "-b", "side", "HEAD~2"])
+                .status()?
+                .success(),
+            "a sibling branch starts at the squash target"
+        );
+        std::fs::write(fixture.path().join("side"), b"side\n")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["add", "side"])
+                .status()?
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["commit", "-q", "-m", "side"])
+                .status()?
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "-q", "main"])
+                .status()?
+                .success()
+        );
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let target = repo.rev_parse_single("HEAD~2")?.detach();
+        let intermediate = repo.rev_parse_single("HEAD~1")?.detach();
+        let source = repo.head_id()?.detach();
+        let side = repo.rev_parse_single("side")?.detach();
+
+        let plan = squash_plan(&repo, &graph, source, target)?;
+        assert_eq!(plan.steps.len(), 3, "the source becomes part of the target step");
+        let step_for = |id| {
+            plan.steps
+                .iter()
+                .position(|step| step.commit == PlanCommit::Pick(id))
+                .expect("the retained commit has a plan step")
+        };
+        let target_step = step_for(target);
+        let intermediate_step = step_for(intermediate);
+        let side_step = step_for(side);
+        assert_eq!(plan.steps[target_step].squash, [source]);
+        assert_eq!(plan.steps[intermediate_step].parent, PlanParent::Step(target_step));
+        assert_eq!(plan.steps[side_step].parent, PlanParent::Step(target_step));
+        assert_eq!(
+            plan.checkout.as_ref().map(|checkout| checkout.target),
+            Some(PlanParent::Step(intermediate_step)),
+            "the attached tip follows the reordered stack"
+        );
+
+        let outcome = perform_plan(&repo, &graph, plan)?.complete()?;
+        let combined = outcome.map(target).context("the squash target is retained")?;
+        assert_eq!(
+            outcome.map(source),
+            Some(combined),
+            "the source maps to the combined commit"
+        );
+        let rewritten_intermediate = outcome
+            .map(intermediate)
+            .context("the intermediate commit is retained")?;
+        assert_eq!(
+            repo.find_commit(rewritten_intermediate)?
+                .parent_ids()
+                .next()
+                .map(gix::Id::detach),
+            Some(combined),
+            "the intermediate commit remains above the combined result"
+        );
+        assert_eq!(
+            repo.head_id()?.detach(),
+            rewritten_intermediate,
+            "the attached branch remains at the final reordered tip"
+        );
+        let rewritten_side = outcome.map(side).context("the sibling branch is retained")?;
+        assert_eq!(
+            repo.find_commit(rewritten_side)?
+                .parent_ids()
+                .next()
+                .map(gix::Id::detach),
+            Some(combined),
+            "a sibling fork remains attached to the rewritten target"
+        );
+        assert_eq!(repo.find_reference("refs/heads/side")?.id().detach(), rewritten_side);
         Ok(())
     }
 

@@ -1003,7 +1003,11 @@ space first; changes blocks adapt within the remaining history width.
   `e u` rebases it onto the newer hidden branch tip when available,
   `e o` rewords, `e n` creates a rebased child, `e f` forks an independent child,
   `e a` amends `@`, `e h` stashes changes at `@`, `e s` spills `@`, `e p` splits staged from unstaged changes,
-  and `e d d` confirms forgetting a top commit when each action is available.
+  `e q` squashes the selected commit, and `e d d` confirms forgetting a top commit when each action is available.
+- Squash accepts any visible strict ancestor whose affected descendants contain no merges. With one eligible
+  target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
+  and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
+  forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
 - `@` and `#` invoke detached and attached time travel directly, outside the edit
   group. Invoking either leaves an already expanded edit group open.
 - Edit shortcuts keep the group open. Navigation or another recognized command
