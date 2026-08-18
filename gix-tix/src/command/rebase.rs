@@ -38,8 +38,11 @@ pub(super) struct Todo {
     #[arg(long)]
     no_auto_hide: bool,
     /// Rebase the derived scope onto this commit instead of its fork point.
-    #[arg(long, value_name = "REV")]
+    #[arg(long, value_name = "REV", conflicts_with = "update_base")]
     onto: Option<OsString>,
+    /// Rebase onto the newer hidden local branch tip associated with the fork point.
+    #[arg(long)]
+    update_base: bool,
     /// Open the todo in Git's editor and apply it after the editor exits.
     #[arg(long)]
     edit_and_apply: bool,
@@ -97,12 +100,12 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
             revision.to_string_lossy()
         );
     }
-    let resolved_tips = history::snapshot(repo, &args.tips, &hide, false)?.view_tips;
+    let refs = history::snapshot(repo, &args.tips, &hide, false)?;
 
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
     let mut app = App::new(usize::MAX);
     let mut decorations = Decorations::default();
-    let mut complete = false;
+    let mut graph = None;
     history::load(
         repo,
         &args.tips,
@@ -115,15 +118,14 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
                 Event::Decorations(value) => decorations = value,
                 Event::Commits(commits) => app.extend_commits(commits),
                 Event::HiddenCommits(commits) => app.extend_hidden_commits(commits),
-                Event::Complete(_) => complete = true,
+                Event::Complete(value) => graph = Some(value),
                 Event::VisibleComplete | Event::Cancelled => {}
             }
             true
         },
     )?;
-    if !complete {
-        anyhow::bail!("history traversal did not produce a graph");
-    }
+    let graph = graph.context("history traversal did not produce a graph")?;
+    crate::update_hidden_branch_updates(&mut app, Some(&graph), &refs);
     let mut candidates = app.hidden_rebase_candidates();
     if candidates.len() != 1 {
         if candidates.is_empty() {
@@ -140,12 +142,21 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
         );
     }
     let (base, scope) = candidates.pop().context("one rebase candidate was expected")?;
-    let onto = args
-        .onto
-        .as_deref()
-        .map(|revision| resolve_commit(repo, revision, "onto revision"))
-        .transpose()?
-        .unwrap_or(base);
+    let (onto, onto_kind) = if args.update_base {
+        let onto = app
+            .hidden_branch_update(base)
+            .context("--update-base found no newer hidden local branch tip for the derived base")?;
+        (onto, todo::OntoKind::UpdatedBase)
+    } else {
+        (
+            args.onto
+                .as_deref()
+                .map(|revision| resolve_commit(repo, revision, "onto revision"))
+                .transpose()?
+                .unwrap_or(base),
+            todo::OntoKind::Onto,
+        )
+    };
 
     let mut notes = repo.notes().context("could not open Git notes")?;
     let row_indices: HashMap<_, _> = app
@@ -190,7 +201,7 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    todo::prepare(repo, base, onto, &commits, &resolved_tips, todo::OntoKind::Onto)
+    todo::prepare(repo, base, onto, &commits, &refs.view_tips, onto_kind)
 }
 
 fn resolve_commit(repo: &gix::Repository, revision: &OsStr, description: &str) -> Result<ObjectId> {
@@ -330,6 +341,7 @@ mod tests {
                 hide: vec!["HEAD~2".into()],
                 no_auto_hide: false,
                 onto: None,
+                update_base: false,
                 edit_and_apply: false,
                 tips: Vec::new(),
             },
@@ -357,6 +369,7 @@ mod tests {
                 hide: Vec::new(),
                 no_auto_hide: true,
                 onto: None,
+                update_base: false,
                 edit_and_apply: false,
                 tips: Vec::new(),
             },
@@ -393,6 +406,7 @@ mod tests {
                 hide: Vec::new(),
                 no_auto_hide: false,
                 onto: None,
+                update_base: false,
                 edit_and_apply: false,
                 tips: Vec::new(),
             },
@@ -401,6 +415,77 @@ mod tests {
             String::from_utf8(prepared.document)?.contains("# Rebase from"),
             "the inferred local default branch provides the rebase base"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn update_base_uses_the_newer_hidden_local_branch_tip() -> gix_testtools::Result {
+        let (fixture, repo) = repository()?;
+        drop(repo);
+        for args in [
+            &["branch", "base", "HEAD~2"][..],
+            &["checkout", "-q", "base"][..],
+            &[
+                "-c",
+                "user.name=updated base",
+                "-c",
+                "user.email=updated@example.com",
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "updated base",
+            ][..],
+            &["checkout", "-q", "main"][..],
+        ] {
+            let output = Command::new("git").current_dir(fixture.path()).args(args).output()?;
+            assert!(
+                output.status.success(),
+                "git {args:?} prepares the updated base: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            ["core.abbrev=7", "user.name=todo author", "user.email=todo@example.com"],
+        )?;
+        let updated = repo.rev_parse_single("base")?.detach();
+        let prepared = prepare(
+            &repo,
+            &Todo {
+                hide: vec!["base".into()],
+                no_auto_hide: false,
+                onto: None,
+                update_base: true,
+                edit_and_apply: false,
+                tips: Vec::new(),
+            },
+        )?;
+        let document = String::from_utf8(prepared.document)?;
+        assert!(
+            prepared.apply_unchanged,
+            "moving to the updated base makes an unchanged todo actionable"
+        );
+        assert!(
+            document.contains(&format!("{} (updated-base)", updated.to_hex_with_len(7))),
+            "the TUI-selected hidden tip is labelled as the updated base: {document}"
+        );
+
+        let err = prepare(
+            &repo,
+            &Todo {
+                hide: vec!["HEAD~2".into()],
+                no_auto_hide: false,
+                onto: None,
+                update_base: true,
+                edit_and_apply: false,
+                tips: Vec::new(),
+            },
+        )
+        .expect_err("a derived revision without a hidden local branch has no update target");
+        assert!(format!("{err:#}").contains("no newer hidden local branch tip"));
         Ok(())
     }
 
@@ -513,6 +598,7 @@ mod tests {
                 hide: vec!["HEAD~2".into()],
                 no_auto_hide: false,
                 onto: None,
+                update_base: false,
                 edit_and_apply: false,
                 tips: Vec::new(),
             },
