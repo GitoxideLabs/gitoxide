@@ -1,5 +1,5 @@
 #![allow(clippy::result_large_err)]
-use std::ffi::OsString;
+use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, time::SystemTime};
 
 use gix_sec::Permission;
 
@@ -58,6 +58,11 @@ impl Cache {
             cli_config_overrides,
             use_repository_local_environment,
         )?;
+        let config_files = config_files(&config);
+        let api_config_override_ids = config
+            .sections()
+            .filter_map(|section| (section.meta().source == gix_config::Source::Api).then_some(section.id()))
+            .collect();
 
         let hex_len = util::parse_core_abbrev(&config, object_hash).with_leniency(lenient_config)?;
 
@@ -80,6 +85,8 @@ impl Cache {
         // NOTE: When adding a new initial cache, consider adjusting `reread_values_and_clear_caches()` as well.
         Ok(Cache {
             resolved: config.into(),
+            config_files,
+            api_config_override_ids,
             use_multi_pack_index,
             object_hash,
             #[cfg(feature = "revision")]
@@ -331,6 +338,77 @@ pub(crate) fn load(
 }
 
 impl crate::Repository {
+    /// Reload configuration if any previously observed file changed.
+    pub(crate) fn refresh_config(&mut self) -> Result<(), Error> {
+        let observed_files = self
+            .config
+            .config_files
+            .keys()
+            .map(|path| (path.clone(), modified(path)))
+            .collect::<BTreeMap<_, _>>();
+        if observed_files == self.config.config_files {
+            return Ok(());
+        }
+
+        let runtime_api_sections = self
+            .config
+            .resolved
+            .sections()
+            .filter(|section| {
+                section.meta().source == gix_config::Source::Api
+                    && !self.config.api_config_override_ids.contains(&section.id())
+            })
+            .map(gix_config::file::SectionRef::to_owned)
+            .collect::<Vec<_>>();
+
+        let options = self.options.clone();
+        let common_dir = self.common_dir().to_owned();
+        let git_dir = self.git_dir().to_owned();
+        let mut stage_one = StageOne::new(
+            &common_dir,
+            &git_dir,
+            self.git_dir_trust(),
+            options.lossy_config,
+            options.lenient_config,
+        )?;
+        let head = self.refs.find("HEAD").ok();
+        let git_install_dir = crate::path::install_dir().ok();
+        let environment = options.permissions.env;
+        let home = gix_path::env::home_dir().and_then(|home| environment.home.check_opt(home));
+        let mut config = load(
+            Some(stage_one.git_dir_config),
+            &mut stage_one.buf,
+            Some(&common_dir),
+            head.as_ref().and_then(|head| head.target.try_name()),
+            git_install_dir.as_deref(),
+            home.as_deref(),
+            environment,
+            options.permissions.config,
+            options.lossy_config,
+            options.lenient_config,
+            &options.api_config_overrides,
+            &options.cli_config_overrides,
+            options.use_repository_local_environment,
+        )?;
+        let api_config_override_ids = config
+            .sections()
+            .filter_map(|section| (section.meta().source == gix_config::Source::Api).then_some(section.id()))
+            .collect();
+        for section in runtime_api_sections {
+            config.push_section(section)?;
+        }
+
+        let mut config_files = observed_files;
+        for path in config_paths(&config) {
+            config_files.entry(path.clone()).or_insert_with(|| modified(path));
+        }
+
+        self.reread_values_and_clear_caches_replacing_config(config.into())?;
+        self.config.config_files = config_files;
+        self.config.api_config_override_ids = api_config_override_ids;
+        Ok(())
+    }
+
     /// Replace our own configuration with `config` and re-read all cached values, and apply them to select in-memory instances.
     pub(crate) fn reread_values_and_clear_caches_replacing_config(
         &mut self,
@@ -367,6 +445,24 @@ impl crate::Repository {
         self.refs.write_reflog = util::reflog_or_default(self.config.reflog, self.workdir().is_some());
         self.refs.namespace.clone_from(&self.config.refs_namespace);
     }
+}
+
+fn config_paths(config: &gix_config::File) -> impl Iterator<Item = &PathBuf> {
+    config
+        .meta()
+        .path
+        .iter()
+        .chain(config.sections().filter_map(|section| section.meta().path.as_ref()))
+}
+
+fn config_files(config: &gix_config::File) -> BTreeMap<PathBuf, Option<SystemTime>> {
+    config_paths(config)
+        .map(|path| (path.clone(), modified(path)))
+        .collect()
+}
+
+fn modified(path: &std::path::Path) -> Option<SystemTime> {
+    path.metadata().and_then(|metadata| metadata.modified()).ok()
 }
 
 fn apply_environment_overrides(

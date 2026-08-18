@@ -14,9 +14,7 @@ pub mod overrides;
 pub mod tree;
 pub use tree::root::Tree;
 
-/// A platform to access configuration values as read from disk.
-///
-/// Note that these values won't update even if the underlying file(s) change.
+/// A platform to access configuration values frozen at the time it was created.
 pub struct Snapshot<'repo> {
     /// The owning repository.
     pub repo: &'repo Repository,
@@ -26,11 +24,7 @@ pub struct Snapshot<'repo> {
 /// as form of auto-commit.
 /// Note that the values will only affect this instance of the parent repository, and not other clones that may exist.
 ///
-/// Note that these values won't update even if the underlying file(s) change.
-///
 /// Use [`forget()`][Self::forget()] to not apply any of the changes.
-// TODO: make it possible to load snapshots with reloading via .config() and write mutated snapshots back to disk which should be the way
-//       to affect all instances of a repo, probably via `config_mut()` and `config_mut_at()`.
 pub struct SnapshotMut<'repo> {
     /// The owning repository.
     pub repo: Option<&'repo mut Repository>,
@@ -609,6 +603,10 @@ pub mod transport {
 #[derive(Clone)]
 pub(crate) struct Cache {
     pub resolved: crate::Config,
+    /// Modification times of all configuration files seen while loading `resolved`.
+    pub(crate) config_files: std::collections::BTreeMap<std::path::PathBuf, Option<std::time::SystemTime>>,
+    /// The API sections originating in `open::Options::config_overrides()`.
+    pub(crate) api_config_override_ids: Vec<gix_config::file::SectionId>,
     /// The hex-length to assume when shortening object ids. If `None`, it should be computed based on the approximate object count.
     pub hex_len: Option<usize>,
     /// `true` if the repository is designated as 'bare', without work tree. If `None`, the value wasn't configured.

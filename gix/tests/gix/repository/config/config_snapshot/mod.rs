@@ -1,6 +1,26 @@
 use gix::config::tree::{Branch, Core, Key, Pack, gitoxide};
 
-use crate::{named_repo, repo_rw};
+use crate::{named_repo, repo_rw, repo_rw_opts};
+
+fn write_config_with_new_mtime(path: &std::path::Path, config: &gix_config::File) -> crate::Result {
+    let previous = std::fs::metadata(path)?.modified()?;
+    std::fs::write(path, config.to_bstring())?;
+    let changed = previous
+        .checked_sub(std::time::Duration::from_secs(2))
+        .expect("fixture modification time is after the Unix epoch");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)?
+        .set_modified(changed)?;
+    assert_ne!(std::fs::metadata(path)?.modified()?, previous, "mtime must change");
+    Ok(())
+}
+
+fn options_with_includes() -> gix::open::Options {
+    let mut permissions = gix::open::Permissions::isolated();
+    permissions.config.includes = true;
+    gix::open::Options::isolated().permissions(permissions)
+}
 
 #[cfg(feature = "credentials")]
 mod credential_helpers;
@@ -269,5 +289,102 @@ fn reload_discards_in_memory_only_changes() -> crate::Result {
 
     repo.reload()?;
     assert_eq!(repo.config_snapshot().integer("core.abbrev"), None);
+    Ok(())
+}
+
+#[test]
+fn config_access_refreshes_file_changes_but_snapshot_access_does_not() -> crate::Result {
+    let (mut repo, _tmp) = repo_rw_opts("make_config_repo.sh", options_with_includes())?;
+    let original_index = repo.index_path();
+    let changed_index = repo.git_dir().join("changed-index");
+    let included_path = repo.git_dir().parent().expect("worktree repository").join("a.config");
+    let mut included = gix_config::File::from_path_no_includes(included_path.clone(), gix_config::Source::Local)?;
+    included.set_raw_value(Core::ABBREV, "4")?;
+    included.set_raw_value("gitoxide.core.indexFile", gix_path::into_bstr(&changed_index).as_ref())?;
+    write_config_with_new_mtime(&included_path, &included)?;
+
+    assert_eq!(
+        repo.config_snapshot_mut().integer("core.abbrev")?,
+        None,
+        "snapshot access must remain free of freshness checks"
+    );
+    assert_eq!(repo.config()?.integer("core.abbrev"), Some(4));
+    assert_eq!(
+        repo.head_id()?.shorten()?.to_string().len(),
+        4,
+        "cached values are refreshed"
+    );
+    assert_eq!(
+        repo.index_path(),
+        original_index,
+        "configuration refresh must not retarget repository paths"
+    );
+
+    std::fs::remove_file(&included_path)?;
+    assert_eq!(
+        repo.config()?.string("a.local-override").expect("base value remains"),
+        "base",
+        "deleting an included file refreshes the configuration"
+    );
+
+    std::fs::write(&included_path, included.to_bstring())?;
+    assert_eq!(
+        repo.config()?.integer("core.abbrev"),
+        Some(4),
+        "recreating a previously observed include refreshes it again"
+    );
+    Ok(())
+}
+
+#[test]
+fn config_mut_preserves_runtime_api_sections_without_duplicating_open_overrides() -> crate::Result {
+    let options = options_with_includes().config_overrides([
+        "user.name=gitoxide",
+        "user.email=gitoxide@localhost",
+        "refresh.open=from-options",
+    ]);
+    let (mut repo, _tmp) = repo_rw_opts("make_config_repo.sh", options)?;
+    repo.config_snapshot_mut()
+        .append_config(["refresh.runtime=from-api"], gix_config::Source::Api)?;
+
+    let included_path = repo.git_dir().parent().expect("worktree repository").join("a.config");
+    let mut included = gix_config::File::from_path_no_includes(included_path.clone(), gix_config::Source::Local)?;
+    included.set_raw_value("refresh.disk", "changed")?;
+    write_config_with_new_mtime(&included_path, &included)?;
+
+    let config = repo.config_mut()?;
+    assert_eq!(config.string("refresh.open").expect("opening override"), "from-options");
+    assert_eq!(config.string("refresh.runtime").expect("runtime API value"), "from-api");
+    assert_eq!(config.string("refresh.disk").expect("refreshed disk value"), "changed");
+    assert_eq!(
+        config
+            .sections()
+            .filter(|section| {
+                section.meta().source == gix_config::Source::Api && section.header().name() == "refresh"
+            })
+            .count(),
+        2,
+        "the opening and runtime API sections occur exactly once"
+    );
+    config.forget();
+
+    included.set_raw_value("refresh.disk", "changed-again")?;
+    write_config_with_new_mtime(&included_path, &included)?;
+    let config = repo.config_mut()?;
+    assert_eq!(config.string("refresh.runtime").expect("runtime API value"), "from-api");
+    assert_eq!(
+        config.string("refresh.disk").expect("refreshed disk value"),
+        "changed-again"
+    );
+    assert_eq!(
+        config
+            .sections()
+            .filter(|section| {
+                section.meta().source == gix_config::Source::Api && section.header().name() == "refresh"
+            })
+            .count(),
+        2,
+        "repeated refreshes neither duplicate nor lose API sections"
+    );
     Ok(())
 }

@@ -18,19 +18,28 @@ impl crate::Repository {
         )
     }
 
-    /// Return a snapshot of the configuration as seen upon opening the repository.
+    /// Return a snapshot of the currently cached configuration without checking files for changes.
     ///
-    /// Use [`reload()`](Self::reload()) to refresh it from disk.
+    /// Use [`config()`](Self::config()) to refresh changed configuration files first.
     pub fn config_snapshot(&self) -> config::Snapshot<'_> {
         config::Snapshot { repo: self }
     }
 
-    /// Return a mutable snapshot of the configuration as seen upon opening the repository, starting a transaction.
+    /// Return an up-to-date snapshot of the configuration, reloading it if any previously seen configuration file changed.
+    ///
+    /// Unlike [`config_snapshot()`](Self::config_snapshot()), this method performs filesystem checks and may reload configuration.
+    /// Repository locations remain as selected when the repository was opened; use [`reload()`](Self::reload()) to update those.
+    pub fn config(&mut self) -> Result<config::Snapshot<'_>, config::Error> {
+        self.refresh_config()?;
+        Ok(self.config_snapshot())
+    }
+
+    /// Return a mutable snapshot of the currently cached configuration without checking files for changes, starting a transaction.
     /// When the returned instance is dropped, it is applied in full, even if the reason for the drop is an error.
     ///
     /// Note that changes to the configuration are in-memory only and are observed only this instance
-    /// of the [`Repository`](crate::Repository). Use [`reload()`](Self::reload()) to discard them and
-    /// refresh the snapshot from disk.
+    /// of the [`Repository`](crate::Repository). Use [`config_mut()`](Self::config_mut()) to refresh changed files first,
+    /// or [`reload()`](Self::reload()) to discard in-memory changes and fully reopen the repository.
     ///
     /// Values used to locate repository files are fixed when the repository is opened and aren't reapplied by
     /// committing changes here. This includes `core.worktree` and `gitoxide.core.indexFile`; `GIT_DIR` likewise
@@ -42,6 +51,15 @@ impl crate::Repository {
             repo: Some(self),
             config,
         }
+    }
+
+    /// Return an up-to-date mutable configuration snapshot, reloading it if any previously seen configuration file changed.
+    ///
+    /// This otherwise has the same transaction and in-memory-only semantics as
+    /// [`config_snapshot_mut()`](Self::config_snapshot_mut()).
+    pub fn config_mut(&mut self) -> Result<config::SnapshotMut<'_>, config::Error> {
+        self.refresh_config()?;
+        Ok(self.config_snapshot_mut())
     }
 
     /// Return filesystem options as retrieved from the repository configuration.
