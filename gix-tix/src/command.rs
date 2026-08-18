@@ -750,6 +750,17 @@ mod tests {
             Some(Command::Rebase(rebase::Command::Todo(_)))
         ));
         assert!(matches!(
+            Cli::try_parse_from(["tix", "rebase", "todo", "-x", "main", "--update-base", "topic"])
+                .expect("rebase update todo parses")
+                .platform
+                .command,
+            Some(Command::Rebase(rebase::Command::Todo(_)))
+        ));
+        assert!(
+            Cli::try_parse_from(["tix", "rebase", "todo", "-x", "main", "--onto", "next", "--update-base"]).is_err(),
+            "explicit and inferred rebase targets are mutually exclusive"
+        );
+        assert!(matches!(
             Cli::try_parse_from(["tix", "rebase", "apply", "-"])
                 .expect("rebase apply parses")
                 .platform
