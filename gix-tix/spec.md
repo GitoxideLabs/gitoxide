@@ -69,9 +69,14 @@ without trading responsiveness for metadata that is not visible.
 - `-h/--help` prints Clap's standard help for `tix` and every subcommand.
 - `--quit-on-finish` exits after traversal and lane computation, for measurement
   and non-interactive use.
-- `tix rebase todo [-x HIDDEN...] [--no-auto-hide] [--onto REV] [TIP...]`
+- `tix rebase todo [-x HIDDEN...] [--no-auto-hide]
+  [--onto REV | --update-base] [TIP...]`
   writes a self-contained Markdown history-rebase plan to stdout. Visible tips
-  default to `HEAD`, and an ambiguous derived fork point is an error.
+  default to `HEAD`, and an ambiguous derived fork point is an error. With
+  `--update-base`, the uniquely derived fork point is rebased onto the same newer
+  hidden local branch tip offered by TUI `rebase-update`; absence of such a tip
+  is an error. The resulting `(updated-base)` plan remains actionable when saved
+  unchanged. `--update-base` and an explicit `--onto` are mutually exclusive.
   `--edit-and-apply` opens the same plan with Git's configured editor and applies
   it when the editor exits.
 - `tix show` and `tix rebase todo` automatically inspect symbolic
