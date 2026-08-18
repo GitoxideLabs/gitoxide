@@ -376,6 +376,7 @@ pub(crate) enum Action {
     Rebase,
     RebaseUpdate,
     Squash,
+    Move,
     Review,
     Forkpoint,
     TimeTravel,
@@ -415,6 +416,10 @@ pub(crate) enum Effect {
         commits: Vec<ObjectId>,
     },
     Squash {
+        source: ObjectId,
+        target: ObjectId,
+    },
+    Move {
         source: ObjectId,
         target: ObjectId,
     },
@@ -1057,7 +1062,7 @@ impl App {
         }
         if !matches!(
             &action,
-            Action::ToggleActions | Action::Squash | Action::Review | Action::Forkpoint
+            Action::ToggleActions | Action::Squash | Action::Move | Action::Review | Action::Forkpoint
         ) {
             self.actions_expanded = false;
         }
@@ -1391,6 +1396,12 @@ impl App {
                     self.clear_reachability_selection();
                     return vec![Effect::Squash { source, target }];
                 }
+            }
+            Action::Move if self.can_move() => {
+                return vec![Effect::Move {
+                    source: self.worktree_head.expect("move availability requires HEAD"),
+                    target: self.rows[self.selected.expect("move requires a selection")].id,
+                }];
             }
             Action::Review if self.can_finish_review() => {
                 return vec![Effect::FinishReview {
@@ -2130,6 +2141,33 @@ impl App {
                                 && self.is_known_ancestor(target.id, source.id)
                         })
                 })
+    }
+
+    pub(crate) fn can_move(&self) -> bool {
+        if self.state != State::Complete
+            || self.changes_focus.is_some()
+            || self.deferred_history_state.unwrap_or(self.state) != State::Complete
+        {
+            return false;
+        }
+        let Some(source) = self
+            .worktree_head
+            .and_then(|head| self.rows.iter().find(|row| row.id == head))
+        else {
+            return false;
+        };
+        let Some((target_index, target)) = self
+            .selected
+            .and_then(|index| self.rows.get(index).map(|row| (index, row)))
+        else {
+            return false;
+        };
+        source.parent_ids.len() == 1
+            && source.id != target.id
+            && source.parent_ids.first().copied() != Some(target.id)
+            && !self.is_row_hidden(target_index)
+            && !self.known_merge_descendants.contains(&source.id)
+            && !self.known_merge_descendants.contains(&target.id)
     }
 
     pub(crate) fn can_review(&self) -> bool {
@@ -3706,6 +3744,49 @@ mod tests {
     }
 
     #[test]
+    fn move_uses_current_head_and_the_selected_target() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        app.set_worktree_head(Some(id(5)), false);
+        complete(&mut app);
+        app.selected = app.rows.iter().position(|row| row.id == id(3));
+
+        assert!(app.can_move());
+        assert_eq!(
+            app.update(Action::Move),
+            vec![Effect::Move {
+                source: id(5),
+                target: id(3),
+            }]
+        );
+
+        app.selected = app.rows.iter().position(|row| row.id == id(4));
+        assert!(!app.can_move(), "the current parent is already directly below HEAD");
+        app.set_known_merge_descendants(HashSet::from([id(3)]));
+        app.selected = app.rows.iter().position(|row| row.id == id(3));
+        assert!(!app.can_move(), "a target with an affected merge is rejected");
+
+        let mut merge_target = App::new(10);
+        merge_target.extend_commits(vec![
+            row_with_parents(5, &[4]),
+            row(4),
+            row_with_parents(3, &[2, 1]),
+            row(2),
+            row(1),
+        ]);
+        merge_target.set_worktree_head(Some(id(5)), false);
+        complete(&mut merge_target);
+        merge_target.selected = merge_target.rows.iter().position(|row| row.id == id(3));
+        assert!(merge_target.can_move(), "an unchanged merge target is allowed");
+    }
+
+    #[test]
     fn selection_follows_the_oldest_commit_until_the_user_moves() {
         let mut app = App::new(2);
         app.extend_commits(vec![row(1), row(2), row(3)]);
@@ -4161,6 +4242,7 @@ mod tests {
         assert!(app.actions_expanded);
         app.update(Action::Review);
         app.update(Action::Squash);
+        app.update(Action::Move);
         assert!(app.actions_expanded, "grouped actions keep the group open");
         app.update(Action::ToggleActions);
         assert!(!app.actions_expanded, "the prefix key toggles the group");
