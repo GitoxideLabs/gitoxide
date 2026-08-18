@@ -2682,6 +2682,18 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("note: {err:#}")),
                     }
                 }
+                Effect::EditGitNote(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    match edit_git_note(terminal, &repository_path, repository_is_bare, id, enhanced_keyboard) {
+                        Ok(Some(saved)) => {
+                            app.clear_notes(id);
+                            app.leave_success(if saved { "saved Git note" } else { "cleared Git note" });
+                        }
+                        Ok(None) => {}
+                        Err(err) => app.leave_error(format!("Git note: {err:#}")),
+                    }
+                }
                 Effect::VerifySignatures(ids) => {
                     verification_receiver = Some(start_signature_verification(
                         repository_path.clone(),
@@ -3741,6 +3753,79 @@ fn edit_note(
     let repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing note")?;
     enrich::set_note(&repository, id, desired_note.map(AsRef::as_ref)).map(Some)
+}
+
+#[tracing::instrument(skip_all, fields(commit_id = %id))]
+fn edit_git_note(
+    terminal: &mut ratatui::DefaultTerminal,
+    repository_path: &Path,
+    bare: bool,
+    id: gix::ObjectId,
+    enhanced_keyboard: bool,
+) -> Result<Option<bool>> {
+    let (editor, reference, document) = {
+        let repository = open_repository(repository_path, bare, false)
+            .context("could not open repository before editing Git note")?;
+        let editor = repository.editor().context("no Git editor is available")?;
+        let notes = repository.notes().map_err(gix::Exn::into_error)?;
+        let reference = notes
+            .default_ref()
+            .context("no default Git notes reference is configured")?
+            .to_owned();
+        let mut notes = notes.with_refs([reference.as_bstr()]).map_err(gix::Exn::into_error)?;
+        let document = notes
+            .get(id)
+            .map_err(gix::Exn::into_error)?
+            .first()
+            .map(|note| note.blob.data.clone())
+            .unwrap_or_default();
+        (editor, reference, document)
+    };
+    let edited = edit::edit_document(
+        terminal,
+        &editor,
+        &document,
+        &format!("tix-git-note-{}.md", std::process::id()),
+        enhanced_keyboard,
+    )?;
+    let cleaned = edit::reword::cleanup_message(edited.as_deref().unwrap_or(&document), None);
+    if cleaned == document {
+        return Ok(None);
+    }
+
+    let repository =
+        open_repository(repository_path, bare, false).context("could not reopen repository after editing Git note")?;
+    set_git_note(
+        &repository,
+        reference.as_ref(),
+        id,
+        (!cleaned.is_empty()).then_some(cleaned.as_ref()),
+    )?;
+    Ok(Some(!cleaned.is_empty()))
+}
+
+fn set_git_note(
+    repository: &gix::Repository,
+    reference: &gix::refs::FullNameRef,
+    id: gix::ObjectId,
+    data: Option<&[u8]>,
+) -> Result<()> {
+    let mut notes = repository.notes().map_err(gix::Exn::into_error)?;
+    match data {
+        Some(data) => {
+            notes
+                .add_to_ref(reference, id, data)
+                .map_err(gix::Exn::into_error)
+                .context("could not save Git note")?;
+        }
+        None => {
+            notes
+                .remove(reference.as_bstr(), id)
+                .map_err(gix::Exn::into_error)
+                .context("could not remove Git note")?;
+        }
+    }
+    Ok(())
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -4939,6 +5024,7 @@ fn action_with_shortcut_groups(
         KeyCode::PageUp => Some(Action::PageUp),
         KeyCode::PageDown => Some(Action::PageDown),
         KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Last),
+        KeyCode::Char('g') if enrich_expanded => Some(Action::EditGitNote),
         KeyCode::Home | KeyCode::Char('g') => Some(Action::First),
         KeyCode::End | KeyCode::Char('G') => Some(Action::Last),
         KeyCode::Char('d') if history_display_expanded => Some(Action::ToggleDate),
@@ -5233,6 +5319,48 @@ mod tests {
         assert!(
             load_commit_message(&repository, id)?.starts_with(b"topic\n\n--- agent\n\nCo-authored-by:"),
             "on-demand loading retains the full commit message"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn creates_replaces_and_removes_a_git_note() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let id = repository.rev_parse_single("topic")?.detach();
+        let notes = repository.notes().map_err(gix::Exn::into_error)?;
+        let reference = notes
+            .default_ref()
+            .expect("the test repository has a default notes ref")
+            .to_owned();
+
+        for expected in [b"first".as_slice(), b"second".as_slice()] {
+            set_git_note(&repository, reference.as_ref(), id, Some(expected))?;
+            let mut notes = repository
+                .notes()
+                .map_err(gix::Exn::into_error)?
+                .with_refs([reference.as_bstr()])
+                .map_err(gix::Exn::into_error)?;
+            assert_eq!(
+                notes
+                    .get(id)
+                    .map_err(gix::Exn::into_error)?
+                    .first()
+                    .map(|note| note.blob.data.as_slice()),
+                Some(expected),
+                "the default note is created or replaced"
+            );
+        }
+
+        set_git_note(&repository, reference.as_ref(), id, None)?;
+        let mut notes = repository
+            .notes()
+            .map_err(gix::Exn::into_error)?
+            .with_refs([reference.as_bstr()])
+            .map_err(gix::Exn::into_error)?;
+        assert!(
+            notes.get(id).map_err(gix::Exn::into_error)?.is_empty(),
+            "empty editor content removes the note"
         );
         Ok(())
     }
@@ -6006,6 +6134,15 @@ mod tests {
                 true
             ),
             Some(Action::EditNote)
+        );
+        assert_eq!(
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+                false,
+                false,
+                true
+            ),
+            Some(Action::EditGitNote)
         );
         assert_eq!(
             action_with_shortcut_groups(
