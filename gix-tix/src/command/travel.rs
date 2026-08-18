@@ -13,16 +13,7 @@ pub(super) struct Args {
 }
 
 pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
-    let revision = gix::path::os_str_into_bstr(&args.revision)
-        .with_context(|| format!("revision {} is not valid UTF-8", args.revision.to_string_lossy()))?;
-    let selected = repository
-        .rev_parse_single(revision)
-        .with_context(|| format!("could not resolve revision {revision:?}"))?
-        .object()
-        .context("could not read time-travel destination")?
-        .peel_to_commit()
-        .context("time-travel destination does not resolve to a commit")?
-        .id;
+    let (selected, resolved_graph) = super::resolve_commit(&repository, &args.revision, "time-travel destination")?;
     let head = repository.head().context("could not read HEAD before time-travel")?;
     let head_id = head
         .id()
@@ -36,7 +27,10 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     }
 
     let revisions = vec![OsString::from("HEAD"), OsString::from(selected.to_string())];
-    let graph = crate::edit::loaded_view_graph_with(&repository, &revisions)?;
+    let graph = match resolved_graph {
+        Some(graph) => graph,
+        None => crate::edit::loaded_view_graph_with(&repository, &revisions)?,
+    };
     let forward = graph.is_ancestor(head_id, selected);
     if detached && !forward {
         let source_is_pinned = crate::history::all_pins(&repository)?
@@ -104,7 +98,10 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let middle = repository.rev_parse_single("HEAD~1")?.detach();
-        run(repository, args("HEAD~1"))?;
+        let change_id = crate::change_id::for_commit(&repository, middle)?
+            .to_reverse_hex_with_len(7)
+            .to_string();
+        run(repository, args(&change_id))?;
 
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(repository.head_id()?.detach(), middle);

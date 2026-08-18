@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering as CmpOrdering,
     collections::{HashMap, HashSet},
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -24,6 +25,57 @@ pub(crate) fn for_commit(repo: &gix::Repository, id: ObjectId) -> Result<ChangeI
         .context("could not read commit for its change ID")?;
     let commit = object.decode().context("could not decode commit for its change ID")?;
     Ok(effective(id, commit.extra_headers().find_all(HEADER)))
+}
+
+pub(crate) fn abbreviations(
+    repo: &gix::Repository,
+    ids: impl IntoIterator<Item = ObjectId>,
+    len: usize,
+) -> Result<HashMap<ObjectId, ChangeId>> {
+    let values = ids
+        .into_iter()
+        .map(|id| Ok((id, for_commit(repo, id)?)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(unique_abbreviations(values, len))
+}
+
+pub(crate) fn resolve_prefix(
+    repo: &gix::Repository,
+    prefix: &str,
+    ids: impl IntoIterator<Item = ObjectId>,
+) -> Result<Option<ObjectId>> {
+    let Ok(prefix) = gix::hash::Prefix::from_reverse_hex(prefix) else {
+        return Ok(None);
+    };
+    let mut found = None;
+    for id in ids {
+        let change_id = for_commit(repo, id)?;
+        if prefix.cmp_oid(&change_id) != CmpOrdering::Equal {
+            continue;
+        }
+        if found.replace(id).is_some() {
+            anyhow::bail!(
+                "change ID prefix {} is ambiguous in the default Tix view",
+                prefix.to_reverse_hex()
+            );
+        }
+    }
+    Ok(found)
+}
+
+fn unique_abbreviations(
+    values: impl IntoIterator<Item = (ObjectId, ChangeId)>,
+    len: usize,
+) -> HashMap<ObjectId, ChangeId> {
+    let mut by_prefix = HashMap::<String, Option<(ObjectId, ChangeId)>>::new();
+    for (id, change_id) in values {
+        let prefix = change_id.to_reverse_hex_with_len(len).to_string();
+        by_prefix
+            .entry(prefix)
+            .and_modify(|entry| *entry = None)
+            .or_insert(Some((id, change_id)));
+    }
+    by_prefix.into_values().flatten().collect()
 }
 
 pub(crate) fn inherit(repo: &gix::Repository, commit: &mut gix::objs::Commit, predecessor: ObjectId) -> Result<()> {
@@ -105,6 +157,29 @@ mod tests {
     }
 
     #[test]
+    fn abbreviates_only_unique_prefixes() -> gix_testtools::Result {
+        let shared_a = ChangeId::from_reverse_hex(format!("zzzzzzz{}", "k".repeat(33)).as_bytes())?;
+        let shared_b = ChangeId::from_reverse_hex(format!("zzzzzzz{}", "l".repeat(33)).as_bytes())?;
+        let duplicate = ChangeId::from_reverse_hex(format!("yyyyyyy{}", "m".repeat(33)).as_bytes())?;
+        let unique = ChangeId::from_reverse_hex(format!("xxxxxxx{}", "n".repeat(33)).as_bytes())?;
+        assert_eq!(
+            unique_abbreviations(
+                [
+                    (id(1), shared_a),
+                    (id(2), shared_b),
+                    (id(3), duplicate),
+                    (id(4), duplicate),
+                    (id(5), unique),
+                ],
+                7,
+            ),
+            HashMap::from([(id(5), unique)]),
+            "prefix collisions and complete duplicates are omitted"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn scans_the_whole_scene_for_duplicate_identities() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
@@ -114,6 +189,22 @@ mod tests {
             .extra_headers
             .push((HEADER.into(), ChangeId::from(predecessor).to_string().into()));
         let duplicate = repo.write_object(&duplicate)?.detach();
+
+        let prefix = ChangeId::from(predecessor).to_reverse_hex_with_len(7).to_string();
+        assert_eq!(
+            resolve_prefix(&repo, &prefix, [predecessor])?,
+            Some(predecessor),
+            "a unique default-view change ID resolves"
+        );
+        assert!(
+            format!(
+                "{:#}",
+                resolve_prefix(&repo, &prefix, [predecessor, duplicate])
+                    .expect_err("two commits sharing a change ID are ambiguous")
+            )
+            .contains("ambiguous"),
+            "ambiguity is reported explicitly"
+        );
 
         let mut successor = repo.find_commit(duplicate)?.decode()?.into_owned()?;
         successor.extra_headers.clear();
