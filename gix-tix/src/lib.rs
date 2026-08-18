@@ -796,8 +796,7 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
     let _log_guard = logging::init();
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
-    let (validation_repository, _) = open_history_repository(&mut repository_path, &common_dir)?;
-    let (hide, unavailable) = history::available_hidden_revisions(&validation_repository, &options.hide, false)?;
+    let (hide, unavailable) = validate_hidden_revisions(&mut repository_path, &common_dir, &options.hide)?;
     options.hide = hide;
     for (revision, err) in unavailable {
         eprintln!(
@@ -835,6 +834,15 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
         eprintln!("lane computation: {:.3}s", lane_time.as_secs_f64());
     }
     Ok(())
+}
+
+fn validate_hidden_revisions(
+    repository_path: &mut PathBuf,
+    common_dir: &Path,
+    hide: &[OsString],
+) -> Result<(Vec<OsString>, Vec<(OsString, String)>)> {
+    let (repository, _) = open_history_repository(repository_path, common_dir)?;
+    history::available_hidden_revisions(&repository, hide, false)
 }
 
 fn enable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
@@ -5727,6 +5735,20 @@ mod tests {
             "the intermediate path is absent"
         );
         assert_eq!(normalize_common_dir(indirect)?, git_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn startup_validation_returns_only_detached_hidden_revision_data() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        let repository = test_repository::open(&fixture)?;
+        let mut git_dir = repository.git_dir().to_owned();
+        let common_dir = repository.common_dir().to_owned();
+        drop(repository);
+
+        let (hide, unavailable) = validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("main")])?;
+        assert_eq!(hide, [OsString::from("main")]);
+        assert!(unavailable.is_empty(), "the fixture's main branch resolves");
         Ok(())
     }
 
