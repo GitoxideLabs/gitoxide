@@ -976,6 +976,13 @@ impl App {
         }
     }
 
+    pub(crate) fn visual_count(&self, index: usize) -> Option<usize> {
+        self.graph
+            .as_ref()
+            .and_then(|graph| graph.visual_counts.get(index))
+            .copied()
+    }
+
     pub(crate) fn attributions(&self, row: &CommitRow) -> &[Attribution] {
         debug_assert!(row.metadata_loaded, "visible rows have metadata");
         &self.attributions[row.attributions.clone()]
@@ -2379,6 +2386,7 @@ const CHECKPOINT_INTERVAL: usize = 256;
 pub(crate) struct Graph {
     offsets: Vec<usize>,
     columns: Vec<ObjectId>,
+    visual_counts: Vec<usize>,
 }
 
 impl Graph {
@@ -2387,6 +2395,7 @@ impl Graph {
         let mut graph = Graph {
             offsets: Vec::with_capacity(rows.len().div_ceil(CHECKPOINT_INTERVAL) + 1),
             columns: Vec::new(),
+            visual_counts: visual_counts(rows),
         };
         for (index, row) in rows.iter().enumerate() {
             if index % CHECKPOINT_INTERVAL == 0 {
@@ -2422,6 +2431,22 @@ impl Graph {
         }
         rendered
     }
+}
+
+fn visual_counts(rows: &[SharedCommitRow]) -> Vec<usize> {
+    let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
+    let mut counts = vec![0; rows.len()];
+    for (index, row) in rows.iter().enumerate().rev() {
+        let base = row
+            .parent_ids
+            .iter()
+            .filter_map(|parent| positions.get(parent).copied())
+            .map(|parent| parent.saturating_add(counts[parent]))
+            .min()
+            .unwrap_or(index);
+        counts[index] = base.saturating_sub(index);
+    }
+    counts
 }
 
 #[derive(Debug, Default)]
