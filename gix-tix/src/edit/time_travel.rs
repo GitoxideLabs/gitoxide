@@ -747,6 +747,27 @@ pub(crate) fn remove_pins(repository_path: &Path, bare: bool, selected: ObjectId
     Ok(pins.len())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PinToggle {
+    Created,
+    Removed(usize),
+}
+
+pub(crate) fn toggle_pin(repository_path: &Path, bare: bool, selected: ObjectId) -> Result<PinToggle> {
+    let repository =
+        open_repository(repository_path, bare, false).context("could not open repository to toggle a pin")?;
+    let pins: Vec<_> = history::all_pins(&repository)?
+        .into_iter()
+        .filter(|pin| !pin.is_head() && pin.id == selected)
+        .collect();
+    if pins.is_empty() {
+        create_or_reuse_pin(&repository, Target::Object(selected), selected, "tix TUI pin")?;
+        return Ok(PinToggle::Created);
+    }
+    drop(repository);
+    remove_pins(repository_path, bare, selected).map(PinToggle::Removed)
+}
+
 fn delete_pin_edit(pin: &history::Pin) -> RefEdit {
     RefEdit {
         change: Change::Delete {
@@ -1368,6 +1389,36 @@ mod tests {
         let pins = history::all_pins(&repository)?;
         assert!(pins.iter().any(history::Pin::is_head), "unpin preserves the HEAD pin");
         assert!(pins.iter().any(|pin| pin.id == other), "pins on other commits remain");
+        Ok(())
+    }
+
+    #[test]
+    fn toggles_one_direct_pin_without_touching_the_head_pin() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let selected = repository.rev_parse_single("main")?.detach();
+        let main = repository.find_reference("refs/heads/main")?.name().to_owned();
+        create_or_update_head_pin(&repository, &main, selected)?;
+        drop(repository);
+
+        assert_eq!(toggle_pin(&repository_path, false, selected)?, PinToggle::Created);
+        let repository = crate::test_repository::open(fixture.path())?;
+        let pins = history::all_pins(&repository)?;
+        assert_eq!(
+            pins.iter().filter(|pin| !pin.is_head() && pin.id == selected).count(),
+            1,
+            "pin creates one direct pin for the selected commit"
+        );
+        drop(repository);
+
+        assert_eq!(toggle_pin(&repository_path, false, selected)?, PinToggle::Removed(1));
+        let pins = history::all_pins(&crate::test_repository::open(fixture.path())?)?;
+        assert!(pins.iter().any(history::Pin::is_head), "unpin preserves the HEAD pin");
+        assert!(
+            pins.iter().all(|pin| pin.is_head() || pin.id != selected),
+            "unpin removes every ordinary pin at the selected commit"
+        );
         Ok(())
     }
 
