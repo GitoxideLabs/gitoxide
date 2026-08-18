@@ -268,7 +268,7 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
             super::print_ref_rewrites(&outcome.ref_rewrites);
             Ok(())
         }
-        rebase::PlanPerform::Conflict(conflict) => {
+        rebase::PlanPerform::Conflict(mut conflict) => {
             let Some(destination) = materialize_conflicts else {
                 anyhow::bail!(
                     "rebase aborted without changes: conflict while applying {}; pass --materialize-conflicts to opt in",
@@ -280,6 +280,7 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
                     "rebase aborted without changes: refusing to materialize a conflict without a continuation output file"
                 );
             }
+            conflict.persist_objects()?;
             let plan = conflict.continuation_plan();
             let mapped_tips = tips.iter().filter_map(|id| conflict.map(*id)).collect();
             let continuation = todo::prepare_continuation(conflict.repository(), &plan, mapped_tips)?.document;
@@ -506,13 +507,32 @@ mod tests {
     #[test]
     fn materialized_conflicts_emit_an_applicable_continuation_todo() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        // This descendant is rewritten into object memory after the earlier commit conflicts.
+        std::fs::write(fixture.path().join("after"), b"after\n")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["add", "after"])
+                .status()?
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["commit", "-q", "-m", "after"])
+                .status()?
+                .success()
+        );
         let repo = crate::test_repository::open_with(
             fixture.path(),
             ["user.name=todo author", "user.email=todo@example.com"],
         )?;
-        let base = repo.rev_parse_single("HEAD~2")?.detach();
-        let middle = repo.rev_parse_single("HEAD~1")?.detach();
-        let tip = repo.head_id()?.detach();
+        let base = repo.rev_parse_single("HEAD~3")?.detach();
+        let middle = repo.rev_parse_single("HEAD~2")?.detach();
+        let tip = repo.rev_parse_single("HEAD~1")?.detach();
+        let after = repo.head_id()?.detach();
         let prepared = todo::prepare(
             &repo,
             base,
@@ -528,8 +548,13 @@ mod tests {
                     parents: vec![base],
                     info: "middle".into(),
                 },
+                todo::Commit {
+                    id: after,
+                    parents: vec![tip],
+                    info: "after".into(),
+                },
             ],
-            &[tip],
+            &[after],
             todo::OntoKind::Onto,
         )?;
         let generated = std::str::from_utf8(&prepared.document)?;
@@ -537,14 +562,18 @@ mod tests {
             .find("<!-- tix-rebase-state-v2")
             .expect("generated state is present")..];
         let edited = format!(
-            "`@pick {}` tip\n──── fork {} ────\n\n{state}",
+            "`@pick {}` after\n`pick {}` tip\n──── fork {} ────\n\n{state}",
+            after.to_hex_with_len(7),
             tip.to_hex_with_len(7),
             base.to_hex_with_len(7)
         );
         let output_dir = gix_testtools::tempfile::tempdir()?;
         let output = output_dir.path().join("continue.md");
         let err = apply_document(repo, edited.as_bytes(), Some(&output)).expect_err("the conflict stops the command");
-        assert!(format!("{err:#}").contains("materialized conflict"));
+        assert!(
+            format!("{err:#}").contains("materialized conflict"),
+            "the conflict is materialized after its continuation is written: {err:#}"
+        );
         let continuation = std::fs::read(&output)?;
         assert!(
             continuation

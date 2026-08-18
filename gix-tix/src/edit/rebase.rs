@@ -179,6 +179,10 @@ impl PlanConflict {
         &self.conflict.prepared.repo
     }
 
+    pub(crate) fn persist_objects(&mut self) -> Result<()> {
+        self.conflict.prepared.persist_objects()
+    }
+
     pub(crate) fn map(&self, id: ObjectId) -> Option<ObjectId> {
         self.rewritten.get(&id).copied().unwrap_or(Some(id))
     }
@@ -1276,8 +1280,7 @@ pub(crate) fn perform_plan_with_progress(
 }
 
 impl Prepared {
-    fn finish(&mut self) -> Result<Outcome> {
-        let stash_edits = super::stash::rewrite_edits(&self.repo, &self.stash_rewritten, &self.removed)?;
+    fn persist_objects(&mut self) -> Result<()> {
         let objects = self
             .repo
             .objects
@@ -1288,6 +1291,18 @@ impl Prepared {
                 .write_buf_with_known_id(*kind, data, *id)
                 .map_err(|err| anyhow::anyhow!("could not persist a prepared rebase object: {err}"))?;
         }
+        self.repo.objects.set_object_memory(Default::default());
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<Outcome> {
+        let stash_edits = super::stash::rewrite_edits(&self.repo, &self.stash_rewritten, &self.removed)?;
+        self.persist_objects()?;
+        let _ = self
+            .repo
+            .objects
+            .take_object_memory()
+            .context("candidate object memory was unavailable")?;
 
         let transitions = worktree_transitions(
             &self.repo,
