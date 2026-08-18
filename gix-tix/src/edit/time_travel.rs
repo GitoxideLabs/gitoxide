@@ -24,6 +24,7 @@ use super::stash::SavedStash;
 pub(crate) enum Perform {
     Complete {
         notice: Option<String>,
+        selected: ObjectId,
         ref_rewrites: Vec<super::rebase::RefRewrite>,
     },
     Conflict(Conflict),
@@ -477,7 +478,11 @@ pub(crate) fn perform_reporting_rebased(
             super::stash::apply(repository_path, bare, &workdir, stash)?,
         );
     }
-    Ok(Perform::Complete { notice, ref_rewrites })
+    Ok(Perform::Complete {
+        notice,
+        selected,
+        ref_rewrites,
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

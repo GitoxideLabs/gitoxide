@@ -1512,13 +1512,17 @@ pub(crate) fn render_full(
     )?;
     let graph = graph.ok_or_else(|| anyhow::anyhow!("history traversal did not produce a graph"))?;
     let decorations = decorations.unwrap_or_default();
-    Ok(render_overview(
-        &Overview::new(&graph, &refs, &decorations, show_tags),
-        unicode,
-    ))
+    let overview = Overview::new(&graph, &refs, &decorations, show_tags);
+    let labels = overview
+        .nodes
+        .iter()
+        .filter(|node| node.raw_tip && node.decorations.is_empty())
+        .map(|node| Ok((node.id, crate::change_id::display(repository, node.id, 7)?)))
+        .collect::<anyhow::Result<HashMap<_, _>>>()?;
+    Ok(render_overview(&overview, unicode, &labels))
 }
 
-fn render_overview(overview: &Overview, unicode: bool) -> String {
+fn render_overview(overview: &Overview, unicode: bool, commit_labels: &HashMap<ObjectId, String>) -> String {
     if overview.nodes.is_empty() {
         return String::new();
     }
@@ -1548,7 +1552,11 @@ fn render_overview(overview: &Overview, unicode: bool) -> String {
         out.push_str(&lane);
         out.extend(std::iter::repeat_n(' ', placed.rail_width.saturating_sub(width)));
         if let Some(node) = node {
-            let label = rail_label(&overview.nodes[node], None);
+            let node = &overview.nodes[node];
+            let label = commit_labels
+                .get(&node.id)
+                .cloned()
+                .unwrap_or_else(|| rail_label(node, None));
             if unicode {
                 out.push_str(&label);
             } else {
@@ -2043,8 +2051,8 @@ mod tests {
             !overview.nodes.iter().any(|node| node.id == id(5)),
             "ordinary pin-only tips are absent"
         );
-        let unicode = render_overview(overview, true);
-        let ascii = render_overview(overview, false);
+        let unicode = render_overview(overview, true, &HashMap::new());
+        let ascii = render_overview(overview, false, &HashMap::new());
         assert_eq!(unicode.matches('📌').count(), 1, "detached HEAD has one marker");
         assert!(
             unicode.contains("★main"),
@@ -2414,7 +2422,7 @@ mod tests {
     fn full_rendering_is_unstyled_ascii() {
         let (graph, refs, decorations) = fixture();
         let overview = Overview::new(&graph, &refs, &decorations, true);
-        let rendered = render_overview(&overview, false);
+        let rendered = render_overview(&overview, false, &HashMap::new());
 
         assert!(rendered.contains("main"), "HEAD is rendered without selection state");
         assert!(rendered.contains("topic"), "ordinary nodes retain their label");
@@ -2425,11 +2433,27 @@ mod tests {
     }
 
     #[test]
+    fn full_rendering_pairs_raw_commit_tips_with_change_ids() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let mut commit = repo.head_commit()?.decode()?.into_owned()?;
+        commit.message = "unreferenced raw tip".into();
+        let id = repo.write_object(&commit)?.detach();
+        let rendered = render_full(&repo, &[id.to_string().into()], &[], true, false)?;
+
+        assert!(
+            rendered.contains(&crate::change_id::display(&repo, id, 7)?),
+            "a displayed raw hash is immediately followed by its change ID: {rendered:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn rail_layout_uses_rounded_unicode_connections_and_ascii_fallbacks() {
         let (graph, refs, decorations) = fixture();
         let overview = Overview::new(&graph, &refs, &decorations, true);
-        let unicode = render_overview(&overview, true);
-        let ascii = render_overview(&overview, false);
+        let unicode = render_overview(&overview, true, &HashMap::new());
+        let ascii = render_overview(&overview, false, &HashMap::new());
 
         assert!(
             unicode.contains("│ ● topic"),

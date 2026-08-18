@@ -210,7 +210,7 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    todo::prepare(repo, base, onto, &commits, &refs.view_tips, onto_kind)
+    todo::prepare(repo, base, onto, &commits, &refs.view_tips, onto_kind, true)
 }
 
 fn resolve_commit(repo: &gix::Repository, revision: &OsStr, description: &str) -> Result<ObjectId> {
@@ -259,13 +259,14 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
     match rebase::perform_plan(&repo, &graph, parsed.plan)? {
         rebase::PlanPerform::Complete(outcome) => {
             let revisions = mapped_revisions(&tips, |id| outcome.map(id));
-            if outcome.selected.is_some() {
+            if let Some(selected) = outcome.selected {
                 let notice = edit::time_travel::checkout_plan(&repository_path, bare, &outcome, &revisions, false)?;
-                println!("{}", notice.unwrap_or_else(|| "rebased history".into()));
+                let notice = notice.unwrap_or_else(|| "rebased history".into());
+                println!("{}", super::notice_with_change_id(&repo, &notice, selected)?);
             } else {
                 println!("rebased history");
             }
-            super::print_ref_rewrites(&outcome.ref_rewrites);
+            super::print_ref_rewrites(&repo, &outcome.ref_rewrites)?;
             Ok(())
         }
         rebase::PlanPerform::Conflict(mut conflict) => {
@@ -283,7 +284,7 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
             conflict.persist_objects()?;
             let plan = conflict.continuation_plan();
             let mapped_tips = tips.iter().filter_map(|id| conflict.map(*id)).collect();
-            let continuation = todo::prepare_continuation(conflict.repository(), &plan, mapped_tips)?.document;
+            let continuation = todo::prepare_continuation(conflict.repository(), &plan, mapped_tips, true)?.document;
             let revisions = mapped_revisions(&tips, |id| conflict.map(id));
             if destination == Path::new("-") {
                 let mut stdout = std::io::stdout().lock();
@@ -314,7 +315,7 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
                     return Err(err);
                 }
             };
-            super::print_ref_rewrites(&ref_rewrites);
+            super::print_ref_rewrites(&repo, &ref_rewrites)?;
             eprintln!("{notice}; continue with `tix rebase apply {}`", destination.display());
             anyhow::bail!("rebase stopped at a materialized conflict")
         }
@@ -483,7 +484,10 @@ mod tests {
             "moving to the updated base makes an unchanged todo actionable"
         );
         assert!(
-            document.contains(&format!("{} (updated-base)", updated.to_hex_with_len(7))),
+            document.contains(&format!(
+                "{} (updated-base)",
+                crate::change_id::display_short(&repo, updated)?
+            )),
             "the TUI-selected hidden tip is labelled as the updated base: {document}"
         );
 
@@ -556,6 +560,7 @@ mod tests {
             ],
             &[after],
             todo::OntoKind::Onto,
+            true,
         )?;
         let generated = std::str::from_utf8(&prepared.document)?;
         let state = &generated[generated

@@ -3881,6 +3881,7 @@ fn rebase_history(
             &commits,
             &[],
             edit::todo::OntoKind::UpdatedBase,
+            false,
         )?;
         (prepared, editor)
     };
