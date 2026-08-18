@@ -1119,15 +1119,14 @@ pub(crate) fn draw_with_worktree(
     ordered.extend(shortcut("enrich", 'n', true));
     if app.enrich_expanded {
         ordered.push(Span::raw(" ("));
-        if app.can_reword() {
-            let (todo, note) = app
-                .selected
-                .and_then(|index| app.rows.get(index))
-                .map(|row| (app.todo(row.id), app.note(row.id).is_some()))
-                .unwrap_or_default();
-            ordered.extend(shortcut("todo", 't', todo));
-            ordered.push(Span::raw(" · "));
-            ordered.extend(shortcut("note", 'o', note));
+        if let Some(row) = app.selected.and_then(|index| app.rows.get(index)) {
+            if app.can_reword() {
+                ordered.extend(shortcut("todo", 't', app.todo(row.id)));
+                ordered.push(Span::raw(" · "));
+                ordered.extend(shortcut("note", 'o', app.note(row.id).is_some()));
+                ordered.push(Span::raw(" · "));
+            }
+            ordered.extend(shortcut("git note", 'g', !app.notes(row.id).is_empty()));
         } else {
             ordered.push(Span::raw("no actions"));
         }
@@ -2653,8 +2652,8 @@ mod tests {
         app.enrich_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).contains("enrich (todo · note)"),
-            "the enrich group advertises both actions"
+            rendered_line(&terminal, 1).contains("enrich (todo · note · git note)"),
+            "the enrich group advertises all note actions"
         );
         app.enrich_expanded = false;
 

@@ -356,6 +356,7 @@ pub(crate) enum Action {
     ToggleEnrich,
     ToggleTodo,
     EditNote,
+    EditGitNote,
     ToggleInformation,
     ToggleAlign,
     ToggleCommit,
@@ -424,6 +425,7 @@ pub(crate) enum Effect {
     Unpin(ObjectId),
     ToggleTodo(ObjectId),
     EditNote(ObjectId),
+    EditGitNote(ObjectId),
     VerifySignatures(Vec<ObjectId>),
     Quit,
 }
@@ -942,6 +944,10 @@ impl App {
         self.notes.insert(id, notes);
     }
 
+    pub(crate) fn clear_notes(&mut self, id: ObjectId) {
+        self.notes.remove(&id);
+    }
+
     pub(crate) fn notes(&self, id: ObjectId) -> &[BString] {
         self.notes.get(&id).map(Vec::as_slice).unwrap_or_default()
     }
@@ -1032,7 +1038,10 @@ impl App {
         ) {
             self.edit_expanded = false;
         }
-        if !matches!(&action, Action::ToggleEnrich | Action::ToggleTodo | Action::EditNote) {
+        if !matches!(
+            &action,
+            Action::ToggleEnrich | Action::ToggleTodo | Action::EditNote | Action::EditGitNote
+        ) {
             self.enrich_expanded = false;
         }
         if !matches!(
@@ -1376,6 +1385,11 @@ impl App {
                 return vec![Effect::EditNote(
                     self.rows[self.selected.expect("note requires a selection")].id,
                 )];
+            }
+            Action::EditGitNote => {
+                if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
+                    return vec![Effect::EditGitNote(id)];
+                }
             }
             Action::VerifySignatures if !self.signature_verification_running => {
                 let start = self.offset.min(self.rows.len());
@@ -3974,7 +3988,7 @@ mod tests {
     }
 
     #[test]
-    fn enrich_group_updates_only_mutable_commits() {
+    fn enrich_group_keeps_git_notes_available_on_immutable_commits() {
         let mut app = App::new(1);
         app.extend_commits(vec![row(1)]);
         complete(&mut app);
@@ -3991,6 +4005,11 @@ mod tests {
             vec![Effect::EditNote(id(1))],
             "note uses the same eligibility"
         );
+        assert_eq!(
+            app.update(Action::EditGitNote),
+            vec![Effect::EditGitNote(id(1))],
+            "Git notes are available on every selection"
+        );
         assert!(app.enrich_expanded, "the grouped actions keep enrich open");
 
         app.update(Action::MoveDown);
@@ -4006,6 +4025,11 @@ mod tests {
             "hidden boundaries are immutable"
         );
         assert!(app.update(Action::EditNote).is_empty());
+        assert_eq!(
+            app.update(Action::EditGitNote),
+            vec![Effect::EditGitNote(id(1))],
+            "immutable boundaries still accept Git notes"
+        );
     }
 
     #[test]

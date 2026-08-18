@@ -177,6 +177,13 @@ mod tests {
             .replacen(b"what\n\nwhy", b"upper\n\nreason", 1)
             .replacen(b";Todo\n;Message:", b"Todo\nMessage: split enrichment", 1);
         let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        let repository = open(fixture.path())?;
+        let mut notes = repository.notes()?;
+        let notes_ref = notes
+            .default_ref()
+            .expect("the test repository has a default notes ref")
+            .to_owned();
+        notes.add_to_ref(notes_ref.as_ref(), old, b"source Git note")?;
         let upper = apply(open(fixture.path())?, &graph, prepared, &edited)?;
         let repository = open(fixture.path())?;
         assert_eq!(
@@ -227,6 +234,16 @@ mod tests {
             crate::change_id::effective(source, source_commit.extra_headers().find_all(crate::change_id::HEADER)),
             gix::hash::ChangeId::from(old),
             "the rewritten lower commit inherits the original identity"
+        );
+        let mut notes = repository.notes()?.with_refs([notes_ref.as_bstr()])?;
+        assert_eq!(
+            notes.get(source)?.first().map(|note| note.blob.data.as_slice()),
+            Some(b"source Git note".as_slice()),
+            "the rewritten lower commit receives the source Git note"
+        );
+        assert!(
+            notes.get(upper)?.is_empty(),
+            "the newly inserted upper commit receives no source Git note"
         );
         assert_eq!(
             repository
