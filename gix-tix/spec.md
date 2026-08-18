@@ -78,7 +78,9 @@ without trading responsiveness for metadata that is not visible.
   is an error. The resulting `(updated-base)` plan remains actionable when saved
   unchanged. `--update-base` and an explicit `--onto` are mutually exclusive.
   `--edit-and-apply` opens the same plan with Git's configured editor and applies
-  it when the editor exits.
+  it when the editor exits. It also accepts `--materialize-conflicts [CONTINUE]`
+  to opt into the same conflict checkout and continuation-document workflow as
+  `tix rebase apply`; the option requires `--edit-and-apply`.
 - `tix show` and `tix rebase todo` automatically inspect symbolic
   `refs/remotes/<remote>/HEAD` references. Their targets are reverse-mapped
   through each remote's fetch refspec, and existing local commit branches are
@@ -911,11 +913,12 @@ space first; changes blocks adapt within the remaining history width.
   without writes.
   Once the index has no unresolved stages, `<enter>` continues; another conflict
   repeats the same choice.
-- Command-line apply reports a conflict without changes unless
-  `--materialize-conflicts` was explicitly supplied. Its continuation document
-  uses the full null object ID for the command whose tree must come from the
-  resolved index. Already produced commits use their new IDs, completed drops and
-  squash sources disappear, unapplied squash sources remain, and the remaining
+- Command-line apply, including todo `--edit-and-apply`, reports a conflict
+  without changes unless `--materialize-conflicts` was explicitly supplied. Its
+  continuation document uses the full null object ID for the command whose tree
+  must come from the resolved index. Already produced commits use their new IDs,
+  completed drops and squash sources disappear, unapplied squash sources remain,
+  and the remaining
   todo stays editable. Applying it
   requires only that `HEAD` names a commit and the index has no unresolved stages;
   the index tree, including additional staged changes, becomes the resolved tree.
