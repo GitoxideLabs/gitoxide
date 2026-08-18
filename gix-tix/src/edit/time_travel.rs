@@ -239,6 +239,7 @@ where
         .then_some(departure)
         .flatten()
         .filter(|departure| *departure != selected)
+        .filter(|departure| !contains(&repository, *departure, selected))
         .map(|departure| {
             let target = head_ref.clone().map_or(Target::Object(departure), Target::Symbolic);
             create_or_reuse_pin(&repository, target, departure, "tix time-travel")
