@@ -2430,7 +2430,7 @@ fn signature_color(signature: SignatureState) -> Color {
         SignatureState::Unverified | SignatureState::Verifying => Color::Rgb(255, 165, 0),
         SignatureState::Verified => Color::Green,
         SignatureState::Failed => Color::LightRed,
-        SignatureState::PendingRebase => Color::LightCyan,
+        SignatureState::PendingRebase => Color::Gray,
     }
 }
 
@@ -4001,7 +4001,7 @@ mod tests {
             (SignatureState::Unverified, Color::Rgb(255, 165, 0)),
             (SignatureState::Verified, Color::Green),
             (SignatureState::Failed, Color::LightRed),
-            (SignatureState::PendingRebase, Color::LightCyan),
+            (SignatureState::PendingRebase, Color::Gray),
         ];
         let mut terminal = Terminal::new(TestBackend::new(4, states.len() as u16))?;
         terminal.draw(|frame| {
