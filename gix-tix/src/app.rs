@@ -331,6 +331,7 @@ pub(crate) enum Action {
     MoveDown,
     MoveUpBy(usize),
     MoveDownBy(usize),
+    CycleDuplicate,
     ScrollLeft,
     ScrollRight,
     HalfPageUp,
@@ -656,6 +657,10 @@ impl App {
 
     pub(crate) fn has_duplicate_change_id(&self, id: ObjectId) -> bool {
         self.duplicate_change_ids.contains(&id)
+    }
+
+    pub(crate) fn can_cycle_duplicate(&self) -> bool {
+        self.changes_focus.is_none() && self.next_duplicate().is_some()
     }
 
     pub(crate) fn set_change_ids(&mut self, change_ids: HashMap<ObjectId, ChangeId>, duplicates: HashSet<ObjectId>) {
@@ -1051,6 +1056,13 @@ impl App {
             Action::MoveDown => self.move_reachable(1, true),
             Action::MoveUpBy(distance) => self.move_reachable(distance, false),
             Action::MoveDownBy(distance) => self.move_reachable(distance, true),
+            Action::CycleDuplicate => {
+                if self.changes_focus.is_none()
+                    && let Some(selected) = self.next_duplicate()
+                {
+                    self.select(selected);
+                }
+            }
             Action::ScrollLeft => {
                 if self.changes_focus.is_some() {
                     self.pan_changes(false);
@@ -1836,6 +1848,18 @@ impl App {
         }
         self.follow_tail = false;
         self.ensure_visible();
+    }
+
+    fn next_duplicate(&self) -> Option<usize> {
+        let selected = self.selected?;
+        let id = self.rows.get(selected)?.id;
+        if !self.has_duplicate_change_id(id) {
+            return None;
+        }
+        let change_id = self.change_id(id);
+        ((selected + 1)..self.rows.len())
+            .chain(0..selected)
+            .find(|index| self.change_id(self.rows[*index].id) == change_id)
     }
 
     fn move_reachable(&mut self, distance: usize, down: bool) {
@@ -2735,6 +2759,47 @@ mod tests {
             .expect("a loading app starts lane computation");
         let (rows, graph, lane_time) = compute_lanes(rows);
         app.finish_lane_computation(rows, graph, lane_time);
+    }
+
+    #[test]
+    fn cycles_duplicate_change_ids_and_wraps() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row(1), row(2), row(3), row(4), row(5)]);
+        complete(&mut app);
+        let duplicate = ChangeId::from(id(9));
+        app.set_change_ids(
+            HashMap::from([(id(1), duplicate), (id(3), duplicate), (id(5), duplicate)]),
+            HashSet::from([id(1), id(3), id(5)]),
+        );
+
+        assert!(app.can_cycle_duplicate());
+        for expected in [id(3), id(5), id(1)] {
+            app.update(Action::CycleDuplicate);
+            assert_eq!(
+                app.selected.map(|index| app.rows[index].id),
+                Some(expected),
+                "duplicate cycling skips unrelated rows and wraps"
+            );
+            assert!(
+                app.selected
+                    .is_some_and(|selected| selected >= app.offset && selected < app.offset + 2),
+                "duplicate cycling keeps the new selection visible"
+            );
+        }
+
+        app.changes_focus = Some(ChangePane::Tree);
+        assert!(!app.can_cycle_duplicate());
+        app.update(Action::CycleDuplicate);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(1)),
+            "duplicate cycling does not move history while a changes pane is focused"
+        );
+        app.changes_focus = None;
+        app.select_commit(id(2));
+        assert!(!app.can_cycle_duplicate());
+        app.update(Action::CycleDuplicate);
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(2)));
     }
 
     fn show_tree_changes(app: &mut App) {
