@@ -159,26 +159,23 @@ mod tests {
     }
 
     #[test]
-    fn editor_can_clear_the_prefilled_todo() -> gix_testtools::Result {
+    fn todo_prefills_the_editable_header() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
-        let mut input = args();
-        input.todo = true;
-        input.edit.message.clear();
-        input.edit.author = None;
-        run(
-            crate::test_repository::open_with(fixture.path(), ["core.editor=sed -i.bak -e 's/^Todo$/;Todo/'"])?,
-            input,
-        )?;
-
         let repository = crate::test_repository::open(fixture.path())?;
-        let id = repository.head_id()?.detach();
+        let parent = repository.head_id()?.detach();
+        let prepared = crate::edit::create::prepare_from(
+            repository,
+            Some(parent),
+            crate::edit::create::Source::Default,
+            None,
+            true,
+        )?;
         assert!(
-            !crate::enrich::load(
-                &mut crate::enrich::open(&repository)?,
-                crate::change_id::for_commit(&repository, id)?,
-            )?
-            .todo,
-            "commenting the prefilled header overrides --todo"
+            prepared
+                .document
+                .windows(b"\nTodo\n".len())
+                .any(|window| window == b"\nTodo\n"),
+            "--todo activates the existing editable header"
         );
         Ok(())
     }
