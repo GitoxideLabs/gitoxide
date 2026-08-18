@@ -53,10 +53,6 @@ pub(crate) enum Edit {
         commit: gix::objs::Commit,
         reset_index: bool,
     },
-    Fork {
-        anchor: ObjectId,
-        commit: gix::objs::Commit,
-    },
     Remove {
         target: ObjectId,
     },
@@ -597,29 +593,19 @@ fn perform_inner(
         Edit::Repeat { checkout, .. } => Some(*checkout),
         _ => None,
     };
-    let (root, replacement, inserted, reset_index, forked, removed, repeat, mut split_upper) = match edit {
-        Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false, false, false, None),
+    let (root, replacement, inserted, reset_index, removed, repeat, mut split_upper) = match edit {
+        Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false, false, None),
         Edit::Insert {
             anchor,
             commit,
             reset_index,
-        } => (anchor, Some(commit), true, reset_index, false, false, false, None),
-        Edit::Fork { anchor, commit } => (Some(anchor), Some(commit), false, false, true, false, false, None),
-        Edit::Remove { target } => (Some(target), None, false, false, false, true, false, None),
-        Edit::Split { target, source, upper } => (
-            Some(target),
-            Some(source),
-            false,
-            false,
-            false,
-            false,
-            false,
-            Some(upper),
-        ),
-        Edit::Repeat { base, .. } => (Some(base), None, false, false, false, false, true, None),
+        } => (anchor, Some(commit), true, reset_index, false, false, None),
+        Edit::Remove { target } => (Some(target), None, false, false, true, false, None),
+        Edit::Split { target, source, upper } => (Some(target), Some(source), false, false, false, false, Some(upper)),
+        Edit::Repeat { base, .. } => (Some(base), None, false, false, false, true, None),
     };
 
-    let affected = match root.filter(|_| !forked) {
+    let affected = match root {
         Some(root) => graph
             .descendants_in_parent_order(root)
             .context("the edited commit is not in the loaded history")?,
@@ -642,7 +628,7 @@ fn perform_inner(
     let mut note_rewrites = Vec::new();
     let mut selected = None;
     let mut conflict = None;
-    if inserted || forked {
+    if inserted {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
         let id = write_commit(
@@ -654,12 +640,10 @@ fn perform_inner(
             signing.clone(),
         )?;
         selected = Some(id);
-        if inserted {
-            if let Some(root) = root {
-                rewritten.insert(root, Some(id));
-            } else {
-                rewritten.insert(id, Some(id));
-            }
+        if let Some(root) = root {
+            rewritten.insert(root, Some(id));
+        } else {
+            rewritten.insert(id, Some(id));
         }
     } else if removed {
         let root = root.context("a removed commit is required")?;
@@ -784,8 +768,7 @@ fn perform_inner(
         }
     }
 
-    let marked = (!forked && matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants))
-        || conflict.is_some();
+    let marked = matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) || conflict.is_some();
     let checkout_after_finish = conflict.is_some();
     let mut prepared = Prepared {
         repo,
@@ -793,7 +776,6 @@ fn perform_inner(
         reset_index: if inserted { reset_index } else { marked },
         reset_index_paths,
         skip_worktree_transitions: inserted
-            || forked
             || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed),
         selected,
         note_rewrites,
@@ -808,11 +790,7 @@ fn perform_inner(
         expected_refs: None,
         checkout_reference: None,
         checkout_after_finish,
-        pins: if forked {
-            selected.into_iter().collect()
-        } else {
-            Vec::new()
-        },
+        pins: Vec::new(),
         delete_refs,
     };
     match conflict {

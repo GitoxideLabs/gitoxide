@@ -942,7 +942,8 @@ pub(crate) fn draw_with_worktree(
     let mut footer_spans = vec![Span::raw(status)];
     let mut time_travel = None;
     let mut attached_time_travel = false;
-    let mut edit_prefix_spans = Vec::new();
+    let mut commit_prefix_spans = Vec::new();
+    let mut actions_prefix_spans = Vec::new();
     if app.changes_focus != Some(ChangePane::Worktree) || app.can_amend() {
         let head_visible = decorations
             .values()
@@ -974,18 +975,13 @@ pub(crate) fn draw_with_worktree(
             None
         };
         attached_time_travel = head_visible && app.attached_time_travel_shortcut_visible();
-        if app.edit_expanded {
+        if app.commit_expanded {
             let mut options = Vec::new();
             if app.can_rebase() {
                 options.push(("rebase", 'b'));
             }
             if app.can_rebase_update() {
                 options.push(("rebase-update", 'u'));
-            }
-            if app.can_finish_review() {
-                options.push(("finish-review", 'v'));
-            } else if app.can_review() {
-                options.push(("review", 'v'));
             }
             if app.changes_focus.is_none() && app.reword_shortcut_visible() {
                 options.push(("reword", 'o'));
@@ -995,9 +991,6 @@ pub(crate) fn draw_with_worktree(
             }
             if app.changes_focus.is_none() && app.can_create_empty_commit() {
                 options.push(("new-empty", 'm'));
-            }
-            if app.can_fork_commit() {
-                options.push(("fork", 'f'));
             }
             if app.can_amend() {
                 options.push(("amend", 'a'));
@@ -1013,9 +1006,6 @@ pub(crate) fn draw_with_worktree(
             if app.can_split() {
                 options.push(("split", 'p'));
             }
-            if app.can_squash() {
-                options.push(("squash", 'q'));
-            }
             if app.changes_focus.is_none() && app.can_forget() {
                 options.push(("d forget", 'd'));
             }
@@ -1029,25 +1019,55 @@ pub(crate) fn draw_with_worktree(
                 });
                 options.push((if pinned { "unpin" } else { "pin" }, 'i'));
             }
-            edit_prefix_spans.push(Span::raw(" · "));
-            edit_prefix_spans.push(Span::styled("e", Style::default().add_modifier(Modifier::UNDERLINED)));
-            edit_prefix_spans.push(Span::raw("dit ("));
+            commit_prefix_spans.push(Span::raw(" · "));
+            commit_prefix_spans.push(Span::styled("c", Style::default().add_modifier(Modifier::UNDERLINED)));
+            commit_prefix_spans.push(Span::raw("ommit ("));
             if options.is_empty() {
-                edit_prefix_spans.push(Span::raw("no actions"));
+                commit_prefix_spans.push(Span::raw("no actions"));
             } else {
                 for (index, (label, key)) in options.into_iter().enumerate() {
                     if index > 0 {
-                        edit_prefix_spans.push(Span::raw(" · "));
+                        commit_prefix_spans.push(Span::raw(" · "));
                     }
-                    edit_prefix_spans.extend(shortcut(label, key, true));
+                    commit_prefix_spans.extend(shortcut(label, key, true));
                 }
             }
-            edit_prefix_spans.push(Span::raw(")"));
-            emphasize_prefix(&mut edit_prefix_spans[1..]);
-        } else if !app.history_display_expanded {
-            edit_prefix_spans.push(Span::raw(" · "));
-            edit_prefix_spans.push(Span::styled("e", Style::default().add_modifier(Modifier::UNDERLINED)));
-            edit_prefix_spans.push(Span::raw("dit"));
+            commit_prefix_spans.push(Span::raw(")"));
+            emphasize_prefix(&mut commit_prefix_spans[1..]);
+        } else {
+            commit_prefix_spans.push(Span::raw(" · "));
+            commit_prefix_spans.push(Span::styled("c", Style::default().add_modifier(Modifier::UNDERLINED)));
+            commit_prefix_spans.push(Span::raw("ommit"));
+        }
+    }
+    if app.changes_focus.is_none() {
+        actions_prefix_spans.push(Span::raw(" · "));
+        actions_prefix_spans.push(Span::styled("a", Style::default().add_modifier(Modifier::UNDERLINED)));
+        if app.actions_expanded {
+            actions_prefix_spans.push(Span::raw("ctions ("));
+            let mut options = Vec::new();
+            if app.can_finish_review() {
+                options.push(("finish-review", 'r'));
+            } else if app.can_review() {
+                options.push(("review", 'r'));
+            }
+            if app.can_squash() {
+                options.push(("squash", 's'));
+            }
+            if options.is_empty() {
+                actions_prefix_spans.push(Span::raw("no actions"));
+            } else {
+                for (index, (label, key)) in options.into_iter().enumerate() {
+                    if index > 0 {
+                        actions_prefix_spans.push(Span::raw(" · "));
+                    }
+                    actions_prefix_spans.extend(shortcut(label, key, true));
+                }
+            }
+            actions_prefix_spans.push(Span::raw(")"));
+            emphasize_prefix(&mut actions_prefix_spans[1..]);
+        } else {
+            actions_prefix_spans.push(Span::raw("ctions"));
         }
     }
     let focus_feedback = app.focus_feedback.take();
@@ -1116,7 +1136,8 @@ pub(crate) fn draw_with_worktree(
     }
     let mut ordered = vec![Span::raw(history_position(app))];
     ordered.append(&mut view_prefix_spans);
-    ordered.append(&mut edit_prefix_spans);
+    ordered.append(&mut commit_prefix_spans);
+    ordered.append(&mut actions_prefix_spans);
     ordered.push(Span::raw(" · "));
     let enrich_prefix_start = ordered.len();
     ordered.extend(shortcut("enrich", 'n', true));
@@ -2723,7 +2744,8 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let computing = rendered_line(&terminal, 1);
         assert!(
-            computing.contains("1 commits · view · edit · enrich · copy") && computing.contains("computing"),
+            computing.contains("1 commits · view · commit · actions · enrich · copy")
+                && computing.contains("computing"),
             "expired deferral reveals computation progress"
         );
         assert_ne!(computing, completed, "visible progress changes the footer");
@@ -3097,8 +3119,8 @@ mod tests {
         terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None, None))?;
 
         assert!(
-            !rendered_line(&terminal, 1).contains(" · edit ·"),
-            "the view group keeps e reserved for toggling emails"
+            rendered_line(&terminal, 1).contains(" · commit · actions ·"),
+            "the commit and actions prefixes remain available beside the view group"
         );
 
         let row = rendered_row(&terminal);
@@ -3282,7 +3304,7 @@ mod tests {
             "todo commit metadata uses the author date and excludes separately represented refs"
         );
 
-        let footer_text = "#0 · view · edit · enrich · copy · refs · ? · quit";
+        let footer_text = "#0 · view · commit · actions · enrich · copy · refs · ? · quit";
         let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
@@ -3308,7 +3330,8 @@ mod tests {
             .set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         for (label, key) in [
             ("view", 'v'),
-            ("edit", 'e'),
+            ("commit", 'c'),
+            ("actions", 'a'),
             ("enrich", 'n'),
             ("copy", 'y'),
             ("refs", 'r'),
@@ -3543,7 +3566,7 @@ mod tests {
             ),
         ]);
         let mut terminal = Terminal::new(TestBackend::new(160, 2))?;
-        app.edit_expanded = true;
+        app.commit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let row = rendered_row(&terminal);
         assert!(row.contains("📌"), "a pinned commit has an obvious pin marker: {row:?}");
@@ -3581,11 +3604,11 @@ mod tests {
         );
         assert!(
             rendered_line(&terminal, 1).contains(
-                "edit (reword · new · new-empty · fork · d forget · unpin) · enrich · @ return · # attach · copy"
+                "commit (reword · new · new-empty · d forget · unpin) · actions · enrich · @ return · # attach · copy"
             ),
-            "both travel actions stay outside the active edit prefix"
+            "both travel actions stay outside the active commit prefix"
         );
-        assert!(!rendered_line(&terminal, 1).contains(" · edit ·"));
+        assert!(!rendered_line(&terminal, 1).contains(" · commit ·"));
 
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
@@ -3648,7 +3671,9 @@ mod tests {
         let footer = rendered_line(&terminal, 1);
         let view = "view (author date · ids · emails · names · mailmap · trailers · refs · show hidden)";
         assert!(
-            footer.starts_with(&format!("0 commits · {view} · enrich · copy · refs · ?")),
+            footer.starts_with(&format!(
+                "0 commits · {view} · commit · actions · enrich · copy · refs · ?"
+            )),
             "the active view prefix follows the history position"
         );
         let active = footer[..footer.find("view (").expect("the active view prefix is visible")]
@@ -3663,20 +3688,32 @@ mod tests {
         assert_reversed_group(&terminal, 1, view);
 
         app.history_display_expanded = false;
-        app.edit_expanded = true;
+        app.commit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · enrich · copy · refs · ?"),
-            "the edit prefix follows the view prefix even when no action is available"
+            rendered_line(&terminal, 1)
+                .starts_with("0 commits · view · commit (no actions) · actions · enrich · copy · refs · ?"),
+            "the commit prefix follows the view prefix even when no action is available"
         );
-        assert_reversed_group(&terminal, 1, "edit (no actions)");
+        assert_reversed_group(&terminal, 1, "commit (no actions)");
 
-        app.edit_expanded = false;
+        app.commit_expanded = false;
+        app.actions_expanded = true;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 1)
+                .starts_with("0 commits · view · commit · actions (no actions) · enrich · copy · refs · ?"),
+            "the actions prefix follows the commit prefix"
+        );
+        assert_reversed_group(&terminal, 1, "actions (no actions)");
+
+        app.actions_expanded = false;
         app.enrich_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).starts_with("0 commits · view · edit · enrich (no actions) · copy · refs · ?"),
-            "the enrich prefix follows the edit prefix"
+            rendered_line(&terminal, 1)
+                .starts_with("0 commits · view · commit · actions · enrich (no actions) · copy · refs · ?"),
+            "the enrich prefix follows the actions prefix"
         );
         assert_reversed_group(&terminal, 1, "enrich (no actions)");
 
@@ -3686,7 +3723,7 @@ mod tests {
         let footer = rendered_line(&terminal, 1);
         assert!(
             footer.starts_with(
-                    "0 commits · view · edit · enrich · copy · refs · ? ([ title · ref-tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
+                    "0 commits · view · commit · actions · enrich · copy · refs · ? ([ title · ref-tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
                 ),
             "the information prefix contains every following action except quit: {footer}"
         );
@@ -3718,7 +3755,7 @@ mod tests {
         app.set_worktree_head(Some(id), false);
         complete(&mut app);
         app.changes_focus = Some(ChangePane::Tree);
-        app.edit_expanded = true;
+        app.commit_expanded = true;
         let changes = Changes {
             paths: vec![crate::app::PathChange {
                 kind: ChangeKind::Added,
@@ -3749,7 +3786,7 @@ mod tests {
         })?;
         let footer = rendered_line(&terminal, 7);
         assert!(
-            footer.contains("edit (spill)"),
+            footer.contains("commit (spill)"),
             "tree focus keeps the scoped edit visible: {footer}"
         );
         assert!(!footer.contains("amend"), "tree paths cannot be amended");
@@ -3767,7 +3804,7 @@ mod tests {
         };
         app.set_head_edit_availability(true, false, false, true, false, false, false);
         assert!(app.can_amend(), "the focused worktree path is amendable");
-        assert!(app.edit_expanded, "the edit prefix remains expanded");
+        assert!(app.commit_expanded, "the commit prefix remains expanded");
         terminal.draw(|frame| {
             super::draw_with_worktree(
                 frame,
@@ -3780,10 +3817,10 @@ mod tests {
             );
         })?;
         assert!(app.can_amend(), "drawing retains scoped amend availability");
-        assert!(app.edit_expanded, "drawing retains the expanded edit prefix");
+        assert!(app.commit_expanded, "drawing retains the expanded commit prefix");
         let footer = rendered_line(&terminal, 7);
         assert!(
-            footer.contains("edit (amend)"),
+            footer.contains("commit (amend)"),
             "worktree focus keeps the scoped edit visible: {footer}"
         );
         assert!(!footer.contains("spill"), "worktree paths cannot be spilled");
@@ -3861,7 +3898,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 7).contains("edit (amend)"),
+            rendered_line(&terminal, 7).contains("commit (amend)"),
             "a review may amend its selected staged path"
         );
         Ok(())
@@ -5983,7 +6020,7 @@ mod tests {
         );
 
         let mut narrow = Terminal::new(TestBackend::new(28, 3))?;
-        app.edit_expanded = true;
+        app.commit_expanded = true;
         narrow.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
             rendered_line(&narrow, 1).ends_with(" ⇣2 "),
@@ -5992,7 +6029,7 @@ mod tests {
         let mut actions = Terminal::new(TestBackend::new(120, 3))?;
         actions.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&actions, 2).contains("edit (rebase · rebase-update · fork · pin)"),
+            rendered_line(&actions, 2).contains("commit (rebase · rebase-update · pin) · actions"),
             "the selected hidden base offers independent edits: {:?}",
             rendered_line(&actions, 2)
         );
