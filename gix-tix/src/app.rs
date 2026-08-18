@@ -2816,10 +2816,10 @@ fn transition(
                 VERTICAL_LEFT => '┤',
                 DOWN_HORIZONTAL => '┬',
                 UP_HORIZONTAL => '┴',
-                DOWN_RIGHT => '┌',
-                DOWN_LEFT => '┐',
-                UP_RIGHT => '└',
-                UP_LEFT => '┘',
+                DOWN_RIGHT => '╭',
+                DOWN_LEFT => '╮',
+                UP_RIGHT => '╰',
+                UP_LEFT => '╯',
                 HORIZONTAL => '─',
                 _ => '│',
             }
@@ -2971,7 +2971,7 @@ mod tests {
         );
         assert_eq!(
             app.render_lanes(0..app.rows.len()).iter().collect::<Vec<_>>(),
-            ["●─┐ ", "● │ ", "├─● ", "● "]
+            ["●─╮ ", "● │ ", "├─● ", "● "]
         );
     }
 
@@ -3574,7 +3574,7 @@ mod tests {
 
         assert_eq!(
             app.render_lanes(0..app.rows.len()).iter().collect::<Vec<_>>(),
-            ["●─┐ ", "●─┘ ", "● "]
+            ["●─╮ ", "●─╯ ", "● "]
         );
     }
 

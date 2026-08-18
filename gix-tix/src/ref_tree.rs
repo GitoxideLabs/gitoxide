@@ -1169,16 +1169,6 @@ fn place_rail(overview: &Overview, overlay: Option<&Overlay>) -> Placed {
         let node_lane = state.node_line(item.id, item.marker);
         let mut transition = String::new();
         state.advance_ids(item.id, item.parent, Some(&mut transition), item.marker);
-        transition = transition
-            .chars()
-            .map(|symbol| match symbol {
-                '┌' => '╭',
-                '┐' => '╮',
-                '└' => '╰',
-                '┘' => '╯',
-                _ => symbol,
-            })
-            .collect();
         let rounded_transition = transition.contains('─');
         let lane = if rounded_transition {
             node_lane

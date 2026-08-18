@@ -1010,6 +1010,13 @@ mod tests {
         )
         .expect_err("disabling auto-hide requires an explicit hidden revision");
         assert!(format!("{err:#}").contains("at least one -x/--hide"));
+        let mut rounded = Vec::new();
+        write_history(&repository, &[], &[OsString::from("v1")], &mut rounded)?;
+        let rounded = String::from_utf8(rounded)?;
+        assert!(
+            rounded.contains(['╭', '╮', '╰', '╯']) && !rounded.contains(['┌', '┐', '└', '┘']),
+            "history graph turns use rounded corners: {rounded:?}"
+        );
         create_pins(&repository, &[OsString::from("topic")])?;
         let old_head = repository.head_id()?.detach();
         let parent = repository
