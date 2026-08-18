@@ -2505,6 +2505,63 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("rebase: {err:#}")),
                     }
                 }
+                Effect::Squash { source, target } => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let result = (|| {
+                        let graph = history_graph
+                            .as_ref()
+                            .context("squashing requires a completed history graph")?;
+                        let mut repository = open_repository(&repository_path, repository_is_bare, false)
+                            .context("could not open repository to squash commits")?;
+                        repository.object_cache_size(None);
+                        let plan = edit::rebase::squash_plan(&repository, graph, source, target)?;
+                        run_rebase_plan(terminal, repository.into_sync(), graph, plan)
+                    })();
+                    match result {
+                        Ok(edit::rebase::PlanPerform::Complete(outcome)) => {
+                            let combined = outcome.map(target).unwrap_or(target);
+                            let notice = if outcome.selected.is_some() {
+                                edit::time_travel::checkout_plan(
+                                    &repository_path,
+                                    repository_is_bare,
+                                    &outcome,
+                                    &revisions,
+                                    false,
+                                )
+                            } else {
+                                Ok(None)
+                            };
+                            match notice {
+                                Ok(notice) => app.leave_success(notice.unwrap_or_else(|| {
+                                    format!(
+                                        "squashed {} into {}",
+                                        source.to_hex_with_len(7),
+                                        combined.to_hex_with_len(7)
+                                    )
+                                })),
+                                Err(err) => app.leave_attention(format!("squash applied, checkout failed: {err:#}")),
+                            }
+                            app.select_commit_after_refresh(combined);
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
+                        }
+                        Ok(edit::rebase::PlanPerform::Conflict(conflict)) => {
+                            let id = conflict.commit();
+                            preview_todo_rebase_conflict(
+                                &mut app,
+                                &conflict,
+                                &authors,
+                                &ref_snapshot.view_tips,
+                                &ref_snapshot.hidden_tips,
+                            )?;
+                            app.arm_rebase_conflict(id);
+                            app.select_commit(id);
+                            pending_todo_rebase_conflict = Some(conflict);
+                        }
+                        Err(err) => app.leave_error(format!("squash: {err:#}")),
+                    }
+                }
                 Effect::StartReview { tip, base } => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
@@ -5021,6 +5078,7 @@ fn action_with_shortcut_groups(
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
         KeyCode::Char('c') => Some(Action::ToggleChanges),
         KeyCode::Char('p') if edit_expanded => Some(Action::Split),
+        KeyCode::Char('q') if edit_expanded => Some(Action::Squash),
         KeyCode::Char('b') if edit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Rebase),
         KeyCode::Char('u') if edit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::RebaseUpdate)
@@ -6306,6 +6364,7 @@ mod tests {
             ('h', Action::Stash),
             ('s', Action::Spill),
             ('p', Action::Split),
+            ('q', Action::Squash),
             ('d', Action::Forget),
             ('i', Action::TogglePin),
         ] {
