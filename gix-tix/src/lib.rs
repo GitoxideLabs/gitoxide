@@ -1280,11 +1280,13 @@ fn event_loop(
                     if quit_on_finish {
                         return Ok(app.lane_time);
                     }
-                    change_id_worker = Some(start_change_id_scan(
-                        repository_path.clone(),
-                        repository_is_bare,
-                        app.rows.iter().map(|row| row.id).collect(),
-                    ));
+                    if change_id_scan_needed(&app) {
+                        change_id_worker = Some(start_change_id_scan(
+                            repository_path.clone(),
+                            repository_is_bare,
+                            app.rows.iter().map(|row| row.id).collect(),
+                        ));
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -2081,6 +2083,7 @@ fn event_loop(
                     execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(actor))?;
                 }
                 Effect::Reload(show_hidden) => {
+                    change_id_worker = None;
                     app.show_hidden = show_hidden;
                     refresh_pending = true;
                     refresh_expand_hidden = true;
@@ -2714,6 +2717,10 @@ fn start_change_id_scan(repository_path: PathBuf, bare: bool, ids: Vec<gix::Obje
         let _ = sender.send(result);
     });
     ChangeIdWorker { cancelled, results }
+}
+
+fn change_id_scan_needed(app: &App) -> bool {
+    app.has_hidden_filter && !app.show_hidden
 }
 
 type SignatureVerification = (gix::ObjectId, bool);
@@ -5029,6 +5036,24 @@ mod tests {
         assert_eq!(shade_terminal_background((255, 255, 255), false), (240, 240, 240));
         assert_eq!(shade_terminal_background((32, 64, 128), true), (45, 75, 135));
         assert_eq!(shade_terminal_background((32, 64, 128), false), (30, 60, 120));
+    }
+
+    #[test]
+    fn scans_change_ids_only_for_the_current_filtered_view() {
+        let mut app = App::new(1);
+        assert!(!change_id_scan_needed(&app), "unrestricted history needs no scan");
+
+        app.configure_hidden_filter(true);
+        assert!(
+            change_id_scan_needed(&app),
+            "excluded hidden tips make the view limited"
+        );
+
+        app.show_hidden = true;
+        assert!(
+            !change_id_scan_needed(&app),
+            "expanding hidden history makes the current view unrestricted"
+        );
     }
 
     #[test]
