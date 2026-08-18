@@ -14,7 +14,7 @@ pub(crate) struct Prepared {
 }
 
 #[tracing::instrument(skip_all)]
-pub(crate) fn prepare(mut repo: gix::Repository) -> Result<Prepared> {
+pub(crate) fn prepare(mut repo: gix::Repository, todo: bool) -> Result<Prepared> {
     let target = repo
         .head_id()
         .context("splitting requires an existing HEAD commit")?
@@ -36,7 +36,7 @@ pub(crate) fn prepare(mut repo: gix::Repository) -> Result<Prepared> {
         .context("could not decode HEAD commit")?
         .into_owned()
         .context("could not own HEAD commit")?;
-    let mut create = create::prepare(repo.clone(), Some(target))?;
+    let mut create = create::prepare_from(repo.clone(), Some(target), create::Source::Default, None, todo)?;
     repo.objects.set_object_memory(std::mem::take(&mut create.objects));
 
     let head_tree = source.tree;
@@ -142,7 +142,7 @@ mod tests {
             git(fixture.path(), &["update-ref", name, &old.to_string()])?;
         }
         let before = gix_testtools::repository::snapshot(fixture.path())?;
-        let prepared = prepare(open(fixture.path())?)?;
+        let prepared = prepare(open(fixture.path())?, false)?;
         assert_eq!(
             prepared
                 .document
@@ -271,7 +271,7 @@ mod tests {
             b"one\nworktree conflict\nmiddle\nbase worktree\nend\n",
         )?;
         let before = gix_testtools::repository::snapshot(fixture.path())?;
-        let err = match prepare(open(fixture.path())?) {
+        let err = match prepare(open(fixture.path())?, false) {
             Ok(_) => return Err("overlapping staged and worktree hunks should conflict".into()),
             Err(err) => err,
         };
