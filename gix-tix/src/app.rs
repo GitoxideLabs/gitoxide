@@ -377,7 +377,7 @@ pub(crate) enum Action {
     RebaseUpdate,
     Review,
     TimeTravel,
-    Unpin,
+    TogglePin,
     VerifySignatures,
     Cancel,
     Copy,
@@ -422,7 +422,7 @@ pub(crate) enum Effect {
         return_to: Option<ObjectId>,
     },
     TimeTravel(ObjectId),
-    Unpin(ObjectId),
+    TogglePin(ObjectId),
     ToggleTodo(ObjectId),
     EditNote(ObjectId),
     EditGitNote(ObjectId),
@@ -1034,7 +1034,7 @@ impl App {
                 | Action::RebaseUpdate
                 | Action::Review
                 | Action::TimeTravel
-                | Action::Unpin
+                | Action::TogglePin
         ) {
             self.edit_expanded = false;
         }
@@ -1371,9 +1371,9 @@ impl App {
                     self.rows[self.selected.expect("time-travel requires a selection")].id,
                 )];
             }
-            Action::Unpin => {
+            Action::TogglePin => {
                 if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
-                    return vec![Effect::Unpin(id)];
+                    return vec![Effect::TogglePin(id)];
                 }
             }
             Action::ToggleTodo if self.can_reword() => {
@@ -3302,7 +3302,7 @@ mod tests {
         assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(1))]);
         app.set_worktree_changes_available(false);
         assert!(app.update(Action::TimeTravel).is_empty());
-        assert_eq!(app.update(Action::Unpin), vec![Effect::Unpin(id(1))]);
+        assert_eq!(app.update(Action::TogglePin), vec![Effect::TogglePin(id(1))]);
     }
 
     #[test]
