@@ -941,7 +941,6 @@ pub(crate) fn draw_with_worktree(
     };
     let mut footer_spans = vec![Span::raw(status)];
     let mut time_travel = None;
-    let mut attached_time_travel = false;
     let mut commit_prefix_spans = Vec::new();
     let mut actions_prefix_spans = Vec::new();
     if app.changes_focus != Some(ChangePane::Worktree) || app.can_amend() {
@@ -974,7 +973,6 @@ pub(crate) fn draw_with_worktree(
         } else {
             None
         };
-        attached_time_travel = head_visible && app.attached_time_travel_shortcut_visible();
         if app.commit_expanded {
             let mut options = Vec::new();
             if app.can_rebase() {
@@ -1053,6 +1051,9 @@ pub(crate) fn draw_with_worktree(
             }
             if app.can_squash() {
                 options.push(("squash", 's'));
+            }
+            if app.can_forkpoint() {
+                options.push(("forkpoint", 'f'));
             }
             if options.is_empty() {
                 actions_prefix_spans.push(Span::raw("no actions"));
@@ -1160,10 +1161,6 @@ pub(crate) fn draw_with_worktree(
     if let Some(label) = time_travel {
         ordered.push(Span::raw(" · "));
         ordered.extend(shortcut(label, '@', true));
-    }
-    if attached_time_travel {
-        ordered.push(Span::raw(" · "));
-        ordered.extend(shortcut("# attach", '#', true));
     }
     if app.can_cycle_duplicate() {
         ordered.push(Span::raw(" · "));
@@ -3519,7 +3516,7 @@ mod tests {
     }
 
     #[test]
-    fn advertises_detached_and_attached_travel() -> Result<(), Box<dyn std::error::Error>> {
+    fn advertises_travel_and_return_for_non_head_rows() -> Result<(), Box<dyn std::error::Error>> {
         let selected = gix::ObjectId::Sha1([1; 20]);
         let head = gix::ObjectId::Sha1([2; 20]);
         let mut app = App::new(2);
@@ -3538,7 +3535,6 @@ mod tests {
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
-        app.set_worktree_branch(Some((head, false)));
         let mut decorations = Decorations::from([
             (
                 selected,
@@ -3565,7 +3561,7 @@ mod tests {
                 }],
             ),
         ]);
-        let mut terminal = Terminal::new(TestBackend::new(160, 2))?;
+        let mut terminal = Terminal::new(TestBackend::new(140, 2))?;
         app.commit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let row = rendered_row(&terminal);
@@ -3603,16 +3599,15 @@ mod tests {
             "hiding refs retains resource markers: {row:?}"
         );
         assert!(
-            rendered_line(&terminal, 1).contains(
-                "commit (reword · new · new-empty · d forget · unpin) · actions · enrich · @ return · # attach · copy"
-            ),
-            "both travel actions stay outside the active commit prefix"
+            rendered_line(&terminal, 1)
+                .contains("commit (reword · new · new-empty · d forget · unpin) · actions · enrich · @ return · copy"),
+            "time travel stays outside the active commit prefix"
         );
         assert!(!rendered_line(&terminal, 1).contains(" · commit ·"));
 
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
-        assert!(rendered_line(&terminal, 1).contains(" · @ travel · # attach · copy"));
+        assert!(rendered_line(&terminal, 1).contains(" · @ travel · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
 
         app.ref_mode = RefMode::Default;
@@ -3623,7 +3618,6 @@ mod tests {
                 kind: DecorationKind::HeadPinBranch,
             }],
         );
-        app.set_worktree_branch(Some((selected, false)));
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let row = rendered_row(&terminal);
         assert!(
@@ -3634,7 +3628,6 @@ mod tests {
         assert!(rendered_line(&terminal, 1).contains(" · @ travel · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
 
-        app.set_worktree_branch(Some((selected, true)));
         decorations.remove(&head);
         decorations.insert(
             selected,
@@ -3652,8 +3645,8 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let footer = rendered_line(&terminal, 1);
         assert!(
-            footer.contains(" · # attach · copy") && !footer.contains("@ travel") && !footer.contains("@ return"),
-            "a detached worktree can reattach at its remembered branch tip: {footer}"
+            !footer.contains("@ travel") && !footer.contains("@ return"),
+            "time travel is hidden at HEAD: {footer}"
         );
         Ok(())
     }
