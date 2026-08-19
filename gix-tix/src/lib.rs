@@ -3885,7 +3885,7 @@ fn edit_git_note(
     Ok(Some(!cleaned.is_empty()))
 }
 
-fn set_git_note(
+pub(crate) fn set_git_note(
     repository: &gix::Repository,
     reference: &gix::refs::FullNameRef,
     id: gix::ObjectId,

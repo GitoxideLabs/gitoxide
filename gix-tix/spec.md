@@ -36,6 +36,14 @@ without trading responsiveness for metadata that is not visible.
   then exits with an error so resolution cannot be mistaken for completion.
 - `tix stash` saves the index and worktree state in a gix stash associated with
   the `HEAD` commit through the same commit-stash operation as the TUI.
+- `tix enrich commit todo [--clear] [REVSPEC]`, `tix enrich commit note
+  [REVSPEC]`, `tix enrich commit git-note [REVSPEC]`, and `tix enrich tree
+  checks-pass [--clear] [REVSPEC]` expose the TUI's enrichment actions without
+  opening it. Targets default to `HEAD` and accept Git revisions or unambiguous
+  reverse-hex change-ID prefixes from the default Tix view. Boolean commands
+  idempotently set their marker, or clear it with `--clear`; note commands use
+  Git's editor, remove empty notes, and leave unchanged notes alone. Output
+  starts with the target's abbreviated commit and change IDs before its status.
 - `tix new [--index | --worktree | --worktree-untracked] [--allow-empty] [--todo]
   [--author "Name <email>"] [-m MESSAGE ... | -f FILE]` creates a child of `HEAD`, or a root commit for
   unborn `HEAD`, with the same signing, editor, enrichment, lazy-rebase, and

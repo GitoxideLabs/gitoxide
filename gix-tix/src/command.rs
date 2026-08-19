@@ -10,6 +10,7 @@ use clap::Parser;
 use gix::prelude::ReferenceExt;
 use ratatui::text::Line;
 
+mod enrich;
 mod new;
 mod rebase;
 mod reword;
@@ -38,6 +39,9 @@ enum Command {
     /// Print the complete history view without opening the terminal UI.
     #[command(visible_alias = "status")]
     Show(Show),
+    /// Manage commit and tree enrichments.
+    #[command(subcommand)]
+    Enrich(enrich::Command),
     /// Add staged changes, or worktree changes when nothing is staged, to HEAD.
     Amend(Amend),
     /// Move the changes introduced by HEAD into the worktree.
@@ -187,6 +191,7 @@ impl Platform {
             Command::Travel(args) => return travel::run(repository, args),
             Command::Reword(args) => return reword::run(repository, args),
             Command::New(args) => return new::run(repository, args),
+            Command::Enrich(command) => return enrich::run(repository, command),
             Command::Rebase(command) => return rebase::run(repository, command),
         }
         Ok(())
@@ -711,6 +716,34 @@ mod tests {
             "top-level help advertises the status alias"
         );
 
+        for arguments in [
+            &["tix", "enrich", "commit", "todo"][..],
+            &["tix", "enrich", "commit", "todo", "--clear", "topic"][..],
+            &["tix", "enrich", "commit", "note", "topic"][..],
+            &["tix", "enrich", "commit", "git-note"][..],
+            &["tix", "enrich", "tree", "checks-pass"][..],
+            &["tix", "enrich", "tree", "checks-pass", "--clear", "topic"][..],
+        ] {
+            assert!(
+                matches!(
+                    Cli::try_parse_from(arguments)
+                        .expect("enrich command parses")
+                        .platform
+                        .command,
+                    Some(Command::Enrich(_))
+                ),
+                "{arguments:?} reaches the enrich command"
+            );
+        }
+        assert!(
+            Cli::try_parse_from(["tix", "enrich", "commit", "checks-pass"]).is_err(),
+            "tree enrichments are not commit subcommands"
+        );
+        assert!(
+            Cli::try_parse_from(["tix", "enrich", "tree", "todo"]).is_err(),
+            "commit enrichments are not tree subcommands"
+        );
+
         assert!(
             Cli::try_parse_from(["tix", "--worktrees"]).is_err(),
             "the removed TUI worktree option is rejected"
@@ -1004,6 +1037,13 @@ mod tests {
             &["pin"],
             &["travel"],
             &["reword"],
+            &["enrich"],
+            &["enrich", "commit"],
+            &["enrich", "commit", "todo"],
+            &["enrich", "commit", "note"],
+            &["enrich", "commit", "git-note"],
+            &["enrich", "tree"],
+            &["enrich", "tree", "checks-pass"],
             &["rebase"],
             &["rebase", "todo"],
             &["rebase", "apply"],
