@@ -173,14 +173,9 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
 fn resolve_commit(repo: &gix::Repository, revision: &OsStr, description: &str) -> Result<ObjectId> {
     let revision =
         gix::path::os_str_into_bstr(revision).with_context(|| format!("{description} is not valid UTF-8"))?;
-    let id = repo
-        .rev_parse_single(revision)
-        .with_context(|| format!("could not resolve {description}"))?;
-    id.object()
-        .with_context(|| format!("could not read {description}"))?
-        .try_into_commit()
-        .with_context(|| format!("{description} does not name a commit"))?;
-    Ok(id.detach())
+    crate::history::resolve_revision(repo, revision)
+        .with_context(|| format!("could not resolve {description}"))
+        .map(|(id, _reference)| id)
 }
 
 fn apply(repo: gix::Repository, args: Apply) -> Result<()> {
@@ -216,14 +211,29 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
     match rebase::perform_plan(&repo, &graph, parsed.plan)? {
         rebase::PlanPerform::Complete(outcome) => {
             let revisions = mapped_revisions(&tips, |id| outcome.map(id));
-            if let Some(selected) = outcome.selected {
-                let notice = edit::time_travel::checkout_plan(&repository_path, bare, &outcome, &revisions, false)?;
+            let changes = if let Some(selected) = outcome.selected {
+                let (notice, changes) = match edit::time_travel::checkout_plan_reporting(
+                    &repository_path,
+                    bare,
+                    &outcome,
+                    &revisions,
+                    false,
+                ) {
+                    Ok(result) => result,
+                    Err(err) => {
+                        super::record_undo(&repo, "rebase history", Ok(outcome.ref_changes));
+                        return Err(err);
+                    }
+                };
                 let notice = notice.unwrap_or_else(|| "rebased history".into());
                 println!("{}", super::notice_with_change_id(&repo, &notice, selected)?);
+                changes
             } else {
                 println!("rebased history");
-            }
+                outcome.ref_changes.clone()
+            };
             super::print_ref_rewrites(&repo, &outcome.ref_rewrites)?;
+            super::record_undo(&repo, "rebase history", Ok(changes));
             Ok(())
         }
         rebase::PlanPerform::Conflict(mut conflict) => {
@@ -261,9 +271,14 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
                     format!("could not write continuation rebase todo at {}", destination.display())
                 })?;
             }
-            let materialized =
-                edit::time_travel::materialize_plan_conflict(conflict, &repository_path, bare, &revisions, false);
-            let (notice, _, ref_rewrites) = match materialized {
+            let materialized = edit::time_travel::materialize_plan_conflict_reporting(
+                conflict,
+                &repository_path,
+                bare,
+                &revisions,
+                false,
+            );
+            let (notice, _, ref_rewrites, ref_changes) = match materialized {
                 Ok(materialized) => materialized,
                 Err(err) => {
                     if destination != Path::new("-") {
@@ -273,6 +288,7 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
                 }
             };
             super::print_ref_rewrites(&repo, &ref_rewrites)?;
+            super::record_undo(&repo, "materialize rebase conflict", Ok(ref_changes));
             eprintln!("{notice}; continue with `tix rebase apply {}`", destination.display());
             anyhow::bail!("rebase stopped at a materialized conflict")
         }

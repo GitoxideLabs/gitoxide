@@ -265,6 +265,7 @@ pub(crate) struct Outcome {
     pub checkout_reference: Option<gix::refs::FullName>,
     pub deferred_ref_deletions: Vec<(gix::refs::FullName, ObjectId)>,
     pub ref_rewrites: Vec<RefRewrite>,
+    pub ref_changes: Vec<super::undo::RefChange>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
 }
 
@@ -317,6 +318,7 @@ impl Conflict {
             commit: self.commit,
             deferred_ref_deletions: outcome.deferred_ref_deletions,
             ref_rewrites: outcome.ref_rewrites,
+            ref_changes: outcome.ref_changes,
             rewritten: outcome.rewritten,
         })
     }
@@ -329,6 +331,7 @@ pub(crate) struct PersistedConflict {
     pub(crate) commit: ObjectId,
     pub(crate) deferred_ref_deletions: Vec<(gix::refs::FullName, ObjectId)>,
     pub(crate) ref_rewrites: Vec<RefRewrite>,
+    pub(crate) ref_changes: Vec<super::undo::RefChange>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
 }
 
@@ -410,7 +413,8 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[O
         if matches!(
             reference.name().category(),
             Some(Category::Tag | Category::RemoteBranch)
-        ) {
+        ) || super::undo::is_queue_ref(reference.name().as_bstr())
+        {
             continue;
         }
         let Some(old) = reference.try_id().map(gix::Id::detach) else {
@@ -1786,6 +1790,7 @@ impl Prepared {
             checkout_reference: self.checkout_reference.clone(),
             deferred_ref_deletions,
             ref_rewrites: updated_refs.rewritten,
+            ref_changes: updated_refs.changes,
             rewritten: std::mem::take(&mut self.rewritten),
         })
     }
@@ -2436,7 +2441,8 @@ fn update_refs(
             if matches!(
                 reference.name().category(),
                 Some(Category::Tag | Category::RemoteBranch)
-            ) {
+            ) || super::undo::is_queue_ref(reference.name().as_bstr())
+            {
                 continue;
             }
             let Some(old) = reference.try_id().map(gix::Id::detach) else {
@@ -2543,13 +2549,16 @@ fn update_refs(
         return Ok(UpdatedRefs::default());
     }
     let mut time = gix::date::parse::TimeBuf::default();
-    repo.edit_references_as(edits, Some(committer.to_ref(&mut time)))
+    let applied = repo
+        .edit_references_as(edits, Some(committer.to_ref(&mut time)))
         .context("could not update references after rebasing")?;
+    let changes = super::undo::changes_from_edits(applied)?;
     ref_rewrites.sort_by(|a, b| a.name.cmp(&b.name));
     ref_rewrites.dedup();
     Ok(UpdatedRefs {
         rollback,
         rewritten: ref_rewrites,
+        changes,
     })
 }
 
@@ -2557,6 +2566,7 @@ fn update_refs(
 struct UpdatedRefs {
     rollback: Vec<RefEdit>,
     rewritten: Vec<RefRewrite>,
+    changes: Vec<super::undo::RefChange>,
 }
 
 fn pin_name(

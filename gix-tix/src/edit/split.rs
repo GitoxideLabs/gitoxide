@@ -66,6 +66,7 @@ pub(crate) fn prepare(mut repo: gix::Repository, todo: bool) -> Result<Prepared>
     })
 }
 
+#[cfg(test)]
 #[tracing::instrument(skip_all, fields(target = %prepared.target))]
 pub(crate) fn apply(
     repo: gix::Repository,
@@ -90,7 +91,7 @@ pub(crate) fn apply_reporting(
         .set_object_memory(std::mem::take(&mut prepared.create.objects));
     let (mut upper, enrichment) = create::commit_from_edit(&prepared.create, edited)?;
     upper.tree = prepared.tree;
-    let outcome = rebase::perform(
+    let mut outcome = rebase::perform(
         &repo,
         graph,
         rebase::Edit::Split {
@@ -104,8 +105,15 @@ pub(crate) fn apply_reporting(
     .complete()?;
     let id = outcome.selected.context("splitting HEAD did not produce a selection")?;
     drop(repo);
-    crate::enrich::apply_headers(&crate::open_repository(&repository_path, bare, false)?, id, &enrichment)
+    let repo = crate::open_repository(&repository_path, bare, false)?;
+    let name: gix::refs::FullName = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
+    let before = super::undo::state(&repo, name.as_ref())?;
+    crate::enrich::apply_headers(&repo, id, &enrichment)
         .context("the commit was split, but its enrichment could not be saved")?;
+    let after = super::undo::state(&repo, name.as_ref())?;
+    if before != after {
+        outcome.ref_changes.push(super::undo::RefChange { name, before, after });
+    }
     Ok(outcome)
 }
 

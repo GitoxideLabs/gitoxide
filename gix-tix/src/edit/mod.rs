@@ -14,6 +14,7 @@ pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::His
                 .name()
                 .as_bstr()
                 .starts_with(crate::history::REVIEW_STASH_PREFIX)
+            || undo::is_queue_ref(reference.name().as_bstr())
         {
             continue;
         }
@@ -84,6 +85,7 @@ pub(crate) mod split;
 pub(crate) mod stash;
 pub(crate) mod time_travel;
 pub(crate) mod todo;
+pub(crate) mod undo;
 
 #[tracing::instrument(skip_all, fields(filename))]
 pub(crate) fn edit_document(
@@ -162,6 +164,27 @@ mod tests {
         let head = repo.head_id()?.detach();
         let graph = loaded_graph(&repo)?;
         assert!(graph.parents_of(head).is_some(), "HEAD remains part of the edit graph");
+        Ok(())
+    }
+
+    #[test]
+    fn edit_graph_ignores_undo_queue_retention_commits() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let path = fixture.path();
+        let retained = String::from_utf8(git(
+            path,
+            &["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "undo-only"],
+        )?)?;
+        let retained = retained.trim();
+        git(path, &["update-ref", undo::TIP_REF, retained])?;
+        git(path, &["update-ref", undo::CURSOR_REF, retained])?;
+
+        let repo = crate::test_repository::open(path)?;
+        let retained = gix::ObjectId::from_hex(retained.as_bytes())?;
+        assert!(
+            loaded_graph(&repo)?.parents_of(retained).is_none(),
+            "undo retention commits never enter the editable graph"
+        );
         Ok(())
     }
 

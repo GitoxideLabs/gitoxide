@@ -49,7 +49,19 @@ pub(super) fn run(repository: gix::Repository, command: Command) -> Result<()> {
     match command {
         Command::Commit(Commit::Todo(args)) => {
             let target = resolve(&repository, &args.target)?;
-            let enrichment = crate::enrich::ensure_todo(&repository, target, !args.clear)?;
+            let reference = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
+            let (enrichment, changes) = tracked_ref_update(&repository, reference, |repository| {
+                crate::enrich::ensure_todo(repository, target, !args.clear)
+            })?;
+            super::record_undo(
+                &repository,
+                if enrichment.todo {
+                    "mark commit todo"
+                } else {
+                    "clear commit todo"
+                },
+                changes,
+            );
             feedback(
                 &repository,
                 target,
@@ -64,7 +76,19 @@ pub(super) fn run(repository: gix::Repository, command: Command) -> Result<()> {
         Command::Commit(Commit::GitNote(args)) => edit_git_note(&repository, &args),
         Command::Tree(Tree::ChecksPass(args)) => {
             let target = resolve(&repository, &args.target)?;
-            let enrichment = crate::enrich::ensure_checks_pass(&repository, target, !args.clear)?;
+            let reference = crate::enrich::TREE_REF_NAME.try_into().expect("valid tree enrich ref");
+            let (enrichment, changes) = tracked_ref_update(&repository, reference, |repository| {
+                crate::enrich::ensure_checks_pass(repository, target, !args.clear)
+            })?;
+            super::record_undo(
+                &repository,
+                if enrichment.checks_pass {
+                    "mark tree checks-pass"
+                } else {
+                    "clear tree checks-pass"
+                },
+                changes,
+            );
             feedback(
                 &repository,
                 target,
@@ -87,6 +111,24 @@ fn feedback(repository: &gix::Repository, target: gix::ObjectId, status: &str) -
     Ok(())
 }
 
+fn tracked_ref_update<T>(
+    repository: &gix::Repository,
+    name: gix::refs::FullName,
+    update: impl FnOnce(&gix::Repository) -> Result<T>,
+) -> Result<(T, Result<Vec<crate::edit::undo::RefChange>>)> {
+    let before = crate::edit::undo::state(repository, name.as_ref());
+    let value = update(repository)?;
+    let changes = before.and_then(|before| {
+        crate::edit::undo::state(repository, name.as_ref()).map(|after| {
+            (before != after)
+                .then_some(crate::edit::undo::RefChange { name, before, after })
+                .into_iter()
+                .collect()
+        })
+    });
+    Ok((value, changes))
+}
+
 fn edit_note(repository: &gix::Repository, args: &Target) -> Result<()> {
     let target = resolve(repository, args)?;
     let enrichment = crate::enrich::load(
@@ -102,16 +144,23 @@ fn edit_note(repository: &gix::Repository, args: &Target) -> Result<()> {
     )?;
     let cleaned = crate::edit::reword::cleanup_message(edited.as_deref().unwrap_or(&document), None);
     let desired = (!cleaned.is_empty()).then_some(cleaned.as_bstr());
-    let status = if enrichment.note.as_ref().map(|note| note.as_bstr()) == desired {
-        "note unchanged"
+    let (status, changes) = if enrichment.note.as_ref().map(|note| note.as_bstr()) == desired {
+        ("note unchanged", Ok(Vec::new()))
     } else {
-        crate::enrich::set_note(repository, target, desired.map(AsRef::as_ref))?;
-        if desired.is_some() {
-            "saved note"
-        } else {
-            "cleared note"
-        }
+        let reference = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
+        let (_, changes) = tracked_ref_update(repository, reference, |repository| {
+            crate::enrich::set_note(repository, target, desired.map(AsRef::as_ref))
+        })?;
+        (
+            if desired.is_some() {
+                "saved note"
+            } else {
+                "cleared note"
+            },
+            changes,
+        )
     };
+    super::record_undo(repository, "edit commit note", changes);
     feedback(repository, target, status)
 }
 
@@ -136,18 +185,27 @@ fn edit_git_note(repository: &gix::Repository, args: &Target) -> Result<()> {
         &format!("tix-git-note-{}-{}.md", std::process::id(), target.to_hex_with_len(7)),
     )?;
     let cleaned = crate::edit::reword::cleanup_message(edited.as_deref().unwrap_or(&document), None);
-    let status = if cleaned == document {
-        "Git note unchanged"
+    let (status, changes) = if cleaned == document {
+        ("Git note unchanged", Ok(Vec::new()))
     } else {
         let saved = !cleaned.is_empty();
-        crate::set_git_note(
-            repository,
-            reference.as_ref(),
-            target,
-            saved.then_some(cleaned.as_ref()),
-        )?;
-        if saved { "saved Git note" } else { "cleared Git note" }
+        let (_, changes) = tracked_ref_update(repository, reference.clone(), |_repository| {
+            let data: Option<&[u8]> = saved.then_some(cleaned.as_ref());
+            match data {
+                Some(data) => notes
+                    .add_to_ref(reference.as_ref(), target, data)
+                    .map_err(gix::Exn::into_error)
+                    .context("could not save Git note")?,
+                None => notes
+                    .remove(reference.as_bstr(), target)
+                    .map_err(gix::Exn::into_error)
+                    .context("could not remove Git note")?,
+            };
+            Ok(())
+        })?;
+        (if saved { "saved Git note" } else { "cleared Git note" }, changes)
     };
+    super::record_undo(repository, "edit Git note", changes);
     feedback(repository, target, status)
 }
 
