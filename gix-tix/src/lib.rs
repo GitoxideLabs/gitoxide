@@ -1269,10 +1269,13 @@ fn event_loop(
         }
         if let Some(result) = refresh_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
-                Ok((kind, graph, result)) => {
+                Ok((kind, mut graph, result)) => {
+                    let result = result?;
+                    if matches!(kind, RefreshKind::RefTree { .. }) {
+                        graph.set_current_view(&ref_snapshot.view_tips);
+                    }
                     app.set_known_descendants(graph.commits_with_descendants());
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
-                    let result = result?;
                     app.set_worktree_branch(
                         (!repository_is_bare)
                             .then(|| current_worktree_branch(&result.refs))
