@@ -1498,7 +1498,10 @@ pub(crate) fn applicable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
         .collect())
 }
 
-fn referenced_refs(repo: &gix::Repository, revisions: &[OsString]) -> Result<HashMap<BString, gix::refs::Target>> {
+pub(crate) fn referenced_refs(
+    repo: &gix::Repository,
+    revisions: &[OsString],
+) -> Result<HashMap<BString, gix::refs::Target>> {
     let implicit_head = OsString::from("HEAD");
     let revisions = if revisions.is_empty() {
         std::slice::from_ref(&implicit_head)
@@ -1776,6 +1779,15 @@ impl Authors {
 }
 
 pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[WorktreeCheckout]) -> Result<Decorations> {
+    decorations_excluding(repo, pins, worktrees, &HashSet::new())
+}
+
+pub(crate) fn decorations_excluding(
+    repo: &gix::Repository,
+    pins: &[Pin],
+    worktrees: &[WorktreeCheckout],
+    excluded: &HashSet<BString>,
+) -> Result<Decorations> {
     let mut out = Decorations::new();
     let head_pin_branch = pins
         .iter()
@@ -1796,6 +1808,9 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
             Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
         };
         let full_name = reference.name().to_owned();
+        if excluded.contains(full_name.as_bstr()) {
+            continue;
+        }
         if full_name.as_bstr() == HEAD_PIN_NAME {
             continue;
         }
@@ -1909,11 +1924,12 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
             });
         }
     }
-    if let Some(id) = repo
-        .head()
-        .context("could not read HEAD")?
-        .try_peel_to_id()
-        .context("could not peel HEAD")?
+    if !excluded.contains(b"HEAD".as_bstr())
+        && let Some(id) = repo
+            .head()
+            .context("could not read HEAD")?
+            .try_peel_to_id()
+            .context("could not peel HEAD")?
     {
         out.entry(id.detach()).or_default().push(Decoration {
             name: "HEAD".into(),
