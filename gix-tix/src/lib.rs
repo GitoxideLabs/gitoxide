@@ -2191,6 +2191,71 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("new commit: {err:#}")),
                     }
                 }
+                Effect::ForkCommit(parent) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let created = history_graph
+                        .as_ref()
+                        .context("creating a fork requires a completed history graph")
+                        .and_then(|graph| {
+                            create_commit(
+                                terminal,
+                                &repository_path,
+                                repository_is_bare,
+                                graph,
+                                Some(parent),
+                                CreateMode::Fork,
+                                enhanced_keyboard,
+                            )
+                        });
+                    match created {
+                        Ok(Some(new_id)) => {
+                            let review_roots: Vec<_> =
+                                app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
+                            let travel = open_repository(&repository_path, repository_is_bare, false)
+                                .context("could not reopen repository before travelling to fork")
+                                .and_then(|repository| edit::loaded_graph(&repository))
+                                .and_then(|graph| {
+                                    edit::time_travel::perform(
+                                        &repository_path,
+                                        repository_is_bare,
+                                        new_id,
+                                        &graph,
+                                        &review_roots,
+                                        &revisions,
+                                        false,
+                                    )
+                                });
+                            match travel {
+                                Ok(edit::time_travel::Perform::Complete { notice, selected, .. }) => {
+                                    app.leave_success(notice.map_or_else(
+                                        || format!("created fork {}", new_id.to_hex_with_len(7)),
+                                        |notice| format!("created fork {}; {notice}", new_id.to_hex_with_len(7)),
+                                    ));
+                                    app.select_commit_after_refresh(selected);
+                                    invalidate_worktree_changes(&mut worktree_changes);
+                                    refresh_pending = true;
+                                }
+                                Ok(edit::time_travel::Perform::Conflict(conflict)) => {
+                                    let original = conflict.original();
+                                    app.arm_rebase_conflict(original);
+                                    app.select_commit(original);
+                                    pending_rebase_conflict = Some(conflict);
+                                }
+                                Err(err) => {
+                                    app.leave_attention(format!(
+                                        "created fork {}, but checkout failed: {err:#}",
+                                        new_id.to_hex_with_len(7)
+                                    ));
+                                    invalidate_worktree_changes(&mut worktree_changes);
+                                    refresh_pending = true;
+                                }
+                            }
+                        }
+                        Ok(None) => app.leave_attention("no fork created: no input was provided"),
+                        Err(err) => app.leave_error(format!("fork: {err:#}")),
+                    }
+                }
                 Effect::Split(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
@@ -2614,15 +2679,15 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("finish review: {err:#}")),
                     }
                 }
-                Effect::Forkpoint => {
+                Effect::Attach => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
-                    match edit::time_travel::forkpoint(&repository_path, repository_is_bare, &revisions, false) {
+                    match edit::time_travel::attach(&repository_path, repository_is_bare, &revisions, false) {
                         Ok(notice) => {
                             app.leave_success(notice);
                             refresh_pending = true;
                         }
-                        Err(err) => app.leave_error(format!("forkpoint: {err:#}")),
+                        Err(err) => app.leave_error(format!("attach: {err:#}")),
                     }
                 }
                 Effect::TimeTravel(id) => {
@@ -4353,9 +4418,10 @@ fn todo_progress_visible(elapsed: Duration) -> bool {
 enum CreateMode {
     Insert,
     InsertEmpty,
+    Fork,
 }
 
-#[tracing::instrument(skip_all, fields(parent = ?parent))]
+#[tracing::instrument(skip_all, fields(parent = ?parent, fork = matches!(mode, CreateMode::Fork)))]
 fn create_commit(
     terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
@@ -4389,7 +4455,10 @@ fn create_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    let id = edit::create::apply(repository, graph, prepared, &edited)?;
+    let id = match mode {
+        CreateMode::Insert | CreateMode::InsertEmpty => edit::create::apply(repository, graph, prepared, &edited),
+        CreateMode::Fork => edit::create::apply_fork(repository, graph, prepared, &edited),
+    }?;
     Ok(Some(id))
 }
 
@@ -5237,8 +5306,9 @@ fn action_with_shortcut_groups(
         KeyCode::Char('m') if actions_expanded => Some(Action::MoveInsert),
         KeyCode::Char('t') if actions_expanded => Some(Action::StackInsert),
         KeyCode::Char('f') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(Action::Forkpoint)
+            Some(Action::ForkCommit)
         }
+        KeyCode::Char('h') if actions_expanded => Some(Action::Attach),
         KeyCode::Char('p') => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
@@ -6565,7 +6635,8 @@ mod tests {
             ('c', Action::CopyInsert),
             ('m', Action::MoveInsert),
             ('t', Action::StackInsert),
-            ('f', Action::Forkpoint),
+            ('f', Action::ForkCommit),
+            ('h', Action::Attach),
         ] {
             assert_eq!(
                 action_with_shortcut_groups(

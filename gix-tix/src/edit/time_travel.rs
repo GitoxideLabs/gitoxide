@@ -322,7 +322,7 @@ fn remembered_branch(repository: &gix::Repository) -> Result<RememberedBranch> {
     let pin = history::all_pins(repository)?
         .into_iter()
         .find(history::Pin::is_head)
-        .context("setting a forkpoint requires a valid HEAD pin")?;
+        .context("attaching requires a valid HEAD pin")?;
     let branch = pin
         .target
         .try_name()
@@ -337,57 +337,51 @@ fn remembered_branch(repository: &gix::Repository) -> Result<RememberedBranch> {
     })
 }
 
-fn validate_forkpoint(repository: &gix::Repository, head_id: ObjectId, remembered: &RememberedBranch) -> Result<()> {
-    let head = repository
-        .head()
-        .context("could not read HEAD before setting the forkpoint")?;
+fn validate_attach(repository: &gix::Repository, head_id: ObjectId, remembered: &RememberedBranch) -> Result<()> {
+    let head = repository.head().context("could not read HEAD before attaching")?;
     if !head.is_detached() || head.id().map(gix::Id::detach) != Some(head_id) {
-        anyhow::bail!("HEAD changed while preparing the forkpoint");
+        anyhow::bail!("HEAD changed while preparing to attach");
     }
     drop(head);
     let pin = history::all_pins(repository)?
         .into_iter()
         .find(history::Pin::is_head)
-        .context("the HEAD pin disappeared while preparing the forkpoint")?;
+        .context("the HEAD pin disappeared while preparing to attach")?;
     if pin.target.try_name() != Some(remembered.branch.as_ref()) || pin.id != remembered.branch_tip {
-        anyhow::bail!("the HEAD pin changed while preparing the forkpoint");
+        anyhow::bail!("the HEAD pin changed while preparing to attach");
     }
     let branch_id = repository
         .find_reference(remembered.branch.as_ref())
-        .context("the remembered branch disappeared while preparing the forkpoint")?
+        .context("the remembered branch disappeared while preparing to attach")?
         .try_id()
         .context("the remembered branch must be a direct reference")?
         .detach();
     if branch_id != remembered.branch_tip {
-        anyhow::bail!("the remembered branch changed while preparing the forkpoint");
+        anyhow::bail!("the remembered branch changed while preparing to attach");
     }
     ensure_branch_is_available(repository, remembered.branch.as_ref())
 }
 
-pub(crate) fn forkpoint(
+pub(crate) fn attach(
     repository_path: &Path,
     bare: bool,
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<String> {
-    let repository =
-        open_repository(repository_path, bare, false).context("could not open repository to set the forkpoint")?;
-    repository
-        .workdir()
-        .context("setting a forkpoint requires a worktree")?;
-    let head = repository
-        .head()
-        .context("could not read HEAD before setting the forkpoint")?;
+    let repository = open_repository(repository_path, bare, false)
+        .context("could not open repository to attach the remembered branch")?;
+    repository.workdir().context("attaching requires a worktree")?;
+    let head = repository.head().context("could not read HEAD before attaching")?;
     if !head.is_detached() {
-        anyhow::bail!("setting a forkpoint requires detached HEAD");
+        anyhow::bail!("attaching requires detached HEAD");
     }
     let head_id = head
         .id()
         .map(gix::Id::detach)
-        .context("setting a forkpoint requires an existing HEAD commit")?;
+        .context("attaching requires an existing HEAD commit")?;
     drop(head);
     let remembered = remembered_branch(&repository)?;
-    validate_forkpoint(&repository, head_id, &remembered)?;
+    validate_attach(&repository, head_id, &remembered)?;
 
     let destination_pin = selected_pin(&repository, head_id)?;
     let provisional = (remembered.branch_tip != head_id && !contains(&repository, remembered.branch_tip, head_id))
@@ -396,7 +390,7 @@ pub(crate) fn forkpoint(
                 &repository,
                 Target::Object(remembered.branch_tip),
                 remembered.branch_tip,
-                "tix forkpoint departure",
+                "tix attach departure",
             )
         })
         .transpose()?;
@@ -406,18 +400,18 @@ pub(crate) fn forkpoint(
             remembered.branch.clone(),
             Target::Object(remembered.branch_tip),
             Target::Object(head_id),
-            "tix forkpoint",
+            "tix attach",
         ));
     }
     edits.push(checked_ref_edit(
         "HEAD".try_into().expect("valid reference name"),
         Target::Object(head_id),
         Target::Symbolic(remembered.branch.clone()),
-        "tix forkpoint",
+        "tix attach",
     ));
     if let Err(err) = repository
         .edit_references(edits)
-        .context("could not move the remembered branch to the forkpoint")
+        .context("could not move and attach the remembered branch")
     {
         return Err(match provisional.as_ref() {
             Some(pin) => cleanup_new_pins(&repository, std::slice::from_ref(pin), err),
@@ -426,7 +420,7 @@ pub(crate) fn forkpoint(
     }
 
     let mut notice = format!(
-        "set {} forkpoint to {}",
+        "attached {} at {}",
         remembered.branch.shorten(),
         head_id.to_hex_with_len(7)
     );
@@ -483,7 +477,7 @@ fn cleanup_new_pins(
     if !edits.is_empty()
         && let Err(err) = repository
             .edit_references(edits)
-            .context("could not remove provisional forkpoint pins")
+            .context("could not remove provisional attach pins")
     {
         cause = cause.context(format!("provisional pin cleanup failed: {err:#}"));
     }
@@ -491,9 +485,7 @@ fn cleanup_new_pins(
 }
 
 fn ensure_branch_is_available(repository: &gix::Repository, branch: &gix::refs::FullNameRef) -> Result<()> {
-    let current = repository
-        .worktree()
-        .context("setting a forkpoint requires a current worktree")?;
+    let current = repository.worktree().context("attaching requires a current worktree")?;
     let current_id = current.id().map(ToOwned::to_owned);
     if current_id.is_some() {
         ensure_worktree_does_not_own_branch(
@@ -1525,7 +1517,7 @@ mod tests {
     }
 
     #[test]
-    fn forkpoint_moves_and_attaches_the_remembered_branch_without_touching_files() -> gix_testtools::Result {
+    fn attach_moves_and_attaches_the_remembered_branch_without_touching_files() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
@@ -1538,8 +1530,8 @@ mod tests {
         std::fs::write(fixture.path().join("root"), "dirty root\n")?;
         let before = gix_testtools::repository::snapshot(fixture.path())?;
 
-        let notice = forkpoint(&repository_path, false, &[], false)?;
-        assert!(notice.contains("set main forkpoint"), "{notice}");
+        let notice = attach(&repository_path, false, &[], false)?;
+        assert!(notice.contains("attached main at"), "{notice}");
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
             repository.head_name()?.map(|name| name.as_bstr().to_owned()),
@@ -1558,19 +1550,13 @@ mod tests {
             "the departed branch tip remains visible through an ordinary pin"
         );
         let after = gix_testtools::repository::snapshot(fixture.path())?;
-        assert_eq!(
-            after.index_tree, before.index_tree,
-            "forkpoint does not update the index"
-        );
-        assert_eq!(
-            after.worktree, before.worktree,
-            "forkpoint does not update worktree files"
-        );
+        assert_eq!(after.index_tree, before.index_tree, "attach does not update the index");
+        assert_eq!(after.worktree, before.worktree, "attach does not update worktree files");
         Ok(())
     }
 
     #[test]
-    fn forkpoint_does_not_pin_a_tip_retained_by_another_branch() -> gix_testtools::Result {
+    fn attach_does_not_pin_a_tip_retained_by_another_branch() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         git(fixture.path(), &["branch", "keep", "main"])?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -1581,7 +1567,7 @@ mod tests {
         drop(repository);
 
         perform(&repository_path, false, middle, &graph, &[], &[], false)?.complete()?;
-        forkpoint(&repository_path, false, &["keep".into()], false)?;
+        attach(&repository_path, false, &["keep".into()], false)?;
         let repository = crate::test_repository::open(fixture.path())?;
         assert!(
             history::all_pins(&repository)?
@@ -1593,7 +1579,7 @@ mod tests {
     }
 
     #[test]
-    fn forkpoint_rejects_a_branch_owned_by_another_worktree() -> gix_testtools::Result {
+    fn attach_rejects_a_branch_owned_by_another_worktree() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
@@ -1613,21 +1599,18 @@ mod tests {
             .status()?;
         assert!(worktree.success(), "the remembered branch moves to another worktree");
 
-        let err = forkpoint(&repository_path, false, &[], false)
-            .expect_err("a branch cannot become attached in two worktrees");
+        let err =
+            attach(&repository_path, false, &[], false).expect_err("a branch cannot become attached in two worktrees");
         assert!(
             format!("{err:#}").contains("checked out in another worktree"),
             "{err:#}"
         );
         let repository = crate::test_repository::open(fixture.path())?;
-        assert!(
-            repository.head()?.is_detached(),
-            "failed forkpoint retains detached HEAD"
-        );
+        assert!(repository.head()?.is_detached(), "failed attach retains detached HEAD");
         assert_eq!(
             repository.head_id()?.detach(),
             middle,
-            "failed forkpoint retains its departure"
+            "failed attach retains its departure"
         );
         assert_eq!(
             repository.find_reference("refs/heads/main")?.id().detach(),
@@ -1641,7 +1624,7 @@ mod tests {
     }
 
     #[test]
-    fn forkpoint_accepts_the_branch_of_the_current_linked_worktree() -> gix_testtools::Result {
+    fn attach_accepts_the_branch_of_the_current_linked_worktree() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let linked = fixture.path().join("topic-wt");
         let worktree = Command::new("git")
@@ -1671,17 +1654,17 @@ mod tests {
         );
         drop(repository);
 
-        forkpoint(&git_dir, false, &[], false)?;
+        attach(&git_dir, false, &[], false)?;
         let repository = open_repository(&git_dir, false, false)?;
         assert_eq!(
             repository.head_name()?.map(|name| name.as_bstr().to_owned()),
             Some(branch.as_bstr().to_owned()),
-            "forkpoint reattaches the current linked worktree branch"
+            "attach reattaches the current linked worktree branch"
         );
         assert_eq!(
             repository.find_reference(branch.as_ref())?.id().detach(),
             root,
-            "forkpoint moves the linked worktree branch"
+            "attach moves the linked worktree branch"
         );
         Ok(())
     }

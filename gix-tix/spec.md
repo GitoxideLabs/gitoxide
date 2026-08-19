@@ -426,13 +426,13 @@ The Enter key is written as `<enter>` throughout.
 
 - On a completed, focused history in a worktree repository, `@` on a non-`HEAD`
   row runs `git checkout --detach <commit>` without forcing local changes.
-- `a f` is available while `HEAD` is detached with a valid symbolic HEAD pin.
+- `a h` is available while `HEAD` is detached with a valid symbolic HEAD pin.
   It atomically moves the remembered local branch to the current `HEAD` commit
   and attaches `HEAD` without changing the index or worktree. The symbolic HEAD
   pin remains and follows the moved branch. The branch's previous tip receives
   an ordinary pin only when no other normal view tip still reaches it; an
   ordinary destination pin is consumed normally.
-- Forkpoint refuses a remembered branch checked out by another worktree. It is
+- Attach refuses a remembered branch checked out by another worktree. It is
   unavailable during conflicts or incomplete history, but otherwise permits
   dirty index and worktree state because the operation changes only refs.
 - When tix detaches an attached local branch, it records that branch symbolically
@@ -441,7 +441,7 @@ The Enter key is written as `<enter>` throughout.
   Further detached travel preserves the singleton. After each successful tix
   checkout, landing on the remembered branch tip reattaches `HEAD` to that branch
   and removes the HEAD pin; explicitly attaching another branch also removes it.
-  Forkpoint is the exception: it deliberately retains the symbolic HEAD pin
+  Attach is the exception: it deliberately retains the symbolic HEAD pin
   after attaching its remembered branch.
   A failed automatic reattachment leaves both detached `HEAD` and the HEAD pin
   intact and reports a warning. External Git checkouts do not reconcile it.
@@ -680,6 +680,22 @@ space first; changes blocks adapt within the remaining history width.
   branches, custom refs, direct tix pins, and a detached `HEAD`, while excluding
   tags and remote-tracking refs. Checked-out affected worktrees are preflighted;
   inaccessible or conflicting affected worktrees abort safely.
+
+### Fork commits
+
+- `a f` creates an independent child of any selected commit, including a hidden
+  boundary or merge commit. It requires completed history and a live,
+  conflict-free worktree, but unlike `c n` it is not restricted by descendants
+  because it rewrites none of them. It is unavailable for unborn history.
+- Fork preparation reuses the new-commit editor, candidate-tree, identity,
+  enrichment, and signing rules. Empty-delta children are allowed so historical
+  commits can be forked without borrowing the current worktree's changes.
+- Saving writes only the new commit and a temporary direct
+  `refs/worktree/tix/pins/*` ref; existing refs, descendants, indexes, and
+  worktrees do not move during creation.
+- Tix immediately time-travels to the new fork. A successful checkout consumes
+  its temporary pin and reconciles the departed `HEAD` through the standard pin
+  primitive. If checkout fails, the fork remains pinned and visible.
 
 ### Amend, spill, and split
 
@@ -1014,8 +1030,8 @@ space first; changes blocks adapt within the remaining history width.
   or finishes a review, `a s` squashes the selected commit, `a c` copy-inserts
   current `HEAD` above the selected commit, `a m` move-inserts it, `a t` starts
   stack-insert for the linear ancestry from the selected commit through `HEAD`,
-  and `a f` establishes
-  the remembered branch's forkpoint at detached `HEAD` when available.
+  `a f` creates and travels to a standalone child of the selected commit, and
+  `a h` attaches the remembered branch at detached `HEAD` when available.
 - Squash accepts any visible strict ancestor whose affected descendants contain no merges. With one eligible
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling

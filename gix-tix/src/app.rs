@@ -381,7 +381,8 @@ pub(crate) enum Action {
     MoveInsert,
     StackInsert,
     Review,
-    Forkpoint,
+    ForkCommit,
+    Attach,
     TimeTravel,
     TogglePin,
     VerifySignatures,
@@ -436,7 +437,8 @@ pub(crate) enum Effect {
         review: ObjectId,
         return_to: Option<ObjectId>,
     },
-    Forkpoint,
+    ForkCommit(ObjectId),
+    Attach,
     TimeTravel(ObjectId),
     TogglePin(ObjectId),
     ToggleTodo(ObjectId),
@@ -1101,7 +1103,8 @@ impl App {
                 | Action::MoveInsert
                 | Action::StackInsert
                 | Action::Review
-                | Action::Forkpoint
+                | Action::ForkCommit
+                | Action::Attach
         ) {
             self.actions_expanded = false;
         }
@@ -1516,7 +1519,12 @@ impl App {
                     return vec![Effect::StartReview { tip, base }];
                 }
             }
-            Action::Forkpoint if self.can_forkpoint() => return vec![Effect::Forkpoint],
+            Action::ForkCommit if self.can_fork_commit() => {
+                return vec![Effect::ForkCommit(
+                    self.rows[self.selected.expect("fork requires a selection")].id,
+                )];
+            }
+            Action::Attach if self.can_attach() => return vec![Effect::Attach],
             Action::TimeTravel if self.time_travel_shortcut_visible() => {
                 return vec![Effect::TimeTravel(
                     self.rows[self.selected.expect("time-travel requires a selection")].id,
@@ -2371,7 +2379,18 @@ impl App {
             })
     }
 
-    pub(crate) fn can_forkpoint(&self) -> bool {
+    pub(crate) fn can_fork_commit(&self) -> bool {
+        self.state == State::Complete
+            && self.worktree_changes_available
+            && !self.worktree_conflicted
+            && self.pending_rebase_conflict.is_none()
+            && self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.worktree_head.is_some()
+            && self.selected.and_then(|index| self.rows.get(index)).is_some()
+    }
+
+    pub(crate) fn can_attach(&self) -> bool {
         self.state == State::Complete
             && self.worktree_changes_available
             && !self.worktree_conflicted
@@ -3546,6 +3565,7 @@ mod tests {
     fn editing_rejects_merge_descendants_and_new_commits_support_unborn_head() {
         let mut app = App::new(10);
         app.extend_commits(vec![row(2)]);
+        app.set_worktree_head(Some(id(2)), false);
         complete(&mut app);
         app.set_known_descendants(HashSet::from([id(2)]));
         app.set_known_merge_descendants(HashSet::from([id(2)]));
@@ -3557,6 +3577,8 @@ mod tests {
             !app.can_create_commit(),
             "a merge descendant outside the visible projection prevents a child"
         );
+        assert!(app.can_fork_commit(), "a fork does not rewrite merge descendants");
+        assert_eq!(app.update(Action::ForkCommit), vec![Effect::ForkCommit(id(2))]);
 
         let mut unborn = App::new(10);
         unborn.set_worktree_head_unborn(true);
@@ -3571,6 +3593,16 @@ mod tests {
                 parent: None,
                 empty: false,
             }]
+        );
+        assert!(!unborn.can_fork_commit(), "a fork requires a selected parent");
+
+        let mut unborn_with_history = App::new(10);
+        unborn_with_history.set_worktree_head_unborn(true);
+        unborn_with_history.extend_commits(vec![row(1)]);
+        complete(&mut unborn_with_history);
+        assert!(
+            !unborn_with_history.can_fork_commit(),
+            "a fork requires an existing worktree HEAD even when another ref is selected"
         );
     }
 
@@ -3628,11 +3660,11 @@ mod tests {
         assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(1))]);
         app.set_worktree_branch(Some((id(1), true)));
         app.set_worktree_head(Some(id(1)), false);
-        assert!(app.can_forkpoint());
-        assert_eq!(app.update(Action::Forkpoint), vec![Effect::Forkpoint]);
+        assert!(app.can_attach());
+        assert_eq!(app.update(Action::Attach), vec![Effect::Attach]);
         app.set_worktree_changes_available(false);
         assert!(app.update(Action::TimeTravel).is_empty());
-        assert!(app.update(Action::Forkpoint).is_empty());
+        assert!(app.update(Action::Attach).is_empty());
         assert_eq!(app.update(Action::TogglePin), vec![Effect::TogglePin(id(1))]);
     }
 
@@ -3644,14 +3676,17 @@ mod tests {
         complete(&mut app);
         app.update(Action::MoveDown);
         assert!(app.time_travel_shortcut_visible());
+        assert!(app.can_fork_commit());
 
         app.set_worktree_conflicted(true);
         assert!(!app.time_travel_shortcut_visible());
+        assert!(!app.can_fork_commit());
         assert!(app.update(Action::TimeTravel).is_empty());
         app.set_worktree_conflicted(false);
         assert!(app.changes_visible(), "changes are normally shown while enabled");
         app.arm_rebase_conflict(id(1));
         assert!(!app.time_travel_shortcut_visible());
+        assert!(!app.can_fork_commit());
         assert!(
             !app.changes_visible(),
             "an in-memory conflict preview cannot be loaded by an on-disk changes view"
@@ -4300,6 +4335,7 @@ mod tests {
         let mut app = App::new(4);
         app.extend_commits(vec![row(1), row(2), row(3)]);
         app.extend_hidden_commits(vec![row(4)]);
+        app.set_worktree_head(Some(id(1)), false);
         complete(&mut app);
         Arc::make_mut(&mut app.rows[3]).signature = SignatureState::Unverified;
 
@@ -4309,6 +4345,8 @@ mod tests {
         assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(id(4))]);
         assert!(!app.can_reword());
         assert!(!app.can_forget());
+        assert!(app.can_fork_commit());
+        assert_eq!(app.update(Action::ForkCommit), vec![Effect::ForkCommit(id(4))]);
         assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(4))]);
         assert!(
             app.update(Action::VerifySignatures).is_empty(),
@@ -4656,6 +4694,8 @@ mod tests {
         app.update(Action::CopyInsert);
         app.update(Action::MoveInsert);
         app.update(Action::StackInsert);
+        app.update(Action::ForkCommit);
+        app.update(Action::Attach);
         assert!(app.actions_expanded, "grouped actions keep the group open");
         app.update(Action::ToggleActions);
         assert!(!app.actions_expanded, "the prefix key toggles the group");
