@@ -25,7 +25,7 @@ const HELP: &str = r#"
 - Saving an unchanged document in the history-view editor is a no-op unless the ancestry ending at `@` has a pending rebase. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. Unchanged picks whose parent stays unchanged retain their IDs; replay starts at the first pending or structurally changed commit. Changed commits through `@` are cherry-picked and re-signed, while descendants and other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Tix pins, stashes, and review refs, tags, remote-tracking refs, and symbolic refs stay unchanged and hidden. A ref checked out by another worktree may be moved but not deleted. New unreferenced leaves are pinned.
 - A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts [CONTINUE]` and writes a continuation todo. Resolve the ordinary unmerged index, then apply that todo. Concurrent ref changes still abort the update.
-- Commit states are display-only and editing them has no effect: `↻` means a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, `○` means unsigned, and `🎁` means worktree state is stashed for that commit. Stashes follow rewritten commits automatically; dropping a stashed commit or combining multiple stashes into one result is rejected.
+- Commit states are display-only and editing them has no effect: `🚧` means the commit is a todo, `📝` it has a note, `✔️` its tree passed checks, `↻` a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, `○` means unsigned, and `🎁` means worktree state is stashed for that commit. Stashes follow rewritten commits automatically; dropping a stashed commit or combining multiple stashes into one result is rejected.
 -->
 "#;
 
@@ -201,6 +201,8 @@ pub(crate) fn prepare(
     };
     let anchor_title = anchor_title(repo, onto)?;
     let mut body = Vec::new();
+    let mut enrichments = crate::enrich::open(repo)?;
+    let mut tree_enrichments = crate::enrich::open_tree(repo)?;
     for (section_index, section) in sections.iter().enumerate() {
         if section_index > 0 {
             body.push(b'\n');
@@ -222,7 +224,7 @@ pub(crate) fn prepare(
             } else {
                 "pick"
             };
-            let states = commit_states(repo, *id)?;
+            let states = commit_states(repo, &mut enrichments, &mut tree_enrichments, *id)?;
             body.extend_from_slice(
                 format!(
                     "`{verb} {}` {states}{}\n",
@@ -278,6 +280,8 @@ pub(crate) fn prepare_continuation(
     };
     let mut document = b"<!-- Rebase help follows. Saving unchanged continues the materialized rebase; empty this file or remove the tix-rebase-state-v2 comment to cancel. -->\n# Continue materialized rebase\n\n".to_vec();
     let mut body = Vec::new();
+    let mut enrichments = crate::enrich::open(repo)?;
+    let mut tree_enrichments = crate::enrich::open_tree(repo)?;
     for (index, step) in plan.steps.iter().enumerate() {
         let continues = matches!(step.parent, rebase::PlanParent::Step(parent) if parent + 1 == index);
         if !continues {
@@ -334,7 +338,12 @@ pub(crate) fn prepare_continuation(
                 };
                 let title = anchor_title(repo, id)?;
                 body.extend_from_slice(
-                    format!("`{marker}pick {value}` {}{}\n", commit_states(repo, id)?, title).as_bytes(),
+                    format!(
+                        "`{marker}pick {value}` {}{}\n",
+                        commit_states(repo, &mut enrichments, &mut tree_enrichments, id)?,
+                        title
+                    )
+                    .as_bytes(),
                 );
             }
             rebase::PlanCommit::Empty(ref title) => {
@@ -347,7 +356,7 @@ pub(crate) fn prepare_continuation(
                 format!(
                     "`squash {}` {}{}\n",
                     short(repo, *id, show_change_ids)?,
-                    commit_states(repo, *id)?,
+                    commit_states(repo, &mut enrichments, &mut tree_enrichments, *id)?,
                     title
                 )
                 .as_bytes(),
@@ -477,7 +486,12 @@ fn ref_display_name(name: &gix::refs::FullName, refs: &[rebase::ExpectedRef]) ->
     }
 }
 
-fn commit_states(repo: &gix::Repository, id: ObjectId) -> Result<String> {
+fn commit_states(
+    repo: &gix::Repository,
+    enrichments: &mut gix::note::Platform,
+    tree_enrichments: &mut gix::note::Platform,
+    id: ObjectId,
+) -> Result<String> {
     let commit = repo
         .find_commit(id)
         .context("could not load a commit state for the rebase todo")?
@@ -501,7 +515,29 @@ fn commit_states(repo: &gix::Repository, id: ObjectId) -> Result<String> {
     let stashed = repo
         .try_find_reference(super::stash::reference(id)?.as_ref())?
         .is_some();
-    let mut out = Vec::with_capacity(4);
+    let enrichment =
+        crate::change_id::for_commit(repo, id).and_then(|change_id| crate::enrich::load(enrichments, change_id));
+    let enrichment = match enrichment {
+        Ok(enrichment) => enrichment,
+        Err(err) => {
+            tracing::warn!(commit_id = %id, error = %err, "ignored malformed tix enrichment");
+            crate::enrich::Enrichment::default()
+        }
+    };
+    let tree_enrichment =
+        crate::enrich::tree_id(repo, id).and_then(|tree_id| crate::enrich::load_tree(tree_enrichments, tree_id));
+    let tree_enrichment = match tree_enrichment {
+        Ok(enrichment) => enrichment,
+        Err(err) => {
+            tracing::warn!(commit_id = %id, error = %err, "ignored malformed tix tree enrichment");
+            crate::enrich::TreeEnrichment::default()
+        }
+    };
+    let marker = crate::enrich::marker(enrichment.todo, enrichment.note.is_some(), tree_enrichment.checks_pass);
+    let mut out = Vec::with_capacity(6);
+    if !marker.is_empty() {
+        out.push(marker);
+    }
     if pending {
         out.push("↻");
     }
@@ -1313,6 +1349,81 @@ mod tests {
             Some(&"refs/heads/main".try_into()?),
             "the generated @ command retains the implicitly attached branch"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn enrichment_markers_precede_commit_states_in_initial_and_continuation_todos() -> gix_testtools::Result {
+        let (_fixture, repo) = repo()?;
+        let (base, middle, tip, commits) = commits(&repo)?;
+        crate::enrich::ensure_todo(&repo, middle, true)?;
+        crate::enrich::set_note(&repo, middle, Some(b"follow up"))?;
+        crate::enrich::ensure_checks_pass(&repo, middle, true)?;
+
+        let id = crate::change_id::display_short(&repo, middle)?;
+        let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
+        let document = String::from_utf8(prepared.document)?;
+        assert!(
+            document.contains(&format!("`pick {id}` 🚧📝✔️ ○ 2000-01-02")),
+            "commit and tree enrichments precede the unsigned signature state"
+        );
+        assert!(
+            document.contains("`🚧` means the commit is a todo, `📝` it has a note, `✔️` its tree passed checks"),
+            "the embedded legend explains enrichment states"
+        );
+
+        repo.reference(
+            super::super::stash::reference(middle)?,
+            tip,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test enriched todo stash ordering",
+        )?;
+        let prepared = prepare_continuation(
+            &repo,
+            &rebase::Plan {
+                base,
+                scope: vec![middle],
+                steps: vec![rebase::PlanStep {
+                    parent: rebase::PlanParent::Existing(base),
+                    commit: rebase::PlanCommit::Pick(middle),
+                    squash: Vec::new(),
+                }],
+                checkout: None,
+                expected_refs: Vec::new(),
+            },
+            vec![middle],
+            true,
+        )?;
+        let document = String::from_utf8(prepared.document)?;
+        assert!(
+            document.contains(&format!("`pick {id}` 🚧📝✔️ ○ 🎁 middle")),
+            "continuation todos retain enrichment ordering before stash state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_enrichments_do_not_prevent_todo_generation() -> gix_testtools::Result {
+        let (_fixture, repo) = repo()?;
+        let (base, middle, tip, commits) = commits(&repo)?;
+        let change_id = crate::change_id::for_commit(&repo, middle)?;
+        let reference: gix::refs::FullName = crate::enrich::REF_NAME.try_into()?;
+        repo.notes()?
+            .add_to_ref(reference.as_ref(), ObjectId::from(change_id), b"[commit")?;
+        let tree_id = crate::enrich::tree_id(&repo, middle)?;
+        let reference: gix::refs::FullName = crate::enrich::TREE_REF_NAME.try_into()?;
+        repo.notes()?.add_to_ref(reference.as_ref(), tree_id, b"[tree")?;
+
+        let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
+        let document = String::from_utf8(prepared.document)?;
+        let line = document
+            .lines()
+            .find(|line| line.contains("2000-01-02 author middle"))
+            .expect("the malformed enrichment commit remains in the todo");
+        assert!(line.contains(" ○ "), "ordinary commit states remain visible");
+        for marker in ["🚧", "📝", "✔️"] {
+            assert!(!line.contains(marker), "malformed enrichments are ignored");
+        }
         Ok(())
     }
 

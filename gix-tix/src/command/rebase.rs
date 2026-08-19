@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     ffi::{OsStr, OsString},
     io::{IsTerminal, Read, Write},
     path::{Path, PathBuf},
@@ -167,49 +166,7 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
         )
     };
 
-    let mut notes = repo.notes().context("could not open Git notes")?;
-    let row_indices: HashMap<_, _> = app
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(index, row)| (row.id, index))
-        .collect();
-    for id in &scope {
-        let index = row_indices
-            .get(id)
-            .copied()
-            .context("an editable commit disappeared from the history view")?;
-        if !app.rows[index].metadata_loaded {
-            let (metadata, attributions) =
-                history::load_metadata(repo, *id, &authors).context("could not load editable commit metadata")?;
-            app.set_metadata(index, metadata, attributions);
-        }
-        let loaded = notes
-            .get(*id)
-            .context("could not load commit notes")?
-            .into_iter()
-            .map(|note| {
-                let mut blob = note.blob;
-                blob.take_data().into()
-            })
-            .collect();
-        app.set_notes(*id, loaded);
-    }
-    let mailmap = repo.open_mailmap();
-    let commits = scope
-        .iter()
-        .map(|id| {
-            let row = row_indices
-                .get(id)
-                .and_then(|index| app.rows.get(*index))
-                .context("an editable commit disappeared while formatting the todo")?;
-            Ok(todo::Commit {
-                id: *id,
-                parents: row.parent_ids.iter().copied().collect(),
-                info: crate::ui::todo_metadata(&app, row, &mailmap),
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let commits = crate::load_rebase_todo_commits(repo, &mut app, &authors, &scope)?;
     todo::prepare(repo, base, onto, &commits, &refs.view_tips, onto_kind, true)
 }
 
