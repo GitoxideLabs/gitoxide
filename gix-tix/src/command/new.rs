@@ -79,6 +79,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .context("creating a commit did not produce a selection")?;
     println!("{}", crate::change_id::display(&repository, selected, 7)?);
     super::print_ref_rewrites(&repository, &outcome.ref_rewrites)?;
+    super::record_undo(&repository, "create commit", Ok(outcome.ref_changes));
     Ok(())
 }
 

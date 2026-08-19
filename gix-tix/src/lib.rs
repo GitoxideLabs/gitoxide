@@ -990,6 +990,8 @@ fn event_loop(
     let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
     let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
     let mut pending_todo_rebase_plan: Option<edit::rebase::Plan> = None;
+    let mut pending_todo_ref_changes = Vec::new();
+    let mut pending_conflict_ref_changes = Vec::new();
     let result: Result<Option<Duration>> = (|| loop {
         if let Some(mut recovered) =
             recover_event_loop_repository(&mut repository_path, &common_dir, &mut repository_is_bare)?
@@ -1561,6 +1563,15 @@ fn event_loop(
             continue;
         };
         if ref_tree.is_active() {
+            if matches!(
+                &terminal_event,
+                TerminalEvent::Key(KeyEvent {
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }) | TerminalEvent::Mouse(_)
+            ) {
+                app.dismiss_undo_position();
+            }
             match &terminal_event {
                 TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => match ref_tree.handle_key(*key) {
                     ref_tree::Input::Handled => {
@@ -1571,16 +1582,23 @@ fn event_loop(
                     ref_tree::Input::PinReferences { id, kinds } => {
                         let result = open_repository(&repository_path, repository_is_bare, false)
                             .context("could not open repository to pin ref-tree references")
-                            .and_then(|repository| ref_tree::pin_references(&repository, id, &kinds));
+                            .and_then(|repository| ref_tree::pin_references_reporting(&repository, id, &kinds));
                         match result {
-                            Ok(pins) if !pins.is_empty() => {
+                            Ok((pins, changes)) if !pins.is_empty() => {
                                 app.select_commit_after_refresh(pins[0].id);
                                 return_to_history_after_refresh = Some(pins[0].id);
-                                app.leave_success(if pins.len() == 1 {
-                                    "pinned selected reference".into()
-                                } else {
-                                    format!("pinned {} selected references", pins.len())
-                                });
+                                leave_recorded_success(
+                                    &mut app,
+                                    &repository_path,
+                                    repository_is_bare,
+                                    "pin references",
+                                    &changes,
+                                    if pins.len() == 1 {
+                                        "pinned selected reference".into()
+                                    } else {
+                                        format!("pinned {} selected references", pins.len())
+                                    },
+                                );
                                 refresh_pending = true;
                                 refresh_expand_hidden = true;
                             }
@@ -1618,24 +1636,56 @@ fn event_loop(
                         };
                         let mut deleted = false;
                         match open_repository(&repository_path, repository_is_bare, false) {
-                            Ok(mut repository) => match repository.delete_local_branches(names) {
-                                Ok(()) => {
-                                    ref_tree.leave_success(format!("deleted {label}"));
+                            Ok(mut repository) => {
+                                let before = names
+                                    .iter()
+                                    .map(|name| {
+                                        edit::undo::state(&repository, name.as_ref()).map(|state| (name.clone(), state))
+                                    })
+                                    .collect::<Result<Vec<_>>>();
+                                let result = repository.delete_local_branches(names);
+                                let changed = result.is_ok()
+                                    || result.as_ref().is_err_and(|err| {
+                                        matches!(err, gix::repository::branch::delete::Error::Cleanup { .. })
+                                    });
+                                if changed {
+                                    let recorded = before
+                                        .and_then(|before| {
+                                            before
+                                                .into_iter()
+                                                .map(|(name, before)| {
+                                                    edit::undo::state(&repository, name.as_ref())
+                                                        .map(|after| edit::undo::RefChange { name, before, after })
+                                                })
+                                                .collect::<Result<Vec<_>>>()
+                                        })
+                                        .map(|changes| {
+                                            changes
+                                                .into_iter()
+                                                .filter(|change| change.before != change.after)
+                                                .collect::<Vec<_>>()
+                                        })
+                                        .and_then(|changes| {
+                                            edit::undo::record(&repository, "delete local branches", &changes)
+                                                .map(|_| ())
+                                        });
+                                    let message = result.as_ref().map_or_else(
+                                        |err| format!("delete {label}: {err}"),
+                                        |()| format!("deleted {label}"),
+                                    );
+                                    match (result, recorded) {
+                                        (Ok(()), Ok(())) => ref_tree.leave_success(message),
+                                        (_, Ok(())) => ref_tree.leave_attention(message),
+                                        (_, Err(err)) => {
+                                            ref_tree.leave_attention(format!("{message}; undo history: {err:#}"));
+                                        }
+                                    }
                                     deleted = true;
                                     refresh_pending = true;
+                                } else if let Err(err) = result {
+                                    ref_tree.leave_error(format!("delete {label}: {err}"));
                                 }
-                                Err(err) => {
-                                    let changed =
-                                        matches!(&err, gix::repository::branch::delete::Error::Cleanup { .. });
-                                    if changed {
-                                        ref_tree.leave_attention(format!("delete {label}: {err}"));
-                                    } else {
-                                        ref_tree.leave_error(format!("delete {label}: {err}"));
-                                    }
-                                    deleted = changed;
-                                    refresh_pending |= changed;
-                                }
-                            },
+                            }
                             Err(err) => ref_tree.leave_error(format!("delete {label}: {err:#}")),
                         }
                         if deleted {
@@ -1685,7 +1735,7 @@ fn event_loop(
             }
         }
         let key_pressed = is_key_press(&terminal_event);
-        let (action, repeats_history, is_repeat, throttles_draw) = match terminal_event {
+        let (mut action, repeats_history, is_repeat, throttles_draw) = match terminal_event {
             TerminalEvent::Key(key) => {
                 let action = action_with_shortcut_groups(
                     key,
@@ -1794,12 +1844,28 @@ fn event_loop(
             urgent = true;
         }
         if key_pressed
+            && action == Some(Action::OpenDiff)
+            && app.changes_focus.is_none()
+            && !pending_conflict_ref_changes.is_empty()
+        {
+            action = Some(Action::Amend);
+        }
+        if key_pressed
             && action == Some(Action::Cancel)
             && pending_rebase_conflict.is_none()
             && pending_todo_rebase_conflict.is_none()
             && app.has_rebase_conflict()
         {
+            let recorded = record_and_clear_pending_undo(
+                &repository_path,
+                repository_is_bare,
+                "materialize time-travel conflict",
+                &mut pending_conflict_ref_changes,
+            );
             app.clear_rebase_conflict();
+            if let Err(err) = recorded {
+                app.leave_attention(format!("cancelled conflict; undo history: {err:#}"));
+            }
             dirty = true;
             urgent = true;
             continue;
@@ -1811,13 +1877,15 @@ fn event_loop(
                     .expect("a pending conflict was checked before accepting it");
                 let original = conflict.original();
                 match conflict.accept() {
-                    Ok((notice, id, _)) => {
+                    Ok((notice, id, _, ref_changes)) => {
+                        pending_conflict_ref_changes = ref_changes;
                         tracing::info!(commit_id = %original, rewritten_id = %id, "accepted suspended rebase conflict");
                         app.begin_conflict_resolution();
                         app.leave_attention(notice);
                         app.select_commit_after_refresh(id);
                     }
                     Err(err) => {
+                        pending_conflict_ref_changes.clear();
                         tracing::warn!(commit_id = %original, error = %err, "suspended rebase conflict checkout failed");
                         app.clear_rebase_conflict();
                         app.leave_error(format!("conflict checkout: {err:#}"));
@@ -1851,7 +1919,17 @@ fn event_loop(
                     .take()
                     .expect("a pending conflict was checked before discarding it");
                 tracing::info!(commit_id = %conflict.original(), "discarded suspended rebase conflict");
+                let mut changes = conflict.into_ref_changes();
+                let recorded = record_and_clear_pending_undo(
+                    &repository_path,
+                    repository_is_bare,
+                    "time travel before conflict",
+                    &mut changes,
+                );
                 app.clear_rebase_conflict();
+                if let Err(err) = recorded {
+                    app.leave_attention(format!("cancelled conflict; undo history: {err:#}"));
+                }
                 dirty = true;
                 urgent = true;
                 continue;
@@ -1863,14 +1941,15 @@ fn event_loop(
                     .take()
                     .expect("a pending todo conflict was checked before accepting it");
                 let plan = conflict.continuation_plan();
-                match edit::time_travel::materialize_plan_conflict(
+                match edit::time_travel::materialize_plan_conflict_reporting(
                     conflict,
                     &repository_path,
                     repository_is_bare,
                     &revisions,
                     false,
                 ) {
-                    Ok((notice, id, _)) => {
+                    Ok((notice, id, _, mut ref_changes)) => {
+                        pending_todo_ref_changes.append(&mut ref_changes);
                         pending_todo_rebase_plan = Some(plan);
                         app.begin_conflict_resolution();
                         app.arm_rebase_continuation();
@@ -1878,6 +1957,7 @@ fn event_loop(
                         app.select_commit_after_refresh(id);
                     }
                     Err(err) => {
+                        pending_todo_ref_changes.clear();
                         app.clear_rebase_conflict();
                         app.leave_error(format!("conflict checkout: {err:#}"));
                     }
@@ -1893,7 +1973,16 @@ fn event_loop(
                     .take()
                     .expect("a pending todo conflict was checked before discarding it");
                 tracing::info!(commit_id = %conflict.original(), "discarded suspended todo rebase conflict");
+                let recorded = record_and_clear_pending_undo(
+                    &repository_path,
+                    repository_is_bare,
+                    "materialize rebase conflict",
+                    &mut pending_todo_ref_changes,
+                );
                 app.clear_rebase_conflict();
+                if let Err(err) = recorded {
+                    app.leave_attention(format!("cancelled rebase conflict; undo history: {err:#}"));
+                }
                 refresh_pending = true;
                 dirty = true;
                 urgent = true;
@@ -1913,8 +2002,18 @@ fn event_loop(
             && pending_todo_rebase_plan.is_some()
         {
             drop(pending_todo_rebase_plan.take());
+            let recorded = record_and_clear_pending_undo(
+                &repository_path,
+                repository_is_bare,
+                "materialize rebase conflict",
+                &mut pending_todo_ref_changes,
+            );
             app.clear_rebase_continuation();
-            app.leave_attention("stopped rebase continuation; the partially applied repository remains unchanged");
+            let message = "stopped rebase continuation; the partially applied repository remains unchanged";
+            app.leave_attention(match recorded {
+                Ok(()) => message.into(),
+                Err(err) => format!("{message}; undo history: {err:#}"),
+            });
             tracing::info!("stopped materialized rebase continuation without rolling back repository state");
             dirty = true;
             urgent = true;
@@ -1941,7 +2040,7 @@ fn event_loop(
                     let notice = outcome
                         .selected
                         .map(|selected| {
-                            edit::time_travel::checkout_without_replay(
+                            edit::time_travel::checkout_without_replay_reporting(
                                 &repository_path,
                                 repository_is_bare,
                                 selected,
@@ -1950,14 +2049,27 @@ fn event_loop(
                             )
                         })
                         .transpose()
-                        .map(Option::flatten);
+                        .map(|result| result.unwrap_or((None, Vec::new())));
                     app.clear_rebase_conflict();
                     app.clear_rebase_continuation();
                     app.set_worktree_conflicted(false);
-                    match notice {
-                        Ok(notice) => app.leave_success(notice.unwrap_or_else(|| "rebased history".into())),
-                        Err(err) => app.leave_attention(format!("rebase applied, checkout failed: {err:#}")),
-                    }
+                    let mut changes = std::mem::take(&mut pending_todo_ref_changes);
+                    changes.extend(outcome.ref_changes.iter().cloned());
+                    let message = match notice {
+                        Ok((notice, mut checkout_changes)) => {
+                            changes.append(&mut checkout_changes);
+                            notice.unwrap_or_else(|| "rebased history".into())
+                        }
+                        Err(err) => format!("rebase applied, checkout failed: {err:#}"),
+                    };
+                    leave_recorded_success(
+                        &mut app,
+                        &repository_path,
+                        repository_is_bare,
+                        "rebase history",
+                        &changes,
+                        message,
+                    );
                     refresh_pending = true;
                 }
                 Ok(edit::rebase::PlanPerform::Conflict(conflict)) => {
@@ -1990,10 +2102,20 @@ fn event_loop(
             urgent = true;
             continue;
         }
+        if !pending_conflict_ref_changes.is_empty()
+            && action != Some(Action::Amend)
+            && !action_allowed_during_rebase_continuation(action.as_ref(), app.changes_focus.is_some())
+        {
+            app.leave_attention("resolve the checked-out conflict, then press <enter> to amend");
+            dirty = true;
+            urgent = true;
+            continue;
+        }
         let Some(action) = action else {
             continue;
         };
         if action == Action::ToggleRefTree {
+            app.dismiss_undo_position();
             if ref_tree.is_active() {
                 ref_tree.leave();
             } else {
@@ -2067,6 +2189,73 @@ fn event_loop(
         for effect in effects {
             match effect {
                 Effect::Cancel => cancelled.store(true, Ordering::Relaxed),
+                direction @ (Effect::Undo | Effect::Redo) => {
+                    let undoing = matches!(direction, Effect::Undo);
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let repository = open_repository(&repository_path, repository_is_bare, false)
+                        .context("could not open repository for undo")?;
+                    match edit::undo::review_blocks_undo(&repository) {
+                        Ok(true) => {
+                            app.dismiss_undo_position();
+                            app.leave_attention("undo and redo are unavailable during a review");
+                            continue;
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            app.dismiss_undo_position();
+                            app.leave_error(format!("undo: {err:#}"));
+                            continue;
+                        }
+                    }
+                    let current = edit::undo::position(&repository);
+                    let planned = if undoing {
+                        edit::undo::plan_undo(&repository)
+                    } else {
+                        edit::undo::plan_redo(&repository)
+                    };
+                    match planned {
+                        Ok(Some(plan)) => {
+                            let crossed = plan.title.clone();
+                            let position = plan.position.clone();
+                            match plan.apply(&repository) {
+                                Ok(()) => {
+                                    pending_conflict_ref_changes.clear();
+                                    app.show_undo_position(
+                                        position.undo,
+                                        position.undo + position.redo,
+                                        position.title,
+                                    );
+                                    if let Ok(id) = repository.head_id() {
+                                        app.select_commit_after_refresh(id.detach());
+                                    }
+                                    invalidate_worktree_changes(&mut worktree_changes);
+                                    refresh_pending = true;
+                                }
+                                Err(err) => {
+                                    if let Ok(position) = current {
+                                        app.show_undo_position(
+                                            position.undo,
+                                            position.undo + position.redo,
+                                            position.title,
+                                        );
+                                    }
+                                    app.leave_error(format!(
+                                        "{} {crossed}: {err:#}",
+                                        if undoing { "undo" } else { "redo" }
+                                    ));
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            if let Ok(position) = current {
+                                app.show_undo_position(position.undo, position.undo + position.redo, position.title);
+                            }
+                            app.leave_attention(if undoing { "nothing to undo" } else { "nothing to redo" });
+                        }
+                        Err(err) => app.leave_error(format!("{}: {err:#}", if undoing { "undo" } else { "redo" })),
+                    }
+                }
                 Effect::CopyId(id) => execute!(
                     terminal.backend_mut(),
                     CopyToClipboard::to_clipboard_from(id.to_hex().to_string())
@@ -2141,23 +2330,36 @@ fn event_loop(
                         });
                     match result {
                         Ok(Some(edit::reword::Outcome {
-                            commit: Some(new_id), ..
+                            commit: Some(new_id),
+                            ref_changes,
+                            ..
                         })) => {
-                            app.leave_success(format!(
-                                "reworded {} as {}",
-                                id.to_hex_with_len(7),
-                                new_id.to_hex_with_len(7)
-                            ));
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "reword commit",
+                                &ref_changes,
+                                format!("reworded {} as {}", id.to_hex_with_len(7), new_id.to_hex_with_len(7)),
+                            );
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
                         Ok(Some(edit::reword::Outcome {
                             enrichment: Some(enrichment),
+                            ref_changes,
                             ..
                         })) => {
                             app.clear_enrichments();
                             app.set_enrichment(id, enrichment);
-                            app.leave_success("updated enrichment");
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "edit commit enrichment",
+                                &ref_changes,
+                                "updated enrichment",
+                            );
                         }
                         Ok(None) => {}
                         Ok(Some(_)) => {}
@@ -2184,8 +2386,16 @@ fn event_loop(
                             )
                         });
                     match result {
-                        Ok(Some(new_id)) => {
-                            app.leave_success(format!("created {}", new_id.to_hex_with_len(7)));
+                        Ok(Some(outcome)) => {
+                            let new_id = outcome.selected.context("creating a commit did not select it")?;
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                if empty { "create empty commit" } else { "create commit" },
+                                &outcome.ref_changes,
+                                format!("created {}", new_id.to_hex_with_len(7)),
+                            );
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
@@ -2211,7 +2421,9 @@ fn event_loop(
                             )
                         });
                     match created {
-                        Ok(Some(new_id)) => {
+                        Ok(Some(outcome)) => {
+                            let new_id = outcome.selected.context("creating a fork did not select it")?;
+                            let ref_changes = outcome.ref_changes;
                             let review_roots: Vec<_> =
                                 app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
                             let travel = open_repository(&repository_path, repository_is_bare, false)
@@ -2229,26 +2441,48 @@ fn event_loop(
                                     )
                                 });
                             match travel {
-                                Ok(edit::time_travel::Perform::Complete { notice, selected, .. }) => {
-                                    app.leave_success(notice.map_or_else(
-                                        || format!("created fork {}", new_id.to_hex_with_len(7)),
-                                        |notice| format!("created fork {}; {notice}", new_id.to_hex_with_len(7)),
-                                    ));
+                                Ok(edit::time_travel::Perform::Complete {
+                                    notice,
+                                    selected,
+                                    ref_changes: mut travel_changes,
+                                    ..
+                                }) => {
+                                    let mut changes = ref_changes;
+                                    changes.append(&mut travel_changes);
+                                    leave_recorded_success(
+                                        &mut app,
+                                        &repository_path,
+                                        repository_is_bare,
+                                        "fork commit",
+                                        &changes,
+                                        notice.map_or_else(
+                                            || format!("created fork {}", new_id.to_hex_with_len(7)),
+                                            |notice| format!("created fork {}; {notice}", new_id.to_hex_with_len(7)),
+                                        ),
+                                    );
                                     app.select_commit_after_refresh(selected);
                                     invalidate_worktree_changes(&mut worktree_changes);
                                     refresh_pending = true;
                                 }
-                                Ok(edit::time_travel::Perform::Conflict(conflict)) => {
+                                Ok(edit::time_travel::Perform::Conflict(mut conflict)) => {
+                                    conflict.prepend_ref_changes(ref_changes);
                                     let original = conflict.original();
                                     app.arm_rebase_conflict(original);
                                     app.select_commit(original);
                                     pending_rebase_conflict = Some(conflict);
                                 }
                                 Err(err) => {
-                                    app.leave_attention(format!(
-                                        "created fork {}, but checkout failed: {err:#}",
-                                        new_id.to_hex_with_len(7)
-                                    ));
+                                    leave_recorded_success(
+                                        &mut app,
+                                        &repository_path,
+                                        repository_is_bare,
+                                        "fork commit",
+                                        &ref_changes,
+                                        format!(
+                                            "created fork {}, but checkout failed: {err:#}",
+                                            new_id.to_hex_with_len(7)
+                                        ),
+                                    );
                                     invalidate_worktree_changes(&mut worktree_changes);
                                     refresh_pending = true;
                                 }
@@ -2268,12 +2502,16 @@ fn event_loop(
                             split_commit(terminal, &repository_path, repository_is_bare, graph, enhanced_keyboard)
                         });
                     match result {
-                        Ok(Some(new_id)) => {
-                            app.leave_success(format!(
-                                "split {} as {}",
-                                id.to_hex_with_len(7),
-                                new_id.to_hex_with_len(7)
-                            ));
+                        Ok(Some(outcome)) => {
+                            let new_id = outcome.selected.context("splitting HEAD did not select its result")?;
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "split commit",
+                                &outcome.ref_changes,
+                                format!("split {} as {}", id.to_hex_with_len(7), new_id.to_hex_with_len(7)),
+                            );
                             invalidate_worktree_changes(&mut worktree_changes);
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
@@ -2325,9 +2563,13 @@ fn event_loop(
                         .context("editing HEAD requires a completed history graph")
                         .and_then(|graph| {
                             path.and_then(|path| {
-                                edit::head::perform(
-                                    open_repository(&repository_path, repository_is_bare, false)
-                                        .context("could not open repository for HEAD edit")?,
+                                let repository = open_repository(&repository_path, repository_is_bare, false)
+                                    .context("could not open repository for HEAD edit")?;
+                                if kind == edit::head::Kind::Amend && !pending_conflict_ref_changes.is_empty() {
+                                    stage_resolved_conflict_paths(&repository)?;
+                                }
+                                edit::head::perform_with_changes(
+                                    repository,
                                     graph,
                                     kind,
                                     path.as_ref().map(|(path, parent)| (path, *parent)),
@@ -2335,12 +2577,27 @@ fn event_loop(
                             })
                         });
                     match result {
-                        Ok(Some(new_id)) => {
-                            app.leave_success(format!(
-                                "{verb}ed {} as {}",
-                                id.to_hex_with_len(7),
-                                new_id.to_hex_with_len(7)
-                            ));
+                        Ok(Some(outcome)) => {
+                            let new_id = outcome.selected.context("editing HEAD did not select its result")?;
+                            let mut changes = if kind == edit::head::Kind::Amend {
+                                std::mem::take(&mut pending_conflict_ref_changes)
+                            } else {
+                                Vec::new()
+                            };
+                            let resolved_conflict = !changes.is_empty();
+                            changes.extend(outcome.ref_changes.iter().cloned());
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                if resolved_conflict {
+                                    "resolve rebase conflict"
+                                } else {
+                                    verb
+                                },
+                                &changes,
+                                format!("{verb}ed {} as {}", id.to_hex_with_len(7), new_id.to_hex_with_len(7)),
+                            );
                             invalidate_worktree_changes(&mut worktree_changes);
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
@@ -2378,14 +2635,25 @@ fn event_loop(
                 Effect::Forget(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
+                    let cancels_review = app.rows.iter().any(|row| row.id == id && row.is_review);
+                    if cancels_review {
+                        app.dismiss_undo_position();
+                    }
                     let result = history_graph
                         .as_ref()
                         .context("forget requires a completed history graph")
-                        .and_then(|graph| forget_commit(&repository_path, repository_is_bare, graph, id));
+                        .and_then(|graph| {
+                            if cancels_review {
+                                clear_undo_history(&repository_path, repository_is_bare)
+                                    .context("could not clear undo history before cancelling review")?;
+                            }
+                            forget_commit(&repository_path, repository_is_bare, graph, id)
+                        });
                     match result {
                         Ok(outcome) => {
+                            let ref_changes = outcome.ref_changes.clone();
                             let returned = outcome.review_return.as_ref().map(|name| {
-                                edit::time_travel::checkout_review_return(
+                                edit::time_travel::checkout_review_return_reporting(
                                     &repository_path,
                                     repository_is_bare,
                                     name,
@@ -2394,15 +2662,52 @@ fn event_loop(
                                 )
                             });
                             match returned.transpose() {
-                                Ok(Some((selected, _))) => {
-                                    app.leave_attention("cancelled review");
+                                Ok(Some((selected, _, mut checkout_changes))) => {
+                                    let mut changes = ref_changes;
+                                    changes.append(&mut checkout_changes);
+                                    if cancels_review {
+                                        app.leave_success("cancelled review");
+                                    } else {
+                                        leave_recorded_success(
+                                            &mut app,
+                                            &repository_path,
+                                            repository_is_bare,
+                                            "cancel review",
+                                            &changes,
+                                            "cancelled review",
+                                        );
+                                    }
                                     app.select_commit_after_refresh(selected);
                                 }
                                 Err(err) => {
-                                    app.leave_attention(format!("review cancelled, return checkout failed: {err:#}"));
+                                    let message = format!("review cancelled, return checkout failed: {err:#}");
+                                    if cancels_review {
+                                        app.leave_attention(message);
+                                    } else {
+                                        leave_recorded_success(
+                                            &mut app,
+                                            &repository_path,
+                                            repository_is_bare,
+                                            "forget commit",
+                                            &ref_changes,
+                                            message,
+                                        );
+                                    }
                                 }
                                 Ok(None) => {
-                                    app.leave_success(format!("forgot {}", id.to_hex_with_len(7)));
+                                    let message = format!("forgot {}", id.to_hex_with_len(7));
+                                    if cancels_review {
+                                        app.leave_success(message);
+                                    } else {
+                                        leave_recorded_success(
+                                            &mut app,
+                                            &repository_path,
+                                            repository_is_bare,
+                                            "forget commit",
+                                            &ref_changes,
+                                            message,
+                                        );
+                                    }
                                     if let Some(selected) = outcome.selected {
                                         app.select_commit(selected);
                                     }
@@ -2441,7 +2746,7 @@ fn event_loop(
                     match result {
                         Ok(Some(edit::rebase::PlanPerform::Complete(outcome))) => {
                             let notice = if outcome.selected.is_some() {
-                                edit::time_travel::checkout_plan(
+                                edit::time_travel::checkout_plan_reporting(
                                     &repository_path,
                                     repository_is_bare,
                                     &outcome,
@@ -2449,17 +2754,31 @@ fn event_loop(
                                     false,
                                 )
                             } else {
-                                Ok(None)
+                                Ok((None, outcome.ref_changes.clone()))
                             };
                             match notice {
-                                Ok(notice) => {
-                                    app.leave_success(notice.unwrap_or_else(|| "rebased history".to_owned()));
+                                Ok((notice, changes)) => {
+                                    leave_recorded_success(
+                                        &mut app,
+                                        &repository_path,
+                                        repository_is_bare,
+                                        "rebase history",
+                                        &changes,
+                                        notice.unwrap_or_else(|| "rebased history".to_owned()),
+                                    );
                                     app.select_commit_after_refresh(base);
                                     invalidate_worktree_changes(&mut worktree_changes);
                                     refresh_pending = true;
                                 }
                                 Err(err) => {
-                                    app.leave_attention(format!("rebase applied, checkout failed: {err:#}"));
+                                    leave_recorded_success(
+                                        &mut app,
+                                        &repository_path,
+                                        repository_is_bare,
+                                        "rebase history",
+                                        &outcome.ref_changes,
+                                        format!("rebase applied, checkout failed: {err:#}"),
+                                    );
                                     invalidate_worktree_changes(&mut worktree_changes);
                                     refresh_pending = true;
                                 }
@@ -2499,7 +2818,7 @@ fn event_loop(
                         Ok(edit::rebase::PlanPerform::Complete(outcome)) => {
                             let combined = outcome.map(target).unwrap_or(target);
                             let notice = if outcome.selected.is_some() {
-                                edit::time_travel::checkout_plan(
+                                edit::time_travel::checkout_plan_reporting(
                                     &repository_path,
                                     repository_is_bare,
                                     &outcome,
@@ -2507,18 +2826,36 @@ fn event_loop(
                                     false,
                                 )
                             } else {
-                                Ok(None)
+                                Ok((None, outcome.ref_changes.clone()))
                             };
-                            match notice {
-                                Ok(notice) => app.leave_success(notice.unwrap_or_else(|| {
-                                    format!(
-                                        "squashed {} into {}",
-                                        source.to_hex_with_len(7),
-                                        combined.to_hex_with_len(7)
+                            let (message, changes) = notice.map_or_else(
+                                |err| {
+                                    (
+                                        format!("squash applied, checkout failed: {err:#}"),
+                                        outcome.ref_changes.clone(),
                                     )
-                                })),
-                                Err(err) => app.leave_attention(format!("squash applied, checkout failed: {err:#}")),
-                            }
+                                },
+                                |(notice, changes)| {
+                                    (
+                                        notice.unwrap_or_else(|| {
+                                            format!(
+                                                "squashed {} into {}",
+                                                source.to_hex_with_len(7),
+                                                combined.to_hex_with_len(7)
+                                            )
+                                        }),
+                                        changes,
+                                    )
+                                },
+                            );
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "squash commits",
+                                &changes,
+                                message,
+                            );
                             app.select_commit_after_refresh(combined);
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
@@ -2570,32 +2907,56 @@ fn event_loop(
                             } else {
                                 outcome.map(source).unwrap_or(source)
                             };
-                            let notice = edit::time_travel::checkout_plan(
+                            let notice = edit::time_travel::checkout_plan_reporting(
                                 &repository_path,
                                 repository_is_bare,
                                 &outcome,
                                 &revisions,
                                 false,
                             );
-                            match notice {
-                                Ok(notice) => app.leave_success(notice.unwrap_or_else(|| {
-                                    if copy {
-                                        format!(
-                                            "copied {} as {} above {}",
-                                            source.to_hex_with_len(7),
-                                            inserted.to_hex_with_len(7),
-                                            target.to_hex_with_len(7)
-                                        )
-                                    } else {
-                                        format!(
-                                            "inserted {} above {}",
-                                            inserted.to_hex_with_len(7),
-                                            target.to_hex_with_len(7)
-                                        )
-                                    }
-                                })),
-                                Err(err) => app.leave_attention(format!("insert applied, checkout failed: {err:#}")),
-                            }
+                            let (message, changes) = notice.map_or_else(
+                                |err| {
+                                    (
+                                        format!("insert applied, checkout failed: {err:#}"),
+                                        outcome.ref_changes.clone(),
+                                    )
+                                },
+                                |(notice, changes)| {
+                                    (
+                                        notice.unwrap_or_else(|| {
+                                            if copy {
+                                                format!(
+                                                    "copied {} as {} above {}",
+                                                    source.to_hex_with_len(7),
+                                                    inserted.to_hex_with_len(7),
+                                                    target.to_hex_with_len(7)
+                                                )
+                                            } else {
+                                                format!(
+                                                    "inserted {} above {}",
+                                                    inserted.to_hex_with_len(7),
+                                                    target.to_hex_with_len(7)
+                                                )
+                                            }
+                                        }),
+                                        changes,
+                                    )
+                                },
+                            );
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                if copy {
+                                    "copy-insert commit"
+                                } else if base == source {
+                                    "move-insert commit"
+                                } else {
+                                    "stack-insert commits"
+                                },
+                                &changes,
+                                message,
+                            );
                             app.select_commit_after_refresh(inserted);
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
@@ -2625,11 +2986,16 @@ fn event_loop(
                         .and_then(|graph| edit::review::start(&repository_path, repository_is_bare, graph, tip, base));
                     match result {
                         Ok(started) => {
-                            app.leave_success(format!(
+                            app.dismiss_undo_position();
+                            let message = format!(
                                 "started review {} at {}",
                                 started.reference.shorten(),
                                 started.commit.to_hex_with_len(7)
-                            ));
+                            );
+                            match clear_undo_history(&repository_path, repository_is_bare) {
+                                Ok(()) => app.leave_success(message),
+                                Err(err) => app.leave_attention(format!("{message}; undo history: {err:#}")),
+                            }
                             app.select_commit_after_refresh(started.commit);
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
@@ -2646,27 +3012,25 @@ fn event_loop(
                         .and_then(|graph| {
                             let mut repo = open_repository(&repository_path, repository_is_bare, false)
                                 .context("could not open repository to finish review")?;
+                            edit::undo::clear(&repo).context("could not clear undo history before finishing review")?;
                             repo.object_cache_size(None);
                             edit::review::finish(repo, graph, id, return_to)
                         });
                     match result {
                         Ok(edit::review::Finish::Complete(finished)) => {
-                            let checkout = edit::time_travel::checkout_plan(
+                            let checkout = edit::time_travel::checkout_plan_reporting(
                                 &repository_path,
                                 repository_is_bare,
                                 &finished.outcome,
                                 &revisions,
                                 false,
                             );
-                            match checkout {
-                                Ok(_) => app.leave_success(format!(
-                                    "finished review as {}",
-                                    finished.commit.to_hex_with_len(7)
-                                )),
-                                Err(err) => {
-                                    app.leave_attention(format!("review applied, return checkout failed: {err:#}"));
-                                }
-                            }
+                            let message = checkout.map_or_else(
+                                |err| format!("review applied, return checkout failed: {err:#}"),
+                                |(_, _changes)| format!("finished review as {}", finished.commit.to_hex_with_len(7)),
+                            );
+                            app.dismiss_undo_position();
+                            app.leave_success(message);
                             app.select_commit_after_refresh(finished.outcome.selected.unwrap_or(finished.commit));
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
@@ -2684,9 +3048,16 @@ fn event_loop(
                 Effect::Attach => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
-                    match edit::time_travel::attach(&repository_path, repository_is_bare, &revisions, false) {
-                        Ok(notice) => {
-                            app.leave_success(notice);
+                    match edit::time_travel::attach_reporting(&repository_path, repository_is_bare, &revisions, false) {
+                        Ok((notice, changes)) => {
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "attach HEAD",
+                                &changes,
+                                notice,
+                            );
                             refresh_pending = true;
                         }
                         Err(err) => app.leave_error(format!("attach: {err:#}")),
@@ -2740,10 +3111,19 @@ fn event_loop(
                         });
                     match result {
                         Ok(edit::time_travel::Perform::Complete {
-                            notice: Some(notice), ..
+                            notice: Some(notice),
+                            ref_changes,
+                            ..
                         }) => {
                             tracing::info!(selected = %id, %notice, "completed time-travel action");
-                            app.leave_success(notice);
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "time travel",
+                                &ref_changes,
+                                notice,
+                            );
                             if let Ok(head) = open_repository(&repository_path, repository_is_bare, false)
                                 .and_then(|repo| Ok(repo.head_id()?.detach()))
                             {
@@ -2752,7 +3132,22 @@ fn event_loop(
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
-                        Ok(edit::time_travel::Perform::Complete { notice: None, .. }) => {}
+                        Ok(edit::time_travel::Perform::Complete {
+                            notice: None,
+                            ref_changes,
+                            ..
+                        }) => {
+                            if !ref_changes.is_empty() {
+                                leave_recorded_success(
+                                    &mut app,
+                                    &repository_path,
+                                    repository_is_bare,
+                                    "time travel",
+                                    &ref_changes,
+                                    "time-travelled",
+                                );
+                            }
+                        }
                         Ok(edit::time_travel::Perform::Conflict(conflict)) => {
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
@@ -2769,14 +3164,28 @@ fn event_loop(
                 Effect::TogglePin(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
-                    match edit::time_travel::toggle_pin(&repository_path, repository_is_bare, id) {
-                        Ok(edit::time_travel::PinToggle::Removed(count)) => {
-                            app.leave_success(format!("removed {count} pin{}", if count == 1 { "" } else { "s" }));
+                    match edit::time_travel::toggle_pin_reporting(&repository_path, repository_is_bare, id) {
+                        Ok((edit::time_travel::PinToggle::Removed(count), changes)) => {
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "unpin commit",
+                                &changes,
+                                format!("removed {count} pin{}", if count == 1 { "" } else { "s" }),
+                            );
                             app.select_commit_after_refresh(id);
                             refresh_pending = true;
                         }
-                        Ok(edit::time_travel::PinToggle::Created) => {
-                            app.leave_success("pinned selected commit");
+                        Ok((edit::time_travel::PinToggle::Created, changes)) => {
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "pin commit",
+                                &changes,
+                                "pinned selected commit",
+                            );
                             app.select_commit_after_refresh(id);
                             refresh_pending = true;
                         }
@@ -2788,17 +3197,24 @@ fn event_loop(
                     fill_repository.retained = None;
                     let result = open_repository(&repository_path, repository_is_bare, false)
                         .context("could not open repository to update the enrichment")
-                        .and_then(|repo| enrich::toggle(&repo, id));
+                        .and_then(|repo| tracked_ref_update(&repo, enrich::REF_NAME, |repo| enrich::toggle(repo, id)));
                     match result {
-                        Ok(enrichment) => {
+                        Ok((enrichment, changes)) => {
                             let enabled = enrichment.todo;
                             app.clear_enrichments();
                             app.set_enrichment(id, enrichment);
-                            app.leave_success(if enabled {
-                                "marked commit todo"
-                            } else {
-                                "cleared commit todo"
-                            });
+                            leave_tracked_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "toggle todo",
+                                changes,
+                                if enabled {
+                                    "marked commit todo"
+                                } else {
+                                    "cleared commit todo"
+                                },
+                            );
                         }
                         Err(err) => app.leave_error(format!("todo: {err:#}")),
                     }
@@ -2808,17 +3224,28 @@ fn event_loop(
                     fill_repository.retained = None;
                     let result = open_repository(&repository_path, repository_is_bare, false)
                         .context("could not open repository to update the tree enrichment")
-                        .and_then(|repo| enrich::toggle_checks_pass(&repo, id));
+                        .and_then(|repo| {
+                            tracked_ref_update(&repo, enrich::TREE_REF_NAME, |repo| {
+                                enrich::toggle_checks_pass(repo, id)
+                            })
+                        });
                     match result {
-                        Ok(enrichment) => {
+                        Ok((enrichment, changes)) => {
                             let enabled = enrichment.checks_pass;
                             app.clear_enrichments();
                             app.set_tree_enrichment(id, enrichment);
-                            app.leave_success(if enabled {
-                                "marked tree checks-pass"
-                            } else {
-                                "cleared tree checks-pass"
-                            });
+                            leave_tracked_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "toggle checks-pass",
+                                changes,
+                                if enabled {
+                                    "marked tree checks-pass"
+                                } else {
+                                    "cleared tree checks-pass"
+                                },
+                            );
                         }
                         Err(err) => app.leave_error(format!("checks-pass: {err:#}")),
                     }
@@ -2827,11 +3254,18 @@ fn event_loop(
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     match edit_note(terminal, &repository_path, repository_is_bare, id, enhanced_keyboard) {
-                        Ok(Some(enrichment)) => {
+                        Ok(Some((enrichment, changes))) => {
                             let has_note = enrichment.note.is_some();
                             app.clear_enrichments();
                             app.set_enrichment(id, enrichment);
-                            app.leave_success(if has_note { "saved note" } else { "cleared note" });
+                            leave_tracked_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "edit commit note",
+                                changes,
+                                if has_note { "saved note" } else { "cleared note" },
+                            );
                         }
                         Ok(None) => {}
                         Err(err) => app.leave_error(format!("note: {err:#}")),
@@ -2841,9 +3275,16 @@ fn event_loop(
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     match edit_git_note(terminal, &repository_path, repository_is_bare, id, enhanced_keyboard) {
-                        Ok(Some(saved)) => {
+                        Ok(Some((saved, changes))) => {
                             app.clear_notes(id);
-                            app.leave_success(if saved { "saved Git note" } else { "cleared Git note" });
+                            leave_tracked_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "edit Git note",
+                                changes,
+                                if saved { "saved Git note" } else { "cleared Git note" },
+                            );
                         }
                         Ok(None) => {}
                         Err(err) => app.leave_error(format!("Git note: {err:#}")),
@@ -3114,6 +3555,78 @@ fn invalidate_worktree_changes(changes: &mut Option<(usize, Changes)>) -> bool {
         return true;
     }
     false
+}
+
+fn leave_recorded_success(
+    app: &mut App,
+    repository_path: &Path,
+    bare: bool,
+    title: &str,
+    changes: &[edit::undo::RefChange],
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    match record_undo(repository_path, bare, title, changes) {
+        Ok(()) => app.leave_success(message),
+        Err(err) => app.leave_attention(format!("{message}; undo history: {err:#}")),
+    }
+}
+
+fn record_undo(repository_path: &Path, bare: bool, title: &str, changes: &[edit::undo::RefChange]) -> Result<()> {
+    open_repository(repository_path, bare, false)
+        .context("could not reopen repository for undo history")
+        .and_then(|repo| edit::undo::record(&repo, title, changes).map(|_| ()))
+}
+
+fn clear_undo_history(repository_path: &Path, bare: bool) -> Result<()> {
+    open_repository(repository_path, bare, false)
+        .context("could not reopen repository to clear undo history")
+        .and_then(|repo| edit::undo::clear(&repo))
+}
+
+fn record_and_clear_pending_undo(
+    repository_path: &Path,
+    bare: bool,
+    title: &str,
+    changes: &mut Vec<edit::undo::RefChange>,
+) -> Result<()> {
+    let result = record_undo(repository_path, bare, title, changes);
+    changes.clear();
+    result
+}
+
+fn tracked_ref_update<T>(
+    repo: &gix::Repository,
+    name: &str,
+    update: impl FnOnce(&gix::Repository) -> Result<T>,
+) -> Result<(T, Result<Vec<edit::undo::RefChange>>)> {
+    let name: gix::refs::FullName = name.try_into().context("tracked reference name is invalid")?;
+    let before = edit::undo::state(repo, name.as_ref());
+    let value = update(repo)?;
+    let changes = before.and_then(|before| {
+        edit::undo::state(repo, name.as_ref()).map(|after| {
+            (before != after)
+                .then_some(edit::undo::RefChange { name, before, after })
+                .into_iter()
+                .collect()
+        })
+    });
+    Ok((value, changes))
+}
+
+fn leave_tracked_success(
+    app: &mut App,
+    repository_path: &Path,
+    bare: bool,
+    title: &str,
+    changes: Result<Vec<edit::undo::RefChange>>,
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    match changes {
+        Ok(changes) => leave_recorded_success(app, repository_path, bare, title, &changes, message),
+        Err(err) => app.leave_attention(format!("{message}; undo history: {err:#}")),
+    }
 }
 
 fn remembered_change_selection(view: &app::ChangesView, changes: Option<&Changes>) -> Option<(BString, usize)> {
@@ -3917,7 +4430,7 @@ fn edit_note(
     bare: bool,
     id: gix::ObjectId,
     enhanced_keyboard: bool,
-) -> Result<Option<enrich::Enrichment>> {
+) -> Result<Option<(enrich::Enrichment, Result<Vec<edit::undo::RefChange>>)>> {
     let (editor, enrichment, document) = {
         let repository =
             open_repository(repository_path, bare, false).context("could not open repository before editing note")?;
@@ -3942,7 +4455,18 @@ fn edit_note(
 
     let repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing note")?;
-    enrich::set_note(&repository, id, desired_note.map(AsRef::as_ref)).map(Some)
+    let name: gix::refs::FullName = enrich::REF_NAME.try_into().expect("valid enrich ref");
+    let before = edit::undo::state(&repository, name.as_ref());
+    let enrichment = enrich::set_note(&repository, id, desired_note.map(AsRef::as_ref))?;
+    let changes = before.and_then(|before| {
+        edit::undo::state(&repository, name.as_ref()).map(|after| {
+            (before != after)
+                .then_some(edit::undo::RefChange { name, before, after })
+                .into_iter()
+                .collect()
+        })
+    });
+    Ok(Some((enrichment, changes)))
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -3952,7 +4476,7 @@ fn edit_git_note(
     bare: bool,
     id: gix::ObjectId,
     enhanced_keyboard: bool,
-) -> Result<Option<bool>> {
+) -> Result<Option<(bool, Result<Vec<edit::undo::RefChange>>)>> {
     let (editor, reference, document) = {
         let repository = open_repository(repository_path, bare, false)
             .context("could not open repository before editing Git note")?;
@@ -3984,21 +4508,23 @@ fn edit_git_note(
 
     let repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing Git note")?;
-    set_git_note(
+    let changes = set_git_note_reporting(
         &repository,
         reference.as_ref(),
         id,
         (!cleaned.is_empty()).then_some(cleaned.as_ref()),
     )?;
-    Ok(Some(!cleaned.is_empty()))
+    Ok(Some((!cleaned.is_empty(), changes)))
 }
 
-pub(crate) fn set_git_note(
+fn set_git_note_reporting(
     repository: &gix::Repository,
     reference: &gix::refs::FullNameRef,
     id: gix::ObjectId,
     data: Option<&[u8]>,
-) -> Result<()> {
+) -> Result<Result<Vec<edit::undo::RefChange>>> {
+    let name = reference.to_owned();
+    let before = edit::undo::state(repository, reference);
     let mut notes = repository.notes()?;
     match data {
         Some(data) => {
@@ -4012,7 +4538,24 @@ pub(crate) fn set_git_note(
                 .context("could not remove Git note")?;
         }
     }
-    Ok(())
+    Ok(before.and_then(|before| {
+        edit::undo::state(repository, reference).map(|after| {
+            (before != after)
+                .then_some(edit::undo::RefChange { name, before, after })
+                .into_iter()
+                .collect()
+        })
+    }))
+}
+
+#[cfg(test)]
+pub(crate) fn set_git_note(
+    repository: &gix::Repository,
+    reference: &gix::refs::FullNameRef,
+    id: gix::ObjectId,
+    data: Option<&[u8]>,
+) -> Result<Vec<edit::undo::RefChange>> {
+    set_git_note_reporting(repository, reference, id, data)?
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -4428,7 +4971,7 @@ fn create_commit(
     parent: Option<gix::ObjectId>,
     mode: CreateMode,
     enhanced_keyboard: bool,
-) -> Result<Option<gix::ObjectId>> {
+) -> Result<Option<edit::rebase::Outcome>> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before creating commit")?;
     repository.object_cache_size(None);
@@ -4453,11 +4996,13 @@ fn create_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    let id = match mode {
-        CreateMode::Insert | CreateMode::InsertEmpty => edit::create::apply(repository, graph, prepared, &edited),
-        CreateMode::Fork => edit::create::apply_fork(repository, graph, prepared, &edited),
+    let outcome = match mode {
+        CreateMode::Insert | CreateMode::InsertEmpty => {
+            edit::create::apply_reporting(repository, graph, prepared, &edited)
+        }
+        CreateMode::Fork => edit::create::apply_fork_reporting(repository, graph, prepared, &edited),
     }?;
-    Ok(Some(id))
+    Ok(Some(outcome))
 }
 
 #[tracing::instrument(skip_all)]
@@ -4467,7 +5012,7 @@ fn split_commit(
     bare: bool,
     graph: &HistoryGraph,
     enhanced_keyboard: bool,
-) -> Result<Option<gix::ObjectId>> {
+) -> Result<Option<edit::rebase::Outcome>> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before splitting HEAD")?;
     repository.object_cache_size(None);
@@ -4485,7 +5030,7 @@ fn split_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing split")?;
     repository.object_cache_size(None);
-    edit::split::apply(repository, graph, prepared, &edited).map(Some)
+    edit::split::apply_reporting(repository, graph, prepared, &edited).map(Some)
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -5295,9 +5840,14 @@ fn action_with_shortcut_groups(
         KeyCode::Char('b') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::Rebase)
         }
-        KeyCode::Char('u') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('U') => Some(Action::Redo),
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Redo),
+        KeyCode::Char('u')
+            if actions_expanded && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+        {
             Some(Action::RebaseUpdate)
         }
+        KeyCode::Char('u') if !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Undo),
         KeyCode::Char('r') if actions_expanded => Some(Action::Review),
         KeyCode::Char('s') if actions_expanded => Some(Action::Squash),
         KeyCode::Char('c') if actions_expanded => Some(Action::CopyInsert),
@@ -5444,6 +5994,40 @@ mod tests {
             !change_id_scan_needed(&app),
             "expanding hidden history makes the current view unrestricted"
         );
+    }
+
+    #[test]
+    fn pending_changes_are_recorded_before_they_are_cleared() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let id = repository.rev_parse_single("topic")?.detach();
+        let name: gix::refs::FullName = "refs/heads/cancelled-conflict".try_into()?;
+        let status = Command::new("git")
+            .current_dir(fixture.path())
+            .args(["update-ref", name.as_bstr().to_str_lossy().as_ref(), &id.to_string()])
+            .status()?;
+        assert!(
+            status.success(),
+            "the cancelled operation has an applied reference change"
+        );
+        let mut changes = vec![edit::undo::RefChange {
+            name: name.clone(),
+            before: edit::undo::State::Missing,
+            after: edit::undo::State::Object(id),
+        }];
+
+        record_and_clear_pending_undo(fixture.path(), false, "materialize rebase conflict", &mut changes)?;
+        assert!(changes.is_empty(), "the cancellation releases its accumulator");
+
+        let repository = test_repository::open(fixture.path())?;
+        edit::undo::plan_undo(&repository)?
+            .expect("the cancelled operation was journalled")
+            .apply(&repository)?;
+        assert!(
+            repository.try_find_reference(name.as_ref())?.is_none(),
+            "the recorded cancellation remains undoable"
+        );
+        Ok(())
     }
 
     #[test]
@@ -6408,6 +6992,18 @@ mod tests {
             Some(Action::HalfPageUp)
         );
         assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE)),
+            Some(Action::Undo)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::NONE)),
+            Some(Action::Redo)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::SHIFT)),
+            Some(Action::Redo)
+        );
+        assert_eq!(
             action(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
             Some(Action::HalfPageDown)
         );
@@ -6825,11 +7421,14 @@ mod tests {
             assert!(action_allowed_during_rebase_continuation(Some(&action), false));
         }
         for action in [
+            Action::Undo,
+            Action::Redo,
             Action::Refresh,
             Action::ToggleHidden,
             Action::ToggleRefTree,
             Action::ToggleCommitGroup,
             Action::Amend,
+            Action::Spill,
             Action::Rebase,
             Action::TimeTravel,
             Action::VerifySignatures,

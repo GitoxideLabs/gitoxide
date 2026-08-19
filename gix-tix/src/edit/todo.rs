@@ -1148,6 +1148,7 @@ fn resolve_ref_name(
     if name.as_bstr().starts_with(crate::history::PIN_PREFIX)
         || name.as_bstr().starts_with(crate::history::STASH_PREFIX)
         || name.as_bstr().starts_with(crate::history::REVIEW_PREFIX)
+        || super::undo::is_queue_ref(name.as_bstr())
         || matches!(
             name.category(),
             Some(gix::refs::Category::Tag | gix::refs::Category::RemoteBranch)

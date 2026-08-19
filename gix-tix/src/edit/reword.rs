@@ -27,6 +27,7 @@ pub(crate) struct Outcome {
     pub commit: Option<gix::ObjectId>,
     pub enrichment: Option<crate::enrich::Enrichment>,
     pub ref_rewrites: Vec<rebase::RefRewrite>,
+    pub ref_changes: Vec<super::undo::RefChange>,
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -127,11 +128,26 @@ pub(crate) fn apply(
         .as_ref()
         .and_then(|outcome| outcome.selected)
         .filter(|new_id| *new_id != old_id);
+    let enrich_ref: gix::refs::FullName = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
+    let enrich_before = super::undo::state(&repo, enrich_ref.as_ref())?;
     let enrichment = crate::enrich::apply_headers(&repo, commit.unwrap_or(old_id), &edit.enrichment)?;
+    let enrich_after = super::undo::state(&repo, enrich_ref.as_ref())?;
+    let (ref_rewrites, mut ref_changes) = rebased.map_or_else(
+        || (Vec::new(), Vec::new()),
+        |outcome| (outcome.ref_rewrites, outcome.ref_changes),
+    );
+    if enrich_before != enrich_after {
+        ref_changes.push(super::undo::RefChange {
+            name: enrich_ref,
+            before: enrich_before,
+            after: enrich_after,
+        });
+    }
     Ok(Outcome {
         commit,
         enrichment,
-        ref_rewrites: rebased.map_or_else(Vec::new, |outcome| outcome.ref_rewrites),
+        ref_rewrites,
+        ref_changes,
     })
 }
 
@@ -162,6 +178,7 @@ pub(crate) fn apply_message_reporting(
             commit: None,
             enrichment: None,
             ref_rewrites: Vec::new(),
+            ref_changes: Vec::new(),
         });
     }
     if let Some(author) = changed_author {
@@ -173,6 +190,7 @@ pub(crate) fn apply_message_reporting(
         commit: outcome.selected.filter(|new_id| *new_id != old_id),
         enrichment: None,
         ref_rewrites: outcome.ref_rewrites,
+        ref_changes: outcome.ref_changes,
     })
 }
 

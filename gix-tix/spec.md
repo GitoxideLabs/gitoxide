@@ -1181,7 +1181,12 @@ space first; changes blocks adapt within the remaining history width.
   within that pane when visible and otherwise within the main view. It never
   covers the main or pane-local status lines. Green indicates success, yellow
   indicates attention, no-op, recovery, partial success, or an armed prompt, and
-  red indicates failure. Forget, review selection and recovery, suspended
+  red indicates failure. While undo or redo feedback retains its queue position,
+  the notice becomes a two-tone progress bar: the applied share is bright on the
+  left and the redo share is dim on the right. A fully applied queue is entirely
+  bright, while its start and an empty queue are entirely dim; attention and
+  failure notices retain the same progress in their respective hues. Forget,
+  review selection and recovery, suspended
   conflicts, and paused rebases retain their notice until resolved; pane-specific
   errors remain in their pane status line.
 - Closing the new-commit editor without changing its prepared buffer leaves the
