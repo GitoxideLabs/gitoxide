@@ -13,7 +13,8 @@ without trading responsiveness for metadata that is not visible.
 
 - `tix [REVISION]...` shows commits reachable from the supplied revisions, or
   from `HEAD` when none are supplied.
-- `tix show [-x HIDDEN...] [--no-auto-hide] [TIP...]` prints the complete
+- `tix show [-x HIDDEN...] [--no-auto-hide] [TIP...]`, also available through
+  the visible `tix status` alias, prints the complete
   history view without opening a terminal UI. Tips default to `HEAD`, and
   applicable pins participate exactly as they do in the history view. Output
   uses the history view's graph lanes and default metadata, without colors,
