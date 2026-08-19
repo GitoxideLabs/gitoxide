@@ -2466,7 +2466,7 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("squash: {err:#}")),
                     }
                 }
-                Effect::Move { source, target } => {
+                Effect::Move { source, base, target } => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let result = (|| {
@@ -2476,7 +2476,11 @@ fn event_loop(
                         let mut repository = open_repository(&repository_path, repository_is_bare, false)
                             .context("could not open repository to move HEAD")?;
                         repository.object_cache_size(None);
-                        let plan = edit::rebase::cherry_move_plan(&repository, graph, source, target)?;
+                        let plan = if base == source {
+                            edit::rebase::cherry_move_plan(&repository, graph, source, target)?
+                        } else {
+                            edit::rebase::cherry_stack_plan(&repository, graph, base, source, target)?
+                        };
                         run_rebase_plan(terminal, repository.into_sync(), graph, plan)
                     })();
                     match result {
@@ -5078,13 +5082,16 @@ fn action_with_shortcut_groups(
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
         KeyCode::Char('c') if information_expanded => Some(Action::ToggleChanges),
         KeyCode::Char('p') if commit_expanded => Some(Action::Split),
-        KeyCode::Char('b') if commit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Rebase),
-        KeyCode::Char('u') if commit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('b') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::Rebase)
+        }
+        KeyCode::Char('u') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::RebaseUpdate)
         }
         KeyCode::Char('r') if actions_expanded => Some(Action::Review),
         KeyCode::Char('s') if actions_expanded => Some(Action::Squash),
         KeyCode::Char('m') if actions_expanded => Some(Action::Move),
+        KeyCode::Char('v') if actions_expanded => Some(Action::MoveStack),
         KeyCode::Char('f') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::Forkpoint)
         }
@@ -6368,8 +6375,6 @@ mod tests {
             "v closes the view shortcut group"
         );
         for (key, expected) in [
-            ('b', Action::Rebase),
-            ('u', Action::RebaseUpdate),
             ('o', Action::Reword),
             ('n', Action::NewCommit),
             ('m', Action::NewEmptyCommit),
@@ -6394,9 +6399,12 @@ mod tests {
             );
         }
         for (key, expected) in [
+            ('b', Action::Rebase),
+            ('u', Action::RebaseUpdate),
             ('r', Action::Review),
             ('s', Action::Squash),
             ('m', Action::Move),
+            ('v', Action::MoveStack),
             ('f', Action::Forkpoint),
         ] {
             assert_eq!(
