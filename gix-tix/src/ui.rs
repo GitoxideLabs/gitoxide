@@ -1025,7 +1025,7 @@ pub(crate) fn draw_with_worktree(
                 None => None,
             } {
                 spans.push(Span::raw(" · "));
-                spans.extend(shortcut(label, 'c', true));
+                spans.extend(shortcut(label, 'e', true));
             }
             frame.render_widget(
                 Paragraph::new(Line::from(spans)).style(Style::default().bg(PANE_STATUS_BACKGROUND)),
@@ -1096,18 +1096,13 @@ pub(crate) fn draw_with_worktree(
                 options.push(("reword", 'o'));
             }
             if app.changes_focus.is_none() && app.can_create_commit() {
-                options.push(("new", 'n'));
+                options.push(("new", 'w'));
             }
             if app.changes_focus.is_none() && app.can_create_empty_commit() {
                 options.push(("new-empty", 'm'));
             }
             if app.can_amend() {
-                options.push(("amend", 'a'));
-            }
-            if app.can_stash() {
-                options.push(("stash", 'h'));
-            } else if app.can_unstash() {
-                options.push(("unstash", 'h'));
+                options.push(("amend", 'e'));
             }
             if app.can_spill() {
                 options.push(("spill", 's'));
@@ -1154,6 +1149,11 @@ pub(crate) fn draw_with_worktree(
         actions_prefix_spans.push(Span::raw("ctions"));
         if app.actions_expanded {
             let mut options = Vec::new();
+            if app.can_stash() {
+                options.push(("z stash", 'z'));
+            } else if app.can_unstash() {
+                options.push(("z unstash", 'z'));
+            }
             if app.can_rebase() {
                 options.push(("rebase", 'b'));
             }
@@ -1169,7 +1169,7 @@ pub(crate) fn draw_with_worktree(
                 options.push(("squash", 's'));
             }
             if app.can_copy_insert() {
-                options.push(("copy-insert", 'c'));
+                options.push(("copy-insert", 'y'));
             }
             if app.can_move_insert() {
                 options.push(("move-insert", 'm'));
@@ -1185,8 +1185,8 @@ pub(crate) fn draw_with_worktree(
                 if !items.is_empty() {
                     items.push(Span::raw(" · "));
                 }
+                items.push(Span::raw("stack-inser"));
                 items.push(Span::styled("t", Style::default().add_modifier(Modifier::UNDERLINED)));
-                items.push(Span::raw(" stack-insert"));
             }
             if app.can_fork_commit() {
                 if !items.is_empty() {
@@ -1233,14 +1233,14 @@ pub(crate) fn draw_with_worktree(
         };
         items.extend(shortcut(id_label, 'i', ids_visible));
         items.push(Span::raw(" · "));
-        items.extend(shortcut("emails", 'e', app.show_emails));
+        items.extend(shortcut("emails", 's', app.show_emails));
         let (name_label, names_visible) = match app.name_mode {
             NameMode::All => ("names", true),
             NameMode::Author => ("name", true),
             NameMode::None => ("name", false),
         };
         items.push(Span::raw(" · "));
-        items.extend(shortcut(name_label, 'n', names_visible));
+        items.extend(shortcut(name_label, 'e', names_visible));
         for (label, key, enabled) in [("mailmap", 'm', app.use_mailmap), ("trailers", 't', app.show_trailers)] {
             items.push(Span::raw(" · "));
             items.extend(shortcut(label, key, enabled));
@@ -1297,7 +1297,7 @@ pub(crate) fn draw_with_worktree(
                     items.extend(shortcut("note", 'o', app.note(row.id).is_some()));
                     items.push(Span::raw(" · "));
                 }
-                items.extend(shortcut("checks-pass", 'c', app.checks_pass(row.id)));
+                items.extend(shortcut("checks-pass", 'e', app.checks_pass(row.id)));
                 items.push(Span::raw(" · "));
                 items.extend(shortcut("git note", 'g', !app.notes(row.id).is_empty()));
             } else {
@@ -1355,7 +1355,7 @@ pub(crate) fn draw_with_worktree(
             items.push(Span::raw(" · "));
             items.extend(shortcut("message", 'm', app.show_commit));
             items.push(Span::raw(" · "));
-            items.extend(shortcut("changes", 'c', app.changes_mode.is_some()));
+            items.extend(shortcut("changes", 'e', app.changes_mode.is_some()));
             if app.tree_changes_visible || app.worktree_changes_visible {
                 items.push(Span::raw(" · "));
                 items.push(match focus_feedback {
@@ -4265,20 +4265,21 @@ mod tests {
         assert!(popup.contains("fork"));
         assert!(popup.contains("attach"));
         assert!(!popup.contains("cherry-"));
-        let label = "t stack-insert";
+        let label = "stack-insert";
         let start = popup[..popup.find(label).expect("the stack-insert action is visible")]
             .chars()
             .count() as u16;
+        let shortcut = start + label.len() as u16 - 1;
         assert!(
-            terminal.backend().buffer()[(start, 3)]
+            terminal.backend().buffer()[(shortcut, 3)]
                 .modifier
                 .contains(Modifier::UNDERLINED)
         );
         assert!(
-            (start + 1..start + label.len() as u16).all(|x| !terminal.backend().buffer()[(x, 3)]
+            (start..shortcut).all(|x| !terminal.backend().buffer()[(x, 3)]
                 .modifier
                 .contains(Modifier::UNDERLINED)),
-            "only the prefixed t is underlined"
+            "only the t in insert is underlined"
         );
         Ok(())
     }
@@ -4374,6 +4375,7 @@ mod tests {
         assert!(!popup.contains("spill"), "worktree paths cannot be spilled");
 
         app.changes_focus = None;
+        app.update(Action::ToggleActions);
         terminal.draw(|frame| {
             super::draw_with_worktree(
                 frame,
@@ -4416,6 +4418,7 @@ mod tests {
             .expect("HEAD has decorations")
             .retain(|decoration| decoration.kind != DecorationKind::Stash);
         app.changes_focus = Some(ChangePane::Worktree);
+        app.update(Action::ToggleCommitGroup);
 
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
         terminal.draw(|frame| {
