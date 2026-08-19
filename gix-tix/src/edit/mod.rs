@@ -37,21 +37,33 @@ pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::His
     if repo.head().is_ok_and(|head| head.referent_name().is_none()) {
         revisions.push("HEAD".into());
     }
-    load_graph(repo, &revisions)
+    load_graph(repo, &revisions, &[])
 }
 
 pub(super) fn loaded_view_graph(repo: &gix::Repository) -> Result<crate::history::HistoryGraph> {
-    load_graph(repo, &[])
+    load_graph(repo, &[], &[])
 }
 
 pub(super) fn loaded_view_graph_with(
     repo: &gix::Repository,
     revisions: &[std::ffi::OsString],
 ) -> Result<crate::history::HistoryGraph> {
-    load_graph(repo, revisions)
+    load_graph(repo, revisions, &[])
 }
 
-fn load_graph(repo: &gix::Repository, revisions: &[std::ffi::OsString]) -> Result<crate::history::HistoryGraph> {
+pub(super) fn loaded_view_graph_with_hidden(
+    repo: &gix::Repository,
+    revisions: &[std::ffi::OsString],
+    hidden_revisions: &[std::ffi::OsString],
+) -> Result<crate::history::HistoryGraph> {
+    load_graph(repo, revisions, hidden_revisions)
+}
+
+fn load_graph(
+    repo: &gix::Repository,
+    revisions: &[std::ffi::OsString],
+    hidden_revisions: &[std::ffi::OsString],
+) -> Result<crate::history::HistoryGraph> {
     use std::sync::atomic::AtomicBool;
 
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
@@ -61,7 +73,7 @@ fn load_graph(repo: &gix::Repository, revisions: &[std::ffi::OsString]) -> Resul
     crate::history::load(
         repo,
         revisions,
-        &[],
+        hidden_revisions,
         false,
         &authors,
         &AtomicBool::new(false),
