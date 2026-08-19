@@ -6,7 +6,6 @@ use gix_object::{
     bstr::{BString, ByteSlice},
     tree::EntryKind,
 };
-use gix_worktree::stack::state::attributes;
 
 use crate::{
     blob::pipeline::convert_to_diffable::default_options,
@@ -404,18 +403,7 @@ fn new_platform(
     mode: gix_diff::blob::pipeline::Mode,
 ) -> Platform {
     let root = crate::scripted_fixture_read_only("make_blob_repo.sh").expect("valid fixture");
-    let attributes = gix_worktree::Stack::new(
-        &root,
-        gix_worktree::stack::State::AttributesStack(gix_worktree::stack::state::Attributes::new(
-            Default::default(),
-            None,
-            attributes::Source::WorktreeThenIdMapping,
-            Default::default(),
-        )),
-        gix_worktree::glob::pattern::Case::Sensitive,
-        Vec::new(),
-        Vec::new(),
-    );
+    let attributes = crate::blob::new_attributes_stack(&root);
     let filter = gix_diff::blob::Pipeline::new(
         pipeline::WorktreeRoots {
             old_root: Some(root.clone()),

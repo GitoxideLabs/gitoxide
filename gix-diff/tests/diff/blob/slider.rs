@@ -47,7 +47,7 @@ fn baseline() -> gix_testtools::Result {
 
         let baseline_path = worktree_path.join(&file_name);
         let baseline = std::fs::read(baseline_path)?;
-        let baseline = baseline::skip_header_and_fold_to_unidiff(&baseline);
+        let baseline = crate::blob::skip_header_and_fold_to_unidiff(&baseline);
 
         let actual_matches_baseline = actual == baseline;
         diffs.push((actual, baseline, actual_matches_baseline, file_name));
@@ -92,7 +92,6 @@ fn assert_diffs(diffs: &[(String, String, bool, String)]) {
 
 mod baseline {
     use gix_diff::blob::Algorithm;
-    use gix_object::bstr::ByteSlice;
     use std::ffi::OsStr;
     use std::path::Path;
 
@@ -135,25 +134,6 @@ mod baseline {
             new_data,
         }
         .into())
-    }
-
-    pub fn skip_header_and_fold_to_unidiff(content: &[u8]) -> String {
-        let mut lines = content.lines();
-
-        assert!(lines.next().expect("diff header").starts_with(b"diff --git "));
-        assert!(lines.next().expect("index header").starts_with(b"index "));
-        assert!(lines.next().expect("--- header").starts_with(b"--- "));
-        assert!(lines.next().expect("+++ header").starts_with(b"+++ "));
-
-        let mut out = String::new();
-        for line in lines {
-            if line.starts_with(b"\\") {
-                continue;
-            }
-            out.push_str(line.to_str().expect("baseline diff is valid utf-8"));
-            out.push('\n');
-        }
-        out
     }
 }
 
