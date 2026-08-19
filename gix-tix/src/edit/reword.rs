@@ -24,10 +24,38 @@ pub(super) struct Edit<'a> {
 }
 
 pub(crate) struct Outcome {
+    pub target: gix::ObjectId,
     pub commit: Option<gix::ObjectId>,
     pub enrichment: Option<crate::enrich::Enrichment>,
     pub ref_rewrites: Vec<rebase::RefRewrite>,
     pub ref_changes: Vec<super::undo::RefChange>,
+}
+
+pub(crate) fn relocate_after_editor(
+    repo: &gix::Repository,
+    revisions: &[std::ffi::OsString],
+    hidden_revisions: &[std::ffi::OsString],
+    change_id: gix::hash::ChangeId,
+) -> Result<(crate::history::HistoryGraph, gix::ObjectId)> {
+    let graph = super::loaded_view_graph_with_hidden(repo, revisions, hidden_revisions)?;
+    let mut matches = Vec::new();
+    for id in graph.stored_commit_ids() {
+        if crate::change_id::for_commit(repo, id)? == change_id {
+            matches.push(id);
+        }
+    }
+    match matches.as_slice() {
+        [target] => Ok((graph, *target)),
+        [] => anyhow::bail!("change ID {change_id} is no longer present in the Tix view"),
+        candidates => {
+            let candidates = candidates
+                .iter()
+                .map(|id| crate::change_id::display_short(repo, *id))
+                .collect::<Result<Vec<_>>>()?
+                .join("\n  ");
+            anyhow::bail!("change ID {change_id} is ambiguous in the Tix view; candidates:\n  {candidates}")
+        }
+    }
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -144,6 +172,7 @@ pub(crate) fn apply(
         });
     }
     Ok(Outcome {
+        target: old_id,
         commit,
         enrichment,
         ref_rewrites,
@@ -175,6 +204,7 @@ pub(crate) fn apply_message_reporting(
         .transpose()?;
     if commit.message == message && changed_author.as_ref().is_none_or(|author| *author == commit.author) {
         return Ok(Outcome {
+            target: old_id,
             commit: None,
             enrichment: None,
             ref_rewrites: Vec::new(),
@@ -187,6 +217,7 @@ pub(crate) fn apply_message_reporting(
     commit.message = message;
     let outcome = apply_commit(&repo, graph, old_id, commit)?;
     Ok(Outcome {
+        target: old_id,
         commit: outcome.selected.filter(|new_id| *new_id != old_id),
         enrichment: None,
         ref_rewrites: outcome.ref_rewrites,
@@ -514,6 +545,7 @@ mod tests {
         let edited = document.replacen(b"Message: Existing title", b"Message: New title", 1);
         let graph = super::super::loaded_graph(&repository)?;
         let outcome = apply(repository.clone(), &graph, id, &edited)?;
+        assert_eq!(outcome.target, id, "the outcome identifies the edited commit");
         assert!(
             outcome.commit.is_none(),
             "enrichment changes leave the commit object untouched"
@@ -525,6 +557,164 @@ mod tests {
             enrichment.note.as_ref().map(|note| note.as_bstr()),
             Some(b"New title\n\nexisting body\n".as_bstr())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn relocates_an_editor_reword_onto_a_concurrent_amend() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        let repository = crate::test_repository::open_with(
+            path,
+            [
+                "committer.name=Current Committer",
+                "committer.email=current@example.com",
+            ],
+        )?;
+        let original = repository.head_id()?.detach();
+        let change_id = crate::change_id::for_commit(&repository, original)?;
+        let (_, document) = document(&repository, original)?;
+        let edited = document.replacen(b"\ntip\n", b"\nreworded tip\n", 1);
+
+        let mut outside = repository.find_commit(original)?.decode()?.into_owned()?;
+        outside.parents = [original].into_iter().collect();
+        outside.message = "outside the view".into();
+        crate::change_id::inherit(&repository, &mut outside, original)?;
+        let outside = repository.write_object(&outside)?.detach();
+        repository.reference(
+            "refs/heads/outside",
+            outside,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test outside-view successor",
+        )?;
+
+        std::fs::write(path.join("concurrent"), b"amended while editing\n")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(["add", "concurrent"])
+                .status()?
+                .success(),
+            "the concurrent tree change is staged"
+        );
+        let graph = super::super::loaded_view_graph(&repository)?;
+        let amended =
+            crate::edit::head::amend_index(repository.clone(), &graph)?.expect("the staged tree changes amend HEAD");
+        let amended_commit = repository.find_commit(amended)?.decode()?.into_owned()?;
+        assert_eq!(
+            crate::change_id::for_commit(&repository, amended)?,
+            change_id,
+            "the concurrent amend preserves the stable identity"
+        );
+
+        let (graph, target) = relocate_after_editor(&repository, &[], &[], change_id)?;
+        assert_eq!(target, amended, "the fresh view resolves the amended successor");
+        let outcome = apply(repository.clone(), &graph, target, &edited)?;
+        assert_eq!(outcome.target, amended, "the outcome reports the relocated target");
+        let rewritten = outcome.commit.expect("the edited message rewrites the amended commit");
+        let rewritten_commit = repository.find_commit(rewritten)?.decode()?.into_owned()?;
+        assert_eq!(repository.head_id()?.detach(), rewritten, "HEAD follows the reword");
+        assert_eq!(
+            rewritten_commit.tree, amended_commit.tree,
+            "the reword retains the concurrently amended tree"
+        );
+        assert_eq!(
+            rewritten_commit.parents, amended_commit.parents,
+            "the reword retains the current topology"
+        );
+        assert_eq!(rewritten_commit.message, b"reworded tip\n".as_bstr());
+        assert_eq!(
+            repository.find_reference("refs/heads/outside")?.id().detach(),
+            outside,
+            "a duplicate identity outside the active view is neither selected nor rewritten"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn editor_relocation_requires_one_visible_commit() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        let repository = crate::test_repository::open(path)?;
+        let head = repository.head_id()?.detach();
+        let index_before = std::fs::read(repository.index_path())?;
+        let worktree_before = std::fs::read(path.join("tip"))?;
+
+        let missing = gix::hash::ChangeId::from(gix::ObjectId::Sha1([42; 20]));
+        let err = relocate_after_editor(&repository, &[], &[], missing)
+            .expect_err("an identity outside the current view cannot be edited");
+        assert!(
+            format!("{err:#}").contains("no longer present"),
+            "the missing identity is explained: {err:#}"
+        );
+
+        let change_id = crate::change_id::for_commit(&repository, head)?;
+        let mut colliding_change_id = change_id.to_reverse_hex().to_string().into_bytes();
+        let last = colliding_change_id.last_mut().expect("a change ID is not empty");
+        *last = if *last == b'k' { b'l' } else { b'k' };
+        let colliding_change_id = gix::hash::ChangeId::from_reverse_hex(&colliding_change_id)?;
+        let mut prefix_collision = repository.find_commit(head)?.decode()?.into_owned()?;
+        prefix_collision.message = "prefix collision".into();
+        prefix_collision
+            .extra_headers
+            .retain(|(name, _)| name.as_slice() != crate::change_id::HEADER.as_bytes());
+        prefix_collision
+            .extra_headers
+            .push((crate::change_id::HEADER.into(), colliding_change_id.to_string().into()));
+        let prefix_collision = repository.write_object(&prefix_collision)?.detach();
+        let prefix_pin = "refs/worktree/tix/pins/prefix-collision";
+        repository.reference(
+            prefix_pin,
+            prefix_collision,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test change ID prefix collision",
+        )?;
+        let (_, resolved) = relocate_after_editor(&repository, &[], &[], change_id)?;
+        assert_eq!(
+            resolved, head,
+            "a later prefix collision cannot make the captured full identity ambiguous"
+        );
+
+        let mut duplicate = repository.find_commit(head)?.decode()?.into_owned()?;
+        duplicate.message = "duplicate identity".into();
+        crate::change_id::inherit(&repository, &mut duplicate, head)?;
+        let duplicate = repository.write_object(&duplicate)?.detach();
+        let pin = "refs/worktree/tix/pins/duplicate";
+        repository.reference(
+            pin,
+            duplicate,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test duplicate identity",
+        )?;
+
+        let err = relocate_after_editor(&repository, &[], &[], change_id)
+            .expect_err("two visible commits with the same identity are ambiguous");
+        let message = format!("{err:#}");
+        assert!(message.contains("ambiguous"), "ambiguity is explicit: {message}");
+        for candidate in [head, duplicate] {
+            assert!(
+                message.contains(&candidate.to_hex_with_len(7).to_string()),
+                "the error lists candidate {candidate}: {message}"
+            );
+        }
+        assert_eq!(
+            repository.head_id()?.detach(),
+            head,
+            "failed relocation leaves HEAD alone"
+        );
+        assert_eq!(
+            repository.find_reference(pin)?.id().detach(),
+            duplicate,
+            "failed relocation leaves pins alone"
+        );
+        assert_eq!(
+            repository.find_reference(prefix_pin)?.id().detach(),
+            prefix_collision,
+            "failed relocation leaves prefix-collision pins alone"
+        );
+        assert_eq!(std::fs::read(repository.index_path())?, index_before);
+        assert_eq!(std::fs::read(path.join("tip"))?, worktree_before);
         Ok(())
     }
 
