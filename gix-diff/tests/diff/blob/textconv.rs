@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use gix_diff::blob::{self, ResourceKind, pipeline::WorktreeRoots};
-use gix_worktree::stack::state::attributes;
+
 use imara_diff::{Algorithm::Histogram, Diff};
 
 use crate::blob::pipeline::convert_to_diffable::default_options;
@@ -10,24 +10,11 @@ use crate::blob::pipeline::convert_to_diffable::default_options;
 fn binary_diff_with_textconv() -> gix_testtools::Result {
     let workdir = crate::scripted_fixture_read_only("make_blob_textconv_repo.sh")?;
 
-    // There's no quick and easy way to get the blob ids using just plumbing crates. In other tests
-    // in `gix-diff`, ids are hard-coded and passed to `hex_to_id`.
     let new_file_id = read_id(&workdir.join("new-file.id"))?;
     let changed_file_id = read_id(&workdir.join("changed-file.id"))?;
 
     let command = "tr '\\000' '\\n' <";
-    let attributes = gix_worktree::Stack::new(
-        &workdir,
-        gix_worktree::stack::State::AttributesStack(gix_worktree::stack::state::Attributes::new(
-            Default::default(),
-            None,
-            attributes::Source::WorktreeThenIdMapping,
-            Default::default(),
-        )),
-        gix_worktree::glob::pattern::Case::Sensitive,
-        Vec::new(),
-        Vec::new(),
-    );
+    let attributes = crate::blob::new_attributes_stack(&workdir);
     let driver = gix_diff::blob::Driver {
         name: "bin".into(),
         binary_to_text_command: Some(command.into()),
@@ -41,7 +28,6 @@ fn binary_diff_with_textconv() -> gix_testtools::Result {
     );
 
     let odb = gix_odb::at(workdir.join(".git/objects"), gix_testtools::object_hash())?;
-
     let mut resource_cache = gix_diff::blob::Platform::new(
         Default::default(),
         pipeline,
@@ -79,8 +65,10 @@ fn binary_diff_with_textconv() -> gix_testtools::Result {
     let baseline = std::fs::read(workdir.join("baseline.diff"))?;
     let expected = crate::blob::skip_header_and_fold_to_unidiff(&baseline);
 
-    assert_eq!(actual, expected);
-
+    assert_eq!(
+        actual, expected,
+        "the unified diffs of textconv processed diffs matches perfectly, as sliders don't play a role here"
+    );
     Ok(())
 }
 

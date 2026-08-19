@@ -6,7 +6,6 @@ pub(crate) mod convert_to_diffable {
     };
     use gix_filter::{eol, eol::AutoCrlf};
     use gix_object::{bstr::ByteSlice, tree::EntryKind};
-    use gix_worktree::stack::state::attributes;
 
     use crate::util::{insert, object_db};
 
@@ -438,18 +437,7 @@ pub(crate) mod convert_to_diffable {
     fn binary_by_buffer_inspection() -> crate::Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let root = crate::scripted_fixture_read_only("make_blob_repo.sh")?;
-        let mut attributes = gix_worktree::Stack::new(
-            root,
-            gix_worktree::stack::State::AttributesStack(gix_worktree::stack::state::Attributes::new(
-                Default::default(),
-                None,
-                attributes::Source::WorktreeThenIdMapping,
-                Default::default(),
-            )),
-            gix_worktree::glob::pattern::Case::Sensitive,
-            Vec::new(),
-            Vec::new(),
-        );
+        let mut attributes = crate::blob::new_attributes_stack(root);
         let mut filter = gix_diff::blob::Pipeline::new(
             WorktreeRoots {
                 old_root: Some(tmp.path().to_owned()),
@@ -537,18 +525,7 @@ pub(crate) mod convert_to_diffable {
     fn with_driver() -> crate::Result {
         let root = crate::scripted_fixture_read_only("make_blob_repo.sh")?;
         let command = "echo to-text; cat <";
-        let mut attributes = gix_worktree::Stack::new(
-            &root,
-            gix_worktree::stack::State::AttributesStack(gix_worktree::stack::state::Attributes::new(
-                Default::default(),
-                None,
-                attributes::Source::WorktreeThenIdMapping,
-                Default::default(),
-            )),
-            gix_worktree::glob::pattern::Case::Sensitive,
-            Vec::new(),
-            Vec::new(),
-        );
+        let mut attributes = crate::blob::new_attributes_stack(&root);
         let mut filter = gix_diff::blob::Pipeline::new(
             WorktreeRoots {
                 old_root: Some(root.clone()),
