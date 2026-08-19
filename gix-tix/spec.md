@@ -866,7 +866,7 @@ space first; changes blocks adapt within the remaining history width.
 
 ### History rebase editor
 
-- Selecting an eligible hidden boundary and pressing `c b` opens a Markdown
+- Selecting an eligible hidden boundary and pressing `a b` opens a Markdown
   `.md` todo. Its editable plan is read bottom-to-top like the history view:
   newest commands and refs are highest, and each stack ends in a centered
   `──── fork <id> ────` separator below its oldest command.
@@ -876,7 +876,7 @@ space first; changes blocks adapt within the remaining history width.
   exactly as displayed in history without Markdown escaping. Fork points within the editable tree
   remain plain `fork <id>` separators. Every separator is centered with at least
   four `─` characters per side, and all span the widest editable line.
-- When that boundary shows `⇣N`, `c u` opens the same editor with each base-level
+- When that boundary shows `⇣N`, `a u` opens the same editor with each base-level
   stack rooted at the corresponding hidden branch tip. Its otherwise unfamiliar
   separator is `fork <id> (updated-base) <title>`, with the raw title exactly as
   shown in history, including `[A]` and `[N]`. The hidden branch
@@ -994,15 +994,17 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Commit and action shortcuts
 
-- `c` toggles the commit shortcut group. `c b` rebases an eligible hidden base and
-  `c u` rebases it onto the newer hidden branch tip when available,
-  `c o` rewords, `c n` creates a rebased child, `c a` amends `@`, `c h` stashes
+- `c` toggles the commit shortcut group. `c o` rewords, `c n` creates a rebased
+  child, `c a` amends `@`, `c h` stashes
   changes at `@`, `c s` spills `@`, `c p` splits staged from unstaged changes,
   and `c d d` confirms forgetting a top commit when each action is available.
-- `a` toggles the actions shortcut group. `a r` starts or finishes a review and
-  `a s` squashes the selected commit, `a m` cherry-moves current `HEAD` directly
-  above the selected commit, and `a f` establishes the remembered branch's
-  forkpoint at detached `HEAD` when available.
+- `a` toggles the actions shortcut group. `a b` rebases an eligible hidden base,
+  `a u` rebases it onto the newer hidden branch tip when available, `a r` starts
+  or finishes a review, `a s` squashes the selected commit, `a m` cherry-moves
+  current `HEAD` directly above the selected commit, `a v` starts
+  cherry-move-stack for the linear ancestry from the selected commit through
+  `HEAD`, and `a f` establishes
+  the remembered branch's forkpoint at detached `HEAD` when available.
 - Squash accepts any visible strict ancestor whose affected descendants contain no merges. With one eligible
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
@@ -1016,6 +1018,11 @@ space first; changes blocks adapt within the remaining history width.
   is unavailable. Mutable refs, pins, Git notes, enrichments, review resources,
   and attached or detached checkout state follow their rewritten commits.
   Cherry-move uses the history-todo conflict and continuation rules.
+- Cherry-move-stack requires the selected commit to be an inclusive base in the linear
+  ancestry of `HEAD`. It then limits navigation to eligible insertion targets;
+  `<enter>` moves the complete inclusive base-through-`HEAD` stack as a unit above the selected
+  target, and Escape cancels. The stack follows the same eligibility, rewrite,
+  no-op, metadata, checkout, and conflict rules as a single cherry-move.
 - `@` invokes time travel directly, outside both groups. Invoking it leaves an
   already expanded commit group open.
 - Commit and action shortcuts keep their respective group open. Navigation or

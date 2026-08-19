@@ -985,12 +985,6 @@ pub(crate) fn draw_with_worktree(
         };
         if app.commit_expanded {
             let mut options = Vec::new();
-            if app.can_rebase() {
-                options.push(("rebase", 'b'));
-            }
-            if app.can_rebase_update() {
-                options.push(("rebase-update", 'u'));
-            }
             if app.changes_focus.is_none() && app.reword_shortcut_visible() {
                 options.push(("reword", 'o'));
             }
@@ -1053,6 +1047,12 @@ pub(crate) fn draw_with_worktree(
         actions_prefix_spans.push(Span::raw("ctions"));
         if app.actions_expanded {
             let mut options = Vec::new();
+            if app.can_rebase() {
+                options.push(("rebase", 'b'));
+            }
+            if app.can_rebase_update() {
+                options.push(("rebase-update", 'u'));
+            }
             if app.can_finish_review() {
                 options.push(("finish-review", 'r'));
             } else if app.can_review() {
@@ -1064,19 +1064,28 @@ pub(crate) fn draw_with_worktree(
             if app.can_move() {
                 options.push(("cherry-move", 'm'));
             }
-            if app.can_forkpoint() {
-                options.push(("forkpoint", 'f'));
-            }
             let mut items = Vec::new();
-            if options.is_empty() {
-                items.push(Span::raw("no actions"));
-            } else {
-                for (index, (label, key)) in options.into_iter().enumerate() {
-                    if index > 0 {
-                        items.push(Span::raw(" · "));
-                    }
-                    items.extend(shortcut(label, key, true));
+            for (label, key) in options {
+                if !items.is_empty() {
+                    items.push(Span::raw(" · "));
                 }
+                items.extend(shortcut(label, key, true));
+            }
+            if app.can_cherry_stack() {
+                if !items.is_empty() {
+                    items.push(Span::raw(" · "));
+                }
+                items.push(Span::styled("v", Style::default().add_modifier(Modifier::UNDERLINED)));
+                items.push(Span::raw(" cherry-move-stack"));
+            }
+            if app.can_forkpoint() {
+                if !items.is_empty() {
+                    items.push(Span::raw(" · "));
+                }
+                items.extend(shortcut("forkpoint", 'f', true));
+            }
+            if items.is_empty() {
+                items.push(Span::raw("no actions"));
             }
             actions_popup = Some(items);
             emphasize_prefix(&mut actions_prefix_spans[1..]);
@@ -3823,6 +3832,59 @@ mod tests {
     }
 
     #[test]
+    fn actions_popup_shows_the_prefixed_cherry_stack_shortcut() -> Result<(), Box<dyn std::error::Error>> {
+        let head = gix::ObjectId::Sha1([1; 20]);
+        let base = gix::ObjectId::Sha1([2; 20]);
+        let parent = gix::ObjectId::Sha1([3; 20]);
+        let target = gix::ObjectId::Sha1([4; 20]);
+        let commit = |id, parent: Option<gix::ObjectId>| Commit {
+            id,
+            parent_ids: parent.into_iter().collect(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            signature: SignatureState::Unsigned,
+        };
+        let mut app = App::new(4);
+        app.set_worktree_head(Some(head), false);
+        app.extend_commits(vec![
+            commit(head, Some(base)),
+            commit(base, Some(parent)),
+            commit(parent, None),
+            commit(target, None),
+        ]);
+        complete(&mut app);
+        app.selected = app.rows.iter().position(|row| row.id == base);
+        app.actions_expanded = true;
+        let mut terminal = Terminal::new(TestBackend::new(160, 5))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        let popup = rendered_line(&terminal, 3);
+        let label = "v cherry-move-stack";
+        let start = popup[..popup.find(label).expect("the cherry-move-stack action is visible")]
+            .chars()
+            .count() as u16;
+        assert!(
+            terminal.backend().buffer()[(start, 3)]
+                .modifier
+                .contains(Modifier::UNDERLINED)
+        );
+        assert!(
+            (start + 1..start + label.len() as u16).all(|x| !terminal.backend().buffer()[(x, 3)]
+                .modifier
+                .contains(Modifier::UNDERLINED)),
+            "only the prefixed v is underlined"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn focused_paths_offer_only_their_scoped_edit_in_the_main_prefix() -> Result<(), Box<dyn std::error::Error>> {
         let id = gix::ObjectId::Sha1([1; 20]);
         let mut app = App::new(4);
@@ -6115,12 +6177,18 @@ mod tests {
             "the terminal edge pushes the marker over clipped title text"
         );
         app.commit_expanded = true;
+        let mut commit = Terminal::new(TestBackend::new(120, 3))?;
+        commit.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(rendered_line(&commit, 1).contains(" pin "));
+        assert!(!rendered_line(&commit, 1).contains("rebase"));
+        app.commit_expanded = false;
+        app.actions_expanded = true;
         let mut actions = Terminal::new(TestBackend::new(120, 3))?;
         actions.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&actions, 1).contains(" rebase · rebase-update · pin ")
+            rendered_line(&actions, 1).contains(" rebase · rebase-update ")
                 && rendered_line(&actions, 2).contains("commit · actions"),
-            "the selected hidden base offers independent edits: {:?}",
+            "the selected hidden base offers rebasing from actions: {:?}",
             rendered_line(&actions, 1)
         );
         Ok(())

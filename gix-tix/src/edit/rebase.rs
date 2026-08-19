@@ -536,30 +536,56 @@ pub(crate) fn cherry_move_plan(
     source: ObjectId,
     target: ObjectId,
 ) -> Result<Plan> {
-    if source == target {
-        anyhow::bail!("the move target must differ from HEAD");
+    cherry_stack_plan(repo, graph, source, source, target)
+}
+
+pub(crate) fn cherry_stack_plan(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    base: ObjectId,
+    head: ObjectId,
+    target: ObjectId,
+) -> Result<Plan> {
+    if repo.head_id()?.detach() != head {
+        anyhow::bail!("the move source must be the current HEAD");
     }
-    let source_parents = graph.parents_of(source).context("HEAD is not in the loaded history")?;
-    let [source_parent] = source_parents.as_slice() else {
-        anyhow::bail!("moving HEAD requires exactly one parent");
-    };
-    let source_parent = *source_parent;
+    if !graph.is_ancestor(base, head) {
+        anyhow::bail!("the stack base must be an ancestor of HEAD");
+    }
     graph
         .parents_of(target)
         .context("the move target is not in the loaded history")?;
-    if source_parent == target {
-        anyhow::bail!("HEAD is already directly above the move target");
+
+    let mut stack = vec![head];
+    let mut stack_parent = HashMap::new();
+    loop {
+        let id = *stack.last().expect("a stack always contains HEAD");
+        let parents = graph.parents_of(id).context("a moved stack commit is incomplete")?;
+        let [parent] = parents.as_slice() else {
+            anyhow::bail!("moving a stack requires every commit to have exactly one parent");
+        };
+        stack_parent.insert(id, *parent);
+        if id == base {
+            break;
+        }
+        stack.push(*parent);
     }
-    if repo.head_id()?.detach() != source {
-        anyhow::bail!("the move source must be the current HEAD");
+    stack.reverse();
+    let stack_set: HashSet<_> = stack.iter().copied().collect();
+    if stack_set.contains(&target) {
+        anyhow::bail!("the move target must not be part of the moved stack");
+    }
+    let base_parent = stack_parent[&base];
+    if base_parent == target {
+        anyhow::bail!("the stack is already directly above the move target");
     }
 
-    let target_rewritten = graph.is_ancestor(source, target);
+    let target_rewritten = graph.is_ancestor(base, target);
     let mut scope = Vec::new();
     let mut scope_set = HashSet::new();
     for id in graph
-        .descendants_in_parent_order(source)
-        .context("HEAD is not in the loaded history")?
+        .descendants_in_parent_order(base)
+        .context("the stack base is not in the loaded history")?
         .into_iter()
         .chain(
             graph
@@ -576,16 +602,18 @@ pub(crate) fn cherry_move_plan(
     for id in &scope {
         let parents = graph.parents_of(*id).context("an affected move commit is incomplete")?;
         let [parent] = parents.as_slice() else {
-            anyhow::bail!("moving HEAD cannot rewrite root or merge commits");
+            anyhow::bail!("moving a stack cannot rewrite root or merge commits");
         };
         new_parent.insert(
             *id,
-            if *id == source {
+            if *id == base {
                 target
-            } else if *parent == source {
-                source_parent
+            } else if stack_set.contains(id) {
+                *parent
+            } else if let Some(old_parent) = stack_parent.get(parent) {
+                *old_parent
             } else if *parent == target {
-                source
+                head
             } else {
                 *parent
             },
@@ -616,11 +644,11 @@ pub(crate) fn cherry_move_plan(
             });
         }
         if steps.len() == before {
-            anyhow::bail!("moving HEAD would create a commit cycle");
+            anyhow::bail!("moving the stack would create a commit cycle");
         }
     }
 
-    let source_step = PlanParent::Step(step_by_id[&source]);
+    let head_step = PlanParent::Step(step_by_id[&head]);
     let mut ref_scope = scope.clone();
     if !scope_set.contains(&target) {
         ref_scope.push(target);
@@ -643,8 +671,8 @@ pub(crate) fn cherry_move_plan(
         .collect();
     let mut expected_refs = capture_refs(repo, &ref_scope, &tips)?;
     for expected in &mut expected_refs {
-        if expected.target == source {
-            expected.placement = Some(source_step);
+        if stack_set.contains(&expected.target) {
+            expected.placement = Some(PlanParent::Step(step_by_id[&expected.target]));
         }
     }
     let head = repo.head()?;
@@ -654,11 +682,11 @@ pub(crate) fn cherry_move_plan(
         .map(ToOwned::to_owned);
 
     Ok(Plan {
-        base: source_parent,
+        base: base_parent,
         scope,
         steps,
         checkout: Some(PlanCheckout {
-            target: source_step,
+            target: head_step,
             reference,
         }),
         expected_refs,
@@ -2090,7 +2118,7 @@ fn write_commit(
     predecessor: Option<ObjectId>,
     committer: &gix::actor::Signature,
     state: CommitState,
-    signing: Option<gix::objs::commit::signature::Options>,
+    signing: Option<gix::commit::sign::Options>,
 ) -> Result<ObjectId> {
     Ok(write_commit_timed(repo, commit, predecessor, committer, state, signing)?.0)
 }
@@ -2101,7 +2129,7 @@ fn write_commit_timed(
     predecessor: Option<ObjectId>,
     committer: &gix::actor::Signature,
     state: CommitState,
-    signing: Option<gix::objs::commit::signature::Options>,
+    signing: Option<gix::commit::sign::Options>,
 ) -> Result<(ObjectId, Option<Duration>)> {
     if let Some(predecessor) = predecessor {
         crate::change_id::inherit(repo, &mut commit, predecessor)?;
@@ -3477,6 +3505,102 @@ mod tests {
             "a sibling fork remains attached to the rewritten target"
         );
         assert_eq!(repo.find_reference("refs/heads/side")?.id().detach(), rewritten_side);
+        Ok(())
+    }
+
+    #[test]
+    fn cherry_stack_moves_the_linear_range_and_reconnects_side_children() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        git(fixture.path(), &["checkout", "-q", "-b", "fork", "HEAD~1"])?;
+        std::fs::write(fixture.path().join("fork"), b"fork\n")?;
+        git(fixture.path(), &["add", "fork"])?;
+        git(fixture.path(), &["commit", "-q", "-m", "fork"])?;
+        git(fixture.path(), &["checkout", "-q", "-b", "destination", "main~2"])?;
+        std::fs::write(fixture.path().join("destination"), b"destination\n")?;
+        git(fixture.path(), &["add", "destination"])?;
+        git(fixture.path(), &["commit", "-q", "-m", "destination"])?;
+        std::fs::write(fixture.path().join("destination-child"), b"destination child\n")?;
+        git(fixture.path(), &["add", "destination-child"])?;
+        git(fixture.path(), &["commit", "-q", "-m", "destination child"])?;
+        git(fixture.path(), &["checkout", "-q", "main"])?;
+
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let old_parent = repo.rev_parse_single("main~2")?.detach();
+        let base = repo.rev_parse_single("main~1")?.detach();
+        let head = repo.head_id()?.detach();
+        let fork = repo.rev_parse_single("fork")?.detach();
+        let target = repo.rev_parse_single("destination~1")?.detach();
+        let target_child = repo.rev_parse_single("destination")?.detach();
+
+        let outcome = perform_plan(&repo, &graph, cherry_stack_plan(&repo, &graph, base, head, target)?)?.complete()?;
+        let moved_base = outcome.map(base).context("the stack base is retained")?;
+        let moved_head = outcome.map(head).context("HEAD is retained")?;
+        let rewritten_fork = outcome.map(fork).context("the side child is retained")?;
+        let rewritten_target_child = outcome.map(target_child).context("the target child is retained")?;
+        let parent = |id| -> gix_testtools::Result<Option<ObjectId>> {
+            Ok(repo.find_commit(id)?.parent_ids().next().map(gix::Id::detach))
+        };
+        assert_eq!(
+            parent(moved_base)?,
+            Some(target),
+            "the stack is inserted above the target"
+        );
+        assert_eq!(
+            parent(moved_head)?,
+            Some(moved_base),
+            "the stack keeps its internal ancestry"
+        );
+        assert_eq!(
+            parent(rewritten_fork)?,
+            Some(old_parent),
+            "a non-stack child reconnects to its moved parent's original parent"
+        );
+        assert_eq!(
+            parent(rewritten_target_child)?,
+            Some(moved_head),
+            "the target's former child follows the moved stack"
+        );
+        assert_eq!(repo.head_id()?.detach(), moved_head, "checkout follows rewritten HEAD");
+        for (name, expected) in [
+            ("refs/patches/middle", moved_base),
+            ("refs/patches/tip", moved_head),
+            ("refs/heads/fork", rewritten_fork),
+            ("refs/heads/destination", rewritten_target_child),
+        ] {
+            assert_eq!(
+                repo.find_reference(name)?.id().detach(),
+                expected,
+                "{name} follows its corresponding rewrite"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn cherry_stack_rejects_invalid_ranges_and_cycles() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        git(fixture.path(), &["checkout", "-q", "-b", "cycle-target"])?;
+        std::fs::write(fixture.path().join("cycle-target"), b"cycle target\n")?;
+        git(fixture.path(), &["add", "cycle-target"])?;
+        git(fixture.path(), &["commit", "-q", "-m", "cycle target"])?;
+        git(fixture.path(), &["checkout", "-q", "main"])?;
+
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let root = repo.rev_parse_single("main~2")?.detach();
+        let base = repo.rev_parse_single("main~1")?.detach();
+        let head = repo.head_id()?.detach();
+        let target = repo.rev_parse_single("cycle-target")?.detach();
+        let err = cherry_stack_plan(&repo, &graph, target, head, root)
+            .expect_err("the selected base must be in HEAD's ancestry");
+        assert!(err.to_string().contains("ancestor"), "{err:#}");
+        let err = cherry_stack_plan(&repo, &graph, base, head, base)
+            .expect_err("the insertion target cannot be part of the stack");
+        assert!(err.to_string().contains("moved stack"), "{err:#}");
+        let err = cherry_stack_plan(&repo, &graph, base, head, target)
+            .expect_err("inserting a stack into its own side descendant would cycle");
+        assert!(err.to_string().contains("cycle"), "{err:#}");
         Ok(())
     }
 
