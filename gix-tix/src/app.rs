@@ -2035,6 +2035,12 @@ impl App {
         if self.stack_insert_base.is_some() {
             self.clear_reachability_selection();
         }
+        let previous_order: HashMap<_, _> = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| (row.id, index))
+            .collect();
         drop(self.store_commits(commits));
 
         let visible = self.reachable_from(view_tips);
@@ -2056,6 +2062,32 @@ impl App {
             .filter(|id| visible.contains(*id) || boundary.contains(*id))
             .filter_map(|id| self.all_rows.get(id).map(Arc::clone))
             .collect();
+        let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
+        let mut children = vec![Vec::new(); rows.len()];
+        let mut ranks = vec![None; rows.len()];
+        let mut pending = Vec::new();
+        for (index, row) in rows.iter().enumerate() {
+            if let Some(rank) = previous_order.get(&row.id) {
+                ranks[index] = Some(*rank);
+                pending.push(index);
+                continue;
+            }
+            if let Some(parent) = row.parent_ids.iter().next().and_then(|parent| positions.get(parent)) {
+                children[*parent].push(index);
+            } else {
+                pending.push(index);
+            }
+        }
+        while let Some(parent) = pending.pop() {
+            for child in &children[parent] {
+                // First-parent ancestry identifies the old lane.
+                ranks[*child] = ranks[parent];
+                pending.push(*child);
+            }
+        }
+        let mut rows: Vec<_> = rows.into_iter().zip(ranks).collect();
+        rows.sort_by_key(|(_, rank)| (rank.is_none(), *rank));
+        let rows = rows.into_iter().map(|(row, _)| row).collect();
         self.pending_hidden_rows = Some(boundary);
         self.select_top_after_refresh = select_top;
         self.state = State::Computing;
@@ -3669,6 +3701,50 @@ mod tests {
                 .iter()
                 .all(|row| Arc::ptr_eq(row, app.all_rows.get(&row.id).expect("visible rows remain cached"))),
             "the active projection shares its immutable rows with the append-only cache"
+        );
+    }
+
+    #[test]
+    fn refresh_keeps_an_advanced_tip_on_its_existing_side() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[1]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+
+        let rows = app
+            .start_refresh(vec![row_with_parents(4, &[3])].into(), &[id(4), id(2)], &[], false)
+            .expect("a refresh computes lanes");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(4), id(3), id(2), id(1)],
+            "advancing a tip keeps its history ahead of the independent tip"
+        );
+        assert_eq!(
+            app.render_lanes(0..app.rows.len()).iter().collect::<Vec<_>>(),
+            ["● ", "● ", "├─● ", "● "],
+            "the advanced tip stays in its existing left lane"
+        );
+
+        let rows = app
+            .start_refresh(vec![row_with_parents(5, &[4])].into(), &[id(5), id(2)], &[], false)
+            .expect("a second refresh computes lanes");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(5), id(4), id(3), id(2), id(1)],
+            "successive commits keep inheriting the current lane order"
+        );
+
+        app.select_commit(id(5));
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+        assert_eq!(
+            app.render_lanes(0..app.history_len()).iter().collect::<Vec<_>>(),
+            ["● ", "○ ", "├─● ", "● "],
+            "compressed history inherits the stable canonical lanes"
         );
     }
 
