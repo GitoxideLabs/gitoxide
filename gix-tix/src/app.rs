@@ -1534,6 +1534,9 @@ impl App {
                 return vec![Effect::Reload(!self.show_hidden)];
             }
             Action::ToggleAlign => {
+                let viewport_row = self
+                    .selected_history_index()
+                    .map(|selected| selected.saturating_sub(self.offset));
                 let leaving_compressed = self.alignment == Alignment::Compressed;
                 if leaving_compressed {
                     self.materialize_compressed_selection();
@@ -1553,6 +1556,9 @@ impl App {
                     self.compressed_history = None;
                     self.compressed_anchor = None;
                     self.compressed_expanded.clear();
+                }
+                if let (Some(selected), Some(viewport_row)) = (self.selected_history_index(), viewport_row) {
+                    self.offset = selected.saturating_sub(viewport_row);
                 }
                 self.ensure_visible();
             }
@@ -4912,6 +4918,41 @@ mod tests {
         assert!(
             app.selected_history_index().is_some(),
             "a programmatic jump rebuilds compression around the destination"
+        );
+    }
+
+    #[test]
+    fn compressed_mode_transitions_keep_the_selected_viewport_row() {
+        let mut app = App::new(4);
+        app.extend_commits(
+            (0..=11)
+                .rev()
+                .map(|n| numbered_row(n, n.checked_sub(1)))
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        app.set_view_tips(&[id(11)]);
+        app.select_commit(id(5));
+        app.offset = 4;
+        let viewport_row = app.selected_history_index().expect("the commit is selected") - app.offset;
+
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+        assert_eq!(
+            app.selected_history_index().map(|selected| selected - app.offset),
+            Some(viewport_row),
+            "entering compressed mode keeps the selected commit on screen"
+        );
+
+        app.update(Action::MoveDown);
+        assert!(app.selected_is_segment(), "the lower compressed segment is selected");
+        app.offset = 1;
+        let viewport_row = app.selected_history_index().expect("the segment is selected") - app.offset;
+        app.update(Action::ToggleAlign);
+        assert_eq!(
+            app.selected_history_index().map(|selected| selected - app.offset),
+            Some(viewport_row),
+            "leaving compressed mode keeps its representative on the segment's screen row"
         );
     }
 
