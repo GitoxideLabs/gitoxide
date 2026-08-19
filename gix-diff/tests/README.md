@@ -23,4 +23,9 @@ cargo run --package internal-tools -- \
     --destination-dir gix-diff/tests/fixtures/
 ```
 
-Finally, run `cargo test -p gix-diff sliders -- --nocapture` to execute the actual tests to compare.
+Finally, run `cargo test -p gix-diff slider::baseline -- --nocapture` to execute the actual tests to compare.
+
+The generated fixture includes Git baselines with and without the indent heuristic. The regular test compares
+`gix-diff` with slider heuristics to the primary Git baselines, while the additional `*.no-indent.baseline`
+files are used for diagnostics. To print a coarse mismatch report instead of failing on the first mismatch, run
+`GIX_DIFF_SLIDER_REPORT=1 cargo test -p gix-diff slider::baseline -- --nocapture`.
