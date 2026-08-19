@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tix QA Sweep"
+  short_description: "Repair every Tix commit with fast or thorough QA."
+  default_prompt: "Use $tix-qa-sweep to ask for a QA profile, then visit and repair every commit in the current Tix stack until that profile passes."

@@ -151,7 +151,7 @@ Follow "purposeful conventional commits" style:
 - Ubuntu-latest git version is the compatibility target
 - `cargo smart-release` for releases (driven by commit messages)
 - Every commit must be self-contained and pass CI independently
-   - Feel free to run `etc/scripts/ci-check-local.sh` until it passes as proxy, as running every commit against CI isn't feasible.
+   - Feel free to run `etc/scripts/ci-check-local.sh --thorough` until it passes as proxy, as running every commit against CI isn't feasible.
 - Keep breaking changes and all adaptations required to build and test the workspace in the same commit
 - When such a commit touches multiple crates, _scope_ its conventional commit message to the crate whose changelog should receive the entry
 
