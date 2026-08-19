@@ -273,6 +273,7 @@ fn worktree_tree_with_changes_inner(
 }
 
 #[tracing::instrument(skip_all, fields(parent = ?prepared.parent))]
+#[cfg(test)]
 pub(crate) fn apply(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
@@ -315,7 +316,7 @@ fn apply_commit(
     let repository_path = repo.git_dir().to_owned();
     let bare = repo.is_bare();
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
-    let outcome = rebase::perform(
+    let mut outcome = rebase::perform(
         &repo,
         graph,
         rebase::Edit::Insert {
@@ -331,37 +332,64 @@ fn apply_commit(
         .selected
         .context("inserting a commit did not produce a selection")?;
     drop(repo);
-    crate::enrich::apply_headers(&crate::open_repository(&repository_path, bare, false)?, id, &enrichment)
+    let repo = crate::open_repository(&repository_path, bare, false)?;
+    let name: gix::refs::FullName = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
+    let before = super::undo::state(&repo, name.as_ref())?;
+    crate::enrich::apply_headers(&repo, id, &enrichment)
         .context("the commit was created, but its enrichment could not be saved")?;
+    let after = super::undo::state(&repo, name.as_ref())?;
+    if before != after {
+        outcome.ref_changes.push(super::undo::RefChange { name, before, after });
+    }
     Ok(outcome)
 }
 
 #[tracing::instrument(skip_all, fields(parent = ?prepared.parent))]
+#[cfg(test)]
 pub(crate) fn apply_fork(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    prepared: Prepared,
+    edited: &[u8],
+) -> Result<ObjectId> {
+    apply_fork_reporting(repo, graph, prepared, edited)?
+        .selected
+        .context("forking a commit did not produce a selection")
+}
+
+pub(crate) fn apply_fork_reporting(
     mut repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     mut prepared: Prepared,
     edited: &[u8],
-) -> Result<ObjectId> {
+) -> Result<rebase::Outcome> {
     let repository_path = repo.git_dir().to_owned();
     let bare = repo.is_bare();
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
     let parent = prepared.parent.context("a fork commit requires a parent")?;
     let (commit, enrichment) = commit_from_edit(&prepared, edited)?;
-    let id = rebase::perform(
+    let mut outcome = rebase::perform(
         &repo,
         graph,
         rebase::Edit::Fork { anchor: parent, commit },
         rebase::Signature::RedoIfNeeded,
         rebase::Tree::LeaveAsIs,
     )?
-    .complete()?
-    .selected
-    .context("forking a commit did not produce a selection")?;
+    .complete()?;
+    let id = outcome
+        .selected
+        .context("forking a commit did not produce a selection")?;
     drop(repo);
-    crate::enrich::apply_headers(&crate::open_repository(&repository_path, bare, false)?, id, &enrichment)
+    let repo = crate::open_repository(&repository_path, bare, false)?;
+    let name: gix::refs::FullName = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
+    let before = super::undo::state(&repo, name.as_ref())?;
+    crate::enrich::apply_headers(&repo, id, &enrichment)
         .context("the fork was created, but its enrichment could not be saved")?;
-    Ok(id)
+    let after = super::undo::state(&repo, name.as_ref())?;
+    if before != after {
+        outcome.ref_changes.push(super::undo::RefChange { name, before, after });
+    }
+    Ok(outcome)
 }
 
 pub(super) fn commit_from_edit(

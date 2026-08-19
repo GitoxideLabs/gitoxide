@@ -7,7 +7,6 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use gix::prelude::ReferenceExt;
 use ratatui::text::Line;
 
 mod enrich;
@@ -167,6 +166,7 @@ impl Platform {
                         let selected = outcome.selected.context("amending did not produce a selection")?;
                         println!("{}", crate::change_id::display(&output_repository, selected, 7)?);
                         print_ref_rewrites(&output_repository, &outcome.ref_rewrites)?;
+                        record_undo(&output_repository, "amend", Ok(outcome.ref_changes));
                     }
                     None => println!("nothing to amend"),
                 }
@@ -421,16 +421,8 @@ fn resolve_commit(
 ) -> Result<(gix::ObjectId, Option<crate::history::HistoryGraph>)> {
     let revision = gix::path::os_str_into_bstr(revision)
         .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
-    match repository.rev_parse_single(revision) {
-        Ok(id) => {
-            let id = id
-                .object()
-                .with_context(|| format!("could not read {description}"))?
-                .peel_to_commit()
-                .with_context(|| format!("{description} does not resolve to a commit"))?
-                .id;
-            Ok((id, None))
-        }
+    match crate::history::resolve_revision(repository, revision) {
+        Ok((id, _reference)) => Ok((id, None)),
         Err(revision_error) => {
             let graph = crate::edit::loaded_view_graph(repository)?;
             let resolved = std::str::from_utf8(revision)
@@ -447,34 +439,42 @@ fn resolve_commit(
 }
 
 fn pin(repository: &gix::Repository, args: Pin) -> Result<()> {
-    for pin in create_pins(repository, &args.revisions)? {
-        println!("{}", display_pin(repository, &pin)?);
+    let pins = create_pins(repository, &args.revisions)?;
+    for (pin, _created) in &pins {
+        println!("{}", display_pin(repository, pin)?);
     }
+    record_undo(
+        repository,
+        "pin commit",
+        Ok(pins
+            .into_iter()
+            .filter_map(|(pin, created)| {
+                created.then_some(crate::edit::undo::RefChange {
+                    name: pin.name,
+                    before: crate::edit::undo::State::Missing,
+                    after: match pin.target {
+                        gix::refs::Target::Object(id) => crate::edit::undo::State::Object(id),
+                        gix::refs::Target::Symbolic(name) => crate::edit::undo::State::Symbolic(name),
+                    },
+                })
+            })
+            .collect()),
+    );
     Ok(())
 }
 
-fn create_pins(repository: &gix::Repository, revisions: &[OsString]) -> Result<Vec<crate::history::Pin>> {
+fn create_pins(repository: &gix::Repository, revisions: &[OsString]) -> Result<Vec<(crate::history::Pin, bool)>> {
     let mut seen = HashSet::new();
     let targets = revisions
         .iter()
         .map(|revision| {
             let revision = gix::path::os_str_into_bstr(revision)
                 .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
-            let spec = repository
-                .rev_parse(revision)
+            let (id, reference) = crate::history::resolve_revision(repository, revision)
                 .with_context(|| format!("could not resolve revision {revision:?}"))?;
-            let reference = spec.first_reference().cloned();
-            let id = spec
-                .single()
-                .with_context(|| format!("revision {revision:?} does not name a single object"))?
-                .object()
-                .context("could not read pin target")?
-                .peel_to_commit()
-                .context("pin target does not resolve to a commit")?
-                .id;
             let target = match reference {
-                Some(reference) if reference.clone().attach(repository).peel_to_commit()?.id == id => {
-                    gix::refs::Target::Symbolic(reference.name)
+                Some(reference) if repository.find_reference(reference.as_ref())?.peel_to_commit()?.id == id => {
+                    gix::refs::Target::Symbolic(reference)
                 }
                 _ => gix::refs::Target::Object(id),
             };
@@ -484,9 +484,7 @@ fn create_pins(repository: &gix::Repository, revisions: &[OsString]) -> Result<V
     targets
         .into_iter()
         .filter(|(target, _id)| seen.insert(target.clone()))
-        .map(|(target, id)| {
-            crate::edit::time_travel::create_or_reuse_pin(repository, target, id, "tix pin").map(|(pin, _created)| pin)
-        })
+        .map(|(target, id)| crate::edit::time_travel::create_or_reuse_pin(repository, target, id, "tix pin"))
         .collect()
 }
 
@@ -510,6 +508,7 @@ fn edit_head(
             let selected = outcome.selected.context("editing HEAD did not produce a selection")?;
             println!("{}", crate::change_id::display(&output_repository, selected, 7)?);
             print_ref_rewrites(&output_repository, &outcome.ref_rewrites)?;
+            record_undo(&output_repository, verb, Ok(outcome.ref_changes));
         }
         None => println!("nothing to {verb}"),
     }
@@ -538,7 +537,18 @@ fn split(repository: gix::Repository, graph: &crate::history::HistoryGraph, args
     let selected = outcome.selected.context("splitting did not produce a selection")?;
     println!("{}", crate::change_id::display(&output_repository, selected, 7)?);
     print_ref_rewrites(&output_repository, &outcome.ref_rewrites)?;
+    record_undo(&output_repository, "split commit", Ok(outcome.ref_changes));
     Ok(())
+}
+
+pub(super) fn record_undo(
+    repository: &gix::Repository,
+    title: &str,
+    changes: Result<Vec<crate::edit::undo::RefChange>>,
+) {
+    if let Err(err) = changes.and_then(|changes| crate::edit::undo::record(repository, title, &changes).map(|_| ())) {
+        eprintln!("warning: operation completed, but undo history was not updated: {err:#}");
+    }
 }
 
 fn print_ref_rewrites(repository: &gix::Repository, rewrites: &[crate::edit::rebase::RefRewrite]) -> Result<()> {
@@ -1166,13 +1176,13 @@ mod tests {
         let short_main = main.to_hex_with_len(7).to_string();
         let pins = create_pins(&repository, &revisions(&["main", "v1", "main~1", &short_main]))?;
         assert_eq!(
-            pins.iter().map(|pin| pin.id).collect::<Vec<_>>(),
+            pins.iter().map(|(pin, _created)| pin.id).collect::<Vec<_>>(),
             [main, root, parent, main],
             "distinct pin targets preserve argument order even when IDs match"
         );
         assert_eq!(
             pins.iter()
-                .map(|pin| pin.target.try_name().is_some())
+                .map(|(pin, _created)| pin.target.try_name().is_some())
                 .collect::<Vec<_>>(),
             [true, true, false, false],
             "direct reference names follow symbolically while derived revisions and IDs stay fixed"
@@ -1184,9 +1194,9 @@ mod tests {
         );
 
         let repeated = create_pins(&repository, &revisions(&["main"]))?;
-        assert_eq!(repeated[0].name, pins[0].name, "an existing symbolic pin is reused");
+        assert_eq!(repeated[0].0.name, pins[0].0.name, "an existing symbolic pin is reused");
         assert_eq!(crate::history::all_pins(&repository)?.len(), 4);
-        let display = display_pin(&repository, &pins[0])?;
+        let display = display_pin(&repository, &pins[0].0)?;
         let (label, ids) = display.split_once(' ').context("pin output has a label and IDs")?;
         assert!(label.starts_with("pin:"), "output names the pin");
         assert_eq!(
@@ -1202,7 +1212,7 @@ mod tests {
         )?;
         let followed = crate::history::all_pins(&repository)?
             .into_iter()
-            .find(|pin| pin.name == pins[0].name)
+            .find(|pin| pin.name == pins[0].0.name)
             .context("the symbolic pin remains")?;
         assert_eq!(followed.id, parent, "the symbolic pin follows the moved branch");
         Ok(())

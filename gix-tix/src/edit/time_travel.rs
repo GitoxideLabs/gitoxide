@@ -26,6 +26,7 @@ pub(crate) enum Perform {
         notice: Option<String>,
         selected: ObjectId,
         ref_rewrites: Vec<super::rebase::RefRewrite>,
+        ref_changes: Vec<super::undo::RefChange>,
     },
     Conflict(Conflict),
 }
@@ -53,6 +54,7 @@ pub(crate) struct Conflict {
     revisions: Vec<OsString>,
     include_worktrees: bool,
     ref_rewrites: Vec<super::rebase::RefRewrite>,
+    ref_changes: Vec<super::undo::RefChange>,
 }
 
 impl Conflict {
@@ -60,12 +62,30 @@ impl Conflict {
         self.rebase.original()
     }
 
+    pub(crate) fn prepend_ref_changes(&mut self, mut changes: Vec<super::undo::RefChange>) {
+        changes.append(&mut self.ref_changes);
+        self.ref_changes = changes;
+    }
+
+    pub(crate) fn into_ref_changes(self) -> Vec<super::undo::RefChange> {
+        self.ref_changes
+    }
+
     #[tracing::instrument(skip_all, fields(commit_id = %self.rebase.original()))]
-    pub(crate) fn accept(self) -> Result<(String, ObjectId, Vec<super::rebase::RefRewrite>)> {
+    pub(crate) fn accept(
+        self,
+    ) -> Result<(
+        String,
+        ObjectId,
+        Vec<super::rebase::RefRewrite>,
+        Vec<super::undo::RefChange>,
+    )> {
         let mut conflict = self.rebase.persist()?;
         let mut ref_rewrites = self.ref_rewrites;
+        let mut ref_changes = self.ref_changes;
         ref_rewrites.append(&mut conflict.ref_rewrites);
-        let notice = move_head_to(
+        ref_changes.append(&mut conflict.ref_changes);
+        let (notice, mut checkout_changes) = move_head_to_reporting(
             &self.repository_path,
             self.bare,
             conflict.commit,
@@ -73,29 +93,41 @@ impl Conflict {
             &self.revisions,
             self.include_worktrees,
             |id| conflict.map(id),
-        )?
-        .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
-        delete_deferred_refs(&self.repository_path, self.bare, &conflict.deferred_ref_deletions)?;
+        )?;
+        ref_changes.append(&mut checkout_changes);
+        let mut deletion_changes =
+            delete_deferred_refs(&self.repository_path, self.bare, &conflict.deferred_ref_deletions)?;
+        ref_changes.append(&mut deletion_changes);
         conflict.materialize()?;
         Ok((
-            format!("{notice}; ready to resolve conflicts"),
+            format!(
+                "{}; ready to resolve conflicts",
+                notice.unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)))
+            ),
             conflict.commit,
             ref_rewrites,
+            ref_changes,
         ))
     }
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %conflict.original()))]
-pub(crate) fn materialize_plan_conflict(
+pub(crate) fn materialize_plan_conflict_reporting(
     conflict: super::rebase::PlanConflict,
     repository_path: &Path,
     bare: bool,
     revisions: &[OsString],
     include_worktrees: bool,
-) -> Result<(String, ObjectId, Vec<super::rebase::RefRewrite>)> {
+) -> Result<(
+    String,
+    ObjectId,
+    Vec<super::rebase::RefRewrite>,
+    Vec<super::undo::RefChange>,
+)> {
     let original = conflict.original();
     let mut conflict = conflict.into_conflict().persist()?;
-    let notice = move_head_to(
+    let mut ref_changes = std::mem::take(&mut conflict.ref_changes);
+    let (notice, mut checkout_changes) = move_head_to_reporting(
         repository_path,
         bare,
         conflict.commit,
@@ -103,18 +135,24 @@ pub(crate) fn materialize_plan_conflict(
         revisions,
         include_worktrees,
         |id| conflict.map(id),
-    )?
-    .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
-    delete_deferred_refs(repository_path, bare, &conflict.deferred_ref_deletions)?;
+    )?;
+    ref_changes.append(&mut checkout_changes);
+    let mut deletion_changes = delete_deferred_refs(repository_path, bare, &conflict.deferred_ref_deletions)?;
+    ref_changes.append(&mut deletion_changes);
     conflict.materialize()?;
     tracing::warn!(commit_id = %original, rewritten_id = %conflict.commit, "materialized rebase-todo conflict");
     Ok((
-        format!("{notice}; ready to resolve conflicts"),
+        format!(
+            "{}; ready to resolve conflicts",
+            notice.unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)))
+        ),
         conflict.commit,
         conflict.ref_rewrites,
+        ref_changes,
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn checkout_without_replay(
     repository_path: &Path,
     bare: bool,
@@ -122,9 +160,20 @@ pub(crate) fn checkout_without_replay(
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<Option<String>> {
+    Ok(checkout_without_replay_reporting(repository_path, bare, selected, revisions, include_worktrees)?.0)
+}
+
+pub(crate) fn checkout_without_replay_reporting(
+    repository_path: &Path,
+    bare: bool,
+    selected: ObjectId,
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<(Option<String>, Vec<super::undo::RefChange>)> {
     move_head(repository_path, bare, selected, revisions, include_worktrees)
 }
 
+#[cfg(test)]
 pub(crate) fn checkout_review_return(
     repository_path: &Path,
     bare: bool,
@@ -132,6 +181,18 @@ pub(crate) fn checkout_review_return(
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<(ObjectId, Option<String>)> {
+    let (selected, notice, _) =
+        checkout_review_return_reporting(repository_path, bare, name, revisions, include_worktrees)?;
+    Ok((selected, notice))
+}
+
+pub(crate) fn checkout_review_return_reporting(
+    repository_path: &Path,
+    bare: bool,
+    name: &gix::refs::FullName,
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<(ObjectId, Option<String>, Vec<super::undo::RefChange>)> {
     let repository = open_repository(repository_path, bare, false).context("could not open review return checkout")?;
     let workdir = repository
         .workdir()
@@ -152,7 +213,7 @@ pub(crate) fn checkout_review_return(
     drop(repository);
     checkout(&workdir, [OsString::from("--force"), OsString::from("HEAD")])
         .context("could not discard the cancelled review checkout")?;
-    let notice = move_head_to(
+    let (notice, ref_changes) = move_head_to_reporting(
         repository_path,
         bare,
         selected,
@@ -161,9 +222,10 @@ pub(crate) fn checkout_review_return(
         include_worktrees,
         |_| None,
     )?;
-    Ok((selected, notice))
+    Ok((selected, notice, ref_changes))
 }
 
+#[cfg(test)]
 pub(crate) fn checkout_plan(
     repository_path: &Path,
     bare: bool,
@@ -171,8 +233,19 @@ pub(crate) fn checkout_plan(
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<Option<String>> {
+    Ok(checkout_plan_reporting(repository_path, bare, outcome, revisions, include_worktrees)?.0)
+}
+
+pub(crate) fn checkout_plan_reporting(
+    repository_path: &Path,
+    bare: bool,
+    outcome: &super::rebase::Outcome,
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<(Option<String>, Vec<super::undo::RefChange>)> {
     let selected = outcome.selected.context("the rebase plan does not select a checkout")?;
-    let notice = move_head_to(
+    let mut ref_changes = outcome.ref_changes.clone();
+    let (notice, mut checkout_changes) = move_head_to_reporting(
         repository_path,
         bare,
         selected,
@@ -181,8 +254,10 @@ pub(crate) fn checkout_plan(
         include_worktrees,
         |id| outcome.map(id),
     )?;
-    delete_deferred_refs(repository_path, bare, &outcome.deferred_ref_deletions)?;
-    Ok(notice)
+    ref_changes.append(&mut checkout_changes);
+    let mut deletion_changes = delete_deferred_refs(repository_path, bare, &outcome.deferred_ref_deletions)?;
+    ref_changes.append(&mut deletion_changes);
+    Ok((notice, ref_changes))
 }
 
 fn move_head(
@@ -191,8 +266,8 @@ fn move_head(
     selected: ObjectId,
     revisions: &[OsString],
     include_worktrees: bool,
-) -> Result<Option<String>> {
-    move_head_to(
+) -> Result<(Option<String>, Vec<super::undo::RefChange>)> {
+    move_head_to_reporting(
         repository_path,
         bare,
         selected,
@@ -203,6 +278,7 @@ fn move_head(
     )
 }
 
+#[cfg(test)]
 fn move_head_to<F>(
     repository_path: &Path,
     bare: bool,
@@ -215,7 +291,33 @@ fn move_head_to<F>(
 where
     F: FnOnce(ObjectId) -> Option<ObjectId>,
 {
+    Ok(move_head_to_reporting(
+        repository_path,
+        bare,
+        selected,
+        reference,
+        revisions,
+        include_worktrees,
+        map_departure,
+    )?
+    .0)
+}
+
+fn move_head_to_reporting<F>(
+    repository_path: &Path,
+    bare: bool,
+    selected: ObjectId,
+    reference: Option<&gix::refs::FullName>,
+    revisions: &[OsString],
+    include_worktrees: bool,
+    map_departure: F,
+) -> Result<(Option<String>, Vec<super::undo::RefChange>)>
+where
+    F: FnOnce(ObjectId) -> Option<ObjectId>,
+{
     let repository = open_repository(repository_path, bare, false).context("could not open repository for checkout")?;
+    let head_name: gix::refs::FullName = "HEAD".try_into().expect("valid reference name");
+    let head_before = super::undo::state(&repository, head_name.as_ref())?;
     let workdir = repository
         .workdir()
         .context("time-travel requires a worktree")?
@@ -229,51 +331,73 @@ where
     let departure = map_departure(head_id);
     drop(head);
     if selected == head_id && head_ref.as_ref() == reference {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     }
+    let mut ref_changes = Vec::new();
     let destination_pin = selected_pin(&repository, selected)?;
     let checkout_detaches = reference.is_none()
         && destination_pin
             .as_ref()
             .is_none_or(|pin| pin.target.try_name().is_none());
-    let head_pin = head_ref
+    let head_pin = match head_ref
         .as_ref()
         .filter(|name| checkout_detaches && name.as_bstr().starts_with(b"refs/heads/"))
-        .map(|name| create_or_update_head_pin(&repository, name, head_id))
-        .transpose()?;
-    let provisional = head_pin
+    {
+        Some(name) => {
+            let (pin, mut changes) = create_or_update_head_pin_reporting(&repository, name, head_id)?;
+            ref_changes.append(&mut changes);
+            Some(pin)
+        }
+        None => None,
+    };
+    let provisional = match head_pin
         .is_none()
         .then_some(departure)
         .flatten()
         .filter(|departure| *departure != selected)
         .filter(|departure| !contains(&repository, *departure, selected))
-        .map(|departure| {
+    {
+        Some(departure) => {
             let target = head_ref.clone().map_or(Target::Object(departure), Target::Symbolic);
-            create_or_reuse_pin(&repository, target, departure, "tix time-travel")
-        })
-        .transpose()?;
+            let (pin, created, mut changes) =
+                create_or_reuse_pin_reporting(&repository, target, departure, "tix time-travel")?;
+            ref_changes.append(&mut changes);
+            Some((pin, created))
+        }
+        None => None,
+    };
+    let head_after_checkout = reference.map_or_else(
+        || match destination_pin.as_ref().map(|pin| &pin.target) {
+            Some(Target::Symbolic(name)) => super::undo::State::Symbolic(name.clone()),
+            Some(Target::Object(id)) => super::undo::State::Object(*id),
+            None => super::undo::State::Object(selected),
+        },
+        |name| super::undo::State::Symbolic(name.clone()),
+    );
     drop(repository);
     let checkout = match (reference, &destination_pin) {
+        (Some(reference), _) if reference.as_bstr().starts_with(b"refs/heads/") => {
+            checkout_branch(&workdir, reference.as_ref())
+        }
         (Some(reference), _) => checkout_reference(repository_path, bare, &workdir, selected, reference),
         (None, Some(pin)) => checkout_pin(&workdir, pin),
         (None, None) => checkout_detached(&workdir, selected),
     };
     if let Err(checkout) = checkout {
-        let cleanup_pin = head_pin
-            .as_ref()
-            .or_else(|| provisional.as_ref().and_then(|(pin, created)| created.then_some(pin)));
-        if let Some(pin) = cleanup_pin {
-            let cleanup = open_repository(repository_path, bare, false)
-                .context("could not reopen repository to remove a provisional pin")
-                .and_then(|repository| delete_pin(&repository, pin));
-            if let Err(cleanup) = cleanup {
-                return Err(checkout.context(format!(
-                    "checkout failed and {} could not be removed: {cleanup:#}",
-                    pin_label(pin)
-                )));
-            }
+        let cleanup = open_repository(repository_path, bare, false)
+            .context("could not reopen repository to restore provisional references")
+            .and_then(|repository| super::undo::apply_reversed_changes(&repository, &ref_changes));
+        if let Err(cleanup) = cleanup {
+            return Err(checkout.context(format!("checkout failed and provisional refs remain: {cleanup:#}")));
         }
         return Err(checkout);
+    }
+    if head_before != head_after_checkout {
+        ref_changes.push(super::undo::RefChange {
+            name: head_name,
+            before: head_before,
+            after: head_after_checkout,
+        });
     }
     let mut notice = reference.map_or_else(
         || {
@@ -284,15 +408,27 @@ where
         },
         |reference| format!("checked out {}", reference.shorten()),
     );
-    let repository =
-        open_repository(repository_path, bare, false).context("could not reopen repository after time-travel")?;
-    if let Some(pin) = destination_pin
-        && let Err(err) = delete_pin(&repository, &pin)
-    {
-        notice = format!("{notice}; destination pin remains: {err:#}");
+    let repository = match open_repository(repository_path, bare, false) {
+        Ok(repository) => repository,
+        Err(err) => {
+            notice = format!("{notice}; post-checkout cleanup skipped: {err:#}");
+            return Ok((Some(notice), ref_changes));
+        }
+    };
+    if let Some(pin) = destination_pin {
+        match delete_pin_reporting(&repository, &pin) {
+            Ok(mut changes) => ref_changes.append(&mut changes),
+            Err(err) => notice = format!("{notice}; destination pin remains: {err:#}"),
+        }
     }
-    if let Some(addition) = reconcile_head_pin(&repository, &workdir)? {
-        notice = format!("{notice}; {addition}");
+    match reconcile_head_pin_reporting(&repository, &workdir) {
+        Ok((addition, mut changes)) => {
+            ref_changes.append(&mut changes);
+            if let Some(addition) = addition {
+                notice = format!("{notice}; {addition}");
+            }
+        }
+        Err(err) => notice = format!("{notice}; HEAD-pin reconciliation failed: {err:#}"),
     }
     if let Some((provisional, _)) = provisional {
         let snapshot = history::snapshot_ignoring_pin(
@@ -301,21 +437,29 @@ where
             &[],
             include_worktrees,
             Some(provisional.name.as_bstr()),
-        )?;
+        );
+        let snapshot = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                notice = format!("{notice}; kept {}: {err:#}", pin_label(&provisional));
+                return Ok((Some(notice), ref_changes));
+            }
+        };
         if snapshot
             .view_tips
             .iter()
             .copied()
             .any(|tip| contains(&repository, provisional.id, tip))
         {
-            if let Err(err) = delete_pin(&repository, &provisional) {
-                notice = format!("{notice}; redundant {} remains: {err:#}", pin_label(&provisional));
+            match delete_pin_reporting(&repository, &provisional) {
+                Ok(mut changes) => ref_changes.append(&mut changes),
+                Err(err) => notice = format!("{notice}; redundant {} remains: {err:#}", pin_label(&provisional)),
             }
         } else {
             notice = format!("{notice}; saved {}", pin_label(&provisional));
         }
     }
-    Ok(Some(notice))
+    Ok((Some(notice), ref_changes))
 }
 
 fn remembered_branch(repository: &gix::Repository) -> Result<RememberedBranch> {
@@ -362,12 +506,22 @@ fn validate_attach(repository: &gix::Repository, head_id: ObjectId, remembered: 
     ensure_branch_is_available(repository, remembered.branch.as_ref())
 }
 
+#[cfg(test)]
 pub(crate) fn attach(
     repository_path: &Path,
     bare: bool,
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<String> {
+    Ok(attach_reporting(repository_path, bare, revisions, include_worktrees)?.0)
+}
+
+pub(crate) fn attach_reporting(
+    repository_path: &Path,
+    bare: bool,
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<(String, Vec<super::undo::RefChange>)> {
     let repository = open_repository(repository_path, bare, false)
         .context("could not open repository to attach the remembered branch")?;
     repository.workdir().context("attaching requires a worktree")?;
@@ -384,16 +538,19 @@ pub(crate) fn attach(
     validate_attach(&repository, head_id, &remembered)?;
 
     let destination_pin = selected_pin(&repository, head_id)?;
-    let provisional = (remembered.branch_tip != head_id && !contains(&repository, remembered.branch_tip, head_id))
-        .then(|| {
-            create_or_reuse_pin(
-                &repository,
-                Target::Object(remembered.branch_tip),
-                remembered.branch_tip,
-                "tix attach departure",
-            )
-        })
-        .transpose()?;
+    let mut ref_changes = Vec::new();
+    let provisional = if remembered.branch_tip != head_id && !contains(&repository, remembered.branch_tip, head_id) {
+        let (pin, created, mut changes) = create_or_reuse_pin_reporting(
+            &repository,
+            Target::Object(remembered.branch_tip),
+            remembered.branch_tip,
+            "tix attach departure",
+        )?;
+        ref_changes.append(&mut changes);
+        Some((pin, created))
+    } else {
+        None
+    };
     let mut edits = Vec::with_capacity(2);
     if remembered.branch_tip != head_id {
         edits.push(checked_ref_edit(
@@ -409,43 +566,57 @@ pub(crate) fn attach(
         Target::Symbolic(remembered.branch.clone()),
         "tix attach",
     ));
-    if let Err(err) = repository
+    let applied = match repository
         .edit_references(edits)
         .context("could not move and attach the remembered branch")
     {
-        return Err(match provisional.as_ref() {
-            Some(pin) => cleanup_new_pins(&repository, std::slice::from_ref(pin), err),
-            None => err,
-        });
-    }
+        Ok(applied) => applied,
+        Err(err) => {
+            return Err(match provisional.as_ref() {
+                Some(pin) => cleanup_new_pins(&repository, std::slice::from_ref(pin), err),
+                None => err,
+            });
+        }
+    };
+    let mut attach_changes = super::undo::changes_from_edits(applied)?;
+    ref_changes.append(&mut attach_changes);
 
     let mut notice = format!(
         "attached {} at {}",
         remembered.branch.shorten(),
         head_id.to_hex_with_len(7)
     );
-    if let Some(pin) = destination_pin
-        && let Err(err) = delete_pin(&repository, &pin)
-    {
-        notice = format!("{notice}; destination pin remains: {err:#}");
+    if let Some(pin) = destination_pin {
+        match delete_pin_reporting(&repository, &pin) {
+            Ok(mut changes) => ref_changes.append(&mut changes),
+            Err(err) => notice = format!("{notice}; destination pin remains: {err:#}"),
+        }
     }
     if let Some((pin, _)) = provisional {
         let snapshot =
-            history::snapshot_ignoring_pin(&repository, revisions, &[], include_worktrees, Some(pin.name.as_bstr()))?;
+            history::snapshot_ignoring_pin(&repository, revisions, &[], include_worktrees, Some(pin.name.as_bstr()));
+        let snapshot = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                notice = format!("{notice}; kept {}: {err:#}", pin_label(&pin));
+                return Ok((notice, ref_changes));
+            }
+        };
         if snapshot
             .view_tips
             .iter()
             .copied()
             .any(|tip| contains(&repository, pin.id, tip))
         {
-            if let Err(err) = delete_pin(&repository, &pin) {
-                notice = format!("{notice}; redundant {} remains: {err:#}", pin_label(&pin));
+            match delete_pin_reporting(&repository, &pin) {
+                Ok(mut changes) => ref_changes.append(&mut changes),
+                Err(err) => notice = format!("{notice}; redundant {} remains: {err:#}", pin_label(&pin)),
             }
         } else {
             notice = format!("{notice}; saved {}", pin_label(&pin));
         }
     }
-    Ok(notice)
+    Ok((notice, ref_changes))
 }
 
 fn checked_ref_edit(name: gix::refs::FullName, old: Target, new: Target, message: &str) -> RefEdit {
@@ -583,6 +754,7 @@ pub(crate) fn perform_reporting_rebased(
     let mut original_ids = HashMap::new();
     let mut review_roots = review_roots.to_vec();
     let mut ref_rewrites = Vec::new();
+    let mut ref_changes = Vec::new();
     while let Some(base) = pending_base(&repository, selected)? {
         let mut rebased = Vec::new();
         let outcome = super::rebase::perform_reporting_rebased(
@@ -610,10 +782,12 @@ pub(crate) fn perform_reporting_rebased(
                     revisions: revisions.to_vec(),
                     include_worktrees,
                     ref_rewrites,
+                    ref_changes,
                 }));
             }
         };
         ref_rewrites.extend(outcome.ref_rewrites.iter().cloned());
+        ref_changes.extend(outcome.ref_changes.iter().cloned());
         for (old, original) in rebased {
             if let Some(new) = outcome.map(old) {
                 original_ids.insert(new, original);
@@ -650,7 +824,7 @@ pub(crate) fn perform_reporting_rebased(
     } else {
         None
     };
-    let moved = move_head_to(
+    let moved = move_head_to_reporting(
         repository_path,
         bare,
         selected,
@@ -661,8 +835,8 @@ pub(crate) fn perform_reporting_rebased(
             if head_was_detached { Some(head_id) } else { Some(actual) }
         },
     );
-    let mut notice = match moved {
-        Ok(notice) => notice,
+    let (mut notice, mut checkout_changes) = match moved {
+        Ok(outcome) => outcome,
         Err(err) => {
             let err = match saved {
                 Some(stash) => match apply_review_stash(repository_path, bare, &workdir, stash) {
@@ -674,27 +848,35 @@ pub(crate) fn perform_reporting_rebased(
             return Err(err);
         }
     };
+    ref_changes.append(&mut checkout_changes);
     if let Some(saved) = saved
         && let Some(warning) = saved.warning
     {
         append_notice(&mut notice, warning);
     }
-    if crosses_review_boundary
-        && let Some(review) = destination_review
-        && let Some(stash) = find_review_stash(repository_path, bare, &review)?
-    {
-        append_notice(&mut notice, apply_review_stash(repository_path, bare, &workdir, stash)?);
+    if crosses_review_boundary && let Some(review) = destination_review {
+        match find_review_stash(repository_path, bare, &review) {
+            Ok(Some(stash)) => match apply_review_stash(repository_path, bare, &workdir, stash) {
+                Ok(message) => append_notice(&mut notice, message),
+                Err(err) => append_notice(&mut notice, format!("review stash remains: {err:#}")),
+            },
+            Ok(None) => {}
+            Err(err) => append_notice(&mut notice, format!("could not inspect the review stash: {err:#}")),
+        }
     }
-    if let Some(stash) = super::stash::find(repository_path, bare, super::stash::reference(selected)?)? {
-        append_notice(
-            &mut notice,
-            super::stash::apply(repository_path, bare, &workdir, stash)?,
-        );
+    match super::stash::reference(selected).and_then(|name| super::stash::find(repository_path, bare, name)) {
+        Ok(Some(stash)) => match super::stash::apply(repository_path, bare, &workdir, stash) {
+            Ok(message) => append_notice(&mut notice, message),
+            Err(err) => append_notice(&mut notice, format!("commit stash remains: {err:#}")),
+        },
+        Ok(None) => {}
+        Err(err) => append_notice(&mut notice, format!("could not inspect the commit stash: {err:#}")),
     }
     Ok(Perform::Complete {
         notice,
         selected,
         ref_rewrites,
+        ref_changes,
     })
 }
 
@@ -810,11 +992,20 @@ fn selected_pin(repository: &gix::Repository, selected: ObjectId) -> Result<Opti
     Ok(pins.into_iter().next())
 }
 
+#[cfg(test)]
 fn create_or_update_head_pin(
     repository: &gix::Repository,
     branch: &gix::refs::FullName,
     id: ObjectId,
 ) -> Result<history::Pin> {
+    Ok(create_or_update_head_pin_reporting(repository, branch, id)?.0)
+}
+
+fn create_or_update_head_pin_reporting(
+    repository: &gix::Repository,
+    branch: &gix::refs::FullName,
+    id: ObjectId,
+) -> Result<(history::Pin, Vec<super::undo::RefChange>)> {
     let name: gix::refs::FullName = history::HEAD_PIN_NAME
         .as_bstr()
         .try_into()
@@ -826,51 +1017,74 @@ fn create_or_update_head_pin(
             PreviousValue::MustExistAndMatch(reference.target().into_owned())
         });
     let target = Target::Symbolic(branch.clone());
-    repository
-        .edit_references([RefEdit {
-            change: Change::Update {
-                log: LogChange {
-                    mode: RefLog::AndReference,
-                    force_create_reflog: false,
-                    message: "tix remember HEAD branch".into(),
-                },
-                expected,
-                new: target.clone(),
+    let edit = RefEdit {
+        change: Change::Update {
+            log: LogChange {
+                mode: RefLog::AndReference,
+                force_create_reflog: false,
+                message: "tix remember HEAD branch".into(),
             },
-            name: name.clone(),
-            deref: false,
-        }])
+            expected,
+            new: target.clone(),
+        },
+        name: name.clone(),
+        deref: false,
+    };
+    let applied = repository
+        .edit_references([edit])
         .context("could not remember the branch HEAD was attached to")?;
-    Ok(history::Pin { name, target, id })
+    let changes = super::undo::changes_from_edits(applied)?;
+    Ok((history::Pin { name, target, id }, changes))
 }
 
-fn reconcile_head_pin(repository: &gix::Repository, workdir: &Path) -> Result<Option<String>> {
+fn reconcile_head_pin_reporting(
+    repository: &gix::Repository,
+    workdir: &Path,
+) -> Result<(Option<String>, Vec<super::undo::RefChange>)> {
     let Some(pin) = history::all_pins(repository)?.into_iter().find(history::Pin::is_head) else {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     };
     let head = repository.head().context("could not read HEAD after time-travel")?;
     let detached = head.is_detached();
     let head_id = head.id().map(gix::Id::detach);
     drop(head);
     if !detached {
-        return Ok(delete_pin(repository, &pin)
-            .err()
-            .map(|err| format!("HEAD pin remains: {err:#}")));
+        return Ok(match delete_pin_reporting(repository, &pin) {
+            Ok(changes) => (None, changes),
+            Err(err) => (Some(format!("HEAD pin remains: {err:#}")), Vec::new()),
+        });
     }
     if head_id != Some(pin.id) {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     }
     let branch = pin.target.try_name().context("the HEAD pin is not symbolic")?;
     if let Err(err) = checkout_branch(workdir, branch) {
-        return Ok(Some(format!(
-            "could not reattach HEAD to {}: {err:#}; HEAD pin remains",
-            branch.shorten()
-        )));
+        return Ok((
+            Some(format!(
+                "could not reattach HEAD to {}: {err:#}; HEAD pin remains",
+                branch.shorten()
+            )),
+            Vec::new(),
+        ));
     }
-    Ok(Some(match delete_pin(repository, &pin) {
-        Ok(()) => format!("reattached HEAD to {}", branch.shorten()),
-        Err(err) => format!("reattached HEAD to {}; HEAD pin remains: {err:#}", branch.shorten()),
-    }))
+    let mut head_change = vec![super::undo::RefChange {
+        name: "HEAD".try_into().expect("valid reference name"),
+        before: super::undo::State::Object(pin.id),
+        after: super::undo::State::Symbolic(branch.to_owned()),
+    }];
+    Ok(match delete_pin_reporting(repository, &pin) {
+        Ok(mut changes) => {
+            head_change.append(&mut changes);
+            (Some(format!("reattached HEAD to {}", branch.shorten())), head_change)
+        }
+        Err(err) => (
+            Some(format!(
+                "reattached HEAD to {}; HEAD pin remains: {err:#}",
+                branch.shorten()
+            )),
+            head_change,
+        ),
+    })
 }
 
 pub(crate) fn create_or_reuse_pin(
@@ -879,11 +1093,22 @@ pub(crate) fn create_or_reuse_pin(
     id: ObjectId,
     reflog_message: &str,
 ) -> Result<(history::Pin, bool)> {
+    let (pin, created, _) = create_or_reuse_pin_reporting(repository, target, id, reflog_message)?;
+    Ok((pin, created))
+}
+
+pub(crate) fn create_or_reuse_pin_reporting(
+    repository: &gix::Repository,
+    target: Target,
+    id: ObjectId,
+    reflog_message: &str,
+) -> Result<(history::Pin, bool, Vec<super::undo::RefChange>)> {
     let pins = history::all_pins(repository)?;
     if let Some(pin) = pins.iter().find(|pin| !pin.is_head() && pin.target == target) {
-        return Ok((pin.clone(), false));
+        return Ok((pin.clone(), false, Vec::new()));
     }
-    Ok((create_pin(repository, target, id, reflog_message)?, true))
+    let (pin, changes) = create_pin_reporting(repository, target, id, reflog_message)?;
+    Ok((pin, true, changes))
 }
 
 pub(crate) fn create_pin(
@@ -892,6 +1117,15 @@ pub(crate) fn create_pin(
     id: ObjectId,
     reflog_message: &str,
 ) -> Result<history::Pin> {
+    Ok(create_pin_reporting(repository, target, id, reflog_message)?.0)
+}
+
+pub(crate) fn create_pin_reporting(
+    repository: &gix::Repository,
+    target: Target,
+    id: ObjectId,
+    reflog_message: &str,
+) -> Result<(history::Pin, Vec<super::undo::RefChange>)> {
     let hex = id.to_hex().to_string();
     let mut suffix_len = 8.min(hex.len());
     let mut number = 2;
@@ -919,32 +1153,48 @@ pub(crate) fn create_pin(
             suffix_len = hex.len() + 1;
         }
     };
-    repository
-        .edit_references([RefEdit {
-            change: Change::Update {
-                log: LogChange {
-                    mode: RefLog::AndReference,
-                    force_create_reflog: false,
-                    message: reflog_message.into(),
-                },
-                expected: PreviousValue::MustNotExist,
-                new: target.clone(),
+    let edit = RefEdit {
+        change: Change::Update {
+            log: LogChange {
+                mode: RefLog::AndReference,
+                force_create_reflog: false,
+                message: reflog_message.into(),
             },
-            name: name.clone(),
-            deref: false,
-        }])
-        .context("could not create tix pin")?;
-    Ok(history::Pin { name, target, id })
+            expected: PreviousValue::MustNotExist,
+            new: target.clone(),
+        },
+        name: name.clone(),
+        deref: false,
+    };
+    let applied = repository.edit_references([edit]).context("could not create tix pin")?;
+    let changes = super::undo::changes_from_edits(applied)?;
+    Ok((history::Pin { name, target, id }, changes))
 }
 
 pub(super) fn delete_pin(repository: &gix::Repository, pin: &history::Pin) -> Result<()> {
-    repository
-        .edit_references([delete_pin_edit(pin)])
-        .context("could not remove tix pin")?;
-    Ok(())
+    delete_pin_reporting(repository, pin).map(drop)
 }
 
+pub(crate) fn delete_pin_reporting(
+    repository: &gix::Repository,
+    pin: &history::Pin,
+) -> Result<Vec<super::undo::RefChange>> {
+    let edit = delete_pin_edit(pin);
+    let applied = repository.edit_references([edit]).context("could not remove tix pin")?;
+    let changes = super::undo::changes_from_edits(applied)?;
+    Ok(changes)
+}
+
+#[cfg(test)]
 pub(crate) fn remove_pins(repository_path: &Path, bare: bool, selected: ObjectId) -> Result<usize> {
+    Ok(remove_pins_reporting(repository_path, bare, selected)?.0)
+}
+
+pub(crate) fn remove_pins_reporting(
+    repository_path: &Path,
+    bare: bool,
+    selected: ObjectId,
+) -> Result<(usize, Vec<super::undo::RefChange>)> {
     let repository =
         open_repository(repository_path, bare, false).context("could not open repository to remove pins")?;
     let pins: Vec<_> = history::all_pins(&repository)?
@@ -952,12 +1202,12 @@ pub(crate) fn remove_pins(repository_path: &Path, bare: bool, selected: ObjectId
         .filter(|pin| !pin.is_head() && pin.id == selected)
         .collect();
     if pins.is_empty() {
-        return Ok(0);
+        return Ok((0, Vec::new()));
     }
-    repository
-        .edit_references(pins.iter().map(delete_pin_edit))
-        .context("could not remove tix pins")?;
-    Ok(pins.len())
+    let edits: Vec<_> = pins.iter().map(delete_pin_edit).collect();
+    let applied = repository.edit_references(edits).context("could not remove tix pins")?;
+    let changes = super::undo::changes_from_edits(applied)?;
+    Ok((pins.len(), changes))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -966,7 +1216,11 @@ pub(crate) enum PinToggle {
     Removed(usize),
 }
 
-pub(crate) fn toggle_pin(repository_path: &Path, bare: bool, selected: ObjectId) -> Result<PinToggle> {
+pub(crate) fn toggle_pin_reporting(
+    repository_path: &Path,
+    bare: bool,
+    selected: ObjectId,
+) -> Result<(PinToggle, Vec<super::undo::RefChange>)> {
     let repository =
         open_repository(repository_path, bare, false).context("could not open repository to toggle a pin")?;
     let pins: Vec<_> = history::all_pins(&repository)?
@@ -974,11 +1228,13 @@ pub(crate) fn toggle_pin(repository_path: &Path, bare: bool, selected: ObjectId)
         .filter(|pin| !pin.is_head() && pin.id == selected)
         .collect();
     if pins.is_empty() {
-        create_or_reuse_pin(&repository, Target::Object(selected), selected, "tix TUI pin")?;
-        return Ok(PinToggle::Created);
+        let (_, _, changes) =
+            create_or_reuse_pin_reporting(&repository, Target::Object(selected), selected, "tix TUI pin")?;
+        return Ok((PinToggle::Created, changes));
     }
     drop(repository);
-    remove_pins(repository_path, bare, selected).map(PinToggle::Removed)
+    let (removed, changes) = remove_pins_reporting(repository_path, bare, selected)?;
+    Ok((PinToggle::Removed(removed), changes))
 }
 
 fn delete_pin_edit(pin: &history::Pin) -> RefEdit {
@@ -992,23 +1248,32 @@ fn delete_pin_edit(pin: &history::Pin) -> RefEdit {
     }
 }
 
-fn delete_deferred_refs(repository_path: &Path, bare: bool, refs: &[(gix::refs::FullName, ObjectId)]) -> Result<()> {
+fn delete_deferred_refs(
+    repository_path: &Path,
+    bare: bool,
+    refs: &[(gix::refs::FullName, ObjectId)],
+) -> Result<Vec<super::undo::RefChange>> {
     if refs.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let repository = open_repository(repository_path, bare, false)
         .context("could not reopen repository to finish reference deletions")?;
-    repository
-        .edit_references(refs.iter().map(|(name, old)| RefEdit {
+    let edits: Vec<_> = refs
+        .iter()
+        .map(|(name, old)| RefEdit {
             name: name.clone(),
             deref: false,
             change: Change::Delete {
                 expected: PreviousValue::MustExistAndMatch(Target::Object(*old)),
                 log: RefLog::AndReference,
             },
-        }))
+        })
+        .collect();
+    let applied = repository
+        .edit_references(edits)
         .context("could not delete the branch HEAD left during rebase")?;
-    Ok(())
+    let changes = super::undo::changes_from_edits(applied)?;
+    Ok(changes)
 }
 
 fn checkout_branch(workdir: &Path, name: &gix::refs::FullNameRef) -> Result<()> {
@@ -1484,7 +1749,10 @@ mod tests {
         assert!(advanced.view_tips.contains(&topic), "a symbolic pin follows its branch");
         drop(repository);
 
-        perform(&repository_path, false, topic, &graph, &[], &[], false)?.complete()?;
+        let returned = perform(&repository_path, false, topic, &graph, &[], &[], false)?;
+        let Perform::Complete { ref_changes, .. } = returned else {
+            return Err("returning through the HEAD pin must complete".into());
+        };
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
             repository.head_name()?.map(|name| name.as_bstr().to_owned()),
@@ -1492,6 +1760,25 @@ mod tests {
             "returning through a symbolic pin reattaches HEAD"
         );
         assert!(history::all_pins(&repository)?.is_empty(), "the used pin is removed");
+        super::super::undo::record(&repository, "return to branch", &ref_changes)?;
+        super::super::undo::plan_undo(&repository)?
+            .expect("the return can be undone")
+            .apply_with_worktrees(&repository)?;
+        assert!(repository.head()?.is_detached(), "undo restores the detached HEAD");
+        assert_eq!(repository.head_id()?.detach(), middle);
+        assert!(
+            history::all_pins(&repository)?.iter().any(history::Pin::is_head),
+            "undo restores the symbolic HEAD pin"
+        );
+        super::super::undo::plan_redo(&repository)?
+            .expect("the return can be redone")
+            .apply_with_worktrees(&repository)?;
+        assert_eq!(
+            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
+            Some(b"refs/heads/main".into()),
+            "redo reattaches HEAD"
+        );
+        assert!(history::all_pins(&repository)?.is_empty(), "redo consumes the HEAD pin");
 
         let detach = Command::new("git")
             .arg("-C")
@@ -1809,7 +2096,14 @@ mod tests {
         create_or_update_head_pin(&repository, &main, selected)?;
         drop(repository);
 
-        assert_eq!(toggle_pin(&repository_path, false, selected)?, PinToggle::Created);
+        let (toggle, created_changes) = toggle_pin_reporting(&repository_path, false, selected)?;
+        assert_eq!(toggle, PinToggle::Created);
+        let [created] = created_changes.as_slice() else {
+            return Err("creating one pin must report one reference change".into());
+        };
+        assert_eq!(created.before, super::super::undo::State::Missing);
+        assert_eq!(created.after, super::super::undo::State::Object(selected));
+        let pin_name = created.name.clone();
         let repository = crate::test_repository::open(fixture.path())?;
         let pins = history::all_pins(&repository)?;
         assert_eq!(
@@ -1819,7 +2113,14 @@ mod tests {
         );
         drop(repository);
 
-        assert_eq!(toggle_pin(&repository_path, false, selected)?, PinToggle::Removed(1));
+        let (toggle, removed_changes) = toggle_pin_reporting(&repository_path, false, selected)?;
+        assert_eq!(toggle, PinToggle::Removed(1));
+        let [removed] = removed_changes.as_slice() else {
+            return Err("removing one pin must report one reference change".into());
+        };
+        assert_eq!(removed.name, pin_name);
+        assert_eq!(removed.before, super::super::undo::State::Object(selected));
+        assert_eq!(removed.after, super::super::undo::State::Missing);
         let pins = history::all_pins(&crate::test_repository::open(fixture.path())?)?;
         assert!(pins.iter().any(history::Pin::is_head), "unpin preserves the HEAD pin");
         assert!(
@@ -1893,6 +2194,7 @@ mod tests {
         let repository_path = repository.git_dir().to_owned();
         let root = repository.rev_parse_single("main~2")?.detach();
         let main = repository.rev_parse_single("main")?.detach();
+        let topic = repository.rev_parse_single("topic")?.detach();
         let revisions = [OsString::from("main")];
         let graph = loaded_graph(&repository, &revisions)?;
         drop(repository);
@@ -1912,6 +2214,16 @@ mod tests {
             .args(["checkout", "--no-guess", "main"])
             .status()?;
         assert!(checkout.success());
+        git(
+            fixture.path(),
+            &["symbolic-ref", "refs/worktree/tix/pins/HEAD", "refs/heads/topic"],
+        )?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let head_pin_before = repository
+            .find_reference(history::HEAD_PIN_NAME.as_bstr())?
+            .target()
+            .into_owned();
+        drop(repository);
         assert!(
             Command::new("git")
                 .arg("-C")
@@ -1927,9 +2239,24 @@ mod tests {
         assert!(format!("{err:#}").contains("git checkout failed"));
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(repository.head_id()?.detach(), main, "failed checkout retains HEAD");
+        assert_eq!(
+            repository
+                .find_reference(history::HEAD_PIN_NAME.as_bstr())?
+                .target()
+                .into_owned(),
+            head_pin_before,
+            "failed checkout restores the existing HEAD pin exactly"
+        );
         let pins = history::all_pins(&repository)?;
-        assert_eq!(pins.len(), 1, "the destination pin survives a failed checkout");
-        assert_eq!(pins[0].id, root);
+        assert_eq!(pins.len(), 2, "failed checkout neither loses nor creates pins");
+        assert!(
+            pins.iter().any(|pin| pin.is_head() && pin.id == topic),
+            "the reversed provisional update follows the original remembered branch"
+        );
+        assert!(
+            pins.iter().any(|pin| !pin.is_head() && pin.id == root),
+            "the destination pin survives a failed checkout"
+        );
         Ok(())
     }
 
@@ -1950,7 +2277,7 @@ mod tests {
             "preparing the exact merge result changes no repository state"
         );
 
-        let (_notice, conflict_id, _) = conflict.accept()?;
+        let (_notice, conflict_id, _, _) = conflict.accept()?;
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
             repository.head_id()?.detach(),

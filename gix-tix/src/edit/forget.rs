@@ -8,6 +8,7 @@ use super::rebase;
 pub(crate) struct Outcome {
     pub selected: Option<ObjectId>,
     pub review_return: Option<gix::refs::FullName>,
+    pub ref_changes: Vec<super::undo::RefChange>,
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -50,9 +51,11 @@ pub(crate) fn perform(repo: gix::Repository, graph: &crate::history::HistoryGrap
             deletions,
         )
     }?;
+    let outcome = result.complete()?;
     Ok(Outcome {
-        selected: result.complete()?.selected,
+        selected: outcome.selected,
         review_return,
+        ref_changes: outcome.ref_changes,
     })
 }
 

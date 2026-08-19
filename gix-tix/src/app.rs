@@ -63,6 +63,13 @@ pub(crate) struct Notice {
     pub text: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UndoPosition {
+    applied: usize,
+    total: usize,
+    title: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ChangeKind {
     Added,
@@ -327,6 +334,8 @@ pub(crate) enum CopyKind {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Action {
     Cancelled,
+    Undo,
+    Redo,
     MoveUp,
     MoveDown,
     MoveUpBy(usize),
@@ -397,6 +406,8 @@ pub(crate) enum Action {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Effect {
     Cancel,
+    Undo,
+    Redo,
     CopyId(ObjectId),
     CopyPath(BString),
     CopyAuthor(&'static Author),
@@ -552,6 +563,7 @@ pub(crate) struct App {
     pub copy_feedback: Option<CopyKind>,
     pub(crate) focus_feedback: Option<&'static str>,
     notice: Option<Notice>,
+    undo_position: Option<UndoPosition>,
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
     pub(crate) commit_expanded: bool,
@@ -659,6 +671,7 @@ impl App {
             copy_feedback: None,
             focus_feedback: None,
             notice: None,
+            undo_position: None,
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
             commit_expanded: false,
@@ -786,6 +799,27 @@ impl App {
             }),
             (None, notice) => notice.cloned(),
         }
+    }
+
+    pub(crate) fn show_undo_position(&mut self, applied: usize, total: usize, title: impl Into<String>) {
+        let applied = applied.min(total);
+        let title = if applied == 0 {
+            "start of undo history".into()
+        } else {
+            title.into()
+        };
+        self.leave_success(format!("{title} · {applied} undo · {} redo", total - applied));
+        self.undo_position = Some(UndoPosition { applied, total, title });
+    }
+
+    pub(crate) fn undo_position(&self) -> Option<(usize, usize, &str)> {
+        self.undo_position
+            .as_ref()
+            .map(|position| (position.applied, position.total, position.title.as_str()))
+    }
+
+    pub(crate) fn dismiss_undo_position(&mut self) {
+        self.undo_position = None;
     }
 
     pub(crate) fn configure_hidden_filter(&mut self, present: bool) {
@@ -1310,6 +1344,9 @@ impl App {
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         self.notice = None;
+        if !matches!(&action, Action::Undo | Action::Redo) {
+            self.undo_position = None;
+        }
         if !matches!(&action, Action::Forget) {
             self.forget_confirmation = None;
         }
@@ -1381,6 +1418,8 @@ impl App {
         }
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
+            Action::Undo if self.undo_redo_allowed() => return vec![Effect::Undo],
+            Action::Redo if self.undo_redo_allowed() => return vec![Effect::Redo],
             Action::MoveUp if self.changes_focus.is_some() => self.move_changes(1, false),
             Action::MoveDown if self.changes_focus.is_some() => self.move_changes(1, true),
             Action::MoveUpBy(distance) if self.changes_focus.is_some() => self.move_changes(distance, false),
@@ -1904,6 +1943,13 @@ impl App {
             _ => {}
         }
         Vec::new()
+    }
+
+    fn undo_redo_allowed(&self) -> bool {
+        self.pending_rebase_conflict.is_none()
+            && !self.rebase_continuation_pending
+            && !self.worktree_conflicted
+            && self.reachable_rows.is_none()
     }
 
     pub(crate) fn start_lane_computation(&mut self) -> Option<Vec<SharedCommitRow>> {
@@ -3586,6 +3632,42 @@ mod tests {
             .expect("a loading app starts lane computation");
         let (rows, graph, lane_time) = compute_lanes(rows);
         app.finish_lane_computation(rows, graph, lane_time);
+    }
+
+    #[test]
+    fn undo_and_redo_retain_their_position_until_another_action() {
+        let mut app = App::new(2);
+        app.show_undo_position(9, 4, "reword commit");
+        assert_eq!(app.undo_position(), Some((4, 4, "reword commit")));
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some("reword commit · 4 undo · 0 redo".into())
+        );
+
+        assert_eq!(app.update(Action::Undo), vec![Effect::Undo]);
+        assert_eq!(app.undo_position(), Some((4, 4, "reword commit")));
+        app.leave_error("undo failed");
+        assert_eq!(app.update(Action::Redo), vec![Effect::Redo]);
+        assert_eq!(app.undo_position(), Some((4, 4, "reword commit")));
+
+        app.show_undo_position(0, 4, "ignored at the sentinel");
+        assert_eq!(app.undo_position(), Some((0, 4, "start of undo history")));
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some("start of undo history · 0 undo · 4 redo".into())
+        );
+        assert!(app.update(Action::MoveDown).is_empty());
+        assert_eq!(app.undo_position(), None, "ordinary movement dismisses undo progress");
+    }
+
+    #[test]
+    fn mandatory_prompts_block_undo_without_dismissing_its_position() {
+        let mut app = App::new(2);
+        app.show_undo_position(1, 2, "reword commit");
+        app.arm_rebase_continuation();
+
+        assert!(app.update(Action::Undo).is_empty());
+        assert_eq!(app.undo_position(), Some((1, 2, "reword commit")));
     }
 
     #[test]

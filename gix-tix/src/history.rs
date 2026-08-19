@@ -1450,6 +1450,12 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
         }
         let name = reference.name().to_owned();
         let target = reference.target().into_owned();
+        if let Some(target_name) = target.try_name()
+            && crate::edit::undo::ref_chain_reaches_queue(repo, target_name)?
+        {
+            tracing::warn!(name = %name, %label, "ignoring tix reference into the undo queue");
+            continue;
+        }
         if name.as_bstr() == HEAD_PIN_NAME
             && !target
                 .try_name()
@@ -1465,6 +1471,10 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
                 continue;
             }
         };
+        if crate::edit::undo::is_queue_commit(repo, id)? {
+            tracing::warn!(name = %name, %label, "ignoring tix reference to an undo queue commit");
+            continue;
+        }
         match repo.find_header(id) {
             Ok(header) if header.kind() == gix::object::Kind::Commit => {}
             Ok(_) => {
@@ -1517,6 +1527,10 @@ pub(crate) fn referenced_refs(
             .rev_parse(revision)
             .with_context(|| format!("could not parse revision {revision}"))?;
         for reference in [spec.first_reference(), spec.second_reference()].into_iter().flatten() {
+            anyhow::ensure!(
+                !crate::edit::undo::ref_chain_reaches_queue(repo, reference.name.as_ref())?,
+                "the undo queue is not a selectable revision"
+            );
             insert_ref_chain(repo, reference.name.as_bstr(), &mut out)?;
         }
     }
@@ -1746,15 +1760,38 @@ fn resolve_revisions(repo: &gix::Repository, revisions: &[OsString], kind: &str)
         .map(|revision| {
             let revision = gix::path::os_str_into_bstr(revision)
                 .with_context(|| format!("{kind}revision {} is not valid UTF-8", revision.to_string_lossy()))?;
-            repo.rev_parse_single(revision)
-                .with_context(|| format!("could not resolve {kind}revision {revision}"))?
-                .object()
-                .with_context(|| format!("could not read {kind}revision"))?
-                .peel_to_kind(gix::object::Kind::Commit)
-                .with_context(|| format!("{kind}revision does not resolve to a commit"))
-                .map(|object| object.id)
+            resolve_revision(repo, revision)
+                .with_context(|| format!("could not resolve {kind}revision {revision}"))
+                .map(|(id, _reference)| id)
         })
         .collect()
+}
+
+pub(crate) fn resolve_revision(
+    repo: &gix::Repository,
+    revision: &BStr,
+) -> Result<(ObjectId, Option<gix::refs::FullName>)> {
+    let spec = repo.rev_parse(revision)?;
+    let first_reference = spec.first_reference().map(|reference| reference.name.clone());
+    for reference in [spec.first_reference(), spec.second_reference()].into_iter().flatten() {
+        anyhow::ensure!(
+            !crate::edit::undo::ref_chain_reaches_queue(repo, reference.name.as_ref())?,
+            "the undo queue is not a selectable revision"
+        );
+    }
+    let id = spec
+        .single()
+        .context("revision does not name a single object")?
+        .object()
+        .context("could not read revision")?
+        .peel_to_kind(gix::object::Kind::Commit)
+        .context("revision does not resolve to a commit")?
+        .id;
+    anyhow::ensure!(
+        !crate::edit::undo::is_queue_commit(repo, id)?,
+        "the undo queue is not a selectable revision"
+    );
+    Ok((id, first_reference))
 }
 
 impl Authors {
@@ -1809,7 +1846,7 @@ pub(crate) fn decorations_excluding(
             Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
         };
         let full_name = reference.name().to_owned();
-        if excluded.contains(full_name.as_bstr()) {
+        if excluded.contains(full_name.as_bstr()) || crate::edit::undo::is_queue_ref(full_name.as_bstr()) {
             continue;
         }
         if full_name.as_bstr() == HEAD_PIN_NAME {
@@ -2284,6 +2321,66 @@ mod tests {
         let explicit = snapshot(&repo, &[OsString::from("main")], &[OsString::from("topic")], false)?;
         assert!(explicit.view.contains_key(b"refs/heads/main".as_bstr()));
         assert!(explicit.hidden.contains_key(b"refs/heads/topic".as_bstr()));
+        Ok(())
+    }
+
+    #[test]
+    fn undo_queue_revisions_are_private_but_retained_commits_remain_selectable() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let retained = repo.head_id()?.detach();
+        let retained_ref: gix::refs::FullName = "refs/heads/undo-retained".try_into()?;
+        repo.reference(
+            retained_ref.clone(),
+            retained,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "prepare retained undo commit",
+        )?;
+        let entry = crate::edit::undo::record(
+            &repo,
+            "retain commit",
+            &[crate::edit::undo::RefChange {
+                name: retained_ref,
+                before: crate::edit::undo::State::Missing,
+                after: crate::edit::undo::State::Object(retained),
+            }],
+        )?
+        .expect("the reference change creates an undo entry");
+        let sentinel = repo
+            .find_commit(entry)?
+            .parent_ids()
+            .next()
+            .context("the undo entry has its queue predecessor")?
+            .detach();
+
+        for revision in [
+            crate::edit::undo::TIP_REF.to_owned(),
+            crate::edit::undo::CURSOR_REF.to_owned(),
+            entry.to_string(),
+            sentinel.to_string(),
+        ] {
+            let revision = BString::from(revision);
+            assert!(
+                resolve_revision(&repo, revision.as_bstr()).is_err(),
+                "queue revision {revision} is not selectable"
+            );
+            assert!(
+                snapshot(&repo, &[revision.to_os_str()?.to_owned()], &[], false).is_err(),
+                "queue revision {revision} cannot enter a history view"
+            );
+        }
+
+        let retained_revision = BString::from(retained.to_string());
+        assert_eq!(
+            resolve_revision(&repo, retained_revision.as_bstr())?.0,
+            retained,
+            "a commit retained as a non-first queue parent stays selectable"
+        );
+        assert_eq!(
+            snapshot(&repo, &[retained_revision.to_os_str()?.to_owned()], &[], false)?.view_tips,
+            [retained],
+            "retention does not make an ordinary commit private"
+        );
         Ok(())
     }
 
@@ -2895,6 +2992,14 @@ mod tests {
             gix::refs::transaction::PreviousValue::MustNotExist,
             "test tree revisions",
         )?;
+        for name in [crate::edit::undo::TIP_REF, crate::edit::undo::CURSOR_REF] {
+            repo.reference(
+                name,
+                repo.head_id()?,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "test undo reference filtering",
+            )?;
+        }
         let names = |include_tags| {
             ref_tree_revisions(&repo, include_tags).map(|revisions| {
                 revisions
@@ -2923,6 +3028,12 @@ mod tests {
                 .iter()
                 .all(|name| !name.starts_with("refs/worktree/tix/pins/")),
             "ordinary pins never become tree traversal tips"
+        );
+        assert!(
+            with_tags
+                .iter()
+                .all(|name| !crate::edit::undo::is_queue_ref(name.as_bytes().into())),
+            "undo queue refs never become tree traversal tips"
         );
         Ok(())
     }

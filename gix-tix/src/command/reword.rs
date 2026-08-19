@@ -137,6 +137,7 @@ fn finish(repository: &gix::Repository, outcome: crate::edit::reword::Outcome) -
         None => println!("no reword performed: the edited commit was unchanged"),
     }
     super::print_ref_rewrites(repository, &outcome.ref_rewrites)?;
+    super::record_undo(repository, "reword commit", Ok(outcome.ref_changes));
     Ok(())
 }
 
@@ -145,12 +146,18 @@ fn finish_editor(
     outcome: crate::edit::reword::Outcome,
     original: gix::ObjectId,
 ) -> Result<()> {
+    let title = if outcome.commit.is_some() {
+        "reword commit"
+    } else {
+        "edit commit enrichment"
+    };
     match (outcome.commit, outcome.enrichment) {
         (Some(id), _) => println!("{}", crate::change_id::display(repository, id, 7)?),
         (None, Some(_)) => println!("{}", crate::change_id::display(repository, original, 7)?),
         (None, None) => println!("no reword performed: the edited commit was unchanged"),
     }
     super::print_ref_rewrites(repository, &outcome.ref_rewrites)?;
+    super::record_undo(repository, title, Ok(outcome.ref_changes));
     Ok(())
 }
 

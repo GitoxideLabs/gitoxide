@@ -805,11 +805,20 @@ fn pinnable_kind(kind: DecorationKind) -> Option<DecorationKind> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn pin_references(
     repository: &gix::Repository,
     id: ObjectId,
     kinds: &[DecorationKind],
 ) -> anyhow::Result<Vec<crate::history::Pin>> {
+    pin_references_reporting(repository, id, kinds).map(|(pins, _changes)| pins)
+}
+
+pub(crate) fn pin_references_reporting(
+    repository: &gix::Repository,
+    id: ObjectId,
+    kinds: &[DecorationKind],
+) -> anyhow::Result<(Vec<crate::history::Pin>, Vec<crate::edit::undo::RefChange>)> {
     let mut names = Vec::new();
     for reference in repository
         .references()
@@ -839,18 +848,27 @@ pub(crate) fn pin_references(
     }
     names.sort();
     names.dedup();
-    names
-        .into_iter()
-        .map(|name| {
-            crate::edit::time_travel::create_or_reuse_pin(
-                repository,
-                gix::refs::Target::Symbolic(name),
-                id,
-                "tix ref-tree",
-            )
-            .map(|(pin, _created)| pin)
-        })
-        .collect()
+    let mut pins = Vec::new();
+    let mut changes = Vec::new();
+    for name in names {
+        let (pin, created) = crate::edit::time_travel::create_or_reuse_pin(
+            repository,
+            gix::refs::Target::Symbolic(name),
+            id,
+            "tix ref-tree",
+        )?;
+        if created {
+            changes.push(crate::edit::undo::RefChange {
+                name: pin.name.clone(),
+                before: crate::edit::undo::State::Missing,
+                after: crate::edit::undo::State::Symbolic(
+                    pin.target.try_name().expect("a ref-tree pin is symbolic").to_owned(),
+                ),
+            });
+        }
+        pins.push(pin);
+    }
+    Ok((pins, changes))
 }
 
 impl Overview {

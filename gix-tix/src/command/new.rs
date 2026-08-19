@@ -46,7 +46,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .context("author is not valid UTF-8")?;
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
-    let prepared = crate::edit::create::prepare_from(repository, parent, source, author.as_deref(), args.todo)?;
+    let prepared = crate::edit::create::prepare_from(repository, parent, source, author, args.todo)?;
     if prepared.is_empty && !args.allow_empty {
         anyhow::bail!("the new commit would be empty; use --allow-empty to create it anyway");
     }
@@ -79,6 +79,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .context("creating a commit did not produce a selection")?;
     println!("{}", crate::change_id::display(&repository, selected, 7)?);
     super::print_ref_rewrites(&repository, &outcome.ref_rewrites)?;
+    super::record_undo(&repository, "create commit", Ok(outcome.ref_changes));
     Ok(())
 }
 

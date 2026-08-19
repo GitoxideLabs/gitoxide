@@ -10,6 +10,7 @@ pub enum Kind {
     Spill,
 }
 
+#[cfg(test)]
 #[tracing::instrument(skip_all, fields(?kind))]
 pub fn perform(
     repo: gix::Repository,
@@ -18,6 +19,15 @@ pub fn perform(
     selected_path: Option<(&PathChange, Option<ObjectId>)>,
 ) -> Result<Option<ObjectId>> {
     Ok(perform_inner(repo, graph, kind, selected_path, false)?.and_then(|outcome| outcome.selected))
+}
+
+pub(crate) fn perform_with_changes(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    kind: Kind,
+    selected_path: Option<(&PathChange, Option<ObjectId>)>,
+) -> Result<Option<rebase::Outcome>> {
+    perform_inner(repo, graph, kind, selected_path, false)
 }
 
 pub(crate) fn perform_reporting(

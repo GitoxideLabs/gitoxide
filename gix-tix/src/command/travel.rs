@@ -98,6 +98,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
             notice,
             selected,
             ref_rewrites,
+            ref_changes,
         } => {
             let repository = crate::open_repository(&repository_path, bare, false)
                 .context("could not reopen repository after time-travel")?;
@@ -110,12 +111,14 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
                 )?
             );
             super::print_ref_rewrites(&repository, &ref_rewrites)?;
+            super::record_undo(&repository, "time travel", Ok(ref_changes));
         }
         crate::edit::time_travel::Perform::Conflict(conflict) if args.materialize_conflicts => {
-            let (notice, _, ref_rewrites) = conflict.accept()?;
+            let (notice, _, ref_rewrites, ref_changes) = conflict.accept()?;
             let repository = crate::open_repository(&repository_path, bare, false)
                 .context("could not reopen repository after materializing time-travel")?;
             super::print_ref_rewrites(&repository, &ref_rewrites)?;
+            super::record_undo(&repository, "materialize time-travel conflict", Ok(ref_changes));
             anyhow::bail!("{notice}");
         }
         crate::edit::time_travel::Perform::Conflict(_) => {

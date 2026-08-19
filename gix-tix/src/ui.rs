@@ -1393,6 +1393,9 @@ pub(crate) fn draw_with_worktree(
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
     if let (Some(area), Some(notice)) = (notice_area, notice.as_ref()) {
         render_notice(frame, area, notice);
+        if let Some((applied, total, _)) = app.undo_position() {
+            render_undo_progress(frame, area, notice.kind, applied, total);
+        }
     }
     let prefix_popup_area = prefix_popup
         .filter(|_| prefix_popup_allowed)
@@ -1407,6 +1410,32 @@ pub(crate) fn draw_with_worktree(
             .collect(),
         rows,
     }
+}
+
+fn render_undo_progress(frame: &mut Frame<'_>, area: Rect, kind: NoticeKind, applied: usize, total: usize) {
+    let bright_width = if total == 0 {
+        0
+    } else {
+        (u128::from(area.width) * applied.min(total) as u128 / total as u128) as u16
+    };
+    let (bright, dim) = match kind {
+        NoticeKind::Success => (Color::LightGreen, Color::Green),
+        NoticeKind::Attention => (Color::LightYellow, Color::Yellow),
+        NoticeKind::Error => (Color::LightRed, Color::Red),
+    };
+    frame.buffer_mut().set_style(
+        Rect::new(area.x, area.y, bright_width, area.height),
+        Style::default().bg(bright),
+    );
+    frame.buffer_mut().set_style(
+        Rect::new(
+            area.x.saturating_add(bright_width),
+            area.y,
+            area.width.saturating_sub(bright_width),
+            area.height,
+        ),
+        Style::default().bg(dim),
+    );
 }
 
 fn history_position(app: &App) -> String {
@@ -2816,6 +2845,101 @@ mod tests {
                 .contains(Modifier::REVERSED)),
             "the complete clipped popout keeps its floating treatment"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn undo_progress_uses_the_message_line_without_shifting_the_body() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(4);
+        app.update(Action::ToggleInformation);
+        app.show_undo_position(1, 4, "reword commit");
+        let mut terminal = Terminal::new(TestBackend::new(80, 5))?;
+        let mut layout = None;
+
+        terminal.draw(|frame| {
+            layout = Some(super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                None,
+            ));
+        })?;
+
+        let layout = layout.as_ref().expect("drawing returns its layout");
+        assert_eq!(layout.history.x, 0, "undo progress does not shift history");
+        assert_eq!(layout.history.width, 80, "history retains the complete width");
+        let notice_y = (0..4)
+            .find(|y| rendered_line(&terminal, *y).contains("reword commit · 1 undo · 3 redo"))
+            .expect("the undo message is visible");
+        assert!(
+            rendered_line(&terminal, notice_y).contains("reword commit · 1 undo · 3 redo"),
+            "the message line names the current operation"
+        );
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(2, notice_y)].bg, Color::LightGreen);
+        assert_eq!(buffer[(20, notice_y)].bg, Color::LightGreen);
+        assert_eq!(buffer[(21, notice_y)].bg, Color::Green);
+        assert_eq!(buffer[(77, notice_y)].bg, Color::Green);
+        assert_eq!(buffer[(78, notice_y)].bg, Color::Reset, "the notice margin stays clear");
+        assert!(
+            rendered_line(&terminal, 4).starts_with("0 commits"),
+            "the footer remains full-width"
+        );
+
+        app.update(Action::MoveDown);
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                None,
+            );
+        })?;
+        assert_eq!(app.undo_position(), None, "ordinary movement dismisses undo progress");
+        Ok(())
+    }
+
+    #[test]
+    fn undo_progress_colors_all_notice_rows_and_handles_edges() -> Result<(), Box<dyn std::error::Error>> {
+        let mut terminal = Terminal::new(TestBackend::new(8, 2))?;
+        for (kind, applied, total, bright_width, bright, dim) in [
+            (NoticeKind::Success, 4, 4, 8, Color::LightGreen, Color::Green),
+            (NoticeKind::Success, 3, 4, 6, Color::LightGreen, Color::Green),
+            (NoticeKind::Success, 0, 4, 0, Color::LightGreen, Color::Green),
+            (NoticeKind::Success, 0, 0, 0, Color::LightGreen, Color::Green),
+            (NoticeKind::Attention, 3, 4, 6, Color::LightYellow, Color::Yellow),
+            (NoticeKind::Error, 3, 4, 6, Color::LightRed, Color::Red),
+        ] {
+            let notice = Notice {
+                kind,
+                text: "notice".into(),
+            };
+            terminal.draw(|frame| {
+                render_notice(frame, frame.area(), &notice);
+                render_undo_progress(frame, frame.area(), kind, applied, total);
+            })?;
+            let buffer = terminal.backend().buffer();
+            for y in 0..2 {
+                for x in 0..8 {
+                    assert_eq!(
+                        buffer[(x, y)].bg,
+                        if x < bright_width { bright } else { dim },
+                        "every row uses the same progress boundary"
+                    );
+                }
+            }
+            assert_eq!(buffer[(0, 0)].fg, Color::Black, "progress preserves notice text color");
+            assert!(
+                buffer[(0, 0)].modifier.contains(Modifier::BOLD),
+                "progress preserves notice emphasis"
+            );
+        }
         Ok(())
     }
 
