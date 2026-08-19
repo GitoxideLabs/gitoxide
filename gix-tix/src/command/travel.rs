@@ -1,19 +1,53 @@
-use std::ffi::OsString;
+use std::{
+    collections::{HashMap, HashSet},
+    ffi::OsString,
+};
 
 use anyhow::{Context, Result};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub(super) enum To {
+    /// Visit the oldest reachable root in HEAD's visible history.
+    First,
+    /// Visit HEAD's direct visible parent.
+    Parent,
+    /// Visit HEAD's direct visible child.
+    Child,
+    /// Visit the reachable leaf in HEAD's visible history.
+    Tip,
+}
+
+impl To {
+    fn name(self) -> &'static str {
+        match self {
+            To::First => "first",
+            To::Parent => "parent",
+            To::Child => "child",
+            To::Tip => "tip",
+        }
+    }
+}
+
 #[derive(Debug, clap::Args)]
+#[command(group(
+    clap::ArgGroup::new("destination")
+        .required(true)
+        .multiple(false)
+        .args(["revision", "to"])
+))]
 pub(super) struct Args {
     /// Check out an encountered replay conflict and write its unmerged index.
     #[arg(long)]
     pub(super) materialize_conflicts: bool,
     /// Revision resolving to the commit to visit.
     #[arg(value_name = "REVSPEC")]
-    pub(super) revision: OsString,
+    pub(super) revision: Option<OsString>,
+    /// Visit a commit relative to HEAD in the default Tix view.
+    #[arg(long, value_enum, value_name = "DESTINATION")]
+    pub(super) to: Option<To>,
 }
 
 pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
-    let (selected, resolved_graph) = super::resolve_commit(&repository, &args.revision, "time-travel destination")?;
     let head = repository.head().context("could not read HEAD before time-travel")?;
     let head_id = head
         .id()
@@ -21,6 +55,15 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .context("cannot time-travel from an unborn HEAD")?;
     let detached = head.is_detached();
     drop(head);
+    let (selected, resolved_graph) = match (&args.revision, args.to) {
+        (Some(revision), None) => super::resolve_commit(&repository, revision, "time-travel destination")?,
+        (None, Some(to)) => {
+            let graph = crate::edit::loaded_view_graph(&repository)?;
+            let selected = relative_destination(&repository, &graph, head_id, to)?;
+            (selected, Some(graph))
+        }
+        _ => anyhow::bail!("exactly one time-travel destination is required"),
+    };
     if selected == head_id {
         println!("already at {}", crate::change_id::display(&repository, selected, 7)?);
         return Ok(());
@@ -82,6 +125,117 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     Ok(())
 }
 
+fn relative_destination(
+    repository: &gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    head: gix::ObjectId,
+    to: To,
+) -> Result<gix::ObjectId> {
+    let order = graph.stored_commit_ids().collect::<Vec<_>>();
+    let stored = order.iter().copied().collect::<HashSet<_>>();
+    if !stored.contains(&head) {
+        anyhow::bail!("HEAD is not present in the default Tix view");
+    }
+
+    let candidates = match to {
+        To::Parent => visible_parents(graph, head, &stored),
+        To::Child => order
+            .iter()
+            .copied()
+            .filter(|id| graph.parents_of(*id).is_some_and(|parents| parents.contains(&head)))
+            .collect(),
+        To::First => first_candidates(graph, head, &stored, &order),
+        To::Tip => terminal_candidates(head, &children_by_parent(graph, &stored, &order), &order),
+    };
+    match candidates.as_slice() {
+        [candidate] => Ok(*candidate),
+        [] => anyhow::bail!("HEAD has no {} in the default Tix view", to.name()),
+        candidates => {
+            let candidates = candidates
+                .iter()
+                .map(|id| crate::change_id::display_short(repository, *id))
+                .collect::<Result<Vec<_>>>()?
+                .join("\n  ");
+            anyhow::bail!(
+                "--to {} is ambiguous; candidates:\n  {candidates}\ntravel to one directly with `tix travel REVSPEC`",
+                to.name()
+            )
+        }
+    }
+}
+
+fn visible_parents(
+    graph: &crate::history::HistoryGraph,
+    id: gix::ObjectId,
+    stored: &HashSet<gix::ObjectId>,
+) -> Vec<gix::ObjectId> {
+    graph
+        .parents_of(id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|parent| stored.contains(parent))
+        .collect()
+}
+
+fn first_candidates(
+    graph: &crate::history::HistoryGraph,
+    start: gix::ObjectId,
+    stored: &HashSet<gix::ObjectId>,
+    order: &[gix::ObjectId],
+) -> Vec<gix::ObjectId> {
+    let mut pending = vec![start];
+    let mut seen = HashSet::new();
+    let mut terminals = HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let parents = visible_parents(graph, id, stored);
+        if parents.is_empty() {
+            terminals.insert(id);
+        } else {
+            pending.extend(parents);
+        }
+    }
+    order.iter().copied().filter(|id| terminals.contains(id)).collect()
+}
+
+fn children_by_parent(
+    graph: &crate::history::HistoryGraph,
+    stored: &HashSet<gix::ObjectId>,
+    order: &[gix::ObjectId],
+) -> HashMap<gix::ObjectId, Vec<gix::ObjectId>> {
+    let mut children = HashMap::<_, Vec<_>>::new();
+    for &id in order {
+        for parent in visible_parents(graph, id, stored) {
+            children.entry(parent).or_default().push(id);
+        }
+    }
+    children
+}
+
+fn terminal_candidates(
+    start: gix::ObjectId,
+    adjacent: &HashMap<gix::ObjectId, Vec<gix::ObjectId>>,
+    order: &[gix::ObjectId],
+) -> Vec<gix::ObjectId> {
+    let mut pending = vec![start];
+    let mut seen = HashSet::new();
+    let mut terminals = HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        match adjacent.get(&id).filter(|next| !next.is_empty()) {
+            Some(next) => pending.extend(next),
+            None => {
+                terminals.insert(id);
+            }
+        }
+    }
+    order.iter().copied().filter(|id| terminals.contains(id)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{path::Path, process::Command};
@@ -98,10 +252,26 @@ mod tests {
         Ok(output.stdout)
     }
 
+    fn observable_state(path: &Path) -> gix_testtools::Result<(Vec<u8>, Vec<u8>)> {
+        Ok((
+            git(path, &["status", "--porcelain=v2", "--branch"])?,
+            git(path, &["show-ref"])?,
+        ))
+    }
+
     fn args(revision: &str) -> Args {
         Args {
             materialize_conflicts: false,
-            revision: revision.into(),
+            revision: Some(revision.into()),
+            to: None,
+        }
+    }
+
+    fn relative_args(to: To) -> Args {
+        Args {
+            materialize_conflicts: false,
+            revision: None,
+            to: Some(to),
         }
     }
 
@@ -182,6 +352,175 @@ mod tests {
     }
 
     #[test]
+    fn relative_targets_follow_the_current_default_view_component() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        let repository = crate::test_repository::open(path)?;
+        let tip = repository.head_id()?.detach();
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        let root = repository.rev_parse_single("HEAD~2")?.detach();
+        drop(repository);
+
+        let orphan = gix::ObjectId::from_hex(git(path, &["commit-tree", "HEAD^{tree}", "-m", "orphan"])?.trim())?;
+        let orphan = orphan.to_string();
+        git(path, &["update-ref", "refs/worktree/tix/pins/unrelated", &orphan])?;
+        let tip_hex = tip.to_string();
+        let upstream = gix::ObjectId::from_hex(
+            git(path, &["commit-tree", "HEAD^{tree}", "-p", &tip_hex, "-m", "upstream"])?.trim(),
+        )?
+        .to_string();
+        git(path, &["update-ref", "refs/remotes/origin/main", &upstream])?;
+        git(path, &["config", "branch.main.remote", "origin"])?;
+        git(path, &["config", "branch.main.merge", "refs/heads/main"])?;
+
+        run(crate::test_repository::open(path)?, relative_args(To::Tip))?;
+        assert_eq!(
+            crate::test_repository::open(path)?.head_id()?.detach(),
+            tip,
+            "tip travel at the attached tip is a no-op"
+        );
+        let before = observable_state(path)?;
+        let err = run(crate::test_repository::open(path)?, relative_args(To::Child))
+            .expect_err("the visible tip has no child");
+        assert!(format!("{err:#}").contains("no child"));
+        assert_eq!(
+            observable_state(path)?,
+            before,
+            "a missing child leaves the repository unchanged"
+        );
+
+        run(crate::test_repository::open(path)?, relative_args(To::Parent))?;
+        assert_eq!(
+            crate::test_repository::open(path)?.head_id()?.detach(),
+            middle,
+            "parent travels down by one commit"
+        );
+        run(crate::test_repository::open(path)?, relative_args(To::First))?;
+        assert_eq!(
+            crate::test_repository::open(path)?.head_id()?.detach(),
+            root,
+            "first reaches this component's oldest commit"
+        );
+        run(crate::test_repository::open(path)?, relative_args(To::First))?;
+        assert_eq!(
+            crate::test_repository::open(path)?.head_id()?.detach(),
+            root,
+            "first travel at the oldest commit is a no-op"
+        );
+
+        let before = observable_state(path)?;
+        let err = run(crate::test_repository::open(path)?, relative_args(To::Parent))
+            .expect_err("the visible root has no parent");
+        assert!(format!("{err:#}").contains("no parent"));
+        assert_eq!(
+            observable_state(path)?,
+            before,
+            "a missing parent leaves the repository unchanged"
+        );
+
+        run(crate::test_repository::open(path)?, relative_args(To::Child))?;
+        assert_eq!(
+            crate::test_repository::open(path)?.head_id()?.detach(),
+            middle,
+            "child travels up by one commit"
+        );
+        run(crate::test_repository::open(path)?, relative_args(To::Tip))?;
+        let repository = crate::test_repository::open(path)?;
+        assert_eq!(repository.head_id()?.detach(), tip, "tip reaches this component's leaf");
+        assert_eq!(
+            repository.head()?.referent_name().map(|name| name.as_bstr().to_owned()),
+            Some(b"refs/heads/main".as_bstr().to_owned()),
+            "travelling to the branch tip reattaches HEAD"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn relative_target_ambiguity_lists_every_candidate() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        let repository = crate::test_repository::open(path)?;
+        let old_tip = repository.head_id()?.detach();
+        let root = repository.rev_parse_single("HEAD~2")?.detach();
+        drop(repository);
+
+        let orphan = gix::ObjectId::from_hex(git(path, &["commit-tree", "HEAD^{tree}", "-m", "orphan"])?.trim())?;
+        let old_tip_hex = old_tip.to_string();
+        let orphan_hex = orphan.to_string();
+        let merge = gix::ObjectId::from_hex(
+            git(
+                path,
+                &[
+                    "commit-tree",
+                    "HEAD^{tree}",
+                    "-p",
+                    &old_tip_hex,
+                    "-p",
+                    &orphan_hex,
+                    "-m",
+                    "merge",
+                ],
+            )?
+            .trim(),
+        )?;
+        let merge_hex = merge.to_string();
+        let left = gix::ObjectId::from_hex(
+            git(path, &["commit-tree", "HEAD^{tree}", "-p", &merge_hex, "-m", "left"])?.trim(),
+        )?;
+        let right = gix::ObjectId::from_hex(
+            git(path, &["commit-tree", "HEAD^{tree}", "-p", &merge_hex, "-m", "right"])?.trim(),
+        )?;
+        git(path, &["update-ref", "refs/heads/main", &merge_hex, &old_tip_hex])?;
+        let left_hex = left.to_string();
+        let right_hex = right.to_string();
+        git(path, &["update-ref", "refs/worktree/tix/pins/left", &left_hex])?;
+        git(path, &["update-ref", "refs/worktree/tix/pins/right", &right_hex])?;
+
+        let repository = crate::test_repository::open(path)?;
+        let cases = [
+            (To::First, vec![root, orphan]),
+            (To::Parent, vec![old_tip, orphan]),
+            (To::Child, vec![left, right]),
+            (To::Tip, vec![left, right]),
+        ];
+        let expected = cases
+            .iter()
+            .map(|(to, candidates)| {
+                Ok::<_, anyhow::Error>((
+                    *to,
+                    candidates
+                        .iter()
+                        .map(|id| crate::change_id::display_short(&repository, *id))
+                        .collect::<Result<Vec<_>>>()?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        drop(repository);
+        let before = observable_state(path)?;
+        for (to, candidates) in expected {
+            let err = run(crate::test_repository::open(path)?, relative_args(to))
+                .expect_err("multiple relative destinations are ambiguous");
+            let message = format!("{err:#}");
+            for candidate in candidates {
+                assert!(
+                    message.contains(&candidate),
+                    "{to:?} ambiguity lists candidate {candidate}: {message}"
+                );
+            }
+            assert!(
+                message.contains("tix travel REVSPEC"),
+                "ambiguity suggests direct travel: {message}"
+            );
+            assert_eq!(
+                observable_state(path)?,
+                before,
+                "ambiguity leaves the repository unchanged"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn replay_conflicts_are_unobservable_until_materialization_is_requested() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
         let path = fixture.path();
@@ -222,7 +561,8 @@ mod tests {
             crate::test_repository::open(path)?,
             Args {
                 materialize_conflicts: true,
-                revision: tip.to_string().into(),
+                revision: Some(tip.to_string().into()),
+                to: None,
             },
         )
         .expect_err("a materialized conflict remains an incomplete command");
