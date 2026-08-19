@@ -210,7 +210,7 @@ without trading responsiveness for metadata that is not visible.
   selected row. Stale, malformed, unborn, and otherwise unreadable worktree
   entries are skipped without failing history loading.
 - The selected row uses `>` at the left. If the displayed worktree block is dirty,
-  `D` is shown at the `HEAD` row instead; a separately selected row retains `>`.
+  `🫟` is shown at the `HEAD` row instead; a separately selected row retains `>`.
 - Selection inversion covers the left marker, graph, commit marker, and hash.
   Its graph background is derived from the commit-marker color. The selected
   row's right-hand tail and contextual information always have blank margins and
@@ -751,7 +751,7 @@ space first; changes blocks adapt within the remaining history width.
   and refresh are blocked. Key-release events are not actions and leave it armed.
   Diagnostics warn when a conflict suspends the rebase and record whether it is
   accepted, discarded, or fails during checkout.
-- A checked-out unresolved index keeps `C` at `@`, overrides dirty `D`, and
+- A checked-out unresolved index keeps `C` at `@`, overrides dirty `🫟`, and
   disables time travel until all conflict stages are resolved. The worktree
   changes block is shown for resolution.
 - A materialized todo conflict keeps a high-contrast `REBASE PAUSED` attention notice until
