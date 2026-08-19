@@ -460,13 +460,15 @@ pub(crate) enum Alignment {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HistoryEntry {
     Commit(usize),
-    Segment { count: usize },
+    Segment { representative: usize, count: usize },
 }
 
 #[derive(Debug)]
 struct CompressedHistory {
     entries: Vec<HistoryEntry>,
     display_indices: HashMap<usize, usize>,
+    member_indices: HashMap<ObjectId, usize>,
+    members: Vec<Vec<usize>>,
     rows: Vec<SharedCommitRow>,
     graph: Graph,
 }
@@ -503,6 +505,8 @@ pub(crate) struct App {
     view_tips: HashSet<ObjectId>,
     compressed_history: Option<CompressedHistory>,
     compressed_anchor: Option<ObjectId>,
+    compressed_segment: Option<ObjectId>,
+    compressed_expanded: HashSet<ObjectId>,
     attributions: Vec<Attribution>,
     #[cfg(test)]
     test_lanes: Vec<String>,
@@ -608,6 +612,8 @@ impl App {
             view_tips: HashSet::new(),
             compressed_history: None,
             compressed_anchor: None,
+            compressed_segment: None,
+            compressed_expanded: HashSet::new(),
             attributions: Vec::new(),
             #[cfg(test)]
             test_lanes: Vec::new(),
@@ -712,7 +718,7 @@ impl App {
     }
 
     pub(crate) fn can_cycle_duplicate(&self) -> bool {
-        self.changes_focus.is_none() && self.next_duplicate().is_some()
+        self.changes_focus.is_none() && self.reachable_rows.is_none() && self.next_duplicate().is_some()
     }
 
     pub(crate) fn set_change_ids(&mut self, change_ids: HashMap<ObjectId, ChangeId>, duplicates: HashSet<ObjectId>) {
@@ -754,6 +760,8 @@ impl App {
             })
         } else if self.pending_rebase_conflict.is_some() {
             Some("rebase conflict · <enter> checkout for resolution · Esc cancel")
+        } else if self.selected_is_segment() && self.reachable_rows.is_some() {
+            Some("compressed segment · <enter> expand · Esc cancel")
         } else if self.review_return_selection_active() {
             Some("review return is missing · j/k select commit · <enter> finish detached · Esc cancel")
         } else if self.review_selection_active() {
@@ -808,11 +816,15 @@ impl App {
         self.view_tips.clear();
         self.view_tips.extend(tips.iter().copied());
         if self.alignment == Alignment::Compressed {
+            if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
+                self.compressed_anchor = Some(id);
+            }
             self.rebuild_compressed_history();
         }
     }
 
     pub(crate) fn arm_rebase_conflict(&mut self, id: ObjectId) {
+        self.materialize_compressed_selection();
         tracing::warn!(
             commit_id = %id,
             "rebase suspended on conflict; press <enter> to checkout for resolution"
@@ -846,6 +858,7 @@ impl App {
     }
 
     pub(crate) fn arm_rebase_continuation(&mut self) {
+        self.materialize_compressed_selection();
         self.rebase_continuation_pending = true;
         self.ensure_visible();
     }
@@ -866,6 +879,9 @@ impl App {
     pub(crate) fn set_worktree_conflicted(&mut self, conflicted: bool) {
         if self.worktree_conflicted == conflicted {
             return;
+        }
+        if conflicted {
+            self.materialize_compressed_selection();
         }
         self.worktree_conflicted = conflicted;
         if conflicted {
@@ -1094,7 +1110,18 @@ impl App {
     }
 
     pub(crate) fn selected_history_index(&self) -> Option<usize> {
-        self.selected.and_then(|selected| self.history_index(selected))
+        self.selected
+            .and_then(|selected| self.history_index(selected))
+            .or_else(|| {
+                let history = self.active_compressed_history()?;
+                let selected = self.compressed_segment?;
+                let index = *history.member_indices.get(&selected)?;
+                matches!(history.entries[index], HistoryEntry::Segment { .. }).then_some(index)
+            })
+    }
+
+    pub(crate) fn selected_is_segment(&self) -> bool {
+        self.compressed_segment.is_some() && self.selected_history_index().is_some()
     }
 
     pub(crate) fn visible_history_indices(&self, range: Range<usize>) -> Vec<usize> {
@@ -1115,25 +1142,134 @@ impl App {
     }
 
     fn compressed_history_suspended(&self) -> bool {
-        self.pending_rebase_conflict.is_some()
-            || self.rebase_continuation_pending
-            || self.worktree_conflicted
-            || self.reachability_anchor.is_some()
-            || self.review_return.is_some()
-            || self.stack_insert_base.is_some()
-            || self.reachable_rows.is_some()
+        self.pending_rebase_conflict.is_some() || self.rebase_continuation_pending || self.worktree_conflicted
     }
 
     fn rebuild_compressed_history(&mut self) {
-        self.compressed_history = (self.graph.is_some() && !self.rows.is_empty())
-            .then(|| CompressedHistory::new(&self.rows, &self.view_tips, self.compressed_anchor));
+        let previous_display = self.selected_history_index();
+        self.compressed_expanded.retain(|id| self.all_rows.contains_key(id));
+        let history = (self.graph.is_some() && !self.rows.is_empty()).then(|| {
+            CompressedHistory::new(
+                &self.rows,
+                &self.view_tips,
+                &self.hidden_rows,
+                &self.compressed_expanded,
+                self.compressed_anchor,
+            )
+        });
+        let selection = self.compressed_segment.and_then(|id| {
+            let history = history.as_ref()?;
+            let display = *history.member_indices.get(&id)?;
+            history.entries.get(display).copied()
+        });
+        let fallback = previous_display.and_then(|display| {
+            let history = history.as_ref()?;
+            history
+                .entries
+                .get(display.min(history.entries.len().saturating_sub(1)))
+                .copied()
+        });
+        self.compressed_history = history;
+        if self.compressed_segment.is_some() {
+            match selection.or(fallback) {
+                Some(HistoryEntry::Commit(index)) => {
+                    self.selected = Some(index);
+                    self.compressed_segment = None;
+                }
+                Some(HistoryEntry::Segment { representative, .. }) => {
+                    self.selected = None;
+                    self.compressed_segment = self.rows.get(representative).map(|row| row.id);
+                }
+                None => {
+                    self.selected = (!self.rows.is_empty()).then_some(0);
+                    self.compressed_segment = None;
+                }
+            }
+        }
+    }
+
+    fn materialize_compressed_selection(&mut self) {
+        let Some(id) = self.compressed_segment.take() else {
+            return;
+        };
+        self.selected = self.rows.iter().position(|row| row.id == id);
+    }
+
+    pub(crate) fn history_entry_selectable(&self, display: usize) -> bool {
+        let selectable = |index| {
+            self.reachable_rows.as_ref().is_none()
+                || (self.is_row_reachable(index) && self.reachable_row_selectable(index))
+        };
+        match self.history_entry(display) {
+            Some(HistoryEntry::Commit(index)) => selectable(index),
+            Some(HistoryEntry::Segment { .. }) => self
+                .active_compressed_history()
+                .and_then(|history| history.members.get(display))
+                .is_some_and(|members| members.iter().copied().any(selectable)),
+            None => false,
+        }
+    }
+
+    fn select_history_index(&mut self, display: usize) {
+        if !self.history_entry_selectable(display) {
+            return;
+        }
+        match self.history_entry(display) {
+            Some(HistoryEntry::Commit(index)) => self.select(index),
+            Some(HistoryEntry::Segment { representative, .. }) => {
+                let id = self.rows[representative].id;
+                let changed = self.selected.is_some() || self.compressed_segment != Some(id);
+                self.selected = None;
+                self.compressed_segment = Some(id);
+                self.pending_initial_selection = None;
+                self.commit_expanded = false;
+                self.actions_expanded = false;
+                self.enrich_expanded = false;
+                if changed {
+                    self.retry_failed_signatures();
+                }
+                self.follow_tail = false;
+                self.ensure_visible();
+            }
+            None => {}
+        }
+    }
+
+    fn expand_selected_segment(&mut self) -> bool {
+        let Some(display) = self.selected_history_index() else {
+            return false;
+        };
+        let Some(HistoryEntry::Segment { .. }) = self.history_entry(display) else {
+            return false;
+        };
+        let Some(members) = self
+            .active_compressed_history()
+            .and_then(|history| history.members.get(display))
+            .cloned()
+        else {
+            return false;
+        };
+        let Some(selected) = members.iter().copied().find(|index| {
+            self.reachable_rows.as_ref().is_none()
+                || (self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
+        }) else {
+            return false;
+        };
+        self.compressed_expanded
+            .extend(members.iter().map(|index| self.rows[*index].id));
+        self.compressed_segment = None;
+        self.rebuild_compressed_history();
+        self.select(selected);
+        true
     }
 
     fn restore_compressed_history_around_selection(&mut self) {
         if self.alignment != Alignment::Compressed {
             return;
         }
-        self.compressed_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+        if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
+            self.compressed_anchor = Some(id);
+        }
         self.rebuild_compressed_history();
         self.ensure_visible();
     }
@@ -1255,6 +1391,7 @@ impl App {
             Action::MoveDownBy(distance) => self.move_reachable(distance, true),
             Action::CycleDuplicate => {
                 if self.changes_focus.is_none()
+                    && self.reachable_rows.is_none()
                     && let Some(selected) = self.next_duplicate()
                 {
                     self.select(selected);
@@ -1306,8 +1443,8 @@ impl App {
                 self.ensure_changes_visible();
             }
             Action::First => {
-                if let Some(index) = self.first_selectable() {
-                    self.select(index);
+                if let Some(index) = (0..self.history_len()).find(|index| self.history_entry_selectable(*index)) {
+                    self.select_history_index(index);
                 }
             }
             Action::Last if self.changes_focus.is_some() => {
@@ -1316,15 +1453,16 @@ impl App {
                 changes.error = None;
                 self.ensure_changes_visible();
             }
-            Action::Last if self.last_selectable().is_some() => {
-                self.pending_initial_selection = None;
-                let previous = self.selected;
-                self.selected = self.last_selectable();
-                if self.selected != previous {
-                    self.retry_failed_signatures();
+            Action::Last => {
+                if let Some(index) = (0..self.history_len())
+                    .rev()
+                    .find(|index| self.history_entry_selectable(*index))
+                {
+                    self.pending_initial_selection = None;
+                    self.select_history_index(index);
+                    self.follow_tail = self.state == State::Loading;
+                    self.ensure_visible();
                 }
-                self.follow_tail = self.state == State::Loading;
-                self.ensure_visible();
             }
             Action::ToggleDate => {
                 self.date_mode = match self.date_mode {
@@ -1357,9 +1495,9 @@ impl App {
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
             Action::ToggleHistoryDisplay => self.history_display_expanded = !self.history_display_expanded,
-            Action::ToggleCommitGroup => self.commit_expanded = !self.commit_expanded,
-            Action::ToggleActions => self.actions_expanded = !self.actions_expanded,
-            Action::ToggleEnrich => self.enrich_expanded = !self.enrich_expanded,
+            Action::ToggleCommitGroup if !self.selected_is_segment() => self.commit_expanded = !self.commit_expanded,
+            Action::ToggleActions if !self.selected_is_segment() => self.actions_expanded = !self.actions_expanded,
+            Action::ToggleEnrich if !self.selected_is_segment() => self.enrich_expanded = !self.enrich_expanded,
             Action::ToggleInformation => self.information_expanded = !self.information_expanded,
             Action::CycleRefs => {
                 self.ref_mode = match self.ref_mode {
@@ -1376,14 +1514,30 @@ impl App {
                 }
             },
             Action::Refresh if matches!(self.state, State::Complete | State::Cancelled) => {
+                self.materialize_compressed_selection();
+                self.compressed_expanded.clear();
+                self.compressed_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+                if self.alignment == Alignment::Compressed {
+                    self.rebuild_compressed_history();
+                }
                 return vec![Effect::Reload(self.show_hidden)];
             }
             Action::ToggleHidden
                 if self.has_hidden_filter && matches!(self.state, State::Complete | State::Cancelled) =>
             {
+                self.materialize_compressed_selection();
+                self.compressed_expanded.clear();
+                self.compressed_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+                if self.alignment == Alignment::Compressed {
+                    self.rebuild_compressed_history();
+                }
                 return vec![Effect::Reload(!self.show_hidden)];
             }
             Action::ToggleAlign => {
+                let leaving_compressed = self.alignment == Alignment::Compressed;
+                if leaving_compressed {
+                    self.materialize_compressed_selection();
+                }
                 self.alignment = match self.alignment {
                     Alignment::Title => Alignment::Columns,
                     Alignment::Columns => Alignment::None,
@@ -1391,8 +1545,14 @@ impl App {
                     Alignment::Compressed => Alignment::Title,
                 };
                 if self.alignment == Alignment::Compressed {
+                    self.compressed_expanded.clear();
+                    self.compressed_segment = None;
                     self.compressed_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
                     self.rebuild_compressed_history();
+                } else if leaving_compressed {
+                    self.compressed_history = None;
+                    self.compressed_anchor = None;
+                    self.compressed_expanded.clear();
                 }
                 self.ensure_visible();
             }
@@ -1435,6 +1595,7 @@ impl App {
                 changes.error = None;
                 return vec![Effect::OpenDiff(pane, changes.selected)];
             }
+            Action::OpenDiff if self.expand_selected_segment() => {}
             Action::OpenDiff if self.review_return.is_some() => {
                 let (review, _) = self.review_return.expect("review return selection is active");
                 let Some(return_to) = self
@@ -1936,7 +2097,11 @@ impl App {
         if self.state != State::Computing {
             return;
         }
-        let selected = if std::mem::take(&mut self.select_top_after_refresh) {
+        let select_top = std::mem::take(&mut self.select_top_after_refresh);
+        let segment = (!select_top && self.selection_after_refresh.is_none())
+            .then_some(self.compressed_segment)
+            .flatten();
+        let selected = if select_top {
             self.selection_after_refresh = None;
             None
         } else {
@@ -1990,8 +2155,14 @@ impl App {
         self.selected = selected
             .and_then(|id| self.rows.iter().position(|row| row.id == id))
             .or_else(|| (!self.rows.is_empty()).then_some(0));
+        self.compressed_segment = segment;
+        if self.compressed_segment.is_some() {
+            self.selected = None;
+        }
         if self.alignment == Alignment::Compressed {
-            self.compressed_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+            if self.compressed_segment.is_none() {
+                self.compressed_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+            }
             self.rebuild_compressed_history();
         }
         self.state = State::Complete;
@@ -2010,6 +2181,7 @@ impl App {
 
     #[cfg(test)]
     pub(crate) fn reload(&mut self, show_hidden: bool) {
+        self.materialize_compressed_selection();
         self.reload_selection = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
         self.select_top_after_refresh = false;
         self.rows = Vec::new();
@@ -2028,6 +2200,8 @@ impl App {
         self.view_tips.clear();
         self.compressed_history = None;
         self.compressed_anchor = None;
+        self.compressed_segment = None;
+        self.compressed_expanded.clear();
         self.attributions = Vec::new();
         #[cfg(test)]
         self.test_lanes.clear();
@@ -2159,10 +2333,10 @@ impl App {
 
     fn move_selection(&mut self, distance: usize, down: bool) {
         self.pending_initial_selection = None;
-        let Some(selected) = self.selected else { return };
-        let Some(display_selected) = self.history_index(selected) else {
+        let Some(display_selected) = self.selected_history_index() else {
             return;
         };
+        let distance = distance.max(1);
         let target = if down {
             display_selected
                 .saturating_add(distance)
@@ -2170,12 +2344,22 @@ impl App {
         } else {
             display_selected.saturating_sub(distance)
         };
-        self.selected = self.nearest_selectable(target, down);
-        if self.selected != Some(selected) {
-            self.retry_failed_signatures();
+        if self.reachable_rows.is_some() {
+            let next = if down {
+                (display_selected + 1..self.history_len())
+                    .filter(|index| self.history_entry_selectable(*index))
+                    .min_by_key(|index| index.abs_diff(target))
+            } else {
+                (0..display_selected)
+                    .filter(|index| self.history_entry_selectable(*index))
+                    .min_by_key(|index| index.abs_diff(target))
+            };
+            if let Some(next) = next {
+                self.select_history_index(next);
+            }
+            return;
         }
-        self.follow_tail = false;
-        self.ensure_visible();
+        self.select_history_index(target);
     }
 
     fn next_duplicate(&self) -> Option<usize> {
@@ -2191,25 +2375,7 @@ impl App {
     }
 
     fn move_reachable(&mut self, distance: usize, down: bool) {
-        self.pending_initial_selection = None;
-        let (Some(selected), Some(reachable)) = (self.selected, self.reachable_rows.as_ref()) else {
-            self.move_selection(distance, down);
-            return;
-        };
-        let distance = distance.max(1);
-        let next = if down {
-            (selected + 1..self.rows.len())
-                .filter(|index| self.reachable_row_selectable(*index) && reachable.get(*index) == Some(&true))
-                .nth(distance - 1)
-        } else {
-            (0..selected)
-                .rev()
-                .filter(|index| self.reachable_row_selectable(*index) && reachable.get(*index) == Some(&true))
-                .nth(distance - 1)
-        };
-        if let Some(next) = next {
-            self.select(next);
-        }
+        self.move_selection(distance, down);
     }
 
     fn compute_reachable_rows(&mut self) {
@@ -2273,6 +2439,7 @@ impl App {
 
     fn select(&mut self, selected: usize) {
         self.pending_initial_selection = None;
+        self.compressed_segment = None;
         if !self.rows.is_empty() {
             let selected = selected.min(self.rows.len() - 1);
             if self.alignment == Alignment::Compressed
@@ -2331,6 +2498,7 @@ impl App {
         self.state == State::Complete
             && self.worktree_changes_available
             && self.changes_focus.is_none()
+            && !self.selected_is_segment()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && match self.selected.and_then(|index| self.rows.get(index)) {
                 Some(row) => !self.hidden_rows.contains(&row.id) && !self.known_merge_descendants.contains(&row.id),
@@ -2668,28 +2836,6 @@ impl App {
             })
     }
 
-    fn nearest_selectable(&self, target: usize, down: bool) -> Option<usize> {
-        let len = self.history_len();
-        if len == 0 {
-            return None;
-        }
-        let target = target.min(len - 1);
-        let entry = |index| match self.history_entry(index) {
-            Some(HistoryEntry::Commit(index)) => Some(index),
-            Some(HistoryEntry::Segment { .. }) | None => None,
-        };
-        if down {
-            (target..len)
-                .find_map(entry)
-                .or_else(|| (0..target).rev().find_map(entry))
-        } else {
-            (0..=target)
-                .rev()
-                .find_map(entry)
-                .or_else(|| (target + 1..len).find_map(entry))
-        }
-    }
-
     fn retry_failed_signatures(&mut self) {
         if self.signature_failures == 0 {
             return;
@@ -2730,6 +2876,7 @@ impl App {
             }
             return;
         };
+        self.compressed_segment = None;
         self.selected = Some(selected);
         if self.alignment == Alignment::Compressed
             && !self.compressed_history_suspended()
@@ -2860,7 +3007,13 @@ impl App {
 }
 
 impl CompressedHistory {
-    fn new(rows: &[SharedCommitRow], view_tips: &HashSet<ObjectId>, selected: Option<ObjectId>) -> Self {
+    fn new(
+        rows: &[SharedCommitRow],
+        view_tips: &HashSet<ObjectId>,
+        hidden_rows: &HashSet<ObjectId>,
+        expanded: &HashSet<ObjectId>,
+        selected: Option<ObjectId>,
+    ) -> Self {
         let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
         let mut children = vec![(0usize, 0usize); rows.len()];
         for (child, row) in rows.iter().enumerate() {
@@ -2870,15 +3023,23 @@ impl CompressedHistory {
                 }
             }
         }
-        let is_anchor = |id| view_tips.contains(&id) || selected == Some(id);
+        let is_anchor = |index: usize| {
+            let row = &rows[index];
+            view_tips.contains(&row.id)
+                || hidden_rows.contains(&row.id)
+                || expanded.contains(&row.id)
+                || selected == Some(row.id)
+                || row.parent_ids.len() != 1
+                || children[index].0 != 1
+        };
         let mut representatives = Vec::new();
-        let mut counts = Vec::new();
+        let mut members = Vec::<Vec<usize>>::new();
         let mut group_of = vec![usize::MAX; rows.len()];
         for (index, row) in rows.iter().enumerate() {
-            let joined = (!is_anchor(row.id))
+            let joined = (!is_anchor(index))
                 .then_some(children[index])
                 .and_then(|(count, child)| match count {
-                    1 if !is_anchor(rows[child].id)
+                    1 if !is_anchor(child)
                         && rows[child].parent_ids.len() == 1
                         && rows[child].parent_ids[0] == row.id
                         && group_of[child] != usize::MAX =>
@@ -2889,11 +3050,11 @@ impl CompressedHistory {
                 });
             let group = joined.unwrap_or_else(|| {
                 representatives.push(index);
-                counts.push(0);
+                members.push(Vec::new());
                 representatives.len() - 1
             });
             group_of[index] = group;
-            counts[group] += 1;
+            members[group].push(index);
         }
 
         let representative_ids: Vec<_> = representatives.iter().map(|index| rows[*index].id).collect();
@@ -2905,7 +3066,7 @@ impl CompressedHistory {
                     continue;
                 };
                 let parent_group = group_of[*parent_index];
-                if parent_group != group && !parents[group].contains(&representative_ids[parent_group]) {
+                if parent_group != group {
                     parents[group].push(representative_ids[parent_group]);
                 }
             }
@@ -2917,10 +3078,13 @@ impl CompressedHistory {
             let mut row = rows[representative].as_ref().clone();
             row.parent_ids = std::mem::take(&mut parents[group]);
             compact_rows.push(Arc::new(row));
-            entries.push(if is_anchor(rows[representative].id) {
+            entries.push(if is_anchor(representative) {
                 HistoryEntry::Commit(representative)
             } else {
-                HistoryEntry::Segment { count: counts[group] }
+                HistoryEntry::Segment {
+                    representative,
+                    count: members[group].len(),
+                }
             });
         }
         let graph = Graph::new(&compact_rows);
@@ -2932,9 +3096,16 @@ impl CompressedHistory {
                 HistoryEntry::Segment { .. } => None,
             })
             .collect();
+        let member_indices = members
+            .iter()
+            .enumerate()
+            .flat_map(|(display, members)| members.iter().map(move |index| (rows[*index].id, display)))
+            .collect();
         CompressedHistory {
             entries,
             display_indices,
+            member_indices,
+            members,
             rows: compact_rows,
             graph,
         }
@@ -4610,7 +4781,7 @@ mod tests {
     }
 
     #[test]
-    fn compressed_history_retains_tips_and_selection_and_skips_segments() {
+    fn compressed_history_retains_tips_and_selection_and_selects_segments() {
         let mut app = App::new(2);
         app.extend_commits(vec![
             row_with_parents(6, &[5]),
@@ -4632,25 +4803,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 HistoryEntry::Commit(0),
-                HistoryEntry::Segment { count: 2 },
+                HistoryEntry::Segment {
+                    representative: 1,
+                    count: 2,
+                },
                 HistoryEntry::Commit(3),
-                HistoryEntry::Segment { count: 2 },
+                HistoryEntry::Segment {
+                    representative: 4,
+                    count: 1,
+                },
+                HistoryEntry::Commit(5),
             ],
-            "linear commits between explicit anchors collapse into counted segments"
+            "linear commits between the retained endpoints and selection collapse into counted segments"
         );
         assert_eq!(
             app.render_lanes(0..app.history_len()).iter().collect::<Vec<_>>(),
-            ["● ", "○ ", "● ", "○ "],
+            ["● ", "○ ", "● ", "○ ", "● "],
             "segments reuse the canonical graph with a quieter ring marker"
         );
 
         app.update(Action::MoveUp);
-        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(6)));
+        assert!(app.selected_is_segment(), "navigation stops on a segment summary");
         app.update(Action::MoveDown);
         assert_eq!(
             app.selected.map(|index| app.rows[index].id),
             Some(id(3)),
-            "navigation crosses nonselectable segments"
+            "navigation returns from a summary to its adjacent retained commit"
         );
 
         app.select_commit(id(2));
@@ -4690,11 +4868,11 @@ mod tests {
             entries
                 .iter()
                 .filter_map(|entry| match entry {
-                    HistoryEntry::Segment { count } => Some(*count),
+                    HistoryEntry::Segment { count, .. } => Some(*count),
                     HistoryEntry::Commit(_) => None,
                 })
                 .sum::<usize>(),
-            5,
+            4,
             "every non-anchor commit is represented exactly once"
         );
         let lanes = app.render_lanes(0..app.history_len());
@@ -4707,7 +4885,7 @@ mod tests {
     }
 
     #[test]
-    fn compressed_history_temporarily_expands_for_target_selection() {
+    fn compressed_history_stays_active_for_target_selection() {
         let mut app = App::new(2);
         app.extend_commits(vec![
             row_with_parents(4, &[3]),
@@ -4719,17 +4897,362 @@ mod tests {
         app.set_view_tips(&[id(4)]);
         app.alignment = Alignment::None;
         app.update(Action::ToggleAlign);
-        assert_eq!(app.history_len(), 2);
+        assert_eq!(app.history_len(), 3);
 
         app.reachability_anchor = Some(id(4));
         app.compute_reachable_rows();
         assert_eq!(
             app.history_len(),
-            app.rows.len(),
-            "target selection uses the full history"
+            3,
+            "target selection retains the compressed projection"
         );
+        app.update(Action::MoveDown);
+        assert!(app.selected_is_segment(), "an eligible target segment is selectable");
+        app.update(Action::OpenDiff);
+        assert_eq!(app.history_len(), app.rows.len(), "Enter expands the eligible segment");
         app.clear_reachability_selection();
-        assert_eq!(app.history_len(), 2, "leaving target selection restores compression");
+        assert_eq!(
+            app.history_len(),
+            app.rows.len(),
+            "expanded segments remain open for the compressed cycle"
+        );
+    }
+
+    #[test]
+    fn compressed_history_keeps_graph_junctions_and_endpoints_as_commits() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(6, &[4]),
+            row_with_parents(5, &[3]),
+            row_with_parents(4, &[2]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        app.set_worktree_head(Some(id(6)), false);
+        complete(&mut app);
+        app.set_view_tips(&[id(6), id(5)]);
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+
+        for (n, description) in [
+            (6, "the current graph tip"),
+            (5, "the other graph tip"),
+            (2, "the shared merge base"),
+            (1, "the graph root"),
+        ] {
+            let canonical = app
+                .rows
+                .iter()
+                .position(|row| row.id == id(n))
+                .expect("the structural commit is present");
+            let display = app
+                .history_index(canonical)
+                .expect("structural commits have their own display row");
+            assert_eq!(
+                app.history_entry(display),
+                Some(HistoryEntry::Commit(canonical)),
+                "{description} remains a full commit"
+            );
+        }
+
+        app.select_commit(id(2));
+        assert!(
+            app.can_copy_insert(),
+            "a retained merge base is an ordinary insertion target"
+        );
+        assert_eq!(
+            app.update(Action::CopyInsert),
+            vec![Effect::Insert {
+                source: id(6),
+                base: id(6),
+                target: id(2),
+                copy: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn compressed_history_keeps_the_first_hidden_boundary_as_a_commit() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1])]);
+        app.extend_hidden_commits(vec![row_with_parents(1, &[0])]);
+        complete(&mut app);
+        app.set_view_tips(&[id(3)]);
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+
+        let boundary = app
+            .rows
+            .iter()
+            .position(|row| row.id == id(1))
+            .expect("the hidden boundary is present");
+        assert!(app.is_row_hidden(boundary));
+        let display = app
+            .history_index(boundary)
+            .expect("the hidden boundary has its own display row");
+        assert_eq!(app.history_entry(display), Some(HistoryEntry::Commit(boundary)));
+
+        app.select_commit(id(1));
+        assert!(
+            app.can_rebase(),
+            "the retained boundary keeps its existing base actions"
+        );
+        assert_eq!(
+            app.update(Action::Rebase),
+            vec![Effect::Rebase {
+                base: id(1),
+                onto: id(1),
+                commits: vec![id(3), id(2)],
+            }]
+        );
+    }
+
+    #[test]
+    fn compressed_segments_are_selectable_and_expand_in_place() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(6, &[5]),
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        let ordinary_lanes = app
+            .render_lanes(0..app.rows.len())
+            .iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        app.set_view_tips(&[id(6)]);
+        app.select_commit(id(3));
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+
+        app.update(Action::MoveUp);
+        assert!(app.selected_is_segment(), "navigation stops on the upper summary");
+        assert_eq!(app.selected_history_index(), Some(1));
+        app.set_worktree_head_unborn(true);
+        for action in [Action::ToggleCommitGroup, Action::ToggleActions, Action::ToggleEnrich] {
+            app.update(action);
+        }
+        assert!(!app.commit_expanded && !app.actions_expanded && !app.enrich_expanded);
+        assert!(
+            app.update(Action::NewEmptyCommit).is_empty(),
+            "a synthetic selection is not mistaken for an unborn HEAD"
+        );
+        assert!(
+            app.update(Action::OpenDiff).is_empty(),
+            "Enter expands instead of diffing a summary"
+        );
+        assert_eq!(
+            app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id),
+            Some(id(5)),
+            "expansion selects the newest commit represented by the summary"
+        );
+        assert!(
+            (0..app.history_len()).any(|index| matches!(app.history_entry(index), Some(HistoryEntry::Segment { .. }))),
+            "expanding one summary leaves the other summary compressed"
+        );
+
+        app.update(Action::Last);
+        app.update(Action::MoveUp);
+        assert!(app.selected_is_segment(), "navigation stops on the remaining summary");
+        assert!(app.update(Action::OpenDiff).is_empty());
+        assert_eq!(
+            (0..app.history_len())
+                .filter_map(|index| app.history_entry(index))
+                .collect::<Vec<_>>(),
+            (0..app.rows.len()).map(HistoryEntry::Commit).collect::<Vec<_>>(),
+            "expanding every summary produces the ordinary row sequence"
+        );
+        assert_eq!(
+            app.render_lanes(0..app.history_len())
+                .iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+            ordinary_lanes,
+            "fully expanded compression uses the ordinary graph"
+        );
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::OpenCommitDiff(TreeDiffTarget::Commit { id: id(2), parent: 0 })],
+            "Enter resumes its normal commit behavior after expansion"
+        );
+    }
+
+    #[test]
+    fn compressed_modal_navigation_only_selects_segments_with_eligible_members() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(6, &[5]),
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.set_view_tips(&[id(6)]);
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+
+        app.viewport_rows = 10;
+        app.reachable_rows = Some(vec![false, false, false, true, false, false]);
+        app.update(Action::PageDown);
+        assert!(
+            app.selected_is_segment(),
+            "paged navigation reaches a nearby eligible segment"
+        );
+        app.reachable_rows = Some(vec![false; 6]);
+        app.update(Action::OpenDiff);
+        assert!(
+            app.selected_is_segment(),
+            "an ineligible segment keeps its selection instead of expanding without a target"
+        );
+
+        app.select_commit(id(6));
+        app.reachable_rows = Some(vec![false, false, false, false, false, true]);
+        app.update(Action::MoveDown);
+        assert_eq!(
+            app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id),
+            Some(id(1)),
+            "navigation skips a segment without an eligible target"
+        );
+
+        app.select_commit(id(6));
+        app.reachable_rows = Some(vec![false, false, false, true, false, false]);
+        app.update(Action::MoveDown);
+        assert!(
+            app.selected_is_segment(),
+            "a segment containing an eligible target is selectable"
+        );
+        app.update(Action::OpenDiff);
+        assert_eq!(
+            app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id),
+            Some(id(3)),
+            "expansion selects the newest eligible member"
+        );
+    }
+
+    #[test]
+    fn compressed_selection_and_expansions_survive_in_place_refreshes() {
+        let commits = || {
+            vec![
+                row_with_parents(5, &[4]),
+                row_with_parents(4, &[3]),
+                row_with_parents(3, &[2]),
+                row_with_parents(2, &[1]),
+                row(1),
+            ]
+        };
+        let refresh = |app: &mut App| {
+            let rows = app
+                .start_refresh(commits().into(), &[id(5)], &[], false)
+                .expect("the in-place refresh computes lanes");
+            let (rows, graph, time) = compute_lanes(rows);
+            app.finish_lane_computation(rows, graph, time);
+        };
+        let mut app = App::new(10);
+        app.extend_commits(commits());
+        complete(&mut app);
+        app.set_view_tips(&[id(5)]);
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+        app.update(Action::MoveDown);
+
+        refresh(&mut app);
+        assert!(app.selected_is_segment(), "a synthetic selection survives by object ID");
+        app.update(Action::OpenDiff);
+        refresh(&mut app);
+        assert_eq!(
+            (0..app.history_len())
+                .filter_map(|index| app.history_entry(index))
+                .collect::<Vec<_>>(),
+            (0..app.rows.len()).map(HistoryEntry::Commit).collect::<Vec<_>>(),
+            "expanded members survive an in-place refresh"
+        );
+    }
+
+    #[test]
+    fn suspending_compression_materializes_a_segment_selection() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.set_view_tips(&[id(5)]);
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+        app.update(Action::MoveDown);
+        assert!(app.selected_is_segment());
+
+        app.set_worktree_conflicted(true);
+        assert_eq!(
+            app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id),
+            Some(id(4)),
+            "the segment representative becomes the full-history selection"
+        );
+        app.update(Action::MoveDown);
+        assert_eq!(
+            app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id),
+            Some(id(3))
+        );
+    }
+
+    #[test]
+    fn compressed_expansions_reset_on_mode_exit_and_full_reload() {
+        let commits = || {
+            vec![
+                row_with_parents(5, &[4]),
+                row_with_parents(4, &[3]),
+                row_with_parents(3, &[2]),
+                row_with_parents(2, &[1]),
+                row(1),
+            ]
+        };
+        let has_segment = |app: &App| {
+            (0..app.history_len()).any(|index| matches!(app.history_entry(index), Some(HistoryEntry::Segment { .. })))
+        };
+
+        let mut app = App::new(10);
+        app.extend_commits(commits());
+        complete(&mut app);
+        app.set_view_tips(&[id(5)]);
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+        app.update(Action::MoveDown);
+        assert!(app.selected_is_segment());
+        app.update(Action::OpenDiff);
+        assert!(!has_segment(&app), "the only linear summary is expanded");
+
+        app.update(Action::ToggleAlign);
+        app.update(Action::ToggleAlign);
+        app.update(Action::ToggleAlign);
+        app.update(Action::ToggleAlign);
+        assert_eq!(app.alignment, Alignment::Compressed);
+        assert!(has_segment(&app), "leaving compressed mode discards expansions");
+
+        app.update(Action::MoveDown);
+        if !app.selected_is_segment() {
+            app.update(Action::MoveDown);
+        }
+        assert!(app.selected_is_segment(), "a summary is available to expand again");
+        app.update(Action::OpenDiff);
+        app.reload(false);
+        app.set_view_tips(&[id(5)]);
+        app.extend_commits(commits());
+        complete(&mut app);
+        assert_eq!(app.alignment, Alignment::Compressed);
+        assert!(
+            has_segment(&app),
+            "a full reload discards expansions even for unchanged commit IDs"
+        );
     }
 
     #[test]

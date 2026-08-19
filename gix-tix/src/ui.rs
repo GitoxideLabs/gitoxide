@@ -324,17 +324,18 @@ pub(crate) fn draw_with_worktree(
 ) -> FrameLayout {
     let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
     let full_body = body;
-    let compared_parent = if app.changes_visible() {
+    let selected_segment = app.selected_is_segment();
+    let compared_parent = if app.changes_visible() && !selected_segment {
         tree_changes.and_then(|changes| changes.parent.map(|parent| parent.id))
     } else {
         None
     };
-    let tree_shown = app.changes_visible() && tree_changes.is_some();
+    let tree_shown = app.changes_visible() && !selected_segment && tree_changes.is_some();
     let worktree_shown =
         app.changes_visible() && app.changes_mode == Some(ChangesMode::Both) && worktree_changes.is_some();
     let tree_summary = tree_changes.map(|changes| changes_summary(ChangePane::Tree, app, changes));
     let worktree_summary = worktree_changes.map(|changes| changes_summary(ChangePane::Worktree, app, changes));
-    let mut commit_pane = app.show_commit.then(|| {
+    let mut commit_pane = (app.show_commit && !selected_segment).then(|| {
         let width = COMMIT_PANE_WIDTH.min(full_body.width / 2);
         let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(full_body);
         body.width = body.width.min(commits.width);
@@ -702,7 +703,7 @@ pub(crate) fn draw_with_worktree(
         .iter()
         .enumerate()
         .map(|(index, entry)| match (entry, &metadata[index]) {
-            (HistoryEntry::Segment { count }, _) => lanes
+            (HistoryEntry::Segment { count, .. }, _) => lanes
                 .lane(index)
                 .chars()
                 .count()
@@ -721,11 +722,11 @@ pub(crate) fn draw_with_worktree(
         .min(u16::MAX as usize);
     let horizontal_offset = app.horizontal_offset.min(max_offset);
     let selection_info = selection_info_line(
-        app.changes_visible()
+        (!selected_segment && app.changes_visible())
             .then_some(tree_changes)
             .flatten()
             .filter(|changes| changes.is_visible()),
-        app.selection_relation,
+        (!selected_segment).then_some(app.selection_relation).flatten(),
     );
     let selection_info_width = selection_info.width();
     let mut selection_info_area = None;
@@ -744,9 +745,23 @@ pub(crate) fn draw_with_worktree(
         let row_area = Rect::new(content.x, y, content.width, 1);
         let row_index = match visible_entries[index] {
             HistoryEntry::Commit(index) => index,
-            HistoryEntry::Segment { count } => {
+            HistoryEntry::Segment { count, .. } => {
+                let selected = selected_segment && selected == Some(start + index);
+                let selectable = app.history_entry_selectable(start + index);
+                let style = if selected {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                if selected {
+                    frame.render_widget(
+                        Paragraph::new(Line::styled("> ", style)),
+                        Rect::new(status_x, y, body.right().saturating_sub(status_x).min(2), 1),
+                    );
+                }
                 frame.render_widget(
-                    Paragraph::new(format!("{lane}[{count}]")).scroll((0, horizontal_offset as u16)),
+                    Paragraph::new(Line::styled(format!("{lane}[{count}]"), style))
+                        .scroll((0, horizontal_offset as u16)),
                     row_area,
                 );
                 color_graph(
@@ -754,10 +769,16 @@ pub(crate) fn draw_with_worktree(
                     row_area,
                     lane,
                     horizontal_offset,
-                    None,
+                    selected.then_some(Color::Reset),
                     SignatureState::Unsigned,
                     None,
                 );
+                if !selectable {
+                    frame.buffer_mut().set_style(
+                        Rect::new(body.x, y, body.width, 1),
+                        Style::default().add_modifier(Modifier::DIM),
+                    );
+                }
                 continue;
             }
         };
@@ -1067,7 +1088,7 @@ pub(crate) fn draw_with_worktree(
     let mut commit_popup = None;
     let mut actions_prefix_spans = Vec::new();
     let mut actions_popup = None;
-    if app.changes_focus != Some(ChangePane::Worktree) || app.can_amend() {
+    if !selected_segment && (app.changes_focus != Some(ChangePane::Worktree) || app.can_amend()) {
         time_travel = time_travel_label(app, decorations);
         if app.commit_expanded {
             let mut options = Vec::new();
@@ -1127,7 +1148,7 @@ pub(crate) fn draw_with_worktree(
             emphasize_prefix(&mut commit_prefix_spans[1..]);
         }
     }
-    if app.changes_focus.is_none() {
+    if !selected_segment && app.changes_focus.is_none() {
         actions_prefix_spans.push(Span::raw(" · "));
         actions_prefix_spans.push(Span::styled("a", Style::default().add_modifier(Modifier::UNDERLINED)));
         actions_prefix_spans.push(Span::raw("ctions"));
@@ -1243,6 +1264,9 @@ pub(crate) fn draw_with_worktree(
         emphasize_prefix(&mut view_prefix_spans[1..]);
     }
     let mut ordered = vec![Span::raw(history_position(app))];
+    if selected_segment {
+        ordered.push(Span::raw(" · <enter> expand"));
+    }
     let mut prefix_popup = None;
     let view_anchor = spans_width(&ordered).saturating_add(view_prefix_spans[0].width());
     ordered.append(&mut view_prefix_spans);
@@ -1259,27 +1283,29 @@ pub(crate) fn draw_with_worktree(
     if let Some(items) = actions_popup {
         prefix_popup = Some((actions_anchor, items));
     }
-    ordered.push(Span::raw(" · "));
-    let enrich_anchor = spans_width(&ordered);
-    let enrich_prefix_start = ordered.len();
-    ordered.extend(shortcut("enrich", 'n', true));
-    if app.enrich_expanded {
-        let mut items = Vec::new();
-        if let Some(row) = app.selected.and_then(|index| app.rows.get(index)) {
-            if app.can_reword() {
-                items.extend(shortcut("todo", 't', app.todo(row.id)));
+    if !selected_segment {
+        ordered.push(Span::raw(" · "));
+        let enrich_anchor = spans_width(&ordered);
+        let enrich_prefix_start = ordered.len();
+        ordered.extend(shortcut("enrich", 'n', true));
+        if app.enrich_expanded {
+            let mut items = Vec::new();
+            if let Some(row) = app.selected.and_then(|index| app.rows.get(index)) {
+                if app.can_reword() {
+                    items.extend(shortcut("todo", 't', app.todo(row.id)));
+                    items.push(Span::raw(" · "));
+                    items.extend(shortcut("note", 'o', app.note(row.id).is_some()));
+                    items.push(Span::raw(" · "));
+                }
+                items.extend(shortcut("checks-pass", 'c', app.checks_pass(row.id)));
                 items.push(Span::raw(" · "));
-                items.extend(shortcut("note", 'o', app.note(row.id).is_some()));
-                items.push(Span::raw(" · "));
+                items.extend(shortcut("git note", 'g', !app.notes(row.id).is_empty()));
+            } else {
+                items.push(Span::raw("no actions"));
             }
-            items.extend(shortcut("checks-pass", 'c', app.checks_pass(row.id)));
-            items.push(Span::raw(" · "));
-            items.extend(shortcut("git note", 'g', !app.notes(row.id).is_empty()));
-        } else {
-            items.push(Span::raw("no actions"));
+            emphasize_prefix(&mut ordered[enrich_prefix_start..]);
+            prefix_popup = Some((enrich_anchor, items));
         }
-        emphasize_prefix(&mut ordered[enrich_prefix_start..]);
-        prefix_popup = Some((enrich_anchor, items));
     }
     if let Some(label) = time_travel {
         ordered.push(Span::raw(" · "));
@@ -1289,8 +1315,10 @@ pub(crate) fn draw_with_worktree(
         ordered.push(Span::raw(" · "));
         ordered.extend(shortcut("next duplicate", 'x', true));
     }
-    ordered.push(Span::raw(" · "));
-    ordered.extend(shortcut("copy", 'y', true));
+    if !selected_segment {
+        ordered.push(Span::raw(" · "));
+        ordered.extend(shortcut("copy", 'y', true));
+    }
     ordered.push(Span::raw(" · "));
     ordered.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
     ordered.push(Span::raw(" · "));
@@ -1323,20 +1351,26 @@ pub(crate) fn draw_with_worktree(
         items.push(toggle(alignment, enabled));
         items.push(Span::raw(" · "));
         items.extend(shortcut("ref-tree", 't', false));
-        items.push(Span::raw(" · "));
-        items.extend(shortcut("message", 'm', app.show_commit));
-        items.push(Span::raw(" · "));
-        items.extend(shortcut("changes", 'c', app.changes_mode.is_some()));
-        if app.tree_changes_visible || app.worktree_changes_visible {
+        if !selected_segment {
             items.push(Span::raw(" · "));
-            items.push(match focus_feedback {
-                Some(destination) => Span::raw(format!("<tab> → {destination}")),
-                None => Span::raw("<tab> switch"),
-            });
+            items.extend(shortcut("message", 'm', app.show_commit));
+            items.push(Span::raw(" · "));
+            items.extend(shortcut("changes", 'c', app.changes_mode.is_some()));
+            if app.tree_changes_visible || app.worktree_changes_visible {
+                items.push(Span::raw(" · "));
+                items.push(match focus_feedback {
+                    Some(destination) => Span::raw(format!("<tab> → {destination}")),
+                    None => Span::raw("<tab> switch"),
+                });
+            }
         }
         items.push(Span::raw(" · ↑↓/jk move · h/l pan"));
         if app.changes_focus.is_none() {
-            items.push(Span::raw(" · <enter> diff"));
+            items.push(Span::raw(if selected_segment {
+                " · <enter> expand"
+            } else {
+                " · <enter> diff"
+            }));
         }
         emphasize_prefix(&mut ordered[information_prefix_start..]);
         prefix_popup = Some((information_anchor, items));
@@ -1413,12 +1447,16 @@ fn time_travel_label(app: &App, decorations: &Decorations) -> Option<&'static st
 
 fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<usize> {
     let mut width = history_position(app).chars().count();
+    let selected_segment = app.selected_is_segment();
+    if selected_segment {
+        width += " · <enter> expand".chars().count();
+    }
     width += 3;
     let view = width;
     width += "view".len();
     let mut active = app.history_display_expanded.then_some(view);
 
-    let commit_visible = app.changes_focus != Some(ChangePane::Worktree) || app.can_amend();
+    let commit_visible = !selected_segment && (app.changes_focus != Some(ChangePane::Worktree) || app.can_amend());
     if commit_visible {
         width += 3;
         let commit = width;
@@ -1427,7 +1465,7 @@ fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<us
             active = Some(commit);
         }
     }
-    if app.changes_focus.is_none() {
+    if !selected_segment && app.changes_focus.is_none() {
         width += 3;
         let actions = width;
         width += "actions".len();
@@ -1435,11 +1473,13 @@ fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<us
             active = Some(actions);
         }
     }
-    width += 3;
-    let enrich = width;
-    width += "enrich".len();
-    if app.enrich_expanded {
-        active = Some(enrich);
+    if !selected_segment {
+        width += 3;
+        let enrich = width;
+        width += "enrich".len();
+        if app.enrich_expanded {
+            active = Some(enrich);
+        }
     }
     if commit_visible && let Some(label) = time_travel_label(app, decorations) {
         width += 3 + label.len();
@@ -1447,7 +1487,9 @@ fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<us
     if app.can_cycle_duplicate() {
         width += 3 + "next duplicate".len();
     }
-    width += 3 + "copy".len();
+    if !selected_segment {
+        width += 3 + "copy".len();
+    }
     width += 3 + "refs".len();
     width += 3;
     if app.information_expanded {
@@ -7002,7 +7044,8 @@ mod tests {
     }
 
     #[test]
-    fn renders_compressed_segments_without_commit_metadata_or_row_identity() -> Result<(), Box<dyn std::error::Error>> {
+    fn renders_selected_compressed_segments_as_expandable_without_stale_commit_ui()
+    -> Result<(), Box<dyn std::error::Error>> {
         let ids = [1, 2, 3, 4].map(|byte| gix::ObjectId::Sha1([byte; 20]));
         let mut app = App::new(2);
         app.extend_commits(
@@ -7028,19 +7071,22 @@ mod tests {
         for _ in 0..3 {
             app.update(Action::ToggleAlign);
         }
+        app.update(Action::MoveDown);
+        app.show_commit = true;
 
         let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
         let mut layout = None;
         let decorations = Decorations::new();
         let mailmap = gix::mailmap::Snapshot::default();
+        let stale_tree_changes = Changes::default();
         terminal.draw(|frame| {
             layout = Some(draw_with_worktree(
                 frame,
                 &mut app,
                 &decorations,
                 &mailmap,
-                None,
-                None,
+                Some(BStr::new(b"stale commit message")),
+                Some(&stale_tree_changes),
                 None,
             ));
         })?;
@@ -7049,11 +7095,27 @@ mod tests {
             rendered_line(&terminal, 0).contains("tip"),
             "the retained tip keeps its metadata"
         );
-        assert_eq!(rendered_line(&terminal, 1).trim(), "○ [3]");
+        assert_eq!(rendered_line(&terminal, 1).trim(), "> ○ [2]");
+        assert!(
+            (0..7).all(|x| terminal.backend().buffer()[(x, 1)]
+                .modifier
+                .contains(Modifier::REVERSED)),
+            "the selected summary, including its status and count, is reversed"
+        );
+        let footer = rendered_line(&terminal, 2);
+        assert!(footer.contains("<enter> expand"));
+        for hidden in [" · commit", " · actions", " · enrich", " · copy"] {
+            assert!(!footer.contains(hidden), "synthetic selection hides {hidden:?}");
+        }
+        let layout = layout.expect("drawing returns its layout");
+        assert!(
+            layout.overlays.is_empty(),
+            "stale commit-message and tree-change panes stay hidden"
+        );
         assert_eq!(
-            layout.expect("drawing returns its layout").rows,
+            layout.rows,
             vec![(ids[0], 0)],
-            "segments are not interactive or animated commit rows"
+            "a selectable summary still has no commit identity for animation"
         );
         Ok(())
     }
