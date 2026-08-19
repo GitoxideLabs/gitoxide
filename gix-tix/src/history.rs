@@ -681,9 +681,10 @@ impl HistoryGraph {
             let id = self.id(index);
             let commit = &self.commits[index.as_usize()];
             let was_stored = commit.state & NODE_STORED != 0;
-            let stop =
-                commit.state & NODE_COMPLETE != 0 && (delta & EXPAND == 0 || was_stored && !expand.contains(&id));
             let should_store = delta & (VISIBLE | EXPAND) != 0 && !was_stored;
+            let stop = !should_store
+                && commit.state & NODE_COMPLETE != 0
+                && (delta & EXPAND == 0 || was_stored && !expand.contains(&id));
             let parent_indices = self.parents(index).to_vec();
             let parent_ids = self.parent_ids(index);
             let generation = commit.generation();
@@ -2614,6 +2615,66 @@ mod tests {
         assert!(
             refresh.commits.rows.is_empty(),
             "an unchanged tracking tip stops before revisiting its cached parents"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_walks_cached_tracking_ancestry_when_a_symbolic_pin_makes_it_visible() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let main = crate::test_repository::open(fixture.path())?
+            .rev_parse_single("main")?
+            .detach();
+        let merged = crate::test_repository::open(fixture.path())?
+            .rev_parse_single("merged")?
+            .detach();
+        for args in [
+            &["config", "remote.origin.url", "https://example.com/repo"][..],
+            &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"][..],
+            &["config", "branch.topic.remote", "origin"][..],
+            &["config", "branch.topic.merge", "refs/heads/main"][..],
+            &["update-ref", "refs/remotes/origin/main", &main.to_hex().to_string()][..],
+        ] {
+            let status = Command::new("git").current_dir(fixture.path()).args(args).status()?;
+            assert!(status.success(), "git configures a tracking branch");
+        }
+        let events = loaded(fixture.path(), &["topic"], &[])?;
+        let mut graph = events
+            .into_iter()
+            .find_map(|event| match event {
+                Event::Complete(graph) => Some(graph),
+                _ => None,
+            })
+            .expect("history loading returns the persistent graph");
+        let cached = graph.index(main).expect("the tracking tip was scheduled");
+        assert!(
+            graph.commits[cached.as_usize()].state & NODE_COMPLETE != 0
+                && graph.commits[cached.as_usize()].state & NODE_STORED == 0,
+            "the tracking tip is cached without being visible"
+        );
+
+        assert!(
+            Command::new("git")
+                .current_dir(fixture.path())
+                .args(["switch", "-q", "topic"])
+                .status()?
+                .success(),
+            "git moves HEAD away from the pin target"
+        );
+        let repo = crate::test_repository::open(fixture.path())?;
+        crate::edit::time_travel::create_or_reuse_pin(
+            &repo,
+            gix::refs::Target::Symbolic("refs/remotes/origin/main".try_into()?),
+            main,
+            "test symbolic ref-tree pin",
+        )?;
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        let refresh = graph.refresh(&repo, &["topic".into()], &[], false, &HashSet::new(), &authors)?;
+        let refreshed: HashSet<_> = refresh.commits.rows.iter().map(|row| row.id).collect();
+        assert!(
+            refreshed.contains(&main) && refreshed.contains(&merged),
+            "a newly visible cached tip is loaded together with its missing ancestry: {refreshed:?}"
         );
         Ok(())
     }
