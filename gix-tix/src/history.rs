@@ -237,10 +237,6 @@ impl HistoryGraph {
         self.commits.len()
     }
 
-    pub(crate) fn commit_ids(&self) -> impl Iterator<Item = ObjectId> + '_ {
-        self.commits.iter().map(|commit| commit.id)
-    }
-
     pub(crate) fn stored_commit_ids(&self) -> impl Iterator<Item = ObjectId> + '_ {
         self.stored_order.iter().map(|index| self.id(*index))
     }
