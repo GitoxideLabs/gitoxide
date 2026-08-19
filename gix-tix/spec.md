@@ -386,7 +386,7 @@ without trading responsiveness for metadata that is not visible.
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
 | `?` | Toggle the information key group. |
 | `t` | Toggle the rounded ref-tree overview. |
-| `[` | Cycle viewport-local title alignment, full-column alignment, and no alignment. |
+| `[` | Cycle viewport-local title alignment, full-column alignment, no alignment, and compressed history. |
 | `v` | Toggle the history-display key group. Pressing `v` again closes it. |
 | `v d` | Cycle author dates, committer dates, and no dates. |
 | `v e` | Toggle full actors/emails and titles. |
@@ -408,6 +408,14 @@ without trading responsiveness for metadata that is not visible.
 Alignment uses only rows in the current viewport to determine widths and starts
 in title mode. Horizontal navigation pans the complete padded row in title and
 full-column alignment so clipped fields can be reached.
+
+Compressed history keeps the visible reference, pin, and worktree tips plus the
+commit selected when compression begins. Every maximal hidden segment is shown
+as a nonselectable hollow node followed by its exact commit count, such as
+`○ [12]`; navigation skips these summaries. Retained commits use title
+alignment, and cycling `[` again restores the normal title-aligned history.
+Review, rewrite-target, and rebase-conflict selection temporarily expand the
+history without leaving compressed mode.
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. The `?` group similarly remains open
