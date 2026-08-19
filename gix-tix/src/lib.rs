@@ -2315,21 +2315,19 @@ fn event_loop(
                     }
                 }
                 Effect::Reword(id) => {
-                    let result = history_graph
-                        .as_ref()
-                        .context("reword requires a completed history graph")
-                        .and_then(|graph| {
-                            reword_commit(
-                                terminal,
-                                &repository_path,
-                                repository_is_bare,
-                                graph,
-                                id,
-                                enhanced_keyboard,
-                            )
-                        });
+                    let hidden = if app.show_hidden { &[][..] } else { hide.as_slice() };
+                    let result = reword_commit(
+                        terminal,
+                        &repository_path,
+                        repository_is_bare,
+                        &revisions,
+                        hidden,
+                        id,
+                        enhanced_keyboard,
+                    );
                     match result {
                         Ok(Some(edit::reword::Outcome {
+                            target,
                             commit: Some(new_id),
                             ref_changes,
                             ..
@@ -2340,18 +2338,23 @@ fn event_loop(
                                 repository_is_bare,
                                 "reword commit",
                                 &ref_changes,
-                                format!("reworded {} as {}", id.to_hex_with_len(7), new_id.to_hex_with_len(7)),
+                                format!(
+                                    "reworded {} as {}",
+                                    target.to_hex_with_len(7),
+                                    new_id.to_hex_with_len(7)
+                                ),
                             );
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
                         Ok(Some(edit::reword::Outcome {
+                            target,
                             enrichment: Some(enrichment),
                             ref_changes,
                             ..
                         })) => {
                             app.clear_enrichments();
-                            app.set_enrichment(id, enrichment);
+                            app.set_enrichment(target, enrichment);
                             leave_recorded_success(
                                 &mut app,
                                 &repository_path,
@@ -2360,9 +2363,18 @@ fn event_loop(
                                 &ref_changes,
                                 "updated enrichment",
                             );
+                            if target != id {
+                                app.select_commit_after_refresh(target);
+                                refresh_pending = true;
+                            }
                         }
                         Ok(None) => {}
-                        Ok(Some(_)) => {}
+                        Ok(Some(outcome)) => {
+                            if outcome.target != id {
+                                app.select_commit_after_refresh(outcome.target);
+                                refresh_pending = true;
+                            }
+                        }
                         Err(err) => app.leave_error(format!("reword: {err:#}")),
                     }
                 }
@@ -4563,15 +4575,18 @@ fn reword_commit(
     terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
     bare: bool,
-    graph: &HistoryGraph,
+    revisions: &[OsString],
+    hidden_revisions: &[OsString],
     id: gix::ObjectId,
     enhanced_keyboard: bool,
 ) -> Result<Option<edit::reword::Outcome>> {
-    let (editor, document) = {
+    let (editor, document, change_id) = {
         let mut repository =
             open_repository(repository_path, bare, false).context("could not open repository before editing commit")?;
         repository.object_cache_size(None);
-        edit::reword::document(&repository, id)?
+        let change_id = change_id::for_commit(&repository, id)?;
+        let (editor, document) = edit::reword::document(&repository, id)?;
+        (editor, document, change_id)
     };
     let Some(edited) = edit::edit_document(
         terminal,
@@ -4587,7 +4602,8 @@ fn reword_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    edit::reword::apply(repository, graph, id, &edited).map(Some)
+    let (graph, id) = edit::reword::relocate_after_editor(&repository, revisions, hidden_revisions, change_id)?;
+    edit::reword::apply(repository, &graph, id, &edited).map(Some)
 }
 
 pub(crate) fn load_rebase_todo_commits(

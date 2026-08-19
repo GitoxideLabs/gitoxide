@@ -45,10 +45,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         Some(graph) => graph,
         None => crate::edit::loaded_view_graph_with(&repository, &revisions)?,
     };
-    let covering_pin = pins.iter().any(|pin| graph.is_ancestor(target, pin.id));
-    if !attached_head && !covering_pin {
-        anyhow::bail!("the reword target or one of its descendants must be pinned");
-    }
+    ensure_retained_target(&graph, target, &pins, attached_head)?;
 
     let author = args
         .edit
@@ -74,6 +71,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
 
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
+    let change_id = crate::change_id::for_commit(&repository, target)?;
     let (editor, document) = crate::edit::reword::document_with_author(&repository, target, author.map(AsRef::as_ref))?;
     drop(repository);
     let edited = crate::edit::edit_document_without_terminal(
@@ -93,12 +91,29 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let mut repository = crate::open_repository(&repository_path, bare, false)
         .context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
+    let (graph, target) = crate::edit::reword::relocate_after_editor(&repository, &[], &[], change_id)?;
+    let pins = crate::history::all_pins(&repository)?;
+    let head = repository.head().context("could not read HEAD after editing commit")?;
+    let attached_head = !head.is_detached() && head.id().map(gix::Id::detach) == Some(target);
+    drop(head);
+    ensure_retained_target(&graph, target, &pins, attached_head)?;
     let output_repository = repository.clone();
     finish_editor(
         &output_repository,
         crate::edit::reword::apply(repository, &graph, target, &edited)?,
-        target,
     )
+}
+
+fn ensure_retained_target(
+    graph: &crate::history::HistoryGraph,
+    target: gix::ObjectId,
+    pins: &[crate::history::Pin],
+    attached_head: bool,
+) -> Result<()> {
+    if !attached_head && !pins.iter().any(|pin| graph.is_ancestor(target, pin.id)) {
+        anyhow::bail!("the reword target or one of its descendants must be pinned");
+    }
+    Ok(())
 }
 
 pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Result<Option<Vec<u8>>> {
@@ -141,11 +156,7 @@ fn finish(repository: &gix::Repository, outcome: crate::edit::reword::Outcome) -
     Ok(())
 }
 
-fn finish_editor(
-    repository: &gix::Repository,
-    outcome: crate::edit::reword::Outcome,
-    original: gix::ObjectId,
-) -> Result<()> {
+fn finish_editor(repository: &gix::Repository, outcome: crate::edit::reword::Outcome) -> Result<()> {
     let title = if outcome.commit.is_some() {
         "reword commit"
     } else {
@@ -153,7 +164,7 @@ fn finish_editor(
     };
     match (outcome.commit, outcome.enrichment) {
         (Some(id), _) => println!("{}", crate::change_id::display(repository, id, 7)?),
-        (None, Some(_)) => println!("{}", crate::change_id::display(repository, original, 7)?),
+        (None, Some(_)) => println!("{}", crate::change_id::display(repository, outcome.target, 7)?),
         (None, None) => println!("no reword performed: the edited commit was unchanged"),
     }
     super::print_ref_rewrites(repository, &outcome.ref_rewrites)?;
