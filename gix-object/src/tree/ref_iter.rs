@@ -130,20 +130,8 @@ impl<'a> TreeRef<'a> {
     ///
     /// Note that it's impossible to binary search by name alone as the sort order is special.
     pub fn bisect_entry(&self, name: &BStr, is_dir: bool) -> Option<EntryRef<'a>> {
-        static NULL_HASH: gix_hash::ObjectId = gix_hash::Kind::shortest().null();
-
-        let search = EntryRef {
-            mode: if is_dir {
-                tree::EntryKind::Tree
-            } else {
-                tree::EntryKind::Blob
-            }
-            .into(),
-            filename: name,
-            oid: &NULL_HASH,
-        };
         self.entries
-            .binary_search_by(|e| e.cmp(&search))
+            .binary_search_by(|entry| tree::name_order(entry.filename, entry.mode.is_tree(), name, is_dir))
             .ok()
             .map(|idx| self.entries[idx])
     }
