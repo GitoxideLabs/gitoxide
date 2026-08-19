@@ -291,7 +291,9 @@ pub(crate) fn prepare_continuation(
             let parent = match step.parent {
                 rebase::PlanParent::Existing(id) => id,
                 rebase::PlanParent::Step(parent) => match plan.steps[parent].commit {
-                    rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Resolved(id) => id,
+                    rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Copy(id) | rebase::PlanCommit::Resolved(id) => {
+                        id
+                    }
                     rebase::PlanCommit::Empty(_) => {
                         anyhow::bail!("a continuation fork cannot target an unwritten empty commit")
                     }
@@ -322,7 +324,7 @@ pub(crate) fn prepare_continuation(
             ""
         };
         match step.commit {
-            rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Resolved(id) => {
+            rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Copy(id) | rebase::PlanCommit::Resolved(id) => {
                 let value = if matches!(step.commit, rebase::PlanCommit::Resolved(_)) {
                     let hash = ObjectId::null(id.kind()).to_string();
                     if show_change_ids {

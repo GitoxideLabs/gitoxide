@@ -76,6 +76,7 @@ pub(crate) enum PlanParent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlanCommit {
     Pick(ObjectId),
+    Copy(ObjectId),
     Resolved(ObjectId),
     Empty(BString),
 }
@@ -530,16 +531,110 @@ pub(crate) fn squash_plan(
     })
 }
 
-pub(crate) fn cherry_move_plan(
+pub(crate) fn copy_insert_plan(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     source: ObjectId,
     target: ObjectId,
 ) -> Result<Plan> {
-    cherry_stack_plan(repo, graph, source, source, target)
+    if repo.head_id()?.detach() != source {
+        anyhow::bail!("the copy source must be the current HEAD");
+    }
+    let source_parents = graph
+        .parents_of(source)
+        .context("the copy source is not in the loaded history")?;
+    let [_source_parent] = source_parents.as_slice() else {
+        anyhow::bail!("copying a commit requires it to have exactly one parent");
+    };
+    let source_commit = repo
+        .find_commit(source)
+        .context("could not find the copy source")?
+        .decode()
+        .context("could not decode the copy source")?
+        .into_owned()
+        .context("could not own the copy source")?;
+    if super::review::reference(&source_commit)?.is_some() {
+        anyhow::bail!("review commits cannot be copied");
+    }
+    if source == target {
+        anyhow::bail!("the copy source and target must differ");
+    }
+
+    let mut scope = graph
+        .descendants_in_parent_order(target)
+        .context("the copy target is not in the loaded history")?;
+    scope.retain(|id| *id != target);
+    let mut steps = vec![PlanStep {
+        parent: PlanParent::Existing(target),
+        commit: PlanCommit::Copy(source),
+        squash: Vec::new(),
+    }];
+    let mut step_by_id = HashMap::with_capacity(scope.len());
+    for id in &scope {
+        let parents = graph.parents_of(*id).context("an affected copy commit is incomplete")?;
+        let [parent] = parents.as_slice() else {
+            anyhow::bail!("copying a commit cannot rewrite root or merge commits");
+        };
+        let parent = if *parent == target {
+            PlanParent::Step(0)
+        } else {
+            step_by_id
+                .get(parent)
+                .copied()
+                .map_or(PlanParent::Existing(*parent), PlanParent::Step)
+        };
+        step_by_id.insert(*id, steps.len());
+        steps.push(PlanStep {
+            parent,
+            commit: PlanCommit::Pick(*id),
+            squash: Vec::new(),
+        });
+    }
+
+    let mut ref_scope = Vec::with_capacity(scope.len() + 1);
+    ref_scope.push(target);
+    ref_scope.extend(scope.iter().copied());
+    let ref_scope_set: HashSet<_> = ref_scope.iter().copied().collect();
+    let mut non_leaves = HashSet::new();
+    for id in &ref_scope {
+        non_leaves.extend(
+            graph
+                .parents_of(*id)
+                .context("an affected copy commit is incomplete")?
+                .into_iter()
+                .filter(|parent| ref_scope_set.contains(parent)),
+        );
+    }
+    let tips: Vec<_> = ref_scope
+        .iter()
+        .copied()
+        .filter(|id| !non_leaves.contains(id))
+        .collect();
+    let expected_refs = capture_refs(repo, &ref_scope, &tips)?;
+    let checkout = Some(PlanCheckout {
+        target: PlanParent::Step(0),
+        reference: None,
+    });
+
+    Ok(Plan {
+        base: target,
+        scope,
+        steps,
+        checkout,
+        expected_refs,
+    })
 }
 
-pub(crate) fn cherry_stack_plan(
+pub(crate) fn move_insert_plan(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    source: ObjectId,
+    target: ObjectId,
+) -> Result<Plan> {
+    stack_insert_plan(repo, graph, source, source, target)
+}
+
+pub(crate) fn stack_insert_plan(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     base: ObjectId,
@@ -1154,9 +1249,14 @@ pub(crate) fn perform_plan_with_progress(
     let scope: HashSet<_> = plan.scope.iter().copied().collect();
     let mut picked = HashSet::new();
     for step in &plan.steps {
+        if let PlanCommit::Copy(id) = step.commit
+            && graph.parents_of(id).context("a copied commit is incomplete")?.len() != 1
+        {
+            anyhow::bail!("copying a commit requires it to have exactly one parent");
+        }
         let ids = match step.commit {
             PlanCommit::Pick(id) | PlanCommit::Resolved(id) => Some(id).into_iter().chain(step.squash.iter().copied()),
-            PlanCommit::Empty(_) => None.into_iter().chain(step.squash.iter().copied()),
+            PlanCommit::Copy(_) | PlanCommit::Empty(_) => None.into_iter().chain(step.squash.iter().copied()),
         };
         for id in ids {
             if !scope.contains(&id) || !picked.insert(id) {
@@ -1194,9 +1294,10 @@ pub(crate) fn perform_plan_with_progress(
             }
             PlanParent::Step(parent) => *produced.get(parent).context("a fork points to a later commit")?,
         };
-        let eager = conflict.is_none() && (eager.contains(&index) || !step.squash.is_empty());
+        let eager = conflict.is_none()
+            && (matches!(step.commit, PlanCommit::Copy(_)) || eager.contains(&index) || !step.squash.is_empty());
         let mut commit = match &step.commit {
-            PlanCommit::Pick(id) => repo
+            PlanCommit::Pick(id) | PlanCommit::Copy(id) => repo
                 .find_commit(*id)
                 .context("could not find a picked commit")?
                 .decode()
@@ -1236,7 +1337,7 @@ pub(crate) fn perform_plan_with_progress(
             },
         };
         let graph_parents = match step.commit {
-            PlanCommit::Pick(id) | PlanCommit::Resolved(id) => {
+            PlanCommit::Pick(id) | PlanCommit::Copy(id) | PlanCommit::Resolved(id) => {
                 graph.parents_of(id).context("a picked commit is incomplete")?
             }
             PlanCommit::Empty(_) => vec![parent],
@@ -1262,8 +1363,12 @@ pub(crate) fn perform_plan_with_progress(
         } else {
             Tree::LeaveAsIsAndMark
         };
-        let cherry_pick_started =
-            (eager && matches!(step.commit, PlanCommit::Pick(_) | PlanCommit::Resolved(_))).then(Instant::now);
+        let cherry_pick_started = (eager
+            && matches!(
+                step.commit,
+                PlanCommit::Pick(_) | PlanCommit::Copy(_) | PlanCommit::Resolved(_)
+            ))
+        .then(Instant::now);
         let mut step_conflict = None;
         commit.tree = match rewritten_tree(&repo, &commit, &replay_parents, &[parent], mode)? {
             TreeRewrite::Complete(tree) => tree,
@@ -1272,7 +1377,9 @@ pub(crate) fn perform_plan_with_progress(
                 merged,
                 conflicts,
             } => {
-                let (PlanCommit::Pick(original) | PlanCommit::Resolved(original)) = step.commit else {
+                let (PlanCommit::Pick(original) | PlanCommit::Copy(original) | PlanCommit::Resolved(original)) =
+                    step.commit
+                else {
                     unreachable!("empty commits cannot conflict")
                 };
                 step_conflict = Some((original, merged, conflicts, None));
@@ -1283,7 +1390,10 @@ pub(crate) fn perform_plan_with_progress(
             progress.cherry_picked += 1;
             progress.cherry_pick_time += started.elapsed();
         }
-        if matches!(step.commit, PlanCommit::Pick(_) | PlanCommit::Resolved(_)) {
+        if matches!(
+            step.commit,
+            PlanCommit::Pick(_) | PlanCommit::Copy(_) | PlanCommit::Resolved(_)
+        ) {
             progress.processed += 1;
             report(progress);
         }
@@ -1344,7 +1454,7 @@ pub(crate) fn perform_plan_with_progress(
             }
         };
         let predecessor = match step.commit {
-            PlanCommit::Pick(id) | PlanCommit::Resolved(id) => Some(id),
+            PlanCommit::Pick(id) | PlanCommit::Copy(id) | PlanCommit::Resolved(id) => Some(id),
             PlanCommit::Empty(_) => None,
         };
         let (new_id, signing_time) =
@@ -1362,6 +1472,10 @@ pub(crate) fn perform_plan_with_progress(
             if old_id != new_id {
                 note_rewrites.push((old_id, new_id));
             }
+        } else if let PlanCommit::Copy(old_id) = step.commit
+            && old_id != new_id
+        {
+            note_rewrites.push((old_id, new_id));
         }
         for old_id in step.squash.iter().take(applied_squash) {
             rewritten.insert(*old_id, Some(new_id));
@@ -3502,7 +3616,7 @@ mod tests {
     }
 
     #[test]
-    fn cherry_stack_moves_the_linear_range_and_reconnects_side_children() -> gix_testtools::Result {
+    fn stack_insert_moves_the_linear_range_and_reconnects_side_children() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         git(fixture.path(), &["checkout", "-q", "-b", "fork", "HEAD~1"])?;
         std::fs::write(fixture.path().join("fork"), b"fork\n")?;
@@ -3526,7 +3640,7 @@ mod tests {
         let target = repo.rev_parse_single("destination~1")?.detach();
         let target_child = repo.rev_parse_single("destination")?.detach();
 
-        let outcome = perform_plan(&repo, &graph, cherry_stack_plan(&repo, &graph, base, head, target)?)?.complete()?;
+        let outcome = perform_plan(&repo, &graph, stack_insert_plan(&repo, &graph, base, head, target)?)?.complete()?;
         let moved_base = outcome.map(base).context("the stack base is retained")?;
         let moved_head = outcome.map(head).context("HEAD is retained")?;
         let rewritten_fork = outcome.map(fork).context("the side child is retained")?;
@@ -3571,7 +3685,7 @@ mod tests {
     }
 
     #[test]
-    fn cherry_stack_rejects_invalid_ranges_and_cycles() -> gix_testtools::Result {
+    fn stack_insert_rejects_invalid_ranges_and_cycles() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         git(fixture.path(), &["checkout", "-q", "-b", "cycle-target"])?;
         std::fs::write(fixture.path().join("cycle-target"), b"cycle target\n")?;
@@ -3585,20 +3699,183 @@ mod tests {
         let base = repo.rev_parse_single("main~1")?.detach();
         let head = repo.head_id()?.detach();
         let target = repo.rev_parse_single("cycle-target")?.detach();
-        let err = cherry_stack_plan(&repo, &graph, target, head, root)
+        let err = stack_insert_plan(&repo, &graph, target, head, root)
             .expect_err("the selected base must be in HEAD's ancestry");
         assert!(err.to_string().contains("ancestor"), "{err:#}");
-        let err = cherry_stack_plan(&repo, &graph, base, head, base)
+        let err = stack_insert_plan(&repo, &graph, base, head, base)
             .expect_err("the insertion target cannot be part of the stack");
         assert!(err.to_string().contains("moved stack"), "{err:#}");
-        let err = cherry_stack_plan(&repo, &graph, base, head, target)
+        let err = stack_insert_plan(&repo, &graph, base, head, target)
             .expect_err("inserting a stack into its own side descendant would cycle");
         assert!(err.to_string().contains("cycle"), "{err:#}");
         Ok(())
     }
 
     #[test]
-    fn cherry_move_inserts_head_before_every_target_child_and_keeps_its_refs() -> gix_testtools::Result {
+    fn copy_insert_preserves_the_source_and_inserts_above_target_children() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let source = repo.head_id()?.detach();
+        drop(repo);
+
+        git(fixture.path(), &["checkout", "-q", "--orphan", "destination"])?;
+        git(fixture.path(), &["rm", "-q", "-r", "-f", "."])?;
+        std::fs::write(fixture.path().join("destination"), b"destination\n")?;
+        git(fixture.path(), &["add", "destination"])?;
+        git(fixture.path(), &["commit", "-q", "-m", "destination"])?;
+        let target = open(fixture.path())?.head_id()?.detach();
+        std::fs::write(fixture.path().join("destination-child"), b"child\n")?;
+        git(fixture.path(), &["add", "destination-child"])?;
+        git(fixture.path(), &["commit", "-q", "-m", "destination child"])?;
+        let target_child = open(fixture.path())?.head_id()?.detach();
+        git(fixture.path(), &["checkout", "-q", "main"])?;
+
+        let repo = open(fixture.path())?;
+        set_git_note(&repo, source, b"source note")?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let outcome = perform_plan(&repo, &graph, copy_insert_plan(&repo, &graph, source, target)?)?.complete()?;
+        let rewritten_child = outcome.map(target_child).context("the target child is retained")?;
+        let copied = repo
+            .find_commit(rewritten_child)?
+            .parent_ids()
+            .next()
+            .map(gix::Id::detach)
+            .context("the rewritten target child has a parent")?;
+
+        assert_eq!(
+            repo.find_commit(copied)?.parent_ids().next().map(gix::Id::detach),
+            Some(target)
+        );
+        assert_eq!(outcome.selected, Some(copied), "copy-insert selects the new copy");
+        assert!(
+            outcome.checkout_reference.is_none(),
+            "copy-insert detaches instead of moving the source branch"
+        );
+        assert_eq!(outcome.map(source), Some(source), "copying does not rewrite the source");
+        assert_eq!(
+            repo.head_id()?.detach(),
+            source,
+            "copying elsewhere leaves HEAD at the source"
+        );
+        assert_eq!(repo.find_reference("refs/heads/main")?.id().detach(), source);
+        assert_eq!(
+            repo.find_reference("refs/heads/destination")?.id().detach(),
+            rewritten_child
+        );
+        assert_eq!(git_note(&repo, source)?.as_deref(), Some(b"source note".as_slice()));
+        assert_eq!(git_note(&repo, copied)?.as_deref(), Some(b"source note".as_slice()));
+        let repository_path = repo.git_dir().to_owned();
+        drop(repo);
+        super::super::time_travel::checkout_plan(&repository_path, false, &outcome, &[], false)?;
+        let repo = open(fixture.path())?;
+        assert!(
+            repo.head()?.is_detached(),
+            "the destination copy becomes the detached checkout"
+        );
+        assert_eq!(repo.head_id()?.detach(), copied);
+        assert_eq!(repo.find_reference("refs/heads/main")?.id().detach(), source);
+        let pins = crate::history::all_pins(&repo)?;
+        assert_eq!(pins.len(), 1, "the source branch stays visible through a HEAD pin");
+        assert_eq!(
+            pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(b"refs/heads/main".as_bstr())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn copy_insert_keeps_the_source_occurrence_above_its_current_parent() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let target = repo.rev_parse_single("HEAD~1")?.detach();
+        let source = repo.head_id()?.detach();
+
+        let outcome = perform_plan(&repo, &graph, copy_insert_plan(&repo, &graph, source, target)?)?.complete()?;
+        let copied = outcome
+            .selected
+            .context("copy-insert selects the inserted occurrence")?;
+        let retained_source = outcome.map(source).context("the source occurrence is retained")?;
+        assert_ne!(copied, retained_source, "copy and source remain separate occurrences");
+        assert_eq!(
+            repo.find_commit(copied)?.parent_ids().next().map(gix::Id::detach),
+            Some(target)
+        );
+        assert_eq!(
+            repo.find_reference("refs/heads/main")?.id().detach(),
+            retained_source,
+            "the source branch follows the ordinary source rewrite"
+        );
+        assert_eq!(
+            repo.find_commit(retained_source)?
+                .parent_ids()
+                .next()
+                .map(gix::Id::detach),
+            Some(copied),
+            "copying at the current parent creates two consecutive occurrences"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn copy_insert_rejects_review_sources() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let target = repo.rev_parse_single("HEAD~2")?.detach();
+        let old_source = repo.head_id()?.detach();
+        let mut source = repo.find_commit(old_source)?.decode()?.into_owned()?;
+        source
+            .extra_headers
+            .push(("tix-rebase".into(), "onto refs/worktree/tix/review/1".into()));
+        let source = repo.write_object(&source)?.detach();
+        repo.reference(
+            "refs/heads/main",
+            source,
+            PreviousValue::ExistingMustMatch(Target::Object(old_source)),
+            "prepare review source",
+        )?;
+        let graph = super::super::loaded_graph(&repo)?;
+
+        let err = copy_insert_plan(&repo, &graph, source, target)
+            .expect_err("copying a review commit would duplicate its resource identity");
+        assert!(err.to_string().contains("review commits cannot be copied"), "{err:#}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_conflicting_copy_insert_produces_a_materializable_continuation() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let target = repo.rev_parse_single("HEAD~2")?.detach();
+        let source = repo.head_id()?.detach();
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+
+        let PlanPerform::Conflict(conflict) =
+            perform_plan(&repo, &graph, copy_insert_plan(&repo, &graph, source, target)?)?
+        else {
+            return Err("copying the tip delta onto the root should conflict".into());
+        };
+        assert_eq!(conflict.original(), source);
+        assert!(
+            conflict
+                .continuation_plan()
+                .steps
+                .iter()
+                .any(|step| matches!(step.commit, PlanCommit::Resolved(_))),
+            "the ordinary todo continuation can resume copy-insert"
+        );
+        drop(conflict);
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "an unmaterialized copy conflict leaves the repository unchanged"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn move_insert_places_head_before_every_target_child_and_keeps_its_refs() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         git(fixture.path(), &["checkout", "-q", "-b", "side", "HEAD~2"])?;
         std::fs::write(fixture.path().join("side"), b"side\n")?;
@@ -3614,7 +3891,7 @@ mod tests {
         let side = repo.rev_parse_single("side")?.detach();
         set_git_note(&repo, source, b"source note")?;
 
-        let outcome = perform_plan(&repo, &graph, cherry_move_plan(&repo, &graph, source, target)?)?.complete()?;
+        let outcome = perform_plan(&repo, &graph, move_insert_plan(&repo, &graph, source, target)?)?.complete()?;
         let moved = outcome.map(source).context("HEAD is retained")?;
         let rewritten_middle = outcome.map(middle).context("the old source ancestry is retained")?;
         let rewritten_side = outcome.map(side).context("the target's side child is retained")?;
@@ -3641,7 +3918,7 @@ mod tests {
     }
 
     #[test]
-    fn cherry_move_can_cross_a_descendant_or_unrelated_history() -> gix_testtools::Result {
+    fn move_insert_can_cross_a_descendant_or_unrelated_history() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let middle = repo.rev_parse_single("main~1")?.detach();
@@ -3652,7 +3929,7 @@ mod tests {
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
         let base = repo.rev_parse_single("main~2")?.detach();
-        let outcome = perform_plan(&repo, &graph, cherry_move_plan(&repo, &graph, middle, tip)?)?.complete()?;
+        let outcome = perform_plan(&repo, &graph, move_insert_plan(&repo, &graph, middle, tip)?)?.complete()?;
         let moved = outcome.map(middle).context("detached HEAD is retained")?;
         let rewritten_tip = outcome.map(tip).context("the descendant target is retained")?;
         assert_eq!(
@@ -3686,7 +3963,7 @@ mod tests {
         let repo = open(fixture.path())?;
         let source = repo.head_id()?.detach();
         let graph = super::super::loaded_graph(&repo)?;
-        let outcome = perform_plan(&repo, &graph, cherry_move_plan(&repo, &graph, source, target)?)?.complete()?;
+        let outcome = perform_plan(&repo, &graph, move_insert_plan(&repo, &graph, source, target)?)?.complete()?;
         let moved = outcome.map(source).context("HEAD is retained across histories")?;
         assert_eq!(
             repo.find_commit(moved)?.parent_ids().next().map(gix::Id::detach),
@@ -3698,7 +3975,7 @@ mod tests {
     }
 
     #[test]
-    fn a_conflicting_cherry_move_produces_a_materializable_continuation() -> gix_testtools::Result {
+    fn a_conflicting_move_insert_produces_a_materializable_continuation() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
@@ -3707,7 +3984,7 @@ mod tests {
         let before = gix_testtools::repository::snapshot(fixture.path())?;
 
         let PlanPerform::Conflict(conflict) =
-            perform_plan(&repo, &graph, cherry_move_plan(&repo, &graph, source, target)?)?
+            perform_plan(&repo, &graph, move_insert_plan(&repo, &graph, source, target)?)?
         else {
             return Err("moving the tip delta onto the root should conflict".into());
         };
@@ -3730,7 +4007,7 @@ mod tests {
     }
 
     #[test]
-    fn cherry_move_rejects_a_root_head() -> gix_testtools::Result {
+    fn move_insert_rejects_a_root_head() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let root = repo.rev_parse_single("main~2")?.detach();
@@ -3739,7 +4016,7 @@ mod tests {
         git(fixture.path(), &["checkout", "-q", "--detach", &root.to_string()])?;
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
-        let err = cherry_move_plan(&repo, &graph, root, target)
+        let err = move_insert_plan(&repo, &graph, root, target)
             .expect_err("root HEAD cannot be removed from its old position");
         assert!(err.to_string().contains("exactly one parent"), "{err:#}");
         Ok(())
