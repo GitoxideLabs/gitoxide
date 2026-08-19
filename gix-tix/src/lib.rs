@@ -1792,6 +1792,7 @@ fn event_loop(
             urgent = true;
         }
         if key_pressed
+            && action == Some(Action::Cancel)
             && pending_rebase_conflict.is_none()
             && pending_todo_rebase_conflict.is_none()
             && app.has_rebase_conflict()
@@ -1799,6 +1800,7 @@ fn event_loop(
             app.clear_rebase_conflict();
             dirty = true;
             urgent = true;
+            continue;
         }
         if key_pressed && pending_rebase_conflict.is_some() {
             if action == Some(Action::OpenDiff) && app.changes_focus.is_none() {
@@ -1842,13 +1844,16 @@ fn event_loop(
                 urgent = true;
                 continue;
             }
-            let conflict = pending_rebase_conflict
-                .take()
-                .expect("a pending conflict was checked before discarding it");
-            tracing::info!(commit_id = %conflict.original(), ?action, "discarded suspended rebase conflict");
-            app.clear_rebase_conflict();
-            dirty = true;
-            urgent = true;
+            if action == Some(Action::Cancel) && app.changes_focus.is_none() {
+                let conflict = pending_rebase_conflict
+                    .take()
+                    .expect("a pending conflict was checked before discarding it");
+                tracing::info!(commit_id = %conflict.original(), "discarded suspended rebase conflict");
+                app.clear_rebase_conflict();
+                dirty = true;
+                urgent = true;
+                continue;
+            }
         }
         if key_pressed && pending_todo_rebase_conflict.is_some() {
             if action == Some(Action::OpenDiff) && app.changes_focus.is_none() {
@@ -1881,14 +1886,24 @@ fn event_loop(
                 urgent = true;
                 continue;
             }
-            let conflict = pending_todo_rebase_conflict
-                .take()
-                .expect("a pending todo conflict was checked before discarding it");
-            tracing::info!(commit_id = %conflict.original(), ?action, "discarded suspended todo rebase conflict");
-            app.clear_rebase_conflict();
-            refresh_pending = true;
+            if action == Some(Action::Cancel) && app.changes_focus.is_none() {
+                let conflict = pending_todo_rebase_conflict
+                    .take()
+                    .expect("a pending todo conflict was checked before discarding it");
+                tracing::info!(commit_id = %conflict.original(), "discarded suspended todo rebase conflict");
+                app.clear_rebase_conflict();
+                refresh_pending = true;
+                dirty = true;
+                urgent = true;
+                continue;
+            }
+        }
+        if (pending_rebase_conflict.is_some() || pending_todo_rebase_conflict.is_some())
+            && !action_allowed_during_rebase_continuation(action.as_ref(), app.changes_focus.is_some())
+        {
             dirty = true;
             urgent = true;
+            continue;
         }
         if key_pressed
             && action == Some(Action::Cancel)
@@ -1915,6 +1930,7 @@ fn event_loop(
                 let mut repository = open_repository(&repository_path, repository_is_bare, false)
                     .context("could not reopen repository to continue the rebase")?;
                 repository.object_cache_size(None);
+                stage_resolved_conflict_paths(&repository)?;
                 let graph = HistoryGraph::for_commits(&repository, &plan.scope)?;
                 run_rebase_plan(terminal, repository.into_sync(), &graph, plan.clone())
             })();
@@ -2334,21 +2350,12 @@ fn event_loop(
                 Effect::Rebase { base, onto, commits } => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
-                    let todo_commits = commits
-                        .iter()
-                        .map(|id| {
-                            let row = app
-                                .rows
-                                .iter()
-                                .find(|row| row.id == *id)
-                                .context("an editable commit disappeared from the view")?;
-                            Ok(edit::todo::Commit {
-                                id: *id,
-                                parents: row.parent_ids.to_vec(),
-                                info: ui::todo_metadata(&app, row, &mailmap),
-                            })
-                        })
-                        .collect::<Result<Vec<_>>>();
+                    let todo_commits = (|| {
+                        let mut repository = open_repository(&repository_path, repository_is_bare, false)
+                            .context("could not open repository before formatting the rebase todo")?;
+                        repository.object_cache_size(None);
+                        load_rebase_todo_commits(&repository, &mut app, &authors, &commits)
+                    })();
                     let result = history_graph
                         .as_ref()
                         .context("rebasing requires a completed history graph")
@@ -3949,6 +3956,61 @@ fn reword_commit(
     edit::reword::apply(repository, graph, id, &edited).map(Some)
 }
 
+pub(crate) fn load_rebase_todo_commits(
+    repository: &gix::Repository,
+    app: &mut App,
+    authors: &SharedAuthors,
+    scope: &[gix::ObjectId],
+) -> Result<Vec<edit::todo::Commit>> {
+    let row_indices: HashMap<_, _> = app
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| (row.id, index))
+        .collect();
+    let mut notes = repository
+        .notes()
+        .map_err(gix::Exn::into_error)
+        .context("could not open Git notes")?;
+    for id in scope {
+        let index = row_indices
+            .get(id)
+            .copied()
+            .context("an editable commit disappeared from the history view")?;
+        if !app.rows[index].metadata_loaded {
+            let (metadata, attributions) =
+                history::load_metadata(repository, *id, authors).context("could not load editable commit metadata")?;
+            app.set_metadata(index, metadata, attributions);
+        }
+        let loaded = notes
+            .get(*id)
+            .map_err(gix::Exn::into_error)
+            .context("could not load commit notes")?
+            .into_iter()
+            .map(|note| {
+                let mut blob = note.blob;
+                BString::from(blob.take_data())
+            })
+            .collect();
+        app.set_notes(*id, loaded);
+    }
+    let mailmap = repository.open_mailmap();
+    scope
+        .iter()
+        .map(|id| {
+            let row = row_indices
+                .get(id)
+                .and_then(|index| app.rows.get(*index))
+                .context("an editable commit disappeared while formatting the todo")?;
+            Ok(edit::todo::Commit {
+                id: *id,
+                parents: row.parent_ids.to_vec(),
+                info: ui::todo_metadata(app, row, &mailmap),
+            })
+        })
+        .collect()
+}
+
 #[tracing::instrument(skip_all, fields(base = %base, commits = commits.len()))]
 #[expect(
     clippy::too_many_arguments,
@@ -3999,6 +4061,58 @@ fn rebase_history(
         return Ok(None);
     };
     run_rebase_plan(terminal, repository.into_sync(), graph, parsed.plan).map(Some)
+}
+
+fn stage_resolved_conflict_paths(repository: &gix::Repository) -> Result<()> {
+    let index = repository
+        .open_index()
+        .context("could not inspect the conflict index")?;
+    let mut paths: Vec<BString> = index
+        .entries()
+        .iter()
+        .filter(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
+        .map(|entry| entry.path(&index).to_owned())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let workdir = repository
+        .workdir()
+        .context("cannot resolve a conflict without a worktree")?;
+    let mut command = Command::new("git");
+    command
+        .arg("--literal-pathspecs")
+        .arg("-C")
+        .arg(workdir)
+        .args(["add", "-A", "--"]);
+    for path in &paths {
+        command.arg(gix::path::from_bstr(path.as_bstr()).as_ref());
+    }
+    let output = command
+        .output()
+        .context("could not launch git add for resolved paths")?;
+    if !output.status.success() {
+        let stderr = output.stderr.trim().to_str_lossy();
+        if stderr.is_empty() {
+            anyhow::bail!("git add for resolved paths failed with {}", output.status);
+        }
+        anyhow::bail!("git add for resolved paths failed with {}: {stderr}", output.status);
+    }
+
+    let index = repository
+        .open_index()
+        .context("could not verify the resolved conflict index")?;
+    if index
+        .entries()
+        .iter()
+        .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
+    {
+        anyhow::bail!("the conflict index still has unresolved entries");
+    }
+    Ok(())
 }
 
 fn preview_todo_rebase_conflict(
@@ -5055,7 +5169,6 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::ToggleMailmap
                 | Action::CycleRefs
                 | Action::ToggleRefs
-                | Action::ToggleHidden
                 | Action::ToggleHistoryDisplay
                 | Action::ToggleInformation
                 | Action::ToggleAlign
@@ -6633,6 +6746,8 @@ mod tests {
         }
         for action in [
             Action::Refresh,
+            Action::ToggleHidden,
+            Action::ToggleRefTree,
             Action::ToggleCommitGroup,
             Action::Amend,
             Action::Rebase,
@@ -7049,6 +7164,185 @@ mod tests {
             rendered, ids,
             "slow travel has no rendering mode besides selection frames"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn continuing_a_conflict_commits_the_complete_resolved_index() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let git = |args: &[&str]| Command::new("git").arg("-C").arg(fixture.path()).args(args).output();
+        #[cfg(unix)]
+        let conflict_path = ":(glob)*";
+        #[cfg(not(unix))]
+        let conflict_path = "file";
+        let deleted_path = "deleted-conflict";
+        std::fs::write(fixture.path().join(conflict_path), b"conflict base\n")?;
+        std::fs::write(fixture.path().join(deleted_path), b"delete base\n")?;
+        assert!(
+            git(&["--literal-pathspecs", "add", "--", conflict_path, deleted_path,])?
+                .status
+                .success()
+        );
+        assert!(git(&["commit", "-qm", "conflict base"])?.status.success());
+        assert!(git(&["checkout", "-q", "-b", "conflict-side"])?.status.success());
+        std::fs::write(fixture.path().join(conflict_path), b"side\n")?;
+        std::fs::write(fixture.path().join(deleted_path), b"side\n")?;
+        assert!(git(&["commit", "-qam", "side"])?.status.success());
+        assert!(git(&["checkout", "-q", "main"])?.status.success());
+        std::fs::write(fixture.path().join(conflict_path), b"main\n")?;
+        std::fs::write(fixture.path().join(deleted_path), b"main\n")?;
+        assert!(git(&["commit", "-qam", "main"])?.status.success());
+        assert!(
+            !git(&["merge", "--no-edit", "conflict-side"])?.status.success(),
+            "the fixture produces an ordinary unmerged index"
+        );
+        std::fs::write(fixture.path().join(conflict_path), b"resolved\n")?;
+        std::fs::remove_file(fixture.path().join(deleted_path))?;
+        std::fs::write(fixture.path().join("already-staged"), b"staged\n")?;
+        assert!(git(&["add", "already-staged"])?.status.success());
+        std::fs::write(fixture.path().join("unrelated"), b"unstaged\n")?;
+
+        let repository = test_repository::open(fixture.path())?;
+        stage_resolved_conflict_paths(&repository)?;
+
+        let index = repository.index_or_empty()?;
+        assert!(
+            index
+                .entries()
+                .iter()
+                .all(|entry| entry.stage() == gix::index::entry::Stage::Unconflicted),
+            "resolved paths no longer retain conflict stages"
+        );
+        let staged = git(&["diff", "--cached", "--name-only"])?.stdout;
+        assert_eq!(
+            staged.as_bstr().lines().collect::<HashSet<_>>(),
+            HashSet::from([
+                b"already-staged".as_slice(),
+                conflict_path.as_bytes(),
+                deleted_path.as_bytes(),
+            ]),
+            "edited and deleted resolutions join changes that were already staged"
+        );
+
+        let head = repository.head_id()?.detach();
+        let parent = repository
+            .find_commit(head)?
+            .parent_ids()
+            .next()
+            .map(gix::Id::detach)
+            .context("the conflicted commit has a parent")?;
+        let plan = edit::rebase::Plan {
+            base: parent,
+            scope: vec![head],
+            steps: vec![edit::rebase::PlanStep {
+                parent: edit::rebase::PlanParent::Existing(parent),
+                commit: edit::rebase::PlanCommit::Resolved(head),
+                squash: Vec::new(),
+            }],
+            checkout: Some(edit::rebase::PlanCheckout {
+                target: edit::rebase::PlanParent::Step(0),
+                reference: None,
+            }),
+            expected_refs: Vec::new(),
+        };
+        let graph = HistoryGraph::for_commits(&repository, &plan.scope)?;
+        let outcome = edit::rebase::perform_plan(&repository, &graph, plan)?.complete()?;
+        let resolved = outcome.map(head).context("the conflicted commit is retained")?;
+        edit::time_travel::checkout_without_replay(fixture.path(), false, resolved, &[], false)?;
+
+        let repository = test_repository::open(fixture.path())?;
+        assert_eq!(
+            repository.head_id()?.detach(),
+            resolved,
+            "HEAD selects the resolved commit"
+        );
+        for (path, expected) in [
+            (conflict_path, b"resolved\n".as_slice()),
+            ("already-staged", b"staged\n"),
+        ] {
+            let object = format!("{resolved}:{path}");
+            assert_eq!(
+                git(&["show", &object])?.stdout,
+                expected,
+                "{path} is absorbed into HEAD"
+            );
+        }
+        let deleted = format!("{resolved}:{deleted_path}");
+        assert!(
+            !git(&["cat-file", "-e", &deleted])?.status.success(),
+            "a deleted conflict is absent from HEAD"
+        );
+        assert!(
+            git(&["diff", "--cached", "--quiet"])?.status.success(),
+            "the resolved commit leaves no staged changes"
+        );
+        assert!(
+            repository
+                .index_or_empty()?
+                .entries()
+                .iter()
+                .all(|entry| entry.stage() == gix::index::entry::Stage::Unconflicted),
+            "the final index has no conflict stages"
+        );
+        assert!(
+            !git(&["ls-files", "--error-unmatch", "unrelated"])?.status.success(),
+            "unrelated unstaged paths remain untouched"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rebase_todo_loads_metadata_for_the_entire_editable_scope() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let scope = ["HEAD", "HEAD~1", "HEAD~2"]
+            .into_iter()
+            .map(|revision| Ok(repository.rev_parse_single(revision)?.detach()))
+            .collect::<gix_testtools::Result<Vec<_>>>()?;
+        let unloaded_author = Box::leak(Box::new(app::Author {
+            name: b"".as_bstr(),
+            email: b"".as_bstr(),
+        }));
+        let rows = scope
+            .iter()
+            .map(|id| {
+                let commit = repository.find_commit(*id)?;
+                Ok(app::Commit {
+                    id: *id,
+                    parent_ids: commit.parent_ids().map(gix::Id::detach).collect(),
+                    committer_time: gix::date::Time::default(),
+                    author_time: gix::date::Time::default(),
+                    author: unloaded_author,
+                    attributions: 0..0,
+                    title: BString::default(),
+                    metadata_loaded: false,
+                    has_agent_marker: false,
+                    is_review: false,
+                    signature: app::SignatureState::Unsigned,
+                })
+            })
+            .collect::<gix_testtools::Result<Vec<_>>>()?;
+        let mut app = App::new(1);
+        app.extend_commits(rows);
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+
+        let commits = load_rebase_todo_commits(&repository, &mut app, &authors, &scope)?;
+
+        assert!(app.rows.iter().all(|row| row.metadata_loaded));
+        for (commit, title) in commits.iter().zip(["tip", "middle", "base"]) {
+            assert!(
+                commit.info.contains("author"),
+                "author metadata is loaded: {}",
+                commit.info
+            );
+            assert!(commit.info.contains(title), "the real title is loaded: {}", commit.info);
+            assert!(
+                !commit.info.contains("1970-01-01"),
+                "missing dates never leak into the editor: {}",
+                commit.info
+            );
+        }
         Ok(())
     }
 

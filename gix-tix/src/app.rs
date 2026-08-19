@@ -728,7 +728,7 @@ impl App {
                 "REBASE PAUSED · <enter> continue · Esc stop"
             })
         } else if self.pending_rebase_conflict.is_some() {
-            Some("rebase conflict · <enter> checkout for resolution · any other key cancel")
+            Some("rebase conflict · <enter> checkout for resolution · Esc cancel")
         } else if self.review_return_selection_active() {
             Some("review return is missing · j/k select commit · <enter> finish detached · Esc cancel")
         } else if self.review_selection_active() {
@@ -786,6 +786,12 @@ impl App {
         );
         self.pending_rebase_conflict = Some(id);
         self.rebase_continuation_pending = false;
+        if let Some(index) = self.rows.iter().position(|row| row.id == id) {
+            self.select(index);
+            self.center_selection();
+        } else {
+            self.selection_after_refresh = Some(id);
+        }
     }
 
     pub(crate) fn has_rebase_conflict(&self) -> bool {
@@ -1841,7 +1847,14 @@ impl App {
         if self.reachability_anchor.is_some() {
             self.compute_reachable_rows();
         }
-        self.ensure_visible();
+        if self
+            .pending_rebase_conflict
+            .is_some_and(|id| self.selected.is_some_and(|index| self.rows[index].id == id))
+        {
+            self.center_selection();
+        } else {
+            self.ensure_visible();
+        }
     }
 
     #[cfg(test)]
@@ -2497,14 +2510,19 @@ impl App {
             }
             return;
         };
-        let height = self.viewport_rows.max(1);
-        let centered = selected.saturating_sub(height / 2);
-        let max_offset = self.rows.len().saturating_sub(height);
         self.selected = Some(selected);
-        self.offset = centered.min(max_offset);
+        self.center_selection();
         if matches!(self.state, State::Complete | State::Cancelled) {
             self.pending_initial_selection = None;
         }
+    }
+
+    fn center_selection(&mut self) {
+        let Some(selected) = self.selected else { return };
+        let height = self.viewport_rows.max(1);
+        self.offset = selected
+            .saturating_sub(height / 2)
+            .min(self.rows.len().saturating_sub(height));
     }
 
     pub(crate) fn set_horizontal_bounds(&mut self, page: usize, max: usize) {
@@ -3614,6 +3632,44 @@ mod tests {
         app.clear_rebase_conflict();
         assert!(app.time_travel_shortcut_visible());
         assert!(app.changes_visible(), "clearing the preview restores the changes view");
+    }
+
+    #[test]
+    fn rebase_conflicts_are_selected_and_centered() {
+        let mut app = App::new(3);
+        app.extend_commits((1..=7).rev().map(row).collect::<Vec<_>>());
+        complete(&mut app);
+
+        app.arm_rebase_conflict(id(4));
+
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(4)));
+        assert_eq!(app.offset, 2, "the conflict is centered in the three-row viewport");
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some("rebase conflict · <enter> checkout for resolution · Esc cancel".into())
+        );
+    }
+
+    #[test]
+    fn an_unloaded_rebase_conflict_is_centered_after_refresh() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+        app.arm_rebase_conflict(id(4));
+
+        let rows = app
+            .start_refresh(
+                vec![row_with_parents(5, &[4]), row_with_parents(4, &[2])].into(),
+                &[id(3), id(5)],
+                &[],
+                false,
+            )
+            .expect("the conflict refresh computes lanes");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(4)));
+        assert_eq!(app.offset, 1, "the newly loaded conflict is centered");
     }
 
     #[test]
