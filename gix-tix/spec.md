@@ -740,11 +740,13 @@ space first; changes blocks adapt within the remaining history width.
   pending history; traveling toward a non-pending ancestor leaves the entire
   pending region untouched. A conflict retains the ours tree, exact merge-result
   tree, conflict stages, prepared commits, and in-memory objects without changing
-  the repository. The conflicting row shows a blinking red `C`; `<enter>` persists
+  the repository. The actual conflicting row is selected and centered with normal
+  history-boundary clamping and shows a blinking red `C`; `<enter>` persists
   the prepared rebase, leaves later descendants lazy, checks out the conflicting
   commit at the ours tree, then checks out the merge result and derives the
-  unmerged index from it. Any other key discards
-  the suspended operation; key-release events are not actions and leave it armed.
+  unmerged index from it. `Esc` discards the suspended operation; navigation and
+  other read-only actions leave the choice armed, while repository-changing actions
+  and refresh are blocked. Key-release events are not actions and leave it armed.
   Diagnostics warn when a conflict suspends the rebase and record whether it is
   accepted, discarded, or fails during checkout.
 - A checked-out unresolved index keeps `C` at `@`, overrides dirty `D`, and
@@ -860,9 +862,9 @@ space first; changes blocks adapt within the remaining history width.
   being departed necessarily follows the successful checkout. Newly written
   unreachable objects may remain for normal Git garbage collection.
 - A suspended conflict temporarily owns a cloned repository with object memory
-  while awaiting one confirmation key. Dropping it writes nothing; accepting it
-  consumes the repository immediately after persisting the commit at the ours
-  tree and materializing the retained merge result in the worktree and index.
+  while awaiting an explicit `<enter>` or `Esc` choice. Dropping it writes nothing;
+  accepting it consumes the repository immediately after persisting the commit at
+  the ours tree and materializing the retained merge result in the worktree and index.
 
 ### History rebase editor
 
@@ -870,8 +872,9 @@ space first; changes blocks adapt within the remaining history width.
   `.md` todo. Its editable plan is read bottom-to-top like the history view:
   newest commands and refs are highest, and each stack ends in a centered
   `──── fork <id> ────` separator below its oldest command.
-  IDs are shortened through repository configuration; metadata repeats the
-  information visible in history and always includes the subject. Base-level
+  IDs are shortened through repository configuration; metadata is loaded across
+  the complete todo scope, repeats the full information visible in history, and
+  always includes the subject. Base-level
   stacks end with `fork <id> (base) <title>` in the separator, using the title
   exactly as displayed in history without Markdown escaping. Fork points within the editable tree
   remain plain `fork <id>` separators. Every separator is centered with at least
@@ -927,7 +930,8 @@ space first; changes blocks adapt within the remaining history width.
 - Pick lines use display-only state symbols documented in the footer: `↻` for a
   lazy rebase, `◌` for an invalidated signature awaiting signing, `◐` for an
   unverified signature, and `○` for an unsigned commit. Applicable states may be
-  combined without changing plan semantics.
+  combined without changing plan semantics. Applicable `🚧`, `📝`, and `✔️`
+  enrichment gutter symbols appear before the signature-state disk as metadata.
 - `@pick`, `@squash`, or `@empty` chooses the post-rebase commit. A generated
   todo keeps this marker even when `HEAD` is attached, but shows its branch as an
   ordinary ref. Versioned state remembers that attachment while the ref stays
@@ -944,16 +948,21 @@ space first; changes blocks adapt within the remaining history width.
   markers, and invalidate old signatures for later time travel. With no `@`,
   ordinary steps remain lazy while squash groups are still materialized.
   Any conflict while applying a history todo first remains entirely in memory.
-  The TUI projects the partial result, selects the actual conflicting result, and
-  marks it with a blinking red `C`; predicted ref decorations remain at their
+  The TUI projects the partial result, selects and centers the actual conflicting
+  result with normal history-boundary clamping, and marks it with a blinking red
+  `C`; predicted ref decorations remain at their
   repository positions. Repository-backed overlay content is hidden while these
-  candidate objects exist only in memory. `<enter>` accepts the partial result,
+  candidate objects exist only in memory. History and pane navigation and other
+  read-only actions leave the preview armed; repository-changing actions and
+  refresh are blocked. `<enter>` accepts the partial result,
   moves already-final refs, records the ours tree in the conflicting commit, and
   checks out the retained merge result with an unmerged index,
-  and retains an in-memory continuation plan. Any other key discards the preview
-  without writes.
-  Once the index has no unresolved stages, `<enter>` continues; another conflict
-  repeats the same choice.
+  and retains an in-memory continuation plan. Only `Esc` discards the preview
+  without writes. On continuation, `<enter>` stages paths that still have unresolved
+  index entries, refuses to proceed if any unresolved stages remain, and amends the
+  current conflicting commit from the complete staged index, including any additional
+  staged changes. Unrelated unstaged changes remain untouched. Another conflict
+  repeats the same explicit choice.
 - Command-line apply, including todo `--edit-and-apply`, reports a conflict
   without changes unless `--materialize-conflicts` was explicitly supplied. Its
   continuation document uses the full null object ID for the command whose tree
