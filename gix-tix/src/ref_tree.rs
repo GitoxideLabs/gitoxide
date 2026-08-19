@@ -822,7 +822,8 @@ pub(crate) fn pin_references(
             Err(err) if crate::history::is_missing_ref(&*err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read reference to pin: {err}")),
         };
-        let Some(kind) = pinnable_kind(crate::history::decoration_kind(reference.name().as_bstr())) else {
+        let name = reference.name().to_owned();
+        let Some(kind) = pinnable_kind(crate::history::decoration_kind(name.as_bstr())) else {
             continue;
         };
         if !kinds.contains(&kind) {
@@ -834,7 +835,7 @@ pub(crate) fn pin_references(
         if target.as_ref() != id {
             continue;
         }
-        names.push(reference.name().to_owned());
+        names.push(name);
     }
     names.sort();
     names.dedup();
@@ -2331,6 +2332,18 @@ mod tests {
                 "prepare ref-tree pin test",
             )?;
         }
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(fixture.path())
+                .args([
+                    "symbolic-ref",
+                    "refs/remotes/origin/old-head",
+                    "refs/remotes/origin/old"
+                ])
+                .status()?
+                .success(),
+            "git creates a symbolic remote alias"
+        );
 
         let pins = pin_references(&repo, old, &[DecorationKind::Local, DecorationKind::Remote])?;
         let targets: Vec<_> = pins
@@ -2339,7 +2352,18 @@ mod tests {
             .collect();
         assert!(targets.contains(&b"refs/heads/old".as_bstr().to_owned()));
         assert!(targets.contains(&b"refs/remotes/origin/old".as_bstr().to_owned()));
+        assert!(
+            targets.contains(&b"refs/remotes/origin/old-head".as_bstr().to_owned()),
+            "the pin retains the selected symbolic reference instead of its referent"
+        );
         assert!(!targets.contains(&b"refs/tags/old".as_bstr().to_owned()));
+        for pin in &pins {
+            assert_eq!(
+                repo.find_reference(pin.name.as_ref())?.target().into_owned(),
+                pin.target,
+                "the stored pin itself remains symbolic"
+            );
+        }
         assert!(
             crate::history::snapshot(&repo, &[], &[], false)?
                 .view_tips
