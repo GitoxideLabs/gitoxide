@@ -173,7 +173,7 @@ pub mod is_dirty {
                 // The default pathspec would limit the comparison to the prefix of the current working directory.
                 let mut pathspec = self
                     .pathspec(
-                        false,
+                        false, /* this forces the status from the root, ignoring the prefix/CWD */
                         None::<&str>,
                         false,
                         &gix_index::State::new(self.object_hash()),
