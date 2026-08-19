@@ -170,11 +170,21 @@ pub mod is_dirty {
                 let head_tree_id = self.head_tree_id_or_empty()?;
                 let mut index_is_dirty = false;
 
+                // The default pathspec would limit the comparison to the prefix of the current working directory.
+                let mut pathspec = self
+                    .pathspec(
+                        false, /* this forces the status from the root, ignoring the prefix/CWD */
+                        None::<&str>,
+                        false,
+                        &gix_index::State::new(self.object_hash()),
+                        gix_worktree::stack::state::attributes::Source::IdMapping,
+                    )
+                    .expect("Impossible for this to fail without patterns");
                 // Run this first as there is a high likelihood to find something, and it's very fast.
                 self.tree_index_status(
                     &head_tree_id,
                     &*self.index_or_empty()?,
-                    None,
+                    Some(&mut pathspec),
                     crate::status::tree_index::TrackRenames::Disabled,
                     |_, _, _| {
                         index_is_dirty = true;

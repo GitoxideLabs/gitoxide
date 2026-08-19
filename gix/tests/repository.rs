@@ -109,6 +109,23 @@ fn absolute_paths_outside_the_repository_are_rejected() -> gix_testtools::Result
 }
 
 #[test]
+#[cfg(feature = "status")]
+#[serial]
+fn is_dirty_sees_index_changes_outside_the_current_working_directory() -> gix_testtools::Result {
+    let root = gix::path::realpath(
+        gix_testtools::scripted_fixture_read_only("make_status_repos.sh")?.join("index-changed-outside-subdir"),
+    )?;
+
+    let _cwd = gix_testtools::set_current_dir(root.join("subdir"))?;
+    let repo = gix::discover_opts(".", Default::default(), gix::open::Options::isolated())?;
+    assert!(
+        repo.is_dirty()?,
+        "the index comparison isn't limited to the current working directory"
+    );
+    Ok(())
+}
+
+#[test]
 #[cfg(feature = "revision")]
 #[serial]
 fn revspec_paths_starting_with_a_dot_are_relative_to_the_current_directory() -> gix_testtools::Result {
