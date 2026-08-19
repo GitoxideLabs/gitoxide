@@ -767,7 +767,7 @@ pub(crate) fn draw_with_worktree(
         }
         frame.render_widget(
             Paragraph::new(if head && worktree_dirty {
-                "D "
+                "🫟"
             } else if selected {
                 "> "
             } else {
@@ -4637,7 +4637,7 @@ mod tests {
                 Some(&dirty),
             );
         })?;
-        assert!(rendered_line(&terminal, 0).starts_with("D @"));
+        assert!(rendered_line(&terminal, 0).starts_with("🫟 @"));
         assert!(rendered_line(&terminal, 1).starts_with("> ●"));
         assert_eq!(terminal.backend().buffer()[(0, 0)].modifier, Modifier::empty());
         assert!(
@@ -4658,7 +4658,7 @@ mod tests {
                 Some(&dirty),
             );
         })?;
-        assert!(rendered_line(&terminal, 0).starts_with("D @"));
+        assert!(rendered_line(&terminal, 0).starts_with("🫟 @"));
         assert!(
             terminal.backend().buffer()[(0, 0)]
                 .modifier
@@ -4687,7 +4687,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 0).starts_with("💥 D @"),
+            rendered_line(&terminal, 0).starts_with("💥 🫟 @"),
             "the conflict gutter precedes the ordinary status: {:?}",
             rendered_line(&terminal, 0)
         );
@@ -4711,7 +4711,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 0).starts_with("D @"),
+            rendered_line(&terminal, 0).starts_with("🫟 @"),
             "resolving the index restores the ordinary dirty marker"
         );
 
