@@ -90,14 +90,14 @@ without trading responsiveness for metadata that is not visible.
   it when the editor exits. It also accepts `--materialize-conflicts [CONTINUE]`
   to opt into the same conflict checkout and continuation-document workflow as
   `tix rebase apply`; the option requires `--edit-and-apply`.
-- `tix show` and `tix rebase todo` automatically inspect symbolic
+- `tix show`, `tix ref-tree`, and `tix rebase todo` automatically inspect symbolic
   `refs/remotes/<remote>/HEAD` references. Their targets are reverse-mapped
   through each remote's fetch refspec, and existing local commit branches are
   added to the explicit hidden revisions. Multiple remote defaults are
   deduplicated; stale, direct, ambiguous, unmappable, missing, and non-commit
   results are ignored. At least one explicit or inferred hidden revision is
-  required. `--no-auto-hide` disables inference. The interactive history and
-  `ref-tree --hide` retain their explicit-only behavior.
+  required by commands that need a hidden boundary. `--no-auto-hide` disables
+  inference. The interactive history retains its explicit-only behavior.
 - `tix rebase apply [FILE]` applies such a plan from a file, or from standard
   input when `FILE` is omitted or `-`. Removing its state comment or emptying the
   document cancels successfully; malformed or unsupported state is an error.
@@ -337,11 +337,12 @@ without trading responsiveness for metadata that is not visible.
 
 ### Ref-tree diagnostics
 
-- `tix ref-tree` prints the entire reference projection to standard output without
+- `tix ref-tree` prints the non-hidden reference projection to standard output without
   terminal colors, selection state, counts, or viewport clipping. A detached
   current worktree renders as `[pin]` in ASCII output and `📌` with `--unicode`.
-  It traverses
-  all normal references by default; positional revisions scope traversal.
+  It traverses all normal references by default; positional revisions scope
+  traversal. Hidden reference labels and traversal tips are omitted, including
+  local defaults inferred from remote HEADs unless `--no-auto-hide` is given.
 - Worktree traversal is always enabled. `--no-tags` and repeatable
   `-x/--hide <revision>` match the corresponding ref-tree inputs. Output uses
   ASCII lines and `o` nodes by default; `--unicode` uses the interactive

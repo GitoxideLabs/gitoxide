@@ -33,7 +33,7 @@ pub struct Platform {
 
 #[derive(Debug, clap::Subcommand)]
 enum Command {
-    /// Print the complete ref-tree without opening the terminal UI.
+    /// Print the ref-tree of non-hidden references without opening the terminal UI.
     RefTree(RefTree),
     /// Print the complete history view without opening the terminal UI.
     Show(Show),
@@ -66,6 +66,9 @@ struct RefTree {
     /// Hide this revision and every commit reachable from it.
     #[arg(short = 'x', long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
+    /// Do not infer hidden local branches from remote HEADs.
+    #[arg(long)]
+    no_auto_hide: bool,
     /// Use the ref-tree view's Unicode line and node glyphs instead of ASCII.
     #[arg(long)]
     unicode: bool,
@@ -190,15 +193,26 @@ impl Platform {
 }
 
 fn print_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<()> {
+    let rendered = render_ref_tree(repository, args)?;
+    std::io::Write::write_all(&mut std::io::stdout().lock(), rendered.as_bytes())
+        .context("could not write ref-tree")?;
+    Ok(())
+}
+
+fn render_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<String> {
+    let (hide, unavailable) = crate::history::available_hidden_revisions(repository, &args.hide, !args.no_auto_hide)?;
+    for (revision, err) in unavailable {
+        eprintln!(
+            "warning: ignoring unavailable hidden revision {}: {err}",
+            revision.to_string_lossy()
+        );
+    }
     let revisions = if args.revisions.is_empty() {
         crate::history::ref_tree_revisions(repository, !args.no_tags)?
     } else {
         args.revisions
     };
-    let rendered = crate::ref_tree::render_full(repository, &revisions, &args.hide, !args.no_tags, args.unicode)?;
-    std::io::Write::write_all(&mut std::io::stdout().lock(), rendered.as_bytes())
-        .context("could not write ref-tree")?;
-    Ok(())
+    crate::ref_tree::render_full(repository, &revisions, &hide, !args.no_tags, args.unicode)
 }
 
 fn show(repository: &gix::Repository, args: Show) -> Result<()> {
@@ -632,8 +646,18 @@ mod tests {
         };
         assert!(ref_tree.no_tags);
         assert_eq!(ref_tree.hide, ["private"]);
+        assert!(!ref_tree.no_auto_hide);
         assert!(ref_tree.unicode);
         assert_eq!(ref_tree.revisions, ["main", "topic"]);
+
+        let ref_tree = Cli::try_parse_from(["tix", "ref-tree", "--no-auto-hide"])
+            .expect("ref-tree can disable automatic hiding")
+            .platform
+            .command;
+        let Some(Command::RefTree(ref_tree)) = ref_tree else {
+            panic!("ref-tree was expected")
+        };
+        assert!(ref_tree.no_auto_hide);
 
         let show = Cli::try_parse_from(["tix", "show", "-x", "main", "--hide", "tag", "topic"])
             .expect("show options parse")
@@ -870,6 +894,62 @@ mod tests {
             Cli::command().render_long_help().to_string().contains("GIT_EDITOR"),
             "top-level help explains how to override Git's editor"
         );
+    }
+
+    #[test]
+    fn ref_tree_omits_explicit_and_inferred_hidden_references() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let topic = repository.rev_parse_single("topic")?.detach();
+        repository.reference(
+            "refs/heads/visible",
+            topic,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test visible alias",
+        )?;
+
+        let args = |hide, no_auto_hide| RefTree {
+            no_tags: false,
+            hide,
+            no_auto_hide,
+            unicode: false,
+            revisions: Vec::new(),
+        };
+        let all = render_ref_tree(&repository, args(Vec::new(), true))?;
+        let hidden = render_ref_tree(&repository, args(vec!["topic".into()], true))?;
+        assert!(all.contains("topic"), "the complete tree includes topic: {all:?}");
+        assert!(
+            hidden.contains("visible"),
+            "a visible ref sharing the target remains: {hidden:?}"
+        );
+        assert!(
+            !hidden.contains("topic"),
+            "the explicitly hidden label is gone: {hidden:?}"
+        );
+
+        for git_args in [
+            ["config", "remote.origin.url", "https://example.com/repo"].as_slice(),
+            ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"].as_slice(),
+            ["update-ref", "refs/remotes/origin/main", "main"].as_slice(),
+            ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"].as_slice(),
+        ] {
+            let status = ProcessCommand::new("git")
+                .current_dir(fixture.path())
+                .args(git_args)
+                .status()?;
+            assert!(status.success(), "git {git_args:?} prepares remote HEAD inference");
+        }
+        let repository = crate::test_repository::open(fixture.path())?;
+        let automatic = render_ref_tree(&repository, args(Vec::new(), false))?;
+        assert!(
+            all.contains("@main"),
+            "disabling inference retains the local default: {all:?}"
+        );
+        assert!(
+            !automatic.contains("@main") && automatic.contains("origin/main"),
+            "automatic hiding removes only the inferred local ref: {automatic:?}"
+        );
+        Ok(())
     }
 
     #[test]

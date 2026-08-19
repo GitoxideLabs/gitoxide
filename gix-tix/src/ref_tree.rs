@@ -1478,30 +1478,41 @@ pub(crate) fn render_full(
     show_tags: bool,
     unicode: bool,
 ) -> anyhow::Result<String> {
-    let refs = crate::history::snapshot(repository, revisions, hidden, true)?;
+    let hidden_refs = if hidden.is_empty() {
+        HashMap::new()
+    } else {
+        crate::history::referenced_refs(repository, hidden)?
+    };
+    let mut visible_revisions = Vec::with_capacity(revisions.len());
+    for revision in revisions {
+        let referenced = crate::history::referenced_refs(repository, std::slice::from_ref(revision))?;
+        if referenced.keys().all(|name| !hidden_refs.contains_key(name)) {
+            visible_revisions.push(revision.clone());
+        }
+    }
+    let mut refs = crate::history::snapshot(repository, &visible_revisions, hidden, true)?;
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
         crate::history::Authors::default(),
     ));
     let mut graph = None;
-    let mut decorations = None;
     crate::history::load(
         repository,
-        revisions,
+        &visible_revisions,
         hidden,
         true,
         &authors,
         &AtomicBool::new(false),
         |event| {
-            match event {
-                crate::history::Event::Decorations(value) => decorations = Some(value),
-                crate::history::Event::Complete(value) => graph = Some(value),
-                _ => {}
+            if let crate::history::Event::Complete(value) = event {
+                graph = Some(value);
             }
             true
         },
     )?;
     let graph = graph.ok_or_else(|| anyhow::anyhow!("history traversal did not produce a graph"))?;
-    let decorations = decorations.unwrap_or_default();
+    let hidden_refs = hidden_refs.into_keys().collect();
+    let decorations = crate::history::decorations_excluding(repository, &refs.pins, &refs.worktrees, &hidden_refs)?;
+    refs.hidden_tips.clear();
     let overview = Overview::new(&graph, &refs, &decorations, show_tags);
     let labels = overview
         .nodes
