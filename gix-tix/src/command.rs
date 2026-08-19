@@ -823,7 +823,56 @@ mod tests {
             panic!("travel was expected")
         };
         assert!(travel.materialize_conflicts);
-        assert_eq!(travel.revision, "HEAD~1");
+        assert_eq!(travel.revision.as_deref(), Some(std::ffi::OsStr::new("HEAD~1")));
+        assert_eq!(travel.to, None);
+        for (value, expected) in [
+            ("first", travel::To::First),
+            ("parent", travel::To::Parent),
+            ("child", travel::To::Child),
+            ("tip", travel::To::Tip),
+        ] {
+            let parsed = Cli::try_parse_from(["tix", "travel", "--to", value])
+                .expect("relative travel parses")
+                .platform
+                .command;
+            let Some(Command::Travel(travel)) = parsed else {
+                panic!("travel was expected")
+            };
+            assert_eq!(travel.revision, None);
+            assert_eq!(travel.to, Some(expected));
+        }
+        assert_eq!(
+            Cli::try_parse_from(["tix", "travel"])
+                .expect_err("travel requires one destination")
+                .kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+        assert_eq!(
+            Cli::try_parse_from(["tix", "travel", "HEAD", "--to", "tip"])
+                .expect_err("relative and explicit travel are mutually exclusive")
+                .kind(),
+            ErrorKind::ArgumentConflict
+        );
+        assert_eq!(
+            Cli::try_parse_from(["tix", "travel", "--to", "last"])
+                .expect_err("tip is the sole name for the upper endpoint")
+                .kind(),
+            ErrorKind::InvalidValue
+        );
+        let travel_help = Cli::try_parse_from(["tix", "travel", "--help"])
+            .expect_err("help exits through clap")
+            .to_string();
+        for description in [
+            "Visit the oldest reachable root",
+            "Visit HEAD's direct visible parent",
+            "Visit HEAD's direct visible child",
+            "Visit the reachable leaf",
+        ] {
+            assert!(
+                travel_help.contains(description),
+                "travel help describes every relative destination: {travel_help}"
+            );
+        }
         let reword = Cli::try_parse_from(["tix", "reword", "HEAD~2"])
             .expect("reword parses")
             .platform

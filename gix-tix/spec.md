@@ -24,10 +24,15 @@ without trading responsiveness for metadata that is not visible.
   seven-character commit hash is followed by its seven-character reverse-hex
   change ID. Colliding or duplicated prefixes remain visible and receive a `💥`
   gutter marker.
-- `tix travel [--materialize-conflicts] REVSPEC` performs the same detached
-  checkout, pending-rebase replay, stash handling, and pin reconciliation as
-  TUI time travel. Its target may also be an unambiguous reverse-hex change-ID
-  prefix from the default Tix view. Travelling to the current `HEAD` is a no-op.
+- `tix travel [--materialize-conflicts] (REVSPEC | --to first|parent|child|tip)`
+  performs the same detached checkout, pending-rebase replay, stash handling,
+  and pin reconciliation as TUI time travel. Its target may also be an
+  unambiguous reverse-hex change-ID prefix from the default Tix view. `parent`
+  and `child` move one edge from `HEAD`; `first` selects its oldest reachable
+  root and `tip` its reachable leaf, considering only commits visible in the
+  default view. Multiple direct or terminal candidates are reported with their
+  commit and change IDs and must be selected with a direct `tix travel REVSPEC`.
+  Travelling to the current `HEAD` is a no-op.
   A detached source may travel to a descendant without a pin, but travelling to
   an ancestor or unrelated commit requires an existing current-worktree pin at
   `HEAD` or a descendant. An attached source is preserved through the singleton
