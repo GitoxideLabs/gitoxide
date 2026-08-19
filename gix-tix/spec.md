@@ -401,14 +401,16 @@ full-column alignment so clipped fields can be reached.
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. The `?` group similarly remains open
-for signature verification, alignment, message, and changes actions. While expanded,
-the group visually contains every following status action through `<enter> diff`,
-including pane switching and navigation; none of those hints is visible while
-the group is closed, and quit remains outside it. The footer underlines the `v`
-in `view`; an open prefix reverses its complete expanded group for a strong,
-terminal-theme-independent cue. While active, `view (` contains
-every applicable display option and a closing `)` so direct shortcuts remain visibly
-outside the prefix. The history status starts with the history position, then the
+for signature verification, alignment, message, and changes actions. The footer
+keeps every prefix compact. Opening one reverses its label and shows its available
+items in a reversed, single-row popout immediately above and connected to that
+label; the `?` popout also contains its pane-switching and navigation hints through
+`<enter> diff`. The popout has horizontal padding, shifts left or clips at the
+terminal edge without wrapping, and is omitted when its label or the row above the
+footer is not visible. It does not reserve a history row and may cover history,
+panes, or notices beneath it. Closing behavior and shortcut availability are
+unchanged, and direct status actions and quit remain in the footer. The history
+status starts with the history position, then the
 `v`, `c`, and `a` prefixes when they are addressable. Remaining history-level
 actions end at the information prefix while it is closed. An available direct
 time-travel action follows the shortcut groups, and duplicate cycling follows it when
