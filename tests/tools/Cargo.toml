@@ -18,18 +18,58 @@ path = "src/main.rs"
 doctest = true
 
 [features]
-default = ["worktree-exclusions"]
-## Use the current repository's ignore rules to decide if generated fixture archives should be written.
+default = ["worktree-exclusions", "repo-snapshot"]
+## Use the current repository's complete ignore rules to decide if generated fixture archives should be written.
+## Without this feature, only the `.gitignore` next to the archive is consulted using a fallback matcher
+## that supports literal patterns and `*`, but not the full `.gitignore` syntax.
 worktree-exclusions = ["dep:gix-discover", "dep:gix-worktree", "dep:gix-fs"]
+## Capture repository snapshots using `gix-*` plumbing crates instead of invoking Git.
+## Without this feature, repository snapshots use the Git executable selected by `gix-path`.
+repo-snapshot = [
+    "dep:gix-config",
+    "dep:gix-discover",
+    "dep:gix-index",
+    "dep:gix-object",
+    "dep:gix-odb",
+    "dep:gix-ref",
+    "dep:gix-shallow",
+]
+## Enable support for SHA-1 fixture repositories and object IDs.
+sha1 = [
+    "gix-hash/sha1",
+    "gix-config?/sha1",
+    "gix-index?/sha1",
+    "gix-object?/sha1",
+    "gix-odb?/sha1",
+    "gix-ref?/sha1",
+    "gix-shallow?/sha1",
+]
+## Enable support for SHA-256 fixture repositories and object IDs.
+sha256 = [
+    "gix-hash/sha256",
+    "gix-config?/sha256",
+    "gix-index?/sha256",
+    "gix-object?/sha256",
+    "gix-odb?/sha256",
+    "gix-ref?/sha256",
+    "gix-shallow?/sha256",
+]
 ## Use instead of plain `tar` files, compress these to produce `tar.xz` files instead.
 ## This is useful if archives are uploaded into `git-lfs`, which doesn't have built-in compression
 ## and metering counts towards uncompressed bytes transferred.
 xz = ["dep:xz2"]
 
 [dependencies]
-gix-hash = { version = "^0.26.0", path = "../../gix-hash", features = ["sha1", "sha256"] }
+gix-hash = { version = "^0.26.0", path = "../../gix-hash" }
 gix-lock = { version = "^24.0.0", path = "../../gix-lock" }
+gix-path = { version = "^0.12.4", path = "../../gix-path" }
+gix-config = { version = "^0.59.0", path = "../../gix-config", optional = true, default-features = false }
 gix-discover = { version = "^0.54.0", path = "../../gix-discover", optional = true }
+gix-index = { version = "^0.54.0", path = "../../gix-index", optional = true, default-features = false }
+gix-object = { version = "^0.63.0", path = "../../gix-object", optional = true, default-features = false }
+gix-odb = { version = "^0.83.0", path = "../../gix-odb", optional = true, default-features = false }
+gix-ref = { version = "^0.66.0", path = "../../gix-ref", optional = true, default-features = false }
+gix-shallow = { version = "^0.13.0", path = "../../gix-shallow", optional = true }
 gix-worktree = { version = "^0.55.0", path = "../../gix-worktree", optional = true, features = ["parallel"] }
 gix-fs = { version = "^0.22.0", path = "../../gix-fs", optional = true }
 gix-tempfile = { version = "^24.0.0", path = "../../gix-tempfile", default-features = false, features = ["signals"] }
@@ -48,6 +88,8 @@ xz2 = { version = "0.1.6", optional = true }
 document-features = { version = "0.2.1", optional = true }
 
 [dev-dependencies]
+gix-testtools = { path = ".", default-features = false, features = ["sha1", "sha256"] }
+insta = "1.46.3"
 serial_test = { version = "3.4.0", default-features = false }
 
 [package.metadata.docs.rs]

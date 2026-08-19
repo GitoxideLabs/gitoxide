@@ -5,7 +5,6 @@ use std::{
 
 use bstr::ByteVec;
 use gix_path::{realpath::Error, realpath_opts};
-use gix_testtools::tempfile;
 
 #[test]
 fn fuzzed_timeout() -> crate::Result {

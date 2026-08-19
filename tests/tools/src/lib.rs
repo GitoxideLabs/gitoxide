@@ -37,6 +37,12 @@ use std::sync::LazyLock;
 
 pub use tempfile;
 
+/// Shared setup for tests involving Git-compatible signatures.
+pub mod signature;
+
+/// Capture complete, stable repository state for integration-test assertions.
+pub mod repository;
+
 const ARCHIVE_DIR_NAME: &str = "generated-archives";
 
 /// A result type to allow using the try operator `?` in unit tests.
@@ -340,11 +346,6 @@ fn default_excludes() -> &'static dyn IsExcluded {
     &GITIGNORE_EXCLUSIONS
 }
 
-#[cfg(windows)]
-const GIT_PROGRAM: &str = "git.exe";
-#[cfg(not(windows))]
-const GIT_PROGRAM: &str = "git";
-
 const DISABLE_AUTO_MAINTENANCE_CONFIG: &[(&str, &str)] = &[("maintenance.auto", "false"), ("gc.auto", "0")];
 
 const ISOLATED_GIT_CONFIG: &[(&str, &str)] = &[
@@ -357,7 +358,7 @@ const ISOLATED_GIT_CONFIG: &[(&str, &str)] = &[
 ];
 
 static GIT_CORE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    let output = std::process::Command::new(GIT_PROGRAM)
+    let output = std::process::Command::new(gix_path::env::exe_invocation())
         .arg("--exec-path")
         .output()
         .expect("can execute `git --exec-path`");
@@ -377,8 +378,9 @@ static GIT_CORE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 pub static GIT_VERSION: LazyLock<(u8, u8, u8)> =
     LazyLock::new(|| parse_git_version().expect("git version to be parsable"));
 
-/// Define how [`scripted_fixture_writable_with_args()`] and [`rust_fixture_writable()`]
-/// produces the writable copy.
+/// Define how [`scripted_fixture_writable_with_args()`],
+/// [`scripted_fixture_writable_with_args_with_git_version()`], and [`rust_fixture_writable()`]
+/// produce the writable fixture.
 pub enum Creation {
     /// Run the code once and copy the data from its output to the writable location.
     /// This is fast but won't work if absolute paths are produced by the script.
@@ -406,7 +408,9 @@ pub fn should_skip_as_git_version_is_smaller_than(major: u8, minor: u8, patch: u
 }
 
 fn parse_git_version() -> Result<(u8, u8, u8)> {
-    let output = std::process::Command::new(GIT_PROGRAM).arg("--version").output()?;
+    let output = std::process::Command::new(gix_path::env::exe_invocation())
+        .arg("--version")
+        .output()?;
     git_version_from_bytes(&output.stdout)
 }
 
@@ -460,7 +464,7 @@ impl Drop for AutoRevertToPreviousCWD {
 
 /// Run `git` in `working_dir` with all provided `args`.
 pub fn run_git(working_dir: &Path, args: &[&str]) -> std::io::Result<std::process::ExitStatus> {
-    let mut cmd = std::process::Command::new(GIT_PROGRAM);
+    let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
     apply_git_config_by_environment(&mut cmd, DISABLE_AUTO_MAINTENANCE_CONFIG)
         .current_dir(working_dir)
         .args(args)
@@ -576,7 +580,7 @@ fn spawn_git_daemon_inetd(working_dir: impl AsRef<Path>) -> std::io::Result<GitD
                     Err(_) => continue,
                 };
                 let stdout = stream_to_stdio(stream);
-                let mut cmd = std::process::Command::new(GIT_PROGRAM);
+                let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
                 let Ok(mut child) = apply_git_config_by_environment(&mut cmd, DISABLE_AUTO_MAINTENANCE_CONFIG)
                     .args([
                         "-c",
@@ -645,6 +649,14 @@ enum ArchivePolicy {
     Prefer,
     /// Ignore `GIX_TEST_IGNORE_ARCHIVES` and return no fixture if the archive is unavailable.
     Require,
+}
+
+fn archive_policy_for_git_version(is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool) -> ArchivePolicy {
+    if is_git_version_compatible(*GIT_VERSION) {
+        ArchivePolicy::Normal
+    } else {
+        ArchivePolicy::Require
+    }
 }
 
 impl ArchivePolicy {
@@ -767,6 +779,23 @@ pub fn scripted_fixture_writable(script_name: impl AsRef<Path>) -> Result<tempfi
     scripted_fixture_writable_with_args(script_name, None::<String>, Creation::CopyFromReadOnly)
 }
 
+/// Produce a writable scripted fixture when the installed Git version is compatible, or extract it from a matching
+/// archive otherwise.
+///
+/// This is the writable equivalent of [`scripted_fixture_read_only_with_git_version()`]. It returns `None` when Git is
+/// incompatible and no matching archive is available.
+pub fn scripted_fixture_writable_with_git_version(
+    script_name: impl AsRef<Path>,
+    is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool,
+) -> Result<Option<tempfile::TempDir>> {
+    scripted_fixture_writable_with_args_with_git_version(
+        script_name,
+        None::<String>,
+        Creation::CopyFromReadOnly,
+        is_git_version_compatible,
+    )
+}
+
 /// Like [`scripted_fixture_writable()`], but passes `args` to `script_name` while providing control over
 /// the way files are created with `mode`.
 pub fn scripted_fixture_writable_with_args(
@@ -781,8 +810,29 @@ pub fn scripted_fixture_writable_with_args(
         ArgsInHash::Yes,
         default_excludes(),
         None::<(u32, _)>,
+        ArchivePolicy::Normal,
     )
-    .map(|(dir, _)| dir)
+    .map(|fixture| fixture.expect("normal fixtures fall back to generation").0)
+}
+
+/// Like [`scripted_fixture_writable_with_git_version()`], but passes `args` to `script_name` while providing control
+/// over the way files are created with `mode`.
+pub fn scripted_fixture_writable_with_args_with_git_version(
+    script_name: impl AsRef<Path>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    mode: Creation,
+    is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool,
+) -> Result<Option<tempfile::TempDir>> {
+    scripted_fixture_writable_with_args_inner::<fn(FixtureState<'_>) -> PostResult, ()>(
+        script_name,
+        args,
+        mode,
+        ArgsInHash::Yes,
+        default_excludes(),
+        None::<(u32, _)>,
+        archive_policy_for_git_version(is_git_version_compatible),
+    )
+    .map(|fixture| fixture.map(|(dir, _)| dir))
 }
 
 /// Like [`scripted_fixture_writable()`], but passes `args` to `script_name` while providing control over
@@ -801,8 +851,28 @@ pub fn scripted_fixture_writable_with_args_single_archive(
         ArgsInHash::No,
         default_excludes(),
         None::<(u32, _)>,
+        ArchivePolicy::Normal,
     )
-    .map(|(dir, _)| dir)
+    .map(|fixture| fixture.expect("normal fixtures fall back to generation").0)
+}
+
+/// Like [`scripted_fixture_writable_with_args_with_git_version()`], but uses a single archive for all argument sets.
+pub fn scripted_fixture_writable_with_args_single_archive_with_git_version(
+    script_name: impl AsRef<Path>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    mode: Creation,
+    is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool,
+) -> Result<Option<tempfile::TempDir>> {
+    scripted_fixture_writable_with_args_inner::<fn(FixtureState<'_>) -> PostResult, ()>(
+        script_name,
+        args,
+        mode,
+        ArgsInHash::No,
+        default_excludes(),
+        None::<(u32, _)>,
+        archive_policy_for_git_version(is_git_version_compatible),
+    )
+    .map(|fixture| fixture.map(|(dir, _)| dir))
 }
 
 fn scripted_fixture_writable_with_args_inner<F, T>(
@@ -812,42 +882,47 @@ fn scripted_fixture_writable_with_args_inner<F, T>(
     args_in_hash: ArgsInHash,
     excludes: &dyn IsExcluded,
     mut post_process: Option<(u32, F)>,
-) -> Result<(tempfile::TempDir, Option<T>)>
+    archive_policy: ArchivePolicy,
+) -> Result<Option<(tempfile::TempDir, Option<T>)>>
 where
     F: FnMut(FixtureState<'_>) -> PostResult<T>,
 {
     let dst = tempfile::TempDir::new()?;
-    Ok(match mode {
+    match mode {
         Creation::CopyFromReadOnly => {
             // Create the read-only fixture with post_process (modifications are cached)
-            let (ro_dir, _res_ignored) = scripted_fixture_read_only_with_args_inner(
+            let Some((ro_dir, post_result)) = scripted_fixture_read_only_with_args_inner(
                 script_name,
                 args,
                 None,
                 args_in_hash,
                 excludes,
                 post_process.as_mut().map(|(v, f)| (*v, f)),
-                ArchivePolicy::Normal,
+                archive_policy,
             )?
-            .expect("normal fixtures fall back to generation");
+            else {
+                return Ok(None);
+            };
             copy_recursively_into_existing_dir(ro_dir, dst.path())?;
-            (dst, _res_ignored)
+            Ok(Some((dst, post_result)))
         }
         Creation::Execute => {
             // Execute directly in the temp dir with post_process
-            let (_, post_result) = scripted_fixture_read_only_with_args_inner(
+            let Some((_, post_result)) = scripted_fixture_read_only_with_args_inner(
                 script_name,
                 args,
                 dst.path().into(),
                 args_in_hash,
                 excludes,
                 post_process.as_mut().map(|(v, f)| (*v, f)),
-                ArchivePolicy::Normal,
+                archive_policy,
             )?
-            .expect("normal fixtures fall back to generation");
-            (dst, post_result)
+            else {
+                return Ok(None);
+            };
+            Ok(Some((dst, post_result)))
         }
-    })
+    }
 }
 
 /// A utility to copy the entire contents of `src_dir` into `dst_dir`.
@@ -892,11 +967,6 @@ pub fn scripted_fixture_read_only_with_args_with_git_version(
     args: impl IntoIterator<Item = impl Into<String>>,
     is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool,
 ) -> Result<Option<PathBuf>> {
-    let archive_policy = if is_git_version_compatible(*GIT_VERSION) {
-        ArchivePolicy::Normal
-    } else {
-        ArchivePolicy::Require
-    };
     scripted_fixture_read_only_with_args_inner::<fn(FixtureState<'_>) -> PostResult, ()>(
         script_name,
         args,
@@ -904,7 +974,7 @@ pub fn scripted_fixture_read_only_with_args_with_git_version(
         ArgsInHash::Yes,
         default_excludes(),
         None::<(u32, _)>,
-        archive_policy,
+        archive_policy_for_git_version(is_git_version_compatible),
     )
     .map(|fixture| fixture.map(|(dir, _)| dir))
 }
@@ -936,6 +1006,24 @@ pub fn scripted_fixture_read_only_with_args_single_archive(
     .map(|fixture| fixture.expect("normal fixtures fall back to generation").0)
 }
 
+/// Like [`scripted_fixture_read_only_with_args_with_git_version()`], but uses a single archive for all argument sets.
+pub fn scripted_fixture_read_only_with_args_single_archive_with_git_version(
+    script_name: impl AsRef<Path>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool,
+) -> Result<Option<PathBuf>> {
+    scripted_fixture_read_only_with_args_inner::<fn(FixtureState<'_>) -> PostResult, ()>(
+        script_name,
+        args,
+        None,
+        ArgsInHash::No,
+        default_excludes(),
+        None::<(u32, _)>,
+        archive_policy_for_git_version(is_git_version_compatible),
+    )
+    .map(|fixture| fixture.map(|(dir, _)| dir))
+}
+
 /// Like [`scripted_fixture_read_only`], but runs a Rust closure after the script completes.
 ///
 /// - `version` should be incremented when the closure's behavior changes to invalidate the cache.
@@ -964,6 +1052,22 @@ pub fn scripted_fixture_read_only_with_post<T>(
     })
 }
 
+/// Like [`scripted_fixture_read_only_with_git_version()`], but runs a Rust closure after the script completes.
+pub fn scripted_fixture_read_only_with_post_with_git_version<T>(
+    script_name: impl AsRef<Path>,
+    version: u32,
+    post_process: impl FnMut(FixtureState<'_>) -> PostResult<T>,
+    is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool,
+) -> Result<Option<(PathBuf, T)>> {
+    scripted_fixture_read_only_with_args_with_post_with_git_version(
+        script_name,
+        None::<String>,
+        version,
+        post_process,
+        is_git_version_compatible,
+    )
+}
+
 /// Like [`scripted_fixture_read_only_with_args`], but runs a Rust closure after the script completes.
 ///
 /// See [`scripted_fixture_read_only_with_post`] for details on the closure behavior.
@@ -986,6 +1090,26 @@ pub fn scripted_fixture_read_only_with_args_with_post<T>(
         let (path, opt) = fixture.expect("normal fixtures fall back to generation");
         (path, opt.expect("post_process was provided"))
     })
+}
+
+/// Like [`scripted_fixture_read_only_with_args_with_git_version()`], but runs a Rust closure after the script completes.
+pub fn scripted_fixture_read_only_with_args_with_post_with_git_version<T>(
+    script_name: impl AsRef<Path>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    version: u32,
+    post_process: impl FnMut(FixtureState<'_>) -> PostResult<T>,
+    is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool,
+) -> Result<Option<(PathBuf, T)>> {
+    scripted_fixture_read_only_with_args_inner(
+        script_name,
+        args,
+        None,
+        ArgsInHash::Yes,
+        default_excludes(),
+        Some((version, post_process)),
+        archive_policy_for_git_version(is_git_version_compatible),
+    )
+    .map(|fixture| fixture.map(|(path, opt)| (path, opt.expect("post_process was provided"))))
 }
 
 /// Like [`scripted_fixture_read_only_with_args_single_archive`], but runs a Rust closure after the script completes.
@@ -1012,6 +1136,27 @@ pub fn scripted_fixture_read_only_with_args_single_archive_with_post<T>(
     })
 }
 
+/// Like [`scripted_fixture_read_only_with_args_single_archive_with_git_version()`], but runs a Rust closure after the
+/// script completes.
+pub fn scripted_fixture_read_only_with_args_single_archive_with_post_with_git_version<T>(
+    script_name: impl AsRef<Path>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    version: u32,
+    post_process: impl FnMut(FixtureState<'_>) -> PostResult<T>,
+    is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool,
+) -> Result<Option<(PathBuf, T)>> {
+    scripted_fixture_read_only_with_args_inner(
+        script_name,
+        args,
+        None,
+        ArgsInHash::No,
+        default_excludes(),
+        Some((version, post_process)),
+        archive_policy_for_git_version(is_git_version_compatible),
+    )
+    .map(|fixture| fixture.map(|(path, opt)| (path, opt.expect("post_process was provided"))))
+}
+
 /// Like [`scripted_fixture_writable`], but runs a Rust closure after the script completes.
 ///
 /// - `version` should be incremented when the closure's behavior changes to invalidate the cache.
@@ -1032,8 +1177,29 @@ pub fn scripted_fixture_writable_with_post<T>(
         ArgsInHash::Yes,
         default_excludes(),
         Some((version, post_process)),
+        ArchivePolicy::Normal,
     )
-    .map(|(tmp, opt)| (tmp, opt.expect("post_process was provided")))
+    .map(|fixture| {
+        let (tmp, opt) = fixture.expect("normal fixtures fall back to generation");
+        (tmp, opt.expect("post_process was provided"))
+    })
+}
+
+/// Like [`scripted_fixture_writable_with_git_version()`], but runs a Rust closure after the script completes.
+pub fn scripted_fixture_writable_with_post_with_git_version<T>(
+    script_name: impl AsRef<Path>,
+    version: u32,
+    post_process: impl FnMut(FixtureState<'_>) -> PostResult<T>,
+    is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool,
+) -> Result<Option<(tempfile::TempDir, T)>> {
+    scripted_fixture_writable_with_args_with_post_with_git_version(
+        script_name,
+        None::<String>,
+        Creation::CopyFromReadOnly,
+        version,
+        post_process,
+        is_git_version_compatible,
+    )
 }
 
 /// Like [`scripted_fixture_writable_with_args`], but runs a Rust closure after the script completes.
@@ -1053,8 +1219,33 @@ pub fn scripted_fixture_writable_with_args_with_post<T>(
         ArgsInHash::Yes,
         default_excludes(),
         Some((version, post_process)),
+        ArchivePolicy::Normal,
     )
-    .map(|(tmp, opt)| (tmp, opt.expect("post_process was provided")))
+    .map(|fixture| {
+        let (tmp, opt) = fixture.expect("normal fixtures fall back to generation");
+        (tmp, opt.expect("post_process was provided"))
+    })
+}
+
+/// Like [`scripted_fixture_writable_with_args_with_git_version()`], but runs a Rust closure after the script completes.
+pub fn scripted_fixture_writable_with_args_with_post_with_git_version<T>(
+    script_name: impl AsRef<Path>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    mode: Creation,
+    version: u32,
+    post_process: impl FnMut(FixtureState<'_>) -> PostResult<T>,
+    is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool,
+) -> Result<Option<(tempfile::TempDir, T)>> {
+    scripted_fixture_writable_with_args_inner(
+        script_name,
+        args,
+        mode,
+        ArgsInHash::Yes,
+        default_excludes(),
+        Some((version, post_process)),
+        archive_policy_for_git_version(is_git_version_compatible),
+    )
+    .map(|fixture| fixture.map(|(tmp, opt)| (tmp, opt.expect("post_process was provided"))))
 }
 
 /// Like [`scripted_fixture_writable_with_args_single_archive`], but runs a Rust closure after the script completes.
@@ -1074,8 +1265,34 @@ pub fn scripted_fixture_writable_with_args_single_archive_with_post<T>(
         ArgsInHash::No,
         default_excludes(),
         Some((version, post_process)),
+        ArchivePolicy::Normal,
     )
-    .map(|(tmp, opt)| (tmp, opt.expect("post_process was provided")))
+    .map(|fixture| {
+        let (tmp, opt) = fixture.expect("normal fixtures fall back to generation");
+        (tmp, opt.expect("post_process was provided"))
+    })
+}
+
+/// Like [`scripted_fixture_writable_with_args_single_archive_with_git_version()`], but runs a Rust closure after the
+/// script completes.
+pub fn scripted_fixture_writable_with_args_single_archive_with_post_with_git_version<T>(
+    script_name: impl AsRef<Path>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    mode: Creation,
+    version: u32,
+    post_process: impl FnMut(FixtureState<'_>) -> PostResult<T>,
+    is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool,
+) -> Result<Option<(tempfile::TempDir, T)>> {
+    scripted_fixture_writable_with_args_inner(
+        script_name,
+        args,
+        mode,
+        ArgsInHash::No,
+        default_excludes(),
+        Some((version, post_process)),
+        archive_policy_for_git_version(is_git_version_compatible),
+    )
+    .map(|fixture| fixture.map(|(tmp, opt)| (tmp, opt.expect("post_process was provided"))))
 }
 
 /// Execute a Rust closure in a directory, returning a read-only fixture path.
@@ -1312,64 +1529,71 @@ where
             })?;
         }
         std::fs::create_dir_all(script_result_directory)?;
-        match extract_archive(
-            archive_file_path,
-            script_result_directory,
-            script_identity,
-            archive_policy.ignores_archive_override(),
-        ) {
-            Ok((archive_id, platform)) => {
-                eprintln!(
-                    "Extracted fixture from archive '{}' ({}, {:?})",
-                    archive_file_path.display(),
-                    archive_id,
-                    platform
-                );
-                make_fixture(FixtureState::Fresh(script_result_directory)).map(Some)
-            }
-            Err(err) => {
-                let archive_missing = err.kind() == std::io::ErrorKind::NotFound;
-                let generation_allowed = archive_policy.allows_generation();
-                if !generation_allowed || !archive_missing {
-                    // Remove incomplete output, or an empty required-fixture directory that a later call could
-                    // mistake for a valid cached fixture.
-                    std::fs::remove_dir_all(script_result_directory).map_err(|cleanup_err| {
-                        format!(
-                            "Failed to remove incomplete fixture at '{}': {cleanup_err}",
-                            script_result_directory.display()
-                        )
-                    })?;
-                }
-                if !generation_allowed {
-                    if archive_missing {
-                        return Ok(None);
-                    }
-                    return Err(err.into());
-                }
-                if !archive_missing {
-                    eprintln!("failed to extract '{}': {}", archive_file_path.display(), err);
-                    std::fs::create_dir_all(script_result_directory)?;
-                } else if !excludes.is_excluded(archive_file_path) {
+        // An explicit destination requests execution in that exact location. Normal archives may contain absolute
+        // paths (for example linked-worktree administration files), so extracting one would violate that contract.
+        // Preferred and required archives remain authoritative even with an explicit destination.
+        if !force_run || archive_policy != ArchivePolicy::Normal {
+            match extract_archive(
+                archive_file_path,
+                script_result_directory,
+                script_identity,
+                archive_policy.ignores_archive_override(),
+            ) {
+                Ok((archive_id, platform)) => {
                     eprintln!(
-                        "Archive at '{}' not found, creating fixture {}",
+                        "Extracted fixture from archive '{}' ({}, {:?})",
                         archive_file_path.display(),
-                        description
+                        archive_id,
+                        platform
                     );
+                    return make_fixture(FixtureState::Fresh(script_result_directory)).map(Some);
                 }
-                let res = match make_fixture(FixtureState::Uninitialized(script_result_directory)) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        write_failure_marker(&failure_marker);
-                        return Err(err);
+                Err(err) => {
+                    let archive_missing = err.kind() == std::io::ErrorKind::NotFound;
+                    let generation_allowed = archive_policy.allows_generation();
+                    if !generation_allowed || !archive_missing {
+                        // Remove incomplete output, or an empty required-fixture directory that a later call could
+                        // mistake for a valid cached fixture.
+                        std::fs::remove_dir_all(script_result_directory).map_err(|cleanup_err| {
+                            format!(
+                                "Failed to remove incomplete fixture at '{}': {cleanup_err}",
+                                script_result_directory.display()
+                            )
+                        })?;
                     }
-                };
-                create_archive_if_we_should(script_result_directory, archive_file_path, script_identity, excludes)
-                    .inspect_err(|_err| {
-                        write_failure_marker(&failure_marker);
-                    })?;
-                Ok(Some(res))
+                    if !generation_allowed {
+                        if archive_missing {
+                            return Ok(None);
+                        }
+                        return Err(err.into());
+                    }
+                    if !archive_missing {
+                        eprintln!("failed to extract '{}': {}", archive_file_path.display(), err);
+                        std::fs::create_dir_all(script_result_directory)?;
+                    } else if !excludes.is_excluded(archive_file_path) {
+                        eprintln!(
+                            "Archive at '{}' not found, creating fixture {}",
+                            archive_file_path.display(),
+                            description
+                        );
+                    }
+                }
             }
         }
+        let res = match make_fixture(FixtureState::Uninitialized(script_result_directory)) {
+            Ok(value) => value,
+            Err(err) => {
+                write_failure_marker(&failure_marker);
+                return Err(err);
+            }
+        };
+        if !force_run {
+            create_archive_if_we_should(script_result_directory, archive_file_path, script_identity, excludes)
+                .inspect_err(|_err| {
+                    write_failure_marker(&failure_marker);
+                })?;
+        }
+        Ok(Some(res))
     } else {
         make_fixture(FixtureState::Fresh(script_result_directory)).map(Some)
     }
@@ -1403,7 +1627,7 @@ where
     let post_version = post_process.as_ref().map(|(v, _)| *v);
     let script_identity = {
         let mut map = SCRIPT_IDENTITY.lock();
-        let init = if object_hash == gix_hash::Kind::Sha1 {
+        let init = if is_sha1(object_hash) {
             script_path.clone()
         } else {
             script_path.clone().join(object_hash.to_string())
@@ -1450,7 +1674,7 @@ where
             }
             ArgsInHash::No => "".into(),
         };
-        let potential_hash_suffix = if object_hash == gix_hash::Kind::Sha1 {
+        let potential_hash_suffix = if is_sha1(object_hash) {
             "".into()
         } else {
             format!("_{object_hash}")
@@ -1547,6 +1771,10 @@ pub fn object_hash() -> gix_hash::Kind {
     object_hash_from_env().unwrap_or_default()
 }
 
+fn is_sha1(kind: gix_hash::Kind) -> bool {
+    kind.len_in_bytes() == 20
+}
+
 /// Run `git` in `current_dir` with shell-like whitespace-separated `arguments`, returning stdout as UTF-8.
 ///
 /// Note that Git is run as isolated as possible, just like scripts.
@@ -1556,7 +1784,7 @@ pub fn object_hash() -> gix_hash::Kind {
 pub fn git(current_dir: impl AsRef<Path>, arguments: &str) -> Result<String> {
     let args = split_git_arguments(arguments)?;
     let cwd = current_dir.as_ref();
-    let mut cmd = std::process::Command::new(GIT_PROGRAM);
+    let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
     let output = configure_command(&mut cmd, object_hash(), args.iter().map(String::as_str), cwd)
         .current_dir(cwd)
         .output()?;
@@ -1722,6 +1950,22 @@ const NULL_DEVICE: &str = "nul"; // See `gix_path::env::git::NULL_DEVICE` on why
 #[cfg(not(windows))]
 const NULL_DEVICE: &str = "/dev/null";
 
+/// Ensure fixture scripts resolve `git` to the same executable used by direct helpers and version checks.
+///
+/// Scripts invoke `git` through `PATH`, whereas [`gix_path::env::exe_invocation()`] may select an absolute executable
+/// outside the inherited `PATH`. Without preferring its directory, a version check can inspect a newer Git while the
+/// fixture subsequently runs an older one which lacks the checked feature.
+fn prefer_git_in_path(command: &mut std::process::Command, git: &Path) {
+    let Some(parent) = git.is_absolute().then(|| git.parent()).flatten() else {
+        return;
+    };
+    let inherited_path = env::var_os("PATH").unwrap_or_default();
+    let paths = std::iter::once(parent.to_owned()).chain(env::split_paths(&inherited_path));
+    if let Ok(path) = env::join_paths(paths) {
+        command.env("PATH", path);
+    }
+}
+
 fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     cmd: &'a mut std::process::Command,
     object_hash: gix_hash::Kind,
@@ -1733,6 +1977,7 @@ fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     // either be avoided, or made after this function returns (but before spawning the command).
     let mut msys_for_git_bash_on_windows = env::var_os("MSYS").unwrap_or_default();
     msys_for_git_bash_on_windows.push(" winsymlinks:nativestrict");
+    prefer_git_in_path(cmd, gix_path::env::exe_invocation());
     cmd.args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

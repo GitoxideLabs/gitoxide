@@ -1,0 +1,57 @@
+---
+source: tests/tools/tests/tools/repository.rs
+expression: "gix_testtools::repository::snapshot(fixture.path())?"
+---
+HEAD refs/heads/main -> C0
+
+[config]
+[core]
+	bare = false
+
+[refs]
+refs/heads/main = C0
+refs/heads/side = C1
+
+[commits]
+C0
+  tree T0
+  author author <author@example.com> 946684800 +0000
+  committer committer <committer@example.com> 946684800 +0000
+
+  base
+
+C1
+  tree T0
+  parent C0
+  author author <author@example.com> 946684800 +0000
+  committer committer <committer@example.com> 946771200 +0000
+
+  detached
+
+[index]
+tree = conflicted
+100644 B0 stage=1 "conflicted"
+100644 B1 stage=2 "conflicted"
+100644 B2 stage=3 "conflicted"
+100644 B3 stage=0 "nested/deep/tracked"
+100644 B4 stage=0 "staged"
+100644 B5 stage=0 "tracked"
+
+[worktree]
+040755 dir  "nested"
+040755 dir  "nested/deep"
+100644 file "nested/deep/tracked" = "nested\n"
+100644 file "staged" = "staged\n"
+100644 file "tracked" = "base\n"
+100644 file "untracked" = "untracked\n"
+
+[objects]
+C0 = 1a201a9f40efc86bdb8d9771f6985438cdd613e6f55524431b58e62ec030b45b
+B4 = 52a57714d2536750c31548de52dbae2bf006f552a740b31d947e0fc32074143f
+B1 = 7aeca49e7bd049e2bf0b58e1ee5c2a8b2d8e8fba4dac0747b2a3e534cc309560
+B2 = 8515606a3e382bcd4dba5009dd244cc29a295a21978540b8e02b5ad5d6a8d6f3
+B3 = 901dd740cdbc4bf5ec97deb7308876c6e3b326fcbf34e4e86686f76e01e8da82
+C1 = a18867545ffed69e01330384799d4fcb9ca1d2307d4259f7ce783f618331fa6a
+B5 = abed979e3cd3667c5a295c2641f8319f950860c65cc168eebd1571c51bb4f6fc
+T0 = c25f5fb3b32ef5d1d9842f87d9ebf64fdaa6fe83abb5819f131929c91b3a6a37
+B0 = cf4f6ea25b1adfaa1834f8c7f231cb975a4f0b072563310d52ed33d20d0a1958

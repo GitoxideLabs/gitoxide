@@ -95,6 +95,7 @@ sha1 = [
 ## Enable support for the SHA-256 hash throughout the `gix` stack.
 sha256 = [
     "gix-hash/sha256",
+    "gix-object/sha256",
     "gix-pack/sha256",
     "gix-worktree-stream?/sha256",
 ]
@@ -105,7 +106,7 @@ sha256 = [
 #! Providers of libraries should only activate the components they need.
 
 ## Provide a top-level `command` module that helps with spawning commands similarly to `git`.
-command = ["dep:gix-command"]
+command = ["dep:gix-command", "gix-object/signature"]
 
 ## Obtain information similar to `git status`.
 status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index"]
@@ -350,6 +351,7 @@ gix-revwalk = { version = "^0.34.0", path = "../gix-revwalk" }
 gix-negotiate = { version = "^0.34.0", path = "../gix-negotiate", optional = true }
 
 gix-path = { version = "^0.12.4", path = "../gix-path" }
+gix-quote = { version = "^0.7.2", path = "../gix-quote" }
 gix-url = { version = "^0.37.1", path = "../gix-url" }
 gix-traverse = { version = "^0.60.0", path = "../gix-traverse" }
 gix-diff = { version = "^0.66.0", path = "../gix-diff", default-features = false }
@@ -416,7 +418,7 @@ gix = { path = ".", default-features = false, features = [
 ] }
 gix-hash = { version = "^0.26.0", path = "../gix-hash" }
 pretty_assertions = "1.4.0"
-gix-testtools = { path = "../tests/tools" }
+gix-testtools = { path = "../tests/tools", features = ["sha1", "sha256"] }
 is_ci = "1.1.1"
 anyhow = "1"
 serial_test = { version = "3.4.0", default-features = false }

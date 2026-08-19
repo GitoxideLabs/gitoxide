@@ -6,7 +6,7 @@ use crate::{
 impl Clone {
     /// The `clone.defaultRemoteName` key.
     pub const DEFAULT_REMOTE_NAME: keys::RemoteName =
-        keys::RemoteName::new_remote_name("defaultRemoteName", &config::Tree::CLONE);
+        keys::RemoteName::new_remote_name("defaultRemoteName", &config::Tree::CLONE).with_default(b"origin");
     /// The `clone.rejectShallow` key.
     pub const REJECT_SHALLOW: keys::Boolean = keys::Boolean::new_boolean("rejectShallow", &config::Tree::CLONE);
 }

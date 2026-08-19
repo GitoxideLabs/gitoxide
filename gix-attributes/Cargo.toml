@@ -42,7 +42,7 @@ document-features = { version = "0.2.1", optional = true }
 
 [dev-dependencies]
 criterion = "0.8.2"
-gix-testtools = { path = "../tests/tools", default-features = false }
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
 gix-fs = { path = "../gix-fs" }
 
 [package.metadata.docs.rs]

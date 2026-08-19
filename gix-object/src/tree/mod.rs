@@ -12,6 +12,19 @@ pub mod editor;
 mod ref_iter;
 pub use ref_iter::next_entry;
 
+/// Compare entry names according to Git's canonical tree ordering.
+///
+/// Trees compare as if their name had a trailing `/`, whereas non-tree entries compare as if their name ended in a
+/// NUL byte. This distinction matters when one name is a prefix of another.
+pub fn name_order(a: &[u8], a_is_tree: bool, b: &[u8], b_is_tree: bool) -> Ordering {
+    let common = a.len().min(b.len());
+    a[..common].cmp(&b[..common]).then_with(|| {
+        let a = a.get(common).or_else(|| a_is_tree.then_some(&b'/'));
+        let b = b.get(common).or_else(|| b_is_tree.then_some(&b'/'));
+        a.cmp(&b)
+    })
+}
+
 ///
 pub mod write;
 
@@ -336,13 +349,7 @@ impl PartialOrd for EntryRef<'_> {
 
 impl Ord for EntryRef<'_> {
     fn cmp(&self, b: &Self) -> Ordering {
-        let a = self;
-        let common = a.filename.len().min(b.filename.len());
-        a.filename[..common].cmp(&b.filename[..common]).then_with(|| {
-            let a = a.filename.get(common).or_else(|| a.mode.is_tree().then_some(&b'/'));
-            let b = b.filename.get(common).or_else(|| b.mode.is_tree().then_some(&b'/'));
-            a.cmp(&b)
-        })
+        name_order(self.filename, self.mode.is_tree(), b.filename, b.mode.is_tree())
     }
 }
 
@@ -366,12 +373,6 @@ impl PartialOrd for Entry {
 
 impl Ord for Entry {
     fn cmp(&self, b: &Self) -> Ordering {
-        let a = self;
-        let common = a.filename.len().min(b.filename.len());
-        a.filename[..common].cmp(&b.filename[..common]).then_with(|| {
-            let a = a.filename.get(common).or_else(|| a.mode.is_tree().then_some(&b'/'));
-            let b = b.filename.get(common).or_else(|| b.mode.is_tree().then_some(&b'/'));
-            a.cmp(&b)
-        })
+        name_order(&self.filename, self.mode.is_tree(), &b.filename, b.mode.is_tree())
     }
 }

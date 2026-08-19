@@ -156,7 +156,9 @@ doc $RUSTDOCFLAGS='-D warnings':
 unit-tests:
     cargo nextest run --no-fail-fast
     cargo nextest run -p gix-attributes --features serde --no-fail-fast
+    # Test repository snapshots with the default pure-gix backend and the Git CLI backend.
     cargo nextest run -p gix-testtools --no-fail-fast
+    cargo nextest run -p gix-testtools --no-default-features --features worktree-exclusions,sha1,sha256 --no-fail-fast
     cargo nextest run -p gix-testtools --features xz --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1 --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1,tar --no-fail-fast
@@ -269,25 +271,25 @@ dbg: (query-meta '.target_directory + "/debug"')
 # Run journey tests (`max`)
 journey-tests:
     cargo build --features http-client-curl-rustls
-    cargo build -p gix-testtools --bin jtt
+    cargo build -p gix-testtools --bin jtt --features sha1
     dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" max
 
 # Run journey tests (`max-pure`)
 journey-tests-pure:
     cargo build --no-default-features --features max-pure
-    cargo build -p gix-testtools --bin jtt
+    cargo build -p gix-testtools --bin jtt --features sha1
     dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" max-pure
 
 # Run journey tests (`small`)
 journey-tests-small:
     cargo build --no-default-features --features small
-    cargo build -p gix-testtools
+    cargo build -p gix-testtools --features sha1
     dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" small
 
 # Run journey tests (`lean-async`)
 journey-tests-async:
     cargo build --no-default-features --features lean-async
-    cargo build -p gix-testtools
+    cargo build -p gix-testtools --features sha1
     dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" async
 
 # Build a customized `cross` container image for testing

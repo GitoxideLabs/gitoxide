@@ -58,9 +58,8 @@ windows-sys = { version = "0.61.1", features = [
 ] }
 
 [dev-dependencies]
-gix-status = { path = ".", features = ["worktree-rewrites", "parallel"] }
-gix-hash = { path = "../gix-hash", features = ["sha1"] }
-gix-testtools = { path = "../tests/tools", default-features = false }
+gix-status = { path = ".", features = ["worktree-rewrites", "parallel", "sha1", "sha256"] }
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-index = { path = "../gix-index" }
 gix-fs = { path = "../gix-fs" }
 gix-diff = { path = "../gix-diff" }

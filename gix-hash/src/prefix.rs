@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::{ObjectId, Prefix, oid};
+use crate::{ChangeId, ObjectId, Prefix, change_id::ReverseHexDisplay, oid};
 
 /// The error returned by [`Prefix::new()`].
 #[derive(Debug, thiserror::Error)]
@@ -137,6 +137,36 @@ impl Prefix {
 
         Ok(Prefix { bytes, hex_len })
     }
+
+    /// Create an instance from a reverse-hex prefix, requiring at least [`Self::MIN_HEX_LEN`] characters.
+    pub fn from_reverse_hex(value: &str) -> Result<Self, from_hex::Error> {
+        let hex_len = value.len();
+        if hex_len < Self::MIN_HEX_LEN {
+            return Err(from_hex::Error::TooShort { hex_len });
+        }
+        Self::from_reverse_hex_nonempty(value)
+    }
+
+    /// Create an instance from a non-empty prefix written with JJ's reverse-hex alphabet.
+    pub fn from_reverse_hex_nonempty(value: &str) -> Result<Self, from_hex::Error> {
+        let hex_len = value.len();
+        if hex_len > crate::Kind::longest().len_in_hex() {
+            return Err(from_hex::Error::TooLong { hex_len });
+        } else if hex_len == 0 {
+            return Err(from_hex::Error::TooShort { hex_len });
+        }
+
+        let mut hex = crate::Kind::hex_buf();
+        crate::change_id::reverse_hex_to_hex(value.as_bytes(), &mut hex[..hex_len])
+            .map_err(|()| from_hex::Error::Invalid)?;
+        let hex = std::str::from_utf8(&hex[..hex_len]).expect("translated reverse hex is always ASCII");
+        Self::from_hex_nonempty(hex)
+    }
+
+    /// Return a type which displays this prefix in JJ-compatible reverse-hex notation.
+    pub fn to_reverse_hex(&self) -> ReverseHexDisplay<'_> {
+        ReverseHexDisplay::new(&self.bytes, self.hex_len)
+    }
 }
 
 /// Create an instance from the given hexadecimal prefix, e.g. `35e77c16` would yield a `Prefix`
@@ -161,5 +191,11 @@ impl From<ObjectId> for Prefix {
             bytes: oid,
             hex_len: oid.kind().len_in_hex(),
         }
+    }
+}
+
+impl From<ChangeId> for Prefix {
+    fn from(change_id: ChangeId) -> Self {
+        ObjectId::from(change_id).into()
     }
 }

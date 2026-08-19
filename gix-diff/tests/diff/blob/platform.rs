@@ -88,6 +88,14 @@ fn resources_of_worktree_and_odb_and_check_link() -> crate::Result {
         "in this case, there is no rename-to field as last argument, it's based on the resource paths being different"
     );
 
+    let command = platform.prepare_diff_command("test --flag".into(), Default::default(), 0, 1)?;
+    assert!(
+        command
+            .get_args()
+            .any(|arg| arg.to_string_lossy().contains("test --flag")),
+        "configured command lines with arguments are interpreted by a shell"
+    );
+
     platform.set_resource(id, EntryKind::Link, "a".into(), ResourceKind::NewOrDestination, &db)?;
 
     // Double-inserts are fine.

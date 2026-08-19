@@ -22,7 +22,10 @@ impl Cache {
         use crate::config::{cache::util::ApplyLeniencyDefault, diff::algorithm::Error, tree::Diff};
         self.diff_algorithm
             .get_or_try_init(|| {
-                let name = self.resolved.string(Diff::ALGORITHM).unwrap_or_else(|| "myers".into());
+                let name = self
+                    .resolved
+                    .string(Diff::ALGORITHM)
+                    .unwrap_or_else(|| Diff::ALGORITHM.default_value_or_panic().into());
                 config::tree::Diff::ALGORITHM
                     .try_into_algorithm(name)
                     .or_else(|err| match err {
@@ -214,6 +217,19 @@ impl Cache {
             .enrich_error(self.resolved.boolean("core.commitGraph"))
             .with_lenient_default_value(self.lenient_config, Some(DEFAULT))?
             .unwrap_or(DEFAULT))
+    }
+
+    #[cfg(feature = "command")]
+    pub(crate) fn may_sign_commits(&self) -> Result<bool, config::boolean::Error> {
+        use crate::config::tree::Commit;
+
+        let default = gix_config::Boolean::try_from(Commit::GPG_SIGN.default_value_or_panic())
+            .expect("commit.gpgSign default is a valid boolean")
+            .0;
+        Ok(Commit::GPG_SIGN
+            .enrich_error(self.resolved.boolean(Commit::GPG_SIGN))
+            .with_lenient_default_value(self.lenient_config, Some(default))?
+            .unwrap_or(default))
     }
 
     /// Returns (file-timeout, pack-refs timeout)

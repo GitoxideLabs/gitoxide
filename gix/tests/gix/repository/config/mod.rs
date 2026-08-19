@@ -1,4 +1,5 @@
 mod config_snapshot;
+mod editor;
 mod identity;
 mod remote;
 

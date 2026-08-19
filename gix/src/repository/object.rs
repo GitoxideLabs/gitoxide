@@ -349,7 +349,7 @@ impl crate::Repository {
             name: name.as_ref().into(),
             tagger: tagger.map(|t| t.to_owned()).transpose()?,
             message: message.as_ref().into(),
-            pgp_signature: None,
+            signature: None,
         };
         let tag_id = self.write_object(&tag)?;
         self.tag_reference(name, tag_id, constraint).map_err(Into::into)

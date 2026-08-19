@@ -13,7 +13,7 @@ impl TryFrom<TagRef<'_>> for Tag {
             target_kind,
             message,
             tagger,
-            pgp_signature,
+            signature,
         } = other;
         let untrimmed_tagger = tagger.map(parse_signature).transpose()?.map(Into::into);
         Ok(Tag {
@@ -22,7 +22,7 @@ impl TryFrom<TagRef<'_>> for Tag {
             target_kind,
             message: message.to_owned(),
             tagger: untrimmed_tagger,
-            pgp_signature: pgp_signature.map(ToOwned::to_owned),
+            signature: signature.map(ToOwned::to_owned),
         })
     }
 }

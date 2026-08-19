@@ -73,6 +73,7 @@ Follow "purposeful conventional commits" style:
 ### Code Style
 
 - Follow existing patterns in the codebase
+- When creating directory-backed Rust modules, use the `mod.rs` style (`foo/mod.rs`) rather than a sibling `foo.rs` file.
 - No `.unwrap()` - use `.expect("context")` if you are sure this can't fail.
 - Prefer references in plumbing crates to avoid expensive clones
 - Avoid calling `.detach()` unless an owned value is explicitly required. Many `gix` APIs accept attached ids and references directly, so prefer keeping repository-backed handles like `gix::Id` when possible.

@@ -118,6 +118,7 @@ mod subsections {
 
         /// The `gitoxide.core.shallowFile` key.
         pub const SHALLOW_FILE: keys::Path = keys::Path::new_path("shallowFile", &Gitoxide::CORE)
+            .with_default(b"shallow")
             .with_environment_override("GIT_SHALLOW_FILE")
             .with_deviation(
                 "relative file paths will always be made relative to the git-common-dir, whereas `git` keeps them as is.",
@@ -472,8 +473,9 @@ mod subsections {
         /// The `gitoxide.objects.noReplace` key.
         pub const NO_REPLACE: keys::Boolean = keys::Boolean::new_boolean("noReplace", &Gitoxide::OBJECTS);
         /// The `gitoxide.objects.replaceRefBase` key.
-        pub const REPLACE_REF_BASE: keys::Any =
-            keys::Any::new("replaceRefBase", &Gitoxide::OBJECTS).with_environment_override("GIT_REPLACE_REF_BASE");
+        pub const REPLACE_REF_BASE: keys::Any = keys::Any::new("replaceRefBase", &Gitoxide::OBJECTS)
+            .with_default(b"refs/replace/")
+            .with_environment_override("GIT_REPLACE_REF_BASE");
     }
 
     impl Section for Objects {

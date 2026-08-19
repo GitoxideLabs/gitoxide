@@ -216,9 +216,29 @@ impl<'repo> Commit<'repo> {
     // TODO: make it possible to verify the signature, probably by wrapping `SignedData`. It's quite some work to do it properly.
     pub fn signature(
         &self,
-    ) -> Result<Option<(std::borrow::Cow<'_, BStr>, gix_object::commit::SignedData<'_>)>, gix_object::decode::Error>
+    ) -> Result<Option<(std::borrow::Cow<'_, BStr>, gix_object::signature::SignedData<'_>)>, gix_object::decode::Error>
     {
         gix_object::CommitRefIter::signature(&self.data, self.id.kind())
+    }
+
+    /// Verify this commit's signature using Git-compatible configuration and external verification programs.
+    ///
+    /// Returns `Ok(None)` if the commit has no signature. If it is signed, the returned
+    /// [`Outcome`](crate::commit::verify::Outcome) describes the signature's format, cryptographic status, trust,
+    /// signer identity, and verifier output. A successful call does not necessarily mean that the signature is valid;
+    /// use [`Outcome::is_valid()`](crate::commit::verify::Outcome::is_valid) to determine whether Git would accept it.
+    #[cfg(feature = "command")]
+    pub fn verify_signature(&self) -> Result<Option<crate::commit::verify::Outcome>, crate::commit::verify::Error> {
+        crate::commit::verify::verify(self)
+    }
+
+    /// Write this commit with a Git-compatible signature added from repository configuration and return the attached commit,
+    /// after writing it to the object database.
+    ///
+    /// An existing signature for the repository's object format is replaced.
+    #[cfg(feature = "command")]
+    pub fn signed(&self) -> Result<Commit<'repo>, crate::commit::sign::Error> {
+        crate::commit::sign::sign(self)
     }
 }
 

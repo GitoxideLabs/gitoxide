@@ -41,7 +41,7 @@ fn configure_command_clears_external_config() {
     let temp = tempfile::TempDir::new().expect("can create temp dir");
     populate_ad_hoc_config_files(temp.path());
 
-    let mut cmd = std::process::Command::new(GIT_PROGRAM);
+    let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
     cmd.env("GIT_CONFIG_SYSTEM", SCOPE_ENV_VALUE);
     cmd.env("GIT_CONFIG_GLOBAL", SCOPE_ENV_VALUE);
     configure_command(
@@ -65,9 +65,43 @@ fn configure_command_clears_external_config() {
 }
 
 #[test]
+fn an_absolute_selected_git_is_preferred_in_path() {
+    let temp = tempfile::TempDir::new().expect("can create temp dir");
+    let git = temp.path().join("bin").join("git");
+    let mut command = std::process::Command::new("fixture-script");
+
+    prefer_git_in_path(&mut command, &git);
+
+    let path = command
+        .get_envs()
+        .find_map(|(key, value)| (key == "PATH").then_some(value))
+        .flatten()
+        .expect("an absolute Git executable overrides PATH");
+    assert_eq!(
+        std::env::split_paths(path).next().as_deref(),
+        git.parent(),
+        "the selected Git executable's directory is searched first"
+    );
+}
+
+#[test]
+fn a_path_resolved_selected_git_does_not_override_path() {
+    let mut command = std::process::Command::new("fixture-script");
+    command.env("PATH", "existing-path");
+
+    prefer_git_in_path(&mut command, Path::new("git"));
+
+    let path = command
+        .get_envs()
+        .find_map(|(key, value)| (key == "PATH").then_some(value))
+        .flatten();
+    assert_eq!(path, Some(std::ffi::OsStr::new("existing-path")));
+}
+
+#[test]
 fn configure_command_overrides_xdg_config_home() {
     let temp = tempfile::TempDir::new().expect("can create temp dir");
-    let mut cmd = std::process::Command::new(GIT_PROGRAM);
+    let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
     cmd.env("XDG_CONFIG_HOME", temp.path().join("external-config"));
     configure_command(&mut cmd, gix_hash::Kind::default(), ["--version"], temp.path());
 
@@ -260,6 +294,7 @@ fn split_git_arguments_rejects_unterminated_quotes() {
 }
 
 #[test]
+#[cfg(feature = "sha1")]
 fn normalize_debug_snapshot_returns_replaced_ids_by_placeholder_index() {
     let first = gix_hash::ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").expect("valid SHA1");
     let second = gix_hash::ObjectId::from_hex(b"496d6428b9cf92981dc9495211e6e1120fb6f2ba").expect("valid SHA1");
@@ -278,6 +313,7 @@ fn normalize_debug_snapshot_returns_replaced_ids_by_placeholder_index() {
 }
 
 #[test]
+#[cfg(all(feature = "sha1", feature = "sha256"))]
 fn normalize_hashes_replaces_raw_object_ids() {
     let sha1 = gix_hash::ObjectId::from_hex(b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").expect("valid SHA1");
     let sha256 = gix_hash::ObjectId::from_hex(b"473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813")
@@ -367,12 +403,19 @@ fn archive_required_fixtures_use_a_separate_cache_directory() {
     // output behind and make a later archive-required request skip extraction.
     // Using different paths makes sure they are actually from the archive if they exist.
     let fixture_base = Path::new("tests").join("fixtures");
-    let (_, generated_dir) = force_and_dir(None, &fixture_base, "scripted", Some(gix_hash::Kind::Sha1), &1234, None);
+    let (_, generated_dir) = force_and_dir(
+        None,
+        &fixture_base,
+        "scripted",
+        Some(gix_hash::Kind::default()),
+        &1234,
+        None,
+    );
     let (_, archived_dir) = force_and_dir(
         None,
         &fixture_base,
         "scripted",
-        Some(gix_hash::Kind::Sha1),
+        Some(gix_hash::Kind::default()),
         &1234,
         Some("archive"),
     );
@@ -480,6 +523,103 @@ fn required_archives_are_extracted_even_when_archives_are_ignored() {
     assert_eq!(result.as_deref(), Some("from archive"));
 }
 
+/// Verify that forced execution with normal archive policy honors the explicit destination instead of extracting a
+/// cached fixture there. This matters for fixtures such as linked worktrees whose administration files contain
+/// absolute paths: extracting an archive into a new location would leave those paths pointing at the archived
+/// location. In-place execution must also leave the canonical archive unchanged.
+#[test]
+fn forced_normal_fixtures_execute_in_place_instead_of_extracting_archives() {
+    let temp = tempfile::TempDir::new().expect("temporary directory can be created");
+    let source = temp.path().join("source");
+    std::fs::create_dir(&source).expect("source directory can be created");
+    std::fs::write(source.join("payload"), "from archive").expect("archive payload can be written");
+    let archive = temp.path().join(tar_extension());
+    write_test_archive(&source, &archive, 42);
+    let archived_contents = std::fs::read(&archive).expect("archive can be read");
+    let destination = temp.path().join("fixture");
+
+    let result = run_fixture_generator_with_marker_handling(
+        &archive,
+        &destination,
+        42,
+        true,
+        ArchivePolicy::Normal,
+        &Included,
+        "from a test generator",
+        |state| {
+            assert!(
+                matches!(state, FixtureState::Uninitialized(_)),
+                "forced normal fixtures are generated rather than extracted"
+            );
+            assert!(
+                !state.path().join("payload").exists(),
+                "archived contents were not copied into the explicit destination"
+            );
+            std::fs::write(state.path().join("payload"), "from script")?;
+            std::fs::read_to_string(state.path().join("payload")).map_err(Into::into)
+        },
+    )
+    .expect("the fixture can be generated in place");
+
+    assert_eq!(result.as_deref(), Some("from script"));
+    assert_eq!(
+        std::fs::read(&archive).expect("archive can still be read"),
+        archived_contents,
+        "executing in a writable location does not replace the canonical archive"
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn version_incompatible_writable_fixtures_use_required_archives_in_both_creation_modes() {
+    let temp = tempfile::TempDir::new().expect("temporary directory can be created");
+    let fixture_base = temp.path().join("tests/fixtures");
+    let archive_dir = fixture_base.join(ARCHIVE_DIR_NAME);
+    std::fs::create_dir_all(&archive_dir).expect("fixture directories can be created");
+    let script = b"#!/bin/sh\nprintf from-script >payload\n";
+    std::fs::write(fixture_base.join("make_required.sh"), script).expect("fixture script can be written");
+
+    let source = temp.path().join("archive-source");
+    std::fs::create_dir(&source).expect("archive source can be created");
+    std::fs::write(source.join("payload"), "from archive").expect("archive payload can be written");
+    let crc = crc::Crc::<u32>::new(&crc::CRC_32_CKSUM);
+    let mut digest = crc.digest();
+    digest.update(script);
+    let object_hash = object_hash();
+    let hash_suffix = if is_sha1(object_hash) {
+        String::new()
+    } else {
+        format!("_{object_hash}")
+    };
+    write_test_archive(
+        &source,
+        &archive_dir.join(format!("make_required{hash_suffix}.{}", tar_extension())),
+        digest.finalize(),
+    );
+
+    let _cwd = set_current_dir(temp.path()).expect("temporary fixture root is accessible");
+    let _env = Env::new().set("GIX_TEST_IGNORE_ARCHIVES", "1");
+
+    for mode in [Creation::CopyFromReadOnly, Creation::Execute] {
+        let fixture =
+            scripted_fixture_writable_with_args_with_git_version("make_required.sh", None::<String>, mode, |_| false)
+                .expect("required archive can be loaded")
+                .expect("matching required archive is available");
+        assert_eq!(
+            std::fs::read_to_string(fixture.path().join("payload")).expect("archived payload can be read"),
+            "from archive",
+            "the fixture comes from the archive instead of the incompatible script"
+        );
+    }
+}
+
+#[test]
+fn hash_kinds_are_classified_independently_of_gix_testtools_features() {
+    for kind in gix_hash::Kind::all() {
+        assert_eq!(is_sha1(*kind), kind.to_string() == "sha1");
+    }
+}
+
 #[test]
 fn stale_required_archives_are_unavailable_instead_of_generated() {
     let temp = tempfile::TempDir::new().expect("temporary directory can be created");
@@ -515,12 +655,19 @@ fn stale_required_archives_are_unavailable_instead_of_generated() {
 #[test]
 fn required_archives_use_a_dedicated_cache_directory() {
     let fixture_base = Path::new("tests").join("fixtures");
-    let (_, generated_dir) = force_and_dir(None, &fixture_base, "scripted", Some(gix_hash::Kind::Sha1), &1234, None);
+    let (_, generated_dir) = force_and_dir(
+        None,
+        &fixture_base,
+        "scripted",
+        Some(gix_hash::Kind::default()),
+        &1234,
+        None,
+    );
     let (_, preferred_archive_dir) = force_and_dir(
         None,
         &fixture_base,
         "scripted",
-        Some(gix_hash::Kind::Sha1),
+        Some(gix_hash::Kind::default()),
         &1234,
         Some("archive"),
     );
@@ -528,7 +675,7 @@ fn required_archives_use_a_dedicated_cache_directory() {
         None,
         &fixture_base,
         "scripted",
-        Some(gix_hash::Kind::Sha1),
+        Some(gix_hash::Kind::default()),
         &1234,
         Some("required-archive"),
     );

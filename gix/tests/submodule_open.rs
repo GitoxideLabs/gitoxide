@@ -11,7 +11,7 @@ fn on_nested_symlink() -> gix_testtools::Result {
     std::env::set_current_dir(&symlink_root)?;
 
     assert!(
-        gix::open(&symlink_root).is_err(),
+        gix::open_opts(&symlink_root, gix::open::Options::isolated()).is_err(),
         "this is not a repository directly, it's a directory within one"
     );
     // TODO(symlink): This should work though

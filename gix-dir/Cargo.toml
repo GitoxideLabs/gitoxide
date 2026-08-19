@@ -37,6 +37,7 @@ bstr = { version = "1.12.0", default-features = false }
 thiserror = "2.0.18"
 
 [dev-dependencies]
+gix-dir = { path = ".", features = ["sha1", "sha256"] }
 gix-testtools = { path = "../tests/tools" }
 gix-fs = { path = "../gix-fs" }
 pretty_assertions = "1.4.0"

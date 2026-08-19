@@ -28,7 +28,8 @@ impl Core {
     pub const DISAMBIGUATE: Disambiguate =
         Disambiguate::new_with_validate("disambiguate", &config::Tree::CORE, validate::Disambiguate);
     /// The `core.editor` key.
-    pub const EDITOR: keys::Program = keys::Program::new_program("editor", &config::Tree::CORE);
+    pub const EDITOR: keys::Program =
+        keys::Program::new_program("editor", &config::Tree::CORE).with_environment_override("GIT_EDITOR");
     /// The `core.fileMode` key.
     pub const FILE_MODE: keys::Boolean = keys::Boolean::new_boolean("fileMode", &config::Tree::CORE);
     /// The `core.fsCache` key.

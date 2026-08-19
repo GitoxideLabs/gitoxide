@@ -3,6 +3,13 @@
 
 use std::convert::Infallible;
 
+/// Commit signing errors.
+#[cfg(feature = "command")]
+pub mod sign;
+/// Commit signature verification errors.
+#[cfg(feature = "command")]
+pub mod verify;
+
 /// An empty array of a type usable with the `gix::easy` API to help declaring no parents should be used
 pub const NO_PARENT_IDS: [gix_hash::ObjectId; 0] = [];
 

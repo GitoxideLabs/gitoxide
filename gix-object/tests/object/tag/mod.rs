@@ -1,6 +1,10 @@
+use crate::{hex_to_id, signature};
 use gix_object::{Kind, TagRef, TagRefIter, bstr::ByteSlice};
 
 use crate::fixture_name;
+
+#[cfg(feature = "signature")]
+mod signature;
 
 const PGP_BEGIN_NOT_AT_LINE_START: &[u8] = b"object ffa700b4aca13b80cb6b98a078e7c96804f8e0ec
 type commit
@@ -46,6 +50,87 @@ const PGP_SIGNATURE_AT_BODY_START_SIGNATURE: &[u8] = b"-----BEGIN PGP SIGNATURE-
 body";
 
 #[test]
+fn signature_extraction_preserves_raw_payload_and_matches_gits_last_marker_choice() {
+    let input = b"object ffa700b4aca13b80cb6b98a078e7c96804f8e0ec\n\
+type commit\n\
+tag markers\n\
+\n\
+message -----BEGIN SSH SIGNATURE-----\n\
+-----BEGIN PGP MESSAGE-----\n\
+first\n\
+-----BEGIN SIGNED MESSAGE-----\n\
+last";
+    let (signature, signed) = TagRefIter::signature(input).expect("the final line-boundary marker is found");
+    assert_eq!(signature.format, gix_object::signature::Format::X509);
+    assert_eq!(signature.data, b"-----BEGIN SIGNED MESSAGE-----\nlast".as_bstr());
+    assert_eq!(
+        signed.to_bstring(),
+        b"object ffa700b4aca13b80cb6b98a078e7c96804f8e0ec\n\
+type commit\n\
+tag markers\n\
+\n\
+message -----BEGIN SSH SIGNATURE-----\n\
+-----BEGIN PGP MESSAGE-----\n\
+first\n",
+        "the exact original payload includes the newline preceding the selected marker"
+    );
+}
+
+#[test]
+fn recognizes_all_git_armor_markers_only_at_line_boundaries() {
+    for (marker, format) in [
+        (
+            b"-----BEGIN PGP SIGNATURE-----".as_slice(),
+            gix_object::signature::Format::OpenPgp,
+        ),
+        (
+            b"-----BEGIN PGP MESSAGE-----".as_slice(),
+            gix_object::signature::Format::OpenPgp,
+        ),
+        (
+            b"-----BEGIN SIGNED MESSAGE-----".as_slice(),
+            gix_object::signature::Format::X509,
+        ),
+        (
+            b"-----BEGIN SSH SIGNATURE-----".as_slice(),
+            gix_object::signature::Format::Ssh,
+        ),
+    ] {
+        let mut input = b"payload\n".to_vec();
+        input.extend_from_slice(marker);
+        let (signature, signed) = TagRefIter::signature(&input).expect("a supported marker is found");
+        assert_eq!(signature.format, format);
+        assert_eq!(signature.data, marker.as_bstr());
+        assert_eq!(
+            signed.to_bstring(),
+            b"payload\n",
+            "the separator newline remains signed"
+        );
+
+        let mut tag = b"object ffa700b4aca13b80cb6b98a078e7c96804f8e0ec\n\
+type commit\n\
+tag marker\n\
+\n\
+message\n"
+            .to_vec();
+        tag.extend_from_slice(marker);
+        let parsed = TagRef::from_bytes(&tag, gix_hash::Kind::Sha1).expect("the tag parses");
+        assert_eq!(parsed.message, b"message".as_bstr());
+        assert_eq!(
+            parsed.signature().expect("the parser discovers the signature").format,
+            format
+        );
+
+        let mut embedded = b"payload prefix ".to_vec();
+        embedded.extend_from_slice(marker);
+        assert!(
+            TagRefIter::signature(&embedded).is_none(),
+            "an embedded marker is message text"
+        );
+    }
+}
+
+#[test]
 fn sha256_with_all_fields_and_signature() -> crate::Result {
     let input = b"object abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
 type commit
@@ -78,7 +163,7 @@ sha256-tag-signature
             .as_bstr()
     );
     assert_eq!(
-        tag.pgp_signature,
+        tag.signature,
         Some(
             b"-----BEGIN PGP SIGNATURE-----
 sha256-tag-signature
@@ -95,53 +180,42 @@ sha256-tag-signature
     ));
     assert!(matches!(
         tokens.last(),
-        Some(gix_object::tag::ref_iter::Token::Body {
-            pgp_signature: Some(_),
-            ..
-        })
+        Some(gix_object::tag::ref_iter::Token::Body { signature: Some(_), .. })
     ));
     Ok(())
 }
 
-mod method {
-    use bstr::ByteSlice;
-    use gix_object::TagRef;
-    use pretty_assertions::assert_eq;
+#[test]
+fn target() -> crate::Result {
+    let fixture = fixture_name("tag", "signed.txt");
+    let tag_ref = TagRef::from_bytes(&fixture, gix_hash::Kind::Sha1)?;
+    assert_eq!(tag_ref.target(), hex_to_id("ffa700b4aca13b80cb6b98a078e7c96804f8e0ec"));
+    assert_eq!(tag_ref.target, "ffa700b4aca13b80cb6b98a078e7c96804f8e0ec".as_bytes());
 
-    use crate::{fixture_name, hex_to_id, signature};
+    let gix_object::Tag {
+        target,
+        target_kind,
+        name,
+        tagger,
+        message,
+        signature,
+    } = tag_ref.into_owned()?;
+    assert_eq!(target.to_string(), tag_ref.target);
+    assert_eq!(target_kind, tag_ref.target_kind);
+    assert_eq!(name, tag_ref.name);
+    let expected_tagger = tag_ref.tagger()?.map(Into::into);
+    assert_eq!(tagger, expected_tagger);
+    assert_eq!(message, tag_ref.message);
+    assert_eq!(signature.as_ref().map(|s| s.as_bstr()), tag_ref.signature);
+    Ok(())
+}
 
-    #[test]
-    fn target() -> crate::Result {
-        let fixture = fixture_name("tag", "signed.txt");
-        let tag_ref = TagRef::from_bytes(&fixture, gix_hash::Kind::Sha1)?;
-        assert_eq!(tag_ref.target(), hex_to_id("ffa700b4aca13b80cb6b98a078e7c96804f8e0ec"));
-        assert_eq!(tag_ref.target, "ffa700b4aca13b80cb6b98a078e7c96804f8e0ec".as_bytes());
-
-        let gix_object::Tag {
-            target,
-            target_kind,
-            name,
-            tagger,
-            message,
-            pgp_signature,
-        } = tag_ref.into_owned()?;
-        assert_eq!(target.to_string(), tag_ref.target);
-        assert_eq!(target_kind, tag_ref.target_kind);
-        assert_eq!(name, tag_ref.name);
-        let expected_tagger = tag_ref.tagger()?.map(Into::into);
-        assert_eq!(tagger, expected_tagger);
-        assert_eq!(message, tag_ref.message);
-        assert_eq!(pgp_signature.as_ref().map(|s| s.as_bstr()), tag_ref.pgp_signature);
-        Ok(())
-    }
-
-    #[test]
-    fn tagger_trims_signature() -> crate::Result {
-        let fixture = fixture_name("tag", "tagger-with-whitespace.txt");
-        let tag = TagRef::from_bytes(&fixture, gix_hash::Kind::Sha1)?;
-        std::assert_eq!(tag.tagger()?, Some(signature("1592381636 +0800")));
-        Ok(())
-    }
+#[test]
+fn tagger() -> crate::Result {
+    let fixture = fixture_name("tag", "tagger-with-whitespace.txt");
+    let tag = TagRef::from_bytes(&fixture, gix_hash::Kind::Sha1)?;
+    std::assert_eq!(tag.tagger()?, Some(signature("1592381636 +0800")));
+    Ok(())
 }
 
 mod iter {
@@ -164,7 +238,7 @@ mod iter {
                 Token::Tagger(tagger),
                 Token::Body {
                     message: b"\n".as_bstr(),
-                    pgp_signature: None,
+                    signature: None,
                 }
             ]
         );
@@ -193,7 +267,7 @@ Eventually we'll import some sort of history, and that should tie this tree
 object up to a real commit. In the meantime, this acts as an anchor point for
 doing diffs etc under git."
                         .as_bstr(),
-                    pgp_signature: Some(
+                    signature: Some(
                         b"-----BEGIN PGP SIGNATURE-----
 Version: GnuPG v1.2.4 (GNU/Linux)
 
@@ -224,7 +298,7 @@ KLMHist5yj0sw1E4hDTyQa0=
                 Token::Tagger(Some(signature("1592382888 +0800"))),
                 Token::Body {
                     message: b" \ttab\nnewline\n\nlast-with-trailer\n".as_bstr(),
-                    pgp_signature: None
+                    signature: None
                 }
             ]
         );
@@ -245,7 +319,7 @@ KLMHist5yj0sw1E4hDTyQa0=
                 Token::Tagger(None),
                 Token::Body {
                     message: super::PGP_BEGIN_NOT_AT_LINE_START_MESSAGE.as_bstr(),
-                    pgp_signature: None
+                    signature: None
                 }
             ]
         );
@@ -324,7 +398,7 @@ mod from_bytes {
                 name: b"1.0.0".as_bstr(),
                 target_kind: Kind::Commit,
                 message: b"for the signature".as_bstr(),
-                pgp_signature: Some(
+                signature: Some(
                     b"-----BEGIN PGP SIGNATURE-----
 Comment: GPGTools - https://gpgtools.org
 
@@ -363,7 +437,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
                 target_kind: Kind::Commit,
                 message: b"\n".as_bstr(),
                 tagger: Some(b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592381636 +0800".as_bstr()),
-                pgp_signature: None
+                signature: None
             }
         );
         assert_eq!(tag_ref.size(), fixture.len() as u64);
@@ -383,7 +457,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
                 target_kind: Kind::Commit,
                 message: b"".as_bstr(),
                 tagger: Some(b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592381636 +0800".as_bstr()),
-                pgp_signature: None
+                signature: None
             }
         );
         assert_eq!(tag_ref.size(), fixture.len() as u64);
@@ -401,7 +475,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
                 target_kind: Kind::Commit,
                 message: b"hello\n\nworld".as_bstr(),
                 tagger: Some(b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592311808 +0800".as_bstr()),
-                pgp_signature: None
+                signature: None
             }
         );
         Ok(())
@@ -424,7 +498,7 @@ object up to a real commit. In the meantime, this acts as an anchor point for
 doing diffs etc under git."
                     .as_bstr(),
                 tagger: None,
-                pgp_signature: Some(
+                signature: Some(
                     b"-----BEGIN PGP SIGNATURE-----
 Version: GnuPG v1.2.4 (GNU/Linux)
 
@@ -444,7 +518,7 @@ KLMHist5yj0sw1E4hDTyQa0=
     fn pgp_begin_marker_not_at_line_start_is_message() -> crate::Result {
         let tag = TagRef::from_bytes(super::PGP_BEGIN_NOT_AT_LINE_START, gix_hash::Kind::Sha1)?;
         assert_eq!(tag.message, super::PGP_BEGIN_NOT_AT_LINE_START_MESSAGE.as_bstr());
-        assert_eq!(tag.pgp_signature, None, "it doesn't parse this as PGP signature");
+        assert_eq!(tag.signature, None, "it doesn't parse this as PGP signature");
         assert_roundtrip(super::PGP_BEGIN_NOT_AT_LINE_START)?;
         Ok(())
     }
@@ -454,7 +528,7 @@ KLMHist5yj0sw1E4hDTyQa0=
         let tag = TagRef::from_bytes(super::PGP_SIGNATURE_WITH_TRAILING_TEXT, gix_hash::Kind::Sha1)?;
         assert_eq!(tag.message, b"message text".as_bstr());
         assert_eq!(
-            tag.pgp_signature,
+            tag.signature,
             Some(super::PGP_SIGNATURE_WITH_TRAILING_TEXT_SIGNATURE.as_bstr())
         );
         assert_roundtrip(super::PGP_SIGNATURE_WITH_TRAILING_TEXT)?;
@@ -466,7 +540,7 @@ KLMHist5yj0sw1E4hDTyQa0=
         let tag = TagRef::from_bytes(super::PGP_SIGNATURE_WITHOUT_END_MARKER, gix_hash::Kind::Sha1)?;
         assert_eq!(tag.message, b"message text".as_bstr());
         assert_eq!(
-            tag.pgp_signature,
+            tag.signature,
             Some(super::PGP_SIGNATURE_WITHOUT_END_MARKER_SIGNATURE.as_bstr())
         );
         assert_roundtrip(super::PGP_SIGNATURE_WITHOUT_END_MARKER)?;
@@ -478,7 +552,7 @@ KLMHist5yj0sw1E4hDTyQa0=
         let tag = TagRef::from_bytes(super::PGP_SIGNATURE_AT_BODY_START, gix_hash::Kind::Sha1)?;
         assert_eq!(tag.message, b"".as_bstr());
         assert_eq!(
-            tag.pgp_signature,
+            tag.signature,
             Some(super::PGP_SIGNATURE_AT_BODY_START_SIGNATURE.as_bstr())
         );
         assert_roundtrip(super::PGP_SIGNATURE_AT_BODY_START)?;
@@ -496,7 +570,7 @@ KLMHist5yj0sw1E4hDTyQa0=
                 target_kind: Kind::Commit,
                 message: b" \ttab\nnewline\n\nlast-with-trailer\n".as_bstr(),
                 tagger: Some(b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592382888 +0800".as_bstr()),
-                pgp_signature: None
+                signature: None
             }
         );
         Ok(())
@@ -515,7 +589,7 @@ KLMHist5yj0sw1E4hDTyQa0=
                 target_kind: Kind::Commit,
                 message: b"".as_bstr(),
                 tagger: Some(b"shemminger <shemminger>".as_bstr()),
-                pgp_signature: None
+                signature: None
             }
         );
         Ok(())

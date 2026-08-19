@@ -20,7 +20,7 @@ pub fn git_tag<'a>(i: &mut &'a [u8], hash_kind: gix_hash::Kind) -> ParseResult<T
     let tag_version = name(i)?;
     let tagger = tagger_raw(i)?;
 
-    let (message, pgp_signature) = message(i)?;
+    let (message, signature) = message(i)?;
     if !i.is_empty() {
         return Err(crate::decode::Error);
     }
@@ -31,7 +31,7 @@ pub fn git_tag<'a>(i: &mut &'a [u8], hash_kind: gix_hash::Kind) -> ParseResult<T
         target_kind: kind,
         message,
         tagger,
-        pgp_signature,
+        signature,
     })
 }
 
@@ -101,23 +101,18 @@ pub(crate) fn tagger<'a>(i: &mut &'a [u8]) -> ParseResult<Option<gix_actor::Sign
     .map(Some)
 }
 
-/// Parse the tag message and its optional PGP signature block.
+/// Parse the tag message and its optional cryptographic signature block.
 ///
-/// Typical input starts with the blank-line separator before the message, for
-/// example `\nrelease notes`. A signed input looks like
-/// `\nrelease notes\n-----BEGIN PGP SIGNATURE-----\n...\n-----END PGP SIGNATURE-----`.
 /// On success, `i` is always advanced to the empty suffix. The returned tuple
-/// contains the message and, if a PGP signature marker is found at the
-/// beginning of a line, all bytes from that marker to the end of the input,
-/// and notably the end-of-signature marker isn't required.
+/// contains the message and, if a Git-supported armor marker is found at the
+/// beginning of a line, all bytes from the last such marker through end of input.
+/// An end-of-signature marker isn't required.
 ///
 /// An input consisting only of newlines is accepted as an empty-header message
 /// and consumed entirely. In that case, the newlines are returned as part of
 /// the message to preserve roundtrips for tags whose body is only the
 /// header/message separator.
 pub fn message<'a>(i: &mut &'a [u8]) -> ParseResult<(&'a BStr, Option<&'a BStr>)> {
-    const PGP_SIGNATURE_BEGIN: &[u8] = b"-----BEGIN PGP SIGNATURE-----";
-
     if i.iter().all(|b| *b == b'\n') {
         let message = i.as_bstr();
         *i = &[];
@@ -129,7 +124,7 @@ pub fn message<'a>(i: &mut &'a [u8]) -> ParseResult<(&'a BStr, Option<&'a BStr>)
     };
 
     *i = &[];
-    if let Some(sig_start) = find_pgp_signature(rest, PGP_SIGNATURE_BEGIN) {
+    if let Some((sig_start, _format)) = crate::signature::find(rest) {
         // Truncate newline off the message end.
         let message_end = if sig_start > 0 && rest[sig_start - 1] == b'\n' {
             sig_start - 1
@@ -142,24 +137,4 @@ pub fn message<'a>(i: &mut &'a [u8]) -> ParseResult<(&'a BStr, Option<&'a BStr>)
     }
 
     Ok((rest.as_bstr(), None))
-}
-
-/// Find a PGP signature marker that starts at a line boundary.
-///
-/// `haystack` is usually the tag message body and `needle` is the marker to
-/// search for. On success, the returned index is the marker itself.
-fn find_pgp_signature(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if haystack.starts_with(needle) {
-        return Some(0);
-    }
-
-    let mut offset = 0;
-    while let Some(pos) = haystack.get(offset..)?.find_byte(b'\n') {
-        let found = offset + pos + 1;
-        if haystack[found..].starts_with(needle) {
-            return Some(found);
-        }
-        offset = found;
-    }
-    None
 }

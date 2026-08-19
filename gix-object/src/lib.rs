@@ -49,6 +49,8 @@ use smallvec::SmallVec;
 ///
 pub mod commit;
 mod object;
+/// Cryptographic signature discovery and, with the `signature` feature, external signing and verification.
+pub mod signature;
 ///
 pub mod tag;
 ///
@@ -185,8 +187,10 @@ pub struct TagRef<'a> {
     pub tagger: Option<&'a BStr>,
     /// The message describing this release.
     pub message: &'a BStr,
-    /// A cryptographic signature over the entire content of the serialized tag object thus far.
-    pub pgp_signature: Option<&'a BStr>,
+    /// Any Git-supported in-body cryptographic signature.
+    ///
+    /// Use [`signature()`](TagRef::signature()) to also obtain its detected format.
+    pub signature: Option<&'a BStr>,
 }
 
 /// Like [`TagRef`], but as `Iterator` to support entirely allocation free parsing.
@@ -212,8 +216,10 @@ pub struct Tag {
     pub tagger: Option<gix_actor::Signature>,
     /// The message describing the tag.
     pub message: BString,
-    /// A pgp signature over all bytes of the encoded tag, excluding the pgp signature itself.
-    pub pgp_signature: Option<BString>,
+    /// Any Git-supported in-body cryptographic signature.
+    ///
+    /// Use [`signature()`](Tag::signature()) to also obtain its detected format.
+    pub signature: Option<BString>,
 }
 
 /// Immutable objects are read-only structures referencing most data from [a byte slice](ObjectRef::from_bytes()).

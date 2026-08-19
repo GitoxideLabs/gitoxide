@@ -34,7 +34,7 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"
-gix-testtools = { path = "../tests/tools" }
+gix-testtools = { path = "../tests/tools", default-features = false }
 gix-hash = { path = "../gix-hash" }
 
 [package.metadata.docs.rs]

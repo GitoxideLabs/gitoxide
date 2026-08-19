@@ -1,5 +1,6 @@
 use gix_hash::ObjectId;
 
+mod change_id;
 mod hasher;
 mod kind;
 mod object_id;

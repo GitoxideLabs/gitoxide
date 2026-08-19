@@ -537,6 +537,7 @@ impl Platform {
             .resources()
             .ok_or(prepare_diff_command::Error::SourceOrDestinationUnset)?;
         let mut cmd: std::process::Command = gix_command::prepare(gix_path::from_bstring(diff_command))
+            .command_may_be_shell_script_disallow_manual_argument_splitting()
             .with_context(context)
             .env("GIT_DIFF_PATH_COUNTER", (count + 1).to_string())
             .env("GIT_DIFF_PATH_TOTAL", total.to_string())

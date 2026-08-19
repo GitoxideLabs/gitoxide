@@ -25,6 +25,8 @@ pub struct Any<T: Validate = validate::All> {
     pub link: Option<Link>,
     /// A note about this key.
     pub note: Option<Note>,
+    /// The value to use if this key is unset.
+    pub default_value: Option<&'static [u8]>,
     /// The way validation and transformation should happen.
     validate: T,
 }
@@ -47,6 +49,7 @@ impl<T: Validate> Any<T> {
             subsection_requirement: Some(SubSectionRequirement::Never),
             link: None,
             note: None,
+            default_value: None,
             validate,
         }
     }
@@ -71,6 +74,12 @@ impl<T: Validate> Any<T> {
     /// Set a link to another key which serves as fallback to provide a value if this key is not set.
     pub const fn with_fallback(mut self, key: &'static dyn Key) -> Self {
         self.link = Some(Link::FallbackKey(key));
+        self
+    }
+
+    /// Set the value to use if this key is unset.
+    pub const fn with_default(mut self, value: &'static [u8]) -> Self {
+        self.default_value = Some(value);
         self
     }
 
@@ -149,6 +158,10 @@ impl<T: Validate> Key for Any<T> {
 
     fn note(&self) -> Option<&Note> {
         self.note.as_ref()
+    }
+
+    fn default_value(&self) -> Option<&BStr> {
+        self.default_value.map(BStr::new)
     }
 }
 

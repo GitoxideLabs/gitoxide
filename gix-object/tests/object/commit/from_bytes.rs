@@ -35,7 +35,7 @@ parent 2222222222222222222222222222222222222222222222222222222222222222
 author Ada Lovelace <ada@example.com> 1710000000 +0000
 committer Grace Hopper <grace@example.com> 1710003600 -0230
 encoding ISO-8859-1
-gpgsig -----BEGIN SSH SIGNATURE-----
+gpgsig-sha256 -----BEGIN SSH SIGNATURE-----
  U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgZXhhbXBsZS1zaGEyNTY=
  -----END SSH SIGNATURE-----
 mergetag object 3333333333333333333333333333333333333333333333333333333333333333
@@ -63,13 +63,18 @@ sha256 body
     assert_eq!(commit.committer()?.email, b"grace@example.com".as_bstr());
     assert_eq!(
         commit.extra_headers().pgp_signature(),
-        Some(
-            b"-----BEGIN SSH SIGNATURE-----
+        if cfg!(feature = "sha256") {
+            Some(
+                b"-----BEGIN SSH SIGNATURE-----
 U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgZXhhbXBsZS1zaGEyNTY=
 -----END SSH SIGNATURE-----
 "
-            .as_bstr()
-        )
+                .as_bstr(),
+            )
+        } else {
+            None
+        },
+        "`gpgsig-sha256` is recognized exactly when SHA-256 support is enabled"
     );
     assert_eq!(commit.extra_headers().mergetags().count(), 1);
     assert_eq!(commit.message, b"sha256 subject\n\nsha256 body\n".as_bstr());
@@ -426,12 +431,16 @@ fn merge() -> crate::Result {
 }
 
 #[test]
-fn newline_right_after_signature_multiline_header() -> crate::Result {
+fn newline_right_after_signature_multiline_header_sha1() -> crate::Result {
     let fixture = commit_fixture("signed-whitespace.txt")?;
     let commit = CommitRef::from_bytes(&fixture, crate::fixture_hash_kind())?;
     let pgp_sig = crate::commit::OTHER_SIGNATURE.as_bstr();
     assert_eq!(commit.extra_headers[0].1.as_ref(), pgp_sig);
-    assert_eq!(commit.extra_headers().pgp_signature(), Some(pgp_sig));
+    assert_eq!(
+        commit.extra_headers().pgp_signature(),
+        (crate::fixture_hash_kind() == gix_hash::Kind::Sha1).then_some(pgp_sig),
+        "a `gpgsig` header is only the active signature for SHA-1 commits"
+    );
     assert_eq!(
         commit.extra_headers().find(gix_object::commit::SIGNATURE_FIELD_NAME),
         Some(pgp_sig)
@@ -443,11 +452,29 @@ fn newline_right_after_signature_multiline_header() -> crate::Result {
 }
 
 #[test]
-fn bogus_multi_gpgsig_header() -> crate::Result {
+#[cfg(feature = "sha256")]
+fn sha256_commits_use_their_own_signature_header() -> crate::Result {
+    let data = b"tree 0000000000000000000000000000000000000000000000000000000000000000\n\
+author A <a@example.com> 0 +0000\n\
+committer A <a@example.com> 0 +0000\n\
+gpgsig-sha256 signature\n\
+\nmessage\n";
+    let commit = CommitRef::from_bytes(data, gix_hash::Kind::Sha256)?;
+    assert_eq!(commit.extra_headers().pgp_signature(), Some(b"signature".as_bstr()));
+    assert!(gix_object::CommitRefIter::signature(data, gix_hash::Kind::Sha256)?.is_some());
+    Ok(())
+}
+
+#[test]
+fn bogus_multi_gpgsig_header_sha1() -> crate::Result {
     let fixture = commit_fixture("bogus-gpgsig-lines-in-git.git.txt")?;
     let commit = CommitRef::from_bytes(&fixture, crate::fixture_hash_kind())?;
     let pgp_sig = b"-----BEGIN PGP SIGNATURE-----".as_bstr();
-    assert_eq!(commit.extra_headers().pgp_signature(), Some(pgp_sig));
+    assert_eq!(
+        commit.extra_headers().pgp_signature(),
+        (crate::fixture_hash_kind() == gix_hash::Kind::Sha1).then_some(pgp_sig),
+        "a `gpgsig` header is only the active signature for SHA-1 commits"
+    );
     assert_eq!(
         commit.extra_headers().find_all("gpgsig").count(),
         17,

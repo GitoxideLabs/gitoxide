@@ -32,8 +32,8 @@ thiserror = "2.0.18"
 bitflags = "2"
 
 [dev-dependencies]
-gix-hash = { path = "../gix-hash", features = ["sha1"] }
-gix-testtools = { path = "../tests/tools", default-features = false }
+gix-traverse = { path = ".", features = ["sha1", "sha256"] }
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-odb = { path = "../gix-odb" }
 gix-object = { path = "../gix-object" }
 gix-commitgraph = { path = "../gix-commitgraph" }

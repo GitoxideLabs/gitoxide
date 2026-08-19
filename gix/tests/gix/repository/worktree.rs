@@ -279,7 +279,7 @@ fn from_bare_parent_repo() {
     .unwrap() else {
         return;
     };
-    let repo = gix::open(dir.join("repo.git")).unwrap();
+    let repo = gix::open_opts(dir.join("repo.git"), crate::restricted()).expect("fixture repository opens");
 
     run_assertions(repo, true /* bare */);
 }
@@ -292,7 +292,7 @@ fn from_nonbare_parent_repo() {
     .unwrap() else {
         return;
     };
-    let repo = gix::open(dir.join("repo")).unwrap();
+    let repo = gix::open_opts(dir.join("repo"), crate::restricted()).expect("fixture repository opens");
 
     run_assertions(repo, false /* bare */);
 }
@@ -303,7 +303,7 @@ fn linked_worktree_proxy_base_with_relative_linking_files() -> crate::Result {
     let main = fixture.join("main");
     let linked = fixture.join("linked");
     let private_git_dir = main.join(".git/worktrees/linked");
-    let repo = gix::open(&main)?;
+    let repo = gix::open_opts(&main, crate::restricted())?;
     let worktrees = repo.worktrees()?;
     assert_eq!(worktrees.len(), 1, "the relative-path fixture has one linked worktree");
     let proxy = worktrees.into_iter().next().expect("one worktree");
@@ -330,7 +330,7 @@ fn linked_worktree_proxy_base_with_symlinked_main_repo() -> crate::Result {
     let linked = fixture.join("actual/linked");
     let main_symlink = fixture.join("main-symlink");
 
-    let repo = gix::open(&main_symlink)?;
+    let repo = gix::open_opts(&main_symlink, crate::restricted())?;
     let worktrees = repo.worktrees()?;
     assert_eq!(worktrees.len(), 1, "the relative-path fixture has one linked worktree");
     let proxy = worktrees.into_iter().next().expect("one worktree");
@@ -357,7 +357,7 @@ fn from_nonbare_parent_repo_set_workdir() -> gix_testtools::Result {
     else {
         return Ok(());
     };
-    let mut repo = gix::open(dir.join("repo")).unwrap();
+    let mut repo = gix::open_opts(dir.join("repo"), crate::restricted()).expect("fixture repository opens");
 
     assert!(repo.worktree().is_some_and(|wt| wt.is_main()), "we have main worktree");
 
@@ -456,7 +456,7 @@ fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
         let repo = if base.is_dir() {
             let repo = actual.clone().into_repo().unwrap();
             assert_eq!(
-                &gix::open(base).unwrap(),
+                &gix::open_opts(base, crate::restricted()).expect("linked worktree repository opens"),
                 &repo,
                 "repos are considered the same no matter if opened from worktree or from git dir"
             );
