@@ -34,8 +34,8 @@ without trading responsiveness for metadata that is not visible.
   HEAD-pin rules. Replay conflicts change nothing unless explicitly
   materialized; an accepted conflict writes the checkout and unmerged index,
   then exits with an error so resolution cannot be mistaken for completion.
-- `tix stash` saves the index and worktree state at `HEAD` through the same
-  commit-stash operation as the TUI.
+- `tix stash` saves the index and worktree state in a gix stash associated with
+  the `HEAD` commit through the same commit-stash operation as the TUI.
 - `tix new [--index | --worktree | --worktree-untracked] [--allow-empty] [--todo]
   [--author "Name <email>"] [-m MESSAGE ... | -f FILE]` creates a child of `HEAD`, or a root commit for
   unborn `HEAD`, with the same signing, editor, enrichment, lazy-rebase, and
