@@ -311,6 +311,20 @@ fn write_history(
         }
     }
 
+    let mut checks_pass_ids = HashSet::new();
+    let mut tree_enrichments = crate::enrich::open_tree(repository)?;
+    for row in &app.rows {
+        let loaded = crate::enrich::tree_id(repository, row.id)
+            .and_then(|tree_id| crate::enrich::load_tree(&mut tree_enrichments, tree_id));
+        match loaded {
+            Ok(enrichment) if enrichment.checks_pass => {
+                checks_pass_ids.insert(row.id);
+            }
+            Ok(_) => {}
+            Err(err) => tracing::warn!(commit_id = %row.id, error = %err, "ignored malformed tix tree enrichment"),
+        }
+    }
+
     let change_ids = crate::change_id::abbreviations(repository, app.rows.iter().map(|row| row.id), 7)?;
 
     let mailmap = repository.open_mailmap();
@@ -322,6 +336,7 @@ fn write_history(
             Line::raw(crate::enrich::marker(
                 todo_ids.contains(&row.id),
                 enrichment_note_ids.contains(&row.id),
+                checks_pass_ids.contains(&row.id),
             ))
             .width()
         })
@@ -337,8 +352,11 @@ fn write_history(
             note_ids.contains(&row.id),
             change_ids.values.get(&row.id).copied(),
         );
-        let enrichment_marker =
-            crate::enrich::marker(todo_ids.contains(&row.id), enrichment_note_ids.contains(&row.id));
+        let enrichment_marker = crate::enrich::marker(
+            todo_ids.contains(&row.id),
+            enrichment_note_ids.contains(&row.id),
+            checks_pass_ids.contains(&row.id),
+        );
         let ambiguity_marker = if change_ids.ambiguous.contains(&row.id) {
             "💥"
         } else {
@@ -1150,6 +1168,7 @@ mod tests {
         create_pins(&repository, &[OsString::from(orphan.to_string())])?;
         let head_change_id = crate::change_id::for_commit(&repository, head)?;
         assert!(crate::enrich::toggle(&repository, head)?.todo);
+        assert!(crate::enrich::toggle_checks_pass(&repository, head)?.checks_pass);
 
         let mut output = Vec::new();
         write_history(&repository, &[], &[OsString::from("v1")], &mut output)?;
@@ -1202,8 +1221,8 @@ mod tests {
         }
         assert!(output.contains('●'), "history graph lanes are rendered");
         assert!(
-            output.lines().any(|line| line.starts_with("🚧💥├")),
-            "todos directly lead their rows: {output:?}"
+            output.lines().any(|line| line.starts_with("🚧✔️💥├")),
+            "commit and tree enrichments directly lead their rows: {output:?}"
         );
         assert!(output.contains("📌"), "applicable pins are decorated and traversed");
         assert!(

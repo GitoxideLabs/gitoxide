@@ -8,6 +8,7 @@ use gix::{
 };
 
 pub(crate) const REF_NAME: &str = "refs/worktree/tix/enrich";
+pub(crate) const TREE_REF_NAME: &str = "refs/worktree/tix/enrich-tree";
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Enrichment {
@@ -16,29 +17,46 @@ pub(crate) struct Enrichment {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TreeEnrichment {
+    pub checks_pass: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Headers {
     pub todo: bool,
     pub message: Option<BString>,
 }
 
-pub(crate) fn marker(todo: bool, note: bool) -> &'static str {
-    match (todo, note) {
-        (true, true) => "🚧📝",
-        (true, false) => "🚧",
-        (false, true) => "📝",
-        (false, false) => "",
+pub(crate) fn marker(todo: bool, note: bool, checks_pass: bool) -> &'static str {
+    match (todo, note, checks_pass) {
+        (true, true, true) => "🚧📝✔️",
+        (true, true, false) => "🚧📝",
+        (true, false, true) => "🚧✔️",
+        (true, false, false) => "🚧",
+        (false, true, true) => "📝✔️",
+        (false, true, false) => "📝",
+        (false, false, true) => "✔️",
+        (false, false, false) => "",
     }
 }
 
 pub(crate) fn open(repo: &gix::Repository) -> Result<gix::note::Platform<'_>> {
+    open_at(repo, REF_NAME)
+}
+
+pub(crate) fn open_tree(repo: &gix::Repository) -> Result<gix::note::Platform<'_>> {
+    open_at(repo, TREE_REF_NAME)
+}
+
+fn open_at<'repo>(repo: &'repo gix::Repository, reference: &str) -> Result<gix::note::Platform<'repo>> {
     repo.notes()
         .context("could not open tix enrichments")?
-        .with_refs([REF_NAME])
+        .with_refs([reference])
         .context("could not select the tix enrich reference")
 }
 
 pub(crate) fn load(notes: &mut gix::note::Platform, change_id: ChangeId) -> Result<Enrichment> {
-    let config = load_config(notes, change_id)?;
+    let config = load_config(notes, ObjectId::from(change_id))?;
     let Some(config) = config else {
         return Ok(Enrichment::default());
     };
@@ -51,16 +69,34 @@ pub(crate) fn load(notes: &mut gix::note::Platform, change_id: ChangeId) -> Resu
     })
 }
 
-fn load_config(notes: &mut gix::note::Platform, change_id: ChangeId) -> Result<Option<File>> {
-    let found = notes
-        .get(ObjectId::from(change_id))
-        .context("could not load the tix enrichment")?;
+pub(crate) fn load_tree(notes: &mut gix::note::Platform, tree_id: ObjectId) -> Result<TreeEnrichment> {
+    let Some(config) = load_config(notes, tree_id)? else {
+        return Ok(TreeEnrichment::default());
+    };
+    Ok(TreeEnrichment {
+        checks_pass: config
+            .boolean("tree.checks-pass")
+            .context("tree.checks-pass is not a boolean")?
+            .unwrap_or(false),
+    })
+}
+
+fn load_config(notes: &mut gix::note::Platform, object_id: ObjectId) -> Result<Option<File>> {
+    let found = notes.get(object_id).context("could not load the tix enrichment")?;
     found
         .first()
         .map(|note| {
             File::try_from(note.blob.data.as_bstr()).context("could not parse the tix enrichment as Git config")
         })
         .transpose()
+}
+
+pub(crate) fn tree_id(repo: &gix::Repository, commit_id: ObjectId) -> Result<ObjectId> {
+    repo.find_commit(commit_id)
+        .context("could not find the enriched commit")?
+        .tree_id()
+        .context("could not read the enriched commit tree")
+        .map(gix::Id::detach)
 }
 
 pub(crate) fn toggle(repo: &gix::Repository, commit_id: ObjectId) -> Result<Enrichment> {
@@ -91,6 +127,22 @@ pub(crate) fn set_note(repo: &gix::Repository, commit_id: ObjectId, note: Option
                 section.remove("note");
             }
         }
+        Ok(())
+    })
+}
+
+pub(crate) fn toggle_checks_pass(repo: &gix::Repository, commit_id: ObjectId) -> Result<TreeEnrichment> {
+    let tree_id = tree_id(repo, commit_id)?;
+    update_tree(repo, tree_id, |config| {
+        let enabled = !config
+            .boolean("tree.checks-pass")
+            .context("tree.checks-pass is not a boolean")?
+            .unwrap_or(false);
+        config
+            .section_mut_or_create_new("tree", None)
+            .context("could not create the tree enrichment section")?
+            .set("checks-pass", if enabled { "true" } else { "false" })
+            .context("could not update tree.checks-pass")?;
         Ok(())
     })
 }
@@ -155,13 +207,30 @@ fn update(
 ) -> Result<Enrichment> {
     let change_id = crate::change_id::for_commit(repo, commit_id)?;
     let mut notes = open(repo)?;
-    let mut config = load_config(&mut notes, change_id)?.unwrap_or_default();
+    let mut config = load_config(&mut notes, ObjectId::from(change_id))?.unwrap_or_default();
     edit(&mut config)?;
     let reference: FullName = REF_NAME.try_into().expect("the tix enrich reference is valid");
     notes
         .add_to_ref(reference.as_ref(), ObjectId::from(change_id), config.to_bstring())
         .context("could not write the tix enrichment")?;
     load(&mut notes, change_id)
+}
+
+fn update_tree(
+    repo: &gix::Repository,
+    tree_id: ObjectId,
+    edit: impl FnOnce(&mut File) -> Result<()>,
+) -> Result<TreeEnrichment> {
+    let mut notes = open_tree(repo)?;
+    let mut config = load_config(&mut notes, tree_id)?.unwrap_or_default();
+    edit(&mut config)?;
+    let reference: FullName = TREE_REF_NAME
+        .try_into()
+        .expect("the tix tree enrich reference is valid");
+    notes
+        .add_to_ref(reference.as_ref(), tree_id, config.to_bstring())
+        .context("could not write the tix tree enrichment")?;
+    load_tree(&mut notes, tree_id)
 }
 
 #[cfg(test)]
@@ -220,6 +289,46 @@ mod tests {
         assert!(
             load(&mut open(&repo)?, change_id)?.todo,
             "the rewritten commit shares the todo"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checks_pass_follows_only_the_exact_tree_and_preserves_other_fields() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            ["user.name=checks author", "user.email=checks@example.com"],
+        )?;
+        let original = repo.head_id()?.detach();
+        let tree = tree_id(&repo, original)?;
+        let reference: FullName = TREE_REF_NAME.try_into()?;
+        repo.notes()?.add_to_ref(
+            reference.as_ref(),
+            tree,
+            b"[tree]\n\tchecks-pass = false\n\towner = me\n",
+        )?;
+
+        assert!(toggle_checks_pass(&repo, original)?.checks_pass);
+        let mut notes = open_tree(&repo)?;
+        let note = notes.get(tree)?.into_iter().next().expect("the tree enrichment exists");
+        let config = File::try_from(note.blob.data.as_bstr())?;
+        assert_eq!(
+            config.string("tree.owner").as_ref().map(|value| value.as_bstr()),
+            Some(b"me".as_bstr())
+        );
+
+        let mut rewritten = repo.find_commit(original)?.decode()?.into_owned()?;
+        rewritten.message = "same tree".into();
+        let rewritten = repo.write_object(&rewritten)?.detach();
+        assert!(
+            load_tree(&mut open_tree(&repo)?, tree_id(&repo, rewritten)?)?.checks_pass,
+            "a message-only rewrite retains the tree marker"
+        );
+        let changed_tree = tree_id(&repo, repo.rev_parse_single("HEAD~1")?.detach())?;
+        assert!(
+            !load_tree(&mut open_tree(&repo)?, changed_tree)?.checks_pass,
+            "a different tree has no marker"
         );
         Ok(())
     }
@@ -316,6 +425,13 @@ mod tests {
             toggle(&repo, id).is_err(),
             "mutation does not replace malformed enrichments"
         );
+        let tree = tree_id(&repo, id)?;
+        let reference: FullName = TREE_REF_NAME.try_into()?;
+        repo.notes()?.add_to_ref(reference.as_ref(), tree, b"[tree")?;
+        assert!(
+            toggle_checks_pass(&repo, id).is_err(),
+            "tree mutation does not replace malformed enrichments"
+        );
         Ok(())
     }
 
@@ -346,6 +462,12 @@ mod tests {
         assert!(
             load(&mut open(&linked)?, change_id)?.todo,
             "linked enrichments survive main-worktree changes"
+        );
+        let tree = tree_id(&main, id)?;
+        assert!(toggle_checks_pass(&main, id)?.checks_pass);
+        assert!(
+            !load_tree(&mut open_tree(&linked)?, tree)?.checks_pass,
+            "tree enrichments are also worktree-local"
         );
         Ok(())
     }
