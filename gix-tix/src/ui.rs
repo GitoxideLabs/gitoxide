@@ -600,15 +600,24 @@ pub(crate) fn draw_with_worktree(
                     copy_feedback: if row_selected { copy_feedback } else { None },
                 },
             );
-            if !row_selected
-                && decorations.get(&row.id).is_some_and(|decorations| {
-                    decorations
-                        .iter()
-                        .any(|decoration| decoration.kind == DecorationKind::Head)
-                })
-            {
-                for span in &mut metadata.fields[5].spans {
-                    span.style = span.style.add_modifier(Modifier::REVERSED);
+            if !row_selected && let Some(decorations) = decorations.get(&row.id) {
+                let current_head = decorations
+                    .iter()
+                    .any(|decoration| decoration.kind == DecorationKind::Head);
+                let foreign_head = decorations.iter().any(|decoration| {
+                    matches!(
+                        decoration.kind,
+                        DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
+                    )
+                });
+                if current_head || foreign_head {
+                    for span in &mut metadata.fields[5].spans {
+                        span.style = if current_head {
+                            span.style.add_modifier(Modifier::REVERSED)
+                        } else {
+                            span.style.bg(Color::DarkGray)
+                        };
+                    }
                 }
             }
             metadata
@@ -4587,6 +4596,127 @@ mod tests {
         assert!(
             !terminal.backend().buffer()[(2, 0)].modifier.contains(Modifier::BOLD),
             "a tip @ keeps its normal weight"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn highlights_foreign_worktree_head_titles_without_competing_with_current_head()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let current = gix::ObjectId::Sha1([1; 20]);
+        let attached = gix::ObjectId::Sha1([2; 20]);
+        let detached = gix::ObjectId::Sha1([3; 20]);
+        let ordinary = gix::ObjectId::Sha1([4; 20]);
+        let commit = |id: gix::ObjectId, title: &'static str| Commit {
+            id,
+            parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: title.into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            signature: SignatureState::Unsigned,
+        };
+        let mut app = App::new(4);
+        app.id_mode = IdMode::Commit;
+        app.ref_mode = RefMode::None;
+        app.set_worktree_head(Some(current), false);
+        app.extend_commits(vec![
+            commit(current, "current title"),
+            commit(attached, "attached title"),
+            commit(detached, "detached title"),
+            commit(ordinary, "ordinary title"),
+        ]);
+        complete(&mut app);
+        app.selected = None;
+        let decorations = Decorations::from([
+            (
+                current,
+                vec![
+                    Decoration {
+                        name: "HEAD".into(),
+                        kind: DecorationKind::Head,
+                    },
+                    Decoration {
+                        name: "shared".into(),
+                        kind: DecorationKind::WorktreeBranch,
+                    },
+                ],
+            ),
+            (
+                attached,
+                vec![Decoration {
+                    name: "topic".into(),
+                    kind: DecorationKind::WorktreeBranch,
+                }],
+            ),
+            (
+                detached,
+                vec![Decoration {
+                    name: "agent-wt".into(),
+                    kind: DecorationKind::WorktreeDetached,
+                }],
+            ),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(100, 5))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let current_x = rendered_line(&terminal, 0)
+            .find("current title")
+            .expect("the current HEAD title is visible") as u16;
+        assert!(
+            terminal.backend().buffer()[(current_x, 0)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "the current HEAD keeps its stronger reverse-video title"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(current_x, 0)].bg,
+            Color::Reset,
+            "foreign worktrees do not replace current HEAD reverse video"
+        );
+        for (row, title) in [(1, "attached title"), (2, "detached title")] {
+            let line = rendered_line(&terminal, row);
+            let title_x = line.find(title).expect("the foreign worktree title is visible") as u16;
+            let title_cell = &terminal.backend().buffer()[(title_x, row)];
+            assert_eq!(title_cell.bg, Color::DarkGray, "the foreign HEAD title is shaded");
+            assert!(
+                !title_cell.modifier.contains(Modifier::REVERSED),
+                "foreign HEAD titles remain less prominent than current HEAD"
+            );
+            assert_eq!(
+                terminal.backend().buffer()[(0, row)].bg,
+                Color::Reset,
+                "the foreign HEAD background is limited to its title"
+            );
+            assert!(
+                !line.contains('@'),
+                "hidden reference labels do not provide the highlight"
+            );
+        }
+        let ordinary_line = rendered_line(&terminal, 3);
+        let ordinary_x = ordinary_line
+            .find("ordinary title")
+            .expect("the ordinary title is visible") as u16;
+        assert_eq!(
+            terminal.backend().buffer()[(ordinary_x, 3)].bg,
+            Color::Reset,
+            "ordinary commit titles keep the terminal background"
+        );
+
+        app.selected = Some(1);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let selected_line = rendered_line(&terminal, 1);
+        let selected_title = selected_line
+            .find("attached title")
+            .expect("the selected foreign worktree title is visible") as u16;
+        assert_eq!(
+            terminal.backend().buffer()[(selected_title, 1)].bg,
+            Color::Reset,
+            "selection takes precedence over foreign HEAD emphasis"
         );
         Ok(())
     }

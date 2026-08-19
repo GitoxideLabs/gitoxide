@@ -206,6 +206,11 @@ without trading responsiveness for metadata that is not visible.
   directory basename is available. A detached current worktree is identified by
   the graph `@` alone and has no redundant `@directory` label. Identical labels
   are deduplicated.
+- An unselected commit checked out by any foreign worktree gives only its title
+  a dark-gray background, whether that worktree is attached or detached and even
+  when reference labels are hidden. The current worktree's reverse-video title
+  takes precedence when both point to the same commit; selection clears either
+  title emphasis.
 - When reference labels are hidden, worktree labels are visible only on the
   selected row. Stale, malformed, unborn, and otherwise unreadable worktree
   entries are skipped without failing history loading.

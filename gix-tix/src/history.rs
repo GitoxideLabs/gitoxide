@@ -1906,6 +1906,26 @@ pub(crate) fn decorations_excluding(
     }
     for worktree in worktrees
         .iter()
+        .filter(|worktree| !worktree.is_current && !worktree.is_detached)
+    {
+        let Some(reference) = &worktree.reference else { continue };
+        if excluded.contains(reference.as_bstr()) {
+            continue;
+        }
+        let name = reference.shorten().to_owned();
+        let decorations = out.entry(worktree.id).or_default();
+        if !decorations
+            .iter()
+            .any(|decoration| decoration.kind == DecorationKind::WorktreeBranch && decoration.name == name)
+        {
+            decorations.push(Decoration {
+                name,
+                kind: DecorationKind::WorktreeBranch,
+            });
+        }
+    }
+    for worktree in worktrees
+        .iter()
         .filter(|worktree| worktree.reference.is_none() || worktree.is_detached && !worktree.is_current)
     {
         let kind = if worktree.is_current {
@@ -2282,6 +2302,14 @@ mod tests {
             .args(["branch", "remembered", "main~1"])
             .status()?;
         assert!(remembered_branch.success(), "git creates the remembered branch");
+        let remembered_worktree = Command::new("git")
+            .current_dir(fixture.path())
+            .args(["worktree", "add", "-q", "remembered-wt", "remembered"])
+            .status()?;
+        assert!(
+            remembered_worktree.success(),
+            "git checks out the branch remembered by another worktree"
+        );
         let remembered_pin = Command::new("git")
             .current_dir(fixture.path().join("detached-wt"))
             .args(["symbolic-ref", "refs/worktree/tix/pins/HEAD", "refs/heads/remembered"])
@@ -2331,7 +2359,7 @@ mod tests {
                 && !worktree.is_current
                 && worktree.is_detached
         }));
-        assert_eq!(worktrees.len(), 3, "the malformed worktree is ignored");
+        assert_eq!(worktrees.len(), 4, "the malformed worktree is ignored");
 
         let main_repo_decorations = decorations(&repo, &[], &worktrees)?;
         let main_decorations = main_repo_decorations.get(&main).expect("main is decorated");
@@ -2353,11 +2381,16 @@ mod tests {
                 decoration.kind == DecorationKind::WorktreeDetached && decoration.name == "detached-wt"
             })
         }));
-        assert!(main_repo_decorations.get(&remembered).is_some_and(|decorations| {
-            decorations
-                .iter()
-                .any(|decoration| decoration.kind == DecorationKind::HeadPinBranch && decoration.name == "remembered")
-        }));
+        assert!(
+            main_repo_decorations.get(&remembered).is_some_and(|decorations| {
+                decorations.iter().any(|decoration| {
+                    decoration.kind == DecorationKind::HeadPinBranch && decoration.name == "remembered"
+                }) && decorations.iter().any(|decoration| {
+                    decoration.kind == DecorationKind::WorktreeBranch && decoration.name == "remembered"
+                })
+            }),
+            "a remembered branch can simultaneously identify an attached foreign worktree"
+        );
 
         let explicit = [OsString::from("main")];
         let without = snapshot(&repo, &explicit, &[], false)?;
