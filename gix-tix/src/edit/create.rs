@@ -336,6 +336,34 @@ fn apply_commit(
     Ok(outcome)
 }
 
+#[tracing::instrument(skip_all, fields(parent = ?prepared.parent))]
+pub(crate) fn apply_fork(
+    mut repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    mut prepared: Prepared,
+    edited: &[u8],
+) -> Result<ObjectId> {
+    let repository_path = repo.git_dir().to_owned();
+    let bare = repo.is_bare();
+    repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
+    let parent = prepared.parent.context("a fork commit requires a parent")?;
+    let (commit, enrichment) = commit_from_edit(&prepared, edited)?;
+    let id = rebase::perform(
+        &repo,
+        graph,
+        rebase::Edit::Fork { anchor: parent, commit },
+        rebase::Signature::RedoIfNeeded,
+        rebase::Tree::LeaveAsIs,
+    )?
+    .complete()?
+    .selected
+    .context("forking a commit did not produce a selection")?;
+    drop(repo);
+    crate::enrich::apply_headers(&crate::open_repository(&repository_path, bare, false)?, id, &enrichment)
+        .context("the fork was created, but its enrichment could not be saved")?;
+    Ok(id)
+}
+
 pub(super) fn commit_from_edit(
     prepared: &Prepared,
     edited: &[u8],
@@ -537,6 +565,86 @@ mod tests {
             after.worktree, before.worktree,
             "the committed worktree bytes remain exactly as prepared"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn fork_creates_an_independent_pinned_child_then_time_travels_to_it() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        for args in [
+            ["reset", "--hard", "-q", "HEAD"].as_slice(),
+            ["clean", "-fdq"].as_slice(),
+            ["commit", "--allow-empty", "-q", "-m", "descendant"].as_slice(),
+        ] {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(fixture.path())
+                    .args(args)
+                    .status()?
+                    .success(),
+                "the fork fixture has a clean descendant"
+            );
+        }
+        let repository = open(fixture.path())?;
+        let main = repository.head_id()?.detach();
+        let parent = repository.rev_parse_single("HEAD~1")?.detach();
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let prepared = prepare(open(fixture.path())?, Some(parent))?;
+        let edited = prepared
+            .document
+            .replacen(b"what\n\nwhy", b"fork\n\nreason", 1)
+            .replacen(b";Todo\n;Message:", b"Todo\nMessage: fork enrichment", 1);
+        let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        let fork = apply_fork(open(fixture.path())?, &graph, prepared, &edited)?;
+
+        let repository = open(fixture.path())?;
+        assert_eq!(
+            crate::enrich::load(
+                &mut crate::enrich::open(&repository)?,
+                crate::change_id::for_commit(&repository, fork)?
+            )?,
+            crate::enrich::Enrichment {
+                todo: true,
+                note: Some("fork enrichment".into()),
+            }
+        );
+        assert_eq!(repository.head_id()?.detach(), main, "forking does not move HEAD");
+        assert_eq!(
+            repository.find_reference("refs/heads/main")?.id().detach(),
+            main,
+            "forking does not move the source branch"
+        );
+        assert_eq!(
+            repository.find_commit(fork)?.parent_ids().next().map(gix::Id::detach),
+            Some(parent),
+            "the fork is a direct child of the selected commit"
+        );
+        let pins = crate::history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 1, "the new leaf is retained until checkout");
+        assert_eq!(pins[0].id, fork);
+        let after = gix_testtools::repository::snapshot(fixture.path())?;
+        assert_eq!(
+            after.index, before.index,
+            "creating the fork leaves the index untouched"
+        );
+        assert_eq!(after.index_tree, before.index_tree, "the index tree remains unchanged");
+        assert_eq!(
+            after.worktree, before.worktree,
+            "creating the fork leaves worktree files untouched"
+        );
+
+        let repository_path = repository.git_dir().to_owned();
+        let graph = super::super::loaded_graph(&repository)?;
+        drop(repository);
+        super::super::time_travel::perform(&repository_path, false, fork, &graph, &[], &[], false)?.complete()?;
+        let repository = open(fixture.path())?;
+        assert!(repository.head()?.is_detached(), "automatic fork travel detaches HEAD");
+        assert_eq!(repository.head_id()?.detach(), fork);
+        let pins = crate::history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 1, "the checkout consumes the temporary fork pin");
+        assert!(pins[0].is_head(), "the singleton remembers the departed branch");
+        assert_eq!(pins[0].id, main);
         Ok(())
     }
 

@@ -1084,11 +1084,17 @@ pub(crate) fn draw_with_worktree(
                 items.push(Span::styled("t", Style::default().add_modifier(Modifier::UNDERLINED)));
                 items.push(Span::raw(" stack-insert"));
             }
-            if app.can_forkpoint() {
+            if app.can_fork_commit() {
                 if !items.is_empty() {
                     items.push(Span::raw(" · "));
                 }
-                items.extend(shortcut("forkpoint", 'f', true));
+                items.extend(shortcut("fork", 'f', true));
+            }
+            if app.can_attach() {
+                if !items.is_empty() {
+                    items.push(Span::raw(" · "));
+                }
+                items.extend(shortcut("attach", 'h', true));
             }
             if items.is_empty() {
                 items.push(Span::raw("no actions"));
@@ -3989,6 +3995,7 @@ mod tests {
         };
         let mut app = App::new(5);
         app.set_worktree_head(Some(head), false);
+        app.set_worktree_branch(Some((head, true)));
         app.extend_commits(vec![
             commit(head, Some(base)),
             commit(base, Some(parent)),
@@ -4006,6 +4013,8 @@ mod tests {
         let popup = rendered_line(&terminal, 3);
         assert!(popup.contains("copy-insert"));
         assert!(popup.contains("move-insert"));
+        assert!(popup.contains("fork"));
+        assert!(popup.contains("attach"));
         assert!(!popup.contains("cherry-"));
         let label = "t stack-insert";
         let start = popup[..popup.find(label).expect("the stack-insert action is visible")]
