@@ -44,7 +44,7 @@ enum Command {
     Spill,
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
     Split(Split),
-    /// Save index and worktree changes at HEAD.
+    /// Save index and worktree changes in a gix stash associated with the HEAD commit.
     Stash,
     /// Pin one or more commits as persistent history tips.
     Pin(Pin),
@@ -906,6 +906,13 @@ mod tests {
                 .to_string()
                 .contains("Split HEAD by amending worktree changes into it and committing staged index changes on top"),
             "short help explains how split distributes index and worktree changes"
+        );
+        assert!(
+            Cli::command()
+                .render_help()
+                .to_string()
+                .contains("gix stash associated with the HEAD commit"),
+            "short help distinguishes a commit-associated gix stash"
         );
         assert!(
             Cli::command().render_long_help().to_string().contains("GIT_EDITOR"),
