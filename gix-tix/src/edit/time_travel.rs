@@ -334,11 +334,22 @@ where
         return Ok((None, Vec::new()));
     }
     let mut ref_changes = Vec::new();
-    let destination_pin = selected_pin(&repository, selected)?;
-    let checkout_detaches = reference.is_none()
-        && destination_pin
-            .as_ref()
-            .is_none_or(|pin| pin.target.try_name().is_none());
+    let pins = history::all_pins(&repository)?;
+    let destination_pin = selected_pin(&pins, selected);
+    let direct_head_pin = if reference.is_none() {
+        pins.into_iter().find(|pin| {
+            pin.is_head()
+                && pin.id == selected
+                && pin.target.try_name().is_some_and(|branch| {
+                    branch.as_bstr().starts_with(b"refs/heads/")
+                        && ensure_branch_is_available(&repository, branch).is_ok()
+                })
+        })
+    } else {
+        None
+    };
+    let pin_for_checkout = direct_head_pin.as_ref().or(destination_pin.as_ref());
+    let checkout_detaches = reference.is_none() && pin_for_checkout.is_none_or(|pin| pin.target.try_name().is_none());
     let head_pin = match head_ref
         .as_ref()
         .filter(|name| checkout_detaches && name.as_bstr().starts_with(b"refs/heads/"))
@@ -367,7 +378,7 @@ where
         None => None,
     };
     let head_after_checkout = reference.map_or_else(
-        || match destination_pin.as_ref().map(|pin| &pin.target) {
+        || match pin_for_checkout.map(|pin| &pin.target) {
             Some(Target::Symbolic(name)) => super::undo::State::Symbolic(name.clone()),
             Some(Target::Object(id)) => super::undo::State::Object(*id),
             None => super::undo::State::Object(selected),
@@ -375,7 +386,7 @@ where
         |name| super::undo::State::Symbolic(name.clone()),
     );
     drop(repository);
-    let checkout = match (reference, &destination_pin) {
+    let checkout = match (reference, pin_for_checkout) {
         (Some(reference), _) if reference.as_bstr().starts_with(b"refs/heads/") => {
             checkout_branch(&workdir, reference.as_ref())
         }
@@ -399,15 +410,18 @@ where
             after: head_after_checkout,
         });
     }
-    let mut notice = reference.map_or_else(
-        || {
-            destination_pin.as_ref().map_or_else(
-                || format!("time-travelled to {}", selected.to_hex_with_len(7)),
-                |pin| format!("returned from {}", pin_label(pin)),
-            )
-        },
-        |reference| format!("checked out {}", reference.shorten()),
-    );
+    let mut notice = match (reference, direct_head_pin.as_ref(), destination_pin.as_ref()) {
+        (Some(reference), _, _) => format!("checked out {}", reference.shorten()),
+        (None, Some(pin), _) => format!(
+            "returned to {}",
+            pin.target
+                .try_name()
+                .expect("a direct HEAD return is symbolic")
+                .shorten()
+        ),
+        (None, None, Some(pin)) => format!("returned from {}", pin_label(pin)),
+        (None, None, None) => format!("time-travelled to {}", selected.to_hex_with_len(7)),
+    };
     let repository = match open_repository(repository_path, bare, false) {
         Ok(repository) => repository,
         Err(err) => {
@@ -537,7 +551,8 @@ pub(crate) fn attach_reporting(
     let remembered = remembered_branch(&repository)?;
     validate_attach(&repository, head_id, &remembered)?;
 
-    let destination_pin = selected_pin(&repository, head_id)?;
+    let pins = history::all_pins(&repository)?;
+    let destination_pin = selected_pin(&pins, head_id);
     let mut ref_changes = Vec::new();
     let provisional = if remembered.branch_tip != head_id && !contains(&repository, remembered.branch_tip, head_id) {
         let (pin, created, mut changes) = create_or_reuse_pin_reporting(
@@ -750,16 +765,21 @@ pub(crate) fn perform_reporting_rebased(
     {
         anyhow::bail!("cannot time-travel with unresolved index conflicts");
     }
+    let source_review = review_tree(&repository, graph, review_roots, head_id)?;
+    let destination_review = review_tree(&repository, graph, review_roots, selected)?;
+    let crosses_review_boundary =
+        source_review.as_ref().map(|review| review.root) != destination_review.as_ref().map(|review| review.root);
     let mut completed_graph = None;
     let mut original_ids = HashMap::new();
-    let mut review_roots = review_roots.to_vec();
     let mut ref_rewrites = Vec::new();
     let mut ref_changes = Vec::new();
-    while let Some(base) = pending_base(&repository, selected)? {
+    let mut pending = pending_base(&repository, selected)?;
+    while let Some(base) = pending {
+        let graph = completed_graph.as_ref().unwrap_or(graph);
         let mut rebased = Vec::new();
         let outcome = super::rebase::perform_reporting_rebased(
             &repository,
-            completed_graph.as_ref().unwrap_or(graph),
+            graph,
             super::rebase::Edit::Repeat {
                 base,
                 checkout: selected,
@@ -788,7 +808,7 @@ pub(crate) fn perform_reporting_rebased(
         };
         ref_rewrites.extend(outcome.ref_rewrites.iter().cloned());
         ref_changes.extend(outcome.ref_changes.iter().cloned());
-        for (old, original) in rebased {
+        for &(old, original) in &rebased {
             if let Some(new) = outcome.map(old) {
                 original_ids.insert(new, original);
             }
@@ -799,16 +819,21 @@ pub(crate) fn perform_reporting_rebased(
         head_id = outcome
             .map(head_id)
             .context("HEAD disappeared while completing its rebase")?;
-        review_roots = review_roots.into_iter().filter_map(|id| outcome.map(id)).collect();
         repository = open_repository(repository_path, bare, false)
             .context("could not reopen repository after completing a pending rebase")?;
-        completed_graph = Some(super::loaded_graph(&repository)?);
+        pending = pending_base(&repository, selected)?;
+        if pending.is_some() {
+            let affected = rebased
+                .into_iter()
+                .map(|(id, _original)| {
+                    outcome
+                        .map(id)
+                        .context("a pending rebase commit disappeared while completing time-travel")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            completed_graph = Some(history::HistoryGraph::for_commits(&repository, &affected)?);
+        }
     }
-    let graph = completed_graph.as_ref().unwrap_or(graph);
-    let source_review = review_tree(&repository, graph, &review_roots, head_id)?;
-    let destination_review = review_tree(&repository, graph, &review_roots, selected)?;
-    let crosses_review_boundary =
-        source_review.as_ref().map(|review| review.root) != destination_review.as_ref().map(|review| review.root);
     let workdir = repository
         .workdir()
         .context("time-travel requires a worktree")?
@@ -977,19 +1002,17 @@ fn pending_base(repository: &gix::Repository, selected: ObjectId) -> Result<Opti
     Ok(base)
 }
 
-fn selected_pin(repository: &gix::Repository, selected: ObjectId) -> Result<Option<history::Pin>> {
-    let mut pins: Vec<_> = history::all_pins(repository)?
-        .into_iter()
+fn selected_pin(pins: &[history::Pin], selected: ObjectId) -> Option<history::Pin> {
+    pins.iter()
         .filter(|pin| !pin.is_head() && pin.id == selected)
-        .collect();
-    pins.sort_by(|a, b| {
-        a.target
-            .try_name()
-            .is_none()
-            .cmp(&b.target.try_name().is_none())
-            .then_with(|| a.name.cmp(&b.name))
-    });
-    Ok(pins.into_iter().next())
+        .min_by(|a, b| {
+            a.target
+                .try_name()
+                .is_none()
+                .cmp(&b.target.try_name().is_none())
+                .then_with(|| a.name.cmp(&b.name))
+        })
+        .cloned()
 }
 
 #[cfg(test)]
@@ -1747,12 +1770,27 @@ mod tests {
             .set_target_id(topic, "advance pinned branch")?;
         let advanced = history::snapshot(&repository, &[], &[], false)?;
         assert!(advanced.view_tips.contains(&topic), "a symbolic pin follows its branch");
+        create_pin(&repository, Target::Object(topic), topic, "overlap with the HEAD pin")?;
+        assert_eq!(history::all_pins(&repository)?.len(), 2, "both return paths coexist");
         drop(repository);
 
+        let reflog_entries = git(fixture.path(), &["reflog", "show", "--format=%H", "HEAD"])?
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .count();
         let returned = perform(&repository_path, false, topic, &graph, &[], &[], false)?;
         let Perform::Complete { ref_changes, .. } = returned else {
             return Err("returning through the HEAD pin must complete".into());
         };
+        let returned_reflog_entries = git(fixture.path(), &["reflog", "show", "--format=%H", "HEAD"])?
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .count();
+        assert_eq!(
+            returned_reflog_entries,
+            reflog_entries + 1,
+            "returning through the HEAD pin performs one checkout"
+        );
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
             repository.head_name()?.map(|name| name.as_bstr().to_owned()),
@@ -1766,8 +1804,10 @@ mod tests {
             .apply_with_worktrees(&repository)?;
         assert!(repository.head()?.is_detached(), "undo restores the detached HEAD");
         assert_eq!(repository.head_id()?.detach(), middle);
+        let pins = history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 2, "undo restores both return paths");
         assert!(
-            history::all_pins(&repository)?.iter().any(history::Pin::is_head),
+            pins.iter().any(history::Pin::is_head),
             "undo restores the symbolic HEAD pin"
         );
         super::super::undo::plan_redo(&repository)?
@@ -2330,6 +2370,67 @@ mod tests {
             .and_then(Perform::complete)
             .expect_err("time-travel is disabled until the index conflict is resolved");
         assert!(format!("{err:#}").contains("unresolved index conflicts"));
+        Ok(())
+    }
+
+    #[test]
+    fn pending_time_travel_does_not_load_unrelated_ref_history() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let graph = super::super::loaded_graph(&repository)?;
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        let old_tip = repository.head_id()?.detach();
+        let mut commit = repository.find_commit(middle)?.decode()?.into_owned()?;
+        commit.tree = repository
+            .find_commit(repository.rev_parse_single("HEAD~2")?)?
+            .tree_id()?
+            .detach();
+        let marked = super::super::rebase::perform(
+            &repository,
+            &graph,
+            super::super::rebase::Edit::Replace { target: middle, commit },
+            super::super::rebase::Signature::InvalidateExisting,
+            super::super::rebase::Tree::LeaveAsIsAndMark,
+        )?
+        .complete()?;
+        let pending_tip = marked.map(old_tip).context("the marked tip is retained")?;
+        assert!(super::super::rebase::is_pending(
+            &repository.find_commit(pending_tip)?.decode()?.into_owned()?
+        ));
+
+        let missing_parent = ObjectId::Sha1([0x42; 20]);
+        let mut unrelated = repository.find_commit(pending_tip)?.decode()?.into_owned()?;
+        unrelated.parents = [missing_parent].into_iter().collect();
+        unrelated.message = "unrelated incomplete history".into();
+        let unrelated = repository.write_object(&unrelated)?.detach();
+        drop(repository);
+        git(
+            fixture.path(),
+            &["update-ref", "refs/heads/unrelated", &unrelated.to_string()],
+        )?;
+
+        let repository = crate::test_repository::open(fixture.path())?;
+        let graph = loaded_graph(&repository, &[OsString::from("main")])?;
+        drop(repository);
+        let mut rebased = Vec::new();
+        let outcome = perform_reporting_rebased(&repository_path, false, pending_tip, &graph, &[], &[], false, |id| {
+            rebased.push(id);
+        })?;
+        let Perform::Complete { selected, .. } = outcome else {
+            return Err("the pending rebase must complete".into());
+        };
+        assert_eq!(rebased, [pending_tip], "only the selected pending path is replayed");
+
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert!(!super::super::rebase::is_pending(
+            &repository.find_commit(selected)?.decode()?.into_owned()?
+        ));
+        assert_eq!(
+            repository.find_reference("refs/heads/unrelated")?.id().detach(),
+            unrelated,
+            "time-travel leaves the unrelated incomplete history untouched"
+        );
         Ok(())
     }
 
