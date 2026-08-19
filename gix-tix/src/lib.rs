@@ -2701,6 +2701,26 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("todo: {err:#}")),
                     }
                 }
+                Effect::ToggleChecksPass(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let result = open_repository(&repository_path, repository_is_bare, false)
+                        .context("could not open repository to update the tree enrichment")
+                        .and_then(|repo| enrich::toggle_checks_pass(&repo, id));
+                    match result {
+                        Ok(enrichment) => {
+                            let enabled = enrichment.checks_pass;
+                            app.clear_enrichments();
+                            app.set_tree_enrichment(id, enrichment);
+                            app.leave_success(if enabled {
+                                "marked tree checks-pass"
+                            } else {
+                                "cleared tree checks-pass"
+                            });
+                        }
+                        Err(err) => app.leave_error(format!("checks-pass: {err:#}")),
+                    }
+                }
                 Effect::EditNote(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
@@ -3118,6 +3138,11 @@ fn draw(
         .map(|row| row.id)
         .filter(|id| repository_fill_allowed && !app.enrichment_loaded(*id))
         .collect();
+    let tree_enrichments_to_load: Vec<_> = app.rows[start..end]
+        .iter()
+        .map(|row| row.id)
+        .filter(|id| repository_fill_allowed && !app.tree_enrichment_loaded(*id))
+        .collect();
     let changes_visible = app.changes_visible();
     let selected_id = app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id);
     app.selection_relation = selection_cache
@@ -3192,6 +3217,7 @@ fn draw(
     }
     if !notes_to_load.is_empty()
         || !enrichments_to_load.is_empty()
+        || !tree_enrichments_to_load.is_empty()
         || app.rows[start..end].iter().any(|row| !row.metadata_loaded)
         || message_to_load.is_some()
         || tree_changes_to_load.is_some()
@@ -3235,6 +3261,19 @@ fn draw(
                     Err(err) => {
                         tracing::warn!(commit_id = %id, error = %err, "ignored malformed tix enrichment");
                         app.set_enrichment(id, enrich::Enrichment::default());
+                    }
+                }
+            }
+        }
+        if !tree_enrichments_to_load.is_empty() {
+            let mut notes = enrich::open_tree(repository)?;
+            for id in tree_enrichments_to_load {
+                let loaded = enrich::tree_id(repository, id).and_then(|tree_id| enrich::load_tree(&mut notes, tree_id));
+                match loaded {
+                    Ok(enrichment) => app.set_tree_enrichment(id, enrichment),
+                    Err(err) => {
+                        tracing::warn!(commit_id = %id, error = %err, "ignored malformed tix tree enrichment");
+                        app.set_tree_enrichment(id, enrich::TreeEnrichment::default());
                     }
                 }
             }
@@ -5091,6 +5130,7 @@ fn action_with_shortcut_groups(
         KeyCode::Char('s') if commit_expanded => Some(Action::Spill),
         KeyCode::Char('d') if commit_expanded => Some(Action::Forget),
         KeyCode::Char('i') if commit_expanded => Some(Action::TogglePin),
+        KeyCode::Char('c') if enrich_expanded => Some(Action::ToggleChecksPass),
         KeyCode::Char('t') if enrich_expanded => Some(Action::ToggleTodo),
         KeyCode::Char('o') if enrich_expanded => Some(Action::EditNote),
         KeyCode::Char('@') => Some(Action::TimeTravel),
@@ -6199,6 +6239,17 @@ mod tests {
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)),
             Some(Action::ToggleEnrich)
+        );
+        assert_eq!(
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+                false,
+                false,
+                false,
+                true,
+                false
+            ),
+            Some(Action::ToggleChecksPass)
         );
         assert_eq!(
             action_with_shortcut_groups(

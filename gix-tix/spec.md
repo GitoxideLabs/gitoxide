@@ -247,7 +247,12 @@ without trading responsiveness for metadata that is not visible.
   Consequently, rewritten commits retain their metadata and commits sharing a
   change ID share it as well. Malformed enrichments are ignored for display and
   diagnosed, while mutation refuses to overwrite them.
-- Todo and note enrichments receive a leading `🚧` and `📝` respectively before
+- Tree enrichments use the same human-readable Git config format in notes headed
+  at `refs/worktree/tix/enrich-tree`. They are keyed directly by tree object ID;
+  `[tree] checks-pass = true` therefore applies to every commit with that exact
+  tree and naturally disappears when a rewrite changes the tree.
+- Todo, note, and checks-pass enrichments receive a leading `🚧`, `📝`, and `✔️`
+  respectively before
   the graph, with no gap between them or the following status field. The dedicated
   field remains visible alongside selection, dirty-worktree, and conflict markers.
   `tix show` emits the same field and aligns unmarked rows when any displayed
@@ -1014,8 +1019,10 @@ space first; changes blocks adapt within the remaining history width.
 - The `n` in `enrich` toggles its shortcut group. On any commit eligible for rewording,
   `n t` toggles `[commit] todo`, preserving a saved note, and `n o` opens
   `[commit] note` in Git's editor as Markdown. Saving or removing a note preserves
-  the todo flag, and toggling todo preserves the note. `n g` edits the real Git
-  note and remains available when the Tix-specific actions are not. The group is mutually
+  the todo flag, and toggling todo preserves the note. `n c` toggles
+  `[tree] checks-pass` for any selected commit, including immutable boundaries.
+  `n g` edits the real Git note and remains available when the commit-specific
+  Tix actions are not. The group is mutually
   exclusive with the view, commit, actions, and information groups and otherwise follows
   their closing behavior.
 
