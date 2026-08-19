@@ -1371,7 +1371,6 @@ impl App {
                 | Action::NewCommit
                 | Action::NewEmptyCommit
                 | Action::Amend
-                | Action::Stash
                 | Action::Spill
                 | Action::Split
                 | Action::Forget
@@ -1389,6 +1388,7 @@ impl App {
                 | Action::CopyInsert
                 | Action::MoveInsert
                 | Action::StackInsert
+                | Action::Stash
                 | Action::Review
                 | Action::ForkCommit
                 | Action::Attach
@@ -5820,6 +5820,7 @@ mod tests {
         app.update(Action::CopyInsert);
         app.update(Action::MoveInsert);
         app.update(Action::StackInsert);
+        app.update(Action::Stash);
         app.update(Action::ForkCommit);
         app.update(Action::Attach);
         assert!(app.actions_expanded, "grouped actions keep the group open");

@@ -52,7 +52,7 @@ without trading responsiveness for metadata that is not visible.
 - `tix new [--index | --worktree | --worktree-untracked] [--allow-empty] [--todo]
   [--author "Name <email>"] [-m MESSAGE ... | -f FILE]` creates a child of `HEAD`, or a root commit for
   unborn `HEAD`, with the same signing, editor, enrichment, lazy-rebase, and
-  worktree-safety rules as `c n`. By default a changed index wins and tracked
+  worktree-safety rules as `c w`. By default a changed index wins and tracked
   worktree changes are used only when the index is unchanged. `--index` uses
   only the index delta; `--worktree` applies only unstaged tracked-worktree
   changes to the `HEAD` tree and omits staged-only changes. `--worktree-untracked`
@@ -389,15 +389,16 @@ without trading responsiveness for metadata that is not visible.
 | `[` | Cycle viewport-local title alignment, full-column alignment, no alignment, and compressed history. |
 | `v` | Toggle the history-display key group. Pressing `v` again closes it. |
 | `v d` | Cycle author dates, committer dates, and no dates. |
-| `v e` | Toggle full actors/emails and titles. |
-| `v n` | Cycle all attribution, author only, and no names, skipping inert states. |
+| `v i` | Cycle commit IDs, change IDs, and no explicit IDs. |
+| `v s` | Toggle full actors/emails and titles. |
+| `v e` | Cycle all attribution, author only, and no names, skipping inert states. |
 | `v t` | Toggle attribution trailers. |
 | `v m` | Toggle mailmap resolution. |
 | `v r` | Cycle all, normal, and no reference labels. |
 | `v h` | Show or hide configured hidden ancestry. |
 | `r` | Hide reference labels or restore the mode visible when they were hidden. |
 | `m`/`]` | Toggle the commit-message view. |
-| `? c` | Cycle the tree/worktree changes display. |
+| `? e` | Cycle the tree/worktree changes display. |
 | `Shift-R` | Explicitly refresh the revision view and visible worktree status. |
 | `y` | Copy the selected commit ID, or the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
@@ -521,7 +522,7 @@ The Enter key is written as `<enter>` throughout.
   attached history; returning through that pin consumes it. Nested trees use the
   nearest review-root ancestor.
 - When loaded worktree status shows staged, unstaged, or untracked changes without
-  conflicts, the edit menu offers `stas[h]` at the selected `@` entry. Missing or
+  conflicts, the actions menu offers `z stash` at the selected `@` entry. Missing or
   stale worktree status hides the action instead of performing another status
   query. Saving uses Git with `--include-untracked`, leaves ignored files alone,
   preserves the ordinary stash stack, and records the stash commit at
@@ -535,7 +536,7 @@ The Enter key is written as `<enter>` throughout.
   stashes retain their review-tree identity and namespace. An active automatic
   review stash likewise shows `🎁` on the review leaf whose worktree state it
   saved, without exposing its internal reference or stash commit to traversal.
-- At a selected `@` with a commit stash, the edit menu offers `unstas[h]` even
+- At a selected `@` with a commit stash, the actions menu offers `z unstash` even
   when other worktree changes are present. It applies and consumes the stash in
   place through the same path used when time travel returns to that commit.
 - Rewriting a commit atomically renames its commit-stash association alongside
@@ -671,7 +672,7 @@ space first; changes blocks adapt within the remaining history width.
 
 ### New commits
 
-- `c n` creates a child of the selected commit from tracked changes, or a root
+- `c w` creates a child of the selected commit from tracked changes, or a root
   commit for an unborn `HEAD`. A changed index wins; otherwise, tracked worktree
   changes are used. Untracked files never enter an implicit new commit and remain
   untracked. It is available only with a live worktree, after history completion,
@@ -707,7 +708,7 @@ space first; changes blocks adapt within the remaining history width.
 
 - `a f` creates an independent child of any selected commit, including a hidden
   boundary or merge commit. It requires completed history and a live,
-  conflict-free worktree, but unlike `c n` it is not restricted by descendants
+  conflict-free worktree, but unlike `c w` it is not restricted by descendants
   because it rewrites none of them. It is unavailable for unborn history.
 - Fork preparation reuses the new-commit editor, candidate-tree, identity,
   enrichment, and signing rules. Empty-delta children are allowed so historical
@@ -721,7 +722,7 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Amend, spill, and split
 
-- `c a` amends the current worktree's `@` commit with the changed index, or
+- `c e` amends the current worktree's `@` commit with the changed index, or
   worktree changes when the index already matches `HEAD`. `c s` spills that
   commit's tree delta into the worktree by replacing its tree with its first
   parent's tree, or the empty tree for a root commit. Clean operations are
@@ -743,7 +744,7 @@ space first; changes blocks adapt within the remaining history width.
   offers `spill` and `c s` spills only that path against the displayed parent.
   The CLI intentionally supports only whole-commit spilling.
 - With a path selected in the focused worktree-changes block, the main `c`
-  prefix offers `amend` and `c a` amends only that path. A staged row uses its
+  prefix offers `amend` and `c e` amends only that path. A staged row uses its
   index version; an unstaged row uses its filtered worktree version. If both
   rows exist for one path, the selected row determines the version. Review
   commits accept only staged rows, and unresolved indexes cannot be amended.
@@ -1043,13 +1044,14 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Commit and action shortcuts
 
-- `c` toggles the commit shortcut group. `c o` rewords, `c n` creates a rebased
-  child, `c a` amends `@`, `c h` stashes
-  changes at `@`, `c s` spills `@`, `c p` splits staged from unstaged changes,
-  and `c d d` confirms forgetting a top commit when each action is available.
+- `c` toggles the commit shortcut group. `c o` rewords, `c w` creates a rebased
+  child, `c m` creates an empty child, `c e` amends `@`, `c s` spills `@`, `c p`
+  splits staged from unstaged changes, and `c d d` confirms forgetting a top
+  commit when each action is available.
 - `a` toggles the actions shortcut group. `a b` rebases an eligible hidden base,
   `a u` rebases it onto the newer hidden branch tip when available, `a r` starts
-  or finishes a review, `a s` squashes the selected commit, `a c` copy-inserts
+  or finishes a review, `a s` squashes the selected commit, `a z` stashes or
+  restores changes at `@`, `a y` copy-inserts
   current `HEAD` above the selected commit, `a m` move-inserts it, `a t` starts
   stack-insert for the linear ancestry from the selected commit through `HEAD`,
   `a f` creates and travels to a standalone child of the selected commit, and
@@ -1089,12 +1091,15 @@ space first; changes blocks adapt within the remaining history width.
 - The footer underlines `c` in `commit` and `a` in `actions`; an expanded group
   contains only the operations available for the current selection. An empty
   group says `no actions`.
-- While the `v` group is open, `d`, `e`, `r`, and `t` retain their display
-  meanings for dates, emails, references, and trailers.
+- The top-level `v`, `c`, `a`, `n`, and `?` keys are reserved for their groups.
+  Pressing one while another group is open switches directly to that group;
+  `? e` cycles the changes panes.
+- While the `v` group is open, `d`, `i`, `s`, `e`, `m`, `t`, `r`, and `h` control
+  dates, IDs, emails, names, mailmap, trailers, references, and hidden commits.
 - The `n` in `enrich` toggles its shortcut group. On any commit eligible for rewording,
   `n t` toggles `[commit] todo`, preserving a saved note, and `n o` opens
   `[commit] note` in Git's editor as Markdown. Saving or removing a note preserves
-  the todo flag, and toggling todo preserves the note. `n c` toggles
+  the todo flag, and toggling todo preserves the note. `n e` toggles
   `[tree] checks-pass` for any selected commit, including immutable boundaries.
   `n g` edits the real Git note and remains available when the commit-specific
   Tix actions are not. The group is mutually

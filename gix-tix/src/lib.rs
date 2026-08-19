@@ -1743,7 +1743,7 @@ fn event_loop(
                     app.commit_expanded,
                     app.actions_expanded,
                     app.enrich_expanded,
-                    app.information_expanded,
+                    app.information_expanded || app.changes_focus.is_some(),
                 );
                 let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
                 (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
@@ -5835,7 +5835,12 @@ fn action_with_shortcut_groups(
         KeyCode::Tab => Some(Action::ToggleChangesFocus),
         KeyCode::Enter => Some(Action::OpenDiff),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
-        KeyCode::Char('c') if information_expanded => Some(Action::ToggleChanges),
+        KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
+        KeyCode::Char('c') => Some(Action::ToggleCommitGroup),
+        KeyCode::Char('a') => Some(Action::ToggleActions),
+        KeyCode::Char('n') => Some(Action::ToggleEnrich),
+        KeyCode::Char('?') => Some(Action::ToggleInformation),
+        KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleInformation),
         KeyCode::Char('p') if commit_expanded => Some(Action::Split),
         KeyCode::Char('b') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::Rebase)
@@ -5850,20 +5855,20 @@ fn action_with_shortcut_groups(
         KeyCode::Char('u') if !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Undo),
         KeyCode::Char('r') if actions_expanded => Some(Action::Review),
         KeyCode::Char('s') if actions_expanded => Some(Action::Squash),
-        KeyCode::Char('c') if actions_expanded => Some(Action::CopyInsert),
+        KeyCode::Char('y') if actions_expanded => Some(Action::CopyInsert),
         KeyCode::Char('m') if actions_expanded => Some(Action::MoveInsert),
         KeyCode::Char('t') if actions_expanded => Some(Action::StackInsert),
         KeyCode::Char('f') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::ForkCommit)
         }
         KeyCode::Char('h') if actions_expanded => Some(Action::Attach),
+        KeyCode::Char('z') if actions_expanded => Some(Action::Stash),
         KeyCode::Char('p') => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::MoveDown),
         KeyCode::Char('x') => Some(Action::CycleDuplicate),
-        KeyCode::Char('h') if commit_expanded => Some(Action::Stash),
         KeyCode::Char('h') if history_display_expanded => Some(Action::ToggleHidden),
         KeyCode::Char('h') => Some(Action::ScrollLeft),
         KeyCode::Char('l') => Some(Action::ScrollRight),
@@ -5879,35 +5884,30 @@ fn action_with_shortcut_groups(
         KeyCode::End | KeyCode::Char('G') => Some(Action::Last),
         KeyCode::Char('d') if history_display_expanded => Some(Action::ToggleDate),
         KeyCode::Char('i') if history_display_expanded => Some(Action::CycleIds),
-        KeyCode::Char('e') if history_display_expanded => Some(Action::ToggleEmail),
-        KeyCode::Char('n') if history_display_expanded => Some(Action::ToggleName),
+        KeyCode::Char('s') if history_display_expanded => Some(Action::ToggleEmail),
+        KeyCode::Char('e') if history_display_expanded => Some(Action::ToggleName),
         KeyCode::Char('t') if history_display_expanded => Some(Action::ToggleTrailers),
         KeyCode::Char('m') if history_display_expanded => Some(Action::ToggleMailmap),
         KeyCode::Char('R') => Some(Action::Refresh),
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Refresh),
         KeyCode::Char('r') if history_display_expanded => Some(Action::CycleRefs),
         KeyCode::Char('o') if commit_expanded => Some(Action::Reword),
-        KeyCode::Char('n') if commit_expanded => Some(Action::NewCommit),
+        KeyCode::Char('w') if commit_expanded => Some(Action::NewCommit),
         KeyCode::Char('m') if commit_expanded => Some(Action::NewEmptyCommit),
-        KeyCode::Char('a') if commit_expanded => Some(Action::Amend),
+        KeyCode::Char('e') if commit_expanded => Some(Action::Amend),
         KeyCode::Char('s') if commit_expanded => Some(Action::Spill),
         KeyCode::Char('d') if commit_expanded => Some(Action::Forget),
         KeyCode::Char('i') if commit_expanded => Some(Action::TogglePin),
-        KeyCode::Char('c') if enrich_expanded => Some(Action::ToggleChecksPass),
+        KeyCode::Char('e') if enrich_expanded => Some(Action::ToggleChecksPass),
         KeyCode::Char('t') if enrich_expanded => Some(Action::ToggleTodo),
         KeyCode::Char('o') if enrich_expanded => Some(Action::EditNote),
+        KeyCode::Char('e') if information_expanded => Some(Action::ToggleChanges),
         KeyCode::Char('@') => Some(Action::TimeTravel),
         KeyCode::Char('2') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::TimeTravel),
         KeyCode::Char('m') => Some(Action::ToggleCommit),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('t') => Some(Action::ToggleRefTree),
-        KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
-        KeyCode::Char('c') => Some(Action::ToggleCommitGroup),
-        KeyCode::Char('a') => Some(Action::ToggleActions),
-        KeyCode::Char('n') => Some(Action::ToggleEnrich),
-        KeyCode::Char('?') => Some(Action::ToggleInformation),
-        KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleInformation),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
         KeyCode::Char(']') => Some(Action::ToggleCommit),
         KeyCode::Char('Y') => Some(Action::CopyAuthor),
@@ -7036,7 +7036,7 @@ mod tests {
         );
         assert_eq!(
             action_with_shortcut_groups(
-                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
                 false,
                 false,
                 false,
@@ -7150,8 +7150,8 @@ mod tests {
         for (key, expected) in [
             ('d', Action::ToggleDate),
             ('i', Action::CycleIds),
-            ('e', Action::ToggleEmail),
-            ('n', Action::ToggleName),
+            ('s', Action::ToggleEmail),
+            ('e', Action::ToggleName),
             ('t', Action::ToggleTrailers),
             ('m', Action::ToggleMailmap),
             ('r', Action::CycleRefs),
@@ -7170,6 +7170,34 @@ mod tests {
                 "{key} is available after the view prefix"
             );
         }
+        for (history, commit, actions, enrich, information) in [
+            (true, false, false, false, false),
+            (false, true, false, false, false),
+            (false, false, true, false, false),
+            (false, false, false, true, false),
+            (false, false, false, false, true),
+        ] {
+            for (key, expected) in [
+                ('v', Action::ToggleHistoryDisplay),
+                ('c', Action::ToggleCommitGroup),
+                ('a', Action::ToggleActions),
+                ('n', Action::ToggleEnrich),
+                ('?', Action::ToggleInformation),
+            ] {
+                assert_eq!(
+                    action_with_shortcut_groups(
+                        KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                        history,
+                        commit,
+                        actions,
+                        enrich,
+                        information,
+                    ),
+                    Some(expected),
+                    "{key} switches prefix menus regardless of the active menu"
+                );
+            }
+        }
         assert_eq!(
             action_with_shortcut_groups(
                 KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
@@ -7184,10 +7212,9 @@ mod tests {
         );
         for (key, expected) in [
             ('o', Action::Reword),
-            ('n', Action::NewCommit),
+            ('w', Action::NewCommit),
             ('m', Action::NewEmptyCommit),
-            ('a', Action::Amend),
-            ('h', Action::Stash),
+            ('e', Action::Amend),
             ('s', Action::Spill),
             ('p', Action::Split),
             ('d', Action::Forget),
@@ -7211,11 +7238,12 @@ mod tests {
             ('u', Action::RebaseUpdate),
             ('r', Action::Review),
             ('s', Action::Squash),
-            ('c', Action::CopyInsert),
+            ('y', Action::CopyInsert),
             ('m', Action::MoveInsert),
             ('t', Action::StackInsert),
             ('f', Action::ForkCommit),
             ('h', Action::Attach),
+            ('z', Action::Stash),
         ] {
             assert_eq!(
                 action_with_shortcut_groups(
@@ -7228,6 +7256,24 @@ mod tests {
                 ),
                 Some(expected),
                 "{key} is available after the actions prefix"
+            );
+        }
+        for (history, commit, enrich, expected) in [
+            (true, false, false, Action::ToggleName),
+            (false, true, false, Action::Amend),
+            (false, false, true, Action::ToggleChecksPass),
+        ] {
+            assert_eq!(
+                action_with_shortcut_groups(
+                    KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+                    history,
+                    commit,
+                    false,
+                    enrich,
+                    true,
+                ),
+                Some(expected),
+                "an open submenu takes priority over the focused changes shortcut"
             );
         }
         assert_eq!(
@@ -7314,7 +7360,7 @@ mod tests {
         );
         assert_eq!(
             action_with_shortcut_groups(
-                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
                 false,
                 false,
                 false,
@@ -7322,7 +7368,7 @@ mod tests {
                 true
             ),
             Some(Action::ToggleChanges),
-            "changes is scoped to the information prefix"
+            "e changes is scoped to the information prefix"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT)),
