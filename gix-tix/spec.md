@@ -461,9 +461,10 @@ The Enter key is written as `<enter>` throughout.
 - When tix detaches an attached local branch, it records that branch symbolically
   in the singleton `refs/worktree/tix/pins/HEAD` ref. Git stores this HEAD pin
   privately for the current worktree, and later branch advances move its tip.
-  Further detached travel preserves the singleton. After each successful tix
-  checkout, landing on the remembered branch tip reattaches `HEAD` to that branch
-  and removes the HEAD pin; explicitly attaching another branch also removes it.
+  Further detached travel preserves the singleton. Landing on an available
+  remembered branch tip uses that branch as the checkout target directly,
+  reattaches `HEAD` in one checkout, and removes the HEAD pin; explicitly
+  attaching another branch also removes it.
   Attach is the exception: it deliberately retains the symbolic HEAD pin
   after attaching its remembered branch.
   A failed automatic reattachment leaves both detached `HEAD` and the HEAD pin
@@ -779,7 +780,9 @@ space first; changes blocks adapt within the remaining history width.
   ancestry through that destination. Every later descendant is reparented and
   becomes or remains lazy and unsigned, including ordinary commits created above
   pending history; traveling toward a non-pending ancestor leaves the entire
-  pending region untouched. A conflict retains the ours tree, exact merge-result
+  pending region untouched. A completed final replay does not reload history;
+  another pass loads only the rewritten path and never unrelated references.
+  A conflict retains the ours tree, exact merge-result
   tree, conflict stages, prepared commits, and in-memory objects without changing
   the repository. The actual conflicting row is selected and centered with normal
   history-boundary clamping and shows a blinking red `C`; `<enter>` persists
