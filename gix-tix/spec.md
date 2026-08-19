@@ -195,8 +195,8 @@ without trading responsiveness for metadata that is not visible.
 - At startup, the current worktree's `@` row becomes selected as soon as it is
   loaded, unless the user navigates first. Once the viewport is known, the row
   is centered with normal history-boundary clamping so surrounding commits are
-  visible. If it has visible descendants, its unselected non-whitespace content
-  is underlined and `@` is bold; a selected row keeps only bold `@`.
+  visible. While the row is unselected, its title is shown in reverse video and
+  `@` is bold; a selected row keeps only bold `@`.
 - Local branches checked out in other worktrees are displayed as `short-name@`
   in light blue instead of their plain branch decoration. The current worktree's
   symbolic branch is displayed as `@short-name` in the local-reference color.
@@ -406,11 +406,13 @@ keeps every prefix compact. Opening one reverses its label and shows its availab
 items in a reversed, single-row popout immediately above and connected to that
 label; the `?` popout also contains its pane-switching and navigation hints through
 `<enter> diff`. The popout has horizontal padding, shifts left or clips at the
-terminal edge without wrapping, and is omitted when its label or the row above the
-footer is not visible. It does not reserve a history row and may cover history,
-panes, or notices beneath it. Closing behavior and shortcut availability are
-unchanged, and direct status actions and quit remain in the footer. The history
-status starts with the history position, then the
+terminal edge without wrapping, and is omitted when its label, the row above the
+footer, or space needed to preserve a protected message is not visible. It does
+not reserve a history row and may cover history,
+but message and changes panes, their status lines, and transient notices shift
+upward to reserve its line and are never occluded. Closing behavior and shortcut
+availability are unchanged, and direct status actions and quit remain in the
+footer. The history status starts with the history position, then the
 `v`, `c`, and `a` prefixes when they are addressable. Remaining history-level
 actions end at the information prefix while it is closed. An available direct
 time-travel action follows the shortcut groups, and duplicate cycling follows it when

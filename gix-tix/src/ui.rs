@@ -334,7 +334,7 @@ pub(crate) fn draw_with_worktree(
         app.changes_visible() && app.changes_mode == Some(ChangesMode::Both) && worktree_changes.is_some();
     let tree_summary = tree_changes.map(|changes| changes_summary(ChangePane::Tree, app, changes));
     let worktree_summary = worktree_changes.map(|changes| changes_summary(ChangePane::Worktree, app, changes));
-    let commit_pane = app.show_commit.then(|| {
+    let mut commit_pane = app.show_commit.then(|| {
         let width = COMMIT_PANE_WIDTH.min(full_body.width / 2);
         let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(full_body);
         body.width = body.width.min(commits.width);
@@ -350,7 +350,7 @@ pub(crate) fn draw_with_worktree(
             .saturating_add(u16::from(index_separator(pane, changes).is_some()))
             .saturating_add(2)
     };
-    let (changes_layout, changes_panes, _) = changes_pane_areas(
+    let (changes_layout, mut changes_panes, _) = changes_pane_areas(
         body,
         frame.area().height / 2,
         tree_shown.then(|| {
@@ -382,16 +382,14 @@ pub(crate) fn draw_with_worktree(
         },
         |pane| pane.outer.y,
     );
-    let notice_area = notice
+    let mut notice_area = notice
         .as_ref()
         .and_then(|notice| notice_area(notice, notice_horizontal, body.y, notice_bottom));
     if let Some(notice_area) = notice_area {
         body.height = notice_area.y.saturating_sub(body.y);
     }
-    let worktree_dirty = worktree_changes.is_some_and(|changes| !changes.paths.is_empty())
-        && changes_panes
-            .iter()
-            .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0);
+    let history_changes_panes = changes_panes.clone();
+    let history_notice_area = notice_area;
     if let Some(changes) = worktree_changes {
         app.set_worktree_conflicted(changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
     }
@@ -447,6 +445,36 @@ pub(crate) fn draw_with_worktree(
                     && !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
             }),
     );
+    let mut prefix_popup_allowed = active_prefix_popup_anchor(app, decorations)
+        .is_some_and(|anchor| prefix_popup_can_render(frame.area(), footer, anchor));
+    if prefix_popup_allowed {
+        let popup_y = footer.y - 1;
+        let shifted_y = |area: Rect| area.y.saturating_sub(1).max(full_body.y);
+        prefix_popup_allowed = changes_panes.iter().all(|pane| popup_y > shifted_y(pane.outer))
+            && commit_pane.as_ref().is_none_or(|(outer, _)| popup_y > outer.y)
+            && notice_area.is_none_or(|area| popup_y.saturating_sub(shifted_y(area)) >= area.height);
+        if prefix_popup_allowed {
+            for pane in &mut changes_panes {
+                pane.outer.y = shifted_y(pane.outer);
+                pane.outer.height = pane.outer.height.min(popup_y.saturating_sub(pane.outer.y));
+            }
+            if let Some(area) = notice_area.as_mut() {
+                area.y = shifted_y(*area);
+                area.height = area.height.min(popup_y.saturating_sub(area.y));
+            }
+            if let Some((outer, content)) = commit_pane.as_mut() {
+                outer.height = outer.height.min(popup_y.saturating_sub(outer.y));
+                *content = outer.inner(Margin {
+                    horizontal: 2,
+                    vertical: 1,
+                });
+            }
+        }
+    }
+    let worktree_dirty = worktree_changes.is_some_and(|changes| !changes.paths.is_empty())
+        && changes_panes
+            .iter()
+            .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0);
     if app.changes_visible() {
         app.set_changes_layout(
             changes_layout,
@@ -460,10 +488,10 @@ pub(crate) fn draw_with_worktree(
                 && worktree_changes.is_some_and(Changes::is_visible),
         );
     }
-    app.viewport_rows = changes_panes
+    app.viewport_rows = history_changes_panes
         .iter()
         .map(|pane| pane.outer.y.saturating_sub(body.y))
-        .chain(notice_area.map(|area| area.y.saturating_sub(body.y)))
+        .chain(history_notice_area.map(|area| area.y.saturating_sub(body.y)))
         .min()
         .unwrap_or(body.height)
         .max(1) as usize;
@@ -551,7 +579,7 @@ pub(crate) fn draw_with_worktree(
                 || app.title(row),
                 |note| gix::objs::commit::MessageRef::from_bytes(note).title,
             );
-            metadata_columns(
+            let mut metadata = metadata_columns(
                 row,
                 title,
                 app.attributions(row),
@@ -571,7 +599,19 @@ pub(crate) fn draw_with_worktree(
                     selected: (row_selected && app.show_selection_tail) || compared_parent == Some(row.id),
                     copy_feedback: if row_selected { copy_feedback } else { None },
                 },
-            )
+            );
+            if !row_selected
+                && decorations.get(&row.id).is_some_and(|decorations| {
+                    decorations
+                        .iter()
+                        .any(|decoration| decoration.kind == DecorationKind::Head)
+                })
+            {
+                for span in &mut metadata.fields[5].spans {
+                    span.style = span.style.add_modifier(Modifier::REVERSED);
+                }
+            }
+            metadata
         })
         .collect();
     let title_column = lanes
@@ -648,7 +688,6 @@ pub(crate) fn draw_with_worktree(
                 .any(|decoration| decoration.kind == DecorationKind::CurrentWorktreeBranch)
         });
         let head_has_descendants = app.worktree_head_has_descendants(visible_rows[index].id);
-        let underline = head_has_descendants && !selected;
         let head_state = head.then_some(HeadState {
             has_descendants: head_has_descendants,
             attached: attached_head,
@@ -785,14 +824,6 @@ pub(crate) fn draw_with_worktree(
                 buffer[(marker_x - 1, y)].set_symbol(" ");
             }
             buffer[(marker_x, y)].set_symbol(" ").set_style(style);
-        }
-        if underline {
-            for x in body.x..body.right() {
-                let cell = &mut frame.buffer_mut()[(x, y)];
-                if !cell.symbol().chars().all(char::is_whitespace) {
-                    cell.modifier.insert(Modifier::UNDERLINED);
-                }
-            }
         }
         if !app.is_row_reachable(start + index) {
             for x in body.x..body.right() {
@@ -954,35 +985,7 @@ pub(crate) fn draw_with_worktree(
     let mut actions_prefix_spans = Vec::new();
     let mut actions_popup = None;
     if app.changes_focus != Some(ChangePane::Worktree) || app.can_amend() {
-        let head_visible = decorations
-            .values()
-            .flatten()
-            .any(|decoration| decoration.kind == DecorationKind::Head);
-        time_travel = if app.time_travel_shortcut_visible()
-            && head_visible
-            && let Some(selected) = app.selected.and_then(|index| app.rows.get(index))
-        {
-            let selected_refs = decorations.get(&selected.id).map(Vec::as_slice).unwrap_or_default();
-            if !selected_refs
-                .iter()
-                .any(|decoration| decoration.kind == DecorationKind::Head)
-            {
-                Some(
-                    if selected_refs
-                        .iter()
-                        .any(|decoration| decoration.kind == DecorationKind::Pin)
-                    {
-                        "@ return"
-                    } else {
-                        "@ travel"
-                    },
-                )
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        time_travel = time_travel_label(app, decorations);
         if app.commit_expanded {
             let mut options = Vec::new();
             if app.changes_focus.is_none() && app.reword_shortcut_visible() {
@@ -1264,7 +1267,9 @@ pub(crate) fn draw_with_worktree(
     if let (Some(area), Some(notice)) = (notice_area, notice.as_ref()) {
         render_notice(frame, area, notice);
     }
-    let prefix_popup_area = prefix_popup.and_then(|(anchor, items)| render_prefix_popup(frame, footer, anchor, items));
+    let prefix_popup_area = prefix_popup
+        .filter(|_| prefix_popup_allowed)
+        .and_then(|(anchor, items)| render_prefix_popup(frame, footer, anchor, items));
     FrameLayout {
         history: body,
         overlays: changes_panes
@@ -1286,6 +1291,77 @@ fn history_position(app: &App) -> String {
     } else {
         format!("{} commits", app.rows.len())
     }
+}
+
+fn time_travel_label(app: &App, decorations: &Decorations) -> Option<&'static str> {
+    if !app.time_travel_shortcut_visible()
+        || !decorations
+            .values()
+            .flatten()
+            .any(|decoration| decoration.kind == DecorationKind::Head)
+    {
+        return None;
+    }
+    let selected = app.selected.and_then(|index| app.rows.get(index))?;
+    let selected_refs = decorations.get(&selected.id).map(Vec::as_slice).unwrap_or_default();
+    if selected_refs
+        .iter()
+        .any(|decoration| decoration.kind == DecorationKind::Head)
+    {
+        None
+    } else if selected_refs
+        .iter()
+        .any(|decoration| decoration.kind == DecorationKind::Pin)
+    {
+        Some("@ return")
+    } else {
+        Some("@ travel")
+    }
+}
+
+fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<usize> {
+    let mut width = history_position(app).chars().count();
+    width += 3;
+    let view = width;
+    width += "view".len();
+    let mut active = app.history_display_expanded.then_some(view);
+
+    let commit_visible = app.changes_focus != Some(ChangePane::Worktree) || app.can_amend();
+    if commit_visible {
+        width += 3;
+        let commit = width;
+        width += "commit".len();
+        if app.commit_expanded {
+            active = Some(commit);
+        }
+    }
+    if app.changes_focus.is_none() {
+        width += 3;
+        let actions = width;
+        width += "actions".len();
+        if app.actions_expanded {
+            active = Some(actions);
+        }
+    }
+    width += 3;
+    let enrich = width;
+    width += "enrich".len();
+    if app.enrich_expanded {
+        active = Some(enrich);
+    }
+    if commit_visible && let Some(label) = time_travel_label(app, decorations) {
+        width += 3 + label.len();
+    }
+    if app.can_cycle_duplicate() {
+        width += 3 + "next duplicate".len();
+    }
+    width += 3 + "copy".len();
+    width += 3 + "refs".len();
+    width += 3;
+    if app.information_expanded {
+        active = Some(width);
+    }
+    active
 }
 
 fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app: &App) {
@@ -2009,7 +2085,7 @@ fn render_prefix_popup(
     anchor: usize,
     mut items: Vec<Span<'static>>,
 ) -> Option<Rect> {
-    if footer.width == 0 || footer.y <= frame.area().y || anchor >= usize::from(footer.width) {
+    if !prefix_popup_can_render(frame.area(), footer, anchor) {
         return None;
     }
     items.insert(0, Span::raw(" "));
@@ -2023,6 +2099,10 @@ fn render_prefix_popup(
         area,
     );
     Some(area)
+}
+
+fn prefix_popup_can_render(frame: Rect, footer: Rect, anchor: usize) -> bool {
+    footer.width > 0 && footer.y > frame.y && anchor < usize::from(footer.width)
 }
 
 fn notification_discs(spans: Vec<Span<'_>>) -> Vec<Span<'_>> {
@@ -2879,6 +2959,31 @@ mod tests {
             "the ordinary footer remains visible"
         );
 
+        app.information_expanded = true;
+        let mut layout = None;
+        terminal.draw(|frame| {
+            layout = Some(super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                None,
+            ));
+        })?;
+        assert!(rendered_line(&terminal, 0).trim_start().starts_with("REBASE PAUSED"));
+        assert!(
+            rendered_line(&terminal, 1).contains("[ title"),
+            "the popup keeps its footer-adjacent row"
+        );
+        assert_eq!(
+            layout.expect("drawing returns its layout").history.height,
+            1,
+            "moving the notice leaves history geometry unchanged"
+        );
+        app.information_expanded = false;
+
         app.update(Action::MoveDown);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
@@ -2901,6 +3006,34 @@ mod tests {
         app.clear_rebase_continuation();
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(!(0..3).any(|y| rendered_line(&terminal, y).contains("REBASE PAUSED")));
+        Ok(())
+    }
+
+    #[test]
+    fn an_offscreen_popup_does_not_move_a_notice() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.information_expanded = true;
+        app.leave_success("notice");
+        let mut terminal = Terminal::new(TestBackend::new(10, 3))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        assert!(rendered_line(&terminal, 1).contains("notice"));
+        assert!(!rendered_line(&terminal, 0).contains("notice"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_popup_is_suppressed_when_a_notice_cannot_move() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.information_expanded = true;
+        app.leave_success("notice");
+        let mut terminal = Terminal::new(TestBackend::new(120, 2))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        assert!(rendered_line(&terminal, 0).contains("notice"));
+        assert!(!rendered_line(&terminal, 0).contains("[ title"));
         Ok(())
     }
 
@@ -4336,7 +4469,7 @@ mod tests {
     }
 
     #[test]
-    fn underlines_an_unselected_non_tip_head_and_bolds_its_marker() -> Result<(), Box<dyn std::error::Error>> {
+    fn reverses_only_an_unselected_head_title_and_bolds_a_non_tip_marker() -> Result<(), Box<dyn std::error::Error>> {
         let head = gix::ObjectId::Sha1([1; 20]);
         let child = gix::ObjectId::Sha1([2; 20]);
         let commit = |id: gix::ObjectId, parent: Option<gix::ObjectId>| Commit {
@@ -4369,22 +4502,30 @@ mod tests {
 
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let head_row = 1;
-        for x in [2, 5, 20] {
+        let line = rendered_line(&terminal, head_row);
+        let title = line.find("subject").expect("the HEAD title is visible") as u16;
+        for x in title..title + "subject".len() as u16 {
             assert!(
                 terminal.backend().buffer()[(x, head_row)]
                     .modifier
-                    .contains(Modifier::UNDERLINED),
-                "each non-whitespace part of the unselected HEAD line is underlined"
+                    .contains(Modifier::REVERSED),
+                "the unselected HEAD title is reversed"
             );
         }
-        for x in [0, 1, 3, 11, 79] {
+        for x in [0, 2, 5, 12, 79] {
             assert!(
                 !terminal.backend().buffer()[(x, head_row)]
                     .modifier
-                    .contains(Modifier::UNDERLINED),
-                "whitespace on the HEAD line is not underlined"
+                    .contains(Modifier::REVERSED),
+                "HEAD emphasis does not invert the gutter or metadata"
             );
         }
+        assert!(
+            (0..80).all(|x| !terminal.backend().buffer()[(x, head_row)]
+                .modifier
+                .contains(Modifier::UNDERLINED)),
+            "the old HEAD underline is gone"
+        );
         assert!(
             terminal.backend().buffer()[(2, head_row)]
                 .modifier
@@ -4395,10 +4536,10 @@ mod tests {
         app.selected = Some(1);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(
-            !terminal.backend().buffer()[(20, head_row)]
+            !terminal.backend().buffer()[(title, head_row)]
                 .modifier
-                .contains(Modifier::UNDERLINED),
-            "selection removes the warning underline"
+                .contains(Modifier::REVERSED),
+            "selection removes the HEAD title emphasis"
         );
         assert!(
             terminal.backend().buffer()[(2, head_row)]
@@ -4417,6 +4558,15 @@ mod tests {
         )]);
         app.selected = Some(1);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let tip_title = rendered_line(&terminal, 0)
+            .find("subject")
+            .expect("the tip title is visible") as u16;
+        assert!(
+            terminal.backend().buffer()[(tip_title, 0)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "an unselected tip HEAD title is reversed too"
+        );
         assert!(
             !terminal.backend().buffer()[(2, 0)].modifier.contains(Modifier::BOLD),
             "a tip @ keeps its normal weight"
@@ -4664,7 +4814,7 @@ mod tests {
             is_review: false,
             signature: SignatureState::Unsigned,
         }]);
-        let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
+        let mut terminal = Terminal::new(TestBackend::new(120, 7))?;
 
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -4813,6 +4963,24 @@ mod tests {
             "the main status keeps its original background"
         );
 
+        app.information_expanded = true;
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(message),
+                None,
+            );
+        })?;
+        assert!(
+            rendered_line(&terminal, 4).contains("PgUp/C-b up page · PgDn/C-f down page"),
+            "the popup moves the commit-message status up"
+        );
+        assert!(rendered_line(&terminal, 5).contains("[ title"));
+        app.information_expanded = false;
+
         app.update(Action::PageDown);
         app.update(Action::PageDown);
         terminal.draw(|frame| {
@@ -4845,6 +5013,48 @@ mod tests {
             "the commit status disappears when all content fits"
         );
         assert_eq!(app.commit_offset, 0, "shorter content clamps the old offset");
+        Ok(())
+    }
+
+    #[test]
+    fn popup_keeps_a_focused_changes_error_visible() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.changes_focus = Some(ChangePane::Tree);
+        app.tree_changes.error = Some("failed deliberately".into());
+        app.information_expanded = true;
+        let changes = Changes {
+            paths: vec![crate::app::PathChange {
+                kind: ChangeKind::Modified,
+                group: ChangeGroup::Tree,
+                source: None,
+                path: "file".into(),
+                lines: None,
+            }],
+            ..Changes::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
+        let mut layout = None;
+
+        terminal.draw(|frame| {
+            layout = Some(super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+                None,
+            ));
+        })?;
+
+        assert!(rendered_line(&terminal, 3).contains("diff: failed deliberately"));
+        assert_eq!(terminal.backend().buffer()[(2, 3)].bg, PANE_STATUS_BACKGROUND);
+        assert!(rendered_line(&terminal, 4).contains("[ title"));
+        assert_eq!(
+            layout.expect("drawing returns its layout").history.height,
+            5,
+            "moving the changes pane leaves history geometry unchanged"
+        );
         Ok(())
     }
 
