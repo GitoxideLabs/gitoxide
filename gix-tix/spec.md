@@ -1011,16 +1011,25 @@ space first; changes blocks adapt within the remaining history width.
   and `c d d` confirms forgetting a top commit when each action is available.
 - `a` toggles the actions shortcut group. `a b` rebases an eligible hidden base,
   `a u` rebases it onto the newer hidden branch tip when available, `a r` starts
-  or finishes a review, `a s` squashes the selected commit, `a m` cherry-moves
-  current `HEAD` directly above the selected commit, `a v` starts
-  cherry-move-stack for the linear ancestry from the selected commit through
-  `HEAD`, and `a f` establishes
+  or finishes a review, `a s` squashes the selected commit, `a c` copy-inserts
+  current `HEAD` above the selected commit, `a m` move-inserts it, `a t` starts
+  stack-insert for the linear ancestry from the selected commit through `HEAD`,
+  and `a f` establishes
   the remembered branch's forkpoint at detached `HEAD` when available.
 - Squash accepts any visible strict ancestor whose affected descendants contain no merges. With one eligible
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
   forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
-- Cherry-move requires a non-root, single-parent `HEAD`. It removes `HEAD` from
+- Copy-insert requires a non-root, single-parent `HEAD` that is not an active
+  review commit. It inserts another occurrence of its change above the selected
+  target without removing the source occurrence, including when the target is
+  the source's current parent. The new copy becomes detached `HEAD`; an attached
+  source branch remains visible through the ordinary HEAD pin. If the target is
+  an ancestor of the source, that source occurrence is retained in its original
+  logical position while its branch follows the necessary rewrite. Git notes are
+  copied to the new occurrence. Copy-insert uses the history-todo conflict and
+  continuation rules.
+- Move-insert requires a non-root, single-parent `HEAD`. It removes `HEAD` from
   its old position, reconnects its former children to its parent, inserts its
   rewritten change above the selected target, and reparents every former direct
   child of the target above it. The target may be an ancestor, descendant, or in
@@ -1028,12 +1037,12 @@ space first; changes blocks adapt within the remaining history width.
   unchanged merge target is permitted, but any move that would rewrite a merge
   is unavailable. Mutable refs, pins, Git notes, enrichments, review resources,
   and attached or detached checkout state follow their rewritten commits.
-  Cherry-move uses the history-todo conflict and continuation rules.
-- Cherry-move-stack requires the selected commit to be an inclusive base in the linear
+  Move-insert uses the history-todo conflict and continuation rules.
+- Stack-insert requires the selected commit to be an inclusive base in the linear
   ancestry of `HEAD`. It then limits navigation to eligible insertion targets;
   `<enter>` moves the complete inclusive base-through-`HEAD` stack as a unit above the selected
   target, and Escape cancels. The stack follows the same eligibility, rewrite,
-  no-op, metadata, checkout, and conflict rules as a single cherry-move.
+  no-op, metadata, checkout, and conflict rules as move-insert.
 - `@` invokes time travel directly, outside both groups. Invoking it leaves an
   already expanded commit group open.
 - Commit and action shortcuts keep their respective group open. Navigation or

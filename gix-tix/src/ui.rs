@@ -1064,8 +1064,11 @@ pub(crate) fn draw_with_worktree(
             if app.can_squash() {
                 options.push(("squash", 's'));
             }
-            if app.can_move() {
-                options.push(("cherry-move", 'm'));
+            if app.can_copy_insert() {
+                options.push(("copy-insert", 'c'));
+            }
+            if app.can_move_insert() {
+                options.push(("move-insert", 'm'));
             }
             let mut items = Vec::new();
             for (label, key) in options {
@@ -1074,12 +1077,12 @@ pub(crate) fn draw_with_worktree(
                 }
                 items.extend(shortcut(label, key, true));
             }
-            if app.can_cherry_stack() {
+            if app.can_stack_insert() {
                 if !items.is_empty() {
                     items.push(Span::raw(" · "));
                 }
-                items.push(Span::styled("v", Style::default().add_modifier(Modifier::UNDERLINED)));
-                items.push(Span::raw(" cherry-move-stack"));
+                items.push(Span::styled("t", Style::default().add_modifier(Modifier::UNDERLINED)));
+                items.push(Span::raw(" stack-insert"));
             }
             if app.can_forkpoint() {
                 if !items.is_empty() {
@@ -3965,11 +3968,12 @@ mod tests {
     }
 
     #[test]
-    fn actions_popup_shows_the_prefixed_cherry_stack_shortcut() -> Result<(), Box<dyn std::error::Error>> {
+    fn actions_popup_shows_insert_shortcuts_without_the_cherry_prefix() -> Result<(), Box<dyn std::error::Error>> {
         let head = gix::ObjectId::Sha1([1; 20]);
         let base = gix::ObjectId::Sha1([2; 20]);
         let parent = gix::ObjectId::Sha1([3; 20]);
         let target = gix::ObjectId::Sha1([4; 20]);
+        let root = gix::ObjectId::Sha1([5; 20]);
         let commit = |id, parent: Option<gix::ObjectId>| Commit {
             id,
             parent_ids: parent.into_iter().collect(),
@@ -3983,24 +3987,28 @@ mod tests {
             is_review: false,
             signature: SignatureState::Unsigned,
         };
-        let mut app = App::new(4);
+        let mut app = App::new(5);
         app.set_worktree_head(Some(head), false);
         app.extend_commits(vec![
             commit(head, Some(base)),
             commit(base, Some(parent)),
-            commit(parent, None),
+            commit(parent, Some(root)),
+            commit(root, None),
             commit(target, None),
         ]);
         complete(&mut app);
-        app.selected = app.rows.iter().position(|row| row.id == base);
+        app.selected = app.rows.iter().position(|row| row.id == parent);
         app.actions_expanded = true;
         let mut terminal = Terminal::new(TestBackend::new(160, 5))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
         let popup = rendered_line(&terminal, 3);
-        let label = "v cherry-move-stack";
-        let start = popup[..popup.find(label).expect("the cherry-move-stack action is visible")]
+        assert!(popup.contains("copy-insert"));
+        assert!(popup.contains("move-insert"));
+        assert!(!popup.contains("cherry-"));
+        let label = "t stack-insert";
+        let start = popup[..popup.find(label).expect("the stack-insert action is visible")]
             .chars()
             .count() as u16;
         assert!(
@@ -4012,7 +4020,7 @@ mod tests {
             (start + 1..start + label.len() as u16).all(|x| !terminal.backend().buffer()[(x, 3)]
                 .modifier
                 .contains(Modifier::UNDERLINED)),
-            "only the prefixed v is underlined"
+            "only the prefixed t is underlined"
         );
         Ok(())
     }
