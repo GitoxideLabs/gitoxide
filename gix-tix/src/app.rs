@@ -356,6 +356,7 @@ pub(crate) enum Action {
     ToggleActions,
     ToggleEnrich,
     ToggleTodo,
+    ToggleChecksPass,
     EditNote,
     EditGitNote,
     ToggleInformation,
@@ -435,6 +436,7 @@ pub(crate) enum Effect {
     TimeTravel(ObjectId),
     TogglePin(ObjectId),
     ToggleTodo(ObjectId),
+    ToggleChecksPass(ObjectId),
     EditNote(ObjectId),
     EditGitNote(ObjectId),
     VerifySignatures(Vec<ObjectId>),
@@ -475,6 +477,7 @@ pub(crate) struct App {
     titles: Vec<u8>,
     notes: HashMap<ObjectId, Vec<BString>>,
     enrichments: HashMap<ObjectId, crate::enrich::Enrichment>,
+    tree_enrichments: HashMap<ObjectId, crate::enrich::TreeEnrichment>,
     graph: Option<Graph>,
     attributions: Vec<Attribution>,
     #[cfg(test)]
@@ -575,6 +578,7 @@ impl App {
             titles: Vec::new(),
             notes: HashMap::new(),
             enrichments: HashMap::new(),
+            tree_enrichments: HashMap::new(),
             graph: None,
             attributions: Vec::new(),
             #[cfg(test)]
@@ -994,8 +998,23 @@ impl App {
             .and_then(|enrichment| enrichment.note.as_ref().map(|note| note.as_bstr()))
     }
 
+    pub(crate) fn tree_enrichment_loaded(&self, id: ObjectId) -> bool {
+        self.tree_enrichments.contains_key(&id)
+    }
+
+    pub(crate) fn set_tree_enrichment(&mut self, id: ObjectId, enrichment: crate::enrich::TreeEnrichment) {
+        self.tree_enrichments.insert(id, enrichment);
+    }
+
+    pub(crate) fn checks_pass(&self, id: ObjectId) -> bool {
+        self.tree_enrichments
+            .get(&id)
+            .is_some_and(|enrichment| enrichment.checks_pass)
+    }
+
     pub(crate) fn clear_enrichments(&mut self) {
         self.enrichments.clear();
+        self.tree_enrichments.clear();
     }
 
     pub(crate) fn render_lanes(&self, range: Range<usize>) -> RenderedLanes {
@@ -1068,7 +1087,11 @@ impl App {
         }
         if !matches!(
             &action,
-            Action::ToggleEnrich | Action::ToggleTodo | Action::EditNote | Action::EditGitNote
+            Action::ToggleEnrich
+                | Action::ToggleTodo
+                | Action::ToggleChecksPass
+                | Action::EditNote
+                | Action::EditGitNote
         ) {
             self.enrich_expanded = false;
         }
@@ -1443,6 +1466,11 @@ impl App {
                     self.rows[self.selected.expect("todo requires a selection")].id,
                 )];
             }
+            Action::ToggleChecksPass => {
+                if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
+                    return vec![Effect::ToggleChecksPass(id)];
+                }
+            }
             Action::EditNote if self.can_reword() => {
                 return vec![Effect::EditNote(
                     self.rows[self.selected.expect("note requires a selection")].id,
@@ -1783,7 +1811,7 @@ impl App {
         self.pending_hidden_rows = None;
         self.titles = Vec::new();
         self.notes.clear();
-        self.enrichments.clear();
+        self.clear_enrichments();
         self.graph = None;
         self.attributions = Vec::new();
         #[cfg(test)]
@@ -4271,6 +4299,11 @@ mod tests {
             vec![Effect::EditGitNote(id(1))],
             "Git notes are available on every selection"
         );
+        assert_eq!(
+            app.update(Action::ToggleChecksPass),
+            vec![Effect::ToggleChecksPass(id(1))],
+            "tree enrichments are available on every selection"
+        );
         assert!(app.enrich_expanded, "the grouped actions keep enrich open");
 
         app.update(Action::MoveDown);
@@ -4290,6 +4323,11 @@ mod tests {
             app.update(Action::EditGitNote),
             vec![Effect::EditGitNote(id(1))],
             "immutable boundaries still accept Git notes"
+        );
+        assert_eq!(
+            app.update(Action::ToggleChecksPass),
+            vec![Effect::ToggleChecksPass(id(1))],
+            "immutable boundaries still accept tree enrichments"
         );
     }
 

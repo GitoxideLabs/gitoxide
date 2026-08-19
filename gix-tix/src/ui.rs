@@ -479,7 +479,14 @@ pub(crate) fn draw_with_worktree(
     let lanes = app.render_lanes(start..render_end);
     let enrichment_gutter = visible_rows
         .iter()
-        .map(|row| Line::raw(crate::enrich::marker(app.todo(row.id), app.note(row.id).is_some())).width())
+        .map(|row| {
+            Line::raw(crate::enrich::marker(
+                app.todo(row.id),
+                app.note(row.id).is_some(),
+                app.checks_pass(row.id),
+            ))
+            .width()
+        })
         .max()
         .unwrap_or_default() as u16;
     let change_id_gutter = visible_rows
@@ -692,6 +699,7 @@ pub(crate) fn draw_with_worktree(
         let enrichment_marker = crate::enrich::marker(
             app.todo(visible_rows[index].id),
             app.note(visible_rows[index].id).is_some(),
+            app.checks_pass(visible_rows[index].id),
         );
         if !enrichment_marker.is_empty() {
             frame.render_widget(
@@ -1154,6 +1162,8 @@ pub(crate) fn draw_with_worktree(
                 ordered.extend(shortcut("note", 'o', app.note(row.id).is_some()));
                 ordered.push(Span::raw(" · "));
             }
+            ordered.extend(shortcut("checks-pass", 'c', app.checks_pass(row.id)));
+            ordered.push(Span::raw(" · "));
             ordered.extend(shortcut("git note", 'g', !app.notes(row.id).is_empty()));
         } else {
             ordered.push(Span::raw("no actions"));
@@ -2656,14 +2666,16 @@ mod tests {
                 note: Some("follow-up *title*\n\nwhy it matters\n".into()),
             },
         );
+        app.set_tree_enrichment(id, crate::enrich::TreeEnrichment { checks_pass: true });
         let mut terminal = Terminal::new(TestBackend::new(80, 2))?;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
         let row = terminal.backend().buffer();
         assert_eq!(row[(0, 0)].symbol(), "🚧", "todo leads the row");
         assert_eq!(row[(2, 0)].symbol(), "📝", "note directly follows todo");
-        assert_eq!(row[(4, 0)].symbol(), ">", "selection directly follows enrichments");
-        assert_eq!(row[(6, 0)].symbol(), "●", "the graph remains separate");
+        assert_eq!(row[(4, 0)].symbol(), "✔️", "tree status follows commit enrichments");
+        assert_eq!(row[(6, 0)].symbol(), ">", "selection directly follows enrichments");
+        assert_eq!(row[(8, 0)].symbol(), "●", "the graph remains separate");
         assert!(
             rendered_line(&terminal, 0).contains("follow-up title"),
             "the selected todo displays its note title"
@@ -2680,7 +2692,7 @@ mod tests {
         app.enrich_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).contains("enrich (todo · note · git note)"),
+            rendered_line(&terminal, 1).contains("enrich (todo · note · checks-pass · git note)"),
             "the enrich group advertises all note actions"
         );
         app.enrich_expanded = false;
@@ -2705,8 +2717,9 @@ mod tests {
             "a note replaces the selected title independently of todo"
         );
         assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "📝");
-        assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), ">");
-        assert_eq!(terminal.backend().buffer()[(4, 0)].symbol(), "●");
+        assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), "✔️");
+        assert_eq!(terminal.backend().buffer()[(4, 0)].symbol(), ">");
+        assert_eq!(terminal.backend().buffer()[(6, 0)].symbol(), "●");
         Ok(())
     }
 
