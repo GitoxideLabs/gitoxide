@@ -2472,26 +2472,37 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("squash: {err:#}")),
                     }
                 }
-                Effect::Move { source, base, target } => {
+                Effect::Insert {
+                    source,
+                    base,
+                    target,
+                    copy,
+                } => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let result = (|| {
                         let graph = history_graph
                             .as_ref()
-                            .context("moving HEAD requires a completed history graph")?;
+                            .context("inserting commits requires a completed history graph")?;
                         let mut repository = open_repository(&repository_path, repository_is_bare, false)
-                            .context("could not open repository to move HEAD")?;
+                            .context("could not open repository to insert commits")?;
                         repository.object_cache_size(None);
-                        let plan = if base == source {
-                            edit::rebase::cherry_move_plan(&repository, graph, source, target)?
+                        let plan = if copy {
+                            edit::rebase::copy_insert_plan(&repository, graph, source, target)?
+                        } else if base == source {
+                            edit::rebase::move_insert_plan(&repository, graph, source, target)?
                         } else {
-                            edit::rebase::cherry_stack_plan(&repository, graph, base, source, target)?
+                            edit::rebase::stack_insert_plan(&repository, graph, base, source, target)?
                         };
                         run_rebase_plan(terminal, repository.into_sync(), graph, plan)
                     })();
                     match result {
                         Ok(edit::rebase::PlanPerform::Complete(outcome)) => {
-                            let moved = outcome.map(source).unwrap_or(source);
+                            let inserted = if copy {
+                                outcome.selected.expect("copy-insert selects the copied commit")
+                            } else {
+                                outcome.map(source).unwrap_or(source)
+                            };
                             let notice = edit::time_travel::checkout_plan(
                                 &repository_path,
                                 repository_is_bare,
@@ -2501,11 +2512,24 @@ fn event_loop(
                             );
                             match notice {
                                 Ok(notice) => app.leave_success(notice.unwrap_or_else(|| {
-                                    format!("moved {} above {}", moved.to_hex_with_len(7), target.to_hex_with_len(7))
+                                    if copy {
+                                        format!(
+                                            "copied {} as {} above {}",
+                                            source.to_hex_with_len(7),
+                                            inserted.to_hex_with_len(7),
+                                            target.to_hex_with_len(7)
+                                        )
+                                    } else {
+                                        format!(
+                                            "inserted {} above {}",
+                                            inserted.to_hex_with_len(7),
+                                            target.to_hex_with_len(7)
+                                        )
+                                    }
                                 })),
-                                Err(err) => app.leave_attention(format!("move applied, checkout failed: {err:#}")),
+                                Err(err) => app.leave_attention(format!("insert applied, checkout failed: {err:#}")),
                             }
-                            app.select_commit_after_refresh(moved);
+                            app.select_commit_after_refresh(inserted);
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
@@ -2522,7 +2546,7 @@ fn event_loop(
                             app.select_commit(id);
                             pending_todo_rebase_conflict = Some(conflict);
                         }
-                        Err(err) => app.leave_error(format!("move: {err:#}")),
+                        Err(err) => app.leave_error(format!("insert: {err:#}")),
                     }
                 }
                 Effect::StartReview { tip, base } => {
@@ -5209,8 +5233,9 @@ fn action_with_shortcut_groups(
         }
         KeyCode::Char('r') if actions_expanded => Some(Action::Review),
         KeyCode::Char('s') if actions_expanded => Some(Action::Squash),
-        KeyCode::Char('m') if actions_expanded => Some(Action::Move),
-        KeyCode::Char('v') if actions_expanded => Some(Action::MoveStack),
+        KeyCode::Char('c') if actions_expanded => Some(Action::CopyInsert),
+        KeyCode::Char('m') if actions_expanded => Some(Action::MoveInsert),
+        KeyCode::Char('t') if actions_expanded => Some(Action::StackInsert),
         KeyCode::Char('f') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::Forkpoint)
         }
@@ -6537,8 +6562,9 @@ mod tests {
             ('u', Action::RebaseUpdate),
             ('r', Action::Review),
             ('s', Action::Squash),
-            ('m', Action::Move),
-            ('v', Action::MoveStack),
+            ('c', Action::CopyInsert),
+            ('m', Action::MoveInsert),
+            ('t', Action::StackInsert),
             ('f', Action::Forkpoint),
         ] {
             assert_eq!(
