@@ -471,6 +471,18 @@ pub(crate) fn draw_with_worktree(
             }
         }
     }
+    // Keep pane content above the popup while its underlay still covers the history row beneath it.
+    let changes_pane_underlays = changes_panes
+        .iter()
+        .zip(&history_changes_panes)
+        .map(|(pane, unshifted)| {
+            let mut area = pane.outer;
+            if prefix_popup_allowed {
+                area.height = unshifted.outer.bottom().saturating_sub(area.y);
+            }
+            area
+        })
+        .collect::<Vec<_>>();
     let worktree_dirty = worktree_changes.is_some_and(|changes| !changes.paths.is_empty())
         && changes_panes
             .iter()
@@ -873,7 +885,7 @@ pub(crate) fn draw_with_worktree(
             frame.render_widget(Paragraph::new(selection_info), area);
         }
     }
-    for pane_area in &changes_panes {
+    for (pane_area, underlay) in changes_panes.iter().zip(&changes_pane_underlays) {
         let outer = pane_area.outer;
         let pane = pane_area.pane;
         let changes = match pane {
@@ -888,7 +900,7 @@ pub(crate) fn draw_with_worktree(
             horizontal: 2,
             vertical: 1,
         });
-        frame.render_widget(Clear, outer);
+        frame.render_widget(Clear, *underlay);
         frame.render_widget(Block::new().borders(Borders::TOP).title(summary), outer);
         render_changes(frame, area, changes, pane, app);
         if app.changes_focus == Some(pane) {
@@ -1290,9 +1302,8 @@ pub(crate) fn draw_with_worktree(
         .and_then(|(anchor, items)| render_prefix_popup(frame, footer, anchor, items));
     FrameLayout {
         history: body,
-        overlays: changes_panes
-            .iter()
-            .map(|pane| pane.outer)
+        overlays: changes_pane_underlays
+            .into_iter()
             .chain(commit_pane.map(|(outer, _)| outer))
             .chain(notice_area)
             .chain(prefix_popup_area)
@@ -5166,6 +5177,25 @@ mod tests {
     #[test]
     fn popup_keeps_a_focused_changes_error_visible() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
+        app.id_mode = IdMode::Commit;
+        app.extend_commits(
+            (1..=5)
+                .map(|n| Commit {
+                    id: gix::ObjectId::Sha1([n; 20]),
+                    parent_ids: Default::default(),
+                    author_time: gix::date::Time::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: format!("history {n}").into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    is_review: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
         app.changes_focus = Some(ChangePane::Tree);
         app.tree_changes.error = Some("failed deliberately".into());
         app.information_expanded = true;
@@ -5197,10 +5227,23 @@ mod tests {
         assert!(rendered_line(&terminal, 3).contains("diff: failed deliberately"));
         assert_eq!(terminal.backend().buffer()[(2, 3)].bg, PANE_STATUS_BACKGROUND);
         assert!(rendered_line(&terminal, 4).contains("[ title"));
+        let layout = layout.expect("drawing returns its layout");
         assert_eq!(
-            layout.expect("drawing returns its layout").history.height,
-            5,
+            layout.history.height, 5,
             "moving the changes pane leaves history geometry unchanged"
+        );
+        let popup = layout
+            .overlays
+            .iter()
+            .copied()
+            .find(|area| area.y == 4 && area.height == 1)
+            .expect("the popup is a one-line overlay above the footer");
+        assert!(popup.width < 120, "the popup leaves pane underlay visible on its row");
+        assert!(
+            (0..popup.x)
+                .chain(popup.right()..120)
+                .all(|x| terminal.backend().buffer()[(x, popup.y)].symbol() == " "),
+            "the grown changes pane keeps history covered beneath the floating popup"
         );
         Ok(())
     }
