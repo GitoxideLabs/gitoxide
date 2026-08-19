@@ -378,6 +378,7 @@ pub(crate) enum Action {
     RebaseUpdate,
     Squash,
     Move,
+    MoveStack,
     Review,
     Forkpoint,
     TimeTravel,
@@ -422,6 +423,7 @@ pub(crate) enum Effect {
     },
     Move {
         source: ObjectId,
+        base: ObjectId,
         target: ObjectId,
     },
     StartReview {
@@ -519,6 +521,7 @@ pub(crate) struct App {
     review_tip: Option<ObjectId>,
     review_return: Option<(ObjectId, ObjectId)>,
     squash_source: Option<ObjectId>,
+    move_stack_base: Option<ObjectId>,
     reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
     pub(crate) focus_feedback: Option<&'static str>,
@@ -620,6 +623,7 @@ impl App {
             review_tip: None,
             review_return: None,
             squash_source: None,
+            move_stack_base: None,
             reachable_rows: None,
             copy_feedback: None,
             focus_feedback: None,
@@ -731,6 +735,8 @@ impl App {
             Some("review base · j/k select ancestor · <enter> start · Esc cancel")
         } else if self.squash_selection_active() {
             Some("squash target · j/k select ancestor · <enter> squash · Esc cancel")
+        } else if self.move_stack_base.is_some() {
+            Some("cherry-move-stack target · j/k select insertion point · <enter> move · Esc cancel")
         } else if self.forget_confirmation_visible() {
             Some("forget commit · d again confirm · any other action cancel")
         } else {
@@ -1072,8 +1078,6 @@ impl App {
                 | Action::Spill
                 | Action::Split
                 | Action::Forget
-                | Action::Rebase
-                | Action::RebaseUpdate
                 | Action::TimeTravel
                 | Action::TogglePin
         ) {
@@ -1081,7 +1085,14 @@ impl App {
         }
         if !matches!(
             &action,
-            Action::ToggleActions | Action::Squash | Action::Move | Action::Review | Action::Forkpoint
+            Action::ToggleActions
+                | Action::Rebase
+                | Action::RebaseUpdate
+                | Action::Squash
+                | Action::Move
+                | Action::MoveStack
+                | Action::Review
+                | Action::Forkpoint
         ) {
             self.actions_expanded = false;
         }
@@ -1331,6 +1342,20 @@ impl App {
                 self.clear_reachability_selection();
                 return vec![Effect::Squash { source, target }];
             }
+            Action::OpenDiff if self.move_stack_base.is_some() => {
+                let source = self.worktree_head.expect("cherry-stack selection requires HEAD");
+                let base = self.move_stack_base.expect("cherry-stack selection has a base");
+                let Some(target) = self
+                    .selected
+                    .filter(|index| self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
+                    .and_then(|index| self.rows.get(index))
+                    .map(|row| row.id)
+                else {
+                    return Vec::new();
+                };
+                self.clear_reachability_selection();
+                return vec![Effect::Move { source, base, target }];
+            }
             Action::OpenDiff => {
                 if let Some(target) = self.selected_tree_diff_target() {
                     return vec![Effect::OpenCommitDiff(target)];
@@ -1421,10 +1446,27 @@ impl App {
                 }
             }
             Action::Move if self.can_move() => {
+                let source = self.worktree_head.expect("move availability requires HEAD");
                 return vec![Effect::Move {
-                    source: self.worktree_head.expect("move availability requires HEAD"),
+                    source,
+                    base: source,
                     target: self.rows[self.selected.expect("move requires a selection")].id,
                 }];
+            }
+            Action::MoveStack => {
+                if let Some((source, base, base_parent, stack)) = self.cherry_stack() {
+                    let reachable: Vec<_> = self
+                        .rows
+                        .iter()
+                        .enumerate()
+                        .map(|(index, row)| self.is_cherry_stack_target(index, row.id, base, base_parent, &stack))
+                        .collect();
+                    if reachable.iter().any(|reachable| *reachable) {
+                        debug_assert_eq!(source, self.worktree_head.expect("a cherry-stack has HEAD"));
+                        self.move_stack_base = Some(base);
+                        self.reachable_rows = Some(reachable);
+                    }
+                }
             }
             Action::Review if self.can_finish_review() => {
                 return vec![Effect::FinishReview {
@@ -1503,7 +1545,10 @@ impl App {
             }
             Action::ForceQuit => return vec![Effect::Quit],
             Action::Cancel
-                if self.review_tip.is_some() || self.review_return.is_some() || self.squash_source.is_some() =>
+                if self.review_tip.is_some()
+                    || self.review_return.is_some()
+                    || self.squash_source.is_some()
+                    || self.move_stack_base.is_some() =>
             {
                 self.clear_reachability_selection();
             }
@@ -1673,6 +1718,9 @@ impl App {
         select_top: bool,
     ) -> Option<Vec<SharedCommitRow>> {
         self.forget_confirmation = None;
+        if self.move_stack_base.is_some() {
+            self.clear_reachability_selection();
+        }
         drop(self.store_commits(commits));
 
         let visible = self.reachable_from(view_tips);
@@ -1870,6 +1918,7 @@ impl App {
         self.review_tip = None;
         self.review_return = None;
         self.squash_source = None;
+        self.move_stack_base = None;
         self.reachability_anchor = None;
         self.reachable_rows = None;
     }
@@ -2196,6 +2245,62 @@ impl App {
             && !self.is_row_hidden(target_index)
             && !self.known_merge_descendants.contains(&source.id)
             && !self.known_merge_descendants.contains(&target.id)
+    }
+
+    pub(crate) fn can_cherry_stack(&self) -> bool {
+        self.cherry_stack().is_some_and(|(_, base, base_parent, stack)| {
+            self.rows
+                .iter()
+                .enumerate()
+                .any(|(index, row)| self.is_cherry_stack_target(index, row.id, base, base_parent, &stack))
+        })
+    }
+
+    fn cherry_stack(&self) -> Option<(ObjectId, ObjectId, ObjectId, HashSet<ObjectId>)> {
+        if self.state != State::Complete
+            || self.changes_focus.is_some()
+            || self.deferred_history_state.unwrap_or(self.state) != State::Complete
+        {
+            return None;
+        }
+        let source = self.worktree_head?;
+        let base = self.selected.and_then(|index| self.rows.get(index))?.id;
+        if self.hidden_rows.contains(&base) || self.known_merge_descendants.contains(&base) {
+            return None;
+        }
+
+        let mut current = source;
+        let mut stack = HashSet::new();
+        loop {
+            if !stack.insert(current) {
+                return None;
+            }
+            let row = self.all_rows.get(&current)?;
+            let [parent] = row.parent_ids.as_slice() else {
+                return None;
+            };
+            if current == base {
+                return Some((source, base, *parent, stack));
+            }
+            current = *parent;
+        }
+    }
+
+    fn is_cherry_stack_target(
+        &self,
+        index: usize,
+        id: ObjectId,
+        base: ObjectId,
+        base_parent: ObjectId,
+        stack: &HashSet<ObjectId>,
+    ) -> bool {
+        !self.is_row_hidden(index)
+            && !stack.contains(&id)
+            && id != base_parent
+            && !self.known_merge_descendants.contains(&id)
+            && !stack
+                .iter()
+                .any(|ancestor| *ancestor != base && self.is_known_ancestor(*ancestor, id))
     }
 
     pub(crate) fn can_review(&self) -> bool {
@@ -3790,6 +3895,7 @@ mod tests {
             app.update(Action::Move),
             vec![Effect::Move {
                 source: id(5),
+                base: id(5),
                 target: id(3),
             }]
         );
@@ -3812,6 +3918,161 @@ mod tests {
         complete(&mut merge_target);
         merge_target.selected = merge_target.rows.iter().position(|row| row.id == id(3));
         assert!(merge_target.can_move(), "an unchanged merge target is allowed");
+    }
+
+    #[test]
+    fn cherry_stack_selects_only_valid_insertion_targets() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(7, &[6]),
+            row_with_parents(6, &[1]),
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        app.set_worktree_head(Some(id(5)), false);
+        app.set_known_merge_descendants(HashSet::from([id(6)]));
+        complete(&mut app);
+        app.select_commit(id(3));
+
+        assert!(app.can_cherry_stack());
+        assert!(app.update(Action::MoveStack).is_empty());
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some("cherry-move-stack target · j/k select insertion point · <enter> move · Esc cancel".into())
+        );
+        for (n, reachable) in [
+            (7, true),
+            (6, false),
+            (5, false),
+            (4, false),
+            (3, false),
+            (2, false),
+            (1, true),
+        ] {
+            let index = app
+                .rows
+                .iter()
+                .position(|row| row.id == id(n))
+                .expect("the fixture commit is visible");
+            assert_eq!(app.is_row_reachable(index), reachable, "commit {n} target eligibility");
+        }
+
+        app.update(Action::MoveDown);
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(1)));
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::Move {
+                source: id(5),
+                base: id(3),
+                target: id(1),
+            }]
+        );
+
+        app.select_commit(id(3));
+        app.update(Action::MoveStack);
+        app.update(Action::Cancel);
+        assert!(app.notice().is_none(), "Escape cancels insertion-target selection");
+        assert!(
+            app.rows
+                .iter()
+                .enumerate()
+                .all(|(index, _)| app.is_row_reachable(index))
+        );
+    }
+
+    #[test]
+    fn cherry_stack_requires_a_linear_head_ancestry() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3, 2]),
+            row_with_parents(3, &[1]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        app.set_worktree_head(Some(id(5)), false);
+        complete(&mut app);
+        app.select_commit(id(3));
+
+        assert!(!app.can_cherry_stack());
+        assert!(app.update(Action::MoveStack).is_empty());
+        assert!(app.notice().is_none());
+    }
+
+    #[test]
+    fn cherry_stack_hides_targets_that_would_cycle_through_an_internal_commit() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(8, &[4]),
+            row_with_parents(7, &[3]),
+            row_with_parents(6, &[1]),
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        app.set_worktree_head(Some(id(5)), false);
+        complete(&mut app);
+        app.select_commit(id(3));
+
+        assert!(app.update(Action::MoveStack).is_empty());
+        for (commit, expected) in [(8, false), (7, true), (6, true)] {
+            let index = app
+                .rows
+                .iter()
+                .position(|row| row.id == id(commit))
+                .expect("the candidate is visible");
+            assert_eq!(
+                app.is_row_reachable(index),
+                expected,
+                "candidate {commit} has the expected cycle safety"
+            );
+        }
+    }
+
+    #[test]
+    fn refresh_cancels_cherry_stack_selection_before_rows_change() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        app.set_worktree_head(Some(id(5)), false);
+        complete(&mut app);
+        app.select_commit(id(3));
+        app.update(Action::MoveStack);
+        assert!(app.move_stack_base.is_some(), "target selection is active");
+
+        let rows = app
+            .start_refresh(vec![row_with_parents(6, &[5])].into(), &[id(6)], &[], false)
+            .expect("the changed history starts lane computation");
+        assert!(
+            app.move_stack_base.is_none(),
+            "refresh cancels the index-based selection"
+        );
+        assert!(
+            app.reachable_rows.is_none(),
+            "the stale row mask is discarded immediately"
+        );
+        assert!(app.notice().is_none(), "the cancelled selection no longer prompts");
+
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(app.rows.first().map(|row| row.id), Some(id(6)));
+        assert!(
+            app.rows
+                .iter()
+                .enumerate()
+                .all(|(index, _)| app.is_row_reachable(index)),
+            "the replacement projection has no stale eligibility mask"
+        );
     }
 
     #[test]
@@ -4246,11 +4507,13 @@ mod tests {
         app.update(Action::Reword);
         app.update(Action::NewCommit);
         app.update(Action::Forget);
-        app.update(Action::Rebase);
-        app.update(Action::RebaseUpdate);
         app.update(Action::TimeTravel);
         assert!(app.commit_expanded, "grouped commit commands keep the group open");
 
+        app.update(Action::Rebase);
+        assert!(!app.commit_expanded, "rebase now belongs to the actions group");
+
+        app.update(Action::ToggleCommitGroup);
         app.update(Action::MoveDown);
         assert!(!app.commit_expanded, "navigation collapses the group");
 
@@ -4268,9 +4531,12 @@ mod tests {
         app.update(Action::ToggleActions);
         assert!(!app.commit_expanded, "opening actions closes commit");
         assert!(app.actions_expanded);
+        app.update(Action::Rebase);
+        app.update(Action::RebaseUpdate);
         app.update(Action::Review);
         app.update(Action::Squash);
         app.update(Action::Move);
+        app.update(Action::MoveStack);
         assert!(app.actions_expanded, "grouped actions keep the group open");
         app.update(Action::ToggleActions);
         assert!(!app.actions_expanded, "the prefix key toggles the group");

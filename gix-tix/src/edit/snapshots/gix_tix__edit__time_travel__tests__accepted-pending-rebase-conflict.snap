@@ -4,20 +4,31 @@ expression: "gix_testtools::repository::snapshot(fixture.path())?\n.to_string().
 ---
 HEAD detached C1
 
+[config]
+[core]
+	bare = false
+[user]
+	name = author
+	email = author@example.com
+[commit]
+	gpgSign = false
+[gitoxide "commit"]
+	committerDate = 2001-01-01T00:00:00 +0000
+
 [refs]
 refs/heads/main = C2
 refs/worktree/tix/pins/HEAD = -> refs/heads/main
 
 [commits]
 C0
-  tree T0
+  tree T1
   author author <author@example.com> 946684800 +0000
   committer committer <committer@example.com> 946684800 +0000
 
   base
 
 C1
-  tree T0
+  tree T1
   parent C0
   author author <author@example.com> 946684800 +0000
   committer author <author@example.com> 978307200 +0000
@@ -27,7 +38,7 @@ C1
   tip
 
 C2
-  tree T1
+  tree T0
   parent C1
   author author <author@example.com> 946944000 +0000
   committer author <author@example.com> 978307200 +0000
@@ -38,9 +49,9 @@ C2
 
 [index]
 tree = conflicted
-100644 B2 stage=1 "file"
+100644 B0 stage=1 "file"
 100644 B1 stage=2 "file"
-100644 B0 stage=3 "file"
+100644 B2 stage=3 "file"
 
 [worktree]
 100644 file "file" = "<<<<<<< rebased parent\nbase\n=======\ntip\n>>>>>>> commit\n"
@@ -48,9 +59,9 @@ tree = conflicted
 [objects]
 C2 = 26d78d03083cfe539c4a94c28bd30d9a548a8394
 C1 = 69348f5557de103f6771f9a121ff67f5272ceab5
-T0 = 6d5f482d15035cdd7733b1b551d1fead28d22592
-T1 = 6f2762b571ef9a93001cc607058818aa5d0d055c
-B0 = b218ebde2fc5b78f14aa04eeb42a74b17e2e367d
+T1 = 6d5f482d15035cdd7733b1b551d1fead28d22592
+T0 = 6f2762b571ef9a93001cc607058818aa5d0d055c
+B2 = b218ebde2fc5b78f14aa04eeb42a74b17e2e367d
 C0 = c0b811a58f27425263a4276fe881de38736a9446
 B1 = df967b96a579e45a18b8251732d16804b2e56a55
-B2 = ea1a2ae6cdab2b53dee8943ca555c4312a0b798a
+B0 = ea1a2ae6cdab2b53dee8943ca555c4312a0b798a
