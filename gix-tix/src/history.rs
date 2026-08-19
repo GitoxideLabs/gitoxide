@@ -183,6 +183,7 @@ impl HistoryGraph {
                 state: NODE_LOADED,
             };
         }
+        graph.set_current_view(&commits.iter().map(|(id, _)| *id).collect::<Vec<_>>());
         graph
     }
 
@@ -201,6 +202,7 @@ impl HistoryGraph {
         for id in ids {
             graph.ensure_commit(repo, commit_graph.as_ref(), &shallow, *id, &mut buf)?;
         }
+        graph.set_current_view(ids);
         Ok(graph)
     }
 
@@ -260,7 +262,16 @@ impl HistoryGraph {
     }
 
     pub(crate) fn commits_with_descendants(&self) -> HashSet<ObjectId> {
-        self.parents.iter().map(|parent| self.id(*parent)).collect()
+        self.commits
+            .iter()
+            .filter(|commit| commit.state & NODE_IN_VIEW != 0)
+            .flat_map(|commit| {
+                self.parents[commit.parents.start as usize..commit.parents.end as usize]
+                    .iter()
+                    .copied()
+            })
+            .map(|parent| self.id(parent))
+            .collect()
     }
 
     pub(crate) fn parents_of(&self, id: ObjectId) -> Option<Vec<ObjectId>> {
@@ -272,7 +283,7 @@ impl HistoryGraph {
         let mut pending: Vec<_> = self
             .commits
             .iter()
-            .filter(|commit| commit.parents.len() > 1)
+            .filter(|commit| commit.state & NODE_IN_VIEW != 0 && commit.parents.len() > 1)
             .flat_map(|commit| {
                 let range = commit.parents.clone();
                 self.parents[range.start as usize..range.end as usize].iter().copied()
@@ -281,7 +292,12 @@ impl HistoryGraph {
         let mut ancestors = HashSet::new();
         while let Some(index) = pending.pop() {
             if ancestors.insert(index) {
-                pending.extend_from_slice(self.parents(index));
+                pending.extend(
+                    self.parents(index)
+                        .iter()
+                        .copied()
+                        .filter(|parent| self.commits[parent.as_usize()].state & NODE_IN_VIEW != 0),
+                );
             }
         }
         ancestors.into_iter().map(|index| self.id(index)).collect()
@@ -289,12 +305,18 @@ impl HistoryGraph {
 
     pub(crate) fn descendants_in_parent_order(&self, root: ObjectId) -> Option<Vec<ObjectId>> {
         let root = self.index(root)?;
+        if self.commits[root.as_usize()].state & NODE_IN_VIEW == 0 {
+            return None;
+        }
         let mut included = HashSet::from([root]);
         loop {
             let mut changed = false;
             for index in 0..self.commits.len() {
                 let index = CommitIndex::new(index).expect("an existing graph index fits into u32");
-                if included.contains(&index) || !self.parents(index).iter().any(|parent| included.contains(parent)) {
+                if self.commits[index.as_usize()].state & NODE_IN_VIEW == 0
+                    || included.contains(&index)
+                    || !self.parents(index).iter().any(|parent| included.contains(parent))
+                {
                     continue;
                 }
                 included.insert(index);
@@ -323,6 +345,20 @@ impl HistoryGraph {
             }
         }
         Some(out.into_iter().map(|index| self.id(index)).collect())
+    }
+
+    pub(crate) fn set_current_view(&mut self, tips: &[ObjectId]) {
+        for commit in &mut self.commits {
+            commit.state &= !NODE_IN_VIEW;
+        }
+        let mut pending: Vec<_> = tips.iter().filter_map(|id| self.index(*id)).collect();
+        while let Some(index) = pending.pop() {
+            if self.commits[index.as_usize()].state & NODE_IN_VIEW != 0 {
+                continue;
+            }
+            self.commits[index.as_usize()].state |= NODE_IN_VIEW;
+            pending.extend_from_slice(self.parents(index));
+        }
     }
 
     fn parent_ids(&self, index: CommitIndex) -> gix::traverse::commit::ParentIds {
@@ -782,6 +818,7 @@ impl HistoryGraph {
             }
         }
         self.tracking = tracking;
+        self.set_current_view(&refs.view_tips);
         let decorations = decorations(repo, &refs.pins, &refs.worktrees)?;
         Ok(Refresh {
             refs,
@@ -821,6 +858,7 @@ const EXPAND: u8 = 1 << 4;
 const NODE_LOADED: u8 = 1 << 0;
 const NODE_COMPLETE: u8 = 1 << 1;
 const NODE_STORED: u8 = 1 << 2;
+const NODE_IN_VIEW: u8 = 1 << 3;
 
 #[derive(Clone, Copy, Default)]
 struct WalkState {
@@ -1201,6 +1239,7 @@ pub(crate) fn load(
     }
     emit(Event::VisibleComplete);
     graph.tracking = tracking;
+    graph.set_current_view(&tips);
     emit(Event::Complete(graph));
     Ok(())
 }
@@ -2666,6 +2705,57 @@ mod tests {
         assert!(
             second.commits.rows.is_empty(),
             "an unchanged tip stops immediately at complete cached ancestry"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_excludes_replaced_commits_from_descendant_queries() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let events = loaded(fixture.path(), &["main"], &[])?;
+        let mut graph = events
+            .into_iter()
+            .find_map(|event| match event {
+                Event::Complete(graph) => Some(graph),
+                _ => None,
+            })
+            .expect("history loading returns the persistent graph");
+        let repo = crate::test_repository::open(fixture.path())?;
+        let old_tip = repo.rev_parse_single("main")?.detach();
+        let parent = repo
+            .find_commit(old_tip)?
+            .parent_ids()
+            .next()
+            .expect("the main tip has a parent")
+            .detach();
+        drop(repo);
+
+        let amend = Command::new("git")
+            .current_dir(fixture.path())
+            .args([
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "--amend",
+                "-q",
+                "-m",
+                "replacement",
+            ])
+            .status()?;
+        assert!(amend.success(), "git replaces the visible tip");
+
+        let repo = crate::test_repository::open(fixture.path())?;
+        let replacement = repo.rev_parse_single("main")?.detach();
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        graph.refresh(&repo, &["main".into()], &[], false, &HashSet::new(), &authors)?;
+        let descendants = graph
+            .descendants_in_parent_order(parent)
+            .expect("the shared parent remains in the current view");
+        assert!(descendants.contains(&replacement), "the replacement tip is editable");
+        assert!(
+            !descendants.contains(&old_tip),
+            "the obsolete tip is excluded from edits"
         );
         Ok(())
     }
