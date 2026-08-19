@@ -110,13 +110,25 @@ pub(crate) fn toggle(repo: &gix::Repository, commit_id: ObjectId) -> Result<Enri
             .boolean("commit.todo")
             .context("commit.todo is not a boolean")?
             .unwrap_or(false);
-        config
-            .section_mut_or_create_new("commit", None)
-            .context("could not create the commit enrichment section")?
-            .set("todo", if enabled { "true" } else { "false" })
-            .context("could not update commit.todo")?;
-        Ok(())
+        set_todo(config, enabled)
     })
+}
+
+pub(crate) fn ensure_todo(repo: &gix::Repository, commit_id: ObjectId, enabled: bool) -> Result<Enrichment> {
+    let current = load(&mut open(repo)?, crate::change_id::for_commit(repo, commit_id)?)?;
+    if current.todo == enabled {
+        return Ok(current);
+    }
+    update(repo, commit_id, |config| set_todo(config, enabled))
+}
+
+fn set_todo(config: &mut File, enabled: bool) -> Result<()> {
+    config
+        .section_mut_or_create_new("commit", None)
+        .context("could not create the commit enrichment section")?
+        .set("todo", if enabled { "true" } else { "false" })
+        .context("could not update commit.todo")?;
+    Ok(())
 }
 
 pub(crate) fn set_note(repo: &gix::Repository, commit_id: ObjectId, note: Option<&[u8]>) -> Result<Enrichment> {
@@ -143,13 +155,26 @@ pub(crate) fn toggle_checks_pass(repo: &gix::Repository, commit_id: ObjectId) ->
             .boolean("tree.checks-pass")
             .context("tree.checks-pass is not a boolean")?
             .unwrap_or(false);
-        config
-            .section_mut_or_create_new("tree", None)
-            .context("could not create the tree enrichment section")?
-            .set("checks-pass", if enabled { "true" } else { "false" })
-            .context("could not update tree.checks-pass")?;
-        Ok(())
+        set_checks_pass(config, enabled)
     })
+}
+
+pub(crate) fn ensure_checks_pass(repo: &gix::Repository, commit_id: ObjectId, enabled: bool) -> Result<TreeEnrichment> {
+    let tree_id = tree_id(repo, commit_id)?;
+    let current = load_tree(&mut open_tree(repo)?, tree_id)?;
+    if current.checks_pass == enabled {
+        return Ok(current);
+    }
+    update_tree(repo, tree_id, |config| set_checks_pass(config, enabled))
+}
+
+fn set_checks_pass(config: &mut File, enabled: bool) -> Result<()> {
+    config
+        .section_mut_or_create_new("tree", None)
+        .context("could not create the tree enrichment section")?
+        .set("checks-pass", if enabled { "true" } else { "false" })
+        .context("could not update tree.checks-pass")?;
+    Ok(())
 }
 
 pub(crate) fn apply_headers(
