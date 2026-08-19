@@ -409,13 +409,17 @@ Alignment uses only rows in the current viewport to determine widths and starts
 in title mode. Horizontal navigation pans the complete padded row in title and
 full-column alignment so clipped fields can be reached.
 
-Compressed history keeps the visible reference, pin, and worktree tips plus the
-commit selected when compression begins. Every maximal hidden segment is shown
-as a nonselectable hollow node followed by its exact commit count, such as
-`○ [12]`; navigation skips these summaries. Retained commits use title
-alignment, and cycling `[` again restores the normal title-aligned history.
-Review, rewrite-target, and rebase-conflict selection temporarily expand the
-history without leaving compressed mode.
+Compressed history keeps the visible reference, pin, and worktree tips, the
+commit selected when compression begins, every graph endpoint or junction, and
+every hidden boundary as full, selectable commit rows. Each remaining maximal
+linear segment is represented by a selectable hollow node followed by its exact
+commit count, such as `○ [12]`. Pressing Enter on a summary expands that one
+segment in place; expansions accumulate until the display is the ordinary
+title-aligned history. Modal review and rewrite-target pickers retain the
+compressed projection so its points of interest remain available as targets,
+while conflict selection continues to show the full history. Leaving and
+re-entering compressed mode through the `[` cycle, or performing a full history
+reload, discards accumulated expansions.
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. The `?` group similarly remains open
