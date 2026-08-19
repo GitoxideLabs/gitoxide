@@ -241,6 +241,10 @@ impl HistoryGraph {
         self.commits.iter().map(|commit| commit.id)
     }
 
+    pub(crate) fn stored_commit_ids(&self) -> impl Iterator<Item = ObjectId> + '_ {
+        self.stored_order.iter().map(|index| self.id(*index))
+    }
+
     pub(crate) fn is_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> bool {
         let (Some(ancestor), Some(descendant)) = (self.index(ancestor), self.index(descendant)) else {
             return false;
