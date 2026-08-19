@@ -11,8 +11,8 @@ use crate::{
     BuiltInDiff,
     app::{
         Alignment as HistoryAlignment, App, AttributionKind, ChangeGroup, ChangeKind, ChangePane, Changes,
-        ChangesLayout, ChangesMode, CommitRow, CopyKind, DateMode, IdMode, NameMode, Notice, NoticeKind, RefMode,
-        SelectionRelation, SignatureState, State,
+        ChangesLayout, ChangesMode, CommitRow, CopyKind, DateMode, HistoryEntry, IdMode, NameMode, Notice, NoticeKind,
+        RefMode, SelectionRelation, SignatureState, State,
     },
     history::{DecorationKind, Decorations},
 };
@@ -509,16 +509,28 @@ pub(crate) fn draw_with_worktree(
         .max(1) as usize;
     app.center_initial_selection();
     app.ensure_visible();
-    let start = app.offset.min(app.rows.len());
-    let render_end = start.saturating_add(body.height as usize).min(app.rows.len());
-    let visible_rows = &app.rows[start..render_end];
-    let has_verifiable_signatures = visible_rows.iter().enumerate().any(|(index, row)| {
-        !app.is_row_hidden(start + index)
-            && matches!(row.signature, SignatureState::Unverified | SignatureState::Verifying)
+    let start = app.offset.min(app.history_len());
+    let render_end = start.saturating_add(body.height as usize).min(app.history_len());
+    let visible_entries: Vec<_> = (start..render_end)
+        .filter_map(|index| app.history_entry(index))
+        .collect();
+    let has_verifiable_signatures = visible_entries.iter().any(|entry| {
+        let HistoryEntry::Commit(index) = entry else {
+            return false;
+        };
+        !app.is_row_hidden(*index)
+            && matches!(
+                app.rows[*index].signature,
+                SignatureState::Unverified | SignatureState::Verifying
+            )
     });
     let lanes = app.render_lanes(start..render_end);
-    let enrichment_gutter = visible_rows
+    let enrichment_gutter = visible_entries
         .iter()
+        .filter_map(|entry| match entry {
+            HistoryEntry::Commit(index) => Some(&app.rows[*index]),
+            HistoryEntry::Segment { .. } => None,
+        })
         .map(|row| {
             Line::raw(crate::enrich::marker(
                 app.todo(row.id),
@@ -529,13 +541,24 @@ pub(crate) fn draw_with_worktree(
         })
         .max()
         .unwrap_or_default() as u16;
-    let change_id_gutter = visible_rows
+    let has_duplicate_change_id = visible_entries
         .iter()
-        .any(|row| app.has_duplicate_change_id(row.id))
-        .then(|| Line::raw("👯‍♂️").width() as u16)
-        .unwrap_or_default();
-    let conflict_gutter = visible_rows
+        .filter_map(|entry| match entry {
+            HistoryEntry::Commit(index) => Some(&app.rows[*index]),
+            HistoryEntry::Segment { .. } => None,
+        })
+        .any(|row| app.has_duplicate_change_id(row.id));
+    let change_id_gutter = if has_duplicate_change_id {
+        Line::raw("👯‍♂️").width() as u16
+    } else {
+        0
+    };
+    let has_conflict = visible_entries
         .iter()
+        .filter_map(|entry| match entry {
+            HistoryEntry::Commit(index) => Some(&app.rows[*index]),
+            HistoryEntry::Segment { .. } => None,
+        })
         .any(|row| {
             let head = decorations.get(&row.id).is_some_and(|decorations| {
                 decorations
@@ -543,9 +566,12 @@ pub(crate) fn draw_with_worktree(
                     .any(|decoration| decoration.kind == DecorationKind::Head)
             });
             app.conflict_marker(row.id, head)
-        })
-        .then(|| Line::raw("💥").width() as u16)
-        .unwrap_or_default();
+        });
+    let conflict_gutter = if has_conflict {
+        Line::raw("💥").width() as u16
+    } else {
+        0
+    };
     let status_x = body
         .x
         .saturating_add(enrichment_gutter)
@@ -581,11 +607,15 @@ pub(crate) fn draw_with_worktree(
     let show_author_name = copy_feedback == Some(CopyKind::Author) || name_mode != NameMode::None;
     let show_trailers = name_mode == NameMode::All && app.show_trailers;
     let ref_mode = app.ref_mode;
-    let selected = app.selected;
-    let metadata_columns: Vec<_> = visible_rows
+    let selected = app.selected_history_index();
+    let metadata_columns: Vec<_> = visible_entries
         .iter()
         .enumerate()
-        .map(|(index, row)| {
+        .map(|(index, entry)| {
+            let HistoryEntry::Commit(row_index) = entry else {
+                return None;
+            };
+            let row = &app.rows[*row_index];
             let row_selected = selected == Some(start + index);
             let title = row_selected.then(|| app.note(row.id)).flatten().map_or_else(
                 || app.title(row),
@@ -632,16 +662,20 @@ pub(crate) fn draw_with_worktree(
                     }
                 }
             }
-            metadata
+            Some(metadata)
         })
         .collect();
     let title_column = lanes
         .iter()
         .zip(&metadata_columns)
-        .map(|(lane, metadata)| lane.chars().count().saturating_add(metadata.prefix_width()))
+        .filter_map(|(lane, metadata)| {
+            metadata
+                .as_ref()
+                .map(|metadata| lane.chars().count().saturating_add(metadata.prefix_width()))
+        })
         .max()
         .unwrap_or_default();
-    let column_widths = metadata_columns.iter().fold([0; 5], |mut widths, metadata| {
+    let column_widths = metadata_columns.iter().flatten().fold([0; 5], |mut widths, metadata| {
         for (width, field) in widths.iter_mut().zip(&metadata.fields[..5]) {
             *width = (*width).max(field.width());
         }
@@ -650,34 +684,41 @@ pub(crate) fn draw_with_worktree(
     let metadata: Vec<_> = metadata_columns
         .into_iter()
         .enumerate()
-        .map(|(index, metadata)| match alignment {
-            HistoryAlignment::None => (metadata.into_line(), 0),
-            HistoryAlignment::Title => {
-                let lane_width = lanes.lane(index).chars().count();
-                (
-                    metadata.align_title(title_column.saturating_sub(lane_width)),
-                    lane_width,
-                )
-            }
-            HistoryAlignment::Columns => (metadata.align_columns(column_widths), max_lane_width),
+        .map(|(index, metadata)| {
+            metadata.map(|metadata| match alignment {
+                HistoryAlignment::None => (metadata.into_line(), 0),
+                HistoryAlignment::Title | HistoryAlignment::Compressed => {
+                    let lane_width = lanes.lane(index).chars().count();
+                    (
+                        metadata.align_title(title_column.saturating_sub(lane_width)),
+                        lane_width,
+                    )
+                }
+                HistoryAlignment::Columns => (metadata.align_columns(column_widths), max_lane_width),
+            })
         })
         .collect();
-    let max_offset = match alignment {
-        HistoryAlignment::None => lanes
-            .iter()
-            .zip(&metadata)
-            .map(|(lane, (metadata, _))| lane.chars().count().saturating_add(metadata.width()))
-            .max()
-            .unwrap_or_default()
-            .saturating_sub(content.width as usize),
-        HistoryAlignment::Title | HistoryAlignment::Columns => metadata
-            .iter()
-            .map(|(metadata, metadata_x)| metadata_x.saturating_add(metadata.width()))
-            .max()
-            .unwrap_or_default()
-            .saturating_sub(content.width as usize),
-    }
-    .min(u16::MAX as usize);
+    let max_offset = visible_entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| match (entry, &metadata[index]) {
+            (HistoryEntry::Segment { count }, _) => lanes
+                .lane(index)
+                .chars()
+                .count()
+                .saturating_add(format!("[{count}]").chars().count()),
+            (HistoryEntry::Commit(_), Some((metadata, metadata_x))) => match alignment {
+                HistoryAlignment::None => lanes.lane(index).chars().count().saturating_add(metadata.width()),
+                HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
+                    metadata_x.saturating_add(metadata.width())
+                }
+            },
+            (HistoryEntry::Commit(_), None) => 0,
+        })
+        .max()
+        .unwrap_or_default()
+        .saturating_sub(content.width as usize)
+        .min(u16::MAX as usize);
     let horizontal_offset = app.horizontal_offset.min(max_offset);
     let selection_info = selection_info_line(
         app.changes_visible()
@@ -689,39 +730,64 @@ pub(crate) fn draw_with_worktree(
     let selection_info_width = selection_info.width();
     let mut selection_info_area = None;
 
-    let rows = visible_rows
+    let rows = visible_entries
         .iter()
         .enumerate()
-        .map(|(index, row)| (row.id, body.y.saturating_add(index as u16)))
+        .filter_map(|(index, entry)| match entry {
+            HistoryEntry::Commit(row_index) => Some((app.rows[*row_index].id, body.y.saturating_add(index as u16))),
+            HistoryEntry::Segment { .. } => None,
+        })
         .collect();
-    for (index, (metadata, metadata_x)) in metadata.into_iter().enumerate() {
+    for (index, metadata) in metadata.into_iter().enumerate() {
         let lane = lanes.lane(index);
         let y = body.y.saturating_add(index as u16);
-        let selected = app.selected == Some(start + index);
-        let head = decorations.get(&visible_rows[index].id).is_some_and(|decorations| {
+        let row_area = Rect::new(content.x, y, content.width, 1);
+        let row_index = match visible_entries[index] {
+            HistoryEntry::Commit(index) => index,
+            HistoryEntry::Segment { count } => {
+                frame.render_widget(
+                    Paragraph::new(format!("{lane}[{count}]")).scroll((0, horizontal_offset as u16)),
+                    row_area,
+                );
+                color_graph(
+                    frame,
+                    row_area,
+                    lane,
+                    horizontal_offset,
+                    None,
+                    SignatureState::Unsigned,
+                    None,
+                );
+                continue;
+            }
+        };
+        let row = &app.rows[row_index];
+        let (metadata, metadata_x) = metadata.expect("commit history entries have metadata");
+        let selected = app.selected == Some(row_index);
+        let head = decorations.get(&row.id).is_some_and(|decorations| {
             decorations
                 .iter()
                 .any(|decoration| decoration.kind == DecorationKind::Head)
         });
-        let attached_head = decorations.get(&visible_rows[index].id).is_some_and(|decorations| {
+        let attached_head = decorations.get(&row.id).is_some_and(|decorations| {
             decorations
                 .iter()
                 .any(|decoration| decoration.kind == DecorationKind::CurrentWorktreeBranch)
         });
-        let head_has_descendants = app.worktree_head_has_descendants(visible_rows[index].id);
+        let head_has_descendants = app.worktree_head_has_descendants(row.id);
         let head_state = head.then_some(HeadState {
             has_descendants: head_has_descendants,
             attached: attached_head,
         });
         let metadata_width = metadata.width();
-        let hidden_branch_behind = app.hidden_branch_behind(visible_rows[index].id);
+        let hidden_branch_behind = app.hidden_branch_behind(row.id);
         let line_width = match alignment {
             HistoryAlignment::None => lane
                 .chars()
                 .count()
                 .saturating_add(metadata_width)
                 .saturating_sub(horizontal_offset),
-            HistoryAlignment::Title | HistoryAlignment::Columns => metadata_x
+            HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => metadata_x
                 .saturating_add(metadata_width)
                 .saturating_sub(horizontal_offset),
         };
@@ -744,10 +810,10 @@ pub(crate) fn draw_with_worktree(
                 (marker, x, width)
             })
         });
-        let signature_color = signature_color(visible_rows[index].signature);
+        let signature_color = signature_color(row.signature);
         let highlight = if selected && app.show_selection_tail {
             Some(signature_color)
-        } else if compared_parent == Some(visible_rows[index].id) {
+        } else if compared_parent == Some(row.id) {
             Some(COMPARED_PARENT_COLOR)
         } else {
             None
@@ -755,19 +821,16 @@ pub(crate) fn draw_with_worktree(
         let style = highlight.map_or_else(Style::default, |highlight| {
             color(highlight).add_modifier(Modifier::REVERSED)
         });
-        let conflict = app.conflict_marker(visible_rows[index].id, head);
-        let enrichment_marker = crate::enrich::marker(
-            app.todo(visible_rows[index].id),
-            app.note(visible_rows[index].id).is_some(),
-            app.checks_pass(visible_rows[index].id),
-        );
+        let conflict = app.conflict_marker(row.id, head);
+        let enrichment_marker =
+            crate::enrich::marker(app.todo(row.id), app.note(row.id).is_some(), app.checks_pass(row.id));
         if !enrichment_marker.is_empty() {
             frame.render_widget(
                 Paragraph::new(enrichment_marker),
                 Rect::new(body.x, y, enrichment_gutter, 1),
             );
         }
-        if app.has_duplicate_change_id(visible_rows[index].id) {
+        if app.has_duplicate_change_id(row.id) {
             frame.render_widget(
                 Paragraph::new("👯‍♂️"),
                 Rect::new(body.x.saturating_add(enrichment_gutter), y, change_id_gutter, 1),
@@ -798,7 +861,6 @@ pub(crate) fn draw_with_worktree(
             Rect::new(status_x, y, body.right().saturating_sub(status_x).min(2), 1),
         );
 
-        let row_area = Rect::new(content.x, y, content.width, 1);
         let mut spans = Vec::with_capacity(metadata.spans.len() + 2);
         spans.push(Span::styled(lane, style));
         if alignment != HistoryAlignment::None {
@@ -815,7 +877,7 @@ pub(crate) fn draw_with_worktree(
             lane,
             horizontal_offset,
             highlight,
-            visible_rows[index].signature,
+            row.signature,
             head_state,
         );
         if selected && app.show_selection_tail && body.width > 0 {
@@ -846,12 +908,12 @@ pub(crate) fn draw_with_worktree(
             }
             buffer[(marker_x, y)].set_symbol(" ").set_style(style);
         }
-        if !app.is_row_reachable(start + index) {
+        if !app.is_row_reachable(row_index) {
             for x in body.x..body.right() {
                 frame.buffer_mut()[(x, y)].set_style(Style::default().add_modifier(Modifier::DIM));
             }
         }
-        if app.is_row_hidden(start + index) {
+        if app.is_row_hidden(row_index) {
             for x in body.x..body.right() {
                 frame.buffer_mut()[(x, y)]
                     .set_fg(Color::Reset)
@@ -1256,6 +1318,7 @@ pub(crate) fn draw_with_worktree(
             HistoryAlignment::Title => ("[ title", true),
             HistoryAlignment::Columns => ("[ columns", true),
             HistoryAlignment::None => ("[ align", false),
+            HistoryAlignment::Compressed => ("[ compressed", true),
         };
         items.push(toggle(alignment, enabled));
         items.push(Span::raw(" · "));
@@ -6934,6 +6997,63 @@ mod tests {
         assert!(
             column(&rendered_line(&terminal, 0), "second-title") > visible_title,
             "an off-screen wide author affects alignment only after entering the viewport"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn renders_compressed_segments_without_commit_metadata_or_row_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let ids = [1, 2, 3, 4].map(|byte| gix::ObjectId::Sha1([byte; 20]));
+        let mut app = App::new(2);
+        app.extend_commits(
+            ids.iter()
+                .enumerate()
+                .map(|(index, id)| Commit {
+                    id: *id,
+                    parent_ids: ids.get(index + 1).copied().into_iter().collect(),
+                    author_time: gix::date::Time::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"Byron", b"byron@example.com"),
+                    attributions: 0..0,
+                    title: if index == 0 { "tip" } else { "hidden" }.into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    is_review: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        app.set_view_tips(&ids[..1]);
+        for _ in 0..3 {
+            app.update(Action::ToggleAlign);
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
+        let mut layout = None;
+        let decorations = Decorations::new();
+        let mailmap = gix::mailmap::Snapshot::default();
+        terminal.draw(|frame| {
+            layout = Some(draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &mailmap,
+                None,
+                None,
+                None,
+            ));
+        })?;
+
+        assert!(
+            rendered_line(&terminal, 0).contains("tip"),
+            "the retained tip keeps its metadata"
+        );
+        assert_eq!(rendered_line(&terminal, 1).trim(), "○ [3]");
+        assert_eq!(
+            layout.expect("drawing returns its layout").rows,
+            vec![(ids[0], 0)],
+            "segments are not interactive or animated commit rows"
         );
         Ok(())
     }

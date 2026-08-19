@@ -905,6 +905,7 @@ fn event_loop(
     );
 
     let mut app = App::new(1);
+    app.set_view_tips(&ref_snapshot.view_tips);
     app.set_worktree_head_unborn(worktree_head_unborn);
     app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
     app.commit_pane_background = commit_pane_background;
@@ -3223,24 +3224,28 @@ fn draw(
         focused,
         filesystem_responses.has_queued_frame(),
     );
+    if let Some((_, changes)) = worktree_changes.as_ref() {
+        app.set_worktree_conflicted(changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
+    }
     app.viewport_rows = app.viewport_rows.min(render_rows.max(1));
     app.ensure_visible();
-    let start = app.offset.min(app.rows.len());
-    let end = start.saturating_add(render_rows).min(app.rows.len());
+    let start = app.offset.min(app.history_len());
+    let end = start.saturating_add(render_rows).min(app.history_len());
+    let visible_indices = app.visible_history_indices(start..end);
     let repository_fill_allowed = !app.has_rebase_conflict();
-    let notes_to_load: Vec<_> = app.rows[start..end]
+    let notes_to_load: Vec<_> = visible_indices
         .iter()
-        .map(|row| row.id)
+        .map(|index| app.rows[*index].id)
         .filter(|id| repository_fill_allowed && !app.notes_loaded(*id))
         .collect();
-    let enrichments_to_load: Vec<_> = app.rows[start..end]
+    let enrichments_to_load: Vec<_> = visible_indices
         .iter()
-        .map(|row| row.id)
+        .map(|index| app.rows[*index].id)
         .filter(|id| repository_fill_allowed && !app.enrichment_loaded(*id))
         .collect();
-    let tree_enrichments_to_load: Vec<_> = app.rows[start..end]
+    let tree_enrichments_to_load: Vec<_> = visible_indices
         .iter()
-        .map(|row| row.id)
+        .map(|index| app.rows[*index].id)
         .filter(|id| repository_fill_allowed && !app.tree_enrichment_loaded(*id))
         .collect();
     let changes_visible = app.changes_visible();
@@ -3318,7 +3323,7 @@ fn draw(
     if !notes_to_load.is_empty()
         || !enrichments_to_load.is_empty()
         || !tree_enrichments_to_load.is_empty()
-        || app.rows[start..end].iter().any(|row| !row.metadata_loaded)
+        || visible_indices.iter().any(|index| !app.rows[*index].metadata_loaded)
         || message_to_load.is_some()
         || tree_changes_to_load.is_some()
         || worktree_changes_to_load
@@ -3378,14 +3383,6 @@ fn draw(
                 }
             }
         }
-        for index in start..end {
-            if app.rows[index].metadata_loaded {
-                continue;
-            }
-            let (metadata, attributions) = history::load_metadata(repository, app.rows[index].id, authors)
-                .context("could not load visible commit")?;
-            app.set_metadata(index, metadata, attributions);
-        }
         if let Some(id) = message_to_load {
             *commit_message = Some((id, load_commit_message(repository, id)?));
         }
@@ -3429,6 +3426,7 @@ fn draw(
                     {
                         app.worktree_changes.error = None;
                     }
+                    app.set_worktree_conflicted(loaded.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
                     restore_change_selection(&mut app.worktree_changes, &loaded, worktree_selection);
                     *worktree_changes = Some((0, loaded));
                 }
@@ -3442,6 +3440,16 @@ fn draw(
                     }
                 }
             }
+        }
+        let start = app.offset.min(app.history_len());
+        let end = start.saturating_add(render_rows).min(app.history_len());
+        for index in app.visible_history_indices(start..end) {
+            if app.rows[index].metadata_loaded {
+                continue;
+            }
+            let (metadata, attributions) = history::load_metadata(repository, app.rows[index].id, authors)
+                .context("could not load visible commit")?;
+            app.set_metadata(index, metadata, attributions);
         }
     }
     let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
