@@ -730,6 +730,10 @@ impl App {
         self.duplicate_change_ids.contains(&id)
     }
 
+    pub(crate) fn has_duplicate_change_ids(&self) -> bool {
+        !self.duplicate_change_ids.is_empty()
+    }
+
     pub(crate) fn can_cycle_duplicate(&self) -> bool {
         self.changes_focus.is_none() && self.reachable_rows.is_none() && self.next_duplicate().is_some()
     }
@@ -875,6 +879,10 @@ impl App {
 
     pub(crate) fn has_rebase_conflict(&self) -> bool {
         self.pending_rebase_conflict.is_some()
+    }
+
+    pub(crate) fn has_conflict_marker(&self) -> bool {
+        self.pending_rebase_conflict.is_some() || self.worktree_conflicted
     }
 
     pub(crate) fn clear_rebase_conflict(&mut self) {

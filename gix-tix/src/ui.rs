@@ -526,48 +526,14 @@ pub(crate) fn draw_with_worktree(
             )
     });
     let lanes = app.render_lanes(start..render_end);
-    let enrichment_gutter = visible_entries
-        .iter()
-        .filter_map(|entry| match entry {
-            HistoryEntry::Commit(index) => Some(&app.rows[*index]),
-            HistoryEntry::Segment { .. } => None,
-        })
-        .map(|row| {
-            Line::raw(crate::enrich::marker(
-                app.todo(row.id),
-                app.note(row.id).is_some(),
-                app.checks_pass(row.id),
-            ))
-            .width()
-        })
-        .max()
-        .unwrap_or_default() as u16;
-    let has_duplicate_change_id = visible_entries
-        .iter()
-        .filter_map(|entry| match entry {
-            HistoryEntry::Commit(index) => Some(&app.rows[*index]),
-            HistoryEntry::Segment { .. } => None,
-        })
-        .any(|row| app.has_duplicate_change_id(row.id));
+    let enrichment_gutter = Line::raw(crate::enrich::marker(true, true, true)).width() as u16;
+    let has_duplicate_change_id = app.has_duplicate_change_ids();
     let change_id_gutter = if has_duplicate_change_id {
         Line::raw("👯‍♂️").width() as u16
     } else {
         0
     };
-    let has_conflict = visible_entries
-        .iter()
-        .filter_map(|entry| match entry {
-            HistoryEntry::Commit(index) => Some(&app.rows[*index]),
-            HistoryEntry::Segment { .. } => None,
-        })
-        .any(|row| {
-            let head = decorations.get(&row.id).is_some_and(|decorations| {
-                decorations
-                    .iter()
-                    .any(|decoration| decoration.kind == DecorationKind::Head)
-            });
-            app.conflict_marker(row.id, head)
-        });
+    let has_conflict = app.has_conflict_marker();
     let conflict_gutter = if has_conflict {
         Line::raw("💥").width() as u16
     } else {
@@ -843,14 +809,14 @@ pub(crate) fn draw_with_worktree(
             color(highlight).add_modifier(Modifier::REVERSED)
         });
         let conflict = app.conflict_marker(row.id, head);
-        let enrichment_marker =
-            crate::enrich::marker(app.todo(row.id), app.note(row.id).is_some(), app.checks_pass(row.id));
-        if !enrichment_marker.is_empty() {
-            frame.render_widget(
-                Paragraph::new(enrichment_marker),
-                Rect::new(body.x, y, enrichment_gutter, 1),
-            );
-        }
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(if app.todo(row.id) { "🚧" } else { "  " }),
+                Span::raw(if app.note(row.id).is_some() { "📝" } else { "  " }),
+                Span::raw(if app.checks_pass(row.id) { "✔️" } else { "  " }),
+            ])),
+            Rect::new(body.x, y, enrichment_gutter, 1),
+        );
         if app.has_duplicate_change_id(row.id) {
             frame.render_widget(
                 Paragraph::new("👯‍♂️"),
@@ -3131,10 +3097,70 @@ mod tests {
             rendered_line(&terminal, 0).contains("follow-up title"),
             "a note replaces the selected title independently of todo"
         );
-        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "📝");
-        assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), "✔️");
-        assert_eq!(terminal.backend().buffer()[(4, 0)].symbol(), ">");
-        assert_eq!(terminal.backend().buffer()[(6, 0)].symbol(), "●");
+        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), " ");
+        assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), "📝");
+        assert_eq!(terminal.backend().buffer()[(4, 0)].symbol(), "✔️");
+        assert_eq!(terminal.backend().buffer()[(6, 0)].symbol(), ">");
+        assert_eq!(terminal.backend().buffer()[(8, 0)].symbol(), "●");
+        Ok(())
+    }
+
+    #[test]
+    fn gutter_columns_and_history_offset_stay_fixed_while_scrolling() -> Result<(), Box<dyn std::error::Error>> {
+        let ids = [5, 4, 3, 2, 1].map(|byte| gix::ObjectId::Sha1([byte; 20]));
+        let mut app = App::new(1);
+        app.extend_commits(
+            ids.into_iter()
+                .enumerate()
+                .map(|(index, id)| Commit {
+                    id,
+                    parent_ids: ids.get(index + 1).copied().into_iter().collect(),
+                    author_time: gix::date::Time::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: "subject".into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    is_review: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        let ids: Vec<_> = app.rows.iter().map(|row| row.id).collect();
+        app.set_enrichment(ids[0], crate::enrich::Enrichment { todo: true, note: None });
+        app.set_enrichment(
+            ids[1],
+            crate::enrich::Enrichment {
+                todo: false,
+                note: Some("note".into()),
+            },
+        );
+        app.set_tree_enrichment(ids[2], crate::enrich::TreeEnrichment { checks_pass: true });
+        app.set_change_ids(
+            std::collections::HashMap::new(),
+            std::collections::HashSet::from([ids[3]]),
+        );
+        app.arm_rebase_conflict(ids[4]);
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
+        for (index, marker_x, marker) in [(4, 8, "💥"), (3, 6, "👯‍♂️"), (2, 4, "✔️"), (1, 2, "📝"), (0, 0, "🚧")]
+        {
+            terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+            let row = terminal.backend().buffer();
+            assert_eq!(row[(marker_x, 0)].symbol(), marker, "row {index} keeps its marker slot");
+            assert_eq!(row[(10, 0)].symbol(), ">", "row {index} keeps the status column");
+            assert_eq!(row[(12, 0)].symbol(), "●", "row {index} keeps the graph column");
+            for empty_x in [0, 2, 4, 6, 8].into_iter().filter(|x| *x != marker_x) {
+                assert_eq!(
+                    row[(empty_x, 0)].symbol(),
+                    " ",
+                    "row {index} clears the unused gutter slot at {empty_x}"
+                );
+            }
+            app.update(Action::MoveUp);
+        }
         Ok(())
     }
 
@@ -3786,25 +3812,25 @@ mod tests {
         );
 
         let footer_text = "#0 · view · commit · actions · enrich · copy · refs · ? · quit";
-        let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
+        let selected_line = "      > @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
-        for x in 0..11 {
+        for x in 6..17 {
             expected[(x, 0)].set_style(Style::default().add_modifier(Modifier::REVERSED));
         }
-        for x in 0..4 {
+        for x in 6..10 {
             expected[(x, 0)].set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         }
-        for x in 4..11 {
+        for x in 10..17 {
             expected[(x, 0)].set_style(
                 Style::default()
                     .fg(Color::Magenta)
                     .add_modifier(Modifier::REVERSED | Modifier::BOLD),
             );
         }
-        for x in 12..23 {
+        for x in 18..29 {
             expected[(x, 0)].set_style(Style::default().fg(Color::Blue));
         }
-        for x in 23..37 {
+        for x in 29..43 {
             expected[(x, 0)].set_style(Style::default().fg(Color::Green));
         }
         expected[(selected_line.chars().count() as u16 + 2, 0)]
@@ -3836,11 +3862,11 @@ mod tests {
 
         let row = terminal.backend().buffer();
         assert!(
-            row[(10, 0)].modifier.contains(Modifier::REVERSED),
+            row[(16, 0)].modifier.contains(Modifier::REVERSED),
             "selection includes the final hash character"
         );
         assert!(
-            !row[(11, 0)].modifier.contains(Modifier::REVERSED),
+            !row[(17, 0)].modifier.contains(Modifier::REVERSED),
             "selection ends immediately after the hash"
         );
         assert!(
@@ -3950,7 +3976,7 @@ mod tests {
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(!rendered_row(&terminal).contains("HEAD"), "no refs hides regular refs");
         assert!(
-            rendered_row(&terminal).starts_with("> @"),
+            rendered_row(&terminal).trim_start().starts_with("> @"),
             "HEAD keeps its graph marker"
         );
         assert!(
@@ -4716,7 +4742,7 @@ mod tests {
             ],
         )]);
         terminal.draw(|frame| draw(frame, &mut app, &attached))?;
-        let marker = &terminal.backend().buffer()[(2, 0)];
+        let marker = &terminal.backend().buffer()[(8, 0)];
         assert_eq!(marker.symbol(), "@");
         assert!(marker.modifier.contains(Modifier::ITALIC), "attached HEAD is italic");
 
@@ -4731,7 +4757,7 @@ mod tests {
             ],
         )]);
         terminal.draw(|frame| draw(frame, &mut app, &detached))?;
-        let marker = &terminal.backend().buffer()[(2, 0)];
+        let marker = &terminal.backend().buffer()[(8, 0)];
         assert_eq!(marker.symbol(), "@");
         assert!(!marker.modifier.contains(Modifier::ITALIC), "detached HEAD is upright");
         Ok(())
@@ -4781,7 +4807,7 @@ mod tests {
                 "the unselected HEAD title is reversed"
             );
         }
-        for x in [0, 2, 5, 12, 79] {
+        for x in [0, 6, 8, 11, 18, 79] {
             assert!(
                 !terminal.backend().buffer()[(x, head_row)]
                     .modifier
@@ -4796,7 +4822,7 @@ mod tests {
             "the old HEAD underline is gone"
         );
         assert!(
-            terminal.backend().buffer()[(2, head_row)]
+            terminal.backend().buffer()[(8, head_row)]
                 .modifier
                 .contains(Modifier::BOLD),
             "the non-tip @ is bold"
@@ -4811,7 +4837,7 @@ mod tests {
             "selection removes the HEAD title emphasis"
         );
         assert!(
-            terminal.backend().buffer()[(2, head_row)]
+            terminal.backend().buffer()[(8, head_row)]
                 .modifier
                 .contains(Modifier::BOLD),
             "the selected non-tip @ remains bold"
@@ -4837,7 +4863,7 @@ mod tests {
             "an unselected tip HEAD title is reversed too"
         );
         assert!(
-            !terminal.backend().buffer()[(2, 0)].modifier.contains(Modifier::BOLD),
+            !terminal.backend().buffer()[(8, 0)].modifier.contains(Modifier::BOLD),
             "a tip @ keeps its normal weight"
         );
         Ok(())
@@ -5019,11 +5045,11 @@ mod tests {
                 Some(&dirty),
             );
         })?;
-        assert!(rendered_line(&terminal, 0).starts_with("🫟 @"));
-        assert!(rendered_line(&terminal, 1).starts_with("> ●"));
-        assert_eq!(terminal.backend().buffer()[(0, 0)].modifier, Modifier::empty());
+        assert!(rendered_line(&terminal, 0).trim_start().starts_with("🫟 @"));
+        assert!(rendered_line(&terminal, 1).trim_start().starts_with("> ●"));
+        assert_eq!(terminal.backend().buffer()[(6, 0)].modifier, Modifier::empty());
         assert!(
-            terminal.backend().buffer()[(0, 1)]
+            terminal.backend().buffer()[(6, 1)]
                 .modifier
                 .contains(Modifier::REVERSED)
         );
@@ -5040,9 +5066,9 @@ mod tests {
                 Some(&dirty),
             );
         })?;
-        assert!(rendered_line(&terminal, 0).starts_with("🫟 @"));
+        assert!(rendered_line(&terminal, 0).trim_start().starts_with("🫟 @"));
         assert!(
-            terminal.backend().buffer()[(0, 0)]
+            terminal.backend().buffer()[(6, 0)]
                 .modifier
                 .contains(Modifier::REVERSED)
         );
@@ -5069,13 +5095,13 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 0).starts_with("💥 🫟 @"),
+            rendered_line(&terminal, 0).trim_start().starts_with("💥 🫟 @"),
             "the conflict gutter precedes the ordinary status: {:?}",
             rendered_line(&terminal, 0)
         );
-        assert_eq!(terminal.backend().buffer()[(0, 0)].fg, Color::LightRed);
+        assert_eq!(terminal.backend().buffer()[(6, 0)].fg, Color::LightRed);
         assert!(
-            terminal.backend().buffer()[(0, 0)]
+            terminal.backend().buffer()[(6, 0)]
                 .modifier
                 .contains(Modifier::SLOW_BLINK),
             "the conflict marker remains visually urgent"
@@ -5093,7 +5119,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 0).starts_with("🫟 @"),
+            rendered_line(&terminal, 0).trim_start().starts_with("🫟 @"),
             "resolving the index restores the ordinary dirty marker"
         );
 
@@ -5111,7 +5137,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 1).starts_with("💥 > ●"),
+            rendered_line(&terminal, 1).trim_start().starts_with("💥 > ●"),
             "the conflict gutter does not replace selection: {:?}",
             rendered_line(&terminal, 1)
         );
@@ -5130,7 +5156,7 @@ mod tests {
                 Some(&dirty),
             );
         })?;
-        assert!(rendered_line(&terminal, 0).starts_with("> @"));
+        assert!(rendered_line(&terminal, 0).trim_start().starts_with("> @"));
         Ok(())
     }
 
@@ -6034,7 +6060,7 @@ mod tests {
             app.viewport_rows, 7,
             "history remains bounded above the highest overlay"
         );
-        assert!(rendered_line(&terminal, 0).starts_with('>'));
+        assert!(rendered_line(&terminal, 0).trim_start().starts_with('>'));
 
         let mut wide_terminal = Terminal::new(TestBackend::new(240, 16))?;
         wide_terminal.draw(|frame| {
@@ -6649,17 +6675,17 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(5, 0)].symbol(), "2", "the viewport starts at the second row");
-        assert_eq!(buffer[(5, 1)].symbol(), "3", "the selected third row remains visible");
+        assert_eq!(buffer[(11, 0)].symbol(), "2", "the viewport starts at the second row");
+        assert_eq!(buffer[(11, 1)].symbol(), "3", "the selected third row remains visible");
         assert!(
-            buffer[(0, 1)].modifier.contains(Modifier::REVERSED),
+            buffer[(6, 1)].modifier.contains(Modifier::REVERSED),
             "the slice-local selection highlights the global selection"
         );
         assert!(
             buffer[(23, 1)].modifier.contains(Modifier::REVERSED),
             "a clipped selection marker uses the right border"
         );
-        let hash_color = buffer[(5, 1)].fg;
+        let hash_color = buffer[(11, 1)].fg;
         assert_eq!(app.selected, Some(2), "drawing preserves the global selection");
         assert_eq!(app.offset, 1, "drawing preserves the global offset");
 
@@ -6667,22 +6693,22 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let buffer = terminal.backend().buffer();
         assert!(
-            !buffer[(0, 1)].modifier.contains(Modifier::REVERSED | Modifier::DIM),
+            !buffer[(6, 1)].modifier.contains(Modifier::REVERSED | Modifier::DIM),
             "the inactive marker has no selection modifiers"
         );
         assert!(
-            !buffer[(5, 1)].modifier.contains(Modifier::REVERSED | Modifier::DIM),
+            !buffer[(11, 1)].modifier.contains(Modifier::REVERSED | Modifier::DIM),
             "the inactive hash has no selection modifiers"
         );
-        assert_eq!(buffer[(0, 1)].symbol(), ">", "the inactive row keeps its marker");
-        assert_eq!(buffer[(0, 1)].fg, Color::Reset, "the marker uses normal text color");
+        assert_eq!(buffer[(6, 1)].symbol(), ">", "the inactive row keeps its marker");
+        assert_eq!(buffer[(6, 1)].fg, Color::Reset, "the marker uses normal text color");
         assert_eq!(
-            buffer[(0, 1)].bg,
+            buffer[(6, 1)].bg,
             Color::Reset,
             "the marker has no selection background"
         );
-        assert_eq!(buffer[(5, 1)].fg, hash_color, "the hash returns to its normal color");
-        assert_eq!(buffer[(5, 1)].bg, Color::Reset, "the hash has no selection background");
+        assert_eq!(buffer[(11, 1)].fg, hash_color, "the hash returns to its normal color");
+        assert_eq!(buffer[(11, 1)].bg, Color::Reset, "the hash has no selection background");
         assert!(
             !buffer[(23, 1)].modifier.contains(Modifier::REVERSED),
             "the final frame hides the trailing selection marker"
@@ -6797,7 +6823,7 @@ mod tests {
             assert!(cell.modifier.contains(Modifier::DIM), "the hidden row is dimmed");
         }
         assert_eq!(
-            terminal.backend().buffer()[(0, 1)].symbol(),
+            terminal.backend().buffer()[(6, 1)].symbol(),
             ">",
             "the hidden base is selectable"
         );
@@ -6922,15 +6948,15 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 2))?;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(2, 0)].fg, Color::Blue, "commit dots use graph-commit");
-        assert_eq!(buffer[(4, 0)].fg, Color::Yellow, "lanes cycle through tig's palette");
+        assert_eq!(buffer[(8, 0)].fg, Color::Blue, "commit dots use graph-commit");
+        assert_eq!(buffer[(10, 0)].fg, Color::Yellow, "lanes cycle through tig's palette");
         assert_eq!(
-            buffer[(16, 0)].fg,
+            buffer[(22, 0)].fg,
             Color::Magenta,
             "the palette repeats after seven lanes"
         );
         assert!(
-            buffer[(16, 0)].modifier.contains(Modifier::BOLD),
+            buffer[(22, 0)].modifier.contains(Modifier::BOLD),
             "the second palette cycle is bold"
         );
         Ok(())
@@ -7019,7 +7045,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 2))?;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(
-            rendered_line(&terminal, 0).starts_with("👯‍♂️ > "),
+            rendered_line(&terminal, 0).trim_start().starts_with("👯‍♂️ > "),
             "the ambiguity gutter does not replace selection: {:?}",
             rendered_line(&terminal, 0)
         );
@@ -7148,7 +7174,7 @@ mod tests {
             "attribution and markers share one column"
         );
 
-        let mut narrow = Terminal::new(TestBackend::new(40, 3))?;
+        let mut narrow = Terminal::new(TestBackend::new(46, 3))?;
         narrow.draw(|frame| draw(frame, &mut app, &decorations))?;
         app.update(Action::ScrollRight);
         assert!(app.horizontal_offset > 0, "wide aligned columns create a scroll range");
@@ -7222,9 +7248,12 @@ mod tests {
             rendered_line(&terminal, 0).contains("tip"),
             "the retained tip keeps its metadata"
         );
-        assert_eq!(rendered_line(&terminal, 1).trim(), "> ○ [2]");
+        let line = rendered_line(&terminal, 1);
+        let summary = "> ○ [2]";
+        let summary_x = line.find(summary).expect("the compressed summary is visible") as u16;
+        assert_eq!(line.trim(), summary);
         assert!(
-            (0..7).all(|x| terminal.backend().buffer()[(x, 1)]
+            (summary_x..summary_x + summary.chars().count() as u16).all(|x| terminal.backend().buffer()[(x, 1)]
                 .modifier
                 .contains(Modifier::REVERSED)),
             "the selected summary, including its status and count, is reversed"
