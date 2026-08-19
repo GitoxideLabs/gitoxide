@@ -276,6 +276,55 @@ mod tests {
     }
 
     #[test]
+    fn change_ids_ignore_non_visible_tracking_history() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let path = fixture.path();
+        let repository = crate::test_repository::open(path)?;
+        let main = repository.rev_parse_single("main")?.detach();
+        let original_topic = repository.rev_parse_single("topic")?.detach();
+        let change_id = crate::change_id::for_commit(&repository, main)?;
+        let mut topic = repository.find_commit(original_topic)?.decode()?.into_owned()?;
+        topic
+            .extra_headers
+            .push((crate::change_id::HEADER.into(), change_id.to_string().into()));
+        let topic = repository.write_object(&topic)?.detach();
+        drop(repository);
+
+        git(path, &["update-ref", "refs/heads/topic", &topic.to_string()])?;
+        git(path, &["config", "remote.origin.url", "https://example.com/repo"])?;
+        git(
+            path,
+            &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+        )?;
+        git(path, &["config", "branch.topic.remote", "origin"])?;
+        git(path, &["config", "branch.topic.merge", "refs/heads/main"])?;
+        git(path, &["update-ref", "refs/remotes/origin/main", &main.to_string()])?;
+        git(path, &["switch", "-q", "topic"])?;
+
+        let repository = crate::test_repository::open(path)?;
+        let graph = crate::edit::loaded_view_graph(&repository)?;
+        assert!(
+            graph.index(main).is_some(),
+            "the tracking commit is loaded for topology"
+        );
+        assert!(
+            !graph.stored_commit_ids().any(|id| id == main),
+            "the tracking commit is absent from the visible view"
+        );
+        assert!(
+            graph.stored_commit_ids().any(|id| id == topic),
+            "the checked-out topic is visible"
+        );
+        run(repository, args(&change_id.to_reverse_hex().to_string()))?;
+        assert_eq!(
+            crate::test_repository::open(path)?.head_id()?.detach(),
+            topic,
+            "the visible change ID resolves to the already checked-out topic"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn attached_past_travel_saves_and_returns_to_the_branch() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;

@@ -431,7 +431,7 @@ fn resolve_commit(
             let graph = crate::edit::loaded_view_graph(repository)?;
             let resolved = std::str::from_utf8(revision)
                 .ok()
-                .map(|prefix| crate::change_id::resolve_prefix(repository, prefix, graph.commit_ids()))
+                .map(|prefix| crate::change_id::resolve_prefix(repository, prefix, graph.stored_commit_ids()))
                 .transpose()?
                 .flatten();
             match resolved {
