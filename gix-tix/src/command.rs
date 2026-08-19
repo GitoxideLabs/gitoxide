@@ -36,6 +36,7 @@ enum Command {
     /// Print the ref-tree of non-hidden references without opening the terminal UI.
     RefTree(RefTree),
     /// Print the complete history view without opening the terminal UI.
+    #[command(visible_alias = "status")]
     Show(Show),
     /// Add staged changes, or worktree changes when nothing is staged, to HEAD.
     Amend(Amend),
@@ -680,6 +681,18 @@ mod tests {
         assert!(show.no_auto_hide);
         assert!(show.hide.is_empty());
 
+        assert!(matches!(
+            Cli::try_parse_from(["tix", "status", "-x", "main"])
+                .expect("status is a visible show alias")
+                .platform
+                .command,
+            Some(Command::Show(_))
+        ));
+        assert!(
+            Cli::command().render_help().to_string().contains("status"),
+            "top-level help advertises the status alias"
+        );
+
         assert!(
             Cli::try_parse_from(["tix", "--worktrees"]).is_err(),
             "the removed TUI worktree option is rejected"
@@ -958,6 +971,7 @@ mod tests {
             &[][..],
             &["ref-tree"],
             &["show"],
+            &["status"],
             &["amend"],
             &["spill"],
             &["split"],
