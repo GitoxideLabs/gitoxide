@@ -73,15 +73,13 @@ mod program {
 
     #[test]
     fn builtin() {
+        let err = gix_credentials::helper::invoke(
+            &mut Program::from_kind(Kind::Builtin).suppress_stderr(),
+            &helper::Action::get_for_url("/path/without/scheme/fails/with/error"),
+        )
+        .unwrap_err();
         assert!(
-            matches!(
-                gix_credentials::helper::invoke(
-                    &mut Program::from_kind(Kind::Builtin).suppress_stderr(),
-                    &helper::Action::get_for_url("/path/without/scheme/fails/with/error"),
-                )
-                .unwrap_err(),
-                helper::Error::CredentialsHelperFailed { .. }
-            ),
+            err.downcast_any_ref::<gix_error::RetryableError>().is_some(),
             "this failure indicates we could launch the helper, even though it wasn't happy which is fine. It doesn't like the URL"
         );
     }

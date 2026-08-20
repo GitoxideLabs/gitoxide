@@ -3,12 +3,7 @@ use bstr::BString;
 use crate::protocol::{Context, ContextOptions};
 
 /// Indicates key or values contain errors that can't be encoded.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("{key:?}={value:?} must not contain null bytes or newlines neither in key nor in value.")]
-    Encoding { key: String, value: BString },
-}
+pub type Error = gix_error::ValidationError;
 
 impl Context {
     /// Create a context containing `url`, encoded and decoded according to `options`.
@@ -97,6 +92,7 @@ mod access {
 
 mod mutate {
     use bstr::ByteSlice;
+    use gix_error::{OptionExt, ResultExt, ValidationError};
 
     use crate::{protocol, protocol::Context};
 
@@ -105,17 +101,14 @@ mod mutate {
         /// Destructure the url at our `url` field into parts like protocol, host, username and path and store
         /// them in our respective fields. If `use_http_path` is set, http paths are significant even though
         /// normally this isn't the case.
-        #[expect(
-            clippy::result_large_err,
-            reason = "will be removed once `gix-error` is used consistently"
-        )]
         pub fn destructure_url_in_place(&mut self, use_http_path: bool) -> Result<&mut Self, protocol::Error> {
             if self.url.is_none() {
-                self.url = Some(self.to_url().ok_or(protocol::Error::UrlMissing)?);
+                self.url = Some(self.to_url().ok_or_raise_erased(|| {
+                    ValidationError::new("Either 'url' field or both 'protocol' and 'host' fields must be provided")
+                })?);
             }
 
-            let url = gix_url::parse(self.url.as_ref().expect("URL is present after check above"))
-                .map_err(gix_error::Exn::into_error)?;
+            let url = gix_url::parse(self.url.as_ref().expect("URL is present after check above")).or_erased()?;
             self.protocol = Some(url.scheme.as_str().into());
             self.username = url.user().map(ToOwned::to_owned);
             self.password = url.password().map(ToOwned::to_owned);

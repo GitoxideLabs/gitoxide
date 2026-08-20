@@ -419,7 +419,8 @@ pub fn new() -> Worker {
                 handle.proxy_type(proxy_type)?;
 
                 if let Some((obtain_creds_action, authenticate)) = proxy_authenticate {
-                    let creds = authenticate.lock().expect("no panics in other threads")(obtain_creds_action)?
+                    let creds = authenticate.lock().expect("no panics in other threads")(obtain_creds_action)
+                        .map_err(|err| Error::Authenticate(err.into_error()))?
                         .expect("action to fetch credentials");
                     handle.proxy_username(&creds.identity.username)?;
                     handle.proxy_password(&creds.identity.password)?;
@@ -557,7 +558,8 @@ pub fn new() -> Worker {
                         action.store()
                     } else {
                         action.erase()
-                    })?;
+                    })
+                    .map_err(|err| Error::Authenticate(err.into_error()))?;
                 }
                 handler.reset();
                 handler.receive_body.take();

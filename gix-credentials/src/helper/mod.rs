@@ -57,16 +57,7 @@ impl Outcome {
 pub type Result = std::result::Result<Option<Outcome>, Error>;
 
 /// The error used in the [credentials helper invocation][crate::helper::invoke()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    ContextDecode(#[from] protocol::context::decode::Error),
-    #[error("An IO error occurred while communicating to the credentials helper")]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
-    CredentialsHelperFailed { source: std::io::Error },
-}
+pub type Error = gix_error::Exn;
 
 /// The action to perform by the credentials [helper][`crate::helper::invoke()`].
 #[derive(Clone, Debug)]

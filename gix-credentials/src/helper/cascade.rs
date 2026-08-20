@@ -4,6 +4,7 @@ use crate::{
     protocol,
     protocol::{Context, ContextOptions},
 };
+use gix_error::{ResultExt, RetryableError};
 
 impl Default for Cascade {
     fn default() -> Self {
@@ -74,10 +75,6 @@ impl Cascade {
     ///
     /// When _getting_ credentials, all programs are asked until the credentials are complete, stopping the cascade.
     /// When _storing_ or _erasing_ all programs are instructed in order.
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
     pub fn invoke(&mut self, mut action: helper::Action, mut prompt: gix_prompt::Options) -> protocol::Result {
         if let Some(ctx) = action.context_mut() {
             ctx.options = self.context_options;
@@ -115,7 +112,7 @@ impl Cascade {
                         password_expiry_utc,
                         url: ctx_url,
                         quit,
-                    } = Context::from_bytes(&stdout, self.context_options)?;
+                    } = Context::from_bytes(&stdout, self.context_options).or_erased()?;
                     if let Some(dst_ctx) = action.context_mut() {
                         if let Some(src) = path {
                             dst_ctx.path = Some(src);
@@ -154,8 +151,8 @@ impl Cascade {
                         }
                     }
                 }
-                Err(helper::Error::CredentialsHelperFailed { .. }) => continue, // ignore helpers that we can't call
-                Err(err) if action.context().is_some() => return Err(err.into()), // communication errors are fatal when getting credentials
+                Err(err) if err.downcast_any_ref::<RetryableError>().is_some() => continue,
+                Err(err) if action.context().is_some() => return Err(err), // communication errors are fatal when getting credentials
                 Err(_) => {} // for other actions, ignore everything, try the operation
             }
         }
@@ -167,20 +164,14 @@ impl Cascade {
                     let message = ctx.to_prompt("Username");
                     prompt.mode = gix_prompt::Mode::Visible;
                     ctx.username = gix_prompt::ask(&message, &prompt)
-                        .map_err(|err| protocol::Error::Prompt {
-                            prompt: message,
-                            source: err.into_error(),
-                        })?
+                        .or_raise_erased(|| gix_error::message!("Couldn't obtain {message}"))?
                         .into();
                 }
                 if ctx.password.is_none() {
                     let message = ctx.to_prompt("Password");
                     prompt.mode = gix_prompt::Mode::Hidden;
                     ctx.password = gix_prompt::ask(&message, &prompt)
-                        .map_err(|err| protocol::Error::Prompt {
-                            prompt: message,
-                            source: err.into_error(),
-                        })?
+                        .or_raise_erased(|| gix_error::message!("Couldn't obtain {message}"))?
                         .into();
                 }
             }
