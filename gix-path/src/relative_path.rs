@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{ErrorExt, ResultExt, ValidationError};
 use gix_validate::path::component::Options;
 
 use crate::{os_str_into_bstr, try_from_bstr, try_from_byte_slice};
@@ -37,27 +38,19 @@ impl RelativePath {
 }
 
 /// The error used in [`RelativePath`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("A RelativePath is not allowed to be absolute")]
-    IsAbsolute,
-    #[error(transparent)]
-    ContainsInvalidComponent(#[from] gix_validate::path::component::Error),
-    #[error(transparent)]
-    IllegalUtf8(#[from] crate::Utf8Error),
-}
+pub type Error = gix_error::Exn<ValidationError>;
 
 fn relative_path_from_value_and_path<'a>(path_bstr: &'a BStr, path: &Path) -> Result<&'a RelativePath, Error> {
     if path.is_absolute() {
-        return Err(Error::IsAbsolute);
+        return Err(ValidationError::new("A RelativePath is not allowed to be absolute").raise());
     }
 
     let options = Options::default();
 
     for component in path.components() {
         let component = os_str_into_bstr(component.as_os_str())?;
-        gix_validate::path::component(component, None, options)?;
+        gix_validate::path::component(component, None, options)
+            .or_raise(|| ValidationError::new_with_input("Relative path contains an invalid component", component))?;
     }
 
     RelativePath::new_unchecked(BStr::new(path_bstr.as_bytes()))

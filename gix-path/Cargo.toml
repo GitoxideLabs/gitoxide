@@ -15,10 +15,10 @@ rust-version = "1.85"
 doctest = true
 
 [dependencies]
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 gix-trace = { version = "^0.1.21", path = "../gix-trace" }
 gix-validate = { version = "^0.11.4", path = "../gix-validate" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
-thiserror = "2.0.18"
 
 [dev-dependencies]
 serial_test = { version = "3.4.0", default-features = false }

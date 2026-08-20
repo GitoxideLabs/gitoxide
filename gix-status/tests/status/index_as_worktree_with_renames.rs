@@ -88,7 +88,7 @@ fn changed_and_untracked_and_renamed() {
         &expectations_with_dirwalk,
         Some(rewrites),
         Some(Default::default()),
-        Fixture::ReadOnly,
+        Fixture::ReadOnlyNeedsArchive,
     );
     assert_eq!(
         out.rewrites,
@@ -250,6 +250,7 @@ fn unreadable_untracked() {
 
 enum Fixture {
     ReadOnly,
+    ReadOnlyNeedsArchive,
     #[cfg(unix)]
     WritableExecuted,
 }
@@ -275,6 +276,12 @@ fn fixture_filtered_detailed(
         Fixture::ReadOnly => {
             let dir = fixture_path(script).join(subdir);
             (dir, None::<gix_testtools::tempfile::TempDir>)
+        }
+        Fixture::ReadOnlyNeedsArchive => {
+            let dir = gix_testtools::scripted_fixture_read_only_needs_archive(script)
+                .expect("script works")
+                .join(subdir);
+            (dir, None)
         }
         #[cfg(unix)]
         Fixture::WritableExecuted => {

@@ -6,17 +6,13 @@ use std::{
 
 use bstr::{BStr, BString};
 
-#[derive(Debug)]
 /// The error type returned by [`into_bstr()`] and others may suffer from failed conversions from or to bytes.
-pub struct Utf8Error;
+pub type Utf8Error = gix_error::ValidationError;
 
-impl std::fmt::Display for Utf8Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Could not convert to UTF8 or from UTF8 due to ill-formed input")
-    }
+#[cfg(not(unix))]
+fn utf8_error() -> Utf8Error {
+    Utf8Error::new("Could not convert to UTF8 or from UTF8 due to ill-formed input")
 }
-
-impl std::error::Error for Utf8Error {}
 
 /// Like [`into_bstr()`], but takes `OsStr` as input for a lossless, but fallible, conversion.
 pub fn os_str_into_bstr(path: &OsStr) -> Result<&BStr, Utf8Error> {
@@ -58,7 +54,7 @@ pub fn try_into_bstr<'a>(path: impl Into<Cow<'a, Path>>) -> Result<Cow<'a, BStr>
                 path.into_os_string().into_vec().into()
             };
             #[cfg(not(unix))]
-            let p: BString = path.into_os_string().into_string().map_err(|_| Utf8Error)?.into();
+            let p: BString = path.into_os_string().into_string().map_err(|_| utf8_error())?.into();
             p
         }),
         Cow::Borrowed(path) => Cow::Borrowed({
@@ -68,7 +64,7 @@ pub fn try_into_bstr<'a>(path: impl Into<Cow<'a, Path>>) -> Result<Cow<'a, BStr>
                 path.as_os_str().as_bytes().into()
             };
             #[cfg(not(unix))]
-            let p: &BStr = path.to_str().ok_or(Utf8Error)?.as_bytes().into();
+            let p: &BStr = path.to_str().ok_or_else(utf8_error)?.as_bytes().into();
             p
         }),
     };
@@ -102,7 +98,7 @@ pub fn try_from_byte_slice(input: &[u8]) -> Result<&Path, Utf8Error> {
         OsStr::from_bytes(input).as_ref()
     };
     #[cfg(not(unix))]
-    let p = Path::new(std::str::from_utf8(input).map_err(|_| Utf8Error)?);
+    let p = Path::new(std::str::from_utf8(input).map_err(|_| utf8_error())?);
     Ok(p)
 }
 
@@ -137,7 +133,7 @@ pub fn try_from_bstring(input: impl Into<BString>) -> Result<PathBuf, Utf8Error>
                 v
             }
             .into_string()
-            .map_err(|_| Utf8Error)?,
+            .map_err(|_| utf8_error())?,
         )
     };
     Ok(p)
