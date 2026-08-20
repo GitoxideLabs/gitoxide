@@ -71,6 +71,59 @@ pub fn hooks_path_from_config(
         .transpose()
 }
 
+/// The result of a hook process running to completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// The hook exited with status `0`.
+    Success,
+    /// The hook exited with a non-zero status, or was terminated by a signal.
+    Rejected {
+        /// The process's exit code, or `None` if it was terminated by a signal (Unix only).
+        code: Option<i32>,
+    },
+}
+
+impl From<std::process::ExitStatus> for Outcome {
+    fn from(status: std::process::ExitStatus) -> Self {
+        if status.success() {
+            Outcome::Success
+        } else {
+            Outcome::Rejected { code: status.code() }
+        }
+    }
+}
+
+/// Spawn `prepared` and wait for it to exit, classifying the result as an [`Outcome`].
+pub fn run(prepared: gix_command::Prepare) -> std::io::Result<Outcome> {
+    let status = prepared.spawn()?.wait()?;
+    Ok(status.into())
+}
+
+/// Whether a non-zero exit from the hook named `name` aborts the operation it guards, per
+/// [`githooks(5)`](https://git-scm.com/docs/githooks).
+///
+/// Returns `true` for `name`s not listed here, since git only ever invokes hooks it knows
+/// about, and an unrecognized name is safest treated as gating.
+///
+/// ### `reference-transaction` is state-dependent
+///
+/// That hook only gates during its `prepared` state; `committed` and `aborted` calls are
+/// always advisory regardless of exit code. This function returns `true` for it, matching the
+/// gating case - callers driving `reference-transaction` must additionally check the state
+/// argument themselves.
+pub fn is_gating(name: &str) -> bool {
+    !matches!(
+        name,
+        "post-applypatch"
+            | "post-commit"
+            | "post-merge"
+            | "post-receive"
+            | "post-update"
+            | "post-checkout"
+            | "post-rewrite"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +216,72 @@ mod tests {
         }
     }
 
+    mod outcome {
+        use std::process::ExitStatus;
+
+        use crate::Outcome;
+
+        #[cfg(unix)]
+        fn status(code: i32) -> ExitStatus {
+            use std::os::unix::process::ExitStatusExt;
+            ExitStatus::from_raw(code << 8)
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn zero_is_success() {
+            assert_eq!(Outcome::from(status(0)), Outcome::Success);
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn non_zero_is_rejected_with_code() {
+            assert_eq!(Outcome::from(status(1)), Outcome::Rejected { code: Some(1) });
+        }
+    }
+
+    mod is_gating {
+        use crate::is_gating;
+
+        #[test]
+        fn pre_hooks_gate() {
+            for name in [
+                "pre-commit",
+                "pre-merge-commit",
+                "prepare-commit-msg",
+                "commit-msg",
+                "pre-rebase",
+            ] {
+                assert!(is_gating(name), "{name} should gate per githooks(5)");
+            }
+        }
+
+        #[test]
+        fn post_hooks_are_advisory() {
+            for name in [
+                "post-applypatch",
+                "post-commit",
+                "post-merge",
+                "post-receive",
+                "post-update",
+                "post-checkout",
+                "post-rewrite",
+            ] {
+                assert!(!is_gating(name), "{name} should be advisory-only per githooks(5)");
+            }
+        }
+
+        #[test]
+        fn update_gates_its_own_ref() {
+            assert!(is_gating("update"));
+        }
+
+        #[test]
+        fn unrecognized_hook_defaults_to_gating() {
+            assert!(is_gating("some-future-hook-we-dont-know-about"));
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn command_runs_in_configured_cwd() {
@@ -191,5 +310,33 @@ mod tests {
             std::fs::canonicalize(worktree.path()).unwrap(),
             "the hook observed the cwd we configured, not the test process's own cwd"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_classifies_a_successful_hook() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let hook = dir.path().join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let outcome = run(command(&hook, &dir.path().join(".git"), dir.path())).unwrap();
+        assert_eq!(outcome, Outcome::Success);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_classifies_a_rejecting_hook() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let hook = dir.path().join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\nexit 3\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let outcome = run(command(&hook, &dir.path().join(".git"), dir.path())).unwrap();
+        assert_eq!(outcome, Outcome::Rejected { code: Some(3) });
     }
 }
