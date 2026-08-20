@@ -29,6 +29,9 @@ use bstr::{BString, ByteSlice};
 pub struct Prepare {
     /// The command to invoke, either directly or with a shell depending on `use_shell`.
     pub command: OsString,
+    /// The directory to spawn the command in, or `None` to inherit the current process's
+    /// working directory.
+    pub cwd: Option<PathBuf>,
     /// Additional information to be passed to the spawned command.
     pub context: Option<Context>,
     /// The way standard input is configured.
@@ -102,6 +105,7 @@ mod prepare {
     use std::{
         borrow::Cow,
         ffi::OsString,
+        path::PathBuf,
         process::{Command, Stdio},
     };
 
@@ -204,6 +208,13 @@ mod prepare {
         /// least they need to know the correct Git repository to function.
         pub fn with_context(mut self, ctx: Context) -> Self {
             self.context = Some(ctx);
+            self
+        }
+
+        /// Set the directory to spawn the command in, overriding the current process's working
+        /// directory as the child would otherwise inherit it.
+        pub fn current_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+            self.cwd = Some(dir.into());
             self
         }
 
@@ -371,6 +382,9 @@ mod prepare {
                 .stderr(prep.stderr)
                 .envs(prep.env)
                 .args(prep.args);
+            if let Some(cwd) = prep.cwd {
+                cmd.current_dir(cwd);
+            }
             if let Some(ctx) = prep.context {
                 if let Some(git_dir) = ctx.git_dir {
                     cmd.env("GIT_DIR", &git_dir);
@@ -534,11 +548,12 @@ pub mod shebang {
 /// ### Warning
 ///
 /// When using this method, be sure that the invoked program doesn't rely on the current working dir and/or
-/// environment variables to know its context. If so, call instead [`Prepare::with_context()`] to provide
-/// additional information.
+/// environment variables to know its context. If so, call [`Prepare::current_dir()`] to set the working
+/// directory, and/or [`Prepare::with_context()`] to provide additional Git-specific environment.
 pub fn prepare(cmd: impl Into<OsString>) -> Prepare {
     Prepare {
         command: cmd.into(),
+        cwd: None,
         shell_program: None,
         context: None,
         stdin: std::process::Stdio::null(),
