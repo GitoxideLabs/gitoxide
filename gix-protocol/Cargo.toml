@@ -72,6 +72,7 @@ path = "tests/async-protocol.rs"
 required-features = ["async-client"]
 
 [dependencies]
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 gix-features = { version = "^0.49.1", path = "../gix-features", features = [
     "progress",
 ] }

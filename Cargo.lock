@@ -2300,6 +2300,7 @@ dependencies = [
  "faster-hex",
  "futures-io",
  "futures-lite",
+ "gix-error",
  "gix-hash",
  "gix-macros",
  "gix-odb",
@@ -2307,7 +2308,6 @@ dependencies = [
  "gix-trace",
  "pin-project-lite",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2365,6 +2365,7 @@ dependencies = [
  "futures-lite",
  "gix-credentials",
  "gix-date",
+ "gix-error",
  "gix-features",
  "gix-hash",
  "gix-lock",
