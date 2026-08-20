@@ -326,6 +326,36 @@ mod find {
     }
 
     #[test]
+    fn completed_object_size_is_validated_before_allocation() -> crate::Result {
+        use std::io::Write;
+
+        let tmp = gix_testtools::tempfile::tempdir()?;
+        let object_hash = gix_testtools::object_hash();
+        let db = ldb_at_opts(tmp.path(), object_hash);
+        let blob_id = object_hash.empty_blob();
+        let path = db.object_path(&blob_id);
+        std::fs::create_dir(path.parent().expect("loose objects have a parent directory"))?;
+
+        for size in [1048576, usize::MAX] {
+            let mut writer = gix_zlib::stream::deflate::Write::new(Vec::new(), gix_zlib::Compression::DEFAULT);
+            write!(writer, "blob {size}\0")?;
+            writer.flush()?;
+            std::fs::write(&path, writer.into_inner())?;
+
+            let mut buf = Vec::new();
+            let err = db
+                .try_find(&blob_id, &mut buf)
+                .expect_err("the completed stream contains no body despite its advertised size");
+            assert!(
+                matches!(&err, loose::find::Error::SizeMismatch { .. }),
+                "a completed object with an oversized header is corrupt: {err}"
+            );
+            assert_eq!(buf.capacity(), 0, "invalid sizes must be rejected before allocation");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn tag() -> Result<(), Box<dyn std::error::Error>> {
         let mut buf = Vec::new();
         let o = find("722fe60ad4f0276d5a8121970b5bb9dccdad4ef9", &mut buf);
@@ -434,10 +464,22 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
             (56915, Kind::Blob),
             "header-only reads remain available"
         );
-        assert!(matches!(
-            db.try_find(&id, &mut buf),
-            Err(loose::find::Error::OutOfMemory { size: 56915 })
-        ));
+        let err = db
+            .try_find(&id, &mut buf)
+            .expect_err("the object exceeds the configured allocation limit");
+        assert!(matches!(&err, loose::find::Error::OutOfMemory { size: 56915, .. }));
+        let err = gix_error::Error::from_error(err);
+        assert_eq!(
+            err.classify()
+                .map(|classification| classification.class())
+                .collect::<Vec<_>>(),
+            [gix_error::Class::ResourceExhaustion(
+                gix_error::ResourceExhaustionKind::AllocationLimit
+            )],
+            "configured limits are classified only as resource exhaustion"
+        );
+        assert!(!err.is_corrupted());
+        assert!(!err.can_retry());
         Ok(())
     }
 

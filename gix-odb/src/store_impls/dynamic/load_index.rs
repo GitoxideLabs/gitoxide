@@ -27,33 +27,84 @@ mod error {
     use gix_pack::multi_index::PackIndex;
 
     /// Returned by [`crate::at_opts()`]
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("The objects directory at '{0}' is not an accessible directory")]
         Inaccessible(PathBuf),
-        #[error(transparent)]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        Alternate(#[from] crate::alternate::Error),
-        #[error("The slotmap turned out to be too small with {} entries, would need {} more", .current, .needed)]
-        InsufficientSlots { current: usize, needed: usize },
+        Io(std::io::Error),
+        Alternate(crate::alternate::Error),
+        InsufficientSlots {
+            current: usize,
+            needed: usize,
+        },
         /// The problem here is that some logic assumes that more recent generations are higher than previous ones. If we would overflow,
         /// we would break that invariant which can lead to the wrong object from being returned. It would probably be super rare, but…
         /// let's not risk it.
-        #[error(
-            "Would have overflown amount of max possible generations of {}",
-            super::Generation::MAX
-        )]
         GenerationOverflow,
-        #[error(
-            "Cannot numerically handle more than {limit} packs in a single multi-pack index, got {actual} in file {index_path:?}"
-        )]
         TooManyPacksInMultiIndex {
             actual: PackIndex,
             limit: PackIndex,
             index_path: PathBuf,
         },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Inaccessible(path) => {
+                    write!(
+                        f,
+                        "The objects directory at '{}' is not an accessible directory",
+                        path.display()
+                    )
+                }
+                Error::Io(err) => std::fmt::Display::fmt(err, f),
+                Error::Alternate(err) => std::fmt::Display::fmt(err, f),
+                Error::InsufficientSlots { current, needed } => write!(
+                    f,
+                    "The slotmap turned out to be too small with {current} entries, would need {needed} more"
+                ),
+                Error::GenerationOverflow => write!(
+                    f,
+                    "Would have overflown amount of max possible generations of {}",
+                    super::Generation::MAX
+                ),
+                #[allow(clippy::unnecessary_debug_formatting)]
+                Error::TooManyPacksInMultiIndex {
+                    actual,
+                    limit,
+                    index_path,
+                } => write!(
+                    f,
+                    "Cannot numerically handle more than {limit} packs in a single multi-pack index, got {actual} in file {index_path:?}"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => err.source(),
+                Error::Alternate(err) => err.source(),
+                Error::Inaccessible(_)
+                | Error::InsufficientSlots { .. }
+                | Error::GenerationOverflow
+                | Error::TooManyPacksInMultiIndex { .. } => None,
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<crate::alternate::Error> for Error {
+        fn from(err: crate::alternate::Error) -> Self {
+            Error::Alternate(err)
+        }
     }
 }
 
