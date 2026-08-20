@@ -3,18 +3,7 @@ use std::borrow::Cow;
 use bstr::BStr;
 
 /// The error returned by [`index()`](crate::index()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Cannot diff indices that contain sparse entries")]
-    IsSparse,
-    #[error("Unmerged entries aren't allowed in the left-hand index, only in the right-hand index")]
-    LhsHasUnmerged,
-    #[error("The callback indicated failure")]
-    Callback(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("Failure during rename tracking")]
-    RenameTracking(#[from] crate::rewrites::tracker::emit::Error),
-}
+pub type Error = gix_error::Exn<gix_error::Message>;
 
 /// What to do after a [ChangeRef] was passed ot the callback of [`index()`](crate::index()).
 ///

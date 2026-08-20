@@ -17,7 +17,7 @@ pub mod diff {
     ///
     pub mod init {
         /// The error returned by [`object::tree::diff::Change::diff`](crate::object::tree::diff::Change::diff()).
-        pub type Error = gix_diff::blob::platform::set_resource::Error;
+        pub type Error = gix_error::Error;
     }
 
     ///

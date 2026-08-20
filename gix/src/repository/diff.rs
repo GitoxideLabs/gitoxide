@@ -69,7 +69,7 @@ impl Repository {
             &mut cache,
             &mut Default::default(),
             &self.objects,
-            |change| -> Result<_, std::convert::Infallible> {
+            |change| -> Result<_, gix_error::Exn> {
                 out.push(change.into_owned());
                 Ok(std::ops::ControlFlow::Continue(()))
             },

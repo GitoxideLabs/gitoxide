@@ -229,7 +229,7 @@ fn catchup_rhs_with_lhs(
                 let Err(err) = rhs_entries.next().expect("the peeked item to be present") else {
                     unreachable!("peeked error changed before it was consumed")
                 };
-                return Err(Error::EntriesDecode(err));
+                return Err(err.into());
             }
             None => {
                 delegate.pop_path_component();
@@ -283,7 +283,7 @@ fn catchup_lhs_with_rhs(
                 let Err(err) = lhs_entries.next().expect("the peeked item to be present") else {
                     unreachable!("peeked error changed before it was consumed")
                 };
-                return Err(Error::EntriesDecode(err));
+                return Err(err.into());
             }
             None => {
                 delegate.pop_path_component();

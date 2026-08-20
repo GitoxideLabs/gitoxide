@@ -1,6 +1,7 @@
 use std::{cmp::Ordering, io::Write, process::Stdio};
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{ErrorExt, OptionExt, ResultExt, ValidationError, message};
 
 use super::Algorithm;
 use crate::blob::{Pipeline, Platform, ResourceKind, pipeline};
@@ -240,31 +241,8 @@ pub mod resource {
 
 ///
 pub mod set_resource {
-    use bstr::BString;
-
-    use crate::blob::{ResourceKind, pipeline};
-
     /// The error returned by [Platform::set_resource](super::Platform::set_resource).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Can only diff blobs and links, not {mode:?}")]
-        InvalidMode { mode: gix_object::tree::EntryKind },
-        #[error("Failed to read {kind} worktree data from '{rela_path}'")]
-        Io {
-            rela_path: BString,
-            kind: ResourceKind,
-            source: std::io::Error,
-        },
-        #[error("Failed to obtain attributes for {kind} resource at '{rela_path}'")]
-        Attributes {
-            rela_path: BString,
-            kind: ResourceKind,
-            source: std::io::Error,
-        },
-        #[error(transparent)]
-        ConvertToDiffable(#[from] pipeline::convert_to_diffable::Error),
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 }
 
 ///
@@ -335,35 +313,15 @@ pub mod prepare_diff {
     }
 
     /// The error returned by [Platform::prepare_diff()](super::Platform::prepare_diff()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Either the source or the destination of the diff operation were not set")]
-        SourceOrDestinationUnset,
-        #[error("Tried to diff resources that are both considered removed")]
-        SourceAndDestinationRemoved,
-    }
+    pub type Error = gix_error::ValidationError;
 }
 
 ///
 pub mod prepare_diff_command {
     use std::ops::{Deref, DerefMut};
 
-    use bstr::BString;
-
     /// The error returned by [Platform::prepare_diff_command()](super::Platform::prepare_diff_command()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Either the source or the destination of the diff operation were not set")]
-        SourceOrDestinationUnset,
-        #[error("Binary resources can't be diffed with an external command (as we don't have the data anymore)")]
-        SourceOrDestinationBinary,
-        #[error("Tempfile to store content of '{rela_path}' for passing to external diff command could not be created")]
-        CreateTempfile { rela_path: BString, source: std::io::Error },
-        #[error("Could not write content of '{rela_path}' to tempfile for passing to external diff command")]
-        WriteTempfile { rela_path: BString, source: std::io::Error },
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 
     /// The outcome of a [`prepare_diff_command`](super::Platform::prepare_diff_command()) operation.
     ///
@@ -505,37 +463,49 @@ impl Platform {
                         gix_tempfile::ContainingDirectory::Exists,
                         gix_tempfile::AutoRemove::Tempfile,
                     )
-                    .map_err(|err| prepare_diff_command::Error::CreateTempfile {
-                        rela_path: res.rela_path.to_owned(),
-                        source: err,
+                    .or_raise(|| {
+                        message!(
+                            "Tempfile to store content of '{}' for passing to external diff command could not be created",
+                            res.rela_path
+                        )
                     })?;
-                    tmp.write_all(buf)
-                        .map_err(|err| prepare_diff_command::Error::WriteTempfile {
-                            rela_path: res.rela_path.to_owned(),
-                            source: err,
-                        })?;
+                    tmp.write_all(buf).or_raise(|| {
+                        message!(
+                            "Could not write content of '{}' to tempfile for passing to external diff command",
+                            res.rela_path
+                        )
+                    })?;
                     tmp.with_mut(|f| {
                         cmd.arg(f.path());
                     })
-                    .map_err(|err| prepare_diff_command::Error::WriteTempfile {
-                        rela_path: res.rela_path.to_owned(),
-                        source: err,
+                    .or_raise(|| {
+                        message!(
+                            "Could not access tempfile for '{}' while preparing external diff command",
+                            res.rela_path
+                        )
                     })?;
                     cmd.arg(res.id.to_string()).arg(res.mode.as_octal_str().to_string());
-                    let tmp = tmp.close().map_err(|err| prepare_diff_command::Error::WriteTempfile {
-                        rela_path: res.rela_path.to_owned(),
-                        source: err,
+                    let tmp = tmp.close().or_raise(|| {
+                        message!(
+                            "Could not close tempfile for '{}' while preparing external diff command",
+                            res.rela_path
+                        )
                     })?;
                     Some(tmp)
                 }
-                resource::Data::Binary { .. } => return Err(prepare_diff_command::Error::SourceOrDestinationBinary),
+                resource::Data::Binary { .. } => {
+                    return Err(message(
+                        "Binary resources can't be diffed with an external command (as we don't have the data anymore)",
+                    )
+                    .raise());
+                }
             };
             Ok(tmpfile)
         }
 
         let (old, new) = self
             .resources()
-            .ok_or(prepare_diff_command::Error::SourceOrDestinationUnset)?;
+            .ok_or_raise(|| message("Either the source or the destination of the diff operation were not set"))?;
         let mut cmd: std::process::Command = gix_command::prepare(gix_path::from_bstring(diff_command))
             .command_may_be_shell_script_disallow_manual_argument_splitting()
             .with_context(context)
@@ -593,16 +563,18 @@ impl Platform {
     /// The returned outcome allows to easily perform diff operations, based on the [`prepare_diff::Outcome::operation`] field,
     /// which hints at what should be done.
     pub fn prepare_diff(&mut self) -> Result<prepare_diff::Outcome<'_>, prepare_diff::Error> {
-        let old_key = &self.old.as_ref().ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
-        let old = self
-            .diff_cache
-            .get(old_key)
-            .ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
-        let new_key = &self.new.as_ref().ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
-        let new = self
-            .diff_cache
-            .get(new_key)
-            .ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
+        let old_key = &self.old.as_ref().ok_or_else(|| {
+            ValidationError::new("Either the source or the destination of the diff operation were not set")
+        })?;
+        let old = self.diff_cache.get(old_key).ok_or_else(|| {
+            ValidationError::new("Either the source or the destination of the diff operation were not set")
+        })?;
+        let new_key = &self.new.as_ref().ok_or_else(|| {
+            ValidationError::new("Either the source or the destination of the diff operation were not set")
+        })?;
+        let new = self.diff_cache.get(new_key).ok_or_else(|| {
+            ValidationError::new("Either the source or the destination of the diff operation were not set")
+        })?;
         let mut out = {
             let old = Resource::new(old_key, old);
             let new = Resource::new(new_key, new);
@@ -615,7 +587,11 @@ impl Platform {
         };
 
         match (old.conversion.data, new.conversion.data) {
-            (None, None) => return Err(prepare_diff::Error::SourceAndDestinationRemoved),
+            (None, None) => {
+                return Err(ValidationError::new(
+                    "Tried to diff resources that are both considered removed",
+                ));
+            }
             (Some(pipeline::Data::Binary { .. }), _) | (_, Some(pipeline::Data::Binary { .. })) => return Ok(out),
             _either_missing_or_non_binary => {
                 if let Some(command) = old
@@ -701,7 +677,7 @@ impl Platform {
             mode,
             gix_object::tree::EntryKind::Commit | gix_object::tree::EntryKind::Tree
         ) {
-            return Err(set_resource::Error::InvalidMode { mode });
+            return Err(message!("Can only diff blobs and links, not {mode:?}").raise());
         }
         let storage = match kind {
             ResourceKind::OldOrSource => &mut self.old,
@@ -717,27 +693,26 @@ impl Platform {
         if self.diff_cache.contains_key(storage) {
             return Ok(());
         }
-        let entry =
-            self.attr_stack
-                .at_entry(rela_path, None, objects)
-                .map_err(|err| set_resource::Error::Attributes {
-                    source: err,
-                    kind,
-                    rela_path: rela_path.to_owned(),
-                })?;
+        let entry = self
+            .attr_stack
+            .at_entry(rela_path, None, objects)
+            .or_raise(|| message!("Failed to obtain attributes for {kind} resource at '{rela_path}'"))?;
         let mut buf = self.free_list.pop().unwrap_or_default();
-        let out = self.filter.convert_to_diffable(
-            &id,
-            mode,
-            rela_path,
-            kind,
-            &mut |_, out| {
-                let _ = entry.matching_attributes(out);
-            },
-            objects,
-            self.filter_mode,
-            &mut buf,
-        )?;
+        let out = self
+            .filter
+            .convert_to_diffable(
+                &id,
+                mode,
+                rela_path,
+                kind,
+                &mut |_, out| {
+                    let _ = entry.matching_attributes(out);
+                },
+                objects,
+                self.filter_mode,
+                &mut buf,
+            )
+            .or_raise(|| message!("Failed to convert {kind} resource at '{rela_path}' to diffable data"))?;
         let key = storage.clone();
         assert!(
             self.diff_cache

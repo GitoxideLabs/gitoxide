@@ -135,7 +135,7 @@ pub mod diff_tree_to_tree {
         #[error(transparent)]
         CreateResourceCache(#[from] super::diff_resource_cache::Error),
         #[error(transparent)]
-        TreeDiff(#[from] gix_diff::tree_with_rewrites::Error),
+        TreeDiff(#[from] gix_diff::tree::Error),
     }
 }
 
