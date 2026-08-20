@@ -267,9 +267,8 @@ pub(super) struct SubmoduleStatusMock {
 
 impl SubmoduleStatus for SubmoduleStatusMock {
     type Output = ();
-    type Error = std::convert::Infallible;
 
-    fn status(&mut self, _entry: &Entry, _rela_path: &BStr) -> Result<Option<Self::Output>, Self::Error> {
+    fn status(&mut self, _entry: &Entry, _rela_path: &BStr) -> Result<Option<Self::Output>, gix_error::Exn> {
         Ok(self.dirty.then_some(()))
     }
 }
@@ -301,27 +300,23 @@ fn hash_errors_preserve_io_kinds() {
             &AtomicBool::new(interrupted),
         )
         .expect_err("a short stream or requested interruption prevents hashing");
-        let index_as_worktree::Error::Io(err) = err.into() else {
-            panic!("hashing I/O failures must remain I/O errors");
-        };
+        let err = err
+            .downcast_any_ref::<std::io::Error>()
+            .expect("hashing I/O failures must remain I/O errors");
         assert_eq!(err.kind(), expected_kind, "callers must retain the native I/O kind");
     }
 }
 
 #[test]
-fn hash_errors_without_io_causes_use_other() {
+fn hash_errors_without_io_causes_preserve_hashing_failure() {
     let err = gix_hash::io::from_hasher(gix_hash::hasher::Error::new("hash collision"));
-    let index_as_worktree::Error::Io(err) = err.into() else {
-        panic!("hashing failures must be represented by the I/O error variant");
-    };
-    assert_eq!(
-        err.kind(),
-        std::io::ErrorKind::Other,
+    assert!(
+        err.downcast_any_ref::<std::io::Error>().is_none(),
         "a hashing failure without an I/O cause has no native kind"
     );
     assert!(
-        std::iter::successors(std::error::Error::source(&err), |source| source.source())
-            .any(|source| source.to_string().contains("hash collision")),
+        err.downcast_any_ref::<gix_hash::hasher::Error>()
+            .is_some_and(|source| source.to_string().contains("hash collision")),
         "the original hashing failure remains available for diagnostics"
     );
 }

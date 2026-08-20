@@ -30,11 +30,9 @@ pub trait CompareBlobs {
 pub trait SubmoduleStatus {
     /// The status result, describing in which way the submodule changed.
     type Output;
-    /// A custom error that may occur while computing the submodule status.
-    type Error: std::error::Error + Send + Sync + 'static;
 
     /// Compute the status of the submodule at `entry` and `rela_path`, or return `None` if no change was detected.
-    fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>, Self::Error>;
+    fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>, gix_error::Exn>;
 }
 
 /// Lazy borrowed access to worktree or blob data, with streaming support for worktree files.
