@@ -138,6 +138,7 @@ without trading responsiveness for metadata that is not visible.
   ignored when another hidden revision resolves; if none resolve, startup fails.
 - The UI always owns the alternate screen. Raw mode, focus reporting, mouse
   capture, and enhanced keyboard reporting are restored on every exit path.
+  Shutdown leaves the alternate screen without clearing it or writing afterward.
 - `Ctrl-C` exits immediately from any normal tix focus. `q` quits from history;
   `q` or `Escape` in a focused changes block returns focus to history.
 
