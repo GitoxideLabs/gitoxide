@@ -15,7 +15,7 @@ pub enum Error {
     #[error(transparent)]
     Span(#[from] parse::span::Error),
     #[error(transparent)]
-    Interpolate(#[from] interpolate::Error),
+    Interpolate(gix_error::Error),
     #[error("The maximum allowed length {} of the file include chain built by following nested resolve_includes is exceeded", .max_depth)]
     IncludeDepthExceeded { max_depth: u8 },
     #[error("Include paths from environment variables must not be relative as no config file paths exists as root")]
@@ -23,7 +23,7 @@ pub enum Error {
     #[error("The git directory must be provided to support `gitdir:` conditional includes")]
     MissingGitDir,
     #[error(transparent)]
-    Realpath(#[from] gix_path::realpath::Error),
+    Realpath(gix_error::Error),
 }
 
 /// Options to handle includes, like `include.path` or `includeIf.<condition>.path`,

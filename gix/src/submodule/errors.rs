@@ -43,7 +43,7 @@ pub mod is_active {
         #[error(transparent)]
         InitIsActivePlatform(#[from] gix_submodule::is_active_platform::Error),
         #[error(transparent)]
-        QueryIsActive(#[from] gix_config::value::Error),
+        QueryIsActive(#[from] gix_error::Error),
         #[error(transparent)]
         InitAttributes(#[from] crate::config::attribute_stack::Error),
         #[error(transparent)]

@@ -71,7 +71,7 @@ fn author_and_committer_and_fallback() -> crate::Result {
 
         assert_eq!(config.boolean("core.bare"), Some(false));
         assert_eq!(config.boolean("a.bad-bool"), None);
-        assert_eq!(config.try_boolean("core.bare"), Ok(Some(false)));
+        assert_eq!(config.try_boolean("core.bare")?, Some(false));
         assert!(config.try_boolean("a.bad-bool").is_err());
 
         assert_eq!(config.integer("a.int"), Some(42));
@@ -88,7 +88,7 @@ fn author_and_committer_and_fallback() -> crate::Result {
         assert_eq!(config.string("a.env-override").expect("present"), "from-c.config");
 
         assert_eq!(config.boolean("core.missing"), None);
-        assert_eq!(config.try_boolean("core.missing"), Ok(None));
+        assert_eq!(config.try_boolean("core.missing")?, None);
 
         let relative_path_key = "a.relative-path";
         if trust == gix_sec::Trust::Full {

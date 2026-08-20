@@ -10,12 +10,9 @@ mod error {
     #[expect(missing_docs)]
     pub enum Error {
         #[error("Could not parse 'useHttpPath' key in section {section}")]
-        InvalidUseHttpPath {
-            section: BString,
-            source: gix_config::value::Error,
-        },
+        InvalidUseHttpPath { section: BString, source: gix_error::Error },
         #[error("core.askpass could not be read")]
-        CoreAskpass(#[from] gix_config::path::interpolate::Error),
+        CoreAskpass(#[from] gix_error::Error),
         #[error(transparent)]
         BooleanConfig(#[from] crate::config::boolean::Error),
     }
@@ -169,7 +166,7 @@ pub(super) mod function {
                         .map(|val| {
                             gix_config::Boolean::try_from(val)
                                 .map_err(|err| Error::InvalidUseHttpPath {
-                                    source: err,
+                                    source: err.into_error(),
                                     section: section.header().to_bstring(),
                                 })
                                 .map(|b| b.0)
@@ -277,15 +274,15 @@ pub(super) mod function {
     }
 
     trait IgnoreEmptyPath {
-        fn ignore_empty(self) -> Self;
+        fn ignore_empty(self) -> Result<Option<std::path::PathBuf>, gix_error::Error>;
     }
 
     impl IgnoreEmptyPath for Result<Option<std::path::PathBuf>, gix_config::path::interpolate::Error> {
-        fn ignore_empty(self) -> Self {
+        fn ignore_empty(self) -> Result<Option<std::path::PathBuf>, gix_error::Error> {
             match self {
                 Ok(maybe_path) => Ok(maybe_path),
-                Err(gix_config::path::interpolate::Error::Missing { .. }) => Ok(None),
-                Err(err) => Err(err),
+                Err(err) if err.downcast_any_ref::<gix_error::NotFoundError>().is_some() => Ok(None),
+                Err(err) => Err(err.into_error()),
             }
         }
     }

@@ -403,7 +403,7 @@ impl Cache {
         source: gix_worktree::stack::state::ignore::Source,
         buf: &mut Vec<u8>,
     ) -> Result<gix_worktree::stack::state::Ignore, config::exclude_stack::Error> {
-        let excludes_file = match self.excludes_file()? {
+        let excludes_file = match self.excludes_file().map_err(gix_error::Exn::into_error)? {
             Some(user_path) => Some(user_path),
             None => self.xdg_config_path("ignore")?,
         };
@@ -425,7 +425,10 @@ impl Cache {
         attributes: crate::open::permissions::Attributes,
     ) -> Result<(gix_worktree::stack::state::Attributes, Vec<u8>), config::attribute_stack::Error> {
         use gix_attributes::Source;
-        let configured_or_user_attributes = match self.trusted_file_path(Core::ATTRIBUTES_FILE)? {
+        let configured_or_user_attributes = match self
+            .trusted_file_path(Core::ATTRIBUTES_FILE)
+            .map_err(gix_error::Exn::into_error)?
+        {
             Some(attributes) => Some(attributes),
             None => {
                 if attributes.git {

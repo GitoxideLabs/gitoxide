@@ -278,7 +278,7 @@ impl ThreadSafeRepository {
                 .interpolate(interpolate_context(git_install_dir.as_deref(), home.as_deref()))
                 .map_err(|err| config::Error::PathInterpolation {
                     path: original.value,
-                    source: err,
+                    source: err.into_error(),
                 })?;
             let worktree = match source {
                 gix_config::Source::Env
@@ -311,7 +311,7 @@ impl ThreadSafeRepository {
                 })
                 .map_err(|err| {
                     Error::from(config::Error::ConfigTypedString(
-                        config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err),
+                        config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err.into_error()),
                     ))
                 })?
                 .is_some()

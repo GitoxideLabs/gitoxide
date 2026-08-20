@@ -1,6 +1,7 @@
 use std::{borrow::Cow, fmt::Display, str::FromStr};
 
 use bstr::{BStr, BString};
+use gix_error::{ErrorExt, ResultExt, ValidationError};
 
 use crate::{Color, Error};
 
@@ -30,8 +31,8 @@ impl Display for Color {
     }
 }
 
-fn color_err(input: impl Into<BString>) -> Error {
-    Error::new(
+fn color_err(input: impl Into<BString>) -> ValidationError {
+    ValidationError::new_with_input(
         "Colors are specific color values and their attributes, like 'brightred', or 'blue'",
         input,
     )
@@ -41,7 +42,7 @@ impl TryFrom<&BStr> for Color {
     type Error = Error;
 
     fn try_from(s: &BStr) -> Result<Self, Self::Error> {
-        let s = std::str::from_utf8(s).map_err(|err| color_err(s).with_err(err))?;
+        let s = std::str::from_utf8(s).or_raise(|| color_err(s))?;
         enum ColorItem {
             Value(Name),
             Attr(Attribute),
@@ -71,12 +72,12 @@ impl TryFrom<&BStr> for Color {
                         } else if background.is_none() {
                             background = Some(v);
                         } else {
-                            return Err(color_err(s));
+                            return Err(color_err(s).raise());
                         }
                     }
                     ColorItem::Attr(a) => attributes |= a,
                 },
-                Err(_) => return Err(color_err(s)),
+                Err(_) => return Err(color_err(s).raise()),
             }
         }
 
@@ -240,7 +241,7 @@ impl FromStr for Name {
         }
 
         if is_bright {
-            return Err(color_err(s));
+            return Err(color_err(s).raise());
         }
 
         if s.eq_ignore_ascii_case("normal") || s == "-1" {
@@ -269,7 +270,7 @@ impl FromStr for Name {
             }
         }
 
-        Err(color_err(s))
+        Err(color_err(s).raise())
     }
 }
 
@@ -277,7 +278,7 @@ impl TryFrom<&BStr> for Name {
     type Error = Error;
 
     fn try_from(s: &BStr) -> Result<Self, Self::Error> {
-        Self::from_str(std::str::from_utf8(s).map_err(|err| color_err(s).with_err(err))?)
+        Self::from_str(std::str::from_utf8(s).or_raise(|| color_err(s))?)
     }
 }
 
@@ -383,7 +384,7 @@ impl FromStr for Attribute {
 
         if s.eq_ignore_ascii_case("reset") {
             return if inverted {
-                Err(color_err(s))
+                Err(color_err(s).raise())
             } else {
                 Ok(Attribute::RESET)
             };
@@ -404,7 +405,7 @@ impl FromStr for Attribute {
             "italic" if inverted => Ok(Attribute::NO_ITALIC),
             "strike" if !inverted => Ok(Attribute::STRIKE),
             "strike" if inverted => Ok(Attribute::NO_STRIKE),
-            _ => Err(color_err(s)),
+            _ => Err(color_err(s).raise()),
         }
     }
 }
@@ -413,6 +414,6 @@ impl TryFrom<&BStr> for Attribute {
     type Error = Error;
 
     fn try_from(s: &BStr) -> Result<Self, Self::Error> {
-        Self::from_str(std::str::from_utf8(s).map_err(|err| color_err(s).with_err(err))?)
+        Self::from_str(std::str::from_utf8(s).or_raise(|| color_err(s))?)
     }
 }

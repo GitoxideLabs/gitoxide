@@ -25,8 +25,8 @@ impl Snapshot<'_> {
     }
 
     /// Like [`boolean()`][Self::boolean()], but it will report an error if the value couldn't be interpreted as boolean.
-    pub fn try_boolean(&self, key: impl gix_config::AsKey) -> Result<Option<bool>, gix_config::value::Error> {
-        self.repo.config.resolved.boolean(key)
+    pub fn try_boolean(&self, key: impl gix_config::AsKey) -> Result<Option<bool>, gix_error::Error> {
+        self.repo.config.resolved.boolean(key).map_err(Into::into)
     }
 
     /// Return the resolved integer at `key`, or `None` if there is no such value or if the value can't be interpreted as
@@ -40,8 +40,8 @@ impl Snapshot<'_> {
     }
 
     /// Like [`integer()`][Self::integer()], but it will report an error if the value couldn't be interpreted as boolean.
-    pub fn try_integer(&self, key: impl gix_config::AsKey) -> Result<Option<i64>, gix_config::value::Error> {
-        self.repo.config.resolved.integer(key)
+    pub fn try_integer(&self, key: impl gix_config::AsKey) -> Result<Option<i64>, gix_error::Error> {
+        self.repo.config.resolved.integer(key).map_err(Into::into)
     }
 
     /// Return the string at `key`, or `None` if there is no such value.
@@ -60,11 +60,8 @@ impl Snapshot<'_> {
     /// The path can be prefixed with `:(optional)` which means it won't be returned if the interpolated
     /// path couldn't be accessed. Note also that this is different from Git, which ignores it only if
     /// it doesn't exist.
-    pub fn trusted_path(
-        &self,
-        key: impl gix_config::AsKey,
-    ) -> Result<Option<std::path::PathBuf>, gix_config::path::interpolate::Error> {
-        self.repo.config.trusted_file_path(key)
+    pub fn trusted_path(&self, key: impl gix_config::AsKey) -> Result<Option<std::path::PathBuf>, gix_error::Error> {
+        self.repo.config.trusted_file_path(key).map_err(Into::into)
     }
 
     /// Return the trusted string at `key` for launching using [command::prepare()](gix_command::prepare()),

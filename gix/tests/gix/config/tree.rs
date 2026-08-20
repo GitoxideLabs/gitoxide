@@ -1,3 +1,8 @@
+fn config_value_error(message: &'static str, input: &'static str) -> gix_config::value::Error {
+    use gix_error::ErrorExt;
+    gix_error::ValidationError::new_with_input(message, input).raise()
+}
+
 mod keys {
     use gix::config::tree::{Key, Section};
     use gix_object::bstr::{BStr, ByteSlice};
@@ -117,7 +122,7 @@ mod keys {
                 .validate(out_of_bounds.as_bytes().into())
                 .unwrap_err()
                 .to_string(),
-            "Could not decode '9223372036854775808': Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G"
+            "Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G: \"9223372036854775808\""
         );
     }
 }
@@ -358,19 +363,19 @@ mod diff {
         );
         assert!(Diff::RENAMES.validate("0".into()).is_ok());
         assert_eq!(
-            Diff::RENAMES.try_into_renames(Err(gix_config::value::Error::new("err", "copy")))?,
+            Diff::RENAMES.try_into_renames(Err(crate::config::tree::config_value_error("err", "copy")))?,
             Some(Tracking::RenamesAndCopies)
         );
         assert!(Diff::RENAMES.validate("copy".into()).is_ok());
         assert_eq!(
-            Diff::RENAMES.try_into_renames(Err(gix_config::value::Error::new("err", "copies")))?,
+            Diff::RENAMES.try_into_renames(Err(crate::config::tree::config_value_error("err", "copies")))?,
             Some(Tracking::RenamesAndCopies)
         );
         assert!(Diff::RENAMES.validate("copies".into()).is_ok());
 
         assert_eq!(
             Diff::RENAMES
-                .try_into_renames(Err(gix_config::value::Error::new("err", "foo")))
+                .try_into_renames(Err(crate::config::tree::config_value_error("err", "foo")))
                 .unwrap_err()
                 .to_string(),
             "The value of key \"diff.renames=foo\" was invalid"
@@ -506,7 +511,7 @@ mod core {
         assert!(Core::FILES_REF_LOCK_TIMEOUT.validate("2500".into()).is_ok());
         assert_eq!(
             Core::FILES_REF_LOCK_TIMEOUT
-                .try_into_lock_timeout(Err(gix_config::value::Error::new("err", "bogus")))
+                .try_into_lock_timeout(Err(crate::config::tree::config_value_error("err", "bogus")))
                 .unwrap_err()
                 .to_string(),
             "The timeout at key \"core.filesRefLockTimeout\" was invalid"
@@ -1151,7 +1156,9 @@ mod http {
 
         assert_eq!(
             Http::FOLLOW_REDIRECTS
-                .try_into_follow_redirects("something", || Err(gix_config::value::Error::new("invalid", "value")))
+                .try_into_follow_redirects("something", || {
+                    Err(crate::config::tree::config_value_error("invalid", "value"))
+                })
                 .unwrap_err()
                 .to_string(),
             "The key \"http.followRedirects=something\" was invalid",
