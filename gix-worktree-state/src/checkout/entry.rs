@@ -5,6 +5,7 @@ use std::{
 };
 
 use bstr::BStr;
+use gix_error::{ResultExt, ValidationError, message};
 use gix_filter::{
     driver::apply::MaybeDelayed,
     pipeline::convert::{ToWorktreeOutcome, to_worktree},
@@ -80,32 +81,35 @@ pub fn checkout<'entry, Find>(
 where
     Find: gix_object::Find,
 {
-    let dest_relative = gix_path::try_from_bstr(entry_path).map_err(|_| crate::checkout::Error::IllformedUtf8 {
-        path: entry_path.to_owned(),
-    })?;
-    let path_cache = path_cache.at_path(dest_relative.as_ref(), Some(entry.mode), &*objects)?;
+    let dest_relative = gix_path::try_from_bstr(entry_path)
+        .or_raise_erased(|| ValidationError::new_with_input("Could not convert path to UTF8", entry_path))?;
+    let path_cache = path_cache
+        .at_path(dest_relative.as_ref(), Some(entry.mode), &*objects)
+        .or_erased()?;
     let dest = path_cache.path();
 
     let object_size = match entry.mode {
         gix_index::entry::Mode::FILE | gix_index::entry::Mode::FILE_EXECUTABLE => {
-            let obj = (*objects)
-                .find_blob(&entry.id, buf)
-                .map_err(|err| crate::checkout::Error::Find {
-                    err: err.into_error(),
-                    path: dest.to_path_buf(),
-                })?;
+            let obj = (*objects).find_blob(&entry.id, buf).or_raise_erased(|| {
+                message!(
+                    "object for checkout at {} could not be retrieved from object database",
+                    dest.display()
+                )
+            })?;
 
-            let filtered = filters.convert_to_worktree(
-                obj.data,
-                entry_path,
-                &mut |_, attrs| {
-                    path_cache.matching_attributes(attrs);
-                },
-                to_worktree::Options {
-                    can_delay: filter_process_delay,
-                    unknown_encoding: to_worktree::UnknownEncoding::Ignore,
-                },
-            )?;
+            let filtered = filters
+                .convert_to_worktree(
+                    obj.data,
+                    entry_path,
+                    &mut |_, attrs| {
+                        path_cache.matching_attributes(attrs);
+                    },
+                    to_worktree::Options {
+                        can_delay: filter_process_delay,
+                        unknown_encoding: to_worktree::UnknownEncoding::Ignore,
+                    },
+                )
+                .or_erased()?;
             let (num_bytes, file, executable_bit_change) = match filtered {
                 ToWorktreeOutcome::Unchanged(buf) | ToWorktreeOutcome::Buffer(buf) => {
                     let (mut file, flag) = open_file(
@@ -114,8 +118,9 @@ where
                         overwrite_existing,
                         executable_bit,
                         entry.mode,
-                    )?;
-                    file.write_all(buf)?;
+                    )
+                    .or_erased()?;
+                    file.write_all(buf).or_erased()?;
                     (buf.len(), file, flag)
                 }
                 ToWorktreeOutcome::Process(MaybeDelayed::Immediate(mut filtered)) => {
@@ -125,8 +130,9 @@ where
                         overwrite_existing,
                         executable_bit,
                         entry.mode,
-                    )?;
-                    let num_bytes = std::io::copy(&mut filtered, &mut file)? as usize;
+                    )
+                    .or_erased()?;
+                    let num_bytes = std::io::copy(&mut filtered, &mut file).or_erased()? as usize;
                     (num_bytes, file, flag)
                 }
                 ToWorktreeOutcome::Process(MaybeDelayed::Delayed(key)) => {
@@ -145,18 +151,18 @@ where
             num_bytes
         }
         gix_index::entry::Mode::SYMLINK => {
-            let obj = (*objects)
-                .find_blob(&entry.id, buf)
-                .map_err(|err| crate::checkout::Error::Find {
-                    err: err.into_error(),
-                    path: dest.to_path_buf(),
-                })?;
+            let obj = (*objects).find_blob(&entry.id, buf).or_raise_erased(|| {
+                message!(
+                    "object for checkout at {} could not be retrieved from object database",
+                    dest.display()
+                )
+            })?;
             if symlink {
                 #[cfg_attr(not(windows), allow(unused_mut))]
-                let mut symlink_destination = Cow::Borrowed(
-                    gix_path::try_from_byte_slice(obj.data)
-                        .map_err(|_| crate::checkout::Error::IllformedUtf8 { path: obj.data.into() })?,
-                );
+                let mut symlink_destination =
+                    Cow::Borrowed(gix_path::try_from_byte_slice(obj.data).or_raise_erased(|| {
+                        ValidationError::new_with_input("Could not convert path to UTF8", obj.data)
+                    })?);
                 #[cfg(windows)]
                 {
                     symlink_destination = gix_path::to_native_path_on_windows(gix_path::into_bstr(symlink_destination))
@@ -164,16 +170,18 @@ where
 
                 try_op_or_unlink(dest, overwrite_existing, |p| {
                     gix_fs::symlink::create(symlink_destination.as_ref(), p)
-                })?;
+                })
+                .or_erased()?;
             } else {
                 let mut file = try_op_or_unlink(dest, overwrite_existing, |p| {
                     open_options(destination_is_initially_empty, overwrite_existing).open(p)
-                })?;
-                file.write_all(obj.data)?;
-                file.close()?;
+                })
+                .or_erased()?;
+                file.write_all(obj.data).or_erased()?;
+                file.close().or_erased()?;
             }
 
-            entry.stat = Stat::from_fs(&gix_index::fs::Metadata::from_path_no_follow(dest)?)?;
+            entry.stat = Stat::from_fs(&gix_index::fs::Metadata::from_path_no_follow(dest).or_erased()?).or_erased()?;
             obj.data.len()
         }
         gix_index::entry::Mode::DIR => {
@@ -297,22 +305,22 @@ pub(crate) fn finalize_entry(
     #[cfg(unix)]
     match executable_bit_change {
         ExecutableBitChange::NoChange => {}
-        ExecutableBitChange::Set => adjust_executable_bits(&file, true)?,
-        ExecutableBitChange::Remove => adjust_executable_bits(&file, false)?,
+        ExecutableBitChange::Set => adjust_executable_bits(&file, true).or_erased()?,
+        ExecutableBitChange::Remove => adjust_executable_bits(&file, false).or_erased()?,
     }
 
-    let md = &gix_index::fs::Metadata::from_file(&file)?;
+    let md = &gix_index::fs::Metadata::from_file(&file).or_erased()?;
     // A last sanity check: if the file wasn't truncated upon opening, which is good in case something
     // goes wrong during writing, not everything is lost, then after writing the file is smaller than it was
     // before, it needs truncation. We do that here.
     let needs_truncation = md.len() > desired_bytes;
     if needs_truncation {
-        file.set_len(desired_bytes)?;
+        file.set_len(desired_bytes).or_erased()?;
     }
     // NOTE: we don't call `file.sync_all()` here knowing that some filesystems don't handle this well.
     //       revisit this once there is a bug to fix.
-    entry.stat = Stat::from_fs(md)?;
-    file.close()?;
+    entry.stat = Stat::from_fs(md).or_erased()?;
+    file.close().or_erased()?;
     Ok(())
 }
 
