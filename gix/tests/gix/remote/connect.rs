@@ -12,13 +12,13 @@ mod blocking_io {
             for name in ["protocol_denied", "protocol_file_denied"] {
                 let repo = remote::repo(name);
                 let remote = repo.find_remote("origin").unwrap();
-                assert!(matches!(
-                    remote.connect(Fetch).err(),
-                    Some(gix::remote::connect::Error::ProtocolDenied {
-                        url: _,
-                        scheme: gix::url::Scheme::File
-                    })
-                ));
+                let err = remote.connect(Fetch).err().expect("protocol is denied");
+                assert!(err.is_validation());
+                let validation = err
+                    .downcast_any_ref::<gix::error::ValidationError>()
+                    .expect("protocol denial retains its validation details");
+                assert_eq!(validation.message, "Protocol File is denied per configuration");
+                assert!(validation.input.is_some(), "the denied URL is retained");
             }
         }
 
@@ -50,10 +50,7 @@ mod blocking_io {
                 if let Some(should_allow) = should_allow {
                     assert_eq!(result.is_ok(), should_allow, "Value = {env_value:?}");
                 } else {
-                    assert!(
-                        matches!(result, Err(gix::remote::connect::Error::SchemePermission(_))),
-                        "invalid booleans must be reported"
-                    );
+                    assert!(result.is_err(), "invalid booleans must be reported");
                 }
             }
             Ok(())

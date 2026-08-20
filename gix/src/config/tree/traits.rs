@@ -177,7 +177,7 @@ pub trait Key: std::fmt::Debug {
         self.validate(value)?;
         let mut key = self
             .full_name(None)
-            .map_err(|message| validate_assignment::Error::Name { message })?;
+            .map_err(|message| gix_error::Error::from_error(gix_error::ValidationError::new(message)))?;
         key.push(b'=');
         key.push_str(value);
         Ok(key)
@@ -203,7 +203,7 @@ pub trait Key: std::fmt::Debug {
         self.validate(value)?;
         let mut key = self
             .full_name(Some(subsection))
-            .map_err(|message| validate_assignment::Error::Name { message })?;
+            .map_err(|message| gix_error::Error::from_error(gix_error::ValidationError::new(message)))?;
         key.push(b'=');
         key.push_str(value);
         Ok(key)

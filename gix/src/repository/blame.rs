@@ -1,3 +1,5 @@
+use gix_error::ResultExt;
+
 use gix_blame::Start;
 use gix_hash::ObjectId;
 use gix_ref::bstr::BStr;
@@ -27,7 +29,7 @@ impl Repository {
         } = options;
         let diff_algorithm = match diff_algorithm {
             Some(diff_algorithm) => diff_algorithm,
-            None => self.diff_algorithm()?,
+            None => self.diff_algorithm().or_erased()?,
         };
 
         let options = gix_blame::Options {
@@ -46,7 +48,7 @@ impl Repository {
             file_path,
             options,
         )
-        .map_err(|err| blame_file::Error::Blame(err.into_error()))?;
+        .map_err(gix_error::Exn::into_error)?;
 
         Ok(outcome)
     }

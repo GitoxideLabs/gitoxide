@@ -31,9 +31,11 @@ mod allow {
             scheme: Option<&str>,
         ) -> Result<scheme_permission::Allow, config::protocol::allow::Error> {
             let value = value.as_bstr();
-            scheme_permission::Allow::try_from(value.as_bstr()).map_err(|value| config::protocol::allow::Error {
-                value,
-                scheme: scheme.map(ToOwned::to_owned),
+            scheme_permission::Allow::try_from(value.as_bstr()).map_err(|value| {
+                gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                    "The value {value:?} must be allow|deny|user in configuration key protocol{}.allow",
+                    scheme.map(|scheme| format!(".{scheme}")).unwrap_or_default()
+                )))
             })
         }
     }

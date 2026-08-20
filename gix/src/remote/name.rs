@@ -4,13 +4,7 @@ use super::Name;
 use crate::bstr::{BStr, BString, ByteSlice, ByteVec};
 
 /// The error returned by [validated()].
-#[derive(Debug, thiserror::Error)]
-#[error("remote names must be valid within refspecs for fetching: {name:?}")]
-#[expect(missing_docs)]
-pub struct Error {
-    pub source: gix_error::Error,
-    pub name: BString,
-}
+pub type Error = gix_error::Error;
 
 /// Return `name` if it is valid as symbolic remote name.
 ///
@@ -22,10 +16,12 @@ pub fn validated(name: impl Into<BString>) -> Result<BString, Error> {
         gix_refspec::parse::Operation::Fetch,
     ) {
         Ok(_) => Ok(name),
-        Err(err) => Err(Error {
-            source: err.into_error(),
-            name,
-        }),
+        Err(err) => Err(gix_error::Error::from(err.raise(
+            gix_error::ValidationError::new_with_input(
+                "remote names must be valid within refspecs for fetching",
+                name.clone(),
+            ),
+        ))),
     }
 }
 

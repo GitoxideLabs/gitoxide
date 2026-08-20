@@ -34,14 +34,13 @@ impl crate::Repository {
     pub fn commit_graph_if_enabled(
         &self,
     ) -> Result<Option<gix_commitgraph::Graph>, super::commit_graph_if_enabled::Error> {
-        Ok(self
-            .config
+        self.config
             .may_use_commit_graph()?
             .then(|| gix_commitgraph::at(self.objects.store_ref().path().join("info")))
             .transpose()
             .or_else(|err| match err.downcast_any_ref::<std::io::Error>() {
                 Some(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 _ => Err(err.into_error()),
-            })?)
+            })
     }
 }

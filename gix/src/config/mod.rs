@@ -1,7 +1,7 @@
 pub use gix_config::*;
 use gix_features::threading::OnceCell;
 
-use crate::{Repository, bstr::BString, repository::identity};
+use crate::{Repository, repository::identity};
 
 pub(crate) mod cache;
 mod snapshot;
@@ -56,106 +56,26 @@ pub mod section {
 ///
 pub mod set_value {
     /// The error produced when calling [`SnapshotMut::set(_subsection)?_value()`][crate::config::SnapshotMut::set_value()]
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        SetRaw(gix_error::Error),
-        #[error(transparent)]
-        Validate(#[from] crate::config::tree::key::validate::Error),
-        #[error("The key needs a subsection parameter to be valid.")]
-        SubSectionRequired,
-        #[error("The key must not be used with a subsection")]
-        SubSectionForbidden,
-    }
-
-    impl From<gix_config::file::set_raw_value::Error> for Error {
-        fn from(err: gix_config::file::set_raw_value::Error) -> Self {
-            Error::SetRaw(err.into_error())
-        }
-    }
+    pub type Error = gix_error::Error;
 }
 
 /// The error returned when failing to initialize the repository configuration.
 ///
 /// This configuration is on the critical path when opening a repository.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    ConfigBoolean(#[from] boolean::Error),
-    #[error(transparent)]
-    ConfigUnsigned(#[from] unsigned_integer::Error),
-    #[error(transparent)]
-    ConfigTypedString(#[from] key::GenericErrorWithValue),
-    #[error(transparent)]
-    ConfigCompression(#[from] key::GenericError),
-    #[error(transparent)]
-    RefsNamespace(#[from] refs_namespace::Error),
-    #[error("Cannot handle objects formatted as {:?}", .name)]
-    UnsupportedObjectFormat { name: BString },
-    #[error(
-        "extensions.objectFormat is a v1-only extension, but the repository format version is 0; \
-         set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build)"
-    )]
-    ObjectFormatRequiresV1,
-    #[error("Unsupported repository format version {version}; only versions 0 and 1 are supported")]
-    UnsupportedRepositoryFormatVersion { version: usize },
-    #[error(transparent)]
-    CoreAbbrev(#[from] abbrev::Error),
-    #[error("Could not read configuration file at \"{}\"", path.display())]
-    Io {
-        source: std::io::Error,
-        path: std::path::PathBuf,
-    },
-    #[error(transparent)]
-    Config(gix_error::Error),
-    #[error(transparent)]
-    ConfigValidation(#[from] gix_error::ValidationError),
-    #[error("The path {path:?} at the 'core.worktree' configuration could not be interpolated")]
-    PathInterpolation { path: BString, source: gix_error::Error },
-    #[error("{source:?} configuration overrides at open or init time could not be applied.")]
-    ConfigOverrides {
-        #[source]
-        err: overrides::Error,
-        source: gix_config::Source,
-    },
-}
-
-impl From<gix_error::Exn> for Error {
-    fn from(err: gix_error::Exn) -> Self {
-        Error::Config(err.into_error())
-    }
-}
-
-impl From<gix_error::Exn<gix_error::Message>> for Error {
-    fn from(err: gix_error::Exn<gix_error::Message>) -> Self {
-        Error::Config(err.into_error())
-    }
-}
+pub type Error = gix_error::Error;
 
 ///
 pub mod merge {
     ///
     pub mod pipeline_options {
         /// The error produced when obtaining options needed to fill in [gix_merge::blob::pipeline::Options].
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            BigFileThreshold(#[from] crate::config::unsigned_integer::Error),
-        }
+        pub type Error = gix_error::Error;
     }
 
     ///
     pub mod drivers {
         /// The error produced when obtaining a list of [Drivers](gix_merge::blob::Driver).
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            ConfigBoolean(#[from] crate::config::boolean::Error),
-        }
+        pub type Error = gix_error::Error;
     }
 }
 
@@ -166,155 +86,84 @@ pub mod diff {
         use crate::bstr::BString;
 
         /// The error produced when obtaining `diff.algorithm`.
-        #[derive(Debug, thiserror::Error)]
+        #[derive(Debug)]
         #[expect(missing_docs)]
         pub enum Error {
-            #[error("Unknown diff algorithm named '{name}'")]
             Unknown { name: BString },
-            #[error("The '{name}' algorithm is not yet implemented")]
             Unimplemented { name: BString },
         }
+
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Error::Unknown { name } => write!(f, "Unknown diff algorithm named '{name}'"),
+                    Error::Unimplemented { name } => write!(f, "The '{name}' algorithm is not yet implemented"),
+                }
+            }
+        }
+
+        impl std::error::Error for Error {}
     }
 
     ///
     pub mod pipeline_options {
         /// The error produced when obtaining options needed to fill in [gix_diff::blob::pipeline::Options].
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            FilesystemCapabilities(#[from] crate::config::boolean::Error),
-            #[error(transparent)]
-            BigFileThreshold(#[from] crate::config::unsigned_integer::Error),
-        }
+        pub type Error = gix_error::Error;
     }
 
     ///
     pub mod drivers {
-        use crate::bstr::BString;
-
         /// The error produced when obtaining a list of [Drivers](gix_diff::blob::Driver).
-        #[derive(Debug, thiserror::Error)]
-        #[error("Failed to parse value of 'diff.{name}.{attribute}'")]
-        pub struct Error {
-            /// The name of the driver.
-            pub name: BString,
-            /// The name of the attribute we tried to parse.
-            pub attribute: &'static str,
-            /// The actual error that occurred.
-            pub source: Box<dyn std::error::Error + Send + Sync + 'static>,
-        }
+        pub type Error = gix_error::Error;
     }
 }
 
 ///
 pub mod stat_options {
     /// The error produced when collecting stat information, and returned by [Repository::stat_options()](crate::Repository::stat_options()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ConfigCheckStat(#[from] super::key::GenericErrorWithValue),
-        #[error(transparent)]
-        ConfigBoolean(#[from] super::boolean::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "attributes")]
 pub mod checkout_options {
     /// The error produced when collecting all information needed for checking out files into a worktree.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ConfigCheckStat(#[from] super::key::GenericErrorWithValue),
-        #[error(transparent)]
-        ConfigBoolean(#[from] super::boolean::Error),
-        #[error(transparent)]
-        CheckoutWorkers(#[from] super::checkout::workers::Error),
-        #[error(transparent)]
-        Attributes(#[from] super::attribute_stack::Error),
-        #[error(transparent)]
-        FilterPipelineOptions(#[from] crate::filter::pipeline::options::Error),
-        #[error(transparent)]
-        CommandContext(#[from] crate::config::command_context::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "attributes")]
 pub mod command_context {
-    use crate::config;
-
     /// The error produced when collecting all information relevant to spawned commands,
     /// obtained via [Repository::command_context()](crate::Repository::command_context()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Boolean(#[from] config::boolean::Error),
-        #[error(transparent)]
-        ParseBool(#[from] gix_error::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod exclude_stack {
-    use crate::config;
-    use std::path::PathBuf;
-
     /// The error produced when setting up a stack to query `gitignore` information.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not read repository exclude")]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        EnvironmentPermission(#[from] gix_sec::permission::Error<PathBuf>),
-        #[error("The value for `core.excludesFile` could not be read from configuration")]
-        ExcludesFilePathInterpolation(#[from] gix_error::Error),
-        #[error(transparent)]
-        ParsePreciousEnabled(#[from] config::boolean::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod attribute_stack {
     /// The error produced when setting up the attribute stack to query `gitattributes`.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("An attribute file could not be read")]
-        Io(#[from] std::io::Error),
-        #[error("Failed to interpolate the attribute file configured at `core.attributesFile`")]
-        AttributesFileInterpolation(#[from] gix_error::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod protocol {
     ///
     pub mod allow {
-        use crate::bstr::BString;
-
         /// The error returned when obtaining the permission for a particular scheme.
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        #[error("The value {value:?} must be allow|deny|user in configuration key protocol{0}.allow", scheme.as_ref().map(|s| format!(".{s}")).unwrap_or_default())]
-        pub struct Error {
-            pub scheme: Option<String>,
-            pub value: BString,
-        }
+        pub type Error = gix_error::Error;
     }
 }
 
 ///
 pub mod ssh_connect_options {
     /// The error produced when obtaining ssh connection configuration.
-    #[derive(Debug, thiserror::Error)]
-    #[error(transparent)]
-    pub struct Error(#[from] super::key::GenericErrorWithValue);
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -349,8 +198,7 @@ pub mod key {
     /// A generic error suitable to produce decent messages for all kinds of configuration errors with config-key granularity.
     ///
     /// This error is meant to be reusable and help produce uniform error messages related to parsing any configuration key.
-    #[derive(Debug, thiserror::Error)]
-    #[error("{} \"{key}{}\"{} {}", prefix(PREFIX), value.as_ref().map(|v| format!("={v}")).unwrap_or_default(), environment_override.as_deref().map(|var| format!(" (possibly from {var})")).unwrap_or_default(), suffix(SUFFIX))]
+    #[derive(Debug)]
     pub struct Error<E: std::error::Error + Send + Sync + 'static, const PREFIX: char, const SUFFIX: char> {
         /// The configuration key that contained the value.
         pub key: BString,
@@ -360,6 +208,45 @@ pub mod key {
         pub environment_override: Option<&'static str>,
         /// The source of the error if there was one.
         pub source: Option<E>,
+    }
+
+    impl<E, const PREFIX: char, const SUFFIX: char> std::fmt::Display for Error<E, PREFIX, SUFFIX>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "{} \"{}{}\"{} {}",
+                prefix(PREFIX),
+                self.key,
+                self.value.as_ref().map(|v| format!("={v}")).unwrap_or_default(),
+                self.environment_override
+                    .map(|var| format!(" (possibly from {var})"))
+                    .unwrap_or_default(),
+                suffix(SUFFIX)
+            )
+        }
+    }
+
+    impl<E, const PREFIX: char, const SUFFIX: char> std::error::Error for Error<E, PREFIX, SUFFIX>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.source.as_ref().map(|err| err as _)
+        }
+    }
+
+    impl<E, const PREFIX: char, const SUFFIX: char> From<Error<E, PREFIX, SUFFIX>> for gix_error::Error
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        fn from(err: Error<E, PREFIX, SUFFIX>) -> Self {
+            use gix_error::ErrorExt;
+            let message = err.to_string();
+            err.and_raise(gix_error::ValidationError::new(message)).into()
+        }
     }
 
     /// Initialization
@@ -419,19 +306,8 @@ pub mod key {
 
 ///
 pub mod encoding {
-    use crate::bstr::BString;
-
     /// The error produced when failing to parse the `core.checkRoundTripEncoding` key.
-    #[derive(Debug, thiserror::Error)]
-    #[error("The encoding named '{encoding}' seen in key '{key}={value}' is unsupported")]
-    pub struct Error {
-        /// The configuration key that contained the value.
-        pub key: BString,
-        /// The value that was assigned to `key`.
-        pub value: BString,
-        /// The encoding that failed.
-        pub encoding: BString,
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -447,17 +323,8 @@ pub mod checkout {
 
 ///
 pub mod abbrev {
-    use crate::bstr::BString;
-
     /// The error describing an incorrect `core.abbrev` value.
-    #[derive(Debug, thiserror::Error)]
-    #[error("Invalid value for 'core.abbrev' = '{}'. It must be between 4 and {}", .value, .max)]
-    pub struct Error {
-        /// The value found in the git configuration
-        pub value: BString,
-        /// The maximum abbreviation length, the length of an object hash.
-        pub max: u8,
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -478,14 +345,7 @@ pub mod time {
 ///
 pub mod commit_signature {
     /// The error produced when obtaining or installing a fallback commit signature.
-    #[derive(Debug, thiserror::Error)]
-    #[allow(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Time(#[from] super::time::Error),
-        #[error(transparent)]
-        Span(#[from] gix_config::parse::span::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -544,70 +404,13 @@ pub mod ssl_version {
 
 ///
 pub mod transport {
-    use crate::bstr::BString;
-
     /// The error produced when configuring a transport for a particular protocol.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(
-            "Could not interpret configuration key {key:?} as {kind} integer of desired range with value: {actual}"
-        )]
-        InvalidInteger {
-            key: &'static str,
-            kind: &'static str,
-            actual: i64,
-        },
-        #[error("Could not interpret configuration key {key:?}")]
-        ConfigValue {
-            source: gix_error::Error,
-            key: &'static str,
-        },
-        #[error("Could not interpolate path at key {key:?}")]
-        InterpolatePath {
-            source: gix_error::Error,
-            key: &'static str,
-        },
-        #[error("Could not decode value at key {key:?} as UTF-8 string")]
-        IllformedUtf8 {
-            key: BString,
-            source: crate::config::string::Error,
-        },
-        #[error("Invalid URL passed for configuration")]
-        ParseUrl(#[from] gix_error::Error),
-        #[error("Could obtain configuration for an HTTP url")]
-        Http(#[from] http::Error),
-    }
+    pub type Error = gix_error::Error;
 
     ///
     pub mod http {
-        use crate::bstr::BString;
-
         /// The error produced when configuring a HTTP transport.
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            Boolean(#[from] crate::config::boolean::Error),
-            #[error(transparent)]
-            UnsignedInteger(#[from] crate::config::unsigned_integer::Error),
-            #[error(transparent)]
-            ConnectTimeout(#[from] crate::config::duration::Error),
-            #[error("The proxy authentication at key `{key}` is invalid")]
-            InvalidProxyAuthMethod {
-                source: crate::config::key::GenericErrorWithValue,
-                key: BString,
-            },
-            #[error("Could not configure the credential helpers for the authenticated proxy url")]
-            #[cfg(feature = "credentials")]
-            ConfigureProxyAuthenticate(#[from] crate::config::snapshot::credential_helpers::Error),
-            #[error(transparent)]
-            InvalidSslVersion(#[from] crate::config::ssl_version::Error),
-            #[error("The HTTP version must be 'HTTP/2' or 'HTTP/1.1'")]
-            InvalidHttpVersion(#[from] crate::config::key::GenericErrorWithValue),
-            #[error("The follow redirects value 'initial', or boolean true or false")]
-            InvalidFollowRedirects(#[source] crate::config::key::GenericErrorWithValue),
-        }
+        pub type Error = gix_error::Error;
     }
 }
 

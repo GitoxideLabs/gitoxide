@@ -114,11 +114,12 @@ mod non_bare {
         )
         .unwrap_err();
         assert!(matches!(
-            err,
-            gix::init::Error::InvalidBranchName {
-                name,
-                source: gix_validate::reference::name::Error::Reserved { name: reserved }
-            } if name == "HEAD" && reserved == "refs/heads/HEAD"
+            err.downcast_any_ref::<gix_error::ValidationError>(),
+            Some(gix_error::ValidationError { input: Some(name), .. }) if name == "HEAD"
+        ));
+        assert!(matches!(
+            err.downcast_any_ref(),
+            Some(gix_validate::reference::name::Error::Reserved { name }) if name == "refs/heads/HEAD"
         ));
         Ok(())
     }
@@ -138,11 +139,12 @@ mod non_bare {
         )
         .unwrap_err();
         assert!(matches!(
-            err,
-            gix::init::Error::InvalidBranchName {
-                name,
-                source: gix_validate::reference::name::Error::Reserved { name: reserved }
-            } if name == "refs/heads/HEAD" && reserved == "refs/heads/HEAD"
+            err.downcast_any_ref::<gix_error::ValidationError>(),
+            Some(gix_error::ValidationError { input: Some(name), .. }) if name == "refs/heads/HEAD"
+        ));
+        assert!(matches!(
+            err.downcast_any_ref(),
+            Some(gix_validate::reference::name::Error::Reserved { name }) if name == "refs/heads/HEAD"
         ));
         Ok(())
     }

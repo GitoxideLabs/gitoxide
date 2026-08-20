@@ -68,12 +68,16 @@ fn paths_cannot_leave_the_repository() -> gix_testtools::Result {
         "some-with-file/very/deeply/nested/subdir/empty-file",
         "absolute paths inside the worktree become repository-relative"
     );
-    assert!(
-        matches!(
-            repo.normalize_path("../../outside"),
-            Err(gix::repository::normalize_path::Error::OutsideOfRepository { .. })
-        ),
-        "relative paths cannot traverse above the worktree"
+    let err = repo
+        .normalize_path("../../outside")
+        .expect_err("relative paths cannot traverse above the worktree");
+    assert!(err.is_validation(), "leaving the worktree is a validation error");
+    assert_eq!(
+        err.probable_cause().to_string(),
+        format!(
+            "The path '{}' leaves the repository",
+            std::path::Path::new("some").join("../../outside").display()
+        )
     );
 
     assert_eq!(
@@ -92,19 +96,18 @@ fn absolute_paths_outside_the_repository_are_rejected() -> gix_testtools::Result
     let outside = root.parent().expect("fixture has a parent").to_owned();
     let outside_as_bstr = gix::path::into_bstr(outside.clone());
 
-    match repo
+    let err = repo
         .normalize_path(&outside_as_bstr)
-        .expect_err("an absolute path outside the repository must fail")
-    {
-        gix::repository::normalize_path::Error::AbsolutePathOutsideOfRepository {
-            path,
-            root: actual_root,
-        } => {
-            assert_eq!(path, outside, "the rejected path is retained");
-            assert_eq!(actual_root, root, "the repository root is retained");
-        }
-        err => panic!("expected an absolute-path-outside error, got {err:?}"),
-    }
+        .expect_err("an absolute path outside the repository must fail");
+    assert!(err.is_validation(), "an outside path is a validation error");
+    assert_eq!(
+        err.probable_cause().to_string(),
+        format!(
+            "The absolute path '{}' is not inside the repository at '{}'",
+            outside.display(),
+            root.display()
+        )
+    );
     Ok(())
 }
 
@@ -212,8 +215,7 @@ fn revspec_paths_starting_with_a_dot_need_a_worktree_to_stay_within() -> gix_tes
 
 #[cfg(feature = "revision")]
 fn probable_cause(res: Result<gix::Id<'_>, gix::revision::spec::parse::single::Error>) -> String {
-    match res.expect_err("the revspec must not resolve") {
-        gix::revision::spec::parse::single::Error::Parse(err) => err.probable_cause().to_string(),
-        err => panic!("expected a failure while parsing, got {err:?}"),
-    }
+    res.expect_err("the revspec must not resolve")
+        .probable_cause()
+        .to_string()
 }

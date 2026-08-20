@@ -5,7 +5,7 @@ use std::borrow::Cow;
 /// Low-level operations on Git notes trees.
 pub use gix_note as plumbing;
 
-use gix_error::{ErrorExt, ResultExt, message};
+use gix_error::{BoxedResultExt, ErrorExt, ResultExt, message};
 
 use crate::{
     Blob, Id, Repository,
@@ -357,7 +357,7 @@ fn add_refs(repo: &Repository, pattern: &BStr, out: &mut Vec<FullName>) -> Resul
             .or_raise(|| message!("Could not iterate notes references matching {pattern}"))?;
         for reference in references {
             let reference = reference
-                .map_err(gix_error::Error::from_boxed)
+                .or_erased()
                 .or_raise(|| message!("Could not read notes reference matching {pattern}"))?;
             if parsed.matches(reference.name().as_bstr(), gix_glob::wildmatch::Mode::empty()) {
                 push_unique(reference.inner.name);

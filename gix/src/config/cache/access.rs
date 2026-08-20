@@ -2,6 +2,10 @@
 use std::{path::PathBuf, time::Duration};
 
 use gix_config::file::Metadata;
+#[cfg(feature = "blob-diff")]
+use gix_error::ErrorExt;
+#[cfg(any(feature = "attributes", feature = "excludes"))]
+use gix_error::ResultExt;
 use gix_lock::acquire::Fail;
 
 use crate::{
@@ -67,10 +71,11 @@ impl Cache {
                 driver.is_binary = config::tree::Diff::DRIVER_BINARY
                     .try_into_binary(binary)
                     .with_leniency(self.lenient_config)
-                    .map_err(|err| config::diff::drivers::Error {
-                        name: driver.name.clone(),
-                        attribute: "binary",
-                        source: Box::new(err),
+                    .map_err(|err| {
+                        gix_error::Error::from(err.and_raise(gix_error::message!(
+                            "Failed to parse value of 'diff.{}.binary'",
+                            driver.name
+                        )))
                     })?;
             }
             if let Some(command) = section.value(config::tree::Diff::DRIVER_COMMAND.name) {
@@ -89,10 +94,11 @@ impl Cache {
                         err => Err(err),
                     })
                     .with_lenient_default(self.lenient_config)
-                    .map_err(|err| config::diff::drivers::Error {
-                        name: driver.name.clone(),
-                        attribute: "algorithm",
-                        source: Box::new(err),
+                    .map_err(|err| {
+                        gix_error::Error::from(err.and_raise(gix_error::message!(
+                            "Failed to parse value of 'diff.{}.algorithm'",
+                            driver.name
+                        )))
                     })?
                     .into();
             }
@@ -141,7 +147,7 @@ impl Cache {
         &self,
     ) -> Result<gix_merge::blob::pipeline::Options, config::merge::pipeline_options::Error> {
         Ok(gix_merge::blob::pipeline::Options {
-            large_file_threshold_bytes: self.big_file_threshold()?,
+            large_file_threshold_bytes: self.big_file_threshold().map_err(gix_error::Error::from)?,
         })
     }
 
@@ -150,8 +156,8 @@ impl Cache {
         &self,
     ) -> Result<gix_diff::blob::pipeline::Options, config::diff::pipeline_options::Error> {
         Ok(gix_diff::blob::pipeline::Options {
-            large_file_threshold_bytes: self.big_file_threshold()?,
-            fs: self.fs_capabilities()?,
+            large_file_threshold_bytes: self.big_file_threshold().map_err(gix_error::Error::from)?,
+            fs: self.fs_capabilities().map_err(gix_error::Error::from)?,
         })
     }
 
@@ -290,16 +296,19 @@ impl Cache {
     pub(crate) fn stat_options(&self) -> Result<gix_index::entry::stat::Options, config::stat_options::Error> {
         use crate::config::tree::gitoxide;
         Ok(gix_index::entry::stat::Options {
-            trust_ctime: boolean(self, "core.trustCTime", &Core::TRUST_C_TIME, true)?,
-            use_nsec: boolean(self, "gitoxide.core.useNsec", &gitoxide::Core::USE_NSEC, false)?,
-            use_stdev: boolean(self, "gitoxide.core.useStdev", &gitoxide::Core::USE_STDEV, false)?,
+            trust_ctime: boolean(self, "core.trustCTime", &Core::TRUST_C_TIME, true).map_err(gix_error::Error::from)?,
+            use_nsec: boolean(self, "gitoxide.core.useNsec", &gitoxide::Core::USE_NSEC, false)
+                .map_err(gix_error::Error::from)?,
+            use_stdev: boolean(self, "gitoxide.core.useStdev", &gitoxide::Core::USE_STDEV, false)
+                .map_err(gix_error::Error::from)?,
             check_stat: self
                 .apply_leniency(
                     self.resolved
                         .string(Core::CHECK_STAT)
                         .map(|v| Core::CHECK_STAT.try_into_checkstat(v))
                         .transpose(),
-                )?
+                )
+                .map_err(gix_error::Error::from)?
                 .unwrap_or(true),
         })
     }
@@ -335,13 +344,15 @@ impl Cache {
     ) -> Result<gix_worktree_state::checkout::Options, config::checkout_options::Error> {
         use crate::config::tree::gitoxide;
         let git_dir = repo.git_dir();
-        let thread_limit = self.apply_leniency(
-            crate::config::tree::Checkout::WORKERS.try_from_workers(
-                self.resolved
-                    .integer_filter("checkout.workers", &mut self.filter_config_section.clone()),
-            ),
-        )?;
-        let capabilities = self.fs_capabilities()?;
+        let thread_limit = self
+            .apply_leniency(
+                crate::config::tree::Checkout::WORKERS.try_from_workers(
+                    self.resolved
+                        .integer_filter("checkout.workers", &mut self.filter_config_section.clone()),
+                ),
+            )
+            .map_err(gix_error::Error::from)?;
+        let capabilities = self.fs_capabilities().map_err(gix_error::Error::from)?;
         let filters = {
             let mut filters =
                 gix_filter::Pipeline::new(repo.command_context()?, crate::filter::Pipeline::options(repo)?);
@@ -357,14 +368,16 @@ impl Cache {
             "gitoxide.core.filterProcessDelay",
             &gitoxide::Core::FILTER_PROCESS_DELAY,
             true,
-        )? {
+        )
+        .map_err(gix_error::Error::from)?
+        {
             gix_filter::driver::apply::Delay::Allow
         } else {
             gix_filter::driver::apply::Delay::Forbid
         };
         Ok(gix_worktree_state::checkout::Options {
             filter_process_delay,
-            validate: self.protect_options()?,
+            validate: self.protect_options().map_err(gix_error::Error::from)?,
             filters,
             attributes: self
                 .assemble_attribute_globals(git_dir, attributes_source, self.attributes)?
@@ -374,12 +387,7 @@ impl Cache {
             destination_is_initially_empty: false,
             overwrite_existing: false,
             keep_going: false,
-            stat_options: self.stat_options().map_err(|err| match err {
-                config::stat_options::Error::ConfigCheckStat(err) => {
-                    config::checkout_options::Error::ConfigCheckStat(err)
-                }
-                config::stat_options::Error::ConfigBoolean(err) => config::checkout_options::Error::ConfigBoolean(err),
-            })?,
+            stat_options: self.stat_options()?,
         })
     }
 
@@ -403,14 +411,19 @@ impl Cache {
         source: gix_worktree::stack::state::ignore::Source,
         buf: &mut Vec<u8>,
     ) -> Result<gix_worktree::stack::state::Ignore, config::exclude_stack::Error> {
-        let excludes_file = match self.excludes_file().map_err(gix_error::Exn::into_error)? {
+        let excludes_file = match self.excludes_file().map_err(|err| {
+            gix_error::Error::from(err.raise(gix_error::message(
+                "The value for `core.excludesFile` could not be read from configuration",
+            )))
+        })? {
             Some(user_path) => Some(user_path),
-            None => self.xdg_config_path("ignore")?,
+            None => self.xdg_config_path("ignore").or_erased()?,
         };
-        let parse_ignore = self.ignore_pattern_parser()?;
+        let parse_ignore = self.ignore_pattern_parser().map_err(gix_error::Error::from)?;
         Ok(gix_worktree::stack::state::Ignore::new(
             overrides.unwrap_or_default(),
-            gix_ignore::Search::from_git_dir(git_dir, excludes_file, buf, parse_ignore)?,
+            gix_ignore::Search::from_git_dir(git_dir, excludes_file, buf, parse_ignore)
+                .or_raise(|| gix_error::message("Could not read repository exclude"))?,
             None,
             source,
             parse_ignore,
@@ -425,10 +438,9 @@ impl Cache {
         attributes: crate::open::permissions::Attributes,
     ) -> Result<(gix_worktree::stack::state::Attributes, Vec<u8>), config::attribute_stack::Error> {
         use gix_attributes::Source;
-        let configured_or_user_attributes = match self
-            .trusted_file_path(Core::ATTRIBUTES_FILE)
-            .map_err(gix_error::Exn::into_error)?
-        {
+        let configured_or_user_attributes = match self.trusted_file_path(Core::ATTRIBUTES_FILE).or_raise(|| {
+            gix_error::message("Failed to interpolate the attribute file configured at `core.attributesFile`")
+        })? {
             Some(attributes) => Some(attributes),
             None => {
                 if attributes.git {
@@ -451,7 +463,8 @@ impl Cache {
         let mut buf = Vec::new();
         let mut collection = gix_attributes::search::MetadataCollection::default();
         let state = gix_worktree::stack::state::Attributes::new(
-            gix_attributes::Search::new_globals(attribute_files, &mut buf, &mut collection)?,
+            gix_attributes::Search::new_globals(attribute_files, &mut buf, &mut collection)
+                .or_raise(|| gix_error::message("An attribute file could not be read"))?,
             Some(info_attributes_path),
             source,
             collection,

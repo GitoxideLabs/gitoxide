@@ -258,8 +258,7 @@ mod blocking_and_async_io {
 
     #[test]
     #[cfg(feature = "blocking-network-client")]
-    #[expect(clippy::result_large_err)]
-    fn collate_fetch_error() -> Result<(), gix::env::collate::fetch::Error<std::io::Error>> {
+    fn collate_fetch_error() -> Result<(), gix::env::collate::fetch::Error> {
         let (repo, _tmp) = try_repo_rw("two-origins")?;
         let remote = repo
             .head()?
@@ -276,7 +275,7 @@ mod blocking_and_async_io {
             repo.path()
                 .join("HEAD")
                 .metadata()
-                .map_err(gix::env::collate::fetch::Error::Other)?
+                .map_err(gix::Error::from_error)?
                 .is_file(),
             "just to show off the 'Other' error type"
         );

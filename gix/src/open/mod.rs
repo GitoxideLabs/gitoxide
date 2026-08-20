@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{bstr::BString, config};
+use crate::bstr::BString;
 
 /// Permissions associated with various resources of a git repository
 #[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
@@ -49,22 +49,7 @@ pub struct Options {
 }
 
 /// The error returned by [`crate::open()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Failed to load the git configuration")]
-    Config(#[from] config::Error),
-    #[error("\"{path}\" does not appear to be a git repository")]
-    NotARepository { source: gix_error::Error, path: PathBuf },
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error("The git directory at '{}' is considered unsafe as it's not owned by the current user.", .path.display())]
-    UnsafeGitDir { path: PathBuf },
-    #[error(transparent)]
-    EnvironmentAccessDenied(#[from] gix_sec::permission::Error<std::path::PathBuf>),
-    #[error(transparent)]
-    PrefixNotRelative(#[from] gix_path::relative_path::Error),
-}
+pub type Error = gix_error::Error;
 
 mod options;
 pub mod permissions;

@@ -5,6 +5,7 @@ use std::{
 };
 
 use gix_config::KeyRef;
+use gix_error::ErrorExt;
 
 use crate::{
     bstr::{BStr, ByteSlice},
@@ -141,7 +142,14 @@ impl<T: Validate> Key for Any<T> {
     }
 
     fn validate(&self, value: &BStr) -> Result<(), config::tree::key::validate::Error> {
-        Ok(self.validate.validate(value)?)
+        self.validate.validate(value).map_err(|err| {
+            gix_error::Error::from_boxed(err)
+                .and_raise(gix_error::ValidationError::new_with_input(
+                    format!("Invalid value for configuration key '{}'", self.logical_name()),
+                    value,
+                ))
+                .into()
+        })
     }
 
     fn section(&self) -> &dyn Section {
