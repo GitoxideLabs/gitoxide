@@ -322,10 +322,6 @@ pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository, i
 /// amended with using configuration from the git installation to ensure all authentication options are honored).
 ///
 /// See [`clone::PrepareFetch::new()`] for a function to take full control over all options.
-#[expect(
-    clippy::result_large_err,
-    reason = "will be removed once `gix-error` is used consistently"
-)]
 pub fn prepare_clone_bare<Url, E>(
     url: Url,
     path: impl AsRef<std::path::Path>,
@@ -347,10 +343,6 @@ where
 /// (but amended with using configuration from the git installation to ensure all authentication options are honored).
 ///
 /// See [`clone::PrepareFetch::new()`] for a function to take full control over all options.
-#[expect(
-    clippy::result_large_err,
-    reason = "will be removed once `gix-error` is used consistently"
-)]
 pub fn prepare_clone<Url, E>(url: Url, path: impl AsRef<std::path::Path>) -> Result<clone::PrepareFetch, clone::Error>
 where
     Url: std::convert::TryInto<gix_url::Url, Error = E>,
@@ -401,7 +393,7 @@ pub fn open_opts(directory: impl Into<std::path::PathBuf>, options: open::Option
 ///
 /// `git_dir` supplies context for `includeIf.gitdir` conditions and does not have to exist. Without it, these
 /// conditions aren't matched. Repository-local and branch-dependent configuration isn't available at this stage.
-pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Result<config::File, config::Error> {
+pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Result<config::File, crate::Error> {
     let environment = options.permissions.env;
     let git_install_dir = path::install_dir().ok();
     let home = gix_path::env::home_dir().and_then(|home| environment.home.check_opt(home));
@@ -437,17 +429,18 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
 /// Use this to inspect, prepare or load the file before calling [`config_mut()`]. The file and its parent directories
 /// do not have to exist. No configuration transaction is opened, no lock is acquired, and no directories are created.
 /// Discovering the Git installation path, or the system path on Windows, may invoke Git.
-pub fn config_path(
-    source: config::Source,
-    options: &open::Options,
-) -> Result<std::path::PathBuf, config::file_mut::Error> {
-    use config::file_mut::Error;
+pub fn config_path(source: config::Source, options: &open::Options) -> Result<std::path::PathBuf, crate::Error> {
+    use gix_error::{ErrorExt, ResultExt, message};
 
     if !matches!(
         source,
         config::Source::GitInstallation | config::Source::System | config::Source::Git | config::Source::User
     ) {
-        return Err(Error::UnsupportedSource(source));
+        return Err(
+            message!("Configuration source {source:?} requires a repository or has no physical file")
+                .raise()
+                .into(),
+        );
     }
     let path = config::cache::source_path(
         source,
@@ -456,11 +449,13 @@ pub fn config_path(
         options.permissions.config,
         &mut config::Cache::make_source_env(options.permissions.env),
     )
-    .ok_or(Error::SourceUnavailable(source))?;
+    .ok_or_else(|| message!("Configuration source {source:?} has no available path with these options").raise())?;
     Ok(if path.is_absolute() {
         path
     } else {
-        std::env::current_dir().map_err(Error::CurrentDir)?.join(path)
+        std::env::current_dir()
+            .or_raise(|| message("Could not obtain the current directory for a relative configuration path"))?
+            .join(path)
     })
 }
 
@@ -485,12 +480,11 @@ pub fn config_path(
 /// file.commit()?;
 /// # Ok(()) }
 /// ```
-pub fn config_mut(
-    source: config::Source,
-    options: &open::Options,
-) -> Result<config::FileTransaction, config::file_mut::Error> {
+pub fn config_mut(source: config::Source, options: &open::Options) -> Result<config::FileTransaction, crate::Error> {
+    use gix_error::{ResultExt, message};
+
     let path = config_path(source, options)?;
-    let resolved = config(None, options)?;
+    let resolved = config(None, options).or_raise(|| message("Could not load global configuration"))?;
     let filter = options.filter_config_section.unwrap_or(config::section::is_trusted);
     let lock_mode = config::cache::access::config_lock_timeout(&resolved, options.lenient_config, filter)?;
     let shared_repository_permissions = config::file_mut::shared_repository_permissions(&resolved, filter)?;

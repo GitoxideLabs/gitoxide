@@ -1,5 +1,6 @@
 #![allow(clippy::result_large_err)]
 use crate::{Remote, bstr::BStr, config, remote, remote::find};
+use gix_error::{ErrorExt, ResultExt};
 
 impl crate::Repository {
     /// Create a new remote available at the given `url`.
@@ -67,11 +68,11 @@ impl crate::Repository {
     /// ```
     pub fn find_remote(&self, name_or_url: impl gix_utils::AsBStr) -> Result<Remote<'_>, find::existing::Error> {
         let name_or_url = name_or_url.as_bstr();
-        Ok(self
-            .try_find_remote(name_or_url)
-            .ok_or_else(|| find::existing::Error::NotFound {
-                name: name_or_url.into(),
-            })??)
+        self.try_find_remote(name_or_url).ok_or_else(|| {
+            gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
+                "The remote named {name_or_url:?} did not exist"
+            )))
+        })?
     }
 
     /// Find the default remote as configured, or `None` if no such configuration could be found.
@@ -151,7 +152,9 @@ impl crate::Repository {
         Ok(match name_or_url {
             Some(name) => match self.try_find_remote(name).and_then(Result::ok) {
                 Some(remote) => remote,
-                None => self.remote_at(gix_url::parse(name).map_err(gix_error::Exn::into_error)?)?,
+                None => self.remote_at(
+                    gix_url::parse(name).or_raise(|| gix_error::message("remote name could not be parsed as URL"))?,
+                )?,
             },
             None => self
                 .head()?
@@ -159,7 +162,11 @@ impl crate::Repository {
                 .transpose()?
                 .map(Ok)
                 .or_else(|| self.find_default_remote(remote::Direction::Fetch))
-                .ok_or(find::for_fetch::Error::ExactlyOneRemoteNotAvailable)??,
+                .ok_or_else(|| {
+                    gix_error::Error::from_error(gix_error::NotFoundError::new(
+                        "No configured remote could be found, or too many were available",
+                    ))
+                })??,
         })
     }
 
@@ -188,10 +195,11 @@ impl crate::Repository {
             specs
                 .into_iter()
                 .map(|spec| {
-                    key.try_into_refspec(spec, op).map_err(|err| find::Error::RefSpec {
-                        remote_name: name_or_url.into(),
-                        kind,
-                        source: err,
+                    key.try_into_refspec(spec, op).map_err(|err| {
+                        gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
+                            format!("{kind} ref-spec under `remote.{name_or_url}` was invalid"),
+                            name_or_url.to_owned(),
+                        )))
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()
@@ -232,10 +240,11 @@ impl crate::Repository {
                     effective_urls
                         .into_iter()
                         .map(|url| {
-                            key.try_into_url(url).map_err(|err| find::Error::Url {
-                                kind,
-                                remote_name: name_or_url.into(),
-                                source: err,
+                            key.try_into_url(url).map_err(|err| {
+                                gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
+                                    format!("The {kind} url under `remote.{name_or_url}` was invalid"),
+                                    name_or_url.to_owned(),
+                                )))
                             })
                         })
                         .collect()
@@ -268,9 +277,11 @@ impl crate::Repository {
         let fetch_tags = config
             .string_filter(&format!("remote.{}.{}", name_or_url, "tagOpt"), &mut filter)
             .map(|value| {
-                config::tree::Remote::TAG_OPT
-                    .try_into_tag_opt(value)
-                    .map_err(Into::into)
+                config::tree::Remote::TAG_OPT.try_into_tag_opt(value).map_err(|err| {
+                    gix_error::Error::from(err.and_raise(gix_error::message(
+                        "The value for 'remote.<name>.tagOpt` is invalid and must either be '--tags' or '--no-tags'",
+                    )))
+                })
             });
         let fetch_tags = match fetch_tags {
             Some(Ok(v)) => v,
@@ -310,29 +321,27 @@ impl crate::Repository {
                         Ok(url) if name_is_url || url.scheme != gix_url::Scheme::File => urls.push(url),
                         Ok(_) => {}
                         Err(source) if name_is_url => {
-                            return Some(Err(find::Error::Url {
-                                kind: "fetch",
-                                remote_name: name_or_url.into(),
-                                source,
-                            }));
+                            return Some(Err(gix_error::Error::from(source.and_raise(
+                                gix_error::ValidationError::new_with_input(
+                                    format!("The fetch url under `remote.{name_or_url}` was invalid"),
+                                    name_or_url.to_owned(),
+                                ),
+                            ))));
                         }
                         Err(_) => {}
                     }
                 }
 
-                Some(
-                    Remote::from_preparsed_config(
-                        Some(name_or_url.to_owned()),
-                        urls,
-                        push_urls,
-                        fetch_specs,
-                        push_specs,
-                        rewrite_urls,
-                        fetch_tags,
-                        self,
-                    )
-                    .map_err(Into::into),
-                )
+                Some(Remote::from_preparsed_config(
+                    Some(name_or_url.to_owned()),
+                    urls,
+                    push_urls,
+                    fetch_specs,
+                    push_specs,
+                    rewrite_urls,
+                    fetch_tags,
+                    self,
+                ))
             }
         }
     }

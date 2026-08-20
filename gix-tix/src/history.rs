@@ -957,7 +957,7 @@ fn local_refs_by_target(repo: &gix::Repository) -> Result<HashMap<ObjectId, Vec<
     for reference in refs {
         let reference = match reference {
             Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) if is_missing_ref(&err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read local branch: {err}")),
         };
         out.entry(reference.id().detach())
@@ -1274,7 +1274,7 @@ pub(crate) fn ref_tree_revisions(repo: &gix::Repository, include_tags: bool) -> 
     {
         let mut reference = match reference {
             Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) if is_missing_ref(&err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
         };
         let name = reference.name().as_bstr().to_owned();
@@ -1485,7 +1485,7 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
     {
         let mut reference = match reference {
             Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) if is_missing_ref(&err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read tix {label}: {err}")),
         };
         let suffix = reference.name().as_bstr().strip_prefix(prefix).unwrap_or_default();
@@ -1928,7 +1928,7 @@ pub(crate) fn decorations_excluding(
     {
         let mut reference = match reference {
             Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) if is_missing_ref(&err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
         };
         let full_name = reference.name().to_owned();
@@ -2083,17 +2083,8 @@ pub(crate) fn decorations_excluding(
     Ok(out)
 }
 
-pub(crate) fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
-    loop {
-        if err
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
-        {
-            return true;
-        }
-        let Some(source) = err.source() else { return false };
-        err = source;
-    }
+pub(crate) fn is_missing_ref(err: &gix::Error) -> bool {
+    err.is_not_found()
 }
 
 pub(crate) fn decoration_kind(name: &[u8]) -> DecorationKind {
@@ -2171,9 +2162,12 @@ mod tests {
 
     #[test]
     fn only_missing_ref_reads_are_ignored() {
-        let ref_error = |kind| gix::refs::file::iter::loose_then_packed::Error::ReadFileContents {
-            source: std::io::Error::from(kind),
-            path: "refs/heads/racing".into(),
+        let ref_error = |kind| {
+            gix::Exn::new(gix::refs::file::iter::loose_then_packed::Error::ReadFileContents {
+                source: std::io::Error::from(kind),
+                path: "refs/heads/racing".into(),
+            })
+            .into_error()
         };
         assert!(
             is_missing_ref(&ref_error(std::io::ErrorKind::NotFound)),

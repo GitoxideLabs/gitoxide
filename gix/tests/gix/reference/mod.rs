@@ -93,6 +93,15 @@ mod find {
     }
 
     #[test]
+    fn missing_reference_is_classified() -> crate::Result {
+        let err = repo()?
+            .find_reference("does-not-exist")
+            .expect_err("the reference is missing");
+        assert!(err.is_not_found());
+        Ok(())
+    }
+
+    #[test]
     fn and_peel() -> crate::Result {
         let repo = repo()?;
         let mut packed_tag_ref = repo.try_find_reference("dt1")?.expect("tag to exist");

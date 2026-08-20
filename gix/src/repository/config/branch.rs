@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use gix_error::{ErrorExt, ResultExt};
 use gix_ref::{FullName, FullNameRef};
 
 use crate::{
@@ -58,13 +59,17 @@ impl crate::Repository {
                         } else {
                             gix_ref::Category::LocalBranch.to_full_name(name.as_bstr())
                         }
-                        .map_err(Into::into)
+                        .map_err(|err| {
+                            gix_error::Error::from(err.and_raise(gix_error::ValidationError::new(
+                                "The configured name of the remote ref to merge wasn't valid",
+                            )))
+                        })
                     })
             }
             remote::Direction::Push => {
                 let remote = match self.branch_remote(name.shorten(), direction)? {
                     Ok(r) => r,
-                    Err(err) => return Some(Err(err.into())),
+                    Err(err) => return Some(Err(err)),
                 };
                 if remote.push_specs.is_empty() {
                     let push_default =
@@ -92,7 +97,7 @@ impl crate::Repository {
                     }
                 } else {
                     matching_remote(name, remote.push_specs.iter(), self.object_hash())
-                        .map(|res| res.map_err(Into::into))
+                        .map(|res| -> Result<_, gix_error::Error> { Ok(res.or_erased()?) })
                 }
             }
         }
@@ -123,18 +128,31 @@ impl crate::Repository {
     ) -> Option<Result<FullName, branch_remote_tracking_ref_name::Error>> {
         let remote_ref = match self.branch_remote_ref_name(name, direction)? {
             Ok(r) => r,
-            Err(err) => return Some(Err(err.into())),
+            Err(err) => {
+                return Some(Err(gix_error::Error::from(err.and_raise(gix_error::message(
+                    "Could not get the remote reference to translate into the local tracking branch",
+                )))));
+            }
         };
         let remote = match self.branch_remote(name.shorten(), direction)? {
             Ok(r) => r,
-            Err(err) => return Some(Err(err.into())),
+            Err(err) => {
+                return Some(Err(gix_error::Error::from(err.and_raise(gix_error::message(
+                    "Couldn't find remote to obtain fetch-specs for mapping to the tracking reference",
+                )))));
+            }
         };
 
         if remote.fetch_specs.is_empty() {
             return None;
         }
-        matching_remote(remote_ref.as_ref(), remote.fetch_specs.iter(), self.object_hash())
-            .map(|res| res.map_err(Into::into))
+        matching_remote(remote_ref.as_ref(), remote.fetch_specs.iter(), self.object_hash()).map(|res| {
+            res.map_err(|err| {
+                gix_error::Error::from(
+                    err.and_raise(gix_error::message("The name of the tracking reference was invalid")),
+                )
+            })
+        })
     }
 
     /// Given a local `tracking_branch` name, find the remote that maps to it along with the name of the branch on
@@ -147,11 +165,11 @@ impl crate::Repository {
         &self,
         tracking_branch: &FullNameRef,
     ) -> Result<Option<(FullName, crate::Remote<'_>)>, upstream_branch_and_remote_name_for_tracking_branch::Error> {
-        use upstream_branch_and_remote_name_for_tracking_branch::Error;
         if tracking_branch.category() != Some(gix_ref::Category::RemoteBranch) {
-            return Err(Error::BranchCategory {
-                full_name: tracking_branch.to_owned(),
-            });
+            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                "The input branch '{}' needs to be a remote tracking branch",
+                tracking_branch.as_bstr()
+            ))));
         }
 
         let null = self.object_hash().null();
@@ -184,14 +202,17 @@ impl crate::Repository {
             return Ok(Some((upstream_branch, remote)));
         }
         if !ambiguous_remotes.is_empty() || candidates.len() > 1 {
-            return Err(Error::AmbiguousRemotes {
-                remotes: ambiguous_remotes
-                    .into_iter()
-                    .map(|r| r.name)
-                    .chain(candidates.into_iter().map(|(r, _)| r.name))
-                    .flatten()
-                    .collect(),
-            });
+            let remotes = ambiguous_remotes
+                .into_iter()
+                .map(|r| r.name)
+                .chain(candidates.into_iter().map(|(r, _)| r.name))
+                .flatten()
+                .map(|name| name.as_bstr().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                "Found ambiguous remotes without 1:1 mapping or more than one match: {remotes}"
+            ))));
         }
         Ok(None)
     }
@@ -239,25 +260,25 @@ impl crate::Repository {
         direction: remote::Direction,
     ) -> Option<Result<crate::Remote<'_>, remote::find::existing::Error>> {
         let name = self.branch_remote_name(short_branch_name, direction)?;
-        self.try_find_remote(name.as_bstr())
-            .map(|res| res.map_err(Into::into))
-            .or_else(|| match name {
-                remote::Name::Url(url) => gix_url::parse(&url)
-                    .map_err(gix_error::Exn::into_error)
-                    .map_err(Into::into)
-                    .and_then(|url| {
-                        self.remote_at(url)
-                            .map_err(|err| remote::find::existing::Error::Find(remote::find::Error::Init(err)))
-                    })
-                    .into(),
-                remote::Name::Symbol(_) => None,
-            })
+        self.try_find_remote(name.as_bstr()).or_else(|| match name {
+            remote::Name::Url(url) => gix_url::parse(&url)
+                .map_err(gix_error::Exn::into_error)
+                .and_then(|url| self.remote_at(url))
+                .into(),
+            remote::Name::Symbol(_) => None,
+        })
     }
 }
 
-fn source_ref_to_full_name(source: gix_refspec::match_group::SourceRef<'_>) -> Result<FullName, gix_ref::name::Error> {
+fn source_ref_to_full_name(source: gix_refspec::match_group::SourceRef<'_>) -> Result<FullName, gix_error::Error> {
     match source {
-        gix_refspec::match_group::SourceRef::FullName(name) => gix_ref::FullName::try_from(name.into_owned()),
+        gix_refspec::match_group::SourceRef::FullName(name) => {
+            gix_ref::FullName::try_from(name.into_owned()).map_err(|err| {
+                gix_error::Error::from(
+                    err.and_raise(gix_error::ValidationError::new("The upstream branch name is invalid")),
+                )
+            })
+        }
         gix_refspec::match_group::SourceRef::ObjectId(_) => {
             unreachable!("Such a reverse mapping isn't ever produced")
         }
