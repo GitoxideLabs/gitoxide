@@ -107,7 +107,8 @@ pub fn checkout_exclusive(
             should_interrupt,
             opts,
         ),
-    }?;
+    }
+    .map_err(gix::Exn::into_error)?;
 
     files.show_throughput(start);
     bytes.show_throughput(start);
