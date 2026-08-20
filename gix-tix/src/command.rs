@@ -20,9 +20,15 @@ mod travel;
 #[derive(Debug, clap::Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct Platform {
-    /// Exit once all commits and graph lanes have been computed.
-    #[arg(long)]
-    quit_on_finish: bool,
+    /// Exit after the final frame, optionally replaying read-only INPUTS first.
+    #[arg(
+        long,
+        value_name = "INPUTS",
+        num_args = 0..=1,
+        default_missing_value = "",
+        require_equals = true
+    )]
+    quit_on_finish: Option<String>,
     /// Hide this revision and every commit reachable from it.
     #[arg(short = 'x', long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
@@ -728,7 +734,7 @@ mod tests {
     fn parses_tui_options_and_top_level_commands() {
         let cli = Cli::try_parse_from(["tix", "--quit-on-finish", "-x", "main", "--hide", "tag", "topic"])
             .expect("TUI arguments parse");
-        assert!(cli.platform.quit_on_finish);
+        assert_eq!(cli.platform.quit_on_finish, Some(String::new()));
         assert_eq!(cli.platform.hide, ["main", "tag"], "hide options append");
         assert_eq!(
             cli.platform.revisions,
@@ -736,6 +742,9 @@ mod tests {
             "positional revisions remain visible tips"
         );
         assert!(cli.platform.command.is_none(), "omitting a command launches the TUI");
+
+        let cli = Cli::try_parse_from(["tix", "--quit-on-finish=jjjl"]).expect("diagnostic inputs parse");
+        assert_eq!(cli.platform.quit_on_finish.as_deref(), Some("jjjl"));
 
         let ref_tree = Cli::try_parse_from([
             "tix",
@@ -1536,7 +1545,7 @@ mod tests {
         let linked_target = linked.find_reference(retained_ref.as_ref())?.id().detach();
 
         Platform {
-            quit_on_finish: false,
+            quit_on_finish: None,
             hide: Vec::new(),
             command: Some(Command::Admin(Admin::ClearUndo)),
             revisions: Vec::new(),
@@ -1558,7 +1567,7 @@ mod tests {
         );
 
         Platform {
-            quit_on_finish: false,
+            quit_on_finish: None,
             hide: Vec::new(),
             command: Some(Command::Admin(Admin::ClearUndo)),
             revisions: Vec::new(),
