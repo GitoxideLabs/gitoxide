@@ -7,20 +7,8 @@ pub(crate) fn header(data: &[u8]) -> (Signature, u32, &[u8]) {
 }
 
 mod error {
-    use crate::extension;
-
     /// The error returned when decoding extensions.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(
-            "Encountered mandatory extension '{}' which isn't implemented yet",
-            String::from_utf8_lossy(signature)
-        )]
-        MandatoryUnimplemented { signature: extension::Signature },
-        #[error("Could not parse mandatory link extension")]
-        Link(#[from] extension::link::decode::Error),
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 }
 pub use error::Error;
 
@@ -29,6 +17,8 @@ pub(crate) fn all(
     object_hash: gix_hash::Kind,
     alloc_limit_bytes: Option<usize>,
 ) -> Result<(Outcome, &[u8]), Error> {
+    use gix_error::{ErrorExt, ResultExt, message};
+
     let mut ext_iter = match extension::Iter::new_without_checksum(maybe_beginning_of_extensions, object_hash) {
         Some(iter) => iter,
         None => return Ok((Outcome::default(), maybe_beginning_of_extensions)),
@@ -56,15 +46,29 @@ pub(crate) fn all(
                 ext.offset_table = true;
             } // not relevant/obtained already
             mandatory if mandatory[0].is_ascii_lowercase() => match mandatory {
-                extension::link::SIGNATURE => ext.link = extension::link::decode(ext_data, object_hash)?.into(),
+                extension::link::SIGNATURE => {
+                    ext.link = extension::link::decode(ext_data, object_hash)
+                        .or_raise(|| message("Could not parse mandatory link extension"))?
+                        .into();
+                }
                 extension::sparse::SIGNATURE => {
                     if !ext_data.is_empty() {
                         // only used as a marker, if this changes we need this implementation.
-                        return Err(Error::MandatoryUnimplemented { signature: mandatory });
+                        return Err(message!(
+                            "Encountered mandatory extension '{}' which isn't implemented yet",
+                            String::from_utf8_lossy(&mandatory)
+                        )
+                        .raise());
                     }
                     ext.is_sparse = true;
                 }
-                unknown => return Err(Error::MandatoryUnimplemented { signature: unknown }),
+                unknown => {
+                    return Err(message!(
+                        "Encountered mandatory extension '{}' which isn't implemented yet",
+                        String::from_utf8_lossy(&unknown)
+                    )
+                    .raise());
+                }
             },
             _unknown => {} // skip unknown extensions, too
         }
