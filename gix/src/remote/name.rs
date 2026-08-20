@@ -8,7 +8,7 @@ use crate::bstr::{BStr, BString, ByteSlice, ByteVec};
 #[error("remote names must be valid within refspecs for fetching: {name:?}")]
 #[expect(missing_docs)]
 pub struct Error {
-    pub source: gix_refspec::parse::Error,
+    pub source: gix_error::Error,
     pub name: BString,
 }
 
@@ -22,7 +22,10 @@ pub fn validated(name: impl Into<BString>) -> Result<BString, Error> {
         gix_refspec::parse::Operation::Fetch,
     ) {
         Ok(_) => Ok(name),
-        Err(err) => Err(Error { source: err, name }),
+        Err(err) => Err(Error {
+            source: err.into_error(),
+            name,
+        }),
     }
 }
 

@@ -56,7 +56,7 @@ pub mod with_revision {
     #[expect(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        Parse(#[from] gix_refspec::parse::Error),
+        Parse(#[from] gix_error::Error),
         #[error("A clone revision must be HEAD, a full reference name, or a full object ID, got {revision:?}")]
         Invalid { revision: crate::bstr::BString },
     }

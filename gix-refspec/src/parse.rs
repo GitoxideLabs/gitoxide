@@ -1,33 +1,5 @@
 /// The error returned by the [`parse()`][crate::parse()] function.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Empty refspecs are invalid")]
-    Empty,
-    #[error("Negative refspecs cannot have destinations as they exclude sources")]
-    NegativeWithDestination,
-    #[error("Negative specs must not be empty")]
-    NegativeEmpty,
-    #[error("Negative specs must not be object hashes")]
-    NegativeObjectHash,
-    /// Retained for compatibility; partial negative ref names are accepted and this is no longer returned.
-    #[error("Negative specs must be full ref names, starting with \"refs/\"")]
-    NegativePartialName,
-    /// Retained for compatibility; negative ref patterns containing one `*` are accepted and this is no longer returned.
-    #[error("Negative glob patterns are not allowed")]
-    NegativeGlobPattern,
-    /// Retained for compatibility; invalid fetch destinations are reported as [`Error::ReferenceName`] instead.
-    #[error("Fetch destinations must be ref-names, like 'HEAD:refs/heads/branch'")]
-    InvalidFetchDestination,
-    #[error("Cannot push into an empty destination")]
-    PushToEmpty,
-    #[error("refspec patterns may only contain a single '*' character, found {pattern:?}")]
-    PatternUnsupported { pattern: bstr::BString },
-    #[error("Both sides of a two-sided specification need a pattern, like 'a/*:b/*'")]
-    PatternUnbalanced,
-    #[error(transparent)]
-    ReferenceName(#[from] gix_validate::reference::name::Error),
-}
+pub type Error = gix_error::Exn<gix_error::ValidationError>;
 
 /// Define how the parsed refspec should be used.
 #[derive(PartialOrd, Ord, PartialEq, Eq, Copy, Clone, Hash, Debug)]
@@ -45,6 +17,7 @@ pub(crate) mod function {
         types::Mode,
     };
     use bstr::{BStr, ByteSlice};
+    use gix_error::{ErrorExt, ValidationError};
 
     /// Parse `spec` for use in `operation` and return it if it is valid.
     pub fn parse(mut spec: &BStr, operation: Operation) -> Result<RefSpecRef<'_>, Error> {
@@ -69,7 +42,7 @@ pub(crate) mod function {
             Some(_) => Mode::Normal,
             None => {
                 return match operation {
-                    Operation::Push => Err(Error::Empty),
+                    Operation::Push => Err(ValidationError::new("Empty refspecs are invalid").raise()),
                     Operation::Fetch => Ok(fetch_head_only(Mode::Normal)),
                 };
             }
@@ -81,7 +54,10 @@ pub(crate) mod function {
         let (mut src, dst) = match spec.rfind_byte(b':') {
             Some(pos) => {
                 if mode == Mode::Negative {
-                    return Err(Error::NegativeWithDestination);
+                    return Err(ValidationError::new(
+                        "Negative refspecs cannot have destinations as they exclude sources",
+                    )
+                    .raise());
                 }
 
                 let (src, dst) = spec.split_at(pos);
@@ -98,7 +74,9 @@ pub(crate) mod function {
                         Operation::Fetch => (Some("HEAD".into()), Some(dst)),
                     },
                     (Some(src), None) => match operation {
-                        Operation::Push => return Err(Error::PushToEmpty),
+                        Operation::Push => {
+                            return Err(ValidationError::new("Cannot push into an empty destination").raise());
+                        }
                         Operation::Fetch => (Some(src), None),
                     },
                     (Some(src), Some(dst)) => (Some(src), Some(dst)),
@@ -125,17 +103,19 @@ pub(crate) mod function {
             && src_had_pattern != dst_had_pattern
             && !(operation == Operation::Push && dst.is_none())
         {
-            return Err(Error::PatternUnbalanced);
+            return Err(
+                ValidationError::new("Both sides of a two-sided specification need a pattern, like 'a/*:b/*'").raise(),
+            );
         }
 
         if mode == Mode::Negative {
             match src {
                 Some(spec) => {
                     if looks_like_object_hash(spec) {
-                        return Err(Error::NegativeObjectHash);
+                        return Err(ValidationError::new("Negative specs must not be object hashes").raise());
                     }
                 }
-                None => return Err(Error::NegativeEmpty),
+                None => return Err(ValidationError::new("Negative specs must not be empty").raise()),
             }
         }
 
@@ -156,7 +136,10 @@ pub(crate) mod function {
         buf.extend_from_slice(spec);
         let glob_pos = buf.find_byte(b'*').expect("glob present");
         buf[glob_pos] = b'a';
-        gix_validate::reference::name_partial(buf.as_bstr())?;
+        gix_validate::reference::name_partial(buf.as_bstr()).map_err(|source| {
+            let message = source.to_string();
+            source.and_raise(ValidationError::new(message))
+        })?;
         Ok(())
     }
 
@@ -168,13 +151,20 @@ pub(crate) mod function {
             Some(spec) => {
                 let glob_count = spec.iter().filter(|b| **b == b'*').take(2).count();
                 if glob_count > 1 {
-                    return Err(Error::PatternUnsupported { pattern: spec.into() });
+                    return Err(ValidationError::new_with_input(
+                        "refspec patterns may only contain a single '*' character",
+                        spec,
+                    )
+                    .raise());
                 }
                 let has_globs = glob_count > 0;
                 if has_globs {
                     validate_partial_name_with_single_glob(spec)?;
                 } else if !any_name {
-                    gix_validate::reference::name_partial(spec)?;
+                    gix_validate::reference::name_partial(spec).map_err(|source| {
+                        let message = source.to_string();
+                        source.and_raise(ValidationError::new(message))
+                    })?;
                 }
                 Ok((Some(spec), has_globs))
             }
