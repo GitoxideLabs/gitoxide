@@ -106,7 +106,6 @@ pub(crate) struct FilesystemResponses {
     pending_references: Option<u64>,
     queued_references: Vec<u64>,
     active_references: Vec<u64>,
-    emphasis: Vec<u64>,
     frame_causes: Vec<(u64, &'static str)>,
     finish_after_frame: Vec<(u64, &'static str)>,
 }
@@ -202,30 +201,6 @@ impl FilesystemResponses {
         !self.frame_causes.is_empty()
     }
 
-    pub(crate) fn keep_after_frame(&mut self, ids: &[u64]) {
-        self.finish_after_frame.retain(|(id, _)| !ids.contains(id));
-    }
-
-    pub(crate) fn emphasis_started(&mut self) {
-        let superseded = std::mem::take(&mut self.emphasis);
-        self.finish(&superseded, "superseded");
-        let ids = self.active_references.clone();
-        self.keep_after_frame(&ids);
-        self.queue_frame(&ids, "history-emphasis-started");
-        self.emphasis = ids;
-    }
-
-    pub(crate) fn emphasis_finished(&mut self, reason: &'static str, outcome: &'static str) {
-        let ids = std::mem::take(&mut self.emphasis);
-        self.queue_frame(&ids, reason);
-        self.finish_after_frame(&ids, outcome);
-    }
-
-    pub(crate) fn emphasis_aborted(&mut self, outcome: &'static str) {
-        let ids = std::mem::take(&mut self.emphasis);
-        self.finish(&ids, outcome);
-    }
-
     pub(crate) fn fail_pending_worktree(&mut self) {
         self.cancel_pending_worktree("watcher-failure");
     }
@@ -280,7 +255,6 @@ impl FilesystemResponses {
             );
         }
         self.active_references.retain(|id| !ids.contains(id));
-        self.emphasis.retain(|id| !ids.contains(id));
         self.queued_references.retain(|id| !ids.contains(id));
         self.frame_causes.retain(|(id, _)| !ids.contains(id));
         self.finish_after_frame.retain(|(id, _)| !ids.contains(id));

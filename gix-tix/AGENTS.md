@@ -54,8 +54,3 @@
 - Open a fresh, non-isolated repository for bounded view population so configuration such as mailmap and diff filters is honored, then retain only detached display data.
 - The fill repository may be reused only while continuous navigation is active and must be dropped when its idle timer expires.
 - Filesystem watchers retain paths and native watcher handles, never repositories.
-
-## Filesystem emphasis snapshots
-
-- Transition tests use `insta` snapshots containing every distinct frame; unchanged hold frames are intentionally omitted.
-- Run them with `cargo insta test -p gix-tix -F sha1`; review updates with `cargo insta review`. Never edit `.snap` files manually.
