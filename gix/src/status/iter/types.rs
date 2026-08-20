@@ -84,7 +84,7 @@ impl Outcome {
 
     /// Write the changes if there are any back to the index file.
     /// This can only be done once as the changes are consumed in the process, if there were any.
-    pub fn write_changes(&mut self) -> Option<Result<(), gix_index::file::write::Error>> {
+    pub fn write_changes(&mut self) -> Option<Result<(), gix_error::Error>> {
         let _span = gix_features::trace::coarse!("gix::status::index_worktree::Outcome::write_changes()");
         let changes = self.changes.take()?;
         let mut index = match &self.worktree_index {
@@ -105,10 +105,14 @@ impl Outcome {
             }
         }
 
-        Some(index.write(crate::index::write::Options {
-            extensions: Default::default(),
-            skip_hash: self.skip_hash,
-        }))
+        Some(
+            index
+                .write(crate::index::write::Options {
+                    extensions: Default::default(),
+                    skip_hash: self.skip_hash,
+                })
+                .map_err(gix_error::Exn::into_error),
+        )
     }
 }
 
