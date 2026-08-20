@@ -11,7 +11,7 @@ pub enum Error {
     #[error(transparent)]
     TrackedFileModifications(#[from] crate::index_as_worktree::Error),
     #[error(transparent)]
-    DirWalk(gix_dir::walk::Error),
+    DirWalk(gix_error::Error),
     #[error(transparent)]
     SpawnThread(std::io::Error),
     #[error("Failed to change the context for querying gitattributes to the respective path")]

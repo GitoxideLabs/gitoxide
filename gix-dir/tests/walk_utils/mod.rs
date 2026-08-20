@@ -201,7 +201,7 @@ pub fn try_collect(
     worktree_root: &Path,
     root: Option<&Path>,
     cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
-) -> Result<((walk::Outcome, PathBuf), Entries), walk::Error> {
+) -> Result<((walk::Outcome, PathBuf), Entries), gix_error::Error> {
     try_collect_filtered(worktree_root, root, cb, None::<&str>)
 }
 
@@ -210,7 +210,7 @@ pub fn try_collect_filtered(
     root: Option<&Path>,
     cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
     patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
-) -> Result<((walk::Outcome, PathBuf), Entries), walk::Error> {
+) -> Result<((walk::Outcome, PathBuf), Entries), gix_error::Error> {
     try_collect_filtered_opts_collect(worktree_root, root, cb, patterns, Default::default())
 }
 
@@ -220,7 +220,7 @@ pub fn try_collect_filtered_opts_collect(
     cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
     patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
     options: Options<'_>,
-) -> Result<((walk::Outcome, PathBuf), Entries), walk::Error> {
+) -> Result<((walk::Outcome, PathBuf), Entries), gix_error::Error> {
     let mut dlg = gix_dir::walk::delegate::Collect::default();
     let outcome = try_collect_filtered_opts(worktree_root, root, None, None, cb, patterns, &mut dlg, options)?;
     Ok((outcome, dlg.into_entries_by_path()))
@@ -233,7 +233,7 @@ pub fn try_collect_filtered_opts_collect_with_root(
     cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
     patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
     options: Options<'_>,
-) -> Result<((walk::Outcome, PathBuf), Entries), walk::Error> {
+) -> Result<((walk::Outcome, PathBuf), Entries), gix_error::Error> {
     let mut dlg = gix_dir::walk::delegate::Collect::default();
     let outcome = try_collect_filtered_opts(
         worktree_root,
@@ -284,7 +284,7 @@ pub fn try_collect_filtered_opts(
         git_dir,
         should_interrupt,
     }: Options<'_>,
-) -> Result<(walk::Outcome, PathBuf), walk::Error> {
+) -> Result<(walk::Outcome, PathBuf), gix_error::Error> {
     let git_dir = worktree_root.join(git_dir.unwrap_or(".git"));
     let mut index = std::fs::read(git_dir.join("index")).ok().map_or_else(
         || gix_index::State::new(gix_testtools::object_hash()),
@@ -361,6 +361,7 @@ pub fn try_collect_filtered_opts(
             should_interrupt,
         },
     )
+    .map_err(Into::into)
 }
 
 pub struct Options<'a> {
