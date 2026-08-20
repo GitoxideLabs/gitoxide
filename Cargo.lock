@@ -2503,7 +2503,6 @@ dependencies = [
  "hashbrown 0.16.1",
  "portable-atomic",
  "pretty_assertions",
- "thiserror 2.0.18",
  "windows-sys 0.61.2",
 ]
 
