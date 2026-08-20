@@ -33,10 +33,6 @@ pub mod protocol;
 /// and does everything `git` typically does. The `action` should have been created with [`helper::Action::get_for_url()`] to
 /// contain only the URL to kick off the process, or should be created by [`helper::NextAction`].
 /// If more control is required, use the [`Cascade`][helper::Cascade] type.
-#[expect(
-    clippy::result_large_err,
-    reason = "will be removed once `gix-error` is used consistently"
-)]
 pub fn builtin(action: helper::Action) -> protocol::Result {
     protocol::helper_outcome_to_result(
         helper::invoke(&mut Program::from_kind(program::Kind::Builtin), &action)?,
