@@ -216,7 +216,7 @@ mod expand {
                                         &objects,
                                         &mut traverse_delegate,
                                     )
-                                    .map_err(Error::TreeTraverse)?;
+                                    .map_err(|err| Error::TreeTraverse(err.into_error()))?;
                                     out = objects.dissolve(stats);
                                     &traverse_delegate.non_trees
                                 } else {
@@ -290,7 +290,7 @@ mod expand {
                                         &objects,
                                         &mut traverse_delegate,
                                     )
-                                    .map_err(Error::TreeTraverse)?;
+                                    .map_err(|err| Error::TreeTraverse(err.into_error()))?;
                                     out = objects.dissolve(stats);
                                 }
                                 for id in &traverse_delegate.non_trees {

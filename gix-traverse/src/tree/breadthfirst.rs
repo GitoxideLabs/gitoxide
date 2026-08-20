@@ -4,22 +4,7 @@ use gix_hash::ObjectId;
 
 /// The error is part of the item returned by the [`breadthfirst()`](crate::tree::breadthfirst())  and
 ///[`depthfirst()`](crate::tree::depthfirst()) functions.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Find(gix_error::Error),
-    #[error("The delegate cancelled the operation")]
-    Cancelled,
-    #[error(transparent)]
-    ObjectDecode(#[from] gix_object::decode::Error),
-}
-
-impl From<gix_object::find::existing_iter::Error> for Error {
-    fn from(err: gix_object::find::existing_iter::Error) -> Self {
-        Error::Find(err.into_error())
-    }
-}
+pub type Error = gix_error::Exn;
 
 /// The state used and potentially shared by multiple tree traversals.
 #[derive(Default, Clone)]
@@ -38,6 +23,7 @@ impl State {
 pub(super) mod function {
     use std::borrow::BorrowMut;
 
+    use gix_error::{CorruptionError, ErrorExt, ResultExt, message};
     use gix_object::{FindExt, TreeRefIter};
 
     use super::{Error, State};
@@ -54,8 +40,8 @@ pub(super) mod function {
     /// * `find` - a way to lookup new object data during traversal by their `ObjectId`, writing their data into buffer and returning
     ///   an iterator over entries if the object is present and is a tree. Caching should be implemented within this function
     ///   as needed. The return value is `Option<TreeIter>` which degenerates all error information. Not finding a commit should also
-    ///   be considered an errors as all objects in the tree DAG should be present in the database. Hence [`Error::Find`] should
-    ///   be escalated into a more specific error if it's encountered by the caller.
+    ///   be considered an error as all objects in the tree DAG should be present in the database. Hence lookup errors should
+    ///   be escalated into a more specific error if encountered by the caller.
     /// * `delegate` - A way to observe entries and control the iteration while allowing the optimizer to let you pay only for what you use.
     pub fn breadthfirst<StateMut, Find, V>(
         root: TreeRefIter<'_>,
@@ -73,7 +59,8 @@ pub(super) mod function {
         let mut tree = root;
         loop {
             for entry in tree {
-                let entry = entry?;
+                let entry =
+                    entry.or_raise_erased(|| CorruptionError::new("A tree could not be decoded during traversal"))?;
                 if entry.mode.is_tree() {
                     delegate.push_path_component(entry.filename);
                     let action = delegate.visit_tree(&entry);
@@ -85,13 +72,13 @@ pub(super) mod function {
                             state.next.push_back(entry.oid.to_owned());
                         }
                         std::ops::ControlFlow::Break(()) => {
-                            return Err(Error::Cancelled);
+                            return Err(message("The delegate cancelled the operation").raise_erased());
                         }
                     }
                 } else {
                     delegate.push_path_component(entry.filename);
                     if delegate.visit_nontree(&entry).is_break() {
-                        return Err(Error::Cancelled);
+                        return Err(message("The delegate cancelled the operation").raise_erased());
                     }
                 }
                 delegate.pop_path_component();
