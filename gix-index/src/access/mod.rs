@@ -63,6 +63,7 @@ impl State {
         &'state mut self,
         backing: &'backing PathStorageRef,
     ) -> impl Iterator<Item = (&'state mut Entry, &'backing BStr)> {
+        self.invalidate_tree_cache();
         self.entries.iter_mut().map(move |e| {
             let path = backing[e.path.clone()].as_bstr();
             (e, path)
@@ -489,21 +490,43 @@ impl State {
             self.path_backing.is_empty(),
             "BUG: return path backing only after taking it, once"
         );
+        self.invalidate_tree_cache();
         self.path_backing = backing;
     }
 
-    /// Return mutable entries in a slice.
+    /// Return mutable entries in a slice and invalidate the TREE extension, if present.
+    ///
+    /// Prefer [`entries_mut_keep_tree_cache()`][Self::entries_mut_keep_tree_cache()] if only tree-neutral fields
+    /// are changed.
     pub fn entries_mut(&mut self) -> &mut [Entry] {
+        self.invalidate_tree_cache();
+        &mut self.entries
+    }
+
+    /// Return mutable entries in a slice without invalidating the TREE extension.
+    ///
+    /// Use this only for mutations that cannot change the tree produced by [`State::to_tree()`][crate::State::to_tree()].
+    /// This includes `stat` updates, storage metadata like [`EXTENDED`][entry::Flags::EXTENDED], and flags that only
+    /// describe worktree/cache status, like [`ASSUME_VALID`][entry::Flags::ASSUME_VALID],
+    /// [`UPTODATE`][entry::Flags::UPTODATE], [`FSMONITOR_VALID`][entry::Flags::FSMONITOR_VALID], or
+    /// [`SKIP_WORKTREE`][entry::Flags::SKIP_WORKTREE].
+    ///
+    /// Do not use this method to change object ids, modes, stage bits, paths, entry ordering, or flags that affect
+    /// tree construction like [`REMOVE`][entry::Flags::REMOVE] or [`INTENT_TO_ADD`][entry::Flags::INTENT_TO_ADD].
+    /// Use [`entries_mut()`][Self::entries_mut()] instead for those changes.
+    pub fn entries_mut_keep_tree_cache(&mut self) -> &mut [Entry] {
         &mut self.entries
     }
 
     /// Return a writable slice to entries and read-access to their path storage at the same time.
     pub fn entries_mut_and_pathbacking(&mut self) -> (&mut [Entry], &PathStorageRef) {
+        self.invalidate_tree_cache();
         (&mut self.entries, &self.path_backing)
     }
 
     /// Return mutable entries along with their paths in an iterator.
     pub fn entries_mut_with_paths(&mut self) -> impl Iterator<Item = (&mut Entry, &BStr)> {
+        self.invalidate_tree_cache();
         let paths = &self.path_backing;
         self.entries.iter_mut().map(move |e| {
             let path = paths[e.path.clone()].as_bstr();
@@ -526,6 +549,7 @@ impl State {
             self.path_backing.is_empty(),
             "BUG: cannot take out backing multiple times"
         );
+        self.invalidate_tree_cache();
         std::mem::take(&mut self.path_backing)
     }
 
@@ -534,8 +558,9 @@ impl State {
     ///
     /// The `path` must use the repository-relative, slash-separated [`State`] path format.
     pub fn entry_mut_by_path_and_stage(&mut self, path: &BStr, stage: entry::Stage) -> Option<&mut Entry> {
-        self.entry_index_by_path_and_stage(path, stage)
-            .map(|idx| &mut self.entries[idx])
+        let idx = self.entry_index_by_path_and_stage(path, stage)?;
+        self.invalidate_tree_cache();
+        Some(&mut self.entries[idx])
     }
 
     /// Push a new entry containing `stat`, `id`, `flags` and `mode` and `path` to the end of our storage, without performing
@@ -558,6 +583,7 @@ impl State {
         mode: entry::Mode,
         path: &BStr,
     ) {
+        self.invalidate_tree_cache();
         let path = {
             let path_start = self.path_backing.len();
             self.path_backing.push_str(path);
@@ -603,6 +629,7 @@ impl State {
     /// To implement this operation typically, one would rather add [entry::Flags::REMOVE] to each entry to remove
     /// them when [writing the index](Self::write_to()).
     pub fn remove_entries(&mut self, mut should_remove: impl FnMut(usize, &BStr, &mut Entry) -> bool) {
+        self.invalidate_tree_cache();
         let mut index = 0;
         let paths = &self.path_backing;
         self.entries.retain_mut(|e| {
@@ -620,7 +647,14 @@ impl State {
     /// Note that the memory used for the removed entries paths is not freed, as it's append-only, and
     /// that some extensions might refer to paths which are now deleted.
     pub fn remove_entry_at_index(&mut self, index: usize) -> Entry {
+        self.invalidate_tree_cache();
         self.entries.remove(index)
+    }
+
+    fn invalidate_tree_cache(&mut self) {
+        if let Some(tree) = self.tree.as_mut() {
+            tree.invalidate_recursively();
+        }
     }
 }
 

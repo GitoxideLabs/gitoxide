@@ -44,7 +44,7 @@ pub fn checkout_exclusive(
     } else {
         gix::index::entry::Mode::SYMLINK
     };
-    for entry in index.entries_mut().iter_mut().filter(|e| {
+    for entry in index.entries_mut_keep_tree_cache().iter_mut().filter(|e| {
         e.mode
             .contains(maybe_symlink_mode | gix::index::entry::Mode::DIR | gix::index::entry::Mode::COMMIT)
     }) {
