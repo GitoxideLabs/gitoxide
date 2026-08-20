@@ -65,7 +65,7 @@ fn invalid_attributes() {
 
         let output = gix_pathspec::parse(input.as_bytes(), Default::default());
         assert!(output.is_err(), "This pathspec did not produce an error {input}");
-        assert!(matches!(output.unwrap_err(), Error::InvalidAttribute { .. }));
+        assert!(matches!(output.unwrap_err(), Error::InvalidAttribute(_)));
     }
 }
 
