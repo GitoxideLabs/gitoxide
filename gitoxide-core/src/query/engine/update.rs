@@ -317,7 +317,7 @@ pub fn update(
                                                         });
                                                     }
                                                 }
-                                                Ok::<_, Infallible>(std::ops::ControlFlow::Continue(()))
+                                                Ok::<_, gix::Exn>(std::ops::ControlFlow::Continue(()))
                                             })?;
                                         out_chunk.push(CommitDiffStats {
                                             id: commit,

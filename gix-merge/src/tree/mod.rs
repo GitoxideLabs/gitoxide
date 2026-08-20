@@ -10,7 +10,7 @@ pub enum Error {
     #[error("Could not find ancestor, our or their tree iterator to get started")]
     FindTreeIter(#[source] gix_error::Error),
     #[error("Failed to diff our side or their side")]
-    DiffTree(#[from] gix_diff::tree_with_rewrites::Error),
+    DiffTree(#[from] gix_diff::tree::Error),
     #[error("Could not apply merge result to base tree")]
     TreeEdit(#[source] gix_error::Error),
     #[error("Failed to load resource to prepare for blob merge")]

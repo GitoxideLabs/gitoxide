@@ -8,8 +8,6 @@
 //! Semantic conflict resolution and edits to the result tree belong to the
 //! sibling `resolve` module; this module only prepares, indexes, and matches work.
 
-use std::convert::Infallible;
-
 use bstr::{BString, ByteSlice};
 use gix_diff::{tree::recorder::Location, tree_with_rewrites::Change};
 use gix_object::FindExt;
@@ -115,7 +113,7 @@ pub(super) fn collect(
             diff_resource_cache,
             diff_state,
             objects,
-            |change| -> Result<_, Infallible> {
+            |change| -> Result<_, gix_error::Exn> {
                 track(change, &mut changes);
                 Ok(std::ops::ControlFlow::Continue(()))
             },
