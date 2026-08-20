@@ -1,3 +1,3 @@
-type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T = ()> = std::result::Result<T, gix_error::TestError>;
 
 mod lock;
