@@ -1,6 +1,6 @@
 use std::{fmt::Formatter, ops::Index};
 
-use gix_error::ErrorExt;
+use gix_error::{ErrorExt, ResultExt};
 use gix_hash::oid;
 use smallvec::SmallVec;
 
@@ -15,46 +15,14 @@ pub mod commit;
 mod errors {
     ///
     pub mod insert_parents {
-        use crate::graph::commit::iter_parents;
-
         /// The error returned by [`insert_parents()`](crate::Graph::insert_parents()).
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            Lookup(gix_error::Error),
-            #[error("A commit could not be decoded during traversal")]
-            Decode(#[from] gix_object::decode::Error),
-            #[error(transparent)]
-            Parent(#[from] iter_parents::Error),
-        }
-
-        impl From<gix_object::find::existing_iter::Error> for Error {
-            fn from(err: gix_object::find::existing_iter::Error) -> Self {
-                Error::Lookup(err.into_error())
-            }
-        }
+        pub type Error = gix_error::Exn;
     }
 
     ///
     pub mod get_or_insert_default {
-        use crate::graph::commit::to_owned;
-
         /// The error returned by [`try_lookup_or_insert_default()`](crate::Graph::try_lookup_or_insert_default()).
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            Lookup(gix_error::Error),
-            #[error(transparent)]
-            ToOwned(#[from] to_owned::Error),
-        }
-
-        impl From<gix_object::find::existing_iter::Error> for Error {
-            fn from(err: gix_object::find::existing_iter::Error) -> Self {
-                Error::Lookup(err.into_error())
-            }
-        }
+        pub type Error = gix_error::Exn;
     }
 }
 pub use errors::{get_or_insert_default, insert_parents};
@@ -152,7 +120,7 @@ impl<'cache, T> Graph<'_, 'cache, T> {
         let commit = self.lookup(id)?;
         let parents: SmallVec<[_; 2]> = commit.iter_parents().collect();
         for parent_id in parents {
-            let parent_id = parent_id?;
+            let parent_id = parent_id.or_erased()?;
             match self.map.entry(parent_id) {
                 gix_hashtable::hash_map::Entry::Vacant(entry) => {
                     let parent = match try_lookup(&parent_id, &*self.find, self.cache, &mut self.parent_buf)? {
@@ -186,9 +154,7 @@ impl<'cache, T> Graph<'_, 'cache, T> {
         parent_data: &mut dyn FnMut(gix_hash::ObjectId, LazyCommit<'_, 'cache>, Option<&mut T>) -> Result<T, E>,
     ) -> Result<(), E>
     where
-        E: From<gix_object::find::existing_iter::Error>
-            + From<gix_object::decode::Error>
-            + From<commit::iter_parents::Error>,
+        E: From<gix_object::find::existing_iter::Error> + From<commit::iter_parents::Error>,
     {
         let commit = self.lookup(id).map_err(E::from)?;
         let parents: SmallVec<[_; 2]> = commit.iter_parents().collect();
@@ -258,7 +224,7 @@ impl<T> Graph<'_, '_, Commit<T>> {
                     None => return Ok(None),
                     Some(commit) => commit,
                 };
-                let mut commit = commit.to_owned(new_data)?;
+                let mut commit = commit.to_owned(new_data).or_erased()?;
                 update_data(&mut commit.data);
                 entry.insert(commit);
             }
@@ -309,7 +275,7 @@ impl<T: Default> Graph<'_, '_, Commit<T>> {
                     None => return Ok(None),
                     Some(commit) => commit,
                 };
-                let mut commit = commit.to_owned(T::default)?;
+                let mut commit = commit.to_owned(T::default).or_erased()?;
                 update_commit(&mut commit);
                 entry.insert(commit);
             }
