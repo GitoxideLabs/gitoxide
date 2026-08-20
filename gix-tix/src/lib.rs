@@ -648,8 +648,8 @@ impl BuiltInDiff {
 /// Options for [`run()`].
 #[derive(Clone, Debug, Default)]
 pub struct Options {
-    /// Exit once all commits and graph lanes have been computed.
-    pub quit_on_finish: bool,
+    /// Exit after the final frame, optionally replaying read-only keyboard input first.
+    pub quit_on_finish: Option<String>,
     /// Revisions whose reachable commits should initially be hidden.
     pub hide: Vec<OsString>,
 }
@@ -707,7 +707,7 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
         "starting tix"
     );
     let commit_pane_background = detect_commit_pane_background();
-    let quit_on_finish = options.quit_on_finish;
+    let quit_on_finish = options.quit_on_finish.is_some();
     let mut terminal = if quit_on_finish {
         let (_, height) = terminal::size().context("could not determine terminal size")?;
         ratatui::try_init_with_options(TerminalOptions {
@@ -805,6 +805,13 @@ fn event_loop(
     commit_pane_background: Option<(u8, u8, u8)>,
 ) -> Result<Option<Duration>> {
     let Options { quit_on_finish, hide } = options;
+    let mut quit_inputs: VecDeque<_> = quit_on_finish
+        .as_deref()
+        .unwrap_or_default()
+        .chars()
+        .map(diagnostic_key)
+        .collect();
+    let quit_on_finish = quit_on_finish.is_some();
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (mut view_repository, recovered_at_startup) = open_history_repository(&mut repository_path, &common_dir)?;
@@ -1394,7 +1401,11 @@ fn event_loop(
                 fill_repository.retain = false;
                 fill_repository.retained = None;
             }
-            if quit_on_finish && matches!(app.state, State::Complete) && lane_receiver.is_none() {
+            if quit_on_finish
+                && quit_inputs.is_empty()
+                && matches!(app.state, State::Complete)
+                && lane_receiver.is_none()
+            {
                 return Ok(app.lane_time);
             }
             continue;
@@ -1483,12 +1494,18 @@ fn event_loop(
         .into_iter()
         .flatten()
         .min();
-        let terminal_event = match pending_terminal_event.take() {
-            Some(event) => Some(event),
-            None => match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
-                Some(timeout) if event::poll(timeout)? => Some(event::read()?),
-                Some(_) => None,
-                None => Some(event::read()?),
+        let (terminal_event, diagnostic_input) = match pending_terminal_event.take() {
+            Some(event) => (Some(event), false),
+            None => match next_diagnostic_input(&mut quit_inputs, app.state, lane_receiver.is_some()) {
+                Some(key) => (Some(TerminalEvent::Key(key)), true),
+                None => (
+                    match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
+                        Some(timeout) if event::poll(timeout)? => Some(event::read()?),
+                        Some(_) => None,
+                        None => Some(event::read()?),
+                    },
+                    false,
+                ),
             },
         };
         let Some(terminal_event) = terminal_event else {
@@ -1669,14 +1686,18 @@ fn event_loop(
         let key_pressed = is_key_press(&terminal_event);
         let (mut action, repeats_history, is_repeat, throttles_draw) = match terminal_event {
             TerminalEvent::Key(key) => {
-                let action = action_with_shortcut_groups(
-                    key,
-                    app.history_display_expanded,
-                    app.commit_expanded,
-                    app.actions_expanded,
-                    app.enrich_expanded,
-                    app.information_expanded || app.changes_focus.is_some(),
-                );
+                let action = if diagnostic_input {
+                    diagnostic_action(key, &app)
+                } else {
+                    action_with_shortcut_groups(
+                        key,
+                        app.history_display_expanded,
+                        app.commit_expanded,
+                        app.actions_expanded,
+                        app.enrich_expanded,
+                        app.information_expanded || app.changes_focus.is_some(),
+                    )
+                };
                 let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
                 (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
             }
@@ -1725,6 +1746,11 @@ fn event_loop(
             _ => continue,
         };
         if !focused {
+            continue;
+        }
+        if diagnostic_input && action.is_none() {
+            dirty = true;
+            urgent = true;
             continue;
         }
         if repeats_history || throttles_draw {
@@ -5867,6 +5893,49 @@ fn action(key: KeyEvent) -> Option<Action> {
     action_with_shortcut_groups(key, false, false, false, false, false)
 }
 
+fn diagnostic_key(character: char) -> KeyEvent {
+    let code = match character {
+        '\t' => KeyCode::Tab,
+        '\n' | '\r' => KeyCode::Enter,
+        '\u{1b}' => KeyCode::Esc,
+        character => KeyCode::Char(character),
+    };
+    let modifiers = if character.is_uppercase() {
+        KeyModifiers::SHIFT
+    } else {
+        KeyModifiers::NONE
+    };
+    KeyEvent::new(code, modifiers)
+}
+
+fn next_diagnostic_input(inputs: &mut VecDeque<KeyEvent>, state: State, lane_computing: bool) -> Option<KeyEvent> {
+    (state == State::Complete && !lane_computing)
+        .then(|| inputs.pop_front())
+        .flatten()
+}
+
+fn diagnostic_action(key: KeyEvent, app: &App) -> Option<Action> {
+    action_with_shortcut_groups(
+        key,
+        app.history_display_expanded,
+        app.commit_expanded,
+        app.actions_expanded,
+        app.enrich_expanded,
+        app.information_expanded || app.changes_focus.is_some(),
+    )
+    .filter(|action| {
+        (action_allowed_during_rebase_continuation(Some(action), app.changes_focus.is_some())
+            || matches!(
+                action,
+                Action::ToggleCommitGroup | Action::ToggleActions | Action::ToggleEnrich
+            ))
+            && !matches!(
+                action,
+                Action::Copy | Action::CopyPath(_) | Action::CopyAuthor | Action::ForceQuit | Action::Quit
+            )
+    })
+}
+
 fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_focused: bool) -> bool {
     matches!(
         action,
@@ -7605,6 +7674,36 @@ mod tests {
             action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
             Some(Action::CycleDuplicate)
         );
+    }
+
+    #[test]
+    fn diagnostic_inputs_replay_only_read_only_actions() {
+        let mut app = App::new(1);
+        assert_eq!(diagnostic_action(diagnostic_key('j'), &app), Some(Action::MoveDown));
+        assert_eq!(diagnostic_action(diagnostic_key('l'), &app), Some(Action::ScrollRight));
+        assert_eq!(diagnostic_action(diagnostic_key('G'), &app), Some(Action::Last));
+        assert_eq!(
+            diagnostic_action(diagnostic_key('u'), &app),
+            None,
+            "undo is not replayed"
+        );
+
+        app.actions_expanded = true;
+        assert_eq!(
+            diagnostic_action(diagnostic_key('b'), &app),
+            None,
+            "repository-changing submenu actions are not replayed"
+        );
+    }
+
+    #[test]
+    fn diagnostic_inputs_wait_for_completed_lanes() {
+        let key = diagnostic_key('j');
+        let mut inputs = VecDeque::from([key]);
+        assert!(next_diagnostic_input(&mut inputs, State::Loading, false).is_none());
+        assert!(next_diagnostic_input(&mut inputs, State::Complete, true).is_none());
+        assert_eq!(inputs.len(), 1, "premature checks do not consume input");
+        assert_eq!(next_diagnostic_input(&mut inputs, State::Complete, false), Some(key));
     }
 
     #[test]

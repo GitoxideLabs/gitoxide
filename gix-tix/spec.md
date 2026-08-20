@@ -100,9 +100,12 @@ without trading responsiveness for metadata that is not visible.
 - `-x/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
 - `-h/--help` prints Clap's standard help for `tix` and every subcommand.
-- `--quit-on-finish` exits after traversal, lane computation, and one completed
-  frame, for measurement and non-interactive inspection. Its frame is drawn on
-  the normal screen and remains visible after exit.
+- `--quit-on-finish[=INPUTS]` exits after traversal, lane computation, and one
+  completed frame, for measurement and non-interactive inspection. Optional
+  characters are replayed as read-only keyboard input before the retained final
+  frame, allowing navigation such as `--quit-on-finish=jjjl`. Inputs that would
+  mutate the repository, launch another program, or copy data are ignored. The
+  frame is drawn on the normal screen and remains visible after exit.
 - `tix rebase todo [-x HIDDEN...] [--no-auto-hide]
   [--onto REV | --update-base] [TIP...]`
   writes a self-contained Markdown history-rebase plan to stdout. Visible tips
