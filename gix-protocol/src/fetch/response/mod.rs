@@ -1,50 +1,14 @@
 use bstr::BString;
-use gix_transport::{Protocol, client};
+use gix_error::{CorruptionError, ErrorExt, ResultExt, ValidationError};
+use gix_transport::Protocol;
 
 use crate::{command::Feature, fetch::Response};
 
 /// The error returned in the [response module][crate::fetch::response].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Failed to read from line reader")]
-    Io(#[source] std::io::Error),
-    #[error(transparent)]
-    UploadPack(#[from] gix_transport::packetline::read::Error),
-    #[error(transparent)]
-    Transport(#[from] client::Error),
-    #[error("Currently we require feature {feature:?}, which is not supported by the server")]
-    MissingServerCapability { feature: &'static str },
-    #[error("Encountered an unknown line prefix in {line:?}")]
-    UnknownLineType { line: String },
-    #[error("Unknown or unsupported header: {header:?}")]
-    UnknownSectionHeader { header: String },
-}
+pub type Error = gix_error::Exn;
 
-impl From<std::io::Error> for Error {
-    fn from(err: std::io::Error) -> Self {
-        if err.kind() == std::io::ErrorKind::Other {
-            match err.into_inner() {
-                Some(err) => match err.downcast::<gix_transport::packetline::read::Error>() {
-                    Ok(err) => Error::UploadPack(*err),
-                    Err(err) => Error::Io(std::io::Error::other(err)),
-                },
-                None => Error::Io(std::io::ErrorKind::Other.into()),
-            }
-        } else {
-            Error::Io(err)
-        }
-    }
-}
-
-impl gix_transport::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
-        match self {
-            Error::Io(err) => err.is_spurious(),
-            Error::Transport(err) => err.is_spurious(),
-            _ => false,
-        }
-    }
+fn unknown_line(line: &str) -> Error {
+    CorruptionError::new(format!("Encountered an unknown line prefix in {line:?}")).raise_erased()
 }
 
 /// An 'ACK' line received from the server.
@@ -76,14 +40,14 @@ pub fn shallow_update_from_line(line: &str) -> Result<ShallowUpdate, Error> {
     match line.trim_end().split_once(' ') {
         Some((prefix, id)) => {
             let id = gix_hash::ObjectId::from_hex(id.as_bytes())
-                .map_err(|_| Error::UnknownLineType { line: line.to_owned() })?;
+                .or_raise_erased(|| CorruptionError::new(format!("Encountered an unknown line prefix in {line:?}")))?;
             Ok(match prefix {
                 "shallow" => ShallowUpdate::Shallow(id),
                 "unshallow" => ShallowUpdate::Unshallow(id),
-                _ => return Err(Error::UnknownLineType { line: line.to_owned() }),
+                _ => return Err(unknown_line(line)),
             })
         }
-        None => Err(Error::UnknownLineType { line: line.to_owned() }),
+        None => Err(unknown_line(line)),
     }
 }
 
@@ -97,22 +61,23 @@ impl Acknowledgement {
                 "NAK" => Acknowledgement::Nak,     // V1
                 "ACK" => {
                     let id = match id {
-                        Some(id) => gix_hash::ObjectId::from_hex(id.as_bytes())
-                            .map_err(|_| Error::UnknownLineType { line: line.to_owned() })?,
-                        None => return Err(Error::UnknownLineType { line: line.to_owned() }),
+                        Some(id) => gix_hash::ObjectId::from_hex(id.as_bytes()).or_raise_erased(|| {
+                            CorruptionError::new(format!("Encountered an unknown line prefix in {line:?}"))
+                        })?,
+                        None => return Err(unknown_line(line)),
                     };
                     if let Some(description) = description {
                         match description {
                             "common" => {}
                             "ready" => return Ok(Acknowledgement::Ready),
-                            _ => return Err(Error::UnknownLineType { line: line.to_owned() }),
+                            _ => return Err(unknown_line(line)),
                         }
                     }
                     Acknowledgement::Common(id)
                 }
-                _ => return Err(Error::UnknownLineType { line: line.to_owned() }),
+                _ => return Err(unknown_line(line)),
             }),
-            (None, _, _) => Err(Error::UnknownLineType { line: line.to_owned() }),
+            (None, _, _) => Err(unknown_line(line)),
         }
     }
     /// Returns the hash of the acknowledged object if this instance acknowledges a common one.
@@ -129,11 +94,12 @@ impl WantedRef {
     pub fn from_line(line: &str) -> Result<WantedRef, Error> {
         match line.trim_end().split_once(' ') {
             Some((id, path)) => {
-                let id = gix_hash::ObjectId::from_hex(id.as_bytes())
-                    .map_err(|_| Error::UnknownLineType { line: line.to_owned() })?;
+                let id = gix_hash::ObjectId::from_hex(id.as_bytes()).or_raise_erased(|| {
+                    CorruptionError::new(format!("Encountered an unknown line prefix in {line:?}"))
+                })?;
                 Ok(WantedRef { id, path: path.into() })
             }
-            None => Err(Error::UnknownLineType { line: line.to_owned() }),
+            None => Err(unknown_line(line)),
         }
     }
 }
@@ -155,18 +121,20 @@ impl Response {
                 let has = |name: &str| features.iter().any(|f| f.0 == name);
                 // Let's focus on V2 standards, and simply not support old servers to keep our code simpler
                 if !has("multi_ack_detailed") {
-                    return Err(Error::MissingServerCapability {
-                        feature: "multi_ack_detailed",
-                    });
+                    return Err(ValidationError::new(
+                        "Currently we require feature \"multi_ack_detailed\", which is not supported by the server",
+                    )
+                    .raise_erased());
                 }
                 // It's easy to NOT do sideband for us, but then again, everyone supports it.
                 // CORRECTION: If sideband is off, it would send the packfile without packet line encoding,
                 // which is nothing we ever want to deal with (despite it being more efficient). In V2, this
                 // is not even an option anymore, sidebands are always present.
                 if !has("side-band") && !has("side-band-64k") {
-                    return Err(Error::MissingServerCapability {
-                        feature: "side-band OR side-band-64k",
-                    });
+                    return Err(ValidationError::new(
+                        "Currently we require feature \"side-band OR side-band-64k\", which is not supported by the server",
+                    )
+                    .raise_erased());
                 }
             }
             Protocol::V2 => {}

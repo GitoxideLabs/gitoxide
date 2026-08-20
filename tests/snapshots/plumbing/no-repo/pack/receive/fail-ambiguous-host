@@ -1,1 +1,4 @@
-Error: Host name '-oProxyCommand=open$IFS-aCalculator' could be mistaken for a command-line argument
+Error: Transport handshake failed
+
+Caused by:
+    Host name '-oProxyCommand=open$IFS-aCalculator' could be mistaken for a command-line argument
