@@ -14,10 +14,8 @@ pub struct Remote {
 
 /// A function to configure a single request prior to sending it, support most complex configuration beyond what's possible with
 /// basic `git` http configuration.
-pub type ConfigureRequestFn = dyn FnMut(&mut reqwest::blocking::Request) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>
-    + Send
-    + Sync
-    + 'static;
+pub type ConfigureRequestFn =
+    dyn FnMut(&mut reqwest::blocking::Request) -> Result<(), gix_error::Exn> + Send + Sync + 'static;
 
 /// Options to configure the reqwest HTTP handler.
 #[derive(Default)]

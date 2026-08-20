@@ -167,7 +167,8 @@ mod v1 {
         #[cfg_attr(feature = "blocking-client", test)]
         #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
         async fn all() -> crate::Result {
-            let (caps, _) = Capabilities::from_bytes(&b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0multi_ack thin-pack filter side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0"[..])?;
+            let (caps, _) = Capabilities::from_bytes(&b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0multi_ack thin-pack filter side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0"[..])
+                ?;
             let mut args = fetch::Arguments::new(
                 Protocol::V1,
                 Command::Fetch.default_features(Protocol::V1, &caps),
@@ -428,7 +429,8 @@ mod v2 {
         #[cfg_attr(feature = "blocking-client", test)]
         #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
         async fn all() -> crate::Result {
-            let (caps, _) = Capabilities::from_bytes(&b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0multi_ack thin-pack filter side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0"[..])?;
+            let (caps, _) = Capabilities::from_bytes(&b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0multi_ack thin-pack filter side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0"[..])
+                ?;
             let mut args = fetch::Arguments::new(
                 Protocol::V2,
                 Command::Fetch.default_features(Protocol::V1, &caps),

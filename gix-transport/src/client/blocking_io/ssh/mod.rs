@@ -8,16 +8,29 @@ use gix_url::{ArgumentSafety::*, Url};
 use crate::{Protocol, client::blocking_io::file::SpawnProcessOnDemand};
 
 /// The error used in [`connect()`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("The scheme in \"{}\" is not usable for an ssh connection", .0.to_bstring())]
     UnsupportedScheme(gix_url::Url),
-    #[error("Host name '{host}' could be mistaken for a command-line argument")]
     AmbiguousHostName { host: String },
 }
 
-impl crate::IsSpuriousError for Error {}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::UnsupportedScheme(url) => write!(
+                f,
+                "The scheme in \"{}\" is not usable for an ssh connection",
+                url.to_bstring()
+            ),
+            Error::AmbiguousHostName { host } => {
+                write!(f, "Host name '{host}' could be mistaken for a command-line argument")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 /// The kind of SSH programs we have built-in support for.
 ///
@@ -43,14 +56,15 @@ pub mod invocation {
     use std::ffi::OsString;
 
     /// The error returned when producing ssh invocation arguments based on a selected invocation kind.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Username '{user}' could be mistaken for a command-line argument")]
-        AmbiguousUserName { user: String },
-        #[error("Host name '{host}' could be mistaken for a command-line argument")]
-        AmbiguousHostName { host: String },
-        #[error("The 'Simple' ssh variant doesn't support {function}")]
+        AmbiguousUserName {
+            user: String,
+        },
+        AmbiguousHostName {
+            host: String,
+        },
         Unsupported {
             /// The simple command that should have been invoked.
             command: OsString,
@@ -58,6 +72,24 @@ pub mod invocation {
             function: &'static str,
         },
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::AmbiguousUserName { user } => {
+                    write!(f, "Username '{user}' could be mistaken for a command-line argument")
+                }
+                Error::AmbiguousHostName { host } => {
+                    write!(f, "Host name '{host}' could be mistaken for a command-line argument")
+                }
+                Error::Unsupported { function, .. } => {
+                    write!(f, "The 'Simple' ssh variant doesn't support {function}")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 ///

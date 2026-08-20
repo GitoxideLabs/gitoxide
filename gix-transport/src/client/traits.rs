@@ -48,7 +48,7 @@ pub trait TransportWithoutIO {
     /// Pass `config` can be cast and interpreted by the implementation, as documented separately.
     ///
     /// The caller must know how that `config` data looks like for the intended implementation.
-    fn configure(&mut self, config: &dyn Any) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>;
+    fn configure(&mut self, config: &dyn Any) -> Result<(), gix_error::Exn>;
 }
 
 // Would be nice if the box implementation could auto-forward to all implemented traits.
@@ -69,7 +69,7 @@ impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for Box<T> {
         self.deref().connection_persists_across_multiple_requests()
     }
 
-    fn configure(&mut self, config: &dyn Any) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    fn configure(&mut self, config: &dyn Any) -> Result<(), gix_error::Exn> {
         self.deref_mut().configure(config)
     }
 }
@@ -91,7 +91,7 @@ impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for &mut T {
         self.deref().connection_persists_across_multiple_requests()
     }
 
-    fn configure(&mut self, config: &dyn Any) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    fn configure(&mut self, config: &dyn Any) -> Result<(), gix_error::Exn> {
         self.deref_mut().configure(config)
     }
 }

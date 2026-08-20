@@ -1,7 +1,6 @@
 use std::{
     any::Any,
     borrow::Cow,
-    error::Error,
     ffi::OsString,
     io::Write,
     process::{self, Stdio},
@@ -177,7 +176,7 @@ impl client::TransportWithoutIO for SpawnProcessOnDemand {
         true
     }
 
-    fn configure(&mut self, _config: &dyn Any) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    fn configure(&mut self, _config: &dyn Any) -> Result<(), gix_error::Exn> {
         Ok(())
     }
 }

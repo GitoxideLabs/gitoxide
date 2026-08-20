@@ -38,11 +38,11 @@ pub enum Error {
     NegotiationAlgorithmConfig(#[from] config::key::GenericErrorWithValue),
 }
 
-impl gix_protocol::transport::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
+impl Error {
+    pub(crate) fn can_retry(&self) -> bool {
         match self {
             Error::Fetch(err) => err.can_retry(),
-            Error::Client(err) => err.is_spurious(),
+            Error::Client(err) => err.can_retry(),
             _ => false,
         }
     }
