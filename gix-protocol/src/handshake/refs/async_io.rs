@@ -10,7 +10,8 @@ pub async fn from_v2_refs(in_refs: &mut dyn ReadlineBufRead) -> Result<Vec<Ref>,
         .readline()
         .await
         .transpose()?
-        .transpose()?
+        .transpose()
+        .map_err(|err| Error::DecodePacketline(gix_error::Error::from_error(err)))?
         .and_then(|l| l.as_bstr())
     {
         out_refs.push(refs::shared::parse_v2(line)?);
@@ -39,7 +40,8 @@ pub async fn from_v1_refs_received_as_part_of_handshake_and_capabilities<'a>(
         .readline()
         .await
         .transpose()?
-        .transpose()?
+        .transpose()
+        .map_err(|err| Error::DecodePacketline(gix_error::Error::from_error(err)))?
         .and_then(|l| l.as_bstr())
     {
         refs::shared::parse_v1(
