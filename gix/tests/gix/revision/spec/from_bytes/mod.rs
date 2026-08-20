@@ -143,15 +143,30 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
             "we are able to return objects even though they are 'bad' when trying to decode them, like git",
         );
         let err = parse_spec("e328^{object}", &repo).unwrap_err();
+        let cause = err
+            .probable_cause()
+            .downcast_ref::<gix_error::ValidationError>()
+            .expect("invalid object kinds are classified as validation failures");
         assert_eq!(
-            format!("{:?}", err.probable_cause()),
-            r#"InvalidObjectKind { kind: "bad" }"#,
+            (
+                cause.message.as_ref(),
+                cause.input.as_ref().map(|input| input.as_slice())
+            ),
+            ("Unknown object kind", Some(b"bad".as_slice())),
             "Now we enforce the object to exist and be valid, as ultimately it wants to match with a certain type"
         );
-        insta::assert_debug_snapshot!(err, @r#"
+        insta::assert_snapshot!(format!("{err:#?}").replace('\\', "/"), @r#"
         delegate.peel_until(ValidObject) failed: "{object}"
         |
-        └─ An error occurred while obtaining an object from the loose object store
+        └─ Loose(Decode(The object header contained an unknown object kind., at gix-object/src/lib.rs:344
+        |
+        └─ Unknown object kind: "bad", at gix-object/src/lib.rs:344))
+        |
+        └─ Decode(The object header contained an unknown object kind., at gix-object/src/lib.rs:344
+        |
+        └─ Unknown object kind: "bad", at gix-object/src/lib.rs:344)
+            |
+            └─ ValidationError { message: "Unknown object kind", input: Some("bad") }
         |
         └─ The object header contained an unknown object kind.
         |
@@ -167,26 +182,42 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         );
         let err = parse_spec("cafea^{object}", &repo).unwrap_err();
         let actual = {
-            let mut actual = format!("{err:#?}").replace('\\', "/").replace("windows", "unix");
+            let mut actual = format!("{err:#?}")
+                .replace("\\\\", "/")
+                .replace('\\', "/")
+                .replace("windows", "unix");
             let marker = "make_rev_spec_parse_repos/";
-            if let Some(start) = actual.find(marker) {
-                let start = start + marker.len();
-                if let Some(end) = actual[start..].find("/blob.corrupt") {
-                    actual.replace_range(start..start + end, "$HASH/$SEED-unix");
-                }
+            let mut search_from = 0;
+            while let Some(start) = actual[search_from..].find(marker) {
+                let start = search_from + start + marker.len();
+                let Some(end) = actual[start..].find("/blob.corrupt") else {
+                    break;
+                };
+                actual.replace_range(start..start + end, "$HASH/$SEED-unix");
+                search_from = start + "$HASH/$SEED-unix".len();
             }
             actual
         };
         insta::assert_snapshot!(actual, @r#"
         delegate.peel_until(ValidObject) failed: "{object}"
         |
-        └─ An error occurred while obtaining an object from the loose object store
+        └─ Loose(DecompressFile { source: Could not decode zip stream, at gix-zlib/src/inflate.rs:16
+        |
+        └─ Invalid input data, at gix-zlib/src/decompress.rs:67, path: "tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b" })
+        |
+        └─ DecompressFile { source: Could not decode zip stream, at gix-zlib/src/inflate.rs:16
+        |
+        └─ Invalid input data, at gix-zlib/src/decompress.rs:67, path: "tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b" }
+            |
+            └─ Could not decode zip stream, at gix-zlib/src/inflate.rs:16
+        |
+        └─ Invalid input data, at gix-zlib/src/decompress.rs:67
+                |
+                └─ Invalid input data
         |
         └─ decompression of loose object at 'tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b' failed
         |
-        └─ Message("Could not decode zip stream")
-        |
-        └─ CorruptionError { message: "Invalid input data" }
+        └─ Could not decode zip stream
         |
         └─ Invalid input data
         "#);

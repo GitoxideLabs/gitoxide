@@ -59,7 +59,11 @@ impl crate::Repository {
             }
         }
 
-        if let Some(blob) = blob_id.and_then(|id| self.find_object(id).map_err(|e| err.get_or_insert(e.into())).ok()) {
+        if let Some(blob) = blob_id.and_then(|id| {
+            self.find_object(id)
+                .map_err(|e| err.get_or_insert(crate::mailmap::load::Error::FindExisting(e)))
+                .ok()
+        }) {
             target.merge(gix_mailmap::parse_ignore_errors(&blob.data));
         }
 

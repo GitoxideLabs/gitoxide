@@ -24,25 +24,25 @@ pub(crate) fn any_header_field_multi_line<'a>(i: &mut &'a [u8]) -> ParseResult<(
     let name_end = c
         .find_byteset(SPACE_OR_NL)
         .filter(|pos| *pos > 0)
-        .ok_or(crate::decode::Error)?;
+        .ok_or_else(crate::decode::empty_error)?;
     if c.get(name_end) != Some(&b' ') {
-        return Err(crate::decode::Error);
+        return Err(crate::decode::empty_error());
     }
 
     c = &c[name_end + 1..];
-    let first_line_end = c.find_byte(b'\n').ok_or(crate::decode::Error)?;
+    let first_line_end = c.find_byte(b'\n').ok_or_else(crate::decode::empty_error)?;
     c = &c[first_line_end + 1..];
 
     let mut continuation_end = name_end + 1 + first_line_end + 1;
     let mut continuation_count = 0usize;
     while c.first() == Some(&b' ') {
-        let line_end = c.find_byte(b'\n').ok_or(crate::decode::Error)?;
+        let line_end = c.find_byte(b'\n').ok_or_else(crate::decode::empty_error)?;
         continuation_end += line_end + 1;
         c = &c[line_end + 1..];
         continuation_count += 1;
     }
     if continuation_count == 0 {
-        return Err(crate::decode::Error);
+        return Err(crate::decode::empty_error());
     }
 
     let bytes = input[name_end + 1..continuation_end].as_bstr();
@@ -72,10 +72,10 @@ pub(crate) fn header_field<'a, T>(
 ) -> ParseResult<T> {
     let c = *i;
     let Some(rest) = c.strip_prefix(name).and_then(|rest| rest.strip_prefix(SPACE)) else {
-        return Err(crate::decode::Error);
+        return Err(crate::decode::empty_error());
     };
     let Some(nl) = rest.find_byte(b'\n') else {
-        return Err(crate::decode::Error);
+        return Err(crate::decode::empty_error());
     };
     let value = parse_value(&rest[..nl])?;
     *i = &rest[nl + 1..];
@@ -94,9 +94,9 @@ pub(crate) fn any_header_field<'a>(i: &mut &'a [u8]) -> ParseResult<(&'a [u8], &
     let name_end = c
         .find_byteset(SPACE_OR_NL)
         .filter(|pos| *pos > 0)
-        .ok_or(crate::decode::Error)?;
+        .ok_or_else(crate::decode::empty_error)?;
     if c.get(name_end) != Some(&b' ') {
-        return Err(crate::decode::Error);
+        return Err(crate::decode::empty_error());
     }
     c = &c[name_end + 1..];
     if let Some(value_end) = c.find_byte(b'\n') {
@@ -105,7 +105,7 @@ pub(crate) fn any_header_field<'a>(i: &mut &'a [u8]) -> ParseResult<(&'a [u8], &
         *i = rest;
         Ok((&input[..name_end], value))
     } else {
-        Err(crate::decode::Error)
+        Err(crate::decode::empty_error())
     }
 }
 
@@ -116,7 +116,7 @@ pub(crate) fn any_header_field<'a>(i: &mut &'a [u8]) -> ParseResult<(&'a [u8], &
 /// match the expected object hash length.
 pub fn hex_hash(i: &[u8], hash_kind: gix_hash::Kind) -> ParseResult<&BStr> {
     if i.len() != hash_kind.len_in_hex() || !i.iter().all(u8::is_ascii_hexdigit) {
-        return Err(crate::decode::Error);
+        return Err(crate::decode::empty_error());
     }
     Ok(i.as_bstr())
 }
@@ -127,11 +127,11 @@ pub fn hex_hash(i: &[u8], hash_kind: gix_hash::Kind) -> ParseResult<&BStr> {
 /// The entire input slice must be consumed by
 /// `gix_actor`'s signature parser; trailing bytes cause an error.
 pub(crate) fn signature(mut i: &[u8]) -> ParseResult<gix_actor::SignatureRef<'_>> {
-    let signature = gix_actor::SignatureRef::from_bytes_consuming(&mut i).map_err(|_| crate::decode::Error)?;
+    let signature = gix_actor::SignatureRef::from_bytes_consuming(&mut i)?;
     if i.is_empty() {
         Ok(signature)
     } else {
-        Err(crate::decode::Error)
+        Err(crate::decode::empty_error())
     }
 }
 

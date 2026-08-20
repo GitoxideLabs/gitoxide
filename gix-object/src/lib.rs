@@ -66,7 +66,7 @@ pub mod find;
 ///
 pub mod write {
     /// The error type returned by the [`Write`](crate::Write) trait.
-    pub type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
+    pub type Error = gix_error::Exn;
 }
 
 mod traits;
@@ -318,60 +318,36 @@ pub struct Header {
 pub mod decode {
     mod error {
         pub(crate) fn empty_error() -> Error {
-            Error
+            Error::new("object parsing failed")
         }
 
         /// A type to indicate any error occurred during parsing.
-        #[derive(Debug, Clone, Copy, Default)]
-        pub struct Error;
-
-        impl std::fmt::Display for Error {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("object parsing failed")
-            }
-        }
-
-        impl std::error::Error for Error {}
+        pub type Error = gix_error::ValidationError;
     }
     pub use error::Error;
     pub(crate) use error::empty_error;
 
     /// Returned by [`loose_header()`]
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum LooseHeaderDecodeError {
-        #[error("{message}: {number:?}")]
-        ParseIntegerError {
-            source: gix_utils::btoi::ParseIntegerError,
-            message: &'static str,
-            number: bstr::BString,
-        },
-        #[error("{message}")]
-        InvalidHeader { message: &'static str },
-        #[error("The object header contained an unknown object kind.")]
-        ObjectHeader(#[from] super::kind::Error),
-    }
+    pub type LooseHeaderDecodeError = gix_error::Exn<gix_error::ValidationError>;
 
     use bstr::ByteSlice;
+    use gix_error::{ErrorExt, ResultExt, ValidationError};
     /// Decode a loose object header, being `<kind> <size>\0`, returns
     /// ([`kind`](super::Kind), `size`, `consumed bytes`).
     ///
     /// `size` is the uncompressed size of the payload in bytes.
     pub fn loose_header(input: &[u8]) -> Result<(super::Kind, u64, usize), LooseHeaderDecodeError> {
-        use LooseHeaderDecodeError::*;
-        let kind_end = input.find_byte(0x20).ok_or(InvalidHeader {
-            message: "Expected '<type> <size>'",
-        })?;
-        let kind = super::Kind::from_bytes(&input[..kind_end])?;
-        let size_end = input.find_byte(0x0).ok_or(InvalidHeader {
-            message: "Did not find 0 byte in header",
-        })?;
+        let kind_end = input
+            .find_byte(0x20)
+            .ok_or_else(|| ValidationError::new("Expected '<type> <size>'").raise())?;
+        let kind = super::Kind::from_bytes(&input[..kind_end])
+            .or_raise(|| ValidationError::new("The object header contained an unknown object kind."))?;
+        let size_end = input
+            .find_byte(0x0)
+            .ok_or_else(|| ValidationError::new("Did not find 0 byte in header").raise())?;
         let size_bytes = &input[kind_end + 1..size_end];
-        let size = gix_utils::btoi::to_signed(size_bytes).map_err(|source| ParseIntegerError {
-            source,
-            message: "Object size in header could not be parsed",
-            number: size_bytes.into(),
-        })?;
+        let size = gix_utils::btoi::to_signed(size_bytes)
+            .or_raise(|| ValidationError::new_with_input("Object size in header could not be parsed", size_bytes))?;
         Ok((kind, size, size_end + 1))
     }
 }

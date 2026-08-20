@@ -2,30 +2,22 @@ use std::io;
 
 use bstr::BStr;
 use gix_date::parse::TimeBuf;
+use gix_error::{ErrorExt, ResultExt, ValidationError};
 
 use crate::{Kind, Tag, TagRef, encode, encode::NL};
 
 /// An Error used in [`Tag::write_to()`][crate::WriteTo::write_to()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Tags must not start with a dash: '-'")]
-    StartsWithDash,
-    #[error("The tag name was no valid reference name")]
-    InvalidRefName(#[from] gix_validate::tag::name::Error),
-}
-
-impl From<Error> for io::Error {
-    fn from(err: Error) -> Self {
-        io::Error::other(err)
-    }
-}
+pub type Error = gix_error::Exn<ValidationError>;
 
 impl crate::WriteTo for Tag {
     fn write_to(&self, out: &mut dyn io::Write) -> io::Result<()> {
         encode::trusted_header_id(b"object", &self.target, out)?;
         encode::trusted_header_field(b"type", self.target_kind.as_bytes(), out)?;
-        encode::header_field(b"tag", validated_name(self.name.as_ref())?, out)?;
+        encode::header_field(
+            b"tag",
+            validated_name(self.name.as_ref()).map_err(|err| io::Error::other(err.into_error()))?,
+            out,
+        )?;
         if let Some(tagger) = &self.tagger {
             let mut buf = TimeBuf::default();
             encode::trusted_header_signature(b"tagger", &tagger.to_ref(&mut buf), out)?;
@@ -63,7 +55,11 @@ impl crate::WriteTo for TagRef<'_> {
     fn write_to(&self, mut out: &mut dyn io::Write) -> io::Result<()> {
         encode::trusted_header_field(b"object", self.target, &mut out)?;
         encode::trusted_header_field(b"type", self.target_kind.as_bytes(), &mut out)?;
-        encode::header_field(b"tag", validated_name(self.name)?, &mut out)?;
+        encode::header_field(
+            b"tag",
+            validated_name(self.name).map_err(|err| io::Error::other(err.into_error()))?,
+            &mut out,
+        )?;
         if let Some(tagger) = self.tagger {
             encode::trusted_header_field(b"tagger", tagger.as_ref(), &mut out)?;
         }
@@ -96,9 +92,9 @@ impl crate::WriteTo for TagRef<'_> {
 }
 
 fn validated_name(name: &BStr) -> Result<&BStr, Error> {
-    gix_validate::tag::name(name)?;
+    gix_validate::tag::name(name).or_raise(|| ValidationError::new("The tag name was no valid reference name"))?;
     if name[0] == b'-' {
-        return Err(Error::StartsWithDash);
+        return Err(ValidationError::new("Tags must not start with a dash: '-'").raise());
     }
     Ok(name)
 }

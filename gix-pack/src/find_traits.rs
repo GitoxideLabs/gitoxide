@@ -64,7 +64,16 @@ pub trait Find {
 }
 
 mod ext {
+    use gix_error::{CorruptionError, ErrorExt, NotFoundError, ResultExt, ValidationError};
     use gix_object::{BlobRef, CommitRef, CommitRefIter, Kind, ObjectRef, TagRef, TagRefIter, TreeRef, TreeRefIter};
+
+    fn not_found(id: &gix_hash::oid) -> gix_error::Exn {
+        NotFoundError::new(format!("An object with id {id} could not be found")).raise_erased()
+    }
+
+    fn wrong_kind(id: &gix_hash::oid, actual: Kind, expected: Kind) -> gix_error::Exn {
+        ValidationError::new(format!("Expected object of kind {expected} but got {actual} at {id}")).raise_erased()
+    }
 
     macro_rules! make_obj_lookup {
         ($method:ident, $object_variant:path, $object_kind:path, $object_type:ty) => {
@@ -77,26 +86,16 @@ mod ext {
             ) -> Result<($object_type, Option<crate::data::entry::Location>), gix_object::find::existing_object::Error>
             {
                 let id = id.as_ref();
-                self.try_find(id, buffer)
-                    .map_err(gix_object::find::existing_object::Error::Find)?
-                    .ok_or_else(|| gix_object::find::existing_object::Error::NotFound {
-                        oid: id.as_ref().to_owned(),
-                    })
+                self.try_find(id, buffer)?
+                    .ok_or_else(|| not_found(id))
                     .and_then(|(o, l)| {
                         o.decode()
-                            .map_err(|err| gix_object::find::existing_object::Error::Decode {
-                                source: err,
-                                oid: id.to_owned(),
-                            })
+                            .or_raise_erased(|| CorruptionError::new(format!("Could not decode object at {id}")))
                             .map(|o| (o, l))
                     })
                     .and_then(|(o, l)| match o {
                         $object_variant(o) => return Ok((o, l)),
-                        o => Err(gix_object::find::existing_object::Error::ObjectKind {
-                            oid: id.to_owned(),
-                            actual: o.kind(),
-                            expected: $object_kind,
-                        }),
+                        o => Err(wrong_kind(id, o.kind(), $object_kind)),
                     })
             }
         };
@@ -112,18 +111,11 @@ mod ext {
                 buffer: &'a mut Vec<u8>,
             ) -> Result<($object_type, Option<crate::data::entry::Location>), gix_object::find::existing_iter::Error> {
                 let id = id.as_ref();
-                self.try_find(id, buffer)
-                    .map_err(gix_object::find::existing_iter::Error::Find)?
-                    .ok_or_else(|| gix_object::find::existing_iter::Error::NotFound {
-                        oid: id.as_ref().to_owned(),
-                    })
+                self.try_find(id, buffer)?
+                    .ok_or_else(|| not_found(id))
                     .and_then(|(o, l)| {
                         o.$into_iter()
-                            .ok_or_else(|| gix_object::find::existing_iter::Error::ObjectKind {
-                                oid: id.to_owned(),
-                                actual: o.kind,
-                                expected: $object_kind,
-                            })
+                            .ok_or_else(|| wrong_kind(id, o.kind, $object_kind))
                             .map(|i| (i, l))
                     })
             }
@@ -139,11 +131,7 @@ mod ext {
             buffer: &'a mut Vec<u8>,
         ) -> Result<(gix_object::Data<'a>, Option<crate::data::entry::Location>), gix_object::find::existing::Error>
         {
-            self.try_find(id, buffer)
-                .map_err(gix_object::find::existing::Error::Find)?
-                .ok_or_else(|| gix_object::find::existing::Error::NotFound {
-                    oid: id.as_ref().to_owned(),
-                })
+            self.try_find(id, buffer)?.ok_or_else(|| not_found(id))
         }
 
         make_obj_lookup!(find_commit, ObjectRef::Commit, Kind::Commit, CommitRef<'a>);

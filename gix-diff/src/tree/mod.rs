@@ -11,11 +11,17 @@ use crate::tree::visit::Relation;
 #[expect(missing_docs)]
 pub enum Error {
     #[error(transparent)]
-    Find(#[from] gix_object::find::existing_iter::Error),
+    Find(gix_error::Error),
     #[error("The delegate cancelled the operation")]
     Cancelled,
     #[error(transparent)]
     EntriesDecode(#[from] gix_object::decode::Error),
+}
+
+impl From<gix_object::find::existing_iter::Error> for Error {
+    fn from(err: gix_object::find::existing_iter::Error) -> Self {
+        Error::Find(err.into_error())
+    }
 }
 
 /// A trait to allow responding to a traversal designed to figure out the [changes](visit::Change)

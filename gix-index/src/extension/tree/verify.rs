@@ -18,7 +18,7 @@ pub enum Error {
         name: BString,
     },
     #[error(transparent)]
-    TreeNodeNotFound(#[from] gix_object::find::existing_iter::Error),
+    TreeNodeNotFound(gix_error::Error),
     #[error(
         "The tree with id {oid} should have {expected_childcount} children, but its cached representation had {actual_childcount} of them"
     )]
@@ -49,6 +49,12 @@ pub enum Error {
         current_path: BString,
         previous_path: BString,
     },
+}
+
+impl From<gix_object::find::existing_iter::Error> for Error {
+    fn from(err: gix_object::find::existing_iter::Error) -> Self {
+        Error::TreeNodeNotFound(err.into_error())
+    }
 }
 
 impl Tree {

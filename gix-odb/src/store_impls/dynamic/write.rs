@@ -1,5 +1,6 @@
 use std::{io::Read, ops::Deref};
 
+use gix_error::ResultExt;
 use gix_hash::ObjectId;
 use gix_object::Kind;
 
@@ -36,7 +37,7 @@ where
                 let new_snapshot = self
                     .store
                     .load_one_index(self.index_ctx(snapshot.marker))
-                    .map_err(Box::new)?
+                    .or_erased()?
                     .expect("there is always at least one ODB, and this code runs only once for initialization");
                 *snapshot = new_snapshot;
                 snapshot.loose_dbs[0].write_stream(kind, size, from)?
@@ -57,7 +58,7 @@ where
                 let new_snapshot = self
                     .store
                     .load_one_index(self.index_ctx(snapshot.marker))
-                    .map_err(Box::new)?
+                    .or_erased()?
                     .expect("there is always at least one ODB, and this code runs only once for initialization");
                 *snapshot = new_snapshot;
                 snapshot.loose_dbs[0].write_buf_with_known_id(kind, from, id)?
@@ -79,7 +80,7 @@ where
                 let new_snapshot = self
                     .store
                     .load_one_index(self.index_ctx(snapshot.marker))
-                    .map_err(Box::new)?
+                    .or_erased()?
                     .expect("there is always at least one ODB, and this code runs only once for initialization");
                 *snapshot = new_snapshot;
                 snapshot.loose_dbs[0].write_stream_with_known_id(kind, size, from, id)?

@@ -6,13 +6,13 @@ use gix_diff::{Rewrites, tree_with_rewrites::Change};
 #[expect(missing_docs)]
 pub enum Error {
     #[error("Could not find ancestor, our or their tree to get started")]
-    FindTree(#[from] gix_object::find::existing_object::Error),
+    FindTree(#[source] gix_error::Error),
     #[error("Could not find ancestor, our or their tree iterator to get started")]
-    FindTreeIter(#[from] gix_object::find::existing_iter::Error),
+    FindTreeIter(#[source] gix_error::Error),
     #[error("Failed to diff our side or their side")]
     DiffTree(#[from] gix_diff::tree_with_rewrites::Error),
     #[error("Could not apply merge result to base tree")]
-    TreeEdit(#[from] gix_object::tree::editor::Error),
+    TreeEdit(#[source] gix_error::Error),
     #[error("Failed to load resource to prepare for blob merge")]
     BlobMergeSetResource(#[from] crate::blob::platform::set_resource::Error),
     #[error(transparent)]
@@ -23,6 +23,12 @@ pub enum Error {
     WriteBlobToOdb(Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("The merge was performed, but the binary merge result couldn't be selected as it wasn't found")]
     MergeResourceNotFound,
+}
+
+impl From<gix_object::tree::editor::Error> for Error {
+    fn from(err: gix_object::tree::editor::Error) -> Self {
+        Error::TreeEdit(err.into_error())
+    }
 }
 
 /// The outcome produced by [`tree()`](crate::tree()).

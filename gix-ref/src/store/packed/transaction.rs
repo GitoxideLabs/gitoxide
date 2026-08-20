@@ -106,7 +106,9 @@ impl packed::Transaction {
             {
                 let mut next_id = new;
                 edit.peeled = loop {
-                    let data = objects.try_find(&next_id, &mut buf)?;
+                    let data = objects
+                        .try_find(&next_id, &mut buf)
+                        .map_err(|err| prepare::Error::Resolve(err.into()))?;
                     match data {
                         Some(gix_object::Data {
                             kind: gix_object::Kind::Tag,

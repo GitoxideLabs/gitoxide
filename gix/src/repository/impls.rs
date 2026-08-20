@@ -1,5 +1,6 @@
 use std::ops::DerefMut;
 
+use gix_error::{ErrorExt, ResultExt};
 use gix_hash::ObjectId;
 use gix_object::Exists;
 
@@ -109,12 +110,12 @@ impl From<crate::Repository> for crate::ThreadSafeRepository {
 impl gix_object::Write for crate::Repository {
     fn write(&self, object: &dyn gix_object::WriteTo) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
         let mut buf = self.empty_reusable_buffer();
-        object.write_to(buf.deref_mut())?;
+        object.write_to(buf.deref_mut()).or_erased()?;
         self.write_buf(object.kind(), &buf)
     }
 
     fn write_buf(&self, object: gix_object::Kind, from: &[u8]) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
-        let oid = gix_object::compute_hash(self.object_hash(), object, from)?;
+        let oid = gix_object::compute_hash(self.object_hash(), object, from).or_erased()?;
         if self.objects.exists(&oid) {
             return Ok(oid);
         }
@@ -128,9 +129,11 @@ impl gix_object::Write for crate::Repository {
         from: &mut dyn std::io::Read,
     ) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
         let mut buf = self.empty_reusable_buffer();
-        let bytes = std::io::copy(from, buf.deref_mut())?;
+        let bytes = std::io::copy(from, buf.deref_mut()).or_erased()?;
         if size != bytes {
-            return Err(format!("Found {bytes} bytes in stream, but had {size} bytes declared").into());
+            return Err(
+                gix_error::message!("Found {bytes} bytes in stream, but had {size} bytes declared").raise_erased(),
+            );
         }
         self.write_buf(kind, &buf)
     }
@@ -155,9 +158,11 @@ impl gix_object::Write for crate::Repository {
         id: gix_hash::ObjectId,
     ) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
         let mut buf = self.empty_reusable_buffer();
-        let bytes = std::io::copy(from, buf.deref_mut())?;
+        let bytes = std::io::copy(from, buf.deref_mut()).or_erased()?;
         if size != bytes {
-            return Err(format!("Found {bytes} bytes in stream, but had {size} bytes declared").into());
+            return Err(
+                gix_error::message!("Found {bytes} bytes in stream, but had {size} bytes declared").raise_erased(),
+            );
         }
         self.write_buf_with_known_id(kind, &buf, id)
     }

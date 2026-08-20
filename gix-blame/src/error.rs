@@ -20,9 +20,9 @@ pub enum Error {
     #[error("Couldn't find commit or tree in the object database")]
     FindObject(#[from] gix_object::find::Error),
     #[error("Could not find existing blob or commit")]
-    FindExistingObject(#[from] gix_object::find::existing_object::Error),
+    FindExistingObject(#[source] gix_error::Error),
     #[error("Could not find existing iterator over a tree")]
-    FindExistingIter(#[from] gix_object::find::existing_iter::Error),
+    FindExistingIter(#[source] gix_error::Error),
     #[error("Failed to obtain the next commit in the commit-graph traversal")]
     Traverse(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error(transparent)]
@@ -37,4 +37,14 @@ pub enum Error {
     DecodeCommit(#[from] gix_object::decode::Error),
     #[error("Failed to get parent from commitgraph during traversal")]
     GetParentFromCommitGraph(#[from] gix_error::Message),
+}
+
+impl Error {
+    pub(crate) fn find_existing_object(err: gix_object::find::existing_object::Error) -> Self {
+        Error::FindExistingObject(err.into_error())
+    }
+
+    pub(crate) fn find_existing_iter(err: gix_object::find::existing_iter::Error) -> Self {
+        Error::FindExistingIter(err.into_error())
+    }
 }

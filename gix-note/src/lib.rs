@@ -537,7 +537,7 @@ impl InternalNode {
                 .or_raise_erased(|| message("Could not add a note tree entry"))?;
         }
         editor
-            .write(|tree| objects.write(tree).map_err(gix_error::Error::from_boxed))
+            .write(|tree| objects.write(tree))
             .or_raise_erased(|| message("Could not write the notes tree"))
     }
 
@@ -634,7 +634,6 @@ fn write_note_entries(notes: &[TreeEntry], level: usize, objects: &impl Write) -
 
     objects
         .write(&Tree { entries })
-        .map_err(gix_error::Error::from_boxed)
         .or_raise_erased(|| message("Could not write the notes tree"))
 }
 

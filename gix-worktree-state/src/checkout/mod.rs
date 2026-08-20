@@ -87,7 +87,7 @@ pub enum Error {
     #[error("object for checkout at {} could not be retrieved from object database", .path.display())]
     Find {
         #[source]
-        err: gix_object::find::existing_object::Error,
+        err: gix_error::Error,
         path: std::path::PathBuf,
     },
     #[error(transparent)]

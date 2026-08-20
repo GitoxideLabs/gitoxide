@@ -185,33 +185,26 @@ impl Object {
     }
 }
 
-use crate::{
-    BlobRef, CommitRef, Kind, ObjectRef, TagRef, TreeRef,
-    decode::{Error as DecodeError, LooseHeaderDecodeError, loose_header},
-};
+use crate::{BlobRef, CommitRef, Kind, ObjectRef, TagRef, TreeRef, decode::loose_header};
+use gix_error::{ErrorExt, ResultExt, ValidationError};
 
-#[derive(Debug, thiserror::Error)]
-pub enum LooseDecodeError {
-    #[error(transparent)]
-    InvalidHeader(#[from] LooseHeaderDecodeError),
-    #[error(transparent)]
-    InvalidContent(#[from] DecodeError),
-    #[error("Object sized {size} does not fit into memory - this can happen on 32 bit systems")]
-    OutOfMemory { size: u64 },
-}
+pub type LooseDecodeError = gix_error::Exn<ValidationError>;
 
 impl<'a> ObjectRef<'a> {
     /// Deserialize an object from a loose serialisation given `data`, parsing with the provided `object_hash`.
     pub fn from_loose(data: &'a [u8], hash_kind: gix_hash::Kind) -> Result<ObjectRef<'a>, LooseDecodeError> {
         let (kind, size, offset) = loose_header(data)?;
 
-        let body = &data[offset..]
-            .get(..size.try_into().map_err(|_| LooseDecodeError::OutOfMemory { size })?)
-            .ok_or(LooseHeaderDecodeError::InvalidHeader {
-                message: "object data was shorter than its size declared in the header",
-            })?;
+        let size = usize::try_from(size).or_raise(|| {
+            ValidationError::new(format!(
+                "Object sized {size} does not fit into memory - this can happen on 32 bit systems"
+            ))
+        })?;
+        let body = &data[offset..].get(..size).ok_or_else(|| {
+            ValidationError::new("object data was shorter than its size declared in the header").raise()
+        })?;
 
-        Ok(Self::from_bytes(body, kind, hash_kind)?)
+        Self::from_bytes(body, kind, hash_kind).map_err(ErrorExt::raise)
     }
 
     /// Deserialize an object of `kind` from the given `data`, using `object_hash`.

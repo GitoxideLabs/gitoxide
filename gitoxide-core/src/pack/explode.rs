@@ -9,7 +9,7 @@ use anyhow::{Result, anyhow};
 use gix::{
     NestedProgress,
     hash::ObjectId,
-    object, objs, odb,
+    object, odb,
     odb::{loose, pack},
     prelude::Write,
 };
@@ -77,7 +77,7 @@ enum Error {
         id: ObjectId,
     },
     #[error("Object didn't verify after right after writing it")]
-    Verify(#[from] objs::data::verify::Error),
+    Verify(#[source] std::io::Error),
     #[error("{kind} object wasn't re-encoded without change")]
     ObjectEncodeMismatch {
         #[source]
@@ -229,7 +229,7 @@ pub fn pack_or_pack_index(
                 let mut read_buf = Vec::new();
                 move |object_kind, buf, index_entry, progress| {
                     let written_id = out.write_buf(object_kind, buf).map_err(|err| Error::Write {
-                        source: err,
+                        source: err.into(),
                         kind: object_kind,
                         id: index_entry.oid,
                     })?;
@@ -254,7 +254,8 @@ pub fn pack_or_pack_index(
                                 id: written_id,
                             })?
                             .ok_or(Error::WrittenFileMissing { id: written_id })?;
-                        obj.verify_checksum(&written_id)?;
+                        obj.verify_checksum(&written_id)
+                            .map_err(|err| Error::Verify(std::io::Error::other(err.into_error())))?;
                     }
                     Ok(())
                 }

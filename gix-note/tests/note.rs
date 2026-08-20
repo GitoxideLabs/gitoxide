@@ -4,6 +4,7 @@ use std::{
     io::{self, Read},
 };
 
+use gix_error::ErrorExt;
 use gix_hash::{Kind, ObjectId, oid};
 use gix_object::{
     FindExt, Tree, Write,
@@ -66,7 +67,7 @@ impl CountingObjectDb {
 
     fn maybe_fail_write(&self) -> Result<(), gix_object::write::Error> {
         if self.fail_next_write.replace(false) {
-            return Err(io::Error::other("injected write failure").into());
+            return Err(io::Error::other("injected write failure").raise_erased());
         }
         Ok(())
     }
@@ -80,7 +81,7 @@ impl gix_object::Find for CountingObjectDb {
     ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
         self.reads.set(self.reads.get() + 1);
         if self.fail_next_read.replace(false) {
-            return Err(io::Error::other("injected read failure").into());
+            return Err(io::Error::other("injected read failure").raise_erased());
         }
         self.inner.try_find(id, buffer)
     }

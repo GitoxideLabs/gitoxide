@@ -16,7 +16,7 @@ pub fn message<'a>(i: &mut &'a [u8]) -> ParseResult<&'a BStr> {
         *i = &[];
         Ok(rest.as_bstr())
     } else {
-        Err(crate::decode::Error)
+        Err(crate::decode::empty_error())
     }
 }
 
@@ -83,7 +83,7 @@ pub fn commit<'a>(i: &mut &'a [u8], object_hash: gix_hash::Kind) -> ParseResult<
 
     let message = message(i)?;
     if !i.is_empty() {
-        return Err(crate::decode::Error);
+        return Err(crate::decode::empty_error());
     }
 
     Ok(CommitRef {

@@ -17,7 +17,7 @@ pub enum Error {
     #[error(transparent)]
     Decode(#[from] gix_object::decode::Error),
     #[error(transparent)]
-    Sign(#[from] gix_object::signature::sign::Error),
+    Sign(#[from] gix_error::Error),
     #[error(transparent)]
     WriteObject(#[from] crate::object::write::Error),
     #[error(transparent)]
@@ -61,7 +61,7 @@ pub mod options {
 
 pub(crate) fn sign<'repo>(commit: &crate::Commit<'repo>) -> Result<crate::Commit<'repo>, Error> {
     let options = commit.repo.commit_signing_options()?;
-    let signed = commit.decode()?.sign(options)?;
+    let signed = commit.decode()?.sign(options).map_err(gix_error::Exn::into_error)?;
     let id = commit.repo.write_object(&signed)?;
     Ok(commit.repo.find_commit(id)?)
 }

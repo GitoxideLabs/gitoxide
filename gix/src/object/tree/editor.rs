@@ -145,10 +145,7 @@ impl<'repo> super::Editor<'repo> {
     ///
     /// The returned cursor will then allow applying edits to the tree at `rela_path` as root.
     /// If `rela_path` is a single empty string, it is equivalent to using the current instance itself.
-    pub fn cursor_at(
-        &mut self,
-        rela_path: impl ToComponents,
-    ) -> Result<Cursor<'_, 'repo>, gix_object::tree::editor::Error> {
+    pub fn cursor_at(&mut self, rela_path: impl ToComponents) -> Result<Cursor<'_, 'repo>, gix_error::Error> {
         Ok(Cursor {
             inner: self.inner.cursor_at(rela_path.to_components())?,
             validate: self.validate,
@@ -164,19 +161,19 @@ impl<'repo> Cursor<'_, 'repo> {
         rela_path: impl ToComponents,
         kind: EntryKind,
         id: impl Into<ObjectId>,
-    ) -> Result<&mut Self, gix_object::tree::editor::Error> {
+    ) -> Result<&mut Self, gix_error::Error> {
         self.inner.upsert(rela_path.to_components(), kind, id.into())?;
         Ok(self)
     }
 
     /// Like [`Editor::remove()`](super::Editor::remove), but with the constraint of only editing in this cursor's tree.
-    pub fn remove(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_object::tree::editor::Error> {
+    pub fn remove(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_error::Error> {
         self.inner.remove(rela_path.to_components())?;
         Ok(self)
     }
 
     /// Like [`Editor::remove_leaf()`](super::Editor::remove_leaf), but with the constraint of only editing in this cursor's tree.
-    pub fn remove_leaf(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_object::tree::editor::Error> {
+    pub fn remove_leaf(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_error::Error> {
         self.inner.remove_leaf(rela_path.to_components())?;
         Ok(self)
     }
@@ -236,14 +233,14 @@ impl<'repo> super::Editor<'repo> {
         rela_path: impl ToComponents,
         kind: EntryKind,
         id: impl Into<ObjectId>,
-    ) -> Result<&mut Self, gix_object::tree::editor::Error> {
+    ) -> Result<&mut Self, gix_error::Error> {
         self.inner.upsert(rela_path.to_components(), kind, id.into())?;
         Ok(self)
     }
 
     /// Remove the entry at `rela_path`, loading all trees on the path accordingly.
     /// It's no error if the entry doesn't exist, or if `rela_path` doesn't lead to an existing entry at all.
-    pub fn remove(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_object::tree::editor::Error> {
+    pub fn remove(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_error::Error> {
         self.inner.remove(rela_path.to_components())?;
         Ok(self)
     }
@@ -252,7 +249,7 @@ impl<'repo> super::Editor<'repo> {
     /// It's no error if the entry doesn't exist, or if `rela_path` doesn't lead to an existing entry at all.
     ///
     /// Return an error if the entry exists and is a tree, as that would otherwise also remove all entries below it.
-    pub fn remove_leaf(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_object::tree::editor::Error> {
+    pub fn remove_leaf(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_error::Error> {
         self.inner.remove_leaf(rela_path.to_components())?;
         Ok(self)
     }

@@ -153,7 +153,17 @@ mod _impls {
 }
 
 mod ext {
+    use gix_error::{CorruptionError, ErrorExt, NotFoundError, ResultExt, ValidationError};
+
     use crate::{BlobRef, CommitRef, CommitRefIter, Kind, ObjectRef, TagRef, TagRefIter, TreeRef, TreeRefIter, find};
+
+    fn not_found(id: &gix_hash::oid) -> gix_error::Exn {
+        NotFoundError::new(format!("An object with id {id} could not be found")).raise_erased()
+    }
+
+    fn wrong_kind(id: &gix_hash::oid, actual: Kind, expected: Kind) -> gix_error::Exn {
+        ValidationError::new(format!("Expected object of kind {expected} but got {actual} at {id}")).raise_erased()
+    }
 
     macro_rules! make_obj_lookup {
         ($method:ident, $object_variant:path, $object_kind:path, $object_type:ty) => {
@@ -164,24 +174,15 @@ mod ext {
                 id: &gix_hash::oid,
                 buffer: &'a mut Vec<u8>,
             ) -> Result<$object_type, find::existing_object::Error> {
-                self.try_find(id, buffer)
-                    .map_err(find::existing_object::Error::Find)?
-                    .ok_or_else(|| find::existing_object::Error::NotFound {
-                        oid: id.as_ref().to_owned(),
-                    })
+                self.try_find(id, buffer)?
+                    .ok_or_else(|| not_found(id))
                     .and_then(|o| {
-                        o.decode().map_err(|err| find::existing_object::Error::Decode {
-                            source: err,
-                            oid: id.as_ref().to_owned(),
-                        })
+                        o.decode()
+                            .or_raise_erased(|| CorruptionError::new(format!("Could not decode object at {id}")))
                     })
                     .and_then(|o| match o {
                         $object_variant(o) => return Ok(o),
-                        o => Err(find::existing_object::Error::ObjectKind {
-                            oid: id.as_ref().to_owned(),
-                            actual: o.kind(),
-                            expected: $object_kind,
-                        }),
+                        o => Err(wrong_kind(id, o.kind(), $object_kind)),
                     })
             }
         };
@@ -196,19 +197,9 @@ mod ext {
                 id: &gix_hash::oid,
                 buffer: &'a mut Vec<u8>,
             ) -> Result<$object_type, find::existing_iter::Error> {
-                self.try_find(id, buffer)
-                    .map_err(find::existing_iter::Error::Find)?
-                    .ok_or_else(|| find::existing_iter::Error::NotFound {
-                        oid: id.as_ref().to_owned(),
-                    })
-                    .and_then(|o| {
-                        o.$into_iter()
-                            .ok_or_else(|| find::existing_iter::Error::ObjectKind {
-                                oid: id.as_ref().to_owned(),
-                                actual: o.kind,
-                                expected: $object_kind,
-                            })
-                    })
+                self.try_find(id, buffer)?
+                    .ok_or_else(|| not_found(id))
+                    .and_then(|o| o.$into_iter().ok_or_else(|| wrong_kind(id, o.kind, $object_kind)))
             }
         };
     }
@@ -217,9 +208,7 @@ mod ext {
     pub trait HeaderExt: super::Header {
         /// Like [`try_header(…)`](super::Header::try_header()), but flattens the `Result<Option<_>>` into a single `Result` making a non-existing header an error.
         fn header(&self, id: &gix_hash::oid) -> Result<crate::Header, find::existing::Error> {
-            self.try_header(id)
-                .map_err(find::existing::Error::Find)?
-                .ok_or_else(|| find::existing::Error::NotFound { oid: id.to_owned() })
+            self.try_header(id)?.ok_or_else(|| not_found(id))
         }
     }
 
@@ -231,9 +220,7 @@ mod ext {
             id: &gix_hash::oid,
             buffer: &'a mut Vec<u8>,
         ) -> Result<crate::Data<'a>, find::existing::Error> {
-            self.try_find(id, buffer)
-                .map_err(find::existing::Error::Find)?
-                .ok_or_else(|| find::existing::Error::NotFound { oid: id.to_owned() })
+            self.try_find(id, buffer)?.ok_or_else(|| not_found(id))
         }
 
         /// Like [`find(…)`][Self::find()], but flattens the `Result<Option<_>>` into a single `Result` making a non-existing object an error
@@ -246,24 +233,15 @@ mod ext {
             if id == gix_hash::ObjectId::empty_blob(id.kind()) {
                 return Ok(BlobRef { data: &[] });
             }
-            self.try_find(id, buffer)
-                .map_err(find::existing_object::Error::Find)?
-                .ok_or_else(|| find::existing_object::Error::NotFound {
-                    oid: id.as_ref().to_owned(),
-                })
+            self.try_find(id, buffer)?
+                .ok_or_else(|| not_found(id))
                 .and_then(|o| {
-                    o.decode().map_err(|err| find::existing_object::Error::Decode {
-                        source: err,
-                        oid: id.as_ref().to_owned(),
-                    })
+                    o.decode()
+                        .or_raise_erased(|| CorruptionError::new(format!("Could not decode object at {id}")))
                 })
                 .and_then(|o| match o {
                     ObjectRef::Blob(o) => Ok(o),
-                    o => Err(find::existing_object::Error::ObjectKind {
-                        oid: id.as_ref().to_owned(),
-                        actual: o.kind(),
-                        expected: Kind::Blob,
-                    }),
+                    o => Err(wrong_kind(id, o.kind(), Kind::Blob)),
                 })
         }
 
@@ -277,24 +255,15 @@ mod ext {
             if id == gix_hash::ObjectId::empty_tree(id.kind()) {
                 return Ok(TreeRef { entries: Vec::new() });
             }
-            self.try_find(id, buffer)
-                .map_err(find::existing_object::Error::Find)?
-                .ok_or_else(|| find::existing_object::Error::NotFound {
-                    oid: id.as_ref().to_owned(),
-                })
+            self.try_find(id, buffer)?
+                .ok_or_else(|| not_found(id))
                 .and_then(|o| {
-                    o.decode().map_err(|err| find::existing_object::Error::Decode {
-                        source: err,
-                        oid: id.as_ref().to_owned(),
-                    })
+                    o.decode()
+                        .or_raise_erased(|| CorruptionError::new(format!("Could not decode object at {id}")))
                 })
                 .and_then(|o| match o {
                     ObjectRef::Tree(o) => Ok(o),
-                    o => Err(find::existing_object::Error::ObjectKind {
-                        oid: id.as_ref().to_owned(),
-                        actual: o.kind(),
-                        expected: Kind::Tree,
-                    }),
+                    o => Err(wrong_kind(id, o.kind(), Kind::Tree)),
                 })
         }
 

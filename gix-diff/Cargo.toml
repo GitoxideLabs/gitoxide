@@ -56,6 +56,7 @@ gix-index = { version = "^0.55.0", path = "../gix-index", optional = true }
 gix-pathspec = { version = "^0.20.0", path = "../gix-pathspec", optional = true }
 gix-attributes = { version = "^0.35.0", path = "../gix-attributes", optional = true }
 gix-hash = { version = "^0.26.1", path = "../gix-hash" }
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 gix-object = { version = "^0.64.0", path = "../gix-object" }
 gix-filter = { version = "^0.34.0", path = "../gix-filter", optional = true }
 gix-worktree = { version = "^0.56.0", path = "../gix-worktree", default-features = false, features = ["attributes"], optional = true }

@@ -1856,6 +1856,7 @@ dependencies = [
  "getrandom 0.4.3",
  "gix-attributes",
  "gix-command",
+ "gix-error",
  "gix-filter",
  "gix-fs",
  "gix-hash",
@@ -2076,6 +2077,7 @@ dependencies = [
  "filetime",
  "fnv",
  "gix-bitmap",
+ "gix-error",
  "gix-features",
  "gix-fs",
  "gix-hash",
@@ -2145,6 +2147,7 @@ dependencies = [
  "document-features",
  "gix-command",
  "gix-diff",
+ "gix-error",
  "gix-filter",
  "gix-fs",
  "gix-hash",
@@ -2207,6 +2210,7 @@ dependencies = [
  "gix-actor",
  "gix-command",
  "gix-date",
+ "gix-error",
  "gix-features",
  "gix-hash",
  "gix-hashtable",
@@ -2223,7 +2227,6 @@ dependencies = [
  "serde",
  "smallvec",
  "termtree",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2517,6 +2520,7 @@ dependencies = [
  "filetime",
  "gix-diff",
  "gix-dir",
+ "gix-error",
  "gix-features",
  "gix-filter",
  "gix-fs",
@@ -2669,6 +2673,7 @@ dependencies = [
  "bitflags 2.13.0",
  "gix-commitgraph",
  "gix-date",
+ "gix-error",
  "gix-hash",
  "gix-hashtable",
  "gix-object",
@@ -2749,6 +2754,7 @@ version = "0.34.1"
 dependencies = [
  "bstr",
  "gix-discover",
+ "gix-error",
  "gix-features",
  "gix-filter",
  "gix-fs",

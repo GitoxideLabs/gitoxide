@@ -16,6 +16,7 @@ mod from_tree {
     };
 
     use gix_attributes::glob::pattern::Case;
+    use gix_error::ErrorExt;
     use gix_hash::oid;
     use gix_object::{Data, bstr::ByteSlice, tree::EntryKind};
     use gix_worktree::stack::state::attributes::Source;
@@ -32,7 +33,7 @@ mod from_tree {
             _id: &oid,
             _buffer: &'a mut Vec<u8>,
         ) -> Result<Option<Data<'a>>, gix_object::find::Error> {
-            Err(Box::new(Error::other("object retrieval failed")))
+            Err(Error::other("object retrieval failed").raise_erased())
         }
     }
 
