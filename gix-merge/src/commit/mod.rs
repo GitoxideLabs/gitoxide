@@ -16,7 +16,13 @@ pub enum Error {
         their_commit_id: gix_hash::ObjectId,
     },
     #[error("Could not find ancestor, our or their commit to extract tree from")]
-    FindCommit(#[from] gix_object::find::existing_object::Error),
+    FindCommit(#[source] gix_error::Error),
+}
+
+impl From<gix_object::find::existing_object::Error> for Error {
+    fn from(err: gix_object::find::existing_object::Error) -> Self {
+        Error::FindCommit(err.into_error())
+    }
 }
 
 /// A way to configure [`commit()`](crate::commit()).

@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use gix_error::ResultExt;
 use gix_object::Data;
 
 use crate::{Cache, find::Header};
@@ -216,9 +217,9 @@ where
         };
 
         let mut buf = Vec::with_capacity(2048);
-        object.write_to(&mut buf)?;
+        object.write_to(&mut buf).or_erased()?;
         let kind = object.kind();
-        let id = gix_object::compute_hash(self.object_hash, kind, &buf)?;
+        let id = gix_object::compute_hash(self.object_hash, kind, &buf).or_erased()?;
         map.borrow_mut().entry(id).or_insert((kind, buf));
         Ok(id)
     }
@@ -234,9 +235,9 @@ where
         };
 
         let mut buf = Vec::new();
-        from.read_to_end(&mut buf)?;
+        from.read_to_end(&mut buf).or_erased()?;
 
-        let id = gix_object::compute_hash(self.object_hash, kind, &buf)?;
+        let id = gix_object::compute_hash(self.object_hash, kind, &buf).or_erased()?;
         map.borrow_mut().entry(id).or_insert((kind, buf));
         Ok(id)
     }
@@ -267,7 +268,7 @@ where
         };
 
         let mut buf = Vec::new();
-        from.read_to_end(&mut buf)?;
+        from.read_to_end(&mut buf).or_erased()?;
 
         map.borrow_mut().entry(id).or_insert((kind, buf));
         Ok(id)

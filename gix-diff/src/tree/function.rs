@@ -225,7 +225,12 @@ fn catchup_rhs_with_lhs(
                     break;
                 }
             },
-            Some(Err(err)) => return Err(Error::EntriesDecode(err.to_owned())),
+            Some(Err(_)) => {
+                let Err(err) = rhs_entries.next().expect("the peeked item to be present") else {
+                    unreachable!("peeked error changed before it was consumed")
+                };
+                return Err(Error::EntriesDecode(err));
+            }
             None => {
                 delegate.pop_path_component();
                 delete_entry_schedule_recursion(lhs, queue, change_id, relation_to_propagate, delegate)?;
@@ -274,7 +279,12 @@ fn catchup_lhs_with_rhs(
                     break;
                 }
             },
-            Some(Err(err)) => return Err(Error::EntriesDecode(err.to_owned())),
+            Some(Err(_)) => {
+                let Err(err) = lhs_entries.next().expect("the peeked item to be present") else {
+                    unreachable!("peeked error changed before it was consumed")
+                };
+                return Err(Error::EntriesDecode(err));
+            }
             None => {
                 delegate.pop_path_component();
                 add_entry_schedule_recursion(rhs, queue, change_id, relation_to_propagate, delegate)?;

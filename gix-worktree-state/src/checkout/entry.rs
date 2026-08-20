@@ -91,7 +91,7 @@ where
             let obj = (*objects)
                 .find_blob(&entry.id, buf)
                 .map_err(|err| crate::checkout::Error::Find {
-                    err,
+                    err: err.into_error(),
                     path: dest.to_path_buf(),
                 })?;
 
@@ -148,7 +148,7 @@ where
             let obj = (*objects)
                 .find_blob(&entry.id, buf)
                 .map_err(|err| crate::checkout::Error::Find {
-                    err,
+                    err: err.into_error(),
                     path: dest.to_path_buf(),
                 })?;
             if symlink {

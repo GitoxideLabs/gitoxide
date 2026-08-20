@@ -13,7 +13,7 @@ pub enum Error {
     #[error("file at '{path}' showed invalid size of inflated data, expected {expected}, got {actual}")]
     SizeMismatch { actual: u64, expected: u64, path: PathBuf },
     #[error(transparent)]
-    Decode(#[from] gix_object::decode::LooseHeaderDecodeError),
+    Decode(GixError),
     #[error("Cannot store {size} in memory as it's not representable")]
     OutOfMemory { size: u64 },
     #[error("Could not {action} data at '{path}'")]
@@ -22,6 +22,12 @@ pub enum Error {
         action: &'static str,
         path: PathBuf,
     },
+}
+
+impl From<gix_object::decode::LooseHeaderDecodeError> for Error {
+    fn from(err: gix_object::decode::LooseHeaderDecodeError) -> Self {
+        Error::Decode(err.into_error())
+    }
 }
 
 /// Object lookup
