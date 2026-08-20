@@ -100,8 +100,9 @@ without trading responsiveness for metadata that is not visible.
 - `-x/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
 - `-h/--help` prints Clap's standard help for `tix` and every subcommand.
-- `--quit-on-finish` exits after traversal and lane computation, for measurement
-  and non-interactive use.
+- `--quit-on-finish` exits after traversal, lane computation, and one completed
+  frame, for measurement and non-interactive inspection. Its frame is drawn on
+  the normal screen and remains visible after exit.
 - `tix rebase todo [-x HIDDEN...] [--no-auto-hide]
   [--onto REV | --update-base] [TIP...]`
   writes a self-contained Markdown history-rebase plan to stdout. Visible tips
@@ -136,9 +137,10 @@ without trading responsiveness for metadata that is not visible.
 - Revisions must resolve and peel to commits. Invalid or non-commit visible
   revisions are errors. An unavailable hidden revision emits a warning and is
   ignored when another hidden revision resolves; if none resolve, startup fails.
-- The UI always owns the alternate screen. Raw mode, focus reporting, mouse
+- The interactive UI owns the alternate screen. Raw mode, focus reporting, mouse
   capture, and enhanced keyboard reporting are restored on every exit path.
   Shutdown leaves the alternate screen without clearing it or writing afterward.
+  `--quit-on-finish` instead draws without input reporting on the normal screen.
 - `Ctrl-C` exits immediately from any normal tix focus without recovery
   bookkeeping. `q` always quits from history, including while a conflict or
   rebase continuation is suspended. Before that normal exit, tix journals
