@@ -140,7 +140,7 @@ mod _impl {
     }
 
     impl Inner {
-        fn frame(&self) -> &crate::exn::Frame {
+        pub(crate) fn frame(&self) -> &crate::exn::Frame {
             match self {
                 Inner::ExnAsError(f) | Inner::Exn(f) => f,
             }

@@ -290,6 +290,24 @@ impl<E: Error + Send + Sync + 'static> fmt::Display for Exn<E> {
     }
 }
 
+impl<E: Error + Send + Sync + 'static> PartialEq<str> for Exn<E> {
+    fn eq(&self, other: &str) -> bool {
+        crate::root_error_eq(self.frame().error(), other)
+    }
+}
+
+impl<E: Error + Send + Sync + 'static> PartialEq<&str> for Exn<E> {
+    fn eq(&self, other: &&str) -> bool {
+        <Self as PartialEq<str>>::eq(self, other)
+    }
+}
+
+impl<E: Error + Send + Sync + 'static> PartialEq<String> for Exn<E> {
+    fn eq(&self, other: &String) -> bool {
+        <Self as PartialEq<str>>::eq(self, other)
+    }
+}
+
 impl fmt::Display for Frame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {

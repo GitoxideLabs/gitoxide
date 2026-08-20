@@ -340,8 +340,36 @@ pub struct Error {
     inner: ChainedError,
 }
 
+fn root_error_eq(mut error: &(dyn std::error::Error + 'static), other: &str) -> bool {
+    while let Some(nested) = error.downcast_ref::<Error>() {
+        error = nested.error();
+    }
+    error.to_string() == other
+}
+
+impl PartialEq<str> for Error {
+    fn eq(&self, other: &str) -> bool {
+        root_error_eq(self.error(), other)
+    }
+}
+
+impl PartialEq<&str> for Error {
+    fn eq(&self, other: &&str) -> bool {
+        <Self as PartialEq<str>>::eq(self, other)
+    }
+}
+
+impl PartialEq<String> for Error {
+    fn eq(&self, other: &String) -> bool {
+        <Self as PartialEq<str>>::eq(self, other)
+    }
+}
+
 /// A Result type that uses the [`Error`] type.
 pub type Result<T = ()> = std::result::Result<T, Error>;
+
+mod test;
+pub use test::{TestError, TestResult};
 
 mod error;
 pub use error::{DisplaySource, can_retry};
