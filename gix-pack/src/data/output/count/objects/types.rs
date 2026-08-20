@@ -88,7 +88,7 @@ pub enum Error {
     #[error(transparent)]
     InputIteration(Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error(transparent)]
-    TreeTraverse(gix_traverse::tree::breadthfirst::Error),
+    TreeTraverse(gix_error::Error),
     #[error(transparent)]
     TreeChanges(gix_diff::tree::Error),
     #[error("Operation interrupted")]
