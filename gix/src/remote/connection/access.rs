@@ -2,6 +2,7 @@ use crate::{
     Remote,
     remote::{Connection, connection::AuthenticateFn, connection::ConnectionDetached},
 };
+use gix_error::{OptionExt, ResultExt, ValidationError, message};
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
@@ -146,13 +147,13 @@ fn configured_credentials_for_current_url(repo: crate::Repository) -> Authentica
             let url = action
                 .context()
                 .and_then(|ctx| ctx.url.clone().or_else(|| ctx.to_url()))
-                .ok_or(gix_credentials::protocol::Error::UrlMissing)?;
+                .ok_or_raise_erased(|| {
+                    ValidationError::new("Either 'url' field or both 'protocol' and 'host' fields must be provided")
+                })?;
             let (mut cascade, _action_with_normalized_url, prompt_opts) = repo
                 .config_snapshot()
-                .credential_helpers(gix_url::parse(&url).map_err(gix_error::Exn::into_error)?)
-                .map_err(|source| gix_credentials::protocol::Error::ConfigureCredentialHelpers {
-                    source: Box::new(source),
-                })?;
+                .credential_helpers(gix_url::parse(&url).or_erased()?)
+                .or_raise_erased(|| message("Could not configure credential helpers"))?;
             let outcome = cascade.invoke(action, prompt_opts.clone());
             previous_cascade_and_prompt = Some((cascade, prompt_opts));
             outcome

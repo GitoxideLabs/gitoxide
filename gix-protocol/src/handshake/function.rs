@@ -60,19 +60,20 @@ where
                         url: Some(url.clone()),
                         www_authenticate,
                         ..Default::default()
-                    }))?
+                    }))
+                    .map_err(|err| Error::Credentials(err.into_error()))?
                     .ok_or(Error::EmptyCredentials)?;
                 transport.set_identity(identity)?;
                 progress.step();
                 progress.set_name("handshake (authenticated)".into());
                 match transport.handshake(service, &extra_parameters).await {
                     Ok(v) => {
-                        authenticate(next.store())?;
+                        authenticate(next.store()).map_err(|err| Error::Credentials(err.into_error()))?;
                         Ok(v)
                     }
                     // Still no permission? Reject the credentials.
                     Err(client::Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                        authenticate(next.erase())?;
+                        authenticate(next.erase()).map_err(|err| Error::Credentials(err.into_error()))?;
                         return Err(Error::InvalidCredentials { url, source: err });
                     }
                     // Otherwise, do nothing, as we don't know if it actually got to try the credentials.

@@ -1791,7 +1791,6 @@ dependencies = [
  "gix-trace",
  "gix-url",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
