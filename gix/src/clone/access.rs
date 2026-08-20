@@ -81,7 +81,8 @@ impl PrepareFetch {
         self.revision = revision
             .map(|revision| {
                 let revision = revision.into();
-                let spec = gix_refspec::parse(revision.as_ref(), gix_refspec::parse::Operation::Fetch)?;
+                let spec = gix_refspec::parse(revision.as_ref(), gix_refspec::parse::Operation::Fetch)
+                    .map_err(gix_error::Exn::into_error)?;
                 let source = spec.source().expect("one-sided non-empty fetch refspec");
                 let is_full_ref = source.starts_with(b"refs/") && source.find_byteset(b"*?[]\\").is_none();
                 let is_valid = revision.as_bstr() == source
