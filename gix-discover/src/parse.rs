@@ -4,30 +4,24 @@ use bstr::ByteSlice;
 
 ///
 pub mod gitdir {
-    use bstr::BString;
-
     /// The error returned by [`parse::gitdir()`][super::gitdir()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Format should be 'gitdir: <path>', but got: {:?}", .input)]
-        InvalidFormat { input: BString },
-        #[error("Couldn't decode {:?} as UTF8", .input)]
-        IllformedUtf8 { input: BString },
-    }
+    pub type Error = gix_error::ValidationError;
 }
 
 /// Parse typical `gitdir` files as seen in worktrees and submodules.
 pub fn gitdir(input: &[u8]) -> Result<PathBuf, gitdir::Error> {
     let path = input
         .strip_prefix(b"gitdir: ")
-        .ok_or_else(|| gitdir::Error::InvalidFormat { input: input.into() })?
+        .ok_or_else(|| gitdir::Error::new_with_input("Format should be 'gitdir: <path>', but got", input))?
         .as_bstr();
     let path = path.trim_end().as_bstr();
     if path.is_empty() {
-        return Err(gitdir::Error::InvalidFormat { input: input.into() });
+        return Err(gitdir::Error::new_with_input(
+            "Format should be 'gitdir: <path>', but got",
+            input,
+        ));
     }
     Ok(gix_path::try_from_bstr(path)
-        .map_err(|_| gitdir::Error::IllformedUtf8 { input: input.into() })?
+        .map_err(|_| gitdir::Error::new_with_input("Couldn't decode input as UTF8", input))?
         .into_owned())
 }

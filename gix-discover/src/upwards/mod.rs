@@ -11,6 +11,7 @@ pub(crate) mod function {
         path::{Path, PathBuf},
     };
 
+    use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, ValidationError, message};
     use gix_sec::Trust;
 
     use super::{Error, Options, TrustPolicy};
@@ -90,8 +91,12 @@ pub(crate) mod function {
                 } else {
                     self.current.as_ref()
                 };
-                self.current_metadata = Some(path.metadata().map_err(|_| Error::InaccessibleDirectory {
-                    path: self.current.clone(),
+                let inaccessible_path = self.current.clone();
+                self.current_metadata = Some(path.metadata().or_raise_erased(|| {
+                    gix_error::message!(
+                        "Failed to access a directory, or path is not a directory: '{}'",
+                        inaccessible_path.display()
+                    )
                 })?);
             }
             Ok(self
@@ -212,20 +217,25 @@ pub(crate) mod function {
         // us the parent directory. (`Path::parent` just strips off the last
         // path component, which means it will not do what you expect when
         // working with paths that contain '..'.)
-        let cwd = current_dir.map_or_else(
-            || {
-                // The paths we return are relevant to the repository, but at this time it's impossible to know
-                // what `core.precomposeUnicode` is going to be. Hence, the one using these paths will have to
-                // transform the paths as needed, because we can't. `false` means to leave the obtained path as is.
-                gix_fs::current_dir(false).map(Cow::Owned)
-            },
-            |cwd| Ok(Cow::Borrowed(cwd)),
-        )?;
+        let cwd = current_dir
+            .map_or_else(
+                || {
+                    // The paths we return are relevant to the repository, but at this time it's impossible to know
+                    // what `core.precomposeUnicode` is going to be. Hence, the one using these paths will have to
+                    // transform the paths as needed, because we can't. `false` means to leave the obtained path as is.
+                    gix_fs::current_dir(false).map(Cow::Owned)
+                },
+                |cwd| Ok(Cow::Borrowed(cwd)),
+            )
+            .or_raise_erased(|| message("Could not obtain the current working directory"))?;
         #[cfg(windows)]
         let directory = dunce::simplified(directory);
         let logical = gix_path::normalize(directory.into(), cwd.as_ref())
-            .ok_or_else(|| Error::InvalidInput {
-                directory: directory.into(),
+            .ok_or_raise_erased(|| {
+                ValidationError::new(format!(
+                    "Relative path \"{}\" tries to reach beyond root filesystem",
+                    directory.display()
+                ))
             })?
             .into_owned();
         let directory_to_access = if directory.is_absolute() {
@@ -233,12 +243,19 @@ pub(crate) mod function {
         } else {
             Cow::Owned(cwd.join(directory))
         };
-        let dir_metadata = directory_to_access
-            .metadata()
-            .map_err(|_| Error::InaccessibleDirectory { path: logical.clone() })?;
+        let dir_metadata = directory_to_access.metadata().or_raise_erased(|| {
+            gix_error::message!(
+                "Failed to access a directory, or path is not a directory: '{}'",
+                logical.display()
+            )
+        })?;
 
         if !dir_metadata.is_dir() {
-            return Err(Error::InaccessibleDirectory { path: logical });
+            return Err(ValidationError::new(format!(
+                "Failed to access a directory, or path is not a directory: '{}'",
+                logical.display()
+            ))
+            .raise_erased());
         }
         #[cfg(unix)]
         let initial_device = device_id(&dir_metadata);
@@ -247,8 +264,9 @@ pub(crate) mod function {
         let filter_by_trust = |dir: &Path| -> Result<Result<Trust, Trust>, Error> {
             match trust {
                 TrustPolicy::Required(required) => {
-                    let trust =
-                        Trust::from_path_ownership(dir).map_err(|err| Error::CheckTrust { path: dir.into(), err })?;
+                    let trust = Trust::from_path_ownership(dir).or_raise_erased(|| {
+                        gix_error::message!("Could not determine trust level for path '{}'.", dir.display())
+                    })?;
                     Ok(if trust >= required { Ok(trust) } else { Err(required) })
                 }
                 TrustPolicy::Assume(trust) => Ok(Ok(trust)),
@@ -272,7 +290,10 @@ pub(crate) mod function {
                 cwd.as_ref(),
             );
             if max_height.is_none() && match_ceiling_dir_or_error {
-                return Err(Error::NoMatchingCeilingDir);
+                return Err(ValidationError::new(
+                    "None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.",
+                )
+                .raise_erased());
             }
             max_height
         } else {
@@ -282,28 +303,32 @@ pub(crate) mod function {
         let mut height = 0;
         'outer: loop {
             if max_height.is_some_and(|max| height > max) {
-                return Err(Error::NoGitRepositoryWithinCeiling {
-                    path: search.logical,
-                    ceiling_height: height,
-                });
+                return Err(NotFoundError::new(format!(
+                    "Could not find a git repository in '{}' or in any of its parents within ceiling height of {height}",
+                    search.logical.display()
+                ))
+                .raise_erased());
             }
 
             #[cfg(unix)]
             if !cross_fs && device_id(search.metadata()?) != initial_device {
-                return Err(Error::NoGitRepositoryWithinFs {
-                    path: search.logical,
-                    limit: search.current,
-                });
+                return Err(NotFoundError::new(format!(
+                    "Could not find a git repository in '{}' or in any of its parents within device limits below '{}'",
+                    search.logical.display(),
+                    search.current.display()
+                ))
+                .raise_erased());
             }
 
             if let Some((kind, appended_dot_git)) = search.probe_repository(cwd.as_ref(), dot_git_only) {
                 match filter_by_trust(&search.current)? {
-                    Err(required) => {
-                        break 'outer Err(Error::NoTrustedGitRepository {
-                            path: search.logical,
-                            candidate: search.current,
-                            required,
-                        });
+                    Err(_) => {
+                        break 'outer Err(NotFoundError::new(format!(
+                            "Could not find a trusted git repository in '{}' or in any of its parents, candidate at '{}' discarded",
+                            search.logical.display(),
+                            search.current.display()
+                        ))
+                        .raise_erased());
                     }
                     Ok(trust) => {
                         let cursor = search.into_candidate(cwd.as_ref(), appended_dot_git);
@@ -315,11 +340,14 @@ pub(crate) mod function {
                             cursor
                         };
                         break 'outer Ok((
-                            crate::repository::Path::from_dot_git_dir(path, kind, cwd.as_ref()).ok_or_else(|| {
-                                Error::InvalidInput {
-                                    directory: directory.into(),
-                                }
-                            })?,
+                            crate::repository::Path::from_dot_git_dir(path, kind, cwd.as_ref()).ok_or_raise_erased(
+                                || {
+                                    ValidationError::new(format!(
+                                        "Relative path \"{}\" tries to reach beyond root filesystem",
+                                        directory.display()
+                                    ))
+                                },
+                            )?,
                             trust,
                         ));
                     }
@@ -338,15 +366,22 @@ pub(crate) mod function {
                     search.current.components().next(),
                     Some(std::path::Component::RootDir | std::path::Component::Prefix(_))
                 ) {
-                    break Err(Error::NoGitRepository { path: search.logical });
+                    break Err(NotFoundError::new(format!(
+                        "Could not find a git repository in '{}' or in any of its parents",
+                        search.logical.display()
+                    ))
+                    .raise_erased());
                 } else {
                     debug_assert!(
                         !search.current.as_os_str().is_empty(),
                         "only a non-empty relative cursor can require normalization after ascent stalls"
                     );
                     let current = gix_path::normalize(search.current.clone().into(), cwd.as_ref())
-                        .ok_or_else(|| Error::InvalidInput {
-                            directory: search.current.clone(),
+                        .ok_or_raise_erased(|| {
+                            ValidationError::new(format!(
+                                "Relative path \"{}\" tries to reach beyond root filesystem",
+                                search.current.display()
+                            ))
                         })?
                         .into_owned();
                     search.set_current(current);
