@@ -166,7 +166,8 @@ where
 
             if let Some(shallow_lock) = shallow_lock {
                 if !previous_response.shallow_updates().is_empty() {
-                    gix_shallow::write(shallow_lock, shallow_commits, previous_response.shallow_updates())?;
+                    gix_shallow::write(shallow_lock, shallow_commits, previous_response.shallow_updates())
+                        .map_err(|err| Error::WriteShallowFile(err.into_error()))?;
                 }
             }
             Ok(Some(Outcome {
@@ -235,7 +236,7 @@ fn add_shallow_args(
     let expect_change = *shallow != Shallow::NoChange;
     let shallow_lock = expect_change.then(|| acquire_shallow_lock(shallow_file)).transpose()?;
 
-    let shallow_commits = gix_shallow::read(shallow_file)?;
+    let shallow_commits = gix_shallow::read(shallow_file).map_err(|err| Error::ReadShallowFile(err.into_error()))?;
     if (shallow_commits.is_some() || expect_change) && !args.can_use_shallow() {
         // NOTE: if this is an issue, we can always unshallow the repo ourselves.
         return Err(Error::MissingServerFeature {
