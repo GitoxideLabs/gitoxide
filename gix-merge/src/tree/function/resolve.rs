@@ -6,6 +6,7 @@ use std::borrow::Cow;
 
 use bstr::{BString, ByteSlice};
 use gix_diff::tree_with_rewrites::Change;
+use gix_error::ResultExt;
 use gix_hash::ObjectId;
 use gix_object::{
     FindExt, tree,
@@ -107,7 +108,7 @@ where
     let mut editor = {
         let ancestor_tree = objects
             .find_tree(base_tree, &mut base_buf)
-            .map_err(|err| Error::FindTree(err.into_error()))?;
+            .or_raise_erased(|| gix_error::message("Tree merge failed"))?;
         tree::Editor::new(ancestor_tree.to_owned(), objects, base_tree.kind())
     };
     let resolve_tree_conflicts = options.tree_conflicts;
@@ -2034,7 +2035,7 @@ fn apply_change_and_mark(
     editor: &mut tree::Editor<'_>,
     change: &Change,
     disposition: &mut ChangeDisposition,
-) -> Result<(), tree::editor::Error> {
+) -> Result<(), Error> {
     apply_change(editor, change, None)?;
     *disposition = ChangeDisposition::Applied;
     Ok(())
@@ -2052,7 +2053,7 @@ fn apply_our_resolution(
         Original => (local_ours, local_ours_disposition),
         Swapped => (local_theirs, local_theirs_disposition),
     };
-    Ok(apply_change_and_mark(editor, ours, disposition)?)
+    apply_change_and_mark(editor, ours, disposition)
 }
 
 fn involves_submodule(a: &EntryMode, b: &EntryMode) -> bool {
