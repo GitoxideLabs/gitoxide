@@ -6,6 +6,23 @@ fn pack_at(at: &str) -> pack::data::File {
     pack::data::File::at(fixture_path(at).as_path(), gix_hash::Kind::Sha1).expect("valid pack file")
 }
 
+#[test]
+fn unresolved_delta_base_is_not_found() {
+    use gix_error::{ErrorExt, message};
+
+    let base_id = gix_hash::ObjectId::empty_blob(gix_hash::Kind::Sha1);
+    let err = pack::data::decode::DeltaBaseUnresolved(base_id).and_raise(message("Could not decode object"));
+    assert!(err.is_not_found(), "an unresolved delta base is a missing object");
+    let err = err.into_error();
+    assert!(err.is_not_found(), "conversion preserves the classification");
+    assert_eq!(
+        err.downcast_any_ref::<pack::data::decode::DeltaBaseUnresolved>()
+            .expect("retain the custom error and missing object ID")
+            .0,
+        base_id
+    );
+}
+
 mod method {
     use std::sync::atomic::AtomicBool;
 
@@ -20,7 +37,7 @@ mod method {
     }
 
     #[test]
-    fn verify_checksum() -> Result<(), Box<dyn std::error::Error>> {
+    fn verify_checksum() -> crate::Result {
         let p = pack_at(SMALL_PACK);
         assert_eq!(
             p.verify_checksum(&mut progress::Discard, &AtomicBool::new(false))?,
@@ -30,7 +47,7 @@ mod method {
     }
 
     #[test]
-    fn verify_checksum_from_memory() -> Result<(), Box<dyn std::error::Error>> {
+    fn verify_checksum_from_memory() -> crate::Result {
         let p = pack_from_memory_at(SMALL_PACK);
         assert_eq!(
             p.verify_checksum(&mut progress::Discard, &AtomicBool::new(false))?,
@@ -62,23 +79,25 @@ mod method {
         buf.clear();
         let pack = pack_at(SMALL_PACK).with_alloc_limit_bytes(Some(0));
         let entry = pack.entry(entry_offset).expect("valid object type");
-        assert!(
-            matches!(
-                pack.decode_entry(
-                    entry,
-                    &mut buf,
-                    &mut inflate,
-                    &|_, _| None,
-                    &mut gix_odb::pack::cache::Never
-                ),
-                Err(gix_odb::pack::data::decode::Error::OutOfMemory)
-            ),
-            "pack-controlled allocations larger than the configured limit are rejected"
+        let err = pack
+            .decode_entry(
+                entry,
+                &mut buf,
+                &mut inflate,
+                &|_, _| None,
+                &mut gix_odb::pack::cache::Never,
+            )
+            .expect_err("pack-controlled allocations larger than the configured limit are rejected");
+        assert_eq!(err, "Entry too large to fit in memory");
+        assert_eq!(
+            err.downcast_any_ref::<gix_error::ResourceExhaustionError>()
+                .map(gix_error::ResourceExhaustionError::kind),
+            Some(gix_error::ResourceExhaustionKind::AllocationLimit)
         );
     }
 
     #[test]
-    fn iter() -> Result<(), Box<dyn std::error::Error>> {
+    fn iter() -> crate::Result {
         let pack = pack_at(SMALL_PACK);
         let it = pack.streaming_iter()?;
         assert_eq!(it.count(), pack.num_objects() as usize);
@@ -260,6 +279,23 @@ mod decompress_entry {
             buf.len(),
             187,
             "the buffer is larger than the alloc limit and that's alright"
+        );
+    }
+
+    #[test]
+    fn caller_provided_buffer_must_be_large_enough() {
+        let p = pack_at(SMALL_PACK);
+        let entry = p.entry(1968).expect("valid object type");
+        let mut buf = vec![0; entry.decompressed_size as usize - 1];
+
+        let err = p
+            .decompress_entry(&entry, &mut Default::default(), &mut buf)
+            .expect_err("an undersized caller-provided buffer is invalid input");
+        assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+        assert!(
+            !err.into_error()
+                .classify()
+                .any(|classification| matches!(classification.class(), gix_error::Class::ResourceExhaustion(_)))
         );
     }
 
