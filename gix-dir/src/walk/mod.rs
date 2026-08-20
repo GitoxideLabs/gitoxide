@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, path::PathBuf, sync::atomic::AtomicBool};
+use std::{collections::BTreeSet, sync::atomic::AtomicBool};
 
 use bstr::{BStr, BString};
 
@@ -274,36 +274,7 @@ pub struct Outcome {
 }
 
 /// The error returned by [`walk()`](function::walk()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Interrupted")]
-    Interrupted,
-    #[error("Worktree root at '{}' is not a directory", root.display())]
-    WorktreeRootIsFile { root: PathBuf },
-    #[error("Traversal root '{}' contains relative path components and could not be normalized", root.display())]
-    NormalizeRoot { root: PathBuf },
-    #[error("A symlink was found at component {component_index} of traversal root '{}' as seen from worktree root '{}'", root.display(), worktree_root.display())]
-    SymlinkInRoot {
-        root: PathBuf,
-        worktree_root: PathBuf,
-        /// This index starts at 0, with 0 being the first component.
-        component_index: usize,
-    },
-    #[error("Failed to update the excludes stack to see if a path is excluded")]
-    ExcludesAccess(std::io::Error),
-    #[error("Failed to read the directory at '{}'", path.display())]
-    ReadDir { path: PathBuf, source: std::io::Error },
-    #[error("Could not obtain directory entry in root of '{}'", parent_directory.display())]
-    DirEntry {
-        parent_directory: PathBuf,
-        source: std::io::Error,
-    },
-    #[error("Could not obtain filetype of directory entry '{}'", path.display())]
-    DirEntryFileType { path: PathBuf, source: std::io::Error },
-    #[error("Could not obtain symlink metadata on '{}'", path.display())]
-    SymlinkMetadata { path: PathBuf, source: std::io::Error },
-}
+pub type Error = gix_error::Exn;
 
 mod classify;
 pub(crate) mod function;

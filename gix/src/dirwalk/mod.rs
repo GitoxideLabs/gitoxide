@@ -43,7 +43,7 @@ pub struct Iter {
 #[expect(missing_docs)]
 pub enum Error {
     #[error(transparent)]
-    Walk(#[from] gix_dir::walk::Error),
+    Walk(gix_error::Error),
     #[error("A working tree is required to perform a directory walk")]
     MissingWorkDir,
     #[error(transparent)]

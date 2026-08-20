@@ -1883,6 +1883,7 @@ dependencies = [
  "bstr",
  "gix-dir",
  "gix-discover",
+ "gix-error",
  "gix-fs",
  "gix-ignore",
  "gix-index",
@@ -1894,7 +1895,6 @@ dependencies = [
  "gix-utils",
  "gix-worktree",
  "pretty_assertions",
- "thiserror 2.0.18",
 ]
 
 [[package]]
