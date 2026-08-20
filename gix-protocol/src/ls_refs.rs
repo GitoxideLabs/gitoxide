@@ -144,7 +144,7 @@ pub(crate) mod function {
                         trace,
                     )
                     .await
-                    .map_err(|err| crate::fetch::function::transport_error(err, "Could not invoke ls-refs"))?;
+                    .or_raise_erased(|| message("Could not invoke ls-refs"))?;
                 $from_v2_refs(&mut remote_refs).await
             }
         };
@@ -244,7 +244,11 @@ pub(crate) mod function {
                     .invoke_blocking(transport, &mut gix_features::progress::Discard, false)
                     .expect_err("the transport write fails")
                     .into_error();
-                assert_eq!(err.can_retry(), retryable, "preserve retry policy for {kind:?}");
+                assert_eq!(err.can_retry_lenient(), retryable, "preserve retry policy for {kind:?}");
+                assert!(
+                    !err.is_retryable(),
+                    "I/O failures are classified without extra retry markers"
+                );
                 assert_eq!(
                     err.downcast_any_ref::<io::Error>()
                         .expect("retain the I/O cause")

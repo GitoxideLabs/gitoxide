@@ -127,7 +127,7 @@ where
                 let mut reader = arguments
                     .send(transport, is_done)
                     .await
-                    .map_err(|err| transport_error(err, "Failed to send fetch arguments"))?;
+                    .or_raise_erased(|| message("Failed to send fetch arguments"))?;
                 if sideband_all {
                     setup_remote_progress(&mut progress, &mut reader, should_interrupt);
                 }
@@ -286,16 +286,6 @@ fn add_shallow_args(
     Ok((shallow_commits, shallow_lock))
 }
 
-pub(crate) fn transport_error(err: crate::transport::client::Error, context: &'static str) -> Error {
-    use crate::transport::IsSpuriousError;
-
-    if err.is_spurious() {
-        RetryableError::new(err).and_raise(message(context)).erased()
-    } else {
-        err.and_raise(message(context)).erased()
-    }
-}
-
 fn setup_remote_progress<'a>(
     progress: &mut dyn gix_features::progress::DynNestedProgress,
     reader: &mut Box<dyn ExtendedBufRead<'a> + Unpin + 'a>,
@@ -312,22 +302,4 @@ fn setup_remote_progress<'a>(
             }
         }
     }) as HandleProgress<'a>));
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn transport_errors_keep_retryability() {
-        let err = super::transport_error(
-            crate::transport::client::Error::Io(std::io::ErrorKind::ConnectionReset.into()),
-            "transport failed",
-        )
-        .into_error();
-
-        assert!(err.can_retry(), "the transport classifier remains visible");
-        assert!(
-            err.downcast_any_ref::<std::io::Error>().is_some(),
-            "the original I/O error remains in the chain"
-        );
-    }
 }
