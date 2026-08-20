@@ -7,7 +7,13 @@ use crate::{
 /// Parse refs from the given input line by line. Protocol V2 is required for this to succeed.
 pub fn from_v2_refs(in_refs: &mut dyn ReadlineBufRead) -> Result<Vec<Ref>, Error> {
     let mut out_refs = Vec::new();
-    while let Some(line) = in_refs.readline().transpose()?.transpose()?.and_then(|l| l.as_bstr()) {
+    while let Some(line) = in_refs
+        .readline()
+        .transpose()?
+        .transpose()
+        .map_err(|err| Error::DecodePacketline(gix_error::Error::from_error(err)))?
+        .and_then(|l| l.as_bstr())
+    {
         out_refs.push(refs::shared::parse_v2(line)?);
     }
     Ok(out_refs)
@@ -29,7 +35,13 @@ pub fn from_v1_refs_received_as_part_of_handshake_and_capabilities<'a>(
     let mut out_shallow = Vec::new();
     let number_of_possible_symbolic_refs_for_lookup = out_refs.len();
 
-    while let Some(line) = in_refs.readline().transpose()?.transpose()?.and_then(|l| l.as_bstr()) {
+    while let Some(line) = in_refs
+        .readline()
+        .transpose()?
+        .transpose()
+        .map_err(|err| Error::DecodePacketline(gix_error::Error::from_error(err)))?
+        .and_then(|l| l.as_bstr())
+    {
         refs::shared::parse_v1(
             number_of_possible_symbolic_refs_for_lookup,
             &mut out_refs,
