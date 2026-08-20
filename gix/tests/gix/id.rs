@@ -69,6 +69,21 @@ fn display_and_debug() -> crate::Result {
     Ok(())
 }
 
+#[test]
+fn compares_with_text() -> crate::Result {
+    let repo = crate::basic_repo()?;
+    let id = repo.head_id()?;
+    let text = id.to_string();
+
+    assert_eq!(id, text.as_str(), "an attached ID matches str");
+    assert_eq!(text.as_str(), id, "str comparison is symmetric");
+    assert_eq!(id, text, "an attached ID matches String");
+    assert_eq!(text, id, "String comparison is symmetric");
+    assert_ne!(id, "not an object ID", "invalid text does not match an attached ID");
+    assert_ne!("not an object ID", id, "invalid-text comparison is symmetric");
+    Ok(())
+}
+
 mod ancestors {
     use crate::util::hex_to_id;
 

@@ -68,6 +68,35 @@ impl std::fmt::Debug for Reference<'_> {
     }
 }
 
+mod impls {
+    use gix_ref::{
+        FullName, FullNameRef,
+        bstr::{BStr, BString},
+    };
+
+    use crate::Reference;
+
+    macro_rules! impl_partial_eq {
+        ($other:ty) => {
+            impl PartialEq<$other> for Reference<'_> {
+                fn eq(&self, other: &$other) -> bool {
+                    self.inner.eq(other)
+                }
+            }
+        };
+    }
+
+    impl_partial_eq!(str);
+    impl_partial_eq!(&str);
+    impl_partial_eq!(String);
+    impl_partial_eq!(BStr);
+    impl_partial_eq!(&BStr);
+    impl_partial_eq!(BString);
+    impl_partial_eq!(FullName);
+    impl_partial_eq!(FullNameRef);
+    impl_partial_eq!(&FullNameRef);
+}
+
 impl<'repo> Reference<'repo> {
     pub(crate) fn from_ref(reference: gix_ref::Reference, repo: &'repo crate::Repository) -> Self {
         Reference { inner: reference, repo }

@@ -1,5 +1,41 @@
 use gix::remote::Direction;
 
+#[test]
+fn compares_with_name_representations() -> crate::Result {
+    use gix::{
+        bstr::{BString, ByteSlice},
+        refs::{FullName, FullNameRef, Target},
+    };
+
+    let repo = crate::basic_repo()?;
+    let reference = repo.find_reference("main")?;
+    let text = "refs/heads/main";
+    let string = text.to_owned();
+    let bytes = text.as_bytes().as_bstr();
+    let byte_string: BString = text.into();
+    let name = FullName::try_from(text)?;
+    let name_ref: &FullNameRef = name.as_ref();
+
+    assert_eq!(reference, text, "an attached reference matches str");
+    assert_eq!(reference, string, "an attached reference matches String");
+    assert_eq!(reference, bytes, "an attached reference matches BStr");
+    assert_eq!(reference, byte_string, "an attached reference matches BString");
+    assert_eq!(reference, name, "an attached reference matches FullName");
+    assert_eq!(reference, name_ref, "an attached reference matches FullNameRef");
+
+    let mut other_target = reference.clone();
+    other_target.inner.target = Target::Symbolic(FullName::try_from("refs/heads/other")?);
+    assert_eq!(
+        other_target, text,
+        "reference-name equality is independent of the target"
+    );
+    assert_ne!(
+        other_target, "refs/heads/other",
+        "a target name does not compare as the reference name"
+    );
+    Ok(())
+}
+
 mod log {
 
     #[test]
