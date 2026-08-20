@@ -8,9 +8,7 @@ pub enum Error {
     #[error("The remote pointing to {} is anonymous and can't be saved.", url.to_bstring())]
     NameMissing { url: gix_url::Url },
     #[error(transparent)]
-    Span(#[from] gix_config::parse::span::Error),
-    #[error(transparent)]
-    ConfigValue(#[from] gix_config::file::section::value::Error),
+    Config(#[from] gix_error::ValidationError),
 }
 
 /// The error returned by [`Remote::save_as_to()`].

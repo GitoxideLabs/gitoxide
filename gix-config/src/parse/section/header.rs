@@ -3,16 +3,7 @@ use bstr::{BStr, BString, ByteSlice};
 use crate::parse::{Span, section::HeaderData};
 
 /// The error returned when creating a section header.
-#[derive(Debug, PartialOrd, PartialEq, Eq, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("section names can only be ascii, '-'")]
-    InvalidName,
-    #[error("sub-section names must not contain newlines or null bytes")]
-    InvalidSubSection,
-    #[error(transparent)]
-    Span(#[from] crate::parse::span::Error),
-}
+pub type Error = gix_error::ValidationError;
 
 impl HeaderData {
     pub(crate) fn new_in(
@@ -53,14 +44,14 @@ pub fn is_valid_subsection(name: impl crate::AsBStr) -> bool {
 fn validated_subsection(name: &BStr) -> Result<BString, Error> {
     is_valid_subsection(name)
         .then(|| name.into())
-        .ok_or(Error::InvalidSubSection)
+        .ok_or_else(|| Error::new_with_input("sub-section names must not contain newlines or null bytes", name))
 }
 
 fn validated_name(name: &BStr) -> Result<BString, Error> {
     name.iter()
         .all(|b| b.is_ascii_alphanumeric() || *b == b'-')
         .then(|| name.into())
-        .ok_or(Error::InvalidName)
+        .ok_or_else(|| Error::new_with_input("section names can only be ascii, '-'", name))
 }
 
 impl HeaderData {
