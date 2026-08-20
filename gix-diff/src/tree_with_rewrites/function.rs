@@ -1,4 +1,5 @@
 use bstr::BStr;
+use gix_error::ResultExt;
 use gix_object::TreeRefIter;
 
 use super::{Action, ChangeRef, Error, Options};
@@ -21,18 +22,20 @@ use crate::{rewrites, rewrites::tracker};
 /// `rhs` or `lhs` can be empty to indicate deletion or addition of an entire tree.
 ///
 /// Note that the rewrite outcome is only available if [rewrite-tracking was enabled](Options::rewrites).
-pub fn diff<E>(
+pub fn diff(
     lhs: TreeRefIter<'_>,
     rhs: TreeRefIter<'_>,
     resource_cache: &mut crate::blob::Platform,
     tree_diff_state: &mut crate::tree::State,
     objects: &impl gix_object::FindObjectOrHeader,
-    for_each: impl FnMut(ChangeRef<'_>) -> Result<Action, E>,
+    for_each: impl FnMut(ChangeRef<'_>) -> Result<Action, gix_error::Exn>,
     options: Options,
-) -> Result<Option<rewrites::Outcome>, Error>
-where
-    E: Into<Box<dyn std::error::Error + Sync + Send + 'static>>,
-{
+) -> Result<Option<rewrites::Outcome>, Error> {
+    fn callback_error(err: gix_error::Exn) -> Error {
+        err.raise(gix_error::message("The user-provided callback failed"))
+            .into()
+    }
+
     let mut delegate = Delegate {
         src_tree: lhs,
         recorder: crate::tree::Recorder::default().track_location(options.location),
@@ -46,41 +49,38 @@ where
         Ok(()) => {
             let outcome = delegate.process_tracked_changes(resource_cache)?;
             match delegate.err {
-                Some(err) => Err(Error::ForEach(err.into())),
+                Some(err) => Err(callback_error(err)),
                 None => Ok(outcome),
             }
         }
         Err(crate::tree::Error::Cancelled) => delegate
             .err
-            .map_or(Err(Error::Diff(crate::tree::Error::Cancelled)), |err| {
-                Err(Error::ForEach(err.into()))
-            }),
-        Err(err) => Err(err.into()),
+            .map_or(Err(Error::Cancelled), |err| Err(callback_error(err))),
+        Err(err) => Err(err),
     }
 }
 
-struct Delegate<'a, 'old, VisitFn, E, Objects> {
+struct Delegate<'a, 'old, VisitFn, Objects> {
     src_tree: TreeRefIter<'old>,
     recorder: crate::tree::Recorder,
     objects: &'a Objects,
     visit: VisitFn,
     tracked: Option<rewrites::Tracker<crate::tree::visit::Change>>,
     location: Option<crate::tree::recorder::Location>,
-    err: Option<E>,
+    err: Option<gix_error::Exn>,
 }
 
-impl<VisitFn, E, Objects> Delegate<'_, '_, VisitFn, E, Objects>
+impl<VisitFn, Objects> Delegate<'_, '_, VisitFn, Objects>
 where
     Objects: gix_object::FindObjectOrHeader,
-    VisitFn: FnMut(ChangeRef<'_>) -> Result<Action, E>,
-    E: Into<Box<dyn std::error::Error + Sync + Send + 'static>>,
+    VisitFn: FnMut(ChangeRef<'_>) -> Result<Action, gix_error::Exn>,
 {
     /// Call `visit` on an attached version of `change`.
     fn emit_change(
         change: crate::tree::visit::Change,
         location: &BStr,
         visit: &mut VisitFn,
-        stored_err: &mut Option<E>,
+        stored_err: &mut Option<gix_error::Exn>,
     ) -> crate::tree::visit::Action {
         use crate::tree::visit::Change::*;
         let change = match change {
@@ -137,54 +137,55 @@ where
             None => return Ok(None),
         };
 
-        let outcome = tracked.emit(
-            |dest, source| match source {
-                Some(source) => {
-                    let (oid, mode) = dest.change.oid_and_entry_mode();
-                    let change = ChangeRef::Rewrite {
-                        source_location: source.location,
-                        source_entry_mode: source.entry_mode,
-                        source_id: source.id,
-                        source_relation: source.change.relation(),
-                        entry_mode: mode,
-                        id: oid.to_owned(),
-                        relation: dest.change.relation(),
-                        diff: source.diff,
-                        location: dest.location,
-                        copy: match source.kind {
-                            tracker::visit::SourceKind::Rename => false,
-                            tracker::visit::SourceKind::Copy => true,
-                        },
-                    };
-                    match (self.visit)(change) {
-                        Ok(std::ops::ControlFlow::Break(())) => std::ops::ControlFlow::Break(()),
-                        Ok(std::ops::ControlFlow::Continue(())) => std::ops::ControlFlow::Continue(()),
-                        Err(err) => {
-                            self.err = Some(err);
-                            std::ops::ControlFlow::Break(())
+        let outcome = tracked
+            .emit(
+                |dest, source| match source {
+                    Some(source) => {
+                        let (oid, mode) = dest.change.oid_and_entry_mode();
+                        let change = ChangeRef::Rewrite {
+                            source_location: source.location,
+                            source_entry_mode: source.entry_mode,
+                            source_id: source.id,
+                            source_relation: source.change.relation(),
+                            entry_mode: mode,
+                            id: oid.to_owned(),
+                            relation: dest.change.relation(),
+                            diff: source.diff,
+                            location: dest.location,
+                            copy: match source.kind {
+                                tracker::visit::SourceKind::Rename => false,
+                                tracker::visit::SourceKind::Copy => true,
+                            },
+                        };
+                        match (self.visit)(change) {
+                            Ok(std::ops::ControlFlow::Break(())) => std::ops::ControlFlow::Break(()),
+                            Ok(std::ops::ControlFlow::Continue(())) => std::ops::ControlFlow::Continue(()),
+                            Err(err) => {
+                                self.err = Some(err);
+                                std::ops::ControlFlow::Break(())
+                            }
                         }
                     }
-                }
-                None => Self::emit_change(dest.change, dest.location, &mut self.visit, &mut self.err),
-            },
-            diff_cache,
-            self.objects,
-            |push| {
-                let mut delegate = tree_to_changes::Delegate::new(push, self.location);
-                let state = gix_traverse::tree::breadthfirst::State::default();
-                gix_traverse::tree::breadthfirst(self.src_tree, state, self.objects, &mut delegate)
-                    .map_err(gix_error::Exn::into_error)
-            },
-        )?;
+                    None => Self::emit_change(dest.change, dest.location, &mut self.visit, &mut self.err),
+                },
+                diff_cache,
+                self.objects,
+                |push| {
+                    let mut delegate = tree_to_changes::Delegate::new(push, self.location);
+                    let state = gix_traverse::tree::breadthfirst::State::default();
+                    gix_traverse::tree::breadthfirst(self.src_tree, state, self.objects, &mut delegate)
+                        .map_err(gix_error::Exn::into_error)
+                },
+            )
+            .or_raise(|| gix_error::message("Failure during rename tracking"))?;
         Ok(Some(outcome))
     }
 }
 
-impl<VisitFn, E, Objects> crate::tree::Visit for Delegate<'_, '_, VisitFn, E, Objects>
+impl<VisitFn, Objects> crate::tree::Visit for Delegate<'_, '_, VisitFn, Objects>
 where
     Objects: gix_object::FindObjectOrHeader,
-    VisitFn: FnMut(ChangeRef<'_>) -> Result<Action, E>,
-    E: Into<Box<dyn std::error::Error + Sync + Send + 'static>>,
+    VisitFn: FnMut(ChangeRef<'_>) -> Result<Action, gix_error::Exn>,
 {
     fn pop_front_tracked_path_and_set_current(&mut self) {
         self.recorder.pop_front_tracked_path_and_set_current();

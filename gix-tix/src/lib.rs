@@ -543,6 +543,7 @@ fn set_worktree_resources(
             gix::diff::blob::ResourceKind::OldOrSource,
             repository,
         )
+        .map_err(gix::Exn::into_error)
         .context("could not prepare old worktree diff resource")?;
     let new_resource = new.unwrap_or(fallback);
     cache
@@ -553,6 +554,7 @@ fn set_worktree_resources(
             gix::diff::blob::ResourceKind::NewOrDestination,
             repository,
         )
+        .map_err(gix::Exn::into_error)
         .context("could not prepare new worktree diff resource")?;
     Ok(())
 }
@@ -5229,6 +5231,7 @@ fn prepare_external_diff(
             0,
             1,
         )
+        .map_err(gix::Exn::into_error)
         .context("could not prepare external diff command")
 }
 
@@ -6709,7 +6712,7 @@ fn load_staged_changes_without_lines(repository: &gix::Repository) -> Result<Cha
             gix::status::tree_index::TrackRenames::AsConfigured,
             |change, _, _| {
                 raw.push(change.into_owned());
-                Ok::<_, std::convert::Infallible>(std::ops::ControlFlow::Continue(()))
+                Ok::<_, gix::Exn>(std::ops::ControlFlow::Continue(()))
             },
         )
         .context("could not obtain staged status")?;

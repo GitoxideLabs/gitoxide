@@ -11,7 +11,13 @@ pub enum Error {
     #[error("Could not create diff-cache for similarity checks")]
     DiffResourceCache(#[from] crate::repository::diff_resource_cache::Error),
     #[error(transparent)]
-    TreeIndexDiff(#[from] gix_diff::index::Error),
+    TreeIndexDiff(gix_error::Error),
+}
+
+impl From<gix_diff::index::Error> for Error {
+    fn from(err: gix_diff::index::Error) -> Self {
+        Error::TreeIndexDiff(err.into_error())
+    }
 }
 
 /// Specify how to perform rewrite tracking [Repository::tree_index_status()].
@@ -52,7 +58,7 @@ impl Repository {
     ///
     /// * This is a low-level method - prefer the [`Repository::status()`] platform instead for access to various iterators
     ///   over the same information.
-    pub fn tree_index_status<'repo, E>(
+    pub fn tree_index_status<'repo>(
         &'repo self,
         tree_id: &gix_hash::oid,
         worktree_index: &gix_index::State,
@@ -62,11 +68,8 @@ impl Repository {
             gix_diff::index::ChangeRef<'_, '_>,
             &gix_index::State,
             &gix_index::State,
-        ) -> Result<gix_diff::index::Action, E>,
-    ) -> Result<Outcome, Error>
-    where
-        E: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
+        ) -> Result<gix_diff::index::Action, gix_error::Exn>,
+    ) -> Result<Outcome, Error> {
         let _span = gix_trace::coarse!("gix::tree_index_status");
         let tree_index: gix_index::State = self.index_from_tree(tree_id)?.into();
         let rewrites = match renames {

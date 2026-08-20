@@ -1,6 +1,7 @@
 use std::{borrow::Cow, cell::RefCell, cmp::Ordering};
 
 use bstr::BStr;
+use gix_error::{ErrorExt, message};
 use gix_filter::attributes::glob::pattern::Case;
 
 use super::{Action, ChangeRef, Error, RewriteOptions};
@@ -26,27 +27,28 @@ use crate::rewrites;
 /// The entries in `lhs` and `rhs` are both expected to be sorted like index entries are typically sorted.
 ///
 /// Note that sparse indices aren't supported, they must be "unsparsed" before.
-pub fn diff<'rhs, 'lhs: 'rhs, E, Find>(
+pub fn diff<'rhs, 'lhs: 'rhs, Find>(
     lhs: &'lhs gix_index::State,
     rhs: &'rhs gix_index::State,
-    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action, E>,
+    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action, gix_error::Exn>,
     rewrite_options: Option<RewriteOptions<'_, Find>>,
     pathspec: &mut gix_pathspec::Search,
     pathspec_attributes: &mut dyn FnMut(&BStr, Case, bool, &mut gix_attributes::search::Outcome) -> bool,
 ) -> Result<Option<rewrites::Outcome>, Error>
 where
-    E: Into<Box<dyn std::error::Error + Send + Sync>>,
     Find: gix_object::FindObjectOrHeader,
 {
     if lhs.is_sparse() || rhs.is_sparse() {
-        return Err(Error::IsSparse);
+        return Err(message("Cannot diff indices that contain sparse entries").raise());
     }
     if lhs
         .entries()
         .iter()
         .any(|e| e.stage() != gix_index::entry::Stage::Unconflicted)
     {
-        return Err(Error::LhsHasUnmerged);
+        return Err(
+            message("Unmerged entries aren't allowed in the left-hand index, only in the right-hand index").raise(),
+        );
     }
 
     let lhs_range = lhs
@@ -122,7 +124,7 @@ where
                                 Some(tracker) => tracker.try_push_change(change, rhs_path),
                             };
                             if let Some(change) = change {
-                                match cb(change).map_err(|err| Error::Callback(err.into()))? {
+                                match cb(change).map_err(callback_error)? {
                                     std::ops::ControlFlow::Continue(()) => {}
                                     std::ops::ControlFlow::Break(()) => return Ok(None),
                                 }
@@ -183,7 +185,7 @@ where
                     Ok(std::ops::ControlFlow::Continue(())) => std::ops::ControlFlow::Continue(()),
                     Ok(std::ops::ControlFlow::Break(())) => std::ops::ControlFlow::Break(()),
                     Err(err) => {
-                        cb_err = Some(Error::Callback(err.into()));
+                        cb_err = Some(callback_error(err));
                         std::ops::ControlFlow::Break(())
                     }
                 }
@@ -220,14 +222,11 @@ where
     }
 }
 
-fn emit_deletion<'rhs, 'lhs: 'rhs, E>(
+fn emit_deletion<'rhs, 'lhs: 'rhs>(
     (idx, path, entry): (usize, &'lhs BStr, &'lhs gix_index::Entry),
-    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action, E>,
+    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action, gix_error::Exn>,
     tracker: Option<&mut rewrites::Tracker<ChangeRef<'lhs, 'rhs>>>,
-) -> Result<Action, Error>
-where
-    E: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+) -> Result<Action, Error> {
     let change = ChangeRef::Deletion {
         location: Cow::Borrowed(path),
         index: idx,
@@ -243,17 +242,14 @@ where
         },
     };
 
-    cb(change).map_err(|err| Error::Callback(err.into()))
+    cb(change).map_err(callback_error)
 }
 
-fn emit_addition<'rhs, 'lhs: 'rhs, E>(
+fn emit_addition<'rhs, 'lhs: 'rhs>(
     (idx, path, entry): (usize, &'rhs BStr, &'rhs gix_index::Entry),
-    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action, E>,
+    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action, gix_error::Exn>,
     tracker: Option<&mut rewrites::Tracker<ChangeRef<'lhs, 'rhs>>>,
-) -> Result<Action, Error>
-where
-    E: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+) -> Result<Action, Error> {
     if ignore_unmerged_and_intent_to_add((idx, path, entry)) {
         return Ok(std::ops::ControlFlow::Continue(()));
     }
@@ -273,7 +269,11 @@ where
         },
     };
 
-    cb(change).map_err(|err| Error::Callback(err.into()))
+    cb(change).map_err(callback_error)
+}
+
+fn callback_error(err: gix_error::Exn) -> Error {
+    err.raise(message("The callback indicated failure"))
 }
 
 fn ignore_unmerged_and_intent_to_add<'rhs, 'lhs: 'rhs>(

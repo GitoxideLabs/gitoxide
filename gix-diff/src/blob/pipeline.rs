@@ -5,7 +5,7 @@ use std::{
 };
 
 use bstr::{BStr, ByteSlice};
-use gix_error::{ErrorExt, NotFoundError};
+use gix_error::{ErrorExt, NotFoundError, ResultExt, message};
 use gix_filter::{
     driver::apply::{Delay, MaybeDelayed},
     pipeline::convert::{ToGitOutcome, ToWorktreeOutcome, to_worktree},
@@ -125,54 +125,8 @@ impl Mode {
 
 ///
 pub mod convert_to_diffable {
-    use std::collections::TryReserveError;
-
-    use bstr::BString;
-    use gix_object::tree::EntryKind;
-
     /// The error returned by [Pipeline::convert_to_diffable()](super::Pipeline::convert_to_diffable()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Entry at '{rela_path}' must be regular file or symlink, but was {actual:?}")]
-        InvalidEntryKind { rela_path: BString, actual: EntryKind },
-        #[error("Entry at '{rela_path}' is declared as symlink but symlinks are disabled via core.symlinks")]
-        SymlinkDisabled { rela_path: BString },
-        #[error("Entry at '{rela_path}' could not be read as symbolic link")]
-        ReadLink { rela_path: BString, source: std::io::Error },
-        #[error("Entry at '{rela_path}' could not be opened for reading or read from")]
-        OpenOrRead { rela_path: BString, source: std::io::Error },
-        #[error("Entry at '{rela_path}' could not be copied from a filter process to a memory buffer")]
-        StreamCopy { rela_path: BString, source: std::io::Error },
-        #[error("Failed to run '{cmd}' for binary-to-text conversion of entry at {rela_path}")]
-        RunTextConvFilter {
-            rela_path: BString,
-            cmd: String,
-            source: std::io::Error,
-        },
-        #[error("Tempfile for binary-to-text conversion for entry at {rela_path} could not be created")]
-        CreateTempfile { rela_path: BString, source: std::io::Error },
-        #[error("Binary-to-text conversion '{cmd}' for entry at {rela_path} failed with: {stderr}")]
-        TextConvFilterFailed {
-            rela_path: BString,
-            cmd: String,
-            stderr: BString,
-        },
-        #[error(transparent)]
-        FindObject(gix_error::Error),
-        #[error(transparent)]
-        ConvertToWorktree(#[from] gix_filter::pipeline::convert::to_worktree::Error),
-        #[error(transparent)]
-        ConvertToGit(#[from] gix_filter::pipeline::convert::to_git::Error),
-        #[error("Memory allocation failed")]
-        OutOfMemory(#[from] TryReserveError),
-    }
-
-    impl From<gix_object::find::existing_object::Error> for Error {
-        fn from(err: gix_object::find::existing_object::Error) -> Self {
-            Error::FindObject(err.into_error())
-        }
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 }
 
 /// Lifecycle
@@ -252,10 +206,9 @@ impl Pipeline {
             EntryKind::Link => true,
             EntryKind::Blob | EntryKind::BlobExecutable => false,
             _ => {
-                return Err(convert_to_diffable::Error::InvalidEntryKind {
-                    rela_path: rela_path.to_owned(),
-                    actual: mode,
-                });
+                return Err(
+                    message!("Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}").raise(),
+                );
             }
         };
 
@@ -282,16 +235,13 @@ impl Pipeline {
                 self.path.push(gix_path::from_bstr(rela_path));
                 let data = if is_symlink {
                     if !self.options.fs.symlink {
-                        return Err(convert_to_diffable::Error::SymlinkDisabled {
-                            rela_path: rela_path.to_owned(),
-                        });
+                        return Err(message!(
+                            "Entry at '{rela_path}' is declared as symlink but symlinks are disabled via core.symlinks"
+                        )
+                        .raise());
                     }
-                    let target = none_if_missing(std::fs::read_link(&self.path)).map_err(|err| {
-                        convert_to_diffable::Error::ReadLink {
-                            rela_path: rela_path.to_owned(),
-                            source: err,
-                        }
-                    })?;
+                    let target = none_if_missing(std::fs::read_link(&self.path))
+                        .or_raise(|| message!("Entry at '{rela_path}' could not be read as symbolic link"))?;
                     target.map(|target| {
                         out.extend_from_slice(gix_path::into_bstr(target).as_ref());
                         Data::Buffer { is_derived: false }
@@ -301,11 +251,8 @@ impl Pipeline {
                     let size_in_bytes = (need_size_only
                         || (is_binary != Some(false) && self.options.large_file_threshold_bytes > 0))
                         .then(|| {
-                            none_if_missing(self.path.metadata().map(|md| md.len())).map_err(|err| {
-                                convert_to_diffable::Error::OpenOrRead {
-                                    rela_path: rela_path.to_owned(),
-                                    source: err,
-                                }
+                            none_if_missing(self.path.metadata().map(|md| md.len())).or_raise(|| {
+                                message!("Entry at '{rela_path}' could not be opened for reading or read from")
                             })
                         })
                         .transpose()?;
@@ -323,9 +270,10 @@ impl Pipeline {
                                     // Avoid letting the driver program fail if it doesn't exist.
                                     if self.options.large_file_threshold_bytes == 0
                                         && none_if_missing(std::fs::symlink_metadata(&self.path))
-                                            .map_err(|err| convert_to_diffable::Error::OpenOrRead {
-                                                rela_path: rela_path.to_owned(),
-                                                source: err,
+                                            .or_raise(|| {
+                                                message!(
+                                                    "Entry at '{rela_path}' could not be opened for reading or read from"
+                                                )
                                             })?
                                             .is_none()
                                     {
@@ -336,52 +284,54 @@ impl Pipeline {
                                     }
                                 }
                                 None => {
-                                    let file = none_if_missing(std::fs::File::open(&self.path)).map_err(|err| {
-                                        convert_to_diffable::Error::OpenOrRead {
-                                            rela_path: rela_path.to_owned(),
-                                            source: err,
-                                        }
+                                    let file = none_if_missing(std::fs::File::open(&self.path)).or_raise(|| {
+                                        message!("Entry at '{rela_path}' could not be opened for reading or read from")
                                     })?;
 
                                     match file {
                                         Some(mut file) => {
                                             if convert.to_git() {
-                                                let res = self.worktree_filter.convert_to_git(
-                                                    file,
-                                                    gix_path::from_bstr(rela_path).as_ref(),
-                                                    attributes,
-                                                    &mut |buf| objects.try_find(id, buf).map(|obj| obj.map(|_| ())),
-                                                )?;
+                                                let res = self
+                                                    .worktree_filter
+                                                    .convert_to_git(
+                                                        file,
+                                                        gix_path::from_bstr(rela_path).as_ref(),
+                                                        attributes,
+                                                        &mut |buf| objects.try_find(id, buf).map(|obj| obj.map(|_| ())),
+                                                    )
+                                                    .or_raise(|| {
+                                                        message!(
+                                                            "Entry at '{rela_path}' could not be converted to Git form"
+                                                        )
+                                                    })?;
 
                                                 match res {
                                                     ToGitOutcome::Unchanged(mut file) => {
-                                                        file.read_to_end(out).map_err(|err| {
-                                                            convert_to_diffable::Error::OpenOrRead {
-                                                                rela_path: rela_path.to_owned(),
-                                                                source: err,
-                                                            }
+                                                        file.read_to_end(out).or_raise(|| {
+                                                            message!(
+                                                                "Entry at '{rela_path}' could not be opened for reading or read from"
+                                                            )
                                                         })?;
                                                     }
                                                     ToGitOutcome::Process(mut stream) => {
-                                                        stream.read_to_end(out).map_err(|err| {
-                                                            convert_to_diffable::Error::OpenOrRead {
-                                                                rela_path: rela_path.to_owned(),
-                                                                source: err,
-                                                            }
+                                                        stream.read_to_end(out).or_raise(|| {
+                                                            message!(
+                                                                "Entry at '{rela_path}' could not be opened for reading or read from"
+                                                            )
                                                         })?;
                                                     }
                                                     ToGitOutcome::Buffer(buf) => {
                                                         out.clear();
-                                                        out.try_reserve(buf.len())?;
+                                                        out.try_reserve(buf.len())
+                                                            .or_raise(|| message("Memory allocation failed"))?;
                                                         out.extend_from_slice(buf);
                                                     }
                                                 }
                                             } else {
-                                                file.read_to_end(out).map_err(|err| {
-                                                    convert_to_diffable::Error::OpenOrRead {
-                                                        rela_path: rela_path.to_owned(),
-                                                        source: err,
-                                                    }
+                                                file.read_to_end(out).or_raise(|| {
+                                                    message!(
+                                                        "Entry at '{rela_path}' could not be opened for reading or read from"
+                                                    )
                                                 })?;
                                             }
 
@@ -406,9 +356,11 @@ impl Pipeline {
                 let data = if id.is_null() {
                     None
                 } else {
-                    let header = objects.try_header(id)?.ok_or_else(|| {
-                        NotFoundError::new(format!("An object with id {id} could not be found")).raise_erased()
-                    })?;
+                    let header = objects
+                        .try_header(id)
+                        .or_raise(|| message!("Could not find object {id}"))?
+                        .ok_or_else(|| NotFoundError::new(format!("An object with id {id} could not be found")))
+                        .or_raise(|| message!("Could not find object {id}"))?;
                     if is_binary.is_none()
                         && self.options.large_file_threshold_bytes > 0
                         && header.size > self.options.large_file_threshold_bytes
@@ -418,24 +370,31 @@ impl Pipeline {
                     let data = if is_binary == Some(true) {
                         Data::Binary { size: header.size }
                     } else {
-                        objects.try_find(id, out)?.ok_or_else(|| {
-                            NotFoundError::new(format!("An object with id {id} could not be found")).raise_erased()
-                        })?;
+                        objects
+                            .try_find(id, out)
+                            .or_raise(|| message!("Could not find object {id}"))?
+                            .ok_or_else(|| NotFoundError::new(format!("An object with id {id} could not be found")))
+                            .or_raise(|| message!("Could not find object {id}"))?;
                         let mut is_derived = false;
                         if matches!(mode, EntryKind::Blob | EntryKind::BlobExecutable)
                             && convert == Mode::ToWorktreeAndBinaryToText
                             || (convert == Mode::ToGitUnlessBinaryToTextIsPresent
                                 && driver.is_some_and(|d| d.binary_to_text_command.is_some()))
                         {
-                            let res = self.worktree_filter.convert_to_worktree(
-                                out,
-                                rela_path,
-                                attributes,
-                                to_worktree::Options {
-                                    can_delay: Delay::Forbid,
-                                    unknown_encoding: to_worktree::UnknownEncoding::Fail,
-                                },
-                            )?;
+                            let res = self
+                                .worktree_filter
+                                .convert_to_worktree(
+                                    out,
+                                    rela_path,
+                                    attributes,
+                                    to_worktree::Options {
+                                        can_delay: Delay::Forbid,
+                                        unknown_encoding: to_worktree::UnknownEncoding::Fail,
+                                    },
+                                )
+                                .or_raise(|| {
+                                    message!("Entry at '{rela_path}' could not be converted to worktree form")
+                                })?;
 
                             let cmd_and_file = driver
                                 .and_then(|d| {
@@ -460,9 +419,10 @@ impl Pipeline {
                                     })
                                 })
                                 .transpose()
-                                .map_err(|err| convert_to_diffable::Error::CreateTempfile {
-                                    source: err,
-                                    rela_path: rela_path.to_owned(),
+                                .or_raise(|| {
+                                    message!(
+                                        "Tempfile for binary-to-text conversion for entry at {rela_path} could not be created"
+                                    )
                                 })?;
                             match cmd_and_file {
                                 Some((cmd, mut tmp_file)) => {
@@ -477,11 +437,10 @@ impl Pipeline {
                                             unreachable!("we prohibit this")
                                         }
                                     }
-                                    .map_err(|err| {
-                                        convert_to_diffable::Error::StreamCopy {
-                                            source: err,
-                                            rela_path: rela_path.to_owned(),
-                                        }
+                                    .or_raise(|| {
+                                        message!(
+                                            "Entry at '{rela_path}' could not be copied from a filter process to a memory buffer"
+                                        )
                                     })?;
                                     out.clear();
                                     run_cmd(rela_path, cmd, out)?;
@@ -491,15 +450,15 @@ impl Pipeline {
                                     ToWorktreeOutcome::Unchanged(_) => {}
                                     ToWorktreeOutcome::Buffer(src) => {
                                         out.clear();
-                                        out.try_reserve(src.len())?;
+                                        out.try_reserve(src.len())
+                                            .or_raise(|| message("Memory allocation failed"))?;
                                         out.extend_from_slice(src);
                                     }
                                     ToWorktreeOutcome::Process(MaybeDelayed::Immediate(mut stream)) => {
-                                        std::io::copy(&mut stream, out).map_err(|err| {
-                                            convert_to_diffable::Error::StreamCopy {
-                                                rela_path: rela_path.to_owned(),
-                                                source: err,
-                                            }
+                                        std::io::copy(&mut stream, out).or_raise(|| {
+                                            message!(
+                                                "Entry at '{rela_path}' could not be copied from a filter process to a memory buffer"
+                                            )
                                         })?;
                                     }
                                     ToWorktreeOutcome::Process(MaybeDelayed::Delayed(_)) => {
@@ -544,17 +503,13 @@ fn run_cmd(rela_path: &BStr, mut cmd: Command, out: &mut Vec<u8>) -> Result<(), 
     gix_trace::debug!(cmd = ?cmd, "Running binary-to-text command");
     let mut res = cmd
         .output()
-        .map_err(|err| convert_to_diffable::Error::RunTextConvFilter {
-            rela_path: rela_path.to_owned(),
-            cmd: format!("{cmd:?}"),
-            source: err,
-        })?;
+        .or_raise(|| message!("Failed to run '{cmd:?}' for binary-to-text conversion of entry at {rela_path}"))?;
     if !res.status.success() {
-        return Err(convert_to_diffable::Error::TextConvFilterFailed {
-            rela_path: rela_path.to_owned(),
-            cmd: format!("{cmd:?}"),
-            stderr: res.stderr.into(),
-        });
+        return Err(message!(
+            "Binary-to-text conversion '{cmd:?}' for entry at {rela_path} failed with: {}",
+            BStr::new(&res.stderr)
+        )
+        .raise());
     }
     out.append(&mut res.stdout);
     Ok(())
