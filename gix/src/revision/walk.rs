@@ -9,11 +9,17 @@ use crate::{Repository, ext::ObjectIdExt, revision};
 #[expect(missing_docs)]
 pub enum Error {
     #[error(transparent)]
-    SimpleTraversal(#[from] gix_traverse::commit::simple::Error),
+    SimpleTraversal(crate::Error),
     #[error(transparent)]
     ShallowCommits(#[from] crate::Error),
     #[error(transparent)]
     ConfigBoolean(#[from] crate::config::boolean::Error),
+}
+
+impl From<gix_traverse::commit::simple::Error> for Error {
+    fn from(err: gix_traverse::commit::simple::Error) -> Self {
+        Error::SimpleTraversal(err.into_error())
+    }
 }
 
 /// Specify how to sort commits during a [revision::Walk] traversal.
@@ -351,7 +357,13 @@ pub mod iter {
     #[expect(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        SimpleTraversal(#[from] gix_traverse::commit::simple::Error),
+        SimpleTraversal(crate::Error),
+    }
+
+    impl From<gix_traverse::commit::simple::Error> for Error {
+        fn from(err: gix_traverse::commit::simple::Error) -> Self {
+            Error::SimpleTraversal(err.into_error())
+        }
     }
 }
 
