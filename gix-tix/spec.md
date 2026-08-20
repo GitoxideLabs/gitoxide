@@ -784,20 +784,22 @@ space first; changes blocks adapt within the remaining history width.
   need no replay marker; rewritten descendants use the same lazy rebase as amend
   and spill.
 - All three operations leave worktree files untouched and cheaply rewrite linear
-  descendants with their trees unchanged. Whole-commit edits reset the affected
+  descendants. Whole-commit edits reset the affected
   worktree's index to the rewritten commit; selected-path amend synchronizes only
-  its destination and renamed source. A directly amended or spilled commit already
-  has its final tree and unchanged parent, so an empty signature field alone keeps
-  a formerly signed commit pending. Reparented descendants additionally carry
-  `tix-rebase-parent`, retaining the original parent needed for later replay. Both
-  pending forms use a grey commit marker so they remain distinct from unsigned blue.
+  its destination and renamed source. A zero-delta commit immediately adopts and
+  is signed against its rewritten parent tree whenever that parent is final; it
+  remains lazy only behind a pending parent. Other reparented descendants carry
+  `tix-rebase-parent`, retaining the original parent needed for later replay.
+  Pending forms use a grey commit marker so they remain distinct from unsigned
+  blue.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
   targets are trees, blobs, or other non-commit objects.
 - Time travel toward a pending destination cherry-picks and signs only the pending
-  ancestry through that destination. Every later descendant is reparented and
-  becomes or remains lazy and unsigned, including ordinary commits created above
-  pending history; traveling toward a non-pending ancestor leaves the entire
-  pending region untouched. A completed final replay does not reload history;
+  ancestry through that destination. Later non-empty descendants become or
+  remain lazy and unsigned; zero-delta descendants finalize immediately while
+  their parent is final and remain lazy behind a pending parent. Traveling toward
+  a non-pending ancestor leaves the entire pending region untouched. A completed
+  final replay does not reload history;
   another pass loads only the rewritten path and never unrelated references.
   A conflict retains the ours tree, exact merge-result
   tree, conflict stages, prepared commits, and in-memory objects without changing
@@ -919,7 +921,8 @@ space first; changes blocks adapt within the remaining history width.
   cherry-picks that affected path before committing the operation. The edited
   root of a direct amend or spill already has its final tree and does not receive
   a redundant worktree transition. Descendants on unrelated branches and in
-  other worktrees remain lazy. A successful repeated rebase clears the marker
+  other worktrees remain lazy unless their delta is empty and their parent is
+  final. A successful repeated rebase clears the marker
   through its checkout destination.
   On conflict, `tix-rebase-parent` identifies the original base and later descendants
   remain marked instead of being cherry-picked.

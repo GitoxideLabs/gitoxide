@@ -383,7 +383,7 @@ impl PersistedConflict {
 struct Prepared {
     repo: gix::Repository,
     root: Option<ObjectId>,
-    reset_index: bool,
+    reset_indices: HashSet<ObjectId>,
     reset_index_paths: Option<Vec<BString>>,
     skip_worktree_transitions: bool,
     selected: Option<ObjectId>,
@@ -1050,6 +1050,7 @@ fn perform_inner(
     let mut selected = None;
     let mut conflict = None;
     let mut eager_checkout_rewrite = false;
+    let mut finalized_empty = HashSet::new();
     if inserted || forked {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
@@ -1119,13 +1120,28 @@ fn perform_inner(
                 Some(old_id) != root && checkout_path.contains(&old_id)
             };
         eager_checkout_rewrite |= !repeat && eager;
-        let commit_tree_mode = if eager {
+        let mut commit_tree_mode = if eager {
             Tree::CherryPick
         } else if repeat || conflict.is_some() {
             Tree::LeaveAsIsAndMark
         } else {
             tree_mode
         };
+        let finalize_empty = conflict.is_none()
+            && matches!(
+                commit_tree_mode,
+                Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants
+            )
+            && empty_commit_has_final_parent(
+                &repo,
+                commit.tree,
+                original_parents.first().copied(),
+                new_parents.first().copied(),
+            )?;
+        if finalize_empty {
+            commit_tree_mode = Tree::CherryPick;
+            finalized_empty.insert(old_id);
+        }
         let rewritten_tree = rewritten_tree(
             &repo,
             &commit,
@@ -1157,7 +1173,7 @@ fn perform_inner(
         let is_conflicting_commit = new_conflict.is_some();
         let signature = if conflict.is_some() || is_conflicting_commit || (repeat && !eager) {
             Signature::InvalidateExisting
-        } else if eager {
+        } else if eager || finalize_empty {
             Signature::RedoIfNeeded
         } else {
             signature
@@ -1200,15 +1216,24 @@ fn perform_inner(
     let marked = (!forked && matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants))
         || conflict.is_some();
     let checkout_after_finish = conflict.is_some();
+    let skip_worktree_transitions = !eager_checkout_rewrite
+        && (inserted
+            || forked
+            || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed));
+    let mut reset_indices: HashSet<_> = ((inserted && reset_index) || (!inserted && marked))
+        .then_some(root)
+        .flatten()
+        .into_iter()
+        .collect();
+    if skip_worktree_transitions {
+        reset_indices.extend(finalized_empty);
+    }
     let mut prepared = Prepared {
         repo,
         root,
-        reset_index: if inserted { reset_index } else { marked },
+        reset_indices,
         reset_index_paths,
-        skip_worktree_transitions: !eager_checkout_rewrite
-            && (inserted
-                || forked
-                || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed)),
+        skip_worktree_transitions,
         selected,
         note_rewrites,
         stash_rewritten: rewritten.clone(),
@@ -1380,11 +1405,21 @@ pub(super) fn finish_review(
         let original_parents =
             recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
         let eager = conflict.is_none() && checkout_path.contains(&old);
-        let mode = if eager {
+        let mut mode = if eager {
             Tree::CherryPick
         } else {
             Tree::LeaveAsIsAndMark
         };
+        let finalize_empty = conflict.is_none()
+            && empty_commit_has_final_parent(
+                &repo,
+                commit.tree,
+                original_parents.first().copied(),
+                new_parents.first().copied(),
+            )?;
+        if finalize_empty {
+            mode = Tree::CherryPick;
+        }
         let mut new_conflict = None;
         commit.tree = match rewritten_tree(&repo, &commit, &original_parents, &new_parents, mode)? {
             TreeRewrite::Complete(tree) => tree,
@@ -1398,7 +1433,7 @@ pub(super) fn finish_review(
             }
         };
         commit.parents = new_parents.into_iter().collect();
-        let pending = !eager || conflict.is_some() || new_conflict.is_some();
+        let pending = !(eager || finalize_empty) || conflict.is_some() || new_conflict.is_some();
         let new = write_commit(
             &repo,
             commit,
@@ -1428,7 +1463,7 @@ pub(super) fn finish_review(
     let mut prepared = Prepared {
         repo,
         root: Some(review),
-        reset_index: false,
+        reset_indices: HashSet::new(),
         reset_index_paths: None,
         skip_worktree_transitions: false,
         selected: Some(selected),
@@ -1618,7 +1653,10 @@ pub(crate) fn perform_plan_with_progress(
             || graph_parents.clone(),
             |parent| parent.into_iter().collect::<Vec<_>>(),
         );
-        let mode = if eager {
+        let finalize_empty = conflict.is_none()
+            && step.squash.is_empty()
+            && empty_commit_has_final_parent(&repo, commit.tree, replay_parents.first().copied(), Some(parent))?;
+        let mode = if eager || finalize_empty {
             Tree::CherryPick
         } else {
             Tree::LeaveAsIsAndMark
@@ -1705,7 +1743,7 @@ pub(crate) fn perform_plan_with_progress(
         commit.parents = [parent].into_iter().collect();
         let state = if step_conflict.is_some() {
             CommitState::Unmarked(Signature::InvalidateExisting)
-        } else if eager {
+        } else if eager || finalize_empty {
             CommitState::Unmarked(Signature::RedoIfNeeded)
         } else {
             marked = true;
@@ -1844,7 +1882,7 @@ pub(crate) fn perform_plan_with_progress(
     let mut prepared = Prepared {
         repo,
         root: Some(plan.base),
-        reset_index: marked,
+        reset_indices: marked.then_some(plan.base).into_iter().collect(),
         reset_index_paths: None,
         skip_worktree_transitions: false,
         selected,
@@ -1896,7 +1934,7 @@ pub(crate) fn perform_plan_with_progress(
     prepared.selected = None;
     prepared.checkout_reference = None;
     prepared.checkout_after_finish = true;
-    prepared.reset_index = false;
+    prepared.reset_indices.clear();
     prepared.rewritten = final_refs
         .iter()
         .filter_map(|expected| expected.old.map(|old| (old, expected.new)))
@@ -2029,9 +2067,8 @@ impl Prepared {
             self.expected_refs.as_deref(),
             self.skip_worktree_transitions,
         )?;
-        let index_reset_from = if self.reset_index { self.root } else { None };
-        let index_resets = index_reset_from
-            .map(|old| index_resets(&self.repo, &self.rewritten, old))
+        let index_resets = (!self.reset_indices.is_empty())
+            .then(|| index_resets(&self.repo, &self.rewritten, &self.reset_indices))
             .transpose()?;
         for transition in &transitions {
             super::forget::preflight_tree_transition(
@@ -2255,7 +2292,7 @@ fn rollback<T>(
 fn index_resets(
     repo: &gix::Repository,
     rewritten: &HashMap<ObjectId, Option<ObjectId>>,
-    reset_from: ObjectId,
+    reset_from: &HashSet<ObjectId>,
 ) -> Result<Vec<IndexReset>> {
     let mut repos = vec![
         repo.main_repo()
@@ -2279,7 +2316,7 @@ fn index_resets(
         else {
             continue;
         };
-        if old != reset_from {
+        if !reset_from.contains(&old) {
             continue;
         }
         let Some(Some(new)) = rewritten.get(&old).copied() else {
@@ -2570,6 +2607,21 @@ fn parent_tree(repo: &gix::Repository, parent: Option<ObjectId>) -> Result<Objec
         Some(parent) => Ok(repo.find_commit(parent)?.tree_id()?.detach()),
         None => Ok(repo.empty_tree().id),
     }
+}
+
+fn empty_commit_has_final_parent(
+    repo: &gix::Repository,
+    tree: ObjectId,
+    original_parent: Option<ObjectId>,
+    rewritten_parent: Option<ObjectId>,
+) -> Result<bool> {
+    if tree != parent_tree(repo, original_parent)? {
+        return Ok(false);
+    }
+    let Some(parent) = rewritten_parent else {
+        return Ok(true);
+    };
+    Ok(!is_pending(&repo.find_commit(parent)?.decode()?.into_owned()?))
 }
 
 fn marker(commit: &mut gix::objs::Commit, add: bool, original_parent: Option<ObjectId>) {
@@ -3033,10 +3085,10 @@ mod tests {
         )?)
     }
 
-    fn git(path: &Path, args: &[&str]) -> gix_testtools::Result {
+    fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
         let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
         if output.status.success() {
-            Ok(())
+            Ok(output.stdout)
         } else {
             Err(format!(
                 "git {} failed: {}",
@@ -3308,7 +3360,7 @@ mod tests {
     }
 
     #[test]
-    fn a_repeat_accepts_ordinary_descendants_above_legacy_signed_pending_commits() -> gix_testtools::Result {
+    fn a_repeat_finalizes_empty_descendants_above_legacy_signed_pending_commits() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         assert!(
             Command::new("git")
@@ -3398,21 +3450,23 @@ mod tests {
             .map(legacy_tip)
             .expect("the selected pending commit is retained");
         assert!(!has_marker(&repo.find_commit(selected)?.decode()?.into_owned()?));
+        let mut parent = selected;
         for id in [legacy_newer, ordinary].into_iter().map(|id| {
             outcome
                 .map(id)
                 .expect("every descendant is retained while repeating the rebase")
         }) {
             let commit = repo.find_commit(id)?.decode()?.into_owned()?;
-            assert!(has_marker(&commit), "later descendants become or remain pending");
+            assert!(!is_pending(&commit), "empty descendants of a final parent are final");
+            assert_eq!(commit.parents.first().copied(), Some(parent));
             assert!(
                 commit
                     .extra_headers
                     .iter()
-                    .filter(|(name, _)| name == "gpgsig" || name == "gpgsig-sha256")
-                    .all(|(_, value)| value.is_empty()),
-                "later pending descendants have no usable signature"
+                    .all(|(name, _)| name != "gpgsig" && name != "gpgsig-sha256"),
+                "final unsigned descendants discard stale signatures"
             );
+            parent = id;
         }
         Ok(())
     }
@@ -3438,6 +3492,72 @@ mod tests {
         assert!(
             !has_marker(&commit),
             "the replacement tree and unchanged parent need no later cherry-pick"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn empty_descendants_of_a_finalized_parent_are_not_left_pending() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        drop(repo);
+        git(fixture.path(), &["checkout", "-q", "--detach", &base.to_string()])?;
+
+        let repo = open(fixture.path())?;
+        let mut empty = repo.find_commit(tip)?.decode()?.into_owned()?;
+        empty.tree = repo.find_commit(middle)?.tree_id()?.detach();
+        let empty = repo.write_object(&empty)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(empty, "prepare an empty descendant")?;
+        drop(repo);
+        let linked_root = gix_testtools::tempfile::tempdir()?;
+        let linked = linked_root.path().join("linked");
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["worktree", "add", "-q"])
+                .arg(&linked)
+                .arg("main")
+                .status()?
+                .success(),
+            "the empty descendant is checked out in a linked worktree"
+        );
+
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let mut spilled = repo.find_commit(middle)?.decode()?.into_owned()?;
+        spilled.tree = repo.find_commit(base)?.tree_id()?.detach();
+
+        let outcome = perform(
+            &repo,
+            &graph,
+            Edit::Replace {
+                target: middle,
+                commit: spilled,
+            },
+            Signature::InvalidateExisting,
+            Tree::LeaveAsIsAndMark,
+        )?
+        .complete()?;
+        let middle = outcome.map(middle).context("the spilled commit is retained")?;
+        let empty = outcome.map(empty).context("the empty descendant is retained")?;
+        let middle = repo.find_commit(middle)?.decode()?.into_owned()?;
+        let empty = repo.find_commit(empty)?.decode()?.into_owned()?;
+
+        assert!(!is_pending(&middle), "the edited commit is final");
+        assert!(!is_pending(&empty), "its empty descendant is final too");
+        assert_eq!(
+            empty.tree, middle.tree,
+            "the empty descendant follows its final parent tree"
+        );
+        assert_eq!(
+            git(&linked, &["status", "--short"])?,
+            b"?? middle\n",
+            "the linked index follows the finalized commit while spilled bytes stay in its worktree"
         );
         Ok(())
     }
@@ -3948,12 +4068,15 @@ mod tests {
         );
         let rewritten_descendant = outcome.map(descendant).context("the descendant is retained")?;
         let descendant = repo.find_commit(rewritten_descendant)?.decode()?.into_owned()?;
-        assert!(has_marker(&descendant), "history above the checkout remains lazy");
+        assert!(
+            !is_pending(&descendant),
+            "an empty descendant of the finalized checkout is final too"
+        );
         assert_eq!(descendant.parents.as_slice(), [rewritten_checkout]);
         assert_eq!(
             repo.find_reference("refs/heads/main")?.id().detach(),
             rewritten_descendant,
-            "the branch follows the lazily rewritten tip"
+            "the branch follows the finalized empty tip"
         );
         let progress = progress.last().context("rebase progress is reported")?;
         assert_eq!(progress.processed, 3);
