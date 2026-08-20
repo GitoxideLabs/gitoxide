@@ -78,7 +78,9 @@ where
     let fetch_refspecs: Vec<_> = wanted_refs
         .into_iter()
         .map(|ref_name| {
-            gix::refspec::parse(ref_name.as_bstr(), gix::refspec::parse::Operation::Fetch).map(|r| r.to_owned())
+            gix::refspec::parse(ref_name.as_bstr(), gix::refspec::parse::Operation::Fetch)
+                .map(|r| r.to_owned())
+                .map_err(gix::Exn::into_error)
         })
         .collect::<Result<_, _>>()?;
     let user_agent = ("agent", Some(agent.clone()));
