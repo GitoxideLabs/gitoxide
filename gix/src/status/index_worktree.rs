@@ -1,5 +1,7 @@
 use std::sync::atomic::AtomicBool;
 
+use gix_error::ResultExt;
+
 use crate::{
     Repository,
     bstr::{BStr, BString},
@@ -9,26 +11,7 @@ use crate::{
 use gix_status::index_as_worktree::traits::{CompareBlobs, SubmoduleStatus};
 
 /// The error returned by [Repository::index_worktree_status()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("A working tree is required to perform a directory walk")]
-    MissingWorkDir,
-    #[error(transparent)]
-    AttributesAndExcludes(#[from] crate::repository::attributes::Error),
-    #[error(transparent)]
-    Pathspec(#[from] crate::pathspec::init::Error),
-    #[error(transparent)]
-    Prefix(#[from] gix_path::realpath::Error),
-    #[error(transparent)]
-    FilesystemOptions(#[from] config::boolean::Error),
-    #[error(transparent)]
-    IndexAsWorktreeWithRenames(gix_error::Error),
-    #[error(transparent)]
-    StatOptions(#[from] config::stat_options::Error),
-    #[error(transparent)]
-    ResourceCache(#[from] crate::diff::resource_cache::Error),
-}
+pub type Error = gix_error::Error;
 
 /// Options for use with [Repository::index_worktree_status()].
 #[derive(Default, Debug, Clone, Copy, PartialEq)]
@@ -107,22 +90,29 @@ impl Repository {
         U: Send + Clone,
     {
         let _span = gix_trace::coarse!("gix::index_worktree_status");
-        let workdir = self.workdir().ok_or(Error::MissingWorkDir)?;
-        let attrs_and_excludes = self.attributes(
-            index,
-            crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
-            crate::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
-            None,
-        )?;
-        let pathspec =
-            self.index_worktree_status_pathspec::<Error>(patterns, index, options.dirwalk_options.as_ref())?;
+        let workdir = self.workdir().ok_or_else(|| {
+            gix_error::Error::from_error(gix_error::message(
+                "A working tree is required to perform a directory walk",
+            ))
+        })?;
+        let attrs_and_excludes = self
+            .attributes(
+                index,
+                crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+                crate::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+                None,
+            )
+            .or_erased()?;
+        let pathspec = self.index_worktree_status_pathspec(patterns, index, options.dirwalk_options.as_ref())?;
 
         let cwd = self.current_dir();
-        let git_dir_realpath = crate::path::realpath_opts(self.git_dir(), cwd, crate::path::realpath::MAX_SYMLINKS)?;
-        let fs_caps = self.filesystem_options()?;
+        let git_dir_realpath = crate::path::realpath_opts(self.git_dir(), cwd, crate::path::realpath::MAX_SYMLINKS)
+            .map_err(gix_error::Exn::into_error)?;
+        let fs_caps = self.filesystem_options().or_erased()?;
         let fscache = config::tree::Core::FS_CACHE
             .enrich_error(self.config.resolved.boolean(config::tree::Core::FS_CACHE))
-            .with_lenient_default(self.config.lenient_config)?
+            .with_lenient_default(self.config.lenient_config)
+            .or_erased()?
             // if unset, default to enabled on Windows. Good for missing Git installations that would turn it on by installation config
             .unwrap_or(cfg!(windows));
         let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
@@ -168,33 +158,32 @@ impl Repository {
                 rewrites: options.rewrites,
             },
         )
-        .map_err(|err| Error::IndexAsWorktreeWithRenames(err.into_error()))?;
+        .map_err(gix_error::Exn::into_error)?;
         Ok(out)
     }
 
-    pub(super) fn index_worktree_status_pathspec<E>(
+    pub(super) fn index_worktree_status_pathspec(
         &self,
         patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
         index: &gix_index::State,
         options: Option<&crate::dirwalk::Options>,
-    ) -> Result<crate::Pathspec<'_>, E>
-    where
-        E: From<crate::repository::attributes::Error> + From<crate::pathspec::init::Error>,
-    {
+    ) -> Result<crate::Pathspec<'_>, Error> {
         let empty_patterns_match_prefix = options.is_some_and(|opts| opts.empty_patterns_match_prefix);
-        let attrs_and_excludes = self.attributes(
-            index,
-            crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
-            crate::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
-            None,
-        )?;
-        Ok(crate::Pathspec::new(
+        let attrs_and_excludes = self
+            .attributes(
+                index,
+                crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+                crate::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+                None,
+            )
+            .or_erased()?;
+        crate::Pathspec::new(
             self,
             empty_patterns_match_prefix,
             patterns,
             true, /* inherit ignore case */
             move || Ok(attrs_and_excludes.inner),
-        )?)
+        )
     }
 }
 
@@ -598,12 +587,6 @@ pub mod iter {
                 res.map(|item| match item {
                     crate::status::Item::IndexWorktree(item) => item,
                     crate::status::Item::TreeIndex(_) => unreachable!("BUG: we deactivated this kind of traversal"),
-                })
-                .map_err(|err| match err {
-                    crate::status::iter::Error::IndexWorktree(err) => err,
-                    crate::status::iter::Error::TreeIndex(_) => {
-                        unreachable!("BUG: we deactivated this kind of traversal")
-                    }
                 })
             })
         }

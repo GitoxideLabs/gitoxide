@@ -1,25 +1,11 @@
+use gix_error::ResultExt;
+
 use gix_refspec::RefSpec;
 
 use crate::{Remote, Repository, config, remote};
 
-mod error {
-    use crate::bstr::BString;
-
-    /// The error returned by [`Repository::remote_at(…)`][crate::Repository::remote_at()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Url(#[from] gix_error::Error),
-        #[error("The rewritten {kind} url {rewritten_url:?} failed to parse")]
-        RewrittenUrlInvalid {
-            kind: &'static str,
-            rewritten_url: BString,
-            source: gix_error::Error,
-        },
-    }
-}
-pub use error::Error;
+/// The error returned by [`Repository::remote_at(…)`][crate::Repository::remote_at()].
+pub type Error = gix_error::Error;
 
 use crate::bstr::BString;
 
@@ -71,11 +57,7 @@ impl<'repo> Remote<'repo> {
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        Self::from_fetch_url_inner(
-            url.try_into().map_err(gix_error::Error::from_error)?,
-            should_rewrite_urls,
-            repo,
-        )
+        Self::from_fetch_url_inner(url.try_into().or_erased()?, should_rewrite_urls, repo)
     }
 
     fn from_fetch_url_inner(
@@ -114,13 +96,14 @@ pub(crate) fn rewrite_url(
         .url_rewrite()
         .longest(url, direction)
         .map(|url| {
-            gix_url::parse(&url).map_err(|err| Error::RewrittenUrlInvalid {
-                kind: match error_kind {
+            gix_url::parse(&url).map_err(|err| {
+                let kind = match error_kind {
                     remote::Direction::Fetch => "fetch",
                     remote::Direction::Push => "push",
-                },
-                source: err.into_error(),
-                rewritten_url: url,
+                };
+                gix_error::Error::from(
+                    err.raise(gix_error::message!("The rewritten {kind} url {url:?} failed to parse")),
+                )
             })
         })
         .transpose()

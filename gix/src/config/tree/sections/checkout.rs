@@ -47,20 +47,22 @@ mod workers {
 ///
 pub mod validate {
     use crate::{bstr::BStr, config::tree::keys};
-    use gix_error::{ErrorExt, ValidationError};
+    use gix_error::{ErrorExt, ResultExt, ValidationError};
 
     pub struct Workers;
     impl keys::Validate for Workers {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Checkout::WORKERS.try_from_workers(
-                gix_config::Integer::try_from(value)
-                    .and_then(|i| {
-                        i.to_decimal().ok_or_else(|| {
-                            ValidationError::new_with_input("Integer overflow", value.to_owned()).raise()
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Checkout::WORKERS
+                .try_from_workers(
+                    gix_config::Integer::try_from(value)
+                        .and_then(|i| {
+                            i.to_decimal().ok_or_else(|| {
+                                ValidationError::new_with_input("Integer overflow", value.to_owned()).raise()
+                            })
                         })
-                    })
-                    .map(Some),
-            )?;
+                        .map(Some),
+                )
+                .or_erased()?;
             Ok(())
         }
     }

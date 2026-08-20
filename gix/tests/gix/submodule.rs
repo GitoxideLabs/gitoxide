@@ -15,6 +15,44 @@ mod open {
     use crate::{submodule::repo, util::named_subrepo_opts};
 
     #[test]
+    #[cfg(not(any(windows, target_os = "android")))]
+    fn missing_user_in_worktree_config_is_not_an_uninitialized_submodule() -> crate::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("make_submodule_with_worktree.sh")?;
+        let repo = gix::open_opts(
+            fixture.path().join("submodule-with-extra-worktree-host"),
+            gix::open::Options::isolated(),
+        )?;
+        let worktree = repo.workdir().expect("fixture has a worktree");
+        gix_testtools::git(worktree, "submodule deinit -f m1")?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has m1");
+        assert!(
+            sm.open()?.is_some(),
+            "deinitializing preserves the submodule repository"
+        );
+        gix_testtools::git(
+            worktree,
+            "config --file .git/modules/m1/config core.worktree ~gitoxide-nonexistent-user/worktree",
+        )?;
+
+        let err = sm
+            .open()
+            .expect_err("invalid core.worktree configuration must propagate");
+        assert!(
+            err.error().is::<gix_error::ValidationError>(),
+            "the failure is classified as invalid configuration: {err:?}"
+        );
+        assert!(
+            err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
+            "the nested missing-user error must not hide the configuration failure"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn various() -> crate::Result {
         for (name, expected) in [
             (
@@ -320,51 +358,29 @@ mod open {
             .next()
             .expect("one submodule");
 
-        assert!(matches!(
-            sm.git_dir_try_old_form(),
-            Err(submodule::git_dir_try_old_form::Error::InvalidGitDirFileTarget {
-                target: Some(target),
-                source: None,
-                ..
-            }) if target.ends_with("missing")
-        ));
-        assert!(matches!(
-            sm.state(),
-            Err(submodule::state::Error::GitDirTryOldForm(
-                submodule::git_dir_try_old_form::Error::InvalidGitDirFileTarget {
-                    target: Some(target),
-                    source: None,
-                    ..
-                }
-            )) if target.ends_with("missing")
-        ));
-        assert!(matches!(
-            sm.open(),
-            Err(submodule::open::Error::GitDir(
-                submodule::git_dir_try_old_form::Error::InvalidGitDirFileTarget {
-                    target: Some(target),
-                    source: None,
-                    ..
-                }
-            )) if target.ends_with("missing")
-        ));
+        for err in [
+            sm.git_dir_try_old_form().expect_err("the gitlink target is missing"),
+            sm.state().expect_err("state validates the gitlink target"),
+            sm.open().expect_err("opening validates the gitlink target"),
+        ] {
+            assert!(err.is_validation());
+            let cause = err.probable_cause().to_string();
+            assert!(
+                cause.starts_with("The gitdir file at '")
+                    && cause.contains("invalid gitdir target")
+                    && cause.contains("missing"),
+                "the missing target and its validation context are retained: {cause}"
+            );
+        }
 
         #[cfg(feature = "status")]
-        assert!(
-            matches!(
-                sm.status(gix::submodule::config::Ignore::None, false),
-                Err(submodule::status::Error::State(
-                    submodule::state::Error::GitDirTryOldForm(
-                        submodule::git_dir_try_old_form::Error::InvalidGitDirFileTarget {
-                            target: Some(target),
-                            source: None,
-                            ..
-                        }
-                    )
-                )) if target.ends_with("missing")
-            ),
-            "ignore=none fails as some submodules can't be opened"
-        );
+        {
+            let err = sm
+                .status(gix::submodule::config::Ignore::None, false)
+                .expect_err("ignore=none fails as some submodules can't be opened");
+            assert!(err.is_validation());
+            assert!(err.probable_cause().to_string().contains("invalid gitdir target"));
+        }
 
         #[cfg(feature = "status")]
         {
@@ -393,32 +409,15 @@ mod open {
             .next()
             .expect("one submodule");
 
-        assert!(matches!(
-            sm.git_dir_try_old_form(),
-            Err(submodule::git_dir_try_old_form::Error::InvalidGitDirFileTarget {
-                target: None,
-                source: Some(_),
-                ..
-            })
-        ));
+        let err = sm.git_dir_try_old_form().expect_err("the gitlink target is malformed");
+        assert!(err.is_validation());
 
         #[cfg(feature = "status")]
         {
-            assert!(
-                matches!(
-                    sm.status(gix::submodule::config::Ignore::None, false),
-                    Err(submodule::status::Error::State(
-                        submodule::state::Error::GitDirTryOldForm(
-                            submodule::git_dir_try_old_form::Error::InvalidGitDirFileTarget {
-                                target: None,
-                                source: Some(_),
-                                ..
-                            }
-                        )
-                    ))
-                ),
-                "ignore=none fails as some submodules can't be opened"
-            );
+            let err = sm
+                .status(gix::submodule::config::Ignore::None, false)
+                .expect_err("ignore=none fails as some submodules can't be opened");
+            assert!(err.is_validation());
 
             let status = sm.status(gix::submodule::config::Ignore::All, false)?;
             assert_eq!(
@@ -787,29 +786,20 @@ mod advisory {
             sm.git_dir(),
             Err(gix_validate::submodule::name::Error::ParentComponent)
         ));
-        assert!(matches!(
-            sm.git_dir_try_old_form(),
-            Err(gix::submodule::git_dir_try_old_form::Error::GitDir(
-                gix_validate::submodule::name::Error::ParentComponent
-            ))
-        ));
-
-        assert!(matches!(
-            sm.open(),
-            Err(gix::submodule::open::Error::GitDir(
-                gix::submodule::git_dir_try_old_form::Error::GitDir(
-                    gix_validate::submodule::name::Error::ParentComponent
-                )
-            ))
-        ));
-        assert!(matches!(
-            sm.state(),
-            Err(gix::submodule::state::Error::GitDirTryOldForm(
-                gix::submodule::git_dir_try_old_form::Error::GitDir(
-                    gix_validate::submodule::name::Error::ParentComponent
-                )
-            ))
-        ));
+        for err in [
+            sm.git_dir_try_old_form().expect_err("the traversal name is rejected"),
+            sm.open().expect_err("opening rejects the traversal name"),
+            sm.state().expect_err("state rejects the traversal name"),
+        ] {
+            assert!(err.is_validation());
+            assert!(
+                matches!(
+                    err.downcast_any_ref::<gix_validate::submodule::name::Error>(),
+                    Some(gix_validate::submodule::name::Error::ParentComponent)
+                ),
+                "the precise traversal-name failure remains in the erased API's chain"
+            );
+        }
 
         let redirected_repo = fixture.path().join("escaped-target.git");
         assert!(

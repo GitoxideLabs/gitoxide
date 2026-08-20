@@ -143,6 +143,8 @@ without trading responsiveness for metadata that is not visible.
 - Revisions must resolve and peel to commits. Invalid or non-commit visible
   revisions are errors. An unavailable hidden revision emits a warning and is
   ignored when another hidden revision resolves; if none resolve, startup fails.
+- References that disappear during enumeration are ignored. Other errors while
+  reading references are reported.
 - The interactive UI owns the alternate screen by default. `--no-alt-screen`
   instead draws interactively on the normal screen. Raw mode, focus reporting,
   mouse capture, and enhanced keyboard reporting are restored on every exit path.

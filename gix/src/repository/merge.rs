@@ -1,3 +1,5 @@
+use gix_error::ResultExt;
+
 use gix_merge::blob::builtin_driver::text;
 use gix_object::Write;
 
@@ -27,7 +29,8 @@ impl Repository {
         let mode = {
             let renormalize = tree::Merge::RENORMALIZE
                 .enrich_error(self.config.resolved.boolean(tree::Merge::RENORMALIZE))
-                .with_lenient_default(self.config.lenient_config)?
+                .with_lenient_default(self.config.lenient_config)
+                .or_erased()?
                 .unwrap_or_default();
             if renormalize {
                 gix_merge::blob::pipeline::Mode::Renormalize
@@ -43,7 +46,8 @@ impl Repository {
                 } else {
                     gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping
                 },
-            )?
+            )
+            .or_erased()?
             .inner;
         let filter = gix_filter::Pipeline::new(self.command_context()?, crate::filter::Pipeline::options(self)?);
         let filter = gix_merge::blob::Pipeline::new(worktree_roots, filter, self.config.merge_pipeline_options()?);
@@ -61,7 +65,7 @@ impl Repository {
             is_virtual_ancestor: false,
             resolve_binary_with: None,
             text: gix_merge::blob::builtin_driver::text::Options {
-                diff_algorithm: self.diff_algorithm()?,
+                diff_algorithm: self.diff_algorithm().or_erased()?,
                 conflict: text::Conflict::Keep {
                     style: self
                         .config
@@ -72,7 +76,8 @@ impl Repository {
                                 .try_into_conflict_style(value)
                                 .with_lenient_default(self.config.lenient_config)
                         })
-                        .transpose()?
+                        .transpose()
+                        .or_erased()?
                         .unwrap_or_default(),
                     marker_size: text::Conflict::DEFAULT_MARKER_SIZE.try_into().unwrap(),
                 },
@@ -148,9 +153,10 @@ impl Repository {
             &mut diff_cache,
             &mut blob_merge,
             options.into(),
-        )?;
+        )
+        .map_err(gix_error::Exn::into_error)?;
 
-        let validate = self.config.protect_options()?;
+        let validate = self.config.protect_options().or_erased()?;
         Ok(crate::merge::tree::Outcome {
             tree: crate::object::tree::Editor {
                 inner: tree,
@@ -209,9 +215,10 @@ impl Repository {
             self,
             &mut |id| id.to_owned().attach(self).shorten_or_id().to_string(),
             options.into(),
-        )?;
+        )
+        .map_err(gix_error::Error::from)?;
 
-        let validate = self.config.protect_options()?;
+        let validate = self.config.protect_options().or_erased()?;
         let tree_merge = crate::merge::tree::Outcome {
             tree: crate::object::tree::Editor {
                 inner: tree,
@@ -245,7 +252,7 @@ impl Repository {
     ) -> Result<crate::merge::virtual_merge_base::Outcome<'_>, virtual_merge_base::Error> {
         let commit_graph = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(commit_graph.as_ref());
-        Ok(self.virtual_merge_base_with_graph(merge_bases, &mut graph, options)?)
+        self.virtual_merge_base_with_graph(merge_bases, &mut graph, options)
     }
 
     /// Like [`Self::virtual_merge_base()`], but also allows to reuse a `graph` for faster merge-base calculation,
@@ -259,9 +266,9 @@ impl Repository {
         let mut merge_bases: Vec<_> = merge_bases.into_iter().map(Into::into).collect();
         let first = merge_bases
             .pop()
-            .ok_or(virtual_merge_base_with_graph::Error::MissingCommit)?;
+            .ok_or_else(|| gix_error::Error::from_error(gix_error::message("No commit was provided as merge-base")))?;
         let Some(second) = merge_bases.pop() else {
-            let tree_id = self.find_commit(first)?.tree_id()?;
+            let tree_id = self.find_commit(first)?.tree_id().or_erased()?;
             let commit_id = first.attach(self);
             return Ok(crate::merge::virtual_merge_base::Outcome {
                 virtual_merge_bases: Vec::new(),
@@ -287,7 +294,8 @@ impl Repository {
             self,
             &mut |id| id.to_owned().attach(self).shorten_or_id().to_string(),
             options.into(),
-        )?;
+        )
+        .map_err(gix_error::Error::from)?;
 
         Ok(crate::merge::virtual_merge_base::Outcome {
             virtual_merge_bases: virtual_merge_bases.into_iter().map(|id| id.attach(self)).collect(),

@@ -34,11 +34,14 @@ leading = value
 
     repo.config_snapshot_mut().set_raw_value("memory.value", "transient")?;
     let mut file = repo.config_file_mut(&target_path)?;
-    match repo.config_file_mut(&target_path) {
-        Err(gix::config::file_mut::Error::AcquireLock(_)) => {}
-        Err(err) => panic!("lock contention must be reported precisely: {err:?}"),
+    let err = match repo.config_file_mut(&target_path) {
+        Err(err) => err,
         Ok(_) => panic!("a second transaction must not acquire the same lock"),
-    }
+    };
+    assert!(
+        err.can_retry(),
+        "lock contention must be reported as retryable: {err:?}"
+    );
     file.set_raw_value("a.local-override", "written")?;
     file.commit()?;
 
@@ -113,16 +116,14 @@ fn honors_core_config_lock_timeout() -> crate::Result {
         Err(err) => err,
     };
     std::fs::remove_file(lock_path)?;
-    let gix::config::file_mut::Error::AcquireLock(err) = err else {
-        panic!("a held lock must cause a lock-acquisition error")
-    };
     assert!(
-        err.downcast_any_ref::<gix::error::RetryableError>().is_some(),
-        "lock contention is retryable"
+        err.can_retry(),
+        "lock contention must be reported as retryable: {err:?}"
     );
     assert!(
-        err.to_string().contains("immediately"),
-        "the configured zero timeout must be retained in the error"
+        err.iter_errors()
+            .any(|source| source.to_string().contains("immediately")),
+        "the configured zero timeout must be retained in the error: {err:?}"
     );
     Ok(())
 }
@@ -185,11 +186,11 @@ fn follows_symlinked_configuration_files() -> crate::Result {
     symlink("target.config", &link)?;
 
     let mut file = repo.config_file_mut(&link)?;
-    match repo.config_file_mut(&target) {
-        Err(gix::config::file_mut::Error::AcquireLock(_)) => {}
-        Err(err) => panic!("the target must report lock contention: {err:?}"),
+    let err = match repo.config_file_mut(&target) {
+        Err(err) => err,
         Ok(_) => panic!("the symlink and its target must use the same lock"),
-    }
+    };
+    assert!(err.can_retry(), "the target must report lock contention: {err:?}");
     file.set_raw_value("core.abbrev", "8")?;
     file.commit()?;
 
@@ -268,12 +269,10 @@ fn semantic_validation_happens_on_reload() -> crate::Result {
         Ok(_) => panic!("the persisted repository format must be rejected while reopening"),
         Err(err) => err,
     };
-    assert!(
-        matches!(
-            err,
-            gix::open::Error::Config(gix::config::Error::UnsupportedRepositoryFormatVersion { version: 2 })
-        ),
-        "reload reports the semantic error: {err:?}"
+    assert!(err.is_validation(), "reload reports the semantic error: {err:?}");
+    assert_eq!(
+        err.probable_cause().to_string(),
+        "Unsupported repository format version 2; only versions 0 and 1 are supported"
     );
     assert_eq!(
         repo.config_snapshot().integer("core.repositoryFormatVersion"),

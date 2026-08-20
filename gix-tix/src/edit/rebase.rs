@@ -17,7 +17,7 @@ use gix::{
     },
 };
 
-use crate::history::HistoryGraph;
+use crate::history::{HistoryGraph, is_missing_ref};
 
 const MARKER: &[u8] = b"tix-rebase";
 const ORIGINAL_PARENT: &[u8] = b"tix-rebase-parent";
@@ -408,7 +408,7 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[O
     for reference in repo.references()?.all()? {
         let reference = match reference {
             Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) if is_missing_ref(&err) => continue,
             Err(err) => anyhow::bail!("could not inspect a reference before editing: {err}"),
         };
         if matches!(
@@ -2988,7 +2988,7 @@ fn update_refs(
         for reference in repo.references()?.all()? {
             let reference = match reference {
                 Ok(reference) => reference,
-                Err(err) if is_missing_ref(&*err) => continue,
+                Err(err) if is_missing_ref(&err) => continue,
                 Err(err) => anyhow::bail!("could not inspect a reference before rebasing: {err}"),
             };
             if matches!(
@@ -3128,19 +3128,6 @@ fn pin_name(
         } else {
             len = hex.len() + 1;
         }
-    }
-}
-
-fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
-    loop {
-        if err
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
-        {
-            return true;
-        }
-        let Some(source) = err.source() else { return false };
-        err = source;
     }
 }
 

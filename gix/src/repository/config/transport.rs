@@ -2,6 +2,7 @@
 use std::any::Any;
 
 use crate::bstr::BStr;
+use gix_error::ResultExt;
 
 impl crate::Repository {
     /// Produce configuration suitable for `url`, as differentiated by its protocol/scheme, to be passed to a transport instance via
@@ -26,382 +27,408 @@ impl crate::Repository {
         url: impl Into<&'a BStr>,
         remote_name: Option<&BStr>,
     ) -> Result<Option<Box<dyn Any>>, crate::config::transport::Error> {
-        let url = gix_url::parse(url.into()).map_err(gix_error::Exn::into_error)?;
+        let url = gix_url::parse(url.into()).or_raise(|| gix_error::message("Invalid URL passed for configuration"))?;
         use gix_url::Scheme::*;
 
         match &url.scheme {
             Http | Https => {
-                #[cfg(not(any(
-                    feature = "blocking-http-transport-reqwest",
-                    feature = "blocking-http-transport-curl"
-                )))]
-                {
-                    Ok(None)
-                }
-                #[cfg(any(
-                    feature = "blocking-http-transport-reqwest",
-                    feature = "blocking-http-transport-curl"
-                ))]
-                {
-                    use std::sync::{Arc, Mutex};
-
-                    use gix_transport::client::blocking_io::http::{
-                        self,
-                        options::{ProxyAuthMethod, SslVersion, SslVersionRangeInclusive},
-                    };
-
-                    use crate::{
-                        bstr::BString,
-                        config,
-                        config::{
-                            cache::util::ApplyLeniency,
-                            tree::{Key, Remote, gitoxide},
-                        },
-                    };
-                    fn try_to_string(
-                        v: BString,
-                        lenient: bool,
-                        key_str: impl Into<BString>,
-                        key: &'static config::tree::keys::String,
-                    ) -> Result<Option<String>, config::transport::Error> {
-                        key.try_into_string(v)
-                            .map_err(|err| config::transport::Error::IllformedUtf8 {
-                                source: err,
-                                key: key_str.into(),
-                            })
-                            .map(Some)
-                            .with_leniency(lenient)
+                let options: Result<Option<Box<dyn Any>>, crate::config::transport::http::Error> = {
+                    #[cfg(not(any(
+                        feature = "blocking-http-transport-reqwest",
+                        feature = "blocking-http-transport-curl"
+                    )))]
+                    {
+                        Ok(None)
                     }
+                    #[cfg(any(
+                        feature = "blocking-http-transport-reqwest",
+                        feature = "blocking-http-transport-curl"
+                    ))]
+                    {
+                        use std::sync::{Arc, Mutex};
 
-                    fn proxy_auth_method(
-                        value_and_key: Option<(BString, BString, &'static config::tree::http::ProxyAuthMethod)>,
-                    ) -> Result<ProxyAuthMethod, config::transport::Error> {
-                        let value = value_and_key
-                            .map(|(method, key, key_type)| {
-                                key_type.try_into_proxy_auth_method(method).map_err(|err| {
-                                    config::transport::http::Error::InvalidProxyAuthMethod { source: err, key }
+                        use gix_transport::client::blocking_io::http::{
+                            self,
+                            options::{ProxyAuthMethod, SslVersion, SslVersionRangeInclusive},
+                        };
+
+                        use crate::{
+                            bstr::BString,
+                            config,
+                            config::{
+                                cache::util::ApplyLeniency,
+                                tree::{Key, Remote, gitoxide},
+                            },
+                        };
+                        use gix_error::ErrorExt;
+                        fn try_to_string(
+                            v: BString,
+                            lenient: bool,
+                            key_str: impl Into<BString>,
+                            key: &'static config::tree::keys::String,
+                        ) -> Result<Option<String>, config::transport::Error> {
+                            let key_str = key_str.into();
+                            key.try_into_string(v)
+                                .map_err(|err| {
+                                    gix_error::Error::from(err.and_raise(gix_error::message!(
+                                        "Could not decode value at key {:?} as UTF-8 string",
+                                        key_str
+                                    )))
                                 })
-                            })
-                            .transpose()?
-                            .unwrap_or_default();
-                        Ok(value)
-                    }
+                                .map(Some)
+                                .with_leniency(lenient)
+                        }
 
-                    fn ssl_version(
-                        config: &gix_config::File,
-                        key_str: &'static str,
-                        key: &'static config::tree::http::SslVersion,
-                        mut filter: fn(&gix_config::file::Metadata) -> bool,
-                        lenient: bool,
-                    ) -> Result<Option<SslVersion>, config::transport::Error> {
-                        debug_assert_eq!(
-                            key_str,
-                            key.logical_name(),
-                            "BUG: hardcoded and generated key names must match"
-                        );
-                        config
-                            .string_filter(key_str, &mut filter)
-                            .filter(|v| !v.is_empty())
-                            .map(|v| {
-                                key.try_into_ssl_version(v)
-                                    .map_err(crate::config::transport::http::Error::from)
-                            })
-                            .transpose()
-                            .with_leniency(lenient)
-                            .map_err(Into::into)
-                    }
-
-                    fn proxy(
-                        value: Option<(BString, BString, &'static config::tree::keys::String)>,
-                        lenient: bool,
-                    ) -> Result<Option<String>, config::transport::Error> {
-                        Ok(value
-                            .and_then(|(v, k, key)| try_to_string(v, lenient, k.clone(), key).transpose())
-                            .transpose()?
-                            .map(|mut proxy| {
-                                if !proxy.trim().is_empty() && !proxy.contains("://") {
-                                    proxy.insert_str(0, "http://");
-                                    proxy
-                                } else {
-                                    proxy
-                                }
-                            }))
-                    }
-
-                    let mut opts = http::Options::default();
-                    let config = &self.config.resolved;
-                    let mut trusted_only = self.filter_config_section();
-                    let lenient = self.config.lenient_config;
-                    opts.extra_headers = {
-                        let key = "http.extraHeader";
-                        debug_assert_eq!(key, &config::tree::Http::EXTRA_HEADER.logical_name());
-                        config
-                            .strings_filter(key, &mut trusted_only)
-                            .map(|values| config::tree::Http::EXTRA_HEADER.try_into_extra_header(values))
-                            .transpose()
-                            .map_err(|err| config::transport::Error::IllformedUtf8 {
-                                source: err,
-                                key: key.into(),
-                            })?
-                            .unwrap_or_default()
-                    };
-
-                    opts.follow_redirects = {
-                        let key = "http.followRedirects";
-
-                        config::tree::Http::FOLLOW_REDIRECTS
-                            .try_into_follow_redirects(
-                                config.string_filter(key, &mut trusted_only).unwrap_or_default(),
-                                || config.boolean_filter(key, &mut trusted_only).with_leniency(lenient),
-                            )
-                            .map_err(config::transport::http::Error::InvalidFollowRedirects)?
-                    };
-
-                    opts.low_speed_time_seconds = config::tree::Http::LOW_SPEED_TIME
-                        .try_into_u64(config.integer_filter("http.lowSpeedTime", &mut trusted_only))
-                        .with_leniency(lenient)
-                        .map_err(config::transport::http::Error::from)?
-                        .unwrap_or_default();
-                    opts.low_speed_limit_bytes_per_second = config::tree::Http::LOW_SPEED_LIMIT
-                        .try_into_u32(config.integer_filter("http.lowSpeedLimit", &mut trusted_only))
-                        .with_leniency(lenient)
-                        .map_err(config::transport::http::Error::from)?
-                        .unwrap_or_default();
-                    opts.proxy = proxy(
-                        remote_name
-                            .and_then(|name| {
-                                config
-                                    .string_filter(
-                                        &format!("remote.{}.{}", name, Remote::PROXY.name),
-                                        &mut trusted_only,
-                                    )
-                                    .map(|v| (v, format!("remote.{name}.proxy").into(), &Remote::PROXY))
-                            })
-                            .or_else(|| {
-                                let key = "http.proxy";
-                                debug_assert_eq!(key, config::tree::Http::PROXY.logical_name());
-                                let http_proxy = config
-                                    .string_filter(key, &mut trusted_only)
-                                    .map(|v| (v, key.into(), &config::tree::Http::PROXY))
-                                    .or_else(|| {
-                                        let key = "gitoxide.http.proxy";
-                                        debug_assert_eq!(key, gitoxide::Http::PROXY.logical_name());
-                                        config
-                                            .string_filter(key, &mut trusted_only)
-                                            .map(|v| (v, key.into(), &gitoxide::Http::PROXY))
-                                    });
-                                if url.scheme == Https {
-                                    http_proxy.or_else(|| {
-                                        let key = "gitoxide.https.proxy";
-                                        debug_assert_eq!(key, gitoxide::Https::PROXY.logical_name());
-                                        config
-                                            .string_filter(key, &mut trusted_only)
-                                            .map(|v| (v, key.into(), &gitoxide::Https::PROXY))
+                        fn proxy_auth_method(
+                            value_and_key: Option<(BString, BString, &'static config::tree::http::ProxyAuthMethod)>,
+                        ) -> Result<ProxyAuthMethod, config::transport::Error> {
+                            let value = value_and_key
+                                .map(|(method, key, key_type)| {
+                                    let _ = &key; // CodeQL doesn't inspect formatting macro arguments.
+                                    key_type.try_into_proxy_auth_method(method).map_err(|err| {
+                                        gix_error::Error::from(err.and_raise(gix_error::message!(
+                                            "The proxy authentication at key `{key}` is invalid"
+                                        )))
                                     })
-                                } else {
-                                    http_proxy
-                                }
-                            })
-                            .or_else(|| {
-                                let key = "gitoxide.http.allProxy";
-                                debug_assert_eq!(key, gitoxide::Http::ALL_PROXY.logical_name());
-                                config
-                                    .string_filter(key, &mut trusted_only)
-                                    .map(|v| (v, key.into(), &gitoxide::Http::ALL_PROXY))
-                            }),
-                        lenient,
-                    )?;
-                    {
-                        let key = "gitoxide.http.noProxy";
-                        debug_assert_eq!(key, gitoxide::Http::NO_PROXY.logical_name());
-                        opts.no_proxy = config
-                            .string_filter(key, &mut trusted_only)
-                            .and_then(|v| try_to_string(v, lenient, key, &gitoxide::Http::NO_PROXY).transpose())
-                            .transpose()?;
-                    }
-                    opts.proxy_auth_method = proxy_auth_method({
-                        let key = "gitoxide.http.proxyAuthMethod";
-                        debug_assert_eq!(key, gitoxide::Http::PROXY_AUTH_METHOD.logical_name());
-                        config
-                            .string_filter(key, &mut trusted_only)
-                            .map(|v| (v, key.into(), &gitoxide::Http::PROXY_AUTH_METHOD))
-                            .or_else(|| {
-                                remote_name
-                                    .and_then(|name| {
-                                        config
-                                            .string_filter(&format!("remote.{name}.proxyAuthMethod"), &mut trusted_only)
-                                            .map(|v| {
-                                                (
-                                                    v,
-                                                    format!("remote.{name}.proxyAuthMethod").into(),
-                                                    &Remote::PROXY_AUTH_METHOD,
+                                })
+                                .transpose()?
+                                .unwrap_or_default();
+                            Ok(value)
+                        }
+
+                        fn ssl_version(
+                            config: &gix_config::File,
+                            key_str: &'static str,
+                            key: &'static config::tree::http::SslVersion,
+                            mut filter: fn(&gix_config::file::Metadata) -> bool,
+                            lenient: bool,
+                        ) -> Result<Option<SslVersion>, config::transport::Error> {
+                            debug_assert_eq!(
+                                key_str,
+                                key.logical_name(),
+                                "BUG: hardcoded and generated key names must match"
+                            );
+                            config
+                                .string_filter(key_str, &mut filter)
+                                .filter(|v| !v.is_empty())
+                                .map(|v| key.try_into_ssl_version(v).map_err(gix_error::Error::from))
+                                .transpose()
+                                .with_leniency(lenient)
+                        }
+
+                        fn proxy(
+                            value: Option<(BString, BString, &'static config::tree::keys::String)>,
+                            lenient: bool,
+                        ) -> Result<Option<String>, config::transport::Error> {
+                            Ok(value
+                                .and_then(|(v, k, key)| try_to_string(v, lenient, k.clone(), key).transpose())
+                                .transpose()?
+                                .map(|mut proxy| {
+                                    if !proxy.trim().is_empty() && !proxy.contains("://") {
+                                        proxy.insert_str(0, "http://");
+                                        proxy
+                                    } else {
+                                        proxy
+                                    }
+                                }))
+                        }
+
+                        let mut opts = http::Options::default();
+                        let config = &self.config.resolved;
+                        let mut trusted_only = self.filter_config_section();
+                        let lenient = self.config.lenient_config;
+                        opts.extra_headers = {
+                            let key = "http.extraHeader";
+                            debug_assert_eq!(key, &config::tree::Http::EXTRA_HEADER.logical_name());
+                            config
+                                .strings_filter(key, &mut trusted_only)
+                                .map(|values| config::tree::Http::EXTRA_HEADER.try_into_extra_header(values))
+                                .transpose()
+                                .map_err(|err| {
+                                    gix_error::Error::from(err.and_raise(gix_error::message!(
+                                        "Could not decode value at key {key:?} as UTF-8 string"
+                                    )))
+                                })?
+                                .unwrap_or_default()
+                        };
+
+                        opts.follow_redirects = {
+                            let key = "http.followRedirects";
+
+                            config::tree::Http::FOLLOW_REDIRECTS
+                                .try_into_follow_redirects(
+                                    config.string_filter(key, &mut trusted_only).unwrap_or_default(),
+                                    || config.boolean_filter(key, &mut trusted_only).with_leniency(lenient),
+                                )
+                                .map_err(|err| {
+                                    gix_error::Error::from(err.and_raise(gix_error::message!(
+                                        "The follow redirects value must be 'initial', or boolean true or false"
+                                    )))
+                                })?
+                        };
+
+                        opts.low_speed_time_seconds = config::tree::Http::LOW_SPEED_TIME
+                            .try_into_u64(config.integer_filter("http.lowSpeedTime", &mut trusted_only))
+                            .with_leniency(lenient)
+                            .map_err(gix_error::Error::from)?
+                            .unwrap_or_default();
+                        opts.low_speed_limit_bytes_per_second = config::tree::Http::LOW_SPEED_LIMIT
+                            .try_into_u32(config.integer_filter("http.lowSpeedLimit", &mut trusted_only))
+                            .with_leniency(lenient)
+                            .map_err(gix_error::Error::from)?
+                            .unwrap_or_default();
+                        opts.proxy = proxy(
+                            remote_name
+                                .and_then(|name| {
+                                    config
+                                        .string_filter(
+                                            &format!("remote.{}.{}", name, Remote::PROXY.name),
+                                            &mut trusted_only,
+                                        )
+                                        .map(|v| (v, format!("remote.{name}.proxy").into(), &Remote::PROXY))
+                                })
+                                .or_else(|| {
+                                    let key = "http.proxy";
+                                    debug_assert_eq!(key, config::tree::Http::PROXY.logical_name());
+                                    let http_proxy = config
+                                        .string_filter(key, &mut trusted_only)
+                                        .map(|v| (v, key.into(), &config::tree::Http::PROXY))
+                                        .or_else(|| {
+                                            let key = "gitoxide.http.proxy";
+                                            debug_assert_eq!(key, gitoxide::Http::PROXY.logical_name());
+                                            config
+                                                .string_filter(key, &mut trusted_only)
+                                                .map(|v| (v, key.into(), &gitoxide::Http::PROXY))
+                                        });
+                                    if url.scheme == Https {
+                                        http_proxy.or_else(|| {
+                                            let key = "gitoxide.https.proxy";
+                                            debug_assert_eq!(key, gitoxide::Https::PROXY.logical_name());
+                                            config
+                                                .string_filter(key, &mut trusted_only)
+                                                .map(|v| (v, key.into(), &gitoxide::Https::PROXY))
+                                        })
+                                    } else {
+                                        http_proxy
+                                    }
+                                })
+                                .or_else(|| {
+                                    let key = "gitoxide.http.allProxy";
+                                    debug_assert_eq!(key, gitoxide::Http::ALL_PROXY.logical_name());
+                                    config
+                                        .string_filter(key, &mut trusted_only)
+                                        .map(|v| (v, key.into(), &gitoxide::Http::ALL_PROXY))
+                                }),
+                            lenient,
+                        )?;
+                        {
+                            let key = "gitoxide.http.noProxy";
+                            debug_assert_eq!(key, gitoxide::Http::NO_PROXY.logical_name());
+                            opts.no_proxy = config
+                                .string_filter(key, &mut trusted_only)
+                                .and_then(|v| try_to_string(v, lenient, key, &gitoxide::Http::NO_PROXY).transpose())
+                                .transpose()?;
+                        }
+                        opts.proxy_auth_method = proxy_auth_method({
+                            let key = "gitoxide.http.proxyAuthMethod";
+                            debug_assert_eq!(key, gitoxide::Http::PROXY_AUTH_METHOD.logical_name());
+                            config
+                                .string_filter(key, &mut trusted_only)
+                                .map(|v| (v, key.into(), &gitoxide::Http::PROXY_AUTH_METHOD))
+                                .or_else(|| {
+                                    remote_name
+                                        .and_then(|name| {
+                                            config
+                                                .string_filter(
+                                                    &format!("remote.{name}.proxyAuthMethod"),
+                                                    &mut trusted_only,
                                                 )
-                                            })
-                                    })
-                                    .or_else(|| {
-                                        let key = "http.proxyAuthMethod";
-                                        debug_assert_eq!(key, config::tree::Http::PROXY_AUTH_METHOD.logical_name());
-                                        config
-                                            .string_filter(key, &mut trusted_only)
-                                            .map(|v| (v, key.into(), &config::tree::Http::PROXY_AUTH_METHOD))
-                                    })
-                            })
-                    })?;
-                    opts.proxy_authenticate = opts
-                        .proxy
-                        .as_deref()
-                        .filter(|url| !url.is_empty())
-                        .map(gix_url::parse)
-                        .transpose()
-                        .map_err(gix_error::Exn::into_error)?
-                        .filter(|url| url.user().is_some())
-                        .map(|url| -> Result<_, config::transport::http::Error> {
-                            let (mut cascade, action_with_normalized_url, prompt_opts) =
-                                self.config_snapshot().credential_helpers(url)?;
-                            Ok((
-                                action_with_normalized_url,
-                                Arc::new(Mutex::new(move |action| cascade.invoke(action, prompt_opts.clone())))
-                                    as Arc<Mutex<http::options::AuthenticateFn>>,
-                            ))
-                        })
-                        .transpose()?;
-                    opts.connect_timeout = {
-                        let key = "gitoxide.http.connectTimeout";
-                        debug_assert_eq!(key, gitoxide::Http::CONNECT_TIMEOUT.logical_name());
-                        gitoxide::Http::CONNECT_TIMEOUT
-                            .try_into_duration(config.integer_filter(key, &mut trusted_only))
-                            .map_err(crate::config::transport::http::Error::from)
-                            .with_leniency(lenient)?
-                    };
-                    {
-                        let key = "http.userAgent";
-                        opts.user_agent = config
-                            .string_filter(key, &mut trusted_only)
-                            .and_then(|v| try_to_string(v, lenient, key, &config::tree::Http::USER_AGENT).transpose())
-                            .transpose()?
-                            .or_else(|| Some(crate::env::agent().into()));
-                    }
-
-                    {
-                        let key = "http.version";
-                        opts.http_version = config
-                            .string_filter(key, &mut trusted_only)
-                            .map(|v| {
-                                config::tree::Http::VERSION
-                                    .try_into_http_version(v)
-                                    .map_err(config::transport::http::Error::InvalidHttpVersion)
-                            })
-                            .transpose()?;
-                    }
-
-                    {
-                        opts.verbose = config
-                            .boolean_filter(gitoxide::Http::VERBOSE, &mut trusted_only)
-                            .ok()
-                            .flatten()
-                            .unwrap_or_default();
-                    }
-
-                    let may_use_cainfo = {
-                        let key = "http.schannelUseSSLCAInfo";
-                        config::tree::Http::SCHANNEL_USE_SSL_CA_INFO
-                            .enrich_error(config.boolean_filter(key, &mut trusted_only))
-                            .with_leniency(lenient)
-                            .map_err(config::transport::http::Error::from)?
-                            .unwrap_or(true)
-                    };
-
-                    if may_use_cainfo {
-                        let key = "http.sslCAInfo";
-                        debug_assert_eq!(key, config::tree::Http::SSL_CA_INFO.logical_name());
-                        opts.ssl_ca_info = config
-                            .path_filter(key, &mut trusted_only)
-                            .map(|p| {
-                                use crate::config::cache::interpolate_context;
-                                p.interpolate(interpolate_context(
-                                    self.install_dir().ok().as_deref(),
-                                    self.config.home_dir().as_deref(),
+                                                .map(|v| {
+                                                    (
+                                                        v,
+                                                        format!("remote.{name}.proxyAuthMethod").into(),
+                                                        &Remote::PROXY_AUTH_METHOD,
+                                                    )
+                                                })
+                                        })
+                                        .or_else(|| {
+                                            let key = "http.proxyAuthMethod";
+                                            debug_assert_eq!(key, config::tree::Http::PROXY_AUTH_METHOD.logical_name());
+                                            config
+                                                .string_filter(key, &mut trusted_only)
+                                                .map(|v| (v, key.into(), &config::tree::Http::PROXY_AUTH_METHOD))
+                                        })
+                                })
+                        })?;
+                        opts.proxy_authenticate = opts
+                            .proxy
+                            .as_deref()
+                            .filter(|url| !url.is_empty())
+                            .map(gix_url::parse)
+                            .transpose()
+                            .or_raise(|| gix_error::message("Invalid URL passed for configuration"))?
+                            .filter(|url| url.user().is_some())
+                            .map(|url| -> Result<_, config::transport::http::Error> {
+                                let (mut cascade, action_with_normalized_url, prompt_opts) =
+                                self.config_snapshot().credential_helpers(url).or_raise(|| {
+                                    gix_error::message(
+                                        "Could not configure the credential helpers for the authenticated proxy url",
+                                    )
+                                })?;
+                                Ok((
+                                    action_with_normalized_url,
+                                    Arc::new(Mutex::new(move |action| cascade.invoke(action, prompt_opts.clone())))
+                                        as Arc<Mutex<http::options::AuthenticateFn>>,
                                 ))
                             })
-                            .transpose()
-                            .with_leniency(lenient)
-                            .map_err(|err| config::transport::Error::InterpolatePath {
-                                source: err.into_error(),
-                                key,
-                            })?;
-                    }
+                            .transpose()?;
+                        opts.connect_timeout = {
+                            let key = "gitoxide.http.connectTimeout";
+                            debug_assert_eq!(key, gitoxide::Http::CONNECT_TIMEOUT.logical_name());
+                            gitoxide::Http::CONNECT_TIMEOUT
+                                .try_into_duration(config.integer_filter(key, &mut trusted_only))
+                                .map_err(gix_error::Error::from)
+                                .with_leniency(lenient)?
+                        };
+                        {
+                            let key = "http.userAgent";
+                            opts.user_agent = config
+                                .string_filter(key, &mut trusted_only)
+                                .and_then(|v| {
+                                    try_to_string(v, lenient, key, &config::tree::Http::USER_AGENT).transpose()
+                                })
+                                .transpose()?
+                                .or_else(|| Some(crate::env::agent().into()));
+                        }
 
-                    {
-                        opts.ssl_version = ssl_version(
-                            config,
-                            "http.sslVersion",
-                            &config::tree::Http::SSL_VERSION,
-                            trusted_only,
-                            lenient,
-                        )?
-                        .map(|v| SslVersionRangeInclusive { min: v, max: v });
-                        let min_max = ssl_version(
-                            config,
-                            "gitoxide.http.sslVersionMin",
-                            &gitoxide::Http::SSL_VERSION_MIN,
-                            trusted_only,
-                            lenient,
-                        )
-                        .and_then(|min| {
-                            ssl_version(
+                        {
+                            let key = "http.version";
+                            opts.http_version = config
+                                .string_filter(key, &mut trusted_only)
+                                .map(|v| {
+                                    config::tree::Http::VERSION.try_into_http_version(v).map_err(|err| {
+                                        gix_error::Error::from(err.and_raise(gix_error::message!(
+                                            "The HTTP version must be 'HTTP/2' or 'HTTP/1.1'"
+                                        )))
+                                    })
+                                })
+                                .transpose()?;
+                        }
+
+                        {
+                            opts.verbose = config
+                                .boolean_filter(gitoxide::Http::VERBOSE, &mut trusted_only)
+                                .ok()
+                                .flatten()
+                                .unwrap_or_default();
+                        }
+
+                        let may_use_cainfo = {
+                            let key = "http.schannelUseSSLCAInfo";
+                            config::tree::Http::SCHANNEL_USE_SSL_CA_INFO
+                                .enrich_error(config.boolean_filter(key, &mut trusted_only))
+                                .with_leniency(lenient)
+                                .map_err(gix_error::Error::from)?
+                                .unwrap_or(true)
+                        };
+
+                        if may_use_cainfo {
+                            let key = "http.sslCAInfo";
+                            debug_assert_eq!(key, config::tree::Http::SSL_CA_INFO.logical_name());
+                            opts.ssl_ca_info = config
+                                .path_filter(key, &mut trusted_only)
+                                .map(|p| {
+                                    use crate::config::cache::interpolate_context;
+                                    p.interpolate(interpolate_context(
+                                        self.install_dir().ok().as_deref(),
+                                        self.config.home_dir().as_deref(),
+                                    ))
+                                })
+                                .transpose()
+                                .with_leniency(lenient)
+                                .map_err(|err| {
+                                    gix_error::Error::from(
+                                        err.raise(gix_error::message!("Could not interpolate path at key {key:?}")),
+                                    )
+                                })?;
+                        }
+
+                        {
+                            opts.ssl_version = ssl_version(
                                 config,
-                                "gitoxide.http.sslVersionMax",
-                                &gitoxide::Http::SSL_VERSION_MAX,
+                                "http.sslVersion",
+                                &config::tree::Http::SSL_VERSION,
+                                trusted_only,
+                                lenient,
+                            )?
+                            .map(|v| SslVersionRangeInclusive { min: v, max: v });
+                            let min_max = ssl_version(
+                                config,
+                                "gitoxide.http.sslVersionMin",
+                                &gitoxide::Http::SSL_VERSION_MIN,
                                 trusted_only,
                                 lenient,
                             )
-                            .map(|max| min.zip(max))
-                        })?;
-                        if let Some((min, max)) = min_max {
-                            let v = opts.ssl_version.get_or_insert(SslVersionRangeInclusive {
-                                min: SslVersion::TlsV1_3,
-                                max: SslVersion::TlsV1_3,
-                            });
-                            v.min = min;
-                            v.max = max;
+                            .and_then(|min| {
+                                ssl_version(
+                                    config,
+                                    "gitoxide.http.sslVersionMax",
+                                    &gitoxide::Http::SSL_VERSION_MAX,
+                                    trusted_only,
+                                    lenient,
+                                )
+                                .map(|max| min.zip(max))
+                            })?;
+                            if let Some((min, max)) = min_max {
+                                let v = opts.ssl_version.get_or_insert(SslVersionRangeInclusive {
+                                    min: SslVersion::TlsV1_3,
+                                    max: SslVersion::TlsV1_3,
+                                });
+                                v.min = min;
+                                v.max = max;
+                            }
                         }
-                    }
 
-                    {
-                        let key = "gitoxide.http.sslNoVerify";
-                        let ssl_no_verify = config::tree::gitoxide::Http::SSL_NO_VERIFY
-                            .enrich_error(config.boolean_filter(key, &mut trusted_only))
-                            .with_leniency(lenient)
-                            .map_err(config::transport::http::Error::from)?
-                            .unwrap_or_default();
-
-                        if ssl_no_verify {
-                            opts.ssl_verify = false;
-                        } else {
-                            let key = "http.sslVerify";
-                            opts.ssl_verify = config::tree::Http::SSL_VERIFY
+                        {
+                            let key = "gitoxide.http.sslNoVerify";
+                            let ssl_no_verify = config::tree::gitoxide::Http::SSL_NO_VERIFY
                                 .enrich_error(config.boolean_filter(key, &mut trusted_only))
                                 .with_leniency(lenient)
-                                .map_err(config::transport::http::Error::from)?
-                                .unwrap_or(true);
+                                .map_err(gix_error::Error::from)?
+                                .unwrap_or_default();
+
+                            if ssl_no_verify {
+                                opts.ssl_verify = false;
+                            } else {
+                                let key = "http.sslVerify";
+                                opts.ssl_verify = config::tree::Http::SSL_VERIFY
+                                    .enrich_error(config.boolean_filter(key, &mut trusted_only))
+                                    .with_leniency(lenient)
+                                    .map_err(gix_error::Error::from)?
+                                    .unwrap_or(true);
+                            }
                         }
-                    }
 
-                    #[cfg(feature = "blocking-http-transport-curl")]
-                    {
-                        let key = "http.schannelCheckRevoke";
-                        let schannel_check_revoke = config::tree::Http::SCHANNEL_CHECK_REVOKE
-                            .enrich_error(config.boolean_filter(key, &mut trusted_only))
-                            .with_leniency(lenient)
-                            .map_err(config::transport::http::Error::from)?;
-                        let backend =
-                            gix_protocol::transport::client::blocking_io::http::curl::Options { schannel_check_revoke };
-                        opts.backend =
-                            Some(Arc::new(Mutex::new(backend)) as Arc<Mutex<dyn Any + Send + Sync + 'static>>);
-                    }
+                        #[cfg(feature = "blocking-http-transport-curl")]
+                        {
+                            let key = "http.schannelCheckRevoke";
+                            let schannel_check_revoke = config::tree::Http::SCHANNEL_CHECK_REVOKE
+                                .enrich_error(config.boolean_filter(key, &mut trusted_only))
+                                .with_leniency(lenient)
+                                .map_err(gix_error::Error::from)?;
+                            let backend = gix_protocol::transport::client::blocking_io::http::curl::Options {
+                                schannel_check_revoke,
+                            };
+                            opts.backend =
+                                Some(Arc::new(Mutex::new(backend)) as Arc<Mutex<dyn Any + Send + Sync + 'static>>);
+                        }
 
-                    Ok(Some(Box::new(opts)))
-                }
+                        Ok(Some(Box::new(opts) as Box<dyn Any>))
+                    }
+                };
+                options
+                    .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))
+                    .map_err(Into::into)
             }
             File | Git | Ssh | Ext | Helper(_) | HelperUrl(_) => Ok(None),
         }

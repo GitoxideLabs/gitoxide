@@ -102,23 +102,7 @@ pub use gix_protocol::fetch::ProgressId;
 ///
 pub mod prepare {
     /// The error returned by [`prepare_fetch()`][super::Connection::prepare_fetch()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Cannot perform a meaningful fetch operation without any configured ref-specs")]
-        MissingRefSpecs,
-        #[error(transparent)]
-        RefMap(#[from] crate::remote::ref_map::Error),
-    }
-
-    impl Error {
-        pub(crate) fn can_retry(&self) -> bool {
-            match self {
-                Error::RefMap(err) => err.can_retry(),
-                _ => false,
-            }
-        }
-    }
+    pub type Error = gix_error::Error;
 }
 
 impl<'auth, 'repo, T> Connection<'_, 'auth, 'repo, T>
@@ -161,7 +145,9 @@ where
         options: ref_map::Options,
     ) -> Result<PrepareDetached<'remote, T>, prepare::Error> {
         if self.remote.fetch_refspecs().is_empty() && options.extra_refspecs.is_empty() {
-            return Err(prepare::Error::MissingRefSpecs);
+            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(
+                "Cannot perform a meaningful fetch operation without any configured ref-specs",
+            )));
         }
         let ref_map = self.ref_map_by_ref(repo, progress, options).await?;
         Ok(PrepareDetached {

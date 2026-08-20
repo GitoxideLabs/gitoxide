@@ -259,7 +259,9 @@ fn invalid_head() {
     |
     └─ Could not peel 'HEAD' to obtain its target
         |
-        └─ Could not follow a single level of a symbolic reference
+        └─ FollowToObject(Follow(NotFound { name: "refs/heads/main" }))
+    |
+    └─ NotFound { name: "refs/heads/main" }
         |   |
         |   └─ The ref partially named "refs/heads/main" could not be found
         |

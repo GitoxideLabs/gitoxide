@@ -51,10 +51,13 @@ mod save_as_to {
     fn anonymous_remotes_cannot_be_saved_lacking_a_name() -> crate::Result {
         let repo = basic_repo()?;
         let remote = repo.remote_at("https://example.com/path")?;
-        assert!(matches!(
-            remote.save_to(&mut gix::config::File::default()).unwrap_err(),
-            gix::remote::save::Error::NameMissing { .. }
-        ));
+        assert_eq!(
+            remote
+                .save_to(&mut gix::config::File::default())
+                .unwrap_err()
+                .to_string(),
+            "The remote pointing to https://example.com/path is anonymous and can't be saved."
+        );
         Ok(())
     }
 

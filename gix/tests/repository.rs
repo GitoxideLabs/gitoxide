@@ -7,7 +7,7 @@ use serial_test::serial;
 #[test]
 #[serial]
 fn config_path_uses_repository_options_for_global_sources() -> gix_testtools::Result {
-    use gix::config::{Source, file_mut::Error};
+    use gix::config::Source;
 
     let fixture = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?)?;
     let git_dir = fixture.join("bare-repo");
@@ -45,13 +45,17 @@ fn config_path_uses_repository_options_for_global_sources() -> gix_testtools::Re
     let repo = gix::open_opts(&git_dir, gix::open::Options::isolated())?;
     for source in [Source::GitInstallation, Source::System, Source::Git, Source::User] {
         assert!(
-            matches!(repo.config_path(source), Err(Error::SourceUnavailable(actual)) if actual == source),
+            repo.config_path(source).is_err_and(
+                |err| err == format!("Configuration source {source:?} has no available path with these options")
+            ),
             "{source:?} remains unavailable when disabled by the repository's permissions"
         );
     }
     for source in [Source::Env, Source::Cli, Source::Api, Source::EnvOverride] {
         assert!(
-            matches!(repo.config_path(source), Err(Error::UnsupportedSource(actual)) if actual == source),
+            repo.config_path(source)
+                .is_err_and(|err| err
+                    == format!("Configuration source {source:?} requires a repository or has no physical file")),
             "{source:?} has no physical configuration file even with a repository"
         );
     }
@@ -224,12 +228,16 @@ fn paths_cannot_leave_the_repository() -> gix_testtools::Result {
         "some-with-file/very/deeply/nested/subdir/empty-file",
         "absolute paths inside the worktree become repository-relative"
     );
-    assert!(
-        matches!(
-            repo.normalize_path("../../outside"),
-            Err(gix::repository::normalize_path::Error::OutsideOfRepository { .. })
-        ),
-        "relative paths cannot traverse above the worktree"
+    let err = repo
+        .normalize_path("../../outside")
+        .expect_err("relative paths cannot traverse above the worktree");
+    assert!(err.is_validation(), "leaving the worktree is a validation error");
+    assert_eq!(
+        err.probable_cause().to_string(),
+        format!(
+            "The path '{}' leaves the repository",
+            std::path::Path::new("some").join("../../outside").display()
+        )
     );
 
     assert_eq!(
@@ -248,19 +256,18 @@ fn absolute_paths_outside_the_repository_are_rejected() -> gix_testtools::Result
     let outside = root.parent().expect("fixture has a parent").to_owned();
     let outside_as_bstr = gix::path::into_bstr(outside.clone());
 
-    match repo
+    let err = repo
         .normalize_path(&outside_as_bstr)
-        .expect_err("an absolute path outside the repository must fail")
-    {
-        gix::repository::normalize_path::Error::AbsolutePathOutsideOfRepository {
-            path,
-            root: actual_root,
-        } => {
-            assert_eq!(path, outside, "the rejected path is retained");
-            assert_eq!(actual_root, root, "the repository root is retained");
-        }
-        err => panic!("expected an absolute-path-outside error, got {err:?}"),
-    }
+        .expect_err("an absolute path outside the repository must fail");
+    assert!(err.is_validation(), "an outside path is a validation error");
+    assert_eq!(
+        err.probable_cause().to_string(),
+        format!(
+            "The absolute path '{}' is not inside the repository at '{}'",
+            outside.display(),
+            root.display()
+        )
+    );
     Ok(())
 }
 
@@ -438,8 +445,7 @@ fn open_options_preset_system_config_paths_avoid_running_git() -> gix_testtools:
 
 #[cfg(feature = "revision")]
 fn probable_cause(res: Result<gix::Id<'_>, gix::revision::spec::parse::single::Error>) -> String {
-    match res.expect_err("the revspec must not resolve") {
-        gix::revision::spec::parse::single::Error::Parse(err) => err.probable_cause().to_string(),
-        err => panic!("expected a failure while parsing, got {err:?}"),
-    }
+    res.expect_err("the revspec must not resolve")
+        .probable_cause()
+        .to_string()
 }

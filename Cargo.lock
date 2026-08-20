@@ -1643,7 +1643,6 @@ dependencies = [
  "signal-hook 0.4.4",
  "smallvec",
  "termtree",
- "thiserror 2.0.18",
 ]
 
 [[package]]

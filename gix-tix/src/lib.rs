@@ -1925,7 +1925,8 @@ fn event_loop(
                                 let result = repository.delete_local_branches(names);
                                 let changed = result.is_ok()
                                     || result.as_ref().is_err_and(|err| {
-                                        matches!(err, gix::repository::branch::delete::Error::Cleanup { .. })
+                                        err.downcast_any_ref::<gix::repository::branch::delete::CleanupError>()
+                                            .is_some()
                                     });
                                 if changed {
                                     let recorded = before

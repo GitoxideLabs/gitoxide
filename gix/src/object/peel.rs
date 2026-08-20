@@ -8,22 +8,8 @@ use crate::{
 ///
 pub mod to_kind {
     mod error {
-
-        use crate::object;
-
         /// The error returned by [`Object::peel_to_kind()`][crate::Object::peel_to_kind()].
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            FindExistingObject(#[from] object::find::existing::Error),
-            #[error("Last encountered object {oid} was {actual} while trying to peel to {expected}")]
-            NotFound {
-                oid: gix_hash::Prefix,
-                actual: object::Kind,
-                expected: object::Kind,
-            },
-        }
+        pub type Error = gix_error::Error;
     }
     pub use error::Error;
 }
@@ -57,11 +43,11 @@ impl<'repo> Object<'repo> {
                     self = repo.find_object(target_id)?;
                 }
                 Kind::Tree | Kind::Blob => {
-                    return Err(peel::to_kind::Error::NotFound {
-                        oid: self.id().shorten().unwrap_or_else(|_| self.id.into()),
-                        actual: self.kind,
-                        expected: kind,
-                    });
+                    return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                        "Last encountered object {} was {} while trying to peel to {kind}",
+                        self.id().shorten().unwrap_or_else(|_| self.id.into()),
+                        self.kind,
+                    ))));
                 }
             }
         }

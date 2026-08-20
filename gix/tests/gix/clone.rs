@@ -11,6 +11,7 @@ mod blocking_io {
     use gix::{
         bstr::BString,
         config::tree::{Clone, Core, Init, Key},
+        error::ResultExt,
         refs::transaction::PreviousValue,
         remote::{
             Direction,
@@ -140,7 +141,8 @@ mod blocking_io {
                             "+refs/tags/b-tag:refs/tags/b-tag".to_owned().into(),
                         ],
                         Direction::Fetch,
-                    )?;
+                    )
+                    .or_erased()?;
                     Ok(r)
                 }
             })
@@ -280,12 +282,14 @@ mod blocking_io {
         )?
         .fetch_only(gix::progress::Discard, &AtomicBool::default())
         .unwrap_err();
-        let gix::clone::fetch::Error::Fetch(gix::remote::fetch::Error::Fetch(err)) = err else {
-            panic!("expected the protocol fetch to reject the shallow remote")
-        };
         assert!(err.is_validation(), "the configured rejection is a validation failure");
         assert!(
-            err.to_string().contains("clone.rejectShallow"),
+            matches!(
+                err.downcast_any_ref::<gix_error::ValidationError>(),
+                Some(err)
+                    if err.message
+                        == "Receiving objects from shallow remotes is prohibited due to the value of `clone.rejectShallow`"
+            ),
             "we can avoid fetching from remotes with this setting"
         );
         Ok(())
@@ -326,7 +330,8 @@ mod blocking_io {
         let (repo, _change) = gix::prepare_clone_bare(remote::repo("base").path(), tmp.path())?
             .with_shallow(Shallow::DepthAtRemote(2.try_into()?))
             .configure_remote(|mut r| {
-                r.replace_refspecs(Some("refs/heads/main:refs/remotes/origin/main"), Direction::Fetch)?;
+                r.replace_refspecs(Some("refs/heads/main:refs/remotes/origin/main"), Direction::Fetch)
+                    .or_erased()?;
                 Ok(r)
             })
             .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
@@ -447,7 +452,8 @@ mod blocking_io {
             move |r| {
                 called_configure_remote.store(true, std::sync::atomic::Ordering::Relaxed);
                 let r = r
-                    .with_refspecs(Some("+refs/tags/b-tag:refs/tags/b-tag"), gix::remote::Direction::Fetch)?
+                    .with_refspecs(Some("+refs/tags/b-tag:refs/tags/b-tag"), gix::remote::Direction::Fetch)
+                    .or_erased()?
                     .with_fetch_tags(desired_fetch_tags);
                 Ok(r)
             }
@@ -820,14 +826,11 @@ mod blocking_io {
         .map(drop)
         .expect_err("an existing .git directory must not be reused for clone");
 
-        assert!(
-            matches!(
-                err,
-                gix::clone::Error::Init(gix::init::Error::Init(gix::create::Error::DirectoryExists { ref path }))
-                    if *path == dot_git
-            ),
-            "unexpected error: {err}"
-        );
+        assert!(matches!(
+            err.downcast_any_ref::<gix_error::ValidationError>(),
+            Some(gix_error::ValidationError { input: Some(path), .. })
+                if path.as_bstr() == dot_git.to_string_lossy().as_bytes()
+        ));
         assert_eq!(std::fs::read(&existing_path)?, EXISTING_CONTENT);
         assert_eq!(std::fs::read(&head_path)?, EXISTING_HEAD_CONTENT);
         Ok(())
@@ -1033,10 +1036,7 @@ mod blocking_io {
         let err = missing
             .fetch_only(gix::progress::Discard, &AtomicBool::default())
             .expect_err("missing full references fail");
-        assert!(
-            matches!(err, gix::clone::fetch::Error::RevisionMissing { .. }),
-            "the missing revision is reported directly: {err}"
-        );
+        assert!(err.is_not_found(), "the missing revision is reported directly: {err}");
 
         let tree_id = remote_repo
             .find_reference("refs/heads/a")?
@@ -1053,10 +1053,7 @@ mod blocking_io {
         let err = tree
             .fetch_only(gix::progress::Discard, &AtomicBool::default())
             .expect_err("tree revisions cannot become HEAD");
-        assert!(
-            matches!(err, gix::clone::fetch::Error::PeelRevision(_)),
-            "non-commit revisions are rejected: {err}"
-        );
+        assert!(err.is_validation(), "non-commit revisions are rejected: {err}");
         Ok(())
     }
 
@@ -1086,7 +1083,7 @@ mod blocking_io {
     }
 
     #[test]
-    fn fetch_succeeds_despite_remote_head_ref() -> crate::Result {
+    fn fetch_retries_without_the_implicit_head_refspec_on_conflict() -> crate::Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let remote_repo = remote::repo("head-ref");
         let mut prepare = gix::clone::PrepareFetch::new(
@@ -1099,7 +1096,14 @@ mod blocking_io {
 
         let (mut checkout, _out) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
         let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
-        assert!(repo.head().is_ok(), "we could handle the HEAD normaller");
+        assert!(
+            repo.head().is_ok(),
+            "the clone completed after recovering from the conflict"
+        );
+        assert!(
+            repo.try_find_reference("refs/remotes/origin/HEAD")?.is_some(),
+            "retrying without the implicit refspec still fetches the remote branch named HEAD"
+        );
         Ok(())
     }
 
@@ -1318,10 +1322,14 @@ fn clone_and_destination_must_be_empty() -> crate::Result {
         restricted(),
     ) {
         Ok(_) => unreachable!("this should fail as the directory isn't empty"),
-        Err(err) => assert!(
-            err.to_string()
-                .starts_with("Refusing to initialize the non-empty directory as ")
-        ),
+        Err(err) => {
+            assert!(err.is_validation());
+            let validation = err
+                .downcast_any_ref::<gix::error::ValidationError>()
+                .expect("the non-empty destination remains a typed validation failure");
+            assert_eq!(validation.message, "Refusing to initialize the non-empty directory as");
+            assert!(validation.input.is_some(), "the rejected destination is retained");
+        }
     }
     Ok(())
 }
@@ -1339,10 +1347,12 @@ fn clone_with_worktree_and_destination_must_be_empty() -> crate::Result {
     )
     .map(drop)
     .expect_err("this should fail as the directory isn't empty");
-    assert!(
-        err.to_string()
-            .starts_with("Refusing to initialize the non-empty directory as ")
-    );
+    assert!(err.is_validation());
+    let validation = err
+        .downcast_any_ref::<gix::error::ValidationError>()
+        .expect("the non-empty destination remains a typed validation failure");
+    assert_eq!(validation.message, "Refusing to initialize the non-empty directory as");
+    assert!(validation.input.is_some(), "the rejected destination is retained");
     Ok(())
 }
 

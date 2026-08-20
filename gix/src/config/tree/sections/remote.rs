@@ -81,14 +81,14 @@ mod tag_opts {
 }
 
 pub mod validate {
-    use std::error::Error;
+    use gix_error::ResultExt;
 
     use crate::{bstr::BStr, config::tree::keys::Validate};
 
     pub struct TagOpt;
     impl Validate for TagOpt {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            super::Remote::TAG_OPT.try_into_tag_opt(value)?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Remote::TAG_OPT.try_into_tag_opt(value).or_erased()?;
             Ok(())
         }
     }
