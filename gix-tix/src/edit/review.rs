@@ -26,6 +26,7 @@ pub(crate) struct Finished {
 
 pub(crate) enum Finish {
     Complete(Finished),
+    Conflict(super::rebase::Conflict),
     SelectReturn { tip: ObjectId },
 }
 
@@ -280,14 +281,18 @@ pub(crate) fn finish(
             anyhow::bail!("{label} has a pending rebase");
         }
     }
-    let outcome = super::rebase::finish_review(&repo, graph, review, tip, review_ref, delete_refs, checkout)?;
-    let finished = outcome
-        .map(review)
-        .context("finishing review did not produce a commit")?;
-    Ok(Finish::Complete(Finished {
-        commit: finished,
-        outcome,
-    }))
+    match super::rebase::finish_review(&repo, graph, review, tip, review_ref, delete_refs, checkout)? {
+        super::rebase::Perform::Complete(outcome) => {
+            let finished = outcome
+                .map(review)
+                .context("finishing review did not produce a commit")?;
+            Ok(Finish::Complete(Finished {
+                commit: finished,
+                outcome,
+            }))
+        }
+        super::rebase::Perform::Conflict(conflict) => Ok(Finish::Conflict(conflict)),
+    }
 }
 
 pub(super) fn ensure_clean(workdir: &Path) -> Result<()> {
@@ -727,9 +732,10 @@ mod tests {
             b"A\n".as_bstr(),
             "the target history successor is retained"
         );
-        assert!(super::super::rebase::has_marker(
-            &repo.find_commit(successor)?.decode()?.into_owned()?
-        ));
+        assert!(
+            !super::super::rebase::is_pending(&repo.find_commit(successor)?.decode()?.into_owned()?),
+            "the checked-out review return path is fully replayed"
+        );
         insta::assert_snapshot!(
             "changed-review-with-successors",
             gix_testtools::repository::snapshot(fixture.path())?.to_string()

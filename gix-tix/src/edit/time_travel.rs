@@ -58,6 +58,24 @@ pub(crate) struct Conflict {
 }
 
 impl Conflict {
+    pub(crate) fn from_rebase(
+        rebase: super::rebase::Conflict,
+        repository_path: &Path,
+        bare: bool,
+        revisions: &[OsString],
+        include_worktrees: bool,
+    ) -> Self {
+        Conflict {
+            rebase,
+            repository_path: repository_path.to_owned(),
+            bare,
+            revisions: revisions.to_vec(),
+            include_worktrees,
+            ref_rewrites: Vec::new(),
+            ref_changes: Vec::new(),
+        }
+    }
+
     pub(crate) fn original(&self) -> ObjectId {
         self.rebase.original()
     }
@@ -1496,6 +1514,8 @@ mod tests {
             .env("GIT_COMMITTER_DATE", "2000-01-04T00:00:00 +0000")
             .status()?;
         assert!(commit.success(), "the fixture descendant commit is created");
+        let root = repository.rev_parse_single("HEAD~3")?.detach();
+        git(fixture.path(), &["checkout", "-q", "--detach", &root.to_string()])?;
         let graph = super::super::loaded_graph(&repository)?;
         super::super::rebase::perform(
             &repository,
@@ -1506,9 +1526,9 @@ mod tests {
         )?
         .complete()?;
         let graph = super::super::loaded_graph(&repository)?;
-        let root = repository.rev_parse_single("HEAD~2")?.detach();
         let tip = repository.find_reference("refs/heads/main")?.id().detach();
         drop(repository);
+        git(fixture.path(), &["checkout", "-q", "main"])?;
         Ok((fixture, repository_path, root, tip, graph))
     }
 
@@ -2380,12 +2400,11 @@ mod tests {
         let repository_path = repository.git_dir().to_owned();
         let graph = super::super::loaded_graph(&repository)?;
         let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        let root = repository.rev_parse_single("HEAD~2")?.detach();
         let old_tip = repository.head_id()?.detach();
         let mut commit = repository.find_commit(middle)?.decode()?.into_owned()?;
-        commit.tree = repository
-            .find_commit(repository.rev_parse_single("HEAD~2")?)?
-            .tree_id()?
-            .detach();
+        commit.tree = repository.find_commit(root)?.tree_id()?.detach();
+        git(fixture.path(), &["checkout", "-q", "--detach", &root.to_string()])?;
         let marked = super::super::rebase::perform(
             &repository,
             &graph,

@@ -20,7 +20,7 @@ refs/heads/review-successor = C3
 
 [commits]
 C0
-  tree T3
+  tree T2
   author reviewer <reviewer@example.com> 978307200 +0000
   committer reviewer <reviewer@example.com> 978307200 +0000
 
@@ -53,33 +53,35 @@ C3
   review successor
 
 C4
-  tree T2
+  tree T3
   parent C3
   author reviewer <reviewer@example.com> 978307200 +0000
   committer reviewer <reviewer@example.com> 978307200 +0000
   change-id xlpouomvnxrqllnkynsusvqwkkwnlrttmrvxquso
-  tix-rebase-parent 2cb49e443aa675eab8add679938ca6cd303ae353
 
   A
 
 [index]
-tree = T2
+tree = T3
 100644 B0 stage=0 "file"
-100644 B1 stage=0 "successor"
+100644 B1 stage=0 "reviewed"
+100644 B2 stage=0 "successor"
 
 [worktree]
 100644 file "file" = "B\n"
+100644 file "reviewed" = "new review change\n"
 100644 file "successor" = "A\n"
 
 [objects]
+T3 = 1104ca61473daa5765f3a6eb0a5fae3e5012a067
 C2 = 1a13dc5cbbc857de093c9a007e6b104a1a9ffbdb
 B0 = 223b7836fb19fdf64ba2d3cd6173c6a283141f78
 C1 = 2cb49e443aa675eab8add679938ca6cd303ae353
 T1 = 2e457f998ff6a6163f89e091bc4d6b92c8ed2a28
-T3 = 6d5f482d15035cdd7733b1b551d1fead28d22592
-T2 = 74c148aa829dcd83ad2608b6d0862ae1e6981501
-C4 = 7b4c1808849fabbe6f5afcd94ff930defbda47f3
+T2 = 6d5f482d15035cdd7733b1b551d1fead28d22592
+B1 = 8ab2a145f1f16e50d78eaced3311ac16027db494
 T0 = 93664bfc7cc096fcc0d1ac962596031e10f26906
 C0 = c38a9f7427b84ed8ba5e187ec385489d82d71695
 C3 = e028a8e769407c249d118ddc499f0c064685ba16
-B1 = f70f10e4db19068f79bc43844b49f3eece45c4e8
+B2 = f70f10e4db19068f79bc43844b49f3eece45c4e8
+C4 = fb6e9845e1d808bd1257db0bb3462a1747d1d2d9

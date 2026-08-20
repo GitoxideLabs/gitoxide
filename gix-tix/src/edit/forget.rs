@@ -11,8 +11,43 @@ pub(crate) struct Outcome {
     pub ref_changes: Vec<super::undo::RefChange>,
 }
 
+pub(crate) enum Perform {
+    Complete(Outcome),
+    Conflict(Conflict),
+}
+
+#[cfg(test)]
+impl Perform {
+    fn complete(self) -> Result<Outcome> {
+        match self {
+            Perform::Complete(outcome) => Ok(outcome),
+            Perform::Conflict(_) => anyhow::bail!("forgetting the commit would cause a merge conflict"),
+        }
+    }
+}
+
+pub(crate) struct Conflict {
+    rebase: rebase::Conflict,
+}
+
+impl Conflict {
+    pub(crate) fn into_rebase(self) -> rebase::Conflict {
+        self.rebase
+    }
+}
+
+#[cfg(test)]
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 pub(crate) fn perform(repo: gix::Repository, graph: &crate::history::HistoryGraph, id: ObjectId) -> Result<Outcome> {
+    perform_conflict(repo, graph, id)?.complete()
+}
+
+#[tracing::instrument(skip_all, fields(commit_id = %id))]
+pub(crate) fn perform_conflict(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    id: ObjectId,
+) -> Result<Perform> {
     let commit = repo
         .find_commit(id)
         .context("could not find the commit to forget")?
@@ -51,11 +86,19 @@ pub(crate) fn perform(repo: gix::Repository, graph: &crate::history::HistoryGrap
             deletions,
         )
     }?;
-    let outcome = result.complete()?;
-    Ok(Outcome {
-        selected: outcome.selected,
-        review_return,
-        ref_changes: outcome.ref_changes,
+    Ok(match result {
+        rebase::Perform::Complete(outcome) => Perform::Complete(Outcome {
+            selected: outcome.selected,
+            review_return,
+            ref_changes: outcome.ref_changes,
+        }),
+        rebase::Perform::Conflict(rebase) => {
+            anyhow::ensure!(
+                review_return.is_none(),
+                "a checked-out review root cannot suspend while returning from review"
+            );
+            Perform::Conflict(Conflict { rebase })
+        }
     })
 }
 
