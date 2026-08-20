@@ -18,6 +18,18 @@ fn follow_options() -> init::Options<'static> {
     }
 }
 
+fn assert_include_depth(err: from_paths::Error, max_depth: u8) {
+    let err = err
+        .downcast_any_ref::<gix_error::ValidationError>()
+        .expect("exceeding the include depth is a validation error");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "The maximum allowed length {max_depth} of the file include chain built by following nested resolve_includes is exceeded"
+        )
+    );
+}
+
 #[test]
 fn multiple() -> crate::Result {
     let dir = tempdir()?;
@@ -158,12 +170,7 @@ fn respect_max_depth() -> crate::Result {
     // with max_allowed_depth of 2 and 4 levels of includes, max_allowed_depth is exceeded and error is returned
     let options = make_options(2, true);
     let config = File::from_paths_metadata(into_meta(vec![dir.path().join("0")]), options);
-    assert!(matches!(
-        config.unwrap_err(),
-        from_paths::Error::Init(init::Error::Includes(includes::Error::IncludeDepthExceeded {
-            max_depth: 2
-        }))
-    ));
+    assert_include_depth(config.expect_err("the configured include depth must be enforced"), 2);
 
     // with max_allowed_depth of 2 and 4 levels of includes and error_on_max_depth_exceeded: false , max_allowed_depth is exceeded and the value of level 2 is returned
     let options = make_options(2, false);
@@ -173,12 +180,7 @@ fn respect_max_depth() -> crate::Result {
     // with max_allowed_depth of 0 and 4 levels of includes, max_allowed_depth is exceeded and error is returned
     let options = make_options(0, true);
     let config = File::from_paths_metadata(into_meta(vec![dir.path().join("0")]), options);
-    assert!(matches!(
-        config.unwrap_err(),
-        from_paths::Error::Init(init::Error::Includes(includes::Error::IncludeDepthExceeded {
-            max_depth: 0
-        }))
-    ));
+    assert_include_depth(config.expect_err("the configured include depth must be enforced"), 0);
     Ok(())
 }
 
@@ -258,12 +260,7 @@ fn cycle_detection() -> crate::Result {
         ..Default::default()
     };
     let config = File::from_paths_metadata(into_meta(vec![a_path.clone()]), options);
-    assert!(matches!(
-        config.unwrap_err(),
-        from_paths::Error::Init(init::Error::Includes(includes::Error::IncludeDepthExceeded {
-            max_depth: 4
-        }))
-    ));
+    assert_include_depth(config.expect_err("the configured include depth must be enforced"), 4);
 
     let options = init::Options {
         includes: includes::Options {

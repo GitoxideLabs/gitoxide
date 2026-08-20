@@ -1,24 +1,7 @@
-use crate::{file::init, parse, parse::EventRef, path::interpolate};
+use crate::{file::init, parse::EventRef};
 
 /// The error returned by [`File::from_bytes_no_includes()`][crate::File::from_bytes_no_includes()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Parse(#[from] parse::Error),
-    #[error(transparent)]
-    Interpolate(gix_error::Error),
-    #[error(transparent)]
-    Includes(#[from] init::includes::Error),
-    #[error(transparent)]
-    Span(#[from] parse::span::Error),
-}
-
-impl From<interpolate::Error> for Error {
-    fn from(err: interpolate::Error) -> Self {
-        Error::Interpolate(err.into_error())
-    }
-}
+pub type Error = gix_error::Exn;
 
 /// Options when loading git config using [`File::from_paths_metadata()`][crate::File::from_paths_metadata()].
 #[derive(Clone, Copy, Default)]
