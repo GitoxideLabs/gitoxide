@@ -434,10 +434,22 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
             (56915, Kind::Blob),
             "header-only reads remain available"
         );
-        assert!(matches!(
-            db.try_find(&id, &mut buf),
-            Err(loose::find::Error::OutOfMemory { size: 56915 })
-        ));
+        let err = db
+            .try_find(&id, &mut buf)
+            .expect_err("the object exceeds the configured allocation limit");
+        assert!(matches!(&err, loose::find::Error::OutOfMemory { size: 56915, .. }));
+        let err = gix_error::Error::from_error(err);
+        assert_eq!(
+            err.classify()
+                .map(|classification| classification.class())
+                .collect::<Vec<_>>(),
+            [gix_error::Class::ResourceExhaustion(
+                gix_error::ResourceExhaustionKind::AllocationLimit
+            )],
+            "configured limits are classified only as resource exhaustion"
+        );
+        assert!(!err.is_corrupted());
+        assert!(!err.can_retry());
         Ok(())
     }
 

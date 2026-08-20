@@ -10,32 +10,52 @@ use crate::loose::Store;
 ///
 pub mod integrity {
     /// The error returned by [`verify_integrity()`][super::Store::verify_integrity()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("{kind} object {id} could not be decoded")]
         ObjectDecode {
             source: gix_object::decode::Error,
             kind: gix_object::Kind,
             id: gix_hash::ObjectId,
         },
-        #[error("{kind} object {expected} could not be hashed")]
         ObjectHasher {
-            #[source]
             source: gix_hash::hasher::Error,
             kind: gix_object::Kind,
             expected: gix_hash::ObjectId,
         },
-        #[error("{kind} object wasn't re-encoded without change")]
         ObjectEncodeMismatch {
-            #[source]
             source: gix_hash::verify::Error,
             kind: gix_object::Kind,
         },
-        #[error("Objects were deleted during iteration - try again")]
         Retry,
-        #[error("Interrupted")]
         Interrupted,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::ObjectDecode { kind, id, .. } => write!(f, "{kind} object {id} could not be decoded"),
+                Error::ObjectHasher { kind, expected, .. } => {
+                    write!(f, "{kind} object {expected} could not be hashed")
+                }
+                Error::ObjectEncodeMismatch { kind, .. } => {
+                    write!(f, "{kind} object wasn't re-encoded without change")
+                }
+                Error::Retry => f.write_str("Objects were deleted during iteration - try again"),
+                Error::Interrupted => f.write_str("Interrupted"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::ObjectDecode { source, .. } => Some(source),
+                Error::ObjectHasher { source, .. } => Some(source),
+                Error::ObjectEncodeMismatch { source, .. } => Some(source),
+                Error::Retry | Error::Interrupted => None,
+            }
+        }
     }
 
     /// The outcome returned by [`verify_integrity()`][super::Store::verify_integrity()].

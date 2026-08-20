@@ -1,27 +1,62 @@
 use std::{cmp::Ordering, collections::HashSet, io, path::PathBuf};
 
-use gix_error::{CorruptionError, Error as GixError};
+use gix_error::{CorruptionError, Error as GixError, ResourceExhaustionError, ResourceExhaustionKind};
 
 use crate::store_impls::loose::{HEADER_MAX_SIZE, Store, hash_path};
 
 /// Returned by [`Store::try_find()`]
-#[derive(thiserror::Error, Debug)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("decompression of loose object at '{path}' failed")]
-    DecompressFile { source: GixError, path: PathBuf },
-    #[error("file at '{path}' showed invalid size of inflated data, expected {expected}, got {actual}")]
-    SizeMismatch { actual: u64, expected: u64, path: PathBuf },
-    #[error(transparent)]
+    DecompressFile {
+        source: GixError,
+        path: PathBuf,
+    },
+    SizeMismatch {
+        actual: u64,
+        expected: u64,
+        path: PathBuf,
+    },
     Decode(GixError),
-    #[error("Cannot store {size} in memory as it's not representable")]
-    OutOfMemory { size: u64 },
-    #[error("Could not {action} data at '{path}'")]
+    OutOfMemory {
+        size: u64,
+        source: GixError,
+    },
     Io {
         source: std::io::Error,
         action: &'static str,
         path: PathBuf,
     },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::DecompressFile { path, .. } => {
+                write!(f, "decompression of loose object at '{}' failed", path.display())
+            }
+            Error::SizeMismatch { actual, expected, path } => write!(
+                f,
+                "file at '{}' showed invalid size of inflated data, expected {expected}, got {actual}",
+                path.display()
+            ),
+            Error::Decode(err) => std::fmt::Display::fmt(err, f),
+            Error::OutOfMemory { size, .. } => write!(f, "Cannot store {size} bytes in memory"),
+            Error::Io { action, path, .. } => write!(f, "Could not {action} data at '{}'", path.display()),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::DecompressFile { source, .. } => Some(source),
+            Error::Decode(err) => err.source(),
+            Error::Io { source, .. } => Some(source),
+            Error::OutOfMemory { source, .. } => Some(source),
+            Error::SizeMismatch { .. } => None,
+        }
+    }
 }
 
 impl From<gix_object::decode::LooseHeaderDecodeError> for Error {
@@ -170,7 +205,13 @@ impl Store {
 
         let (kind, size, header_size) = gix_object::decode::loose_header(&header[..consumed_out])?;
         self.ensure_in_alloc_limit(size)?;
-        let size_usize = usize::try_from(size).map_err(|_| Error::OutOfMemory { size })?;
+        let size_usize = usize::try_from(size).map_err(|_| Error::OutOfMemory {
+            size,
+            source: GixError::from_error(ResourceExhaustionError::new(
+                ResourceExhaustionKind::AllocationFailure,
+                "The object size cannot be represented in memory",
+            )),
+        })?;
         let decompressed_body_prefix_len = consumed_out.checked_sub(header_size).ok_or(Error::SizeMismatch {
             actual: consumed_out as u64,
             expected: header_size as u64,
@@ -189,6 +230,10 @@ impl Store {
         // contains the complete decompressed object. In that case we can avoid allocating the full
         // output buffer and a second streaming inflate pass.
         out.clear();
+        out.try_reserve(size_usize).map_err(|err| Error::OutOfMemory {
+            size,
+            source: GixError::from_error(err),
+        })?;
         if status == gix_zlib::Status::StreamEnd {
             if consumed_out as u64 != size + header_size as u64 {
                 return Err(Error::SizeMismatch {
@@ -231,7 +276,13 @@ impl Store {
 
     fn ensure_in_alloc_limit(&self, size: u64) -> Result<(), Error> {
         if self.alloc_limit_bytes.is_some_and(|limit| size > limit as u64) {
-            return Err(Error::OutOfMemory { size });
+            return Err(Error::OutOfMemory {
+                size,
+                source: GixError::from_error(ResourceExhaustionError::new(
+                    ResourceExhaustionKind::AllocationLimit,
+                    "The object exceeds the configured allocation limit",
+                )),
+            });
         }
         Ok(())
     }
@@ -266,7 +317,7 @@ mod mmap {
     pub fn read_only(path: &Path) -> std::io::Result<memmap2::Mmap> {
         let file = std::fs::File::open(path)?;
         // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
-        #[expect(unsafe_code)]
+        #[allow(unsafe_code)]
         unsafe {
             memmap2::MmapOptions::new().map_copy_read_only(&file)
         }
