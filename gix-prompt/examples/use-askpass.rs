@@ -1,6 +1,6 @@
 use gix_prompt::{Mode, Options};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pass = gix_prompt::ask(
         "Password: ",
         &Options {
