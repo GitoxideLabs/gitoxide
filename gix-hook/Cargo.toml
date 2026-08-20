@@ -1,0 +1,21 @@
+lints.workspace = true
+
+[package]
+name = "gix-hook"
+version = "0.0.0"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+description = "A crate of the gitoxide project for discovering and executing git hooks"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2024"
+rust-version = "1.85"
+include = ["/src/**/*", "/LICENSE-*"]
+
+[lib]
+doctest = true
+
+[dependencies]
+gix-command = { version = "^0.9.2", path = "../gix-command" }
+
+[dev-dependencies]
+tempfile = "3.10.0"

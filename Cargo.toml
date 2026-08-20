@@ -290,6 +290,7 @@ members = [
     "gix-utils",
     "gix-fs",
     "gix-blame",
+    "gix-hook",
     "gix",
     "gitoxide-core",
     "gix-hashtable",
