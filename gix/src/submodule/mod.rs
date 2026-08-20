@@ -60,13 +60,16 @@ impl<'repo> SharedState<'repo> {
     ) -> Result<(RefMut<'_, IsActivePlatform>, RefMut<'_, gix_worktree::Stack>), is_active::Error> {
         let mut state = self.is_active.borrow_mut();
         if state.is_none() {
-            let platform = self.modules.is_active_platform(
-                &self.repo.config.resolved,
-                self.repo
-                    .config
-                    .pathspec_defaults()
-                    .map_err(|err| is_active::Error::InitPathspecDefaults(err.into_error()))?,
-            )?;
+            let platform = self
+                .modules
+                .is_active_platform(
+                    &self.repo.config.resolved,
+                    self.repo
+                        .config
+                        .pathspec_defaults()
+                        .map_err(|err| is_active::Error::InitPathspecDefaults(err.into_error()))?,
+                )
+                .map_err(|err| is_active::Error::InitIsActivePlatform(gix_error::Error::from_error(err)))?;
             let index = self.index()?;
             let attributes = self
                 .repo
@@ -116,8 +119,8 @@ impl Submodule<'_> {
     /// Return the url from which to clone or update the submodule.
     ///
     /// This method takes into consideration submodule configuration overrides.
-    pub fn url(&self) -> Result<gix_url::Url, config::url::Error> {
-        self.state.modules.url(self.name())
+    pub fn url(&self) -> Result<gix_url::Url, gix_error::Error> {
+        self.state.modules.url(self.name()).map_err(Into::into)
     }
 
     /// Return the `update` field from this submodule's configuration, if present, or `None`.
@@ -130,8 +133,8 @@ impl Submodule<'_> {
     /// Return the `branch` field from this submodule's configuration, if present, or `None`.
     ///
     /// This method takes into consideration submodule configuration overrides.
-    pub fn branch(&self) -> Result<Option<config::Branch>, config::branch::Error> {
-        self.state.modules.branch(self.name())
+    pub fn branch(&self) -> Result<Option<config::Branch>, gix_error::Error> {
+        self.state.modules.branch(self.name()).map_err(Into::into)
     }
 
     /// Return the `fetchRecurseSubmodules` field from this submodule's configuration, or retrieve the value from `fetch.recurseSubmodules` if unset.

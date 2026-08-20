@@ -1,6 +1,7 @@
 use std::{collections::HashSet, path::Path};
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{ErrorExt, ResultExt, ValidationError};
 
 use crate::{
     File, IsActivePlatform, config,
@@ -84,10 +85,8 @@ impl File {
                 let patterns = patterns
                     .into_iter()
                     .map(|pattern| gix_pathspec::parse(&pattern, defaults))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(crate::is_active_platform::Error::ParsePattern)?;
+                    .collect::<Result<Vec<_>, _>>()?;
                 gix_pathspec::Search::from_specs(patterns, None, std::path::Path::new(""))
-                    .map_err(crate::is_active_platform::Error::NormalizePattern)
             })
             .transpose()?;
         Ok(IsActivePlatform { search })
@@ -116,50 +115,49 @@ impl File {
     /// Git currently allows absolute paths to be used when adding submodules, but fails later as it can't find the submodule by
     /// relative path anymore. Let's play it safe here.
     pub fn path(&self, name: &BStr) -> Result<BString, config::path::Error> {
-        let path_bstr =
-            self.config
-                .string(&format!("submodule.{name}.path"))
-                .ok_or_else(|| config::path::Error::Missing {
-                    submodule: name.to_owned(),
-                })?;
+        let path_bstr = self.config.string(&format!("submodule.{name}.path")).ok_or_else(|| {
+            ValidationError::new(format!(
+                "The submodule '{name}' was missing its 'path' field or it was empty"
+            ))
+        })?;
         if path_bstr.is_empty() {
-            return Err(config::path::Error::Missing {
-                submodule: name.to_owned(),
-            });
+            return Err(ValidationError::new(format!(
+                "The submodule '{name}' was missing its 'path' field or it was empty"
+            )));
         }
         let path = gix_path::from_bstr(path_bstr.as_bstr());
         if path.is_absolute() {
-            return Err(config::path::Error::Absolute {
-                submodule: name.to_owned(),
-                actual: path_bstr,
-            });
+            return Err(ValidationError::new_with_input(
+                format!("The path of submodule '{name}' needs to be relative"),
+                path_bstr,
+            ));
         }
         if gix_path::normalize(path, "".as_ref()).is_none() {
-            return Err(config::path::Error::OutsideOfWorktree {
-                submodule: name.to_owned(),
-                actual: path_bstr,
-            });
+            return Err(ValidationError::new_with_input(
+                "The path would lead outside of the repository worktree",
+                path_bstr,
+            ));
         }
         Ok(path_bstr)
     }
 
     /// Retrieve the `url` field of the submodule named `name`. It's an error if it doesn't exist or is empty.
     pub fn url(&self, name: &BStr) -> Result<gix_url::Url, config::url::Error> {
-        let url = self
-            .config
-            .string(&format!("submodule.{name}.url"))
-            .ok_or_else(|| config::url::Error::Missing {
-                submodule: name.to_owned(),
-            })?;
+        let url = self.config.string(&format!("submodule.{name}.url")).ok_or_else(|| {
+            ValidationError::new(format!(
+                "The submodule '{name}' was missing its 'url' field or it was empty"
+            ))
+            .raise()
+        })?;
 
         if url.is_empty() {
-            return Err(config::url::Error::Missing {
-                submodule: name.to_owned(),
-            });
+            return Err(ValidationError::new(format!(
+                "The submodule '{name}' was missing its 'url' field or it was empty"
+            ))
+            .raise());
         }
-        gix_url::Url::from_bytes(url.as_ref()).map_err(|err| config::url::Error::Parse {
-            submodule: name.to_owned(),
-            source: err.into_error(),
+        gix_url::Url::from_bytes(url.as_ref()).or_raise(|| {
+            ValidationError::new_with_input(format!("The url of submodule '{name}' could not be parsed"), url)
         })
     }
 
@@ -171,19 +169,18 @@ impl File {
             value_is_from_modules_file = Some(std::ptr::eq(meta, our_meta));
             true
         }) {
-            Some(v) => v.as_bstr().try_into().map_err(|()| config::update::Error::Invalid {
-                submodule: name.to_owned(),
-                actual: v,
+            Some(v) => v.as_bstr().try_into().map_err(|()| {
+                ValidationError::new_with_input(format!("The 'update' field of submodule '{name}' was invalid"), v)
             })?,
             None => return Ok(None),
         };
 
         if let Update::Command(cmd) = &value {
             if value_is_from_modules_file.unwrap_or_default() {
-                return Err(config::update::Error::CommandForbiddenInModulesConfiguration {
-                    submodule: name.to_owned(),
-                    actual: cmd.to_owned(),
-                });
+                return Err(ValidationError::new_with_input(
+                    format!("The 'update' field of submodule '{name}' tried to set a command to be shared"),
+                    cmd.to_owned(),
+                ));
             }
         }
         Ok(Some(value))
@@ -198,13 +195,12 @@ impl File {
             None => return Ok(None),
         };
 
-        Branch::try_from(branch.as_ref())
-            .map(Some)
-            .map_err(|err| config::branch::Error {
-                submodule: name.to_owned(),
-                actual: branch,
-                source: err.into_error(),
-            })
+        Branch::try_from(branch.as_ref()).map(Some).or_raise(|| {
+            ValidationError::new_with_input(
+                format!("The 'branch' field of submodule '{name}' couldn't be turned into a valid fetch refspec"),
+                branch,
+            )
+        })
     }
 
     /// Retrieve the `fetchRecurseSubmodules` field of the submodule named `name`, or `None` if unset.
@@ -212,11 +208,10 @@ impl File {
     /// Note that if it's unset, it should be retrieved from `fetch.recurseSubmodules` in the configuration.
     pub fn fetch_recurse(&self, name: &BStr) -> Result<Option<FetchRecurse>, config::Error> {
         FetchRecurse::new(self.config.boolean(&format!("submodule.{name}.fetchRecurseSubmodules"))).map_err(|value| {
-            config::Error {
-                field: "fetchRecurseSubmodules",
-                submodule: name.to_owned(),
-                actual: value,
-            }
+            ValidationError::new_with_input(
+                format!("The 'fetchRecurseSubmodules' field of submodule '{name}' was invalid"),
+                value,
+            )
         })
     }
 
@@ -225,10 +220,11 @@ impl File {
         self.config
             .string(&format!("submodule.{name}.ignore"))
             .map(|value| {
-                Ignore::try_from(value.as_ref()).map_err(|()| config::Error {
-                    field: "ignore",
-                    submodule: name.to_owned(),
-                    actual: value,
+                Ignore::try_from(value.as_ref()).map_err(|()| {
+                    ValidationError::new_with_input(
+                        format!("The 'ignore' field of submodule '{name}' was invalid"),
+                        value,
+                    )
                 })
             })
             .transpose()
