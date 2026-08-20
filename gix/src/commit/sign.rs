@@ -45,7 +45,7 @@ pub mod options {
         #[error("user.signingKey or gpg.ssh.defaultKeyCommand must provide an SSH signing key")]
         MissingSshSigningKey,
         #[error("Could not interpolate a configured commit-signing path")]
-        ConfiguredPath(#[from] gix_config::path::interpolate::Error),
+        ConfiguredPath(#[from] gix_error::Error),
         #[error("Could not execute gpg.ssh.defaultKeyCommand {program:?}")]
         DefaultKeyCommand {
             program: OsString,

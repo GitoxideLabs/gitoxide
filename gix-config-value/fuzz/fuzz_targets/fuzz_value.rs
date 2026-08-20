@@ -24,19 +24,19 @@ struct Ctx<'a> {
 }
 
 fn fuzz(ctx: Ctx) -> Result<()> {
-    let b = Boolean::try_from(BStr::new(ctx.bool_str))?;
+    let b = Boolean::try_from(BStr::new(ctx.bool_str)).map_err(|err| err.into_error())?;
     _ = black_box(b.is_true());
 
-    _ = black_box(Color::try_from(BStr::new(ctx.color_str)))?;
+    _ = black_box(Color::try_from(BStr::new(ctx.color_str))).map_err(|err| err.into_error())?;
 
     let mut buf = String::with_capacity(128);
-    let a = Attribute::from_str(ctx.attribute_str)?;
+    let a = Attribute::from_str(ctx.attribute_str).map_err(|err| err.into_error())?;
     _ = black_box(write!(&mut buf, "{a}"));
 
-    let name = Name::from_str(ctx.name_str)?;
+    let name = Name::from_str(ctx.name_str).map_err(|err| err.into_error())?;
     _ = black_box(write!(&mut buf, "{name}"));
 
-    let i = Integer::try_from(BStr::new(ctx.integer_str))?;
+    let i = Integer::try_from(BStr::new(ctx.integer_str)).map_err(|err| err.into_error())?;
     _ = black_box(i.to_decimal());
 
     let p = Path::from(BStr::new(ctx.path_str));

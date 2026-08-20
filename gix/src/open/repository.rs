@@ -1,5 +1,6 @@
 #![allow(clippy::result_large_err)]
 use gix_config::file::Metadata;
+use gix_error::ErrorExt;
 use gix_features::threading::OwnShared;
 use gix_object::bstr::ByteSlice;
 use gix_path::RelativePath;
@@ -284,7 +285,7 @@ impl ThreadSafeRepository {
             if worktree.is_empty() {
                 return Err(config::Error::PathInterpolation {
                     path: worktree,
-                    source: gix_config::path::interpolate::Error::Missing { what: "path" },
+                    source: gix_error::NotFoundError::new("path is missing").raise().into_error(),
                 }
                 .into());
             }
@@ -321,7 +322,7 @@ impl ThreadSafeRepository {
                 })
                 .map_err(|err| {
                     Error::from(config::Error::ConfigTypedString(
-                        config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err),
+                        config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err.into_error()),
                     ))
                 })?
                 .is_some()
