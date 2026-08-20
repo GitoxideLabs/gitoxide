@@ -72,8 +72,8 @@ pub(super) fn reinitialize_with_object_hash(
         // In a freshly initialized repository, this section exists solely to carry `objectformat`.
         config.remove_section("extensions", None);
     }
-    let mut lock =
-        gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)?;
+    let mut lock = gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)
+        .map_err(|err| Error::SaveConfigLockAcquire(err.into_error()))?;
     config.write_to_filter(&mut lock, |section| section.meta().source == gix_config::Source::Local)?;
     lock.commit()?;
 

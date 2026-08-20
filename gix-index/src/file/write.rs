@@ -7,7 +7,7 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] gix_hash::io::Error),
     #[error("Could not acquire lock for index file")]
-    AcquireLock(#[from] gix_lock::acquire::Error),
+    AcquireLock(#[source] std::io::Error),
     #[error("Could not commit lock for index file")]
     CommitLock(#[from] gix_lock::commit::Error<gix_lock::File>),
 }
@@ -68,7 +68,8 @@ impl File {
         let _span = gix_features::trace::detail!("gix_index::File::write()", path = ?self.path);
         let mut lock = std::io::BufWriter::with_capacity(
             64 * 1024,
-            gix_lock::File::acquire_to_update_resource(&self.path, gix_lock::acquire::Fail::Immediately, None)?,
+            gix_lock::File::acquire_to_update_resource(&self.path, gix_lock::acquire::Fail::Immediately, None)
+                .map_err(|err| Error::AcquireLock(std::io::Error::other(err.into_error())))?,
         );
         let (version, digest) = self.write_to(&mut lock, options)?;
         match lock.into_inner() {

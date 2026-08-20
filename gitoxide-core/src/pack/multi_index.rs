@@ -24,11 +24,10 @@ pub fn create(
     should_interrupt: &AtomicBool,
     object_hash: gix::hash::Kind,
 ) -> anyhow::Result<()> {
-    let mut out = BufWriter::new(gix::lock::File::acquire_to_update_resource(
-        output_path,
-        gix::lock::acquire::Fail::Immediately,
-        None,
-    )?);
+    let mut out = BufWriter::new(
+        gix::lock::File::acquire_to_update_resource(output_path, gix::lock::acquire::Fail::Immediately, None)
+            .map_err(gix::Exn::into_error)?,
+    );
     gix::odb::pack::multi_index::write_from_index_paths(
         index_paths,
         &mut out,

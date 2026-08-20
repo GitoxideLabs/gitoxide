@@ -18,7 +18,7 @@ pub enum Error {
     #[error("Could not read 'shallow' file to send current shallow boundary")]
     ReadShallowFile(#[from] gix_shallow::read::Error),
     #[error("'shallow' file could not be locked in preparation for writing changes")]
-    LockShallowFile(#[from] gix_lock::acquire::Error),
+    LockShallowFile(#[source] std::io::Error),
     #[error("Receiving objects from shallow remotes is prohibited due to the value of `clone.rejectShallow`")]
     RejectShallowRemote,
     #[error("Failed to consume the pack sent by the remote")]

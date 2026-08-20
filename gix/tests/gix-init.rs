@@ -441,7 +441,12 @@ mod config_mut {
         let path = temp.path().join("missing/global.config");
         let options = options_for(Source::System).system_config_path(&path);
         assert!(
-            matches!(gix::config_mut(Source::System, &options), Err(Error::AcquireLock(gix::lock::acquire::Error::Io(err))) if err.kind() == std::io::ErrorKind::NotFound),
+            matches!(
+                gix::config_mut(Source::System, &options),
+                Err(Error::AcquireLock(err)) if err
+                    .downcast_any_ref::<std::io::Error>()
+                    .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+            ),
             "the parent directory must already exist"
         );
         assert!(
@@ -487,8 +492,6 @@ mod config_mut {
     #[test]
     #[serial]
     fn lock_timeout_uses_global_configuration_and_option_precedence() -> Result {
-        use gix::lock::acquire::{Error as LockError, Fail};
-
         let temp = gix_testtools::tempfile::tempdir()?;
         let global_config_path = temp.path().join("global.config");
         std::fs::write(
@@ -506,10 +509,9 @@ mod config_mut {
         assert!(
             matches!(
                 gix::config_mut(Source::System, &options),
-                Err(Error::AcquireLock(LockError::PermanentlyLocked {
-                    mode: Fail::Immediately,
-                    ..
-                }))
+                Err(Error::AcquireLock(err))
+                    if err.downcast_any_ref::<gix::error::RetryableError>().is_some()
+                        && err.to_string().contains("immediately")
             ),
             "API overrides take precedence over CLI and disk values"
         );
@@ -520,7 +522,12 @@ mod config_mut {
         );
         let options = options.strict_config(false);
         assert!(
-            matches!(gix::config_mut(Source::System, &options), Err(Error::AcquireLock(LockError::PermanentlyLocked { mode: Fail::AfterDurationWithBackoff(duration), .. })) if duration == std::time::Duration::from_millis(1000)),
+            matches!(
+                gix::config_mut(Source::System, &options),
+                Err(Error::AcquireLock(err))
+                    if err.downcast_any_ref::<gix::error::RetryableError>().is_some()
+                        && err.to_string().contains("after 1.00s")
+            ),
             "lenient invalid timeouts use the one-second default"
         );
 
@@ -545,10 +552,9 @@ mod config_mut {
         assert!(
             matches!(
                 gix::config_mut(Source::System, &options),
-                Err(Error::AcquireLock(LockError::PermanentlyLocked {
-                    mode: Fail::Immediately,
-                    ..
-                }))
+                Err(Error::AcquireLock(err))
+                    if err.downcast_any_ref::<gix::error::RetryableError>().is_some()
+                        && err.to_string().contains("immediately")
             ),
             "expanded global includes can supply the lock timeout"
         );
