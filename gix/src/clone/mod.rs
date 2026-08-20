@@ -73,7 +73,7 @@ pub enum Error {
     #[error(transparent)]
     CommitterOrFallback(#[from] crate::config::commit_signature::Error),
     #[error(transparent)]
-    UrlParse(#[from] gix_url::parse::Error),
+    UrlParse(#[from] gix_error::Error),
     #[error("Failed to turn a the relative file url \"{}\" into an absolute one", url.to_bstring())]
     CanonicalizeUrl {
         url: gix_url::Url,
@@ -106,10 +106,10 @@ impl PrepareFetch {
     ) -> Result<Self, Error>
     where
         Url: TryInto<gix_url::Url, Error = E>,
-        gix_url::parse::Error: From<E>,
+        E: std::error::Error + Send + Sync + 'static,
     {
         Self::new_inner(
-            url.try_into().map_err(gix_url::parse::Error::from)?,
+            url.try_into().map_err(gix_error::Error::from_error)?,
             path.as_ref(),
             kind,
             create_opts,

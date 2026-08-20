@@ -52,7 +52,7 @@ pub(crate) mod connect {
     #[expect(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        Url(#[from] gix_url::parse::Error),
+        Url(#[from] gix_error::Error),
         #[error("The git repository path could not be converted to UTF8")]
         PathConversion(#[from] bstr::Utf8Error),
         #[error("connection failed")]

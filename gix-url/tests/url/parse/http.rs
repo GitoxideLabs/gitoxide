@@ -2,12 +2,21 @@ use gix_url::Scheme;
 
 use crate::parse::{assert_url, assert_url_roundtrip, url, url_with_pass};
 
+fn test_password(with_dot: bool) -> String {
+    let mut value = std::process::id().to_string();
+    if with_dot {
+        value.push('.');
+        value.push_str(&std::process::id().to_string());
+    }
+    value
+}
+
 #[test]
 fn username_expansion_is_unsupported() -> crate::Result {
-    assert_url_roundtrip(
+    Ok(assert_url_roundtrip(
         "http://example.com/~byron/hello",
         url(Scheme::Http, None, "example.com", None, b"/~byron/hello"),
-    )
+    )?)
 }
 
 #[test]
@@ -25,34 +34,37 @@ fn empty_user_cannot_roundtrip() -> crate::Result {
 
 #[test]
 fn username_and_password() -> crate::Result {
-    assert_url_roundtrip(
-        "http://user:password@example.com/~byron/hello",
-        url_with_pass(Scheme::Http, "user", "password", "example.com", None, b"/~byron/hello"),
-    )
+    let password = test_password(false);
+    Ok(assert_url_roundtrip(
+        &format!("http://user:{password}@example.com/~byron/hello"),
+        url_with_pass(Scheme::Http, "user", password, "example.com", None, b"/~byron/hello"),
+    )?)
 }
 
 #[test]
 fn colon_in_username_roundtrips() -> crate::Result {
-    assert_url_roundtrip(
+    Ok(assert_url_roundtrip(
         "http://a%3Ab@example.com/",
         url(Scheme::Http, "a:b", "example.com", None, b"/"),
-    )
+    )?)
 }
 
 #[test]
 fn colon_in_password_roundtrips() -> crate::Result {
-    assert_url_roundtrip(
-        "http://user:a:b@example.com/",
-        url_with_pass(Scheme::Http, "user", "a:b", "example.com", None, b"/"),
-    )
+    let password = format!("a:{}", std::process::id());
+    Ok(assert_url_roundtrip(
+        &format!("http://user:{password}@example.com/"),
+        url_with_pass(Scheme::Http, "user", password, "example.com", None, b"/"),
+    )?)
 }
 
 #[test]
 fn username_and_password_and_port() -> crate::Result {
-    assert_url_roundtrip(
-        "http://user:password@example.com:8080/~byron/hello",
-        url_with_pass(Scheme::Http, "user", "password", "example.com", 8080, b"/~byron/hello"),
-    )
+    let password = test_password(false);
+    Ok(assert_url_roundtrip(
+        &format!("http://user:{password}@example.com:8080/~byron/hello"),
+        url_with_pass(Scheme::Http, "user", password, "example.com", 8080, b"/~byron/hello"),
+    )?)
 }
 
 #[test]
@@ -77,10 +89,11 @@ fn username_and_password_with_spaces_and_port() -> crate::Result {
 
 #[test]
 fn only_password() -> crate::Result {
-    assert_url_roundtrip(
-        "http://:password@example.com/~byron/hello",
-        url_with_pass(Scheme::Http, "", "password", "example.com", None, b"/~byron/hello"),
-    )
+    let password = test_password(false);
+    Ok(assert_url_roundtrip(
+        &format!("http://:{password}@example.com/~byron/hello"),
+        url_with_pass(Scheme::Http, "", password, "example.com", None, b"/~byron/hello"),
+    )?)
 }
 
 #[test]
@@ -98,10 +111,10 @@ fn username_and_empty_password() -> crate::Result {
 
 #[test]
 fn secure() -> crate::Result {
-    assert_url_roundtrip(
+    Ok(assert_url_roundtrip(
         "https://github.com/byron/gitoxide",
         url(Scheme::Https, None, "github.com", None, b"/byron/gitoxide"),
-    )
+    )?)
 }
 
 #[test]
@@ -113,47 +126,52 @@ fn http_missing_path() -> crate::Result {
 
 #[test]
 fn username_with_dot_is_not_percent_encoded() -> crate::Result {
-    assert_url_roundtrip(
+    Ok(assert_url_roundtrip(
         "http://user.name@example.com/repo",
         url(Scheme::Http, "user.name", "example.com", None, b"/repo"),
-    )
+    )?)
 }
 
 #[test]
 fn password_with_dot_is_not_percent_encoded() -> crate::Result {
-    assert_url_roundtrip(
-        "http://user:pass.word@example.com/repo",
-        url_with_pass(Scheme::Http, "user", "pass.word", "example.com", None, b"/repo"),
-    )
+    let password = test_password(true);
+    Ok(assert_url_roundtrip(
+        &format!("http://user:{password}@example.com/repo"),
+        url_with_pass(Scheme::Http, "user", password, "example.com", None, b"/repo"),
+    )?)
 }
 
 #[test]
 fn username_and_password_with_dots_are_not_percent_encoded() -> crate::Result {
-    assert_url_roundtrip(
-        "http://user.name:pass.word@example.com/repo",
-        url_with_pass(Scheme::Http, "user.name", "pass.word", "example.com", None, b"/repo"),
-    )
+    let password = test_password(true);
+    Ok(assert_url_roundtrip(
+        &format!("http://user.name:{password}@example.com/repo"),
+        url_with_pass(Scheme::Http, "user.name", password, "example.com", None, b"/repo"),
+    )?)
 }
 
 #[test]
 fn http_with_ipv6() -> crate::Result {
-    assert_url_roundtrip("http://[::1]/repo", url(Scheme::Http, None, "[::1]", None, b"/repo"))
+    Ok(assert_url_roundtrip(
+        "http://[::1]/repo",
+        url(Scheme::Http, None, "[::1]", None, b"/repo"),
+    )?)
 }
 
 #[test]
 fn http_with_ipv6_and_port() -> crate::Result {
-    assert_url_roundtrip(
+    Ok(assert_url_roundtrip(
         "http://[::1]:8080/repo",
         url(Scheme::Http, None, "[::1]", 8080, b"/repo"),
-    )
+    )?)
 }
 
 #[test]
 fn https_with_ipv6_user_and_port() -> crate::Result {
-    assert_url_roundtrip(
+    Ok(assert_url_roundtrip(
         "https://user@[2001:db8::1]:8443/repo",
         url(Scheme::Https, "user", "[2001:db8::1]", 8443, b"/repo"),
-    )
+    )?)
 }
 
 #[test]
@@ -357,7 +375,10 @@ fn authority_length_limit_excludes_the_scheme_separator() -> crate::Result {
     );
     let over_limit = format!("https://{}", "a".repeat(1025));
     assert!(
-        matches!(gix_url::parse(over_limit), Err(gix_url::parse::Error::TooLong { .. })),
+        gix_url::parse(over_limit)
+            .unwrap_err()
+            .message
+            .contains("host portion of the URL is too long"),
         "one byte beyond the authority limit is rejected"
     );
     Ok(())

@@ -356,7 +356,7 @@ pub fn prepare_clone_bare<Url, E>(
 ) -> Result<clone::PrepareFetch, clone::Error>
 where
     Url: std::convert::TryInto<gix_url::Url, Error = E>,
-    gix_url::parse::Error: From<E>,
+    E: std::error::Error + Send + Sync + 'static,
 {
     clone::PrepareFetch::new(
         url,
@@ -378,7 +378,7 @@ where
 pub fn prepare_clone<Url, E>(url: Url, path: impl AsRef<std::path::Path>) -> Result<clone::PrepareFetch, clone::Error>
 where
     Url: std::convert::TryInto<gix_url::Url, Error = E>,
-    gix_url::parse::Error: From<E>,
+    E: std::error::Error + Send + Sync + 'static,
 {
     clone::PrepareFetch::new(
         url,

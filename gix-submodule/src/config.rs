@@ -190,7 +190,7 @@ pub mod url {
         #[error("The url of submodule '{submodule}' could not be parsed")]
         Parse {
             submodule: BString,
-            source: gix_url::parse::Error,
+            source: gix_error::Error,
         },
         #[error("The submodule '{submodule}' was missing its 'url' field or it was empty")]
         Missing { submodule: BString },
