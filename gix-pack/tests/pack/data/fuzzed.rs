@@ -175,12 +175,14 @@ fn declared_object_size_over_alloc_limit_bytes_is_reported_as_out_of_memory() {
         )
     }));
 
-    assert!(
-        matches!(
-            result.expect("configured allocation limits must not cause panics"),
-            Err(gix_pack::data::decode::Error::OutOfMemory)
-        ),
-        "pack-controlled allocations larger than the configured limit must be rejected"
+    let err = result
+        .expect("configured allocation limits must not cause panics")
+        .expect_err("pack-controlled allocations larger than the configured limit must be rejected");
+    assert_eq!(err, "Entry too large to fit in memory");
+    assert_eq!(
+        err.downcast_any_ref::<gix_error::ResourceExhaustionError>()
+            .map(gix_error::ResourceExhaustionError::kind),
+        Some(gix_error::ResourceExhaustionKind::AllocationLimit)
     );
 }
 

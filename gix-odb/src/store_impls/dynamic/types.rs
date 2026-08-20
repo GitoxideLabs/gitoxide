@@ -320,19 +320,13 @@ impl IndexAndPacks {
             IndexAndPacks::Index(bundle) => bundle.index.load_strict(|path| {
                 gix_pack::index::File::at(path, object_hash)
                     .map(Arc::new)
-                    .map_err(|err| match err {
-                        gix_pack::index::init::Error::Io { source, .. } => source,
-                        err => std::io::Error::other(err),
-                    })
+                    .map_err(super::exn_to_io)
             }),
             IndexAndPacks::MultiIndex(bundle) => {
                 bundle.multi_index.load_strict(|path| {
                     gix_pack::multi_index::File::at(path, alloc_limit_bytes)
                         .map(Arc::new)
-                        .map_err(|err| match err {
-                            gix_pack::multi_index::init::Error::Io { source, .. } => source,
-                            err => std::io::Error::other(err),
-                        })
+                        .map_err(super::exn_to_io)
                 })?;
                 if let Some(multi_index) = bundle.multi_index.loaded() {
                     bundle.data = Self::index_names_to_pack_paths(multi_index);

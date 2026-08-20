@@ -62,7 +62,7 @@ where
     /// at the cost of memory.
     ///
     /// For more details, see the documentation on the [`traverse()`][index::File::traverse()] method.
-    pub fn traverse_with_index<Processor, E, D>(
+    pub fn traverse_with_index<Processor, D>(
         &self,
         pack: &crate::data::File<D>,
         mut processor: Processor,
@@ -73,12 +73,16 @@ where
             thread_limit,
             alloc_limit_bytes,
         }: Options,
-    ) -> Result<Outcome, Error<E>>
+    ) -> Result<Outcome, Error>
     where
-        Processor: FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn gix_features::progress::Progress) -> Result<(), E>
+        Processor: FnMut(
+                gix_object::Kind,
+                &[u8],
+                &index::Entry,
+                &dyn gix_features::progress::Progress,
+            ) -> Result<(), gix_error::Exn>
             + Send
             + Clone,
-        E: std::error::Error + Send + Sync + 'static,
         D: crate::FileData + Send + Sync,
     {
         let (verify_result, traversal_result) = parallel::join(
@@ -100,7 +104,7 @@ where
                     res
                 }
             },
-            || -> Result<_, Error<_>> {
+            || -> Result<_, Error> {
                 let sorted_entries = index_entries_sorted_by_offset_ascending(
                     self,
                     &mut progress.add_child_with_id(
@@ -135,7 +139,7 @@ where
                         data.object_kind = object_kind;
                         data.compressed_size = entry_end - pack_entry.data_offset;
                         data.object_size = bytes.len() as u64;
-                        let result = index::traverse::process_entry(
+                        index::traverse::process_entry(
                             check,
                             object_kind,
                             bytes,
@@ -151,14 +155,7 @@ where
                             },
                             progress,
                             &mut processor,
-                        );
-                        match result {
-                            Err(err @ Error::PackDecode { .. }) if !check.fatal_decode_error() => {
-                                progress.info(format!("Ignoring decode error: {err}"));
-                                Ok(())
-                            }
-                            res => res,
-                        }
+                        )
                     },
                     traverse::Options {
                         object_progress: Box::new(

@@ -1,44 +1,14 @@
 use std::{cmp::Ordering, sync::atomic::AtomicBool, time::Instant};
 
+use gix_error::{CorruptionError, ErrorExt, RetryableError, ValidationError, message};
 use gix_features::progress::{Count, DynNestedProgress, Progress};
 
 use crate::{exact_vec, index, multi_index::File};
 
 ///
 pub mod integrity {
-    use crate::multi_index::EntryIndex;
-
     /// Returned by [`multi_index::File::verify_integrity()`][crate::multi_index::File::verify_integrity()].
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Object {id} should be at pack-offset {expected_pack_offset} but was found at {actual_pack_offset}")]
-        PackOffsetMismatch {
-            id: gix_hash::ObjectId,
-            expected_pack_offset: u64,
-            actual_pack_offset: u64,
-        },
-        #[error(transparent)]
-        MultiIndexChecksum(#[from] crate::multi_index::verify::checksum::Error),
-        #[error(transparent)]
-        IndexIntegrity(#[from] crate::index::verify::integrity::Error),
-        #[error(transparent)]
-        BundleInit(#[from] crate::bundle::init::Error),
-        #[error("Counted {actual} objects, but expected {expected} as per multi-index")]
-        UnexpectedObjectCount { actual: usize, expected: usize },
-        #[error("{id} wasn't found in the index referenced in the multi-pack index")]
-        OidNotFound { id: gix_hash::ObjectId },
-        #[error("The object id at multi-index entry {index} wasn't in order")]
-        OutOfOrder { index: EntryIndex },
-        #[error("The fan at index {index} is out of order as it's larger then the following value.")]
-        Fan { index: usize },
-        #[error("The multi-index claims to have no objects")]
-        Empty,
-        #[error("The multi-index path '{path}' has no parent directory")]
-        InvalidPath { path: std::path::PathBuf },
-        #[error("Interrupted")]
-        Interrupted,
-    }
+    pub type Error = gix_error::Exn;
 
     /// Returned by [`multi_index::File::verify_integrity()`][crate::multi_index::File::verify_integrity()].
     pub struct Outcome {
@@ -110,10 +80,6 @@ where
             false,
             index::verify::integrity::Options::default(),
         )
-        .map_err(|err| match err {
-            index::traverse::Error::Processor(err) => err,
-            _ => unreachable!("BUG: no other error type is possible"),
-        })
         .map(|o| o.actual_index_checksum)
     }
 
@@ -125,7 +91,7 @@ where
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
         options: index::verify::integrity::Options<F>,
-    ) -> Result<integrity::Outcome, index::traverse::Error<integrity::Error>>
+    ) -> Result<integrity::Outcome, index::traverse::Error>
     where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
@@ -139,36 +105,36 @@ where
         should_interrupt: &AtomicBool,
         deep_check: bool,
         options: index::verify::integrity::Options<F>,
-    ) -> Result<integrity::Outcome, index::traverse::Error<integrity::Error>>
+    ) -> Result<integrity::Outcome, index::traverse::Error>
     where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
     {
         let parent = self.path.parent().ok_or_else(|| {
-            index::traverse::Error::Processor(integrity::Error::InvalidPath {
-                path: self.path.clone(),
-            })
+            ValidationError::new(format!(
+                "The multi-index path '{}' has no parent directory",
+                self.path.display()
+            ))
+            .raise_erased()
         })?;
 
-        let actual_index_checksum = self
-            .verify_checksum(
-                &mut progress.add_child_with_id(
-                    format!("{}: checksum", self.path.display()),
-                    integrity::ProgressId::ChecksumBytes.into(),
-                ),
-                should_interrupt,
-            )
-            .map_err(integrity::Error::from)
-            .map_err(index::traverse::Error::Processor)?;
+        let actual_index_checksum = self.verify_checksum(
+            &mut progress.add_child_with_id(
+                format!("{}: checksum", self.path.display()),
+                integrity::ProgressId::ChecksumBytes.into(),
+            ),
+            should_interrupt,
+        )?;
 
         if let Some(first_invalid) = crate::verify::fan(&self.fan) {
-            return Err(index::traverse::Error::Processor(integrity::Error::Fan {
-                index: first_invalid,
-            }));
+            return Err(CorruptionError::new(format!(
+                "The fan at index {first_invalid} is out of order as it's larger then the following value."
+            ))
+            .raise_erased());
         }
 
         if self.num_objects == 0 {
-            return Err(index::traverse::Error::Processor(integrity::Error::Empty));
+            return Err(CorruptionError::new("The multi-index claims to have no objects").raise_erased());
         }
 
         let mut pack_traverse_statistics = Vec::new();
@@ -189,9 +155,10 @@ where
                 let rhs = self.oid_at_index(entry_index + 1);
 
                 if rhs.cmp(lhs) != Ordering::Greater {
-                    return Err(index::traverse::Error::Processor(integrity::Error::OutOfOrder {
-                        index: entry_index,
-                    }));
+                    return Err(CorruptionError::new(format!(
+                        "The object id at multi-index entry {entry_index} wasn't in order"
+                    ))
+                    .raise_erased());
                 }
                 let (pack_id, _) = self.pack_id_and_pack_offset_at_index(entry_index);
                 pack_ids_and_offsets.push((pack_id, entry_index));
@@ -222,18 +189,12 @@ where
             let index;
             let index_path = parent.join(index_file_name);
             let index = if deep_check {
-                let mut opened_bundle = crate::Bundle::at(index_path, self.object_hash)
-                    .map_err(integrity::Error::from)
-                    .map_err(index::traverse::Error::Processor)?;
+                let mut opened_bundle = crate::Bundle::at(index_path, self.object_hash)?;
                 opened_bundle.pack.alloc_limit_bytes = self.alloc_limit_bytes;
                 bundle = Some(opened_bundle);
                 bundle.as_ref().map(|b| &b.index).expect("just set")
             } else {
-                index = Some(
-                    index::File::at(index_path, self.object_hash)
-                        .map_err(|err| integrity::Error::BundleInit(crate::bundle::init::Error::Index(err)))
-                        .map_err(index::traverse::Error::Processor)?,
-                );
+                index = Some(index::File::at(index_path, self.object_hash)?);
                 index.as_ref().expect("just set")
             };
 
@@ -255,23 +216,23 @@ where
                     let oid = self.oid_at_index(entry_id);
                     let (_, expected_pack_offset) = self.pack_id_and_pack_offset_at_index(entry_id);
                     let entry_in_bundle_index = index.lookup(oid).ok_or_else(|| {
-                        index::traverse::Error::Processor(integrity::Error::OidNotFound { id: oid.to_owned() })
+                        CorruptionError::new(format!(
+                            "{oid} wasn't found in the index referenced in the multi-pack index"
+                        ))
+                        .raise_erased()
                     })?;
                     let actual_pack_offset = index.pack_offset_at_index(entry_in_bundle_index);
                     if actual_pack_offset != expected_pack_offset {
-                        return Err(index::traverse::Error::Processor(
-                            integrity::Error::PackOffsetMismatch {
-                                id: oid.to_owned(),
-                                expected_pack_offset,
-                                actual_pack_offset,
-                            },
-                        ));
+                        return Err(CorruptionError::new(format!(
+                            "Object {oid} should be at pack-offset {expected_pack_offset} but was found at {actual_pack_offset}"
+                        ))
+                        .raise_erased());
                     }
                     offsets_progress.inc();
                 }
 
                 if should_interrupt.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Err(index::traverse::Error::Processor(integrity::Error::Interrupted));
+                    return Err(RetryableError::new(message("Interrupted")).raise_erased());
                 }
                 offsets_progress.show_throughput(offset_start);
             }
@@ -283,34 +244,7 @@ where
                 let crate::bundle::verify::integrity::Outcome {
                     actual_index_checksum: _,
                     pack_traverse_outcome,
-                } = bundle
-                    .verify_integrity(progress, should_interrupt, options.clone())
-                    .map_err(|err| {
-                        use index::traverse::Error::*;
-                        match err {
-                            Processor(err) => Processor(integrity::Error::IndexIntegrity(err)),
-                            IndexVerify(err) => IndexVerify(err),
-                            Tree(err) => Tree(err),
-                            TreeTraversal(err) => TreeTraversal(err),
-                            PackVerify(err) => PackVerify(err),
-                            PackDecode { id, offset, source } => PackDecode { id, offset, source },
-                            PackMismatch(err) => PackMismatch(err),
-                            EntryType(err) => EntryType(err),
-                            PackObjectVerify { offset, source } => PackObjectVerify { offset, source },
-                            Crc32Mismatch {
-                                expected,
-                                actual,
-                                offset,
-                                kind,
-                            } => Crc32Mismatch {
-                                expected,
-                                actual,
-                                offset,
-                                kind,
-                            },
-                            Interrupted => Interrupted,
-                        }
-                    })?;
+                } = bundle.verify_integrity(progress, should_interrupt, options.clone())?;
                 pack_traverse_statistics.push(pack_traverse_outcome);
             }
         }
