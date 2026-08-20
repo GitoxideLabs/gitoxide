@@ -31,9 +31,11 @@ mod allow {
             scheme: Option<&str>,
         ) -> Result<scheme_permission::Allow, config::protocol::allow::Error> {
             let value = value.as_bstr();
-            scheme_permission::Allow::try_from(value.as_bstr()).map_err(|value| config::protocol::allow::Error {
-                value,
-                scheme: scheme.map(ToOwned::to_owned),
+            scheme_permission::Allow::try_from(value.as_bstr()).map_err(|value| {
+                gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                    "The value {value:?} must be allow|deny|user in configuration key protocol{}.allow",
+                    scheme.map(|scheme| format!(".{scheme}")).unwrap_or_default()
+                )))
             })
         }
     }
@@ -110,13 +112,14 @@ mod key_impls {
 
 mod validate {
     use crate::{bstr::BStr, config::tree::keys};
+    use gix_error::{ErrorExt, ResultExt, message};
 
     #[derive(Clone, Copy)]
     pub struct Allow;
     impl keys::Validate for Allow {
-        fn validate(&self, _value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, _value: &BStr) -> Result<(), gix_error::Exn> {
             #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
-            super::Protocol::ALLOW.try_into_allow(_value, None)?;
+            super::Protocol::ALLOW.try_into_allow(_value, None).or_erased()?;
             Ok(())
         }
     }
@@ -124,13 +127,14 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct Version;
     impl keys::Validate for Version {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            let value = gix_config::Integer::try_from(value)?
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            let value = gix_config::Integer::try_from(value)
+                .or_erased()?
                 .to_decimal()
-                .ok_or_else(|| format!("integer {value} cannot be represented as integer"))?;
+                .ok_or_else(|| message!("integer {value} cannot be represented as integer").raise_erased())?;
             match value {
                 0..=2 => Ok(()),
-                _ => Err(format!("protocol version {value} is unknown").into()),
+                _ => Err(message!("protocol version {value} is unknown").raise_erased()),
             }
         }
     }

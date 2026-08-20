@@ -1,7 +1,5 @@
-use crate::{
-    bstr::{BStr, BString, ByteSlice},
-    clone::PrepareFetch,
-};
+use crate::{bstr::BStr, clone::PrepareFetch};
+use gix_error::ResultExt;
 use gix_ref::Category;
 
 use crate::config::tree::Key;
@@ -11,82 +9,7 @@ fn mapping_validation(err: &gix_error::Error) -> Option<&gix_refspec::match_grou
 }
 
 /// The error returned by [`PrepareFetch::fetch_only()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Connect(#[from] crate::remote::connect::Error),
-    #[error(transparent)]
-    PrepareFetch(#[from] crate::remote::fetch::prepare::Error),
-    #[error(transparent)]
-    Fetch(#[from] crate::remote::fetch::Error),
-    #[error(transparent)]
-    RemoteInit(#[from] crate::remote::init::Error),
-    #[error("Custom configuration of remote to clone from failed")]
-    RemoteConfiguration(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("Custom configuration of connection to use when cloning failed")]
-    RemoteConnection(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error(transparent)]
-    RemoteName(#[from] crate::config::remote::symbolic_name::Error),
-    #[error(transparent)]
-    ParseConfig(#[from] crate::config::overrides::Error),
-    #[error(transparent)]
-    ApplyConfig(#[from] crate::config::Error),
-    #[error(transparent)]
-    Config(#[from] gix_error::ValidationError),
-    #[error("Failed to load repo-local git configuration before writing")]
-    LoadConfig(#[from] gix_config::file::init::from_paths::Error),
-    #[error("Failed to store configured remote in memory")]
-    SaveConfig(#[from] crate::remote::save::AsError),
-    #[error("Failed to write repository configuration to disk")]
-    SaveConfigIo(#[from] std::io::Error),
-    #[error("Failed to acquire lock to write repository configuration to disk")]
-    SaveConfigLockAcquire(#[source] gix_error::Error),
-    #[error("Failed to commit lock after writing repository configuration to disk")]
-    SaveConfigLockCommit(#[from] gix_lock::commit::Error<gix_lock::File>),
-    #[error("The remote HEAD points to a reference named {head_ref_name:?} which is invalid.")]
-    InvalidHeadRef {
-        source: gix_validate::reference::name::Error,
-        head_ref_name: crate::bstr::BString,
-    },
-    #[error("Failed to update HEAD with values from remote")]
-    HeadUpdate(#[from] crate::reference::edit::Error),
-    #[error("The remote didn't have any ref that matched '{}'", wanted.as_ref().as_bstr())]
-    RefNameMissing { wanted: gix_ref::PartialName },
-    #[error("The remote has {} refs for '{}', try to use a specific name: {}", candidates.len(), wanted.as_ref().as_bstr(), candidates.iter().filter_map(|n| n.to_str().ok()).collect::<Vec<_>>().join(", "))]
-    RefNameAmbiguous {
-        wanted: gix_ref::PartialName,
-        candidates: Vec<BString>,
-    },
-    #[error("The remote didn't have the requested revision {wanted:?}")]
-    RevisionMissing { wanted: BString },
-    #[error("The requested revision could not be read")]
-    FindRevision(#[from] crate::object::find::existing::Error),
-    #[error("The requested revision did not peel to a commit")]
-    PeelRevision(#[from] crate::object::peel::to_kind::Error),
-    #[error(transparent)]
-    CommitterOrFallback(#[from] crate::config::commit_signature::Error),
-    #[error(transparent)]
-    RefMap(#[from] crate::remote::ref_map::Error),
-    #[error(transparent)]
-    ReferenceName(#[from] gix_validate::reference::name::Error),
-    #[error(
-        "Remote now uses {remote} even though the local repository was reconfigured to {local} \
-        to match the remote's previously advertised object format. The server is advertising \
-        inconsistent formats; if the correct one is known, pass `create::Options {{ \
-        object_hash: Some(gix_hash::Kind::{remote:?}), .. }}` to `PrepareFetch::new` to pin it."
-    )]
-    IncompatibleObjectHash {
-        local: gix_hash::Kind,
-        remote: gix_hash::Kind,
-    },
-    #[cfg(feature = "sha256")]
-    #[error("Failed to reopen the local repository after adopting the remote's object format")]
-    ReopenWithObjectHash(#[from] crate::open::Error),
-    #[cfg(feature = "sha256")]
-    #[error("Failed to transfer in-memory configuration after adopting the remote's object format")]
-    TransferInMemoryConfig(#[from] gix_config::file::init::Error),
-}
+pub type Error = gix_error::Error;
 
 /// Modification
 impl PrepareFetch {
@@ -122,11 +45,13 @@ impl PrepareFetch {
             .expect("user error: multiple calls are allowed only until it succeeds")
             .clone();
 
-        repo.committer_or_set_generic_fallback()?;
+        repo.committer_or_set_generic_fallback().or_erased()?;
 
         if !self.config_overrides.is_empty() {
             let mut snapshot = repo.config_snapshot_mut();
-            snapshot.append_config(&self.config_overrides, gix_config::Source::Api)?;
+            snapshot
+                .append_config(&self.config_overrides, gix_config::Source::Api)
+                .or_erased()?;
         }
 
         let remote_name = match self.remote_name.as_ref() {
@@ -153,13 +78,15 @@ impl PrepareFetch {
             && self.fetch_options.extra_refspecs.is_empty()
             && self.revision.is_none();
 
-        let target_ref = if use_single_branch_for_shallow {
+        let target_ref: Option<gix_ref::FullName> = if use_single_branch_for_shallow {
             // Determine target branch from user-specified ref_name or default branch
             if let Some(ref_name) = &self.ref_name {
                 let prev_tags = std::mem::replace(&mut remote.fetch_tags, remote::fetch::Tags::None);
                 let mut connection = remote.connect(remote::Direction::Fetch).await?;
                 if let Some(f) = self.configure_connection.as_mut() {
-                    f(&mut connection).map_err(Error::RemoteConnection)?;
+                    f(&mut connection).or_raise(|| {
+                        gix_error::message("Custom configuration of connection to use when cloning failed")
+                    })?;
                 }
                 let (refmap, _) = connection
                     .ref_map(
@@ -176,14 +103,16 @@ impl PrepareFetch {
                     .await?;
                 let (_target, full_ref_name) = util::find_custom_refname(&refmap, ref_name)?;
                 remote.fetch_tags = prev_tags;
-                Some(full_ref_name.try_into()?)
+                Some(gix_ref::FullName::try_from(full_ref_name).or_erased()?)
             } else {
                 // For shallow clones without a specified ref, we need to determine the ref to clone.
                 // Just fetch HEAD for that.
                 let prev_tags = std::mem::replace(&mut remote.fetch_tags, remote::fetch::Tags::None);
                 let mut connection = remote.connect(remote::Direction::Fetch).await?;
                 if let Some(f) = self.configure_connection.as_mut() {
-                    f(&mut connection).map_err(Error::RemoteConnection)?;
+                    f(&mut connection).or_raise(|| {
+                        gix_error::message("Custom configuration of connection to use when cloning failed")
+                    })?;
                 }
                 let (refmap, _) = connection
                     .ref_map(
@@ -210,17 +139,20 @@ impl PrepareFetch {
                         | gix_protocol::handshake::Ref::Unborn {
                             full_ref_name, target, ..
                         } if full_ref_name == "HEAD" => gix_ref::FullName::try_from(target)
-                            .map_err(|err| Error::InvalidHeadRef {
-                                head_ref_name: target.clone(),
-                                source: err,
+                            .or_raise(|| {
+                                gix_error::ValidationError::new(format!(
+                                    "The remote HEAD points to a reference named {target:?} which is invalid."
+                                ))
                             })
                             .into(),
                         _ => None,
                     })
                     .transpose()?;
 
-                let target = target.ok_or_else(|| Error::RefNameMissing {
-                    wanted: "HEAD".try_into().expect("valid partial name"),
+                let target = target.ok_or_else(|| {
+                    gix_error::Error::from_error(gix_error::NotFoundError::new(
+                        "The remote didn't have a ref that matched 'HEAD'",
+                    ))
                 })?;
 
                 remote.fetch_tags = prev_tags;
@@ -261,7 +193,8 @@ impl PrepareFetch {
 
         let mut clone_fetch_tags = None;
         if let Some(f) = self.configure_remote.as_mut() {
-            remote = f(remote).map_err(Error::RemoteConfiguration)?;
+            remote =
+                f(remote).or_raise(|| gix_error::message("Custom configuration of remote to clone from failed"))?;
         } else if self.revision.is_none() {
             clone_fetch_tags = remote::fetch::Tags::All.into();
         }
@@ -300,7 +233,8 @@ impl PrepareFetch {
             // For shallow clones, we already connected once, so we need to connect again
             let mut connection = remote.connect(remote::Direction::Fetch).await?;
             if let Some(f) = self.configure_connection.as_mut() {
-                f(&mut connection).map_err(Error::RemoteConnection)?;
+                f(&mut connection)
+                    .or_raise(|| gix_error::message("Custom configuration of connection to use when cloning failed"))?;
             }
             let connection = connection.into_detached();
             let mut fetch_opts = {
@@ -324,18 +258,18 @@ impl PrepareFetch {
             };
             match connection.prepare_fetch(&repo, &mut progress, fetch_opts.clone()).await {
                 Ok(prepare) => prepare,
-                Err(remote::fetch::prepare::Error::RefMap(remote::ref_map::Error::InitRefMap(err)))
-                    if mapping_validation(&err).is_some_and(|err| {
-                        err.issues.len() == 1
-                            && fetch_opts.extra_refspecs.contains(&head_refspec)
-                            && matches!(
-                                err.issues.first(),
-                                Some(gix_refspec::match_group::validate::Issue::Conflict {
-                                    destination_full_ref_name,
-                                    ..
-                                }) if *destination_full_ref_name == head_local_tracking_branch
-                            )
-                    }) =>
+                Err(err)
+                    if fetch_opts.extra_refspecs.contains(&head_refspec)
+                        && mapping_validation(&err).is_some_and(|err| {
+                            err.issues.len() == 1
+                                && matches!(
+                                    err.issues.first(),
+                                    Some(gix_refspec::match_group::validate::Issue::Conflict {
+                                        destination_full_ref_name,
+                                        ..
+                                    }) if destination_full_ref_name.as_slice() == head_local_tracking_branch.as_bytes()
+                                )
+                        }) =>
                 {
                     let head_refspec_idx = fetch_opts
                         .extra_refspecs
@@ -351,7 +285,7 @@ impl PrepareFetch {
                     fetch_opts.extra_refspecs.remove(head_refspec_idx);
                     connection.prepare_fetch(&repo, &mut progress, fetch_opts).await?
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => return Err(err),
             }
         };
         drop(remote);
@@ -371,9 +305,12 @@ impl PrepareFetch {
             let remote_object_hash = pending_pack.ref_map().object_hash;
             if remote_object_hash != repo.object_hash() {
                 let mut in_memory_config = Vec::new();
-                repo.config.resolved.write_to_filter(&mut in_memory_config, |section| {
-                    section.meta().source == gix_config::Source::Api
-                })?;
+                repo.config
+                    .resolved
+                    .write_to_filter(&mut in_memory_config, |section| {
+                        section.meta().source == gix_config::Source::Api
+                    })
+                    .or_erased()?;
                 // Reopen the still-empty repo with the remote's format; on error the original is kept for a retry.
                 repo = util::reinitialize_with_object_hash(&repo, remote_object_hash)?;
                 let mut resolved_config = repo.config.resolved.as_ref().clone();
@@ -383,11 +320,20 @@ impl PrepareFetch {
                 // TODO: make this much easier - we go from parsed-to-buffer-to-parsed.
                 //       Maybe make API changes available as overlay, just as utility over
                 //       Api sections.
-                resolved_config.append(gix_config::File::from_bytes_owned(
-                    &mut in_memory_config,
-                    gix_config::file::Metadata::api(),
-                    Default::default(),
-                )?)?;
+                resolved_config
+                    .append(
+                        gix_config::File::from_bytes_owned(
+                            &mut in_memory_config,
+                            gix_config::file::Metadata::api(),
+                            Default::default(),
+                        )
+                        .map_err(gix_error::Exn::into_error)?,
+                    )
+                    .or_raise(|| {
+                        gix_error::message(
+                            "Failed to transfer in-memory configuration after adopting the remote's object format",
+                        )
+                    })?;
                 repo.config
                     .reread_values_and_clear_caches_replacing_config(resolved_config.into())?;
                 config = None;
@@ -410,7 +356,7 @@ impl PrepareFetch {
         // Before finalisation, the current repo handle still needs to
         // learn about the remote config written after it was opened.
         if let Some(config) = config {
-            util::append_config_to_repo_config(&mut repo, config)?;
+            util::append_config_to_repo_config(&mut repo, config).or_erased()?;
         }
         util::update_head(
             &mut repo,

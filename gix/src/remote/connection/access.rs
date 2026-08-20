@@ -2,7 +2,7 @@ use crate::{
     Remote,
     remote::{Connection, connection::AuthenticateFn, connection::ConnectionDetached},
 };
-use gix_error::{OptionExt, ResultExt, ValidationError, message};
+use gix_error::{OptionExt, ResultExt, ValidationError};
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
@@ -153,7 +153,7 @@ fn configured_credentials_for_current_url(repo: crate::Repository) -> Authentica
             let (mut cascade, _action_with_normalized_url, prompt_opts) = repo
                 .config_snapshot()
                 .credential_helpers(gix_url::parse(&url).or_erased()?)
-                .or_raise_erased(|| message("Could not configure credential helpers"))?;
+                .or_raise_erased(|| gix_error::CorruptionError::new("Credential helper configuration is invalid"))?;
             let outcome = cascade.invoke(action, prompt_opts.clone());
             previous_cascade_and_prompt = Some((cascade, prompt_opts));
             outcome

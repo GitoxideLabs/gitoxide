@@ -1,4 +1,6 @@
 #![allow(clippy::result_large_err)]
+use gix_error::{Exn, ResultExt};
+
 use crate::{bstr::BString, remote};
 
 #[cfg(feature = "async-network-client")]
@@ -6,14 +8,10 @@ use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
 use gix_transport::client::blocking_io::Transport;
 
-type ConfigureRemoteFn =
-    Box<dyn FnMut(crate::Remote<'_>) -> Result<crate::Remote<'_>, Box<dyn std::error::Error + Send + Sync>>>;
+type ConfigureRemoteFn = Box<dyn FnMut(crate::Remote<'_>) -> Result<crate::Remote<'_>, Exn>>;
 #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
-type ConfigureConnectionFn = Box<
-    dyn FnMut(
-        &mut remote::Connection<'_, '_, '_, Box<dyn Transport + Send>>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>,
->;
+type ConfigureConnectionFn =
+    Box<dyn FnMut(&mut remote::Connection<'_, '_, '_, Box<dyn Transport + Send>>) -> Result<(), Exn>>;
 
 /// A utility to collect configuration on how to fetch from a remote and initiate a fetch operation. It will delete the newly
 /// created repository on when dropped without successfully finishing a fetch.
@@ -52,34 +50,43 @@ pub struct PrepareFetch {
 /// Errors returned by [`PrepareFetch::with_revision()`].
 pub mod with_revision {
     /// An invalid revision for a single-revision clone.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Parse(#[from] gix_error::Error),
-        #[error("A clone revision must be HEAD, a full reference name, or a full object ID, got {revision:?}")]
+        Parse(gix_error::Error),
         Invalid { revision: crate::bstr::BString },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Parse(err) => err.fmt(f),
+                Error::Invalid { revision } => write!(
+                    f,
+                    "A clone revision must be HEAD, a full reference name, or a full object ID, got {revision:?}"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Parse(err) => Some(err),
+                Error::Invalid { .. } => None,
+            }
+        }
+    }
+
+    impl From<gix_refspec::parse::Error> for Error {
+        fn from(err: gix_refspec::parse::Error) -> Self {
+            Error::Parse(err.into_error())
+        }
     }
 }
 
 /// The error returned by [`PrepareFetch::new()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Config(#[from] crate::config::Error),
-    #[error(transparent)]
-    Init(#[from] crate::init::Error),
-    #[error(transparent)]
-    CommitterOrFallback(#[from] crate::config::commit_signature::Error),
-    #[error(transparent)]
-    UrlParse(#[from] gix_error::Error),
-    #[error("Failed to turn a the relative file url \"{}\" into an absolute one", url.to_bstring())]
-    CanonicalizeUrl {
-        url: gix_url::Url,
-        source: gix_path::realpath::Error,
-    },
-}
+pub type Error = gix_error::Error;
 
 /// Instantiation
 impl PrepareFetch {
@@ -93,10 +100,6 @@ impl PrepareFetch {
     ///
     /// Similar to `git`, a missing user name and email configuration is not terminal and we will fill it in with dummy values. However,
     /// instead of deriving values from the system, ours are hardcoded to indicate what happened.
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
     pub fn new<Url, E>(
         url: Url,
         path: impl AsRef<std::path::Path>,
@@ -108,19 +111,8 @@ impl PrepareFetch {
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        Self::new_inner(
-            url.try_into().map_err(gix_error::Error::from_error)?,
-            path.as_ref(),
-            kind,
-            create_opts,
-            open_opts,
-        )
+        Self::new_inner(url.try_into().or_erased()?, path.as_ref(), kind, create_opts, open_opts)
     }
-
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
     fn new_inner(
         mut url: gix_url::Url,
         path: &std::path::Path,
@@ -157,11 +149,12 @@ impl PrepareFetch {
         };
 
         let mut repo = crate::ThreadSafeRepository::init_opts(path, kind, create_opts, open_opts)?.to_thread_local();
-        url.canonicalize(repo.options.current_dir_or_empty())
-            .map_err(|err| Error::CanonicalizeUrl {
-                url: url.clone(),
-                source: err,
-            })?;
+        url.canonicalize(repo.options.current_dir_or_empty()).map_err(|err| {
+            gix_error::Error::from(err.raise(gix_error::message!(
+                "Failed to turn the relative file url {:?} into an absolute one",
+                url.to_bstring()
+            )))
+        })?;
         repo.committer_or_set_generic_fallback()?;
         Ok(PrepareFetch {
             url,
@@ -225,7 +218,7 @@ mod access_feat {
             mut self,
             f: impl FnMut(
                 &mut crate::remote::Connection<'_, '_, '_, Box<dyn Transport + Send>>,
-            ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+            ) -> Result<(), gix_error::Exn>
             + 'static,
         ) -> Self {
             self.configure_connection = Some(Box::new(f));

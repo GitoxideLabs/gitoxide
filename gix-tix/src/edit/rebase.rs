@@ -408,7 +408,7 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[O
     for reference in repo.references()?.all()? {
         let reference = match reference {
             Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) if is_missing_ref(&err) => continue,
             Err(err) => anyhow::bail!("could not inspect a reference before editing: {err}"),
         };
         if matches!(
@@ -2976,7 +2976,7 @@ fn update_refs(
         for reference in repo.references()?.all()? {
             let reference = match reference {
                 Ok(reference) => reference,
-                Err(err) if is_missing_ref(&*err) => continue,
+                Err(err) if is_missing_ref(&err) => continue,
                 Err(err) => anyhow::bail!("could not inspect a reference before rebasing: {err}"),
             };
             if matches!(

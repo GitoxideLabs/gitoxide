@@ -226,11 +226,11 @@ mod filter {
                         {
                             out.push(
                                 gix_filter::encoding::Encoding::for_label(encoding.trim()).ok_or_else(|| {
-                                    config::encoding::Error {
-                                        key: self.logical_name().into(),
-                                        value: value.into(),
-                                        encoding: encoding.into(),
-                                    }
+                                    gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                                        "The encoding named '{}' seen in key '{}={value}' is unsupported",
+                                        encoding.as_bstr(),
+                                        self.logical_name()
+                                    )))
                                 })?,
                             );
                         }
@@ -455,11 +455,13 @@ mod abbrev {
         ) -> Result<Option<usize>, Error> {
             let hex_len_str = hex_len_str.as_bstr();
             let max = object_hash.len_in_hex() as u8;
+            let invalid = || {
+                gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                    "Invalid value for 'core.abbrev' = '{hex_len_str}'. It must be between 4 and {max}"
+                )))
+            };
             if hex_len_str.trim().is_empty() {
-                return Err(Error {
-                    value: hex_len_str.into(),
-                    max,
-                });
+                return Err(invalid());
             }
             if hex_len_str.trim().eq_ignore_ascii_case(b"auto") {
                 Ok(None)
@@ -469,20 +471,11 @@ mod abbrev {
                     Ok(object_hash.len_in_hex().into())
                 } else {
                     let value = gix_config::Integer::try_from(value_bytes)
-                        .map_err(|_| Error {
-                            value: hex_len_str.into(),
-                            max,
-                        })?
+                        .map_err(|_| invalid())?
                         .to_decimal()
-                        .ok_or_else(|| Error {
-                            value: hex_len_str.into(),
-                            max,
-                        })?;
+                        .ok_or_else(&invalid)?;
                     if value < 4 || value as usize > object_hash.len_in_hex() {
-                        return Err(Error {
-                            value: hex_len_str.into(),
-                            max,
-                        });
+                        return Err(invalid());
                     }
                     Ok(Some(value as usize))
                 }
@@ -493,14 +486,16 @@ mod abbrev {
 
 mod validate {
     use crate::{bstr::BStr, config::tree::keys};
+    use gix_error::ResultExt;
 
     #[derive(Clone, Copy)]
     pub struct Disambiguate;
     impl keys::Validate for Disambiguate {
-        #[cfg_attr(not(feature = "revision"), allow(unused_variables))]
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, _value: &BStr) -> Result<(), gix_error::Exn> {
             #[cfg(feature = "revision")]
-            super::Core::DISAMBIGUATE.try_into_object_kind_hint(value)?;
+            super::Core::DISAMBIGUATE
+                .try_into_object_kind_hint(_value)
+                .or_erased()?;
             Ok(())
         }
     }
@@ -508,9 +503,10 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct LogAllRefUpdates;
     impl keys::Validate for LogAllRefUpdates {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
             super::Core::LOG_ALL_REF_UPDATES
-                .try_into_ref_updates(gix_config::Boolean::try_from(value).map(|b| Some(b.0)))?;
+                .try_into_ref_updates(gix_config::Boolean::try_from(value).map(|b| Some(b.0)))
+                .or_erased()?;
             Ok(())
         }
     }
@@ -518,8 +514,8 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct CheckStat;
     impl keys::Validate for CheckStat {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::CHECK_STAT.try_into_checkstat(value)?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Core::CHECK_STAT.try_into_checkstat(value).or_erased()?;
             Ok(())
         }
     }
@@ -527,12 +523,14 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct Abbrev;
     impl keys::Validate for Abbrev {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
             // The keys::Validate trait API doesn't take a hash kind, and passing one through
             // would touch ~50 impl sites. The repo-aware check with the actual hash runs in
             // config::cache::util::parse_core_abbrev, so here we just use Kind::longest()
             // to allow the most permissive upper bound.
-            super::Core::ABBREV.try_into_abbreviation(value, gix_hash::Kind::longest())?;
+            super::Core::ABBREV
+                .try_into_abbreviation(value, gix_hash::Kind::longest())
+                .or_erased()?;
             Ok(())
         }
     }
@@ -540,8 +538,10 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct SharedRepository;
     impl keys::Validate for SharedRepository {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::SHARED_REPOSITORY.try_into_shared_repository(Some(value))?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Core::SHARED_REPOSITORY
+                .try_into_shared_repository(Some(value))
+                .or_erased()?;
             Ok(())
         }
     }
@@ -551,8 +551,8 @@ mod validate {
     pub struct SafeCrlf;
     #[cfg(feature = "attributes")]
     impl keys::Validate for SafeCrlf {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::SAFE_CRLF.try_into_safecrlf(value)?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Core::SAFE_CRLF.try_into_safecrlf(value).or_erased()?;
             Ok(())
         }
     }
@@ -562,8 +562,8 @@ mod validate {
     pub struct AutoCrlf;
     #[cfg(feature = "attributes")]
     impl keys::Validate for AutoCrlf {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::AUTO_CRLF.try_into_autocrlf(value)?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Core::AUTO_CRLF.try_into_autocrlf(value).or_erased()?;
             Ok(())
         }
     }
@@ -573,8 +573,8 @@ mod validate {
     pub struct Eol;
     #[cfg(feature = "attributes")]
     impl keys::Validate for Eol {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::EOL.try_into_eol(value)?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Core::EOL.try_into_eol(value).or_erased()?;
             Ok(())
         }
     }
@@ -584,8 +584,10 @@ mod validate {
     pub struct CheckRoundTripEncoding;
     #[cfg(feature = "attributes")]
     impl keys::Validate for CheckRoundTripEncoding {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(Some(value))?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Core::CHECK_ROUND_TRIP_ENCODING
+                .try_into_encodings(Some(value))
+                .or_erased()?;
             Ok(())
         }
     }

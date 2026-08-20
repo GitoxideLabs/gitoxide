@@ -160,7 +160,7 @@ pub(crate) fn review_blocks_undo(repo: &gix::Repository) -> Result<bool> {
     {
         let reference = match reference {
             Ok(reference) => reference,
-            Err(err) if crate::history::is_missing_ref(&*err) => continue,
+            Err(err) if crate::history::is_missing_ref(&err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read review reference: {err}")),
         };
         if crate::history::review_number(reference.name().as_bstr()).is_some() {

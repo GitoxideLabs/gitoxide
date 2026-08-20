@@ -1,24 +1,8 @@
 use crate::{Repository, config::tree};
+use gix_error::ResultExt;
 
 /// The error returned by [Repository::tree_index_status()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    IndexFromMTree(#[from] crate::repository::index_from_tree::Error),
-    #[error(transparent)]
-    RewritesConfiguration(#[from] crate::diff::new_rewrites::Error),
-    #[error("Could not create diff-cache for similarity checks")]
-    DiffResourceCache(#[from] crate::repository::diff_resource_cache::Error),
-    #[error(transparent)]
-    TreeIndexDiff(gix_error::Error),
-}
-
-impl From<gix_diff::index::Error> for Error {
-    fn from(err: gix_diff::index::Error) -> Self {
-        Error::TreeIndexDiff(err.into_error())
-    }
-}
+pub type Error = gix_error::Error;
 
 /// Specify how to perform rewrite tracking [Repository::tree_index_status()].
 #[derive(Default, Debug, Copy, Clone)]
@@ -79,10 +63,12 @@ impl Repository {
                     self.config.lenient_config,
                     &tree::Status::RENAMES,
                     &tree::Status::RENAME_LIMIT,
-                )?;
+                )
+                .or_erased()?;
                 if !is_configured {
                     (rewrites, is_configured) =
-                        crate::diff::utils::new_rewrites(&self.config.resolved, self.config.lenient_config)?;
+                        crate::diff::utils::new_rewrites(&self.config.resolved, self.config.lenient_config)
+                            .or_erased()?;
                 }
                 if !is_configured {
                     rewrites = Some(Default::default());
@@ -94,7 +80,10 @@ impl Repository {
         };
         let mut resource_cache = None;
         if rewrites.is_some() {
-            resource_cache = Some(self.diff_resource_cache_for_tree_diff()?);
+            resource_cache = Some(
+                self.diff_resource_cache_for_tree_diff()
+                    .or_raise(|| gix_error::message("Could not create diff-cache for similarity checks"))?,
+            );
         }
         let mut pathspec_storage = None;
         if pathspec.is_none() {
@@ -135,7 +124,8 @@ impl Repository {
                     )
                     .is_ok_and(|platform| platform.matching_attributes(out))
             },
-        )?;
+        )
+        .map_err(gix_error::Error::from)?;
 
         Ok(Outcome { rewrite, tree_index })
     }

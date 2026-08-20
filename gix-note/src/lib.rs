@@ -240,7 +240,7 @@ fn write(
             .or_raise_erased(|| message("Could not add a note tree entry"))?;
     }
     editor
-        .write(|tree| objects.write(tree).map_err(gix_error::Exn::into_error))
+        .write(|tree| objects.write(tree))
         .or_raise_erased(|| message("Could not write the notes tree"))
 }
 

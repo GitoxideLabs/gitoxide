@@ -130,6 +130,4 @@ ignored = [
     "gix-transport-configuration-only",
     # Imported as crate `layout`, which does not match the package name `layout-rs`.
     "layout-rs",
-    # Enabled through `estimate-hours` feature wiring only.
-    "smallvec",
 ]

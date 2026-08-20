@@ -2,40 +2,14 @@ use crate::{Repository, clone::PrepareCheckout};
 
 ///
 pub mod main_worktree {
-    use std::{path::PathBuf, sync::atomic::AtomicBool};
+    use std::sync::atomic::AtomicBool;
+
+    use gix_error::ResultExt;
 
     use crate::{Progress, Repository, clone::PrepareCheckout};
 
     /// The error returned by [`PrepareCheckout::main_worktree()`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Repository at \"{}\" is a bare repository and cannot have a main worktree checkout", git_dir.display())]
-        BareRepository { git_dir: PathBuf },
-        #[error("The object pointed to by HEAD is not a treeish")]
-        NoHeadTree(#[from] crate::object::peel::to_kind::Error),
-        #[error("Could not create index from tree at {id}")]
-        IndexFromTree {
-            id: gix_hash::ObjectId,
-            source: gix_error::Error,
-        },
-        #[error("Couldn't obtain configuration for core.protect*")]
-        BooleanConfig(#[from] crate::config::boolean::Error),
-        #[error(transparent)]
-        WriteIndex(gix_error::Error),
-        #[error(transparent)]
-        CheckoutOptions(#[from] crate::config::checkout_options::Error),
-        #[error(transparent)]
-        IndexCheckout(#[from] gix_error::Error),
-        #[error(transparent)]
-        Peel(#[from] crate::reference::peel::Error),
-        #[error("Failed to reopen object database as Arc (only if thread-safety wasn't compiled in)")]
-        OpenArcOdb(#[from] std::io::Error),
-        #[error("The HEAD reference could not be located")]
-        FindHead(#[from] crate::reference::find::existing::Error),
-        #[error("The HEAD reference could not be located")]
-        PeelHeadToId(#[from] crate::head::peel::Error),
-    }
+    pub type Error = gix_error::Error;
 
     /// The progress ids used in [`PrepareCheckout::main_worktree()`].
     ///
@@ -92,17 +66,35 @@ pub mod main_worktree {
                 .repo
                 .as_ref()
                 .expect("BUG: this method may only be called until it is successful");
-            let workdir = repo.workdir().ok_or_else(|| Error::BareRepository {
-                git_dir: repo.git_dir().to_owned(),
+            let workdir = repo.workdir().ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::message!(
+                    "Repository at \"{}\" is a bare repository and cannot have a main worktree checkout",
+                    repo.git_dir().display()
+                ))
             })?;
 
             let root_tree_id = match &self.ref_name {
-                Some(reference_val) => Some(repo.find_reference(reference_val)?.peel_to_id()?),
-                None => repo.head()?.try_peel_to_id()?,
+                Some(reference_val) => Some(
+                    repo.find_reference(reference_val)
+                        .or_raise(|| gix_error::message("The HEAD reference could not be located"))?
+                        .peel_to_id()
+                        .or_erased()?,
+                ),
+                None => repo
+                    .head()
+                    .or_raise(|| gix_error::message("The HEAD reference could not be located"))?
+                    .try_peel_to_id()
+                    .or_raise(|| gix_error::message("The HEAD reference could not be located"))?,
             };
 
             let root_tree = match root_tree_id {
-                Some(id) => id.object().expect("downloaded from remote").peel_to_tree()?.id,
+                Some(id) => {
+                    id.object()
+                        .expect("downloaded from remote")
+                        .peel_to_tree()
+                        .or_raise(|| gix_error::message("The object pointed to by HEAD is not a treeish"))?
+                        .id
+                }
                 None => {
                     return Ok((
                         self.repo.take().expect("still present"),
@@ -111,11 +103,12 @@ pub mod main_worktree {
                 }
             };
 
-            let index = gix_index::State::from_tree(&root_tree, &repo.objects, repo.config.protect_options()?)
-                .map_err(|err| Error::IndexFromTree {
-                    id: root_tree,
-                    source: err.into_error(),
-                })?;
+            let protect_options = repo
+                .config
+                .protect_options()
+                .or_raise(|| gix_error::message("Couldn't obtain configuration for core.protect*"))?;
+            let index = gix_index::State::from_tree(&root_tree, &repo.objects, protect_options)
+                .or_raise(|| gix_error::message!("Could not create index from tree at {root_tree}"))?;
             let mut index = gix_index::File::from_state(index, repo.index_path());
 
             let mut opts = repo.checkout_options(gix_worktree::stack::state::attributes::Source::IdMapping)?;
@@ -131,7 +124,11 @@ pub mod main_worktree {
             let outcome = gix_worktree_state::checkout(
                 &mut index,
                 workdir,
-                repo.objects.clone().into_arc()?,
+                repo.objects.clone().into_arc().or_raise(|| {
+                    gix_error::message(
+                        "Failed to reopen object database as Arc (only if thread-safety wasn't compiled in)",
+                    )
+                })?,
                 &files,
                 &bytes,
                 should_interrupt,
@@ -141,9 +138,7 @@ pub mod main_worktree {
             files.show_throughput(start);
             bytes.show_throughput(start);
 
-            index
-                .write(Default::default())
-                .map_err(|err| Error::WriteIndex(err.into_error()))?;
+            index.write(Default::default()).map_err(gix_error::Error::from)?;
             Ok((self.repo.take().expect("still present").clone(), outcome))
         }
     }

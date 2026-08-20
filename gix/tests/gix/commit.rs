@@ -239,16 +239,13 @@ mod signature {
             .find_commit(id)?
             .verify_signature()
             .expect_err("the configured verifier does not exist");
-        let gix::commit::verify::Error::Verify(err) = err else {
-            panic!("expected a verifier spawn failure, got {err:?}");
-        };
-        assert_eq!(
-            err.to_string(),
-            format!(
-                "Could not execute signature verifier {:?}",
-                home.join("bin/missing-gpg")
-            ),
-            "the configured verifier path is expanded relative to home"
+        let expected = format!(
+            "Could not execute signature verifier {:?}",
+            home.join("bin/missing-gpg")
+        );
+        assert!(
+            err.iter_errors().any(|source| source.to_string() == expected),
+            "the configured verifier path is expanded relative to home: {err:?}"
         );
         Ok(())
     }

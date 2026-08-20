@@ -1,17 +1,11 @@
+use gix_error::ResultExt;
 use gix_object::TreeRefIter;
 
 use super::{Action, Change, Platform};
 use crate::Tree;
 
 /// The error return by methods on the [diff platform][Platform].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Diff(#[from] gix_diff::tree_with_rewrites::Error),
-    #[error(transparent)]
-    ResourceCache(#[from] crate::repository::diff_resource_cache::Error),
-}
+pub type Error = gix_error::Error;
 
 /// Add the item to compare to.
 impl<'old> Platform<'_, 'old> {
@@ -75,6 +69,7 @@ impl<'old> Platform<'_, 'old> {
                 })
             },
             opts,
-        )?)
+        )
+        .or_erased()?)
     }
 }

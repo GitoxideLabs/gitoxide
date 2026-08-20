@@ -53,12 +53,14 @@ impl Section for Ssh {
 
 mod validate {
     use crate::{bstr::BStr, config::tree::keys};
+    #[cfg(feature = "blocking-network-client")]
+    use gix_error::ResultExt;
 
     pub struct Variant;
     impl keys::Validate for Variant {
-        fn validate(&self, _value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, _value: &BStr) -> Result<(), gix_error::Exn> {
             #[cfg(feature = "blocking-network-client")]
-            super::Ssh::VARIANT.try_into_variant(_value)?;
+            super::Ssh::VARIANT.try_into_variant(_value).or_erased()?;
             Ok(())
         }
     }

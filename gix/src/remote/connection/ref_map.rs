@@ -1,44 +1,14 @@
+use gix_error::{ErrorExt, ResultExt};
 use gix_features::progress::Progress;
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
 use gix_transport::client::blocking_io::Transport;
 
-use crate::{
-    bstr::BString,
-    remote::{Connection, connection::ConnectionDetached, fetch},
-};
+use crate::remote::{Connection, connection::ConnectionDetached, fetch};
 
 /// The error returned by [`Connection::ref_map()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    InitRefMap(gix_error::Error),
-    #[error("Failed to configure the transport before connecting to {url:?}")]
-    GatherTransportConfig {
-        url: BString,
-        source: crate::config::transport::Error,
-    },
-    #[error("Failed to configure the transport layer")]
-    ConfigureTransport(#[from] gix_error::Error),
-    #[error(transparent)]
-    Handshake(gix_error::Error),
-    #[error(transparent)]
-    Transport(#[from] gix_protocol::transport::client::Error),
-    #[error(transparent)]
-    ConfigureCredentials(#[from] crate::config::credential_helpers::Error),
-}
-
-impl Error {
-    pub(crate) fn can_retry(&self) -> bool {
-        match self {
-            Error::Transport(err) => err.can_retry(),
-            Error::Handshake(err) => err.can_retry(),
-            _ => false,
-        }
-    }
-}
+pub type Error = gix_error::Error;
 
 /// For use in [`Connection::ref_map()`].
 #[derive(Debug, Clone)]
@@ -145,16 +115,17 @@ where
         if self.transport_options.is_none() {
             self.transport_options = repo
                 .transport_options(url.as_ref(), self.remote.name().map(crate::remote::Name::as_bstr))
-                .map_err(|err| Error::GatherTransportConfig {
-                    source: err,
-                    url: url.into_owned(),
+                .map_err(|err| {
+                    gix_error::Error::from(err.and_raise(gix_error::CorruptionError::new(format!(
+                        "Failed to configure the transport before connecting to {url:?}"
+                    ))))
                 })?;
         }
         if let Some(config) = self.transport_options.as_ref() {
             self.transport
                 .inner
                 .configure(&**config)
-                .map_err(gix_error::Exn::into_error)?;
+                .or_raise(|| gix_error::message("Failed to configure the transport layer"))?;
         }
         let mut handshake = gix_protocol::handshake(
             &mut self.transport.inner,
@@ -164,8 +135,7 @@ where
             &mut progress,
         )
         .await
-        .map_err(gix_error::Exn::into_error)
-        .map_err(Error::Handshake)?;
+        .map_err(gix_error::Error::from)?;
 
         let context = fetch::refmap::init::Context {
             fetch_refspecs: self.remote.fetch_specs.clone(),
@@ -178,21 +148,18 @@ where
                 prefix_from_spec_as_filter_on_remote,
                 context,
             )
-            .map_err(gix_error::Exn::into_error)
-            .map_err(Error::InitRefMap)?;
+            .map_err(gix_error::Exn::into_error)?;
 
         #[cfg(feature = "async-network-client")]
         let ref_map = fetch_refmap
             .fetch_async(progress, &mut self.transport.inner, self.trace)
             .await
-            .map_err(gix_error::Exn::into_error)
-            .map_err(Error::InitRefMap)?;
+            .map_err(gix_error::Exn::into_error)?;
 
         #[cfg(feature = "blocking-network-client")]
         let ref_map = fetch_refmap
             .fetch_blocking(progress, &mut self.transport.inner, self.trace)
-            .map_err(gix_error::Exn::into_error)
-            .map_err(Error::InitRefMap)?;
+            .map_err(gix_error::Exn::into_error)?;
 
         self.handshake = Some(handshake);
         Ok(ref_map)
