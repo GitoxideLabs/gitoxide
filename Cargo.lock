@@ -2380,7 +2380,6 @@ dependencies = [
  "gix-utils",
  "nonempty",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
