@@ -22,7 +22,7 @@ pub enum Error {
     #[error("We were unable to figure out what objects the server should send after {rounds} round(s)")]
     NegotiationFailed { rounds: usize },
     #[error(transparent)]
-    LookupCommitInGraph(#[from] gix_revwalk::graph::get_or_insert_default::Error),
+    LookupCommitInGraph(gix_error::Error),
     #[error(transparent)]
     OpenPackedRefsBuffer(#[from] gix_ref::packed::buffer::open::Error),
     #[error(transparent)]
@@ -33,6 +33,12 @@ pub enum Error {
     PeelToId(#[from] gix_ref::peel::to_id::Error),
     #[error(transparent)]
     AlternateRefsAndObjects(Box<dyn std::error::Error + Send + Sync + 'static>),
+}
+
+impl From<gix_revwalk::graph::get_or_insert_default::Error> for Error {
+    fn from(err: gix_revwalk::graph::get_or_insert_default::Error) -> Self {
+        Error::LookupCommitInGraph(err.into_error())
+    }
 }
 
 /// Determines what should be done after [preparing the commit-graph for negotiation](mark_complete_and_common_ref).
