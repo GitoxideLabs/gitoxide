@@ -11,7 +11,13 @@ pub enum Error {
     #[error("Could not create diff-cache for similarity checks")]
     DiffResourceCache(#[from] crate::repository::diff_resource_cache::Error),
     #[error(transparent)]
-    TreeIndexDiff(#[from] gix_diff::index::Error),
+    TreeIndexDiff(gix_error::Error),
+}
+
+impl From<gix_diff::index::Error> for Error {
+    fn from(err: gix_diff::index::Error) -> Self {
+        Error::TreeIndexDiff(err.into_error())
+    }
 }
 
 /// Specify how to perform rewrite tracking [Repository::tree_index_status()].

@@ -1,7 +1,7 @@
 use gix_object::TreeRefIter;
 
 use super::{Action, Change, Platform};
-use crate::{Tree, diff::rewrites::tracker};
+use crate::Tree;
 
 /// The error return by methods on the [diff platform][Platform].
 #[derive(Debug, thiserror::Error)]
@@ -9,12 +9,8 @@ use crate::{Tree, diff::rewrites::tracker};
 pub enum Error {
     #[error(transparent)]
     Diff(#[from] gix_diff::tree_with_rewrites::Error),
-    #[error("The user-provided callback failed")]
-    ForEach(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error(transparent)]
     ResourceCache(#[from] crate::repository::diff_resource_cache::Error),
-    #[error("Failure during rename tracking")]
-    RenameTracking(#[from] tracker::emit::Error),
 }
 
 /// Add the item to compare to.

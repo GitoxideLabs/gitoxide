@@ -1842,7 +1842,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "shell-words",
- "thiserror 2.0.18",
 ]
 
 [[package]]

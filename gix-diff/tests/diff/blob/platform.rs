@@ -1,7 +1,4 @@
-use gix_diff::blob::{
-    Algorithm, Platform, ResourceKind, pipeline, platform,
-    platform::{prepare_diff, prepare_diff::Operation},
-};
+use gix_diff::blob::{Algorithm, Platform, ResourceKind, pipeline, platform, platform::prepare_diff::Operation};
 use gix_object::{
     bstr::{BString, ByteSlice},
     tree::EntryKind,
@@ -346,10 +343,13 @@ fn source_and_destination_do_not_exist() -> crate::Result {
     assert_eq!(new.driver_index, None);
     assert_eq!(new.mode, EntryKind::BlobExecutable);
 
-    assert!(matches!(
-        platform.prepare_diff(),
-        Err(prepare_diff::Error::SourceAndDestinationRemoved)
-    ));
+    assert_eq!(
+        platform
+            .prepare_diff()
+            .expect_err("both resources are missing")
+            .to_string(),
+        "Tried to diff resources that are both considered removed"
+    );
 
     assert_eq!(
         format!(
