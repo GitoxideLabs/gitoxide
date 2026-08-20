@@ -236,10 +236,12 @@ without trading responsiveness for metadata that is not visible.
   entries are skipped without failing history loading.
 - The selected row uses `>` at the left. If the displayed worktree block is dirty,
   `🫟` is shown at the `HEAD` row instead; a separately selected row retains `>`.
-- Selection inversion covers the left marker, graph, commit marker, and hash.
-  Its graph background is derived from the commit-marker color. The selected
-  row's right-hand tail and contextual information always have blank margins and
-  never invert an adjacent character.
+- When selection points at the current worktree, inversion covers the left
+  marker, graph, commit marker, and hash. A separately selected row extends that
+  inversion from the row's start through all non-title metadata; its final space
+  and title remain uninverted. The graph background is derived from the
+  commit-marker color. The selected row's right-hand tail and contextual
+  information always have blank margins and never invert an adjacent character.
 - A compared merge parent is cyan, including its commit marker, and its hash is
   inverted.
 - Rows outside active review-base reachability are dimmed. When a changes block has

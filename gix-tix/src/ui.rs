@@ -646,15 +646,19 @@ pub(crate) fn draw_with_worktree(
         .enumerate()
         .map(|(index, metadata)| {
             metadata.map(|metadata| match alignment {
-                HistoryAlignment::None => (metadata.into_line(), 0),
+                HistoryAlignment::None => {
+                    let (metadata, prefix_width) = metadata.into_line_with_prefix();
+                    (metadata, 0, prefix_width)
+                }
                 HistoryAlignment::Title | HistoryAlignment::Compressed => {
                     let lane_width = lanes.lane(index).chars().count();
-                    (
-                        metadata.align_title(title_column.saturating_sub(lane_width)),
-                        lane_width,
-                    )
+                    let (metadata, prefix_width) = metadata.align_title(title_column.saturating_sub(lane_width));
+                    (metadata, lane_width, prefix_width)
                 }
-                HistoryAlignment::Columns => (metadata.align_columns(column_widths), max_lane_width),
+                HistoryAlignment::Columns => {
+                    let (metadata, prefix_width) = metadata.align_columns(column_widths);
+                    (metadata, max_lane_width, prefix_width)
+                }
             })
         })
         .collect();
@@ -667,7 +671,7 @@ pub(crate) fn draw_with_worktree(
                 .chars()
                 .count()
                 .saturating_add(format!("[{count}]").chars().count()),
-            (HistoryEntry::Commit(_), Some((metadata, metadata_x))) => match alignment {
+            (HistoryEntry::Commit(_), Some((metadata, metadata_x, _))) => match alignment {
                 HistoryAlignment::None => lanes.lane(index).chars().count().saturating_add(metadata.width()),
                 HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
                     metadata_x.saturating_add(metadata.width())
@@ -734,7 +738,7 @@ pub(crate) fn draw_with_worktree(
             }
         };
         let row = &app.rows[row_index];
-        let (metadata, metadata_x) = metadata.expect("commit history entries have metadata");
+        let (metadata, metadata_x, metadata_prefix_width) = metadata.expect("commit history entries have metadata");
         let selected = app.selected == Some(row_index);
         let head = decorations.get(&row.id).is_some_and(|decorations| {
             decorations
@@ -752,6 +756,12 @@ pub(crate) fn draw_with_worktree(
             attached: attached_head,
         });
         let metadata_width = metadata.width();
+        let title_offset = match alignment {
+            HistoryAlignment::None => lane.chars().count().saturating_add(metadata_prefix_width),
+            HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
+                metadata_x.saturating_add(metadata_prefix_width)
+            }
+        };
         let hidden_branch_behind = app.hidden_branch_behind(row.id);
         let line_width = match alignment {
             HistoryAlignment::None => lane
@@ -852,6 +862,21 @@ pub(crate) fn draw_with_worktree(
             row.signature,
             head_state,
         );
+        if selected && app.show_selection_tail && !head {
+            let end = if title_offset > horizontal_offset {
+                content
+                    .x
+                    .saturating_add(u16::try_from(title_offset - horizontal_offset).unwrap_or(u16::MAX))
+                    .saturating_sub(1)
+            } else {
+                content.x
+            }
+            .min(body.right());
+            frame.buffer_mut().set_style(
+                Rect::new(body.x, y, end.saturating_sub(body.x), 1),
+                Style::default().add_modifier(Modifier::REVERSED),
+            );
+        }
         if selected && app.show_selection_tail && body.width > 0 {
             let marker_limit = hidden_branch_marker
                 .as_ref()
@@ -2259,19 +2284,24 @@ impl<'a> MetadataColumns<'a> {
         )
     }
 
-    fn align_title(mut self, width: usize) -> Line<'a> {
-        let padding = width.saturating_sub(self.prefix_width());
-        self.fields[4].spans.push(Span::raw(" ".repeat(padding)));
-        self.into_line()
+    fn into_line_with_prefix(self) -> (Line<'a>, usize) {
+        let prefix_width = self.prefix_width();
+        (self.into_line(), prefix_width)
     }
 
-    fn align_columns(mut self, widths: [usize; 5]) -> Line<'a> {
+    fn align_title(mut self, width: usize) -> (Line<'a>, usize) {
+        let padding = width.saturating_sub(self.prefix_width());
+        self.fields[4].spans.push(Span::raw(" ".repeat(padding)));
+        self.into_line_with_prefix()
+    }
+
+    fn align_columns(mut self, widths: [usize; 5]) -> (Line<'a>, usize) {
         for (field, width) in self.fields[..5].iter_mut().zip(widths) {
             field
                 .spans
                 .push(Span::raw(" ".repeat(width.saturating_sub(field.width()))));
         }
-        self.into_line()
+        self.into_line_with_prefix()
     }
 }
 
@@ -3865,6 +3895,29 @@ mod tests {
         assert!(
             !rendered_line(&terminal, 1).contains("Esc cancel"),
             "completed work cannot be cancelled"
+        );
+
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None, None))?;
+        let rendered = rendered_row(&terminal);
+        let title_byte = rendered.find("subject").expect("the selected commit title is visible");
+        let title_x = rendered[..title_byte].chars().count() as u16;
+        let row = terminal.backend().buffer();
+        assert!(
+            (0..title_x - 1).all(|x| row[(x, 0)].modifier.contains(Modifier::REVERSED)),
+            "an off-worktree selection reverses the entire non-title prefix"
+        );
+        assert_eq!(
+            row[(title_x - 1, 0)].symbol(),
+            " ",
+            "metadata keeps its title separator"
+        );
+        assert!(
+            !row[(title_x - 1, 0)].modifier.contains(Modifier::REVERSED),
+            "the metadata-title separator is not reversed"
+        );
+        assert!(
+            (title_x..title_x + "subject".len() as u16).all(|x| !row[(x, 0)].modifier.contains(Modifier::REVERSED)),
+            "the selected commit title is not reversed"
         );
 
         app.unseen_filesystem_redraw = true;
