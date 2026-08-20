@@ -106,6 +106,12 @@ pub fn run(prepared: gix_command::Prepare) -> std::io::Result<Outcome> {
 /// `reference-transaction` is deliberately absent: it only gates during its `prepared` state,
 /// while `committed` and `aborted` calls are always advisory - a single name can't capture that,
 /// so callers driving that hook must check its state argument themselves.
+///
+/// `proc-receive` is also absent, but for a different reason: it gates unconditionally, just
+/// not the whole push. Per `githooks(5)`, "the exit status of the `proc-receive` hook only
+/// determines the success or failure of the group of commands sent to it, unless atomic push is
+/// in use" - so `is_gating("proc-receive")` is `true`, but the caller must additionally know
+/// whether the push is atomic to judge what a non-zero exit takes down with it.
 pub const ADVISORY_HOOKS: &[&str] = &[
     "post-applypatch",
     "post-checkout",
@@ -275,6 +281,14 @@ mod tests {
         #[test]
         fn update_gates_its_own_ref() {
             assert!(is_gating("update"));
+        }
+
+        #[test]
+        fn proc_receive_gates_the_reported_group_of_commands() {
+            assert!(
+                is_gating("proc-receive"),
+                "non-zero exit fails the group of commands sent to it, unless atomic push is in use"
+            );
         }
 
         #[test]
