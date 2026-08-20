@@ -51,7 +51,7 @@ use gix::{
 };
 use history::{Authors, Decorations, Event, HistoryGraph, SelectionRef, SharedAuthors};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use ratatui::{backend::CrosstermBackend, text::Line};
+use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend, layout::Position, text::Line};
 
 const EVENT_BATCH_SIZE: usize = 256;
 const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
@@ -707,9 +707,22 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
         "starting tix"
     );
     let commit_pane_background = detect_commit_pane_background();
-    let mut terminal = ratatui::try_init().context("could not initialize terminal")?;
-    let enhanced_keyboard = terminal::supports_keyboard_enhancement().unwrap_or(false);
-    let keyboard_setup = enable_input(terminal.backend_mut(), enhanced_keyboard);
+    let quit_on_finish = options.quit_on_finish;
+    let mut terminal = if quit_on_finish {
+        let (_, height) = terminal::size().context("could not determine terminal size")?;
+        ratatui::try_init_with_options(TerminalOptions {
+            viewport: Viewport::Inline(height),
+        })
+    } else {
+        ratatui::try_init()
+    }
+    .context("could not initialize terminal")?;
+    let enhanced_keyboard = !quit_on_finish && terminal::supports_keyboard_enhancement().unwrap_or(false);
+    let keyboard_setup = if quit_on_finish {
+        Ok(())
+    } else {
+        enable_input(terminal.backend_mut(), enhanced_keyboard)
+    };
     let result = keyboard_setup
         .context("could not enable enhanced keyboard events")
         .and_then(|()| {
@@ -722,13 +735,28 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
                 commit_pane_background,
             )
         });
-    let keyboard_restore = disable_input(terminal.backend_mut(), enhanced_keyboard);
+    let keyboard_restore = if quit_on_finish {
+        let area = terminal.get_frame().area();
+        terminal
+            .set_cursor_position(Position::new(area.x, area.bottom().saturating_sub(1)))
+            .and_then(|()| terminal.show_cursor())
+    } else {
+        disable_input(terminal.backend_mut(), enhanced_keyboard)
+    };
     drop(terminal);
-    let restore = ratatui::try_restore().context("could not restore terminal");
+    let restore = if quit_on_finish {
+        terminal::disable_raw_mode()
+    } else {
+        ratatui::try_restore()
+    }
+    .context("could not restore terminal");
     let lane_time = result?;
     keyboard_restore.context("could not restore keyboard events")?;
     restore?;
     if let Some(lane_time) = lane_time {
+        if quit_on_finish {
+            eprintln!();
+        }
         eprintln!("lane computation: {:.3}s", lane_time.as_secs_f64());
     }
     Ok(())
@@ -1179,7 +1207,7 @@ fn event_loop(
                     lane_receiver = None;
                     dirty = true;
                     if quit_on_finish {
-                        return Ok(app.lane_time);
+                        urgent = true;
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -1365,6 +1393,9 @@ fn event_loop(
             if repeat_deadline.is_none() {
                 fill_repository.retain = false;
                 fill_repository.retained = None;
+            }
+            if quit_on_finish && matches!(app.state, State::Complete) && lane_receiver.is_none() {
+                return Ok(app.lane_time);
             }
             continue;
         }

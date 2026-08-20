@@ -2231,11 +2231,13 @@ impl App {
             if let Some(metadata) = metadata.get(&row.id) {
                 let row = Arc::make_mut(row);
                 row.committer_time = metadata.committer_time;
+                row.author_time = metadata.author_time;
                 row.author = metadata.author;
                 row.attributions = metadata.attributions.clone();
                 row.title = metadata.title.clone();
                 row.metadata_loaded = true;
                 row.has_agent_marker = metadata.has_agent_marker;
+                row.is_review = metadata.is_review;
                 row.signature = metadata.signature;
             }
         }
@@ -4391,14 +4393,14 @@ mod tests {
         app.set_metadata(
             0,
             Metadata {
-                author_time: gix::date::Time::default(),
-                committer_time: gix::date::Time::default(),
+                author_time: gix::date::Time::new(123, 60),
+                committer_time: gix::date::Time::new(456, 120),
                 author: row(1).author,
                 attributions: 0..0,
                 title: "loaded".into(),
-                has_agent_marker: false,
-                is_review: false,
-                signature: SignatureState::Unsigned,
+                has_agent_marker: true,
+                is_review: true,
+                signature: SignatureState::Verified,
             },
             Vec::new(),
         );
@@ -4407,6 +4409,11 @@ mod tests {
 
         assert!(app.rows[0].metadata_loaded);
         assert_eq!(app.title(&app.rows[0]), "loaded");
+        assert_eq!(app.rows[0].author_time, gix::date::Time::new(123, 60));
+        assert_eq!(app.rows[0].committer_time, gix::date::Time::new(456, 120));
+        assert!(app.rows[0].has_agent_marker);
+        assert!(app.rows[0].is_review);
+        assert_eq!(app.rows[0].signature, SignatureState::Verified);
     }
 
     #[test]
