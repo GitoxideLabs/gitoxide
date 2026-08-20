@@ -246,6 +246,8 @@ fn invalid_head() {
         └─ Could not follow a single level of a symbolic reference
         |   |
         |   └─ The ref partially named "refs/heads/main" could not be found
+        |   |
+        |   └─ Reference or object not found
         |
         └─ Couldn't get object at internal index 0
     "#);

@@ -17,10 +17,23 @@ mod write {
     use crate::log::Line;
 
     /// The Error produced by [`Line::write_to()`] (but wrapped in an io error).
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     enum Error {
-        #[error(r"Messages must not contain newlines (\n)")]
         IllegalCharacter,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::IllegalCharacter => f.write_str(r"Messages must not contain newlines (\n)"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&crate::INVALID_REFLOG)
+        }
     }
 
     impl From<Error> for io::Error {
@@ -96,7 +109,11 @@ pub mod decode {
             }
         }
 
-        impl std::error::Error for Error {}
+        impl std::error::Error for Error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&crate::CORRUPTION)
+            }
+        }
 
         impl Error {
             pub(crate) fn new(input: &[u8]) -> Self {

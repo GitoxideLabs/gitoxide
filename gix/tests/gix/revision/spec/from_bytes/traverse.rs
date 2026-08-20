@@ -39,11 +39,10 @@ fn freestanding_negation_yields_descriptive_error() -> crate::Result {
     couldn't parse revision: "!"
     |
     └─ The ref partially named "!" could not be found
+    |
+    └─ Reference or object not found
     "#);
-    assert_eq!(
-        err.probable_cause().to_string(),
-        "The ref partially named \"!\" could not be found"
-    );
+    assert!(err.is_not_found(), "the missing anchor reference remains classified");
     Ok(())
 }
 #[test]
