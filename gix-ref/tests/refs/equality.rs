@@ -57,10 +57,27 @@ macro_rules! assert_reference_name_equality {
     ($reference:ident, $name:ident) => {{
         let name_ref: &FullNameRef = $name.as_ref();
         assert_eq!($reference, $name, "the reference matches its owned name");
-        assert_eq!($name, $reference, "owned-name comparison is symmetric");
         assert_eq!($reference, name_ref, "the reference matches its borrowed name");
-        assert_eq!(name_ref, $reference, "borrowed-name comparison is symmetric");
-        assert_natural_equality!($reference, "refs/heads/main", "refs/heads/other");
+
+        let matching = "refs/heads/main";
+        assert_eq!($reference, matching, "the reference matches str");
+        assert_eq!($reference, matching.to_owned(), "the reference matches String");
+        assert_eq!($reference, matching.as_bytes().as_bstr(), "the reference matches BStr");
+        assert_eq!($reference, BString::from(matching), "the reference matches BString");
+
+        let different = "refs/heads/other";
+        assert_ne!($reference, different, "the reference differs from str");
+        assert_ne!($reference, different.to_owned(), "the reference differs from String");
+        assert_ne!(
+            $reference,
+            different.as_bytes().as_bstr(),
+            "the reference differs from BStr"
+        );
+        assert_ne!(
+            $reference,
+            BString::from(different),
+            "the reference differs from BString"
+        );
     }};
 }
 

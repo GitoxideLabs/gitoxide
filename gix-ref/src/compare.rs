@@ -4,7 +4,7 @@ use crate::{
     file, packed,
 };
 
-macro_rules! impl_partial_eq_pair {
+macro_rules! impl_partial_eq {
     ($left_type:ty, $right_type:ty, $left:ident => $left_bytes:expr, $right:ident => $right_bytes:expr) => {
         impl PartialEq<$right_type> for $left_type {
             fn eq(&self, other: &$right_type) -> bool {
@@ -13,14 +13,13 @@ macro_rules! impl_partial_eq_pair {
                 $left_bytes == $right_bytes
             }
         }
+    };
+}
 
-        impl PartialEq<$left_type> for $right_type {
-            fn eq(&self, other: &$left_type) -> bool {
-                let $left = other;
-                let $right = self;
-                $left_bytes == $right_bytes
-            }
-        }
+macro_rules! impl_partial_eq_pair {
+    ($left_type:ty, $right_type:ty, $left:ident => $left_bytes:expr, $right:ident => $right_bytes:expr) => {
+        impl_partial_eq!($left_type, $right_type, $left => $left_bytes, $right => $right_bytes);
+        impl_partial_eq!($right_type, $left_type, $right => $right_bytes, $left => $left_bytes);
     };
 }
 
@@ -35,21 +34,27 @@ macro_rules! impl_partial_eq_bytes {
     };
 }
 
-macro_rules! impl_partial_eq_name {
+macro_rules! impl_partial_eq_reference {
     ($type:ty, $value:ident => $name:expr) => {
-        impl_partial_eq_pair!(
+        impl_partial_eq!($type, str, $value => $name.as_bytes(), other => other.as_bytes());
+        impl_partial_eq!($type, &str, $value => $name.as_bytes(), other => other.as_bytes());
+        impl_partial_eq!($type, String, $value => $name.as_bytes(), other => other.as_bytes());
+        impl_partial_eq!($type, BStr, $value => $name.as_bytes(), other => other.as_bytes());
+        impl_partial_eq!($type, &BStr, $value => $name.as_bytes(), other => other.as_bytes());
+        impl_partial_eq!($type, BString, $value => $name.as_bytes(), other => other.as_bytes());
+        impl_partial_eq!(
             $type,
             FullName,
             $value => $name.as_bytes(),
             other => other.as_bstr().as_bytes()
         );
-        impl_partial_eq_pair!(
+        impl_partial_eq!(
             $type,
             FullNameRef,
             $value => $name.as_bytes(),
             other => other.as_bstr().as_bytes()
         );
-        impl_partial_eq_pair!(
+        impl_partial_eq!(
             $type,
             &FullNameRef,
             $value => $name.as_bytes(),
@@ -114,11 +119,8 @@ impl_partial_eq_pair!(
     borrowed => borrowed.as_bstr().as_bytes()
 );
 
-impl_partial_eq_bytes!(Reference, value => value.name.as_bstr());
-impl_partial_eq_name!(Reference, value => value.name.as_bstr());
-
-impl_partial_eq_bytes!(file::loose::Reference, value => value.name.as_bstr());
-impl_partial_eq_name!(file::loose::Reference, value => value.name.as_bstr());
-
-impl_partial_eq_bytes!(packed::Reference<'_>, value => value.name.as_bstr());
-impl_partial_eq_name!(packed::Reference<'_>, value => value.name.as_bstr());
+// Keep these comparisons one-way: same-type reference equality is structural, so reverse
+// implementations would let references with different targets form a non-transitive chain through their name.
+impl_partial_eq_reference!(Reference, value => value.name.as_bstr());
+impl_partial_eq_reference!(file::loose::Reference, value => value.name.as_bstr());
+impl_partial_eq_reference!(packed::Reference<'_>, value => value.name.as_bstr());
