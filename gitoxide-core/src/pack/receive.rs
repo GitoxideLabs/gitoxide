@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::{OutputFormat, net, pack::receive::protocol::fetch::negotiate};
+use gix::error::{ResultExt, message};
 #[cfg(feature = "async-client")]
 use gix::protocol::transport::client::async_io::connect;
 #[cfg(feature = "blocking-client")]
@@ -71,7 +72,8 @@ where
         vec![("agent".into(), Some(agent.clone()))],
         &mut progress,
     )
-    .await?;
+    .await
+    .map_err(gix::Exn::into_error)?;
     if wanted_refs.is_empty() {
         wanted_refs.push("refs/heads/*:refs/remotes/origin/*".into());
     }
@@ -90,15 +92,20 @@ where
         extra_refspecs: vec![],
     };
 
-    let fetch_refmap = handshake.prepare_lsrefs_or_extract_refmap(user_agent.clone(), true, context)?;
+    let fetch_refmap = handshake
+        .prepare_lsrefs_or_extract_refmap(user_agent.clone(), true, context)
+        .map_err(gix::Exn::into_error)?;
 
     #[cfg(feature = "async-client")]
     let refmap = fetch_refmap
         .fetch_async(&mut progress, &mut transport.inner, trace_packetlines)
-        .await?;
+        .await
+        .map_err(gix::Exn::into_error)?;
 
     #[cfg(feature = "blocking-client")]
-    let refmap = fetch_refmap.fetch_blocking(&mut progress, &mut transport.inner, trace_packetlines)?;
+    let refmap = fetch_refmap
+        .fetch_blocking(&mut progress, &mut transport.inner, trace_packetlines)
+        .map_err(gix::Exn::into_error)?;
 
     if refmap.is_missing_required_mapping() {
         return Err(Error::NoMapping {
@@ -124,6 +131,7 @@ where
                 ctx.object_hash,
                 ctx.format,
             )
+            .or_raise_erased(|| message("Failed to receive the pack"))
             .map(|_| true)
         },
         progress,
@@ -141,7 +149,8 @@ where
             reject_shallow_remote: true,
         },
     )
-    .await?;
+    .await
+    .map_err(gix::Exn::into_error)?;
     Ok(())
 }
 

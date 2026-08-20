@@ -44,11 +44,10 @@ mod with_fetch {
     use crate::fetch::{self, negotiate, refmap};
 
     /// For use in [`fetch`](crate::fetch()).
-    pub struct NegotiateContext<'a, 'b, 'c, Objects, Alternates, AlternatesOut, AlternatesErr, Find>
+    pub struct NegotiateContext<'a, 'b, 'c, Objects, Alternates, AlternatesOut, Find>
     where
         Objects: gix_object::Find + gix_object::FindHeader + gix_object::Exists,
-        Alternates: FnOnce() -> Result<AlternatesOut, AlternatesErr>,
-        AlternatesErr: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
+        Alternates: FnOnce() -> Result<AlternatesOut, gix_error::Exn>,
         AlternatesOut: Iterator<Item = (gix_ref::file::Store, Find)>,
         Find: gix_object::Find,
     {

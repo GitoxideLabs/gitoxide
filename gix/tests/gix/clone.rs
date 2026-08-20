@@ -280,13 +280,12 @@ mod blocking_io {
         )?
         .fetch_only(gix::progress::Discard, &AtomicBool::default())
         .unwrap_err();
+        let gix::clone::fetch::Error::Fetch(gix::remote::fetch::Error::Fetch(err)) = err else {
+            panic!("expected the protocol fetch to reject the shallow remote")
+        };
+        assert!(err.is_validation(), "the configured rejection is a validation failure");
         assert!(
-            matches!(
-                err,
-                gix::clone::fetch::Error::Fetch(gix::remote::fetch::Error::Fetch(
-                    gix_protocol::fetch::Error::RejectShallowRemote
-                ))
-            ),
+            err.to_string().contains("clone.rejectShallow"),
             "we can avoid fetching from remotes with this setting"
         );
         Ok(())

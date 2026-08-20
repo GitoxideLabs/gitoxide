@@ -12,6 +12,7 @@ pub enum RefsAction {
 
 mod fetch_fn {
     use crate::bisync::bisync;
+    use gix_error::{ErrorExt, ResultExt, message};
     use gix_features::progress::NestedProgress;
     use gix_protocol::{
         Command, LsRefsCommand, credentials,
@@ -96,7 +97,8 @@ mod fetch_fn {
             delegate.handshake_extra_parameters(),
             &mut progress,
         )
-        .await?;
+        .await
+        .or_raise_erased(|| message("Protocol handshake failed"))?;
 
         let agent = gix_protocol::agent(agent);
         let refs = match refs {
@@ -108,20 +110,23 @@ mod fetch_fn {
                     {
                         LsRefsCommand::new(None, &capabilities, ("agent", Some(agent.clone())))
                             .invoke_async(&mut transport, &mut progress, trace)
-                            .await?
+                            .await
+                            .or_raise_erased(|| message("Failed to list remote references"))?
                     }
                     #[cfg(feature = "blocking-client")]
                     {
-                        LsRefsCommand::new(None, &capabilities, ("agent", Some(agent.clone()))).invoke_blocking(
-                            &mut transport,
-                            &mut progress,
-                            trace,
-                        )?
+                        LsRefsCommand::new(None, &capabilities, ("agent", Some(agent.clone())))
+                            .invoke_blocking(&mut transport, &mut progress, trace)
+                            .or_raise_erased(|| message("Failed to list remote references"))?
                     }
                 }
                 Err(err) => {
-                    indicate_end_of_interaction(transport, trace).await?;
-                    return Err(err.into());
+                    indicate_end_of_interaction(transport, trace)
+                        .await
+                        .or_raise_erased(|| message("Failed to end the interaction"))?;
+                    return Err(err
+                        .and_raise(message("Failed to prepare listing remote references"))
+                        .erased());
                 }
             },
         };
@@ -133,7 +138,9 @@ mod fetch_fn {
                 return if matches!(protocol_version, gix_transport::Protocol::V1)
                     || matches!(fetch_mode, FetchConnection::TerminateOnSuccessfulCompletion)
                 {
-                    indicate_end_of_interaction(transport, trace).await.map_err(Into::into)
+                    indicate_end_of_interaction(transport, trace)
+                        .await
+                        .or_raise_erased(|| message("Failed to end the interaction"))
                 } else {
                     Ok(())
                 };
@@ -144,8 +151,10 @@ mod fetch_fn {
                     .expect("BUG: delegates must always produce valid arguments");
             }
             Err(err) => {
-                indicate_end_of_interaction(transport, trace).await?;
-                return Err(err.into());
+                indicate_end_of_interaction(transport, trace)
+                    .await
+                    .or_raise_erased(|| message("Failed to end the interaction"))?;
+                return Err(err.and_raise(message("Failed to prepare the fetch")).erased());
             }
         }
 
@@ -159,8 +168,13 @@ mod fetch_fn {
             progress.step();
             progress.set_name(format!("negotiate (round {round})"));
             round += 1;
-            let action = delegate.negotiate(&refs, &mut arguments, previous_response.as_ref())?;
-            let mut reader = arguments.send(&mut transport, action == Action::Cancel).await?;
+            let action = delegate
+                .negotiate(&refs, &mut arguments, previous_response.as_ref())
+                .or_raise_erased(|| message("Fetch negotiation failed"))?;
+            let mut reader = arguments
+                .send(&mut transport, action == Action::Cancel)
+                .await
+                .or_raise_erased(|| message("Failed to send fetch arguments"))?;
             if sideband_all {
                 setup_remote_progress(&mut progress, &mut reader);
             }
@@ -170,14 +184,18 @@ mod fetch_fn {
                 true,  /* hack, telling us we don't want this delegate approach anymore */
                 false, /* just as much of a hack which causes us to expect a pack immediately */
             )
-            .await?;
+            .await
+            .or_raise_erased(|| message("Could not decode server reply"))?;
             previous_response = if response.has_pack() {
                 progress.step();
                 progress.set_name("receiving pack".into());
                 if !sideband_all {
                     setup_remote_progress(&mut progress, &mut reader);
                 }
-                delegate.receive_pack(reader, progress, &refs, &response).await?;
+                delegate
+                    .receive_pack(reader, progress, &refs, &response)
+                    .await
+                    .or_raise_erased(|| message("Failed to receive pack"))?;
                 break 'negotiation;
             } else {
                 match action {
@@ -189,7 +207,9 @@ mod fetch_fn {
         if matches!(protocol_version, gix_transport::Protocol::V2)
             && matches!(fetch_mode, FetchConnection::TerminateOnSuccessfulCompletion)
         {
-            indicate_end_of_interaction(transport, trace).await?;
+            indicate_end_of_interaction(transport, trace)
+                .await
+                .or_raise_erased(|| message("Failed to end the interaction"))?;
         }
         Ok(())
     }

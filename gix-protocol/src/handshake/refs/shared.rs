@@ -1,4 +1,5 @@
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{CorruptionError, ErrorExt, ResultExt};
 
 use crate::{
     fetch::response::ShallowUpdate,
@@ -104,13 +105,17 @@ pub(crate) fn from_capabilities<'a>(
         }
     });
     for symref in symref_values {
-        let (left, right) = symref.split_at(symref.find_byte(b':').ok_or_else(|| Error::MalformedSymref {
-            symref: symref.to_owned(),
+        let (left, right) = symref.split_at(symref.find_byte(b':').ok_or_else(|| {
+            CorruptionError::new(format!(
+                "{symref:?} could not be parsed. A symref is expected to look like <NAME>:<target>."
+            ))
+            .raise_erased()
         })?);
         if left.is_empty() || right.is_empty() {
-            return Err(Error::MalformedSymref {
-                symref: symref.to_owned(),
-            });
+            return Err(CorruptionError::new(format!(
+                "{symref:?} could not be parsed. A symref is expected to look like <NAME>:<target>."
+            ))
+            .raise_erased());
         }
         out_refs.push(InternalRef::SymbolicForLookup {
             path: left.into(),
@@ -130,14 +135,18 @@ pub(in crate::handshake::refs) fn parse_v1(
     line: &BStr,
 ) -> Result<(), Error> {
     let trimmed = line.trim_end();
-    let (hex_hash, path) = trimmed.split_at(
-        trimmed
-            .find(b" ")
-            .ok_or_else(|| Error::MalformedV1RefLine(trimmed.to_owned().into()))?,
-    );
+    let (hex_hash, path) = trimmed.split_at(trimmed.find(b" ").ok_or_else(|| {
+        CorruptionError::new(format!(
+            "{trimmed:?} could not be parsed. A V1 ref line should be '<hex-hash> <path>'."
+        ))
+        .raise_erased()
+    })?);
     let path = &path[1..];
     if path.is_empty() {
-        return Err(Error::MalformedV1RefLine(trimmed.to_owned().into()));
+        return Err(CorruptionError::new(format!(
+            "{trimmed:?} could not be parsed. A V1 ref line should be '<hex-hash> <path>'."
+        ))
+        .raise_erased());
     }
     match path.strip_suffix(b"^{}") {
         Some(stripped) => {
@@ -145,33 +154,36 @@ pub(in crate::handshake::refs) fn parse_v1(
                 // this is a special dummy-ref just for the sake of getting capabilities across in a repo that is empty.
                 return Ok(());
             }
-            let (previous_path, tag) =
-                out_refs
-                    .pop()
-                    .and_then(InternalRef::unpack_direct)
-                    .ok_or(Error::InvariantViolation {
-                        message: "Expecting peeled refs to be preceded by direct refs",
-                    })?;
+            let (previous_path, tag) = out_refs.pop().and_then(InternalRef::unpack_direct).ok_or_else(|| {
+                CorruptionError::new("Expecting peeled refs to be preceded by direct refs").raise_erased()
+            })?;
             if previous_path != stripped {
-                return Err(Error::InvariantViolation {
-                    message: "Expecting peeled refs to have the same base path as the previous, unpeeled one",
-                });
+                return Err(CorruptionError::new(
+                    "Expecting peeled refs to have the same base path as the previous, unpeeled one",
+                )
+                .raise_erased());
             }
             out_refs.push(InternalRef::Peeled {
                 path: previous_path,
                 tag,
-                object: gix_hash::ObjectId::from_hex(hex_hash.as_bytes())?,
+                object: gix_hash::ObjectId::from_hex(hex_hash.as_bytes())
+                    .or_raise_erased(|| CorruptionError::new("Could not decode peeled object ID"))?,
             });
         }
         None => {
             let object = match gix_hash::ObjectId::from_hex(hex_hash.as_bytes()) {
                 Ok(id) => id,
                 Err(_) if hex_hash.as_bstr() == "shallow" => {
-                    let id = gix_hash::ObjectId::from_hex(path)?;
+                    let id = gix_hash::ObjectId::from_hex(path)
+                        .or_raise_erased(|| CorruptionError::new("Could not decode shallow object ID"))?;
                     out_shallow.push(ShallowUpdate::Shallow(id));
                     return Ok(());
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => {
+                    return Err(err
+                        .and_raise(CorruptionError::new("Could not decode object ID"))
+                        .erased());
+                }
             };
             match out_refs
                 .iter()
@@ -205,10 +217,16 @@ pub(in crate::handshake::refs) fn parse_v2(line: &BStr) -> Result<Ref, Error> {
             let id = if hex_hash == b"unborn" {
                 None
             } else {
-                Some(gix_hash::ObjectId::from_hex(hex_hash.as_bytes())?)
+                Some(
+                    gix_hash::ObjectId::from_hex(hex_hash.as_bytes())
+                        .or_raise_erased(|| CorruptionError::new("Could not decode object ID"))?,
+                )
             };
             if path.is_empty() {
-                return Err(Error::MalformedV2RefLine(trimmed.to_owned().into()));
+                return Err(CorruptionError::new(format!(
+                    "{trimmed:?} could not be parsed. A V2 ref line should be '<hex-hash> <path>[ (peeled|symref-target):<value>'."
+                ))
+                .raise_erased());
             }
             let mut symref_target = None;
             let mut peeled = None;
@@ -217,43 +235,59 @@ pub(in crate::handshake::refs) fn parse_v2(line: &BStr) -> Result<Ref, Error> {
                 match (tokens.next(), tokens.next()) {
                     (Some(attribute), Some(value)) => {
                         if value.is_empty() {
-                            return Err(Error::MalformedV2RefLine(trimmed.to_owned().into()));
+                            return Err(CorruptionError::new(format!(
+                                "{trimmed:?} could not be parsed. A V2 ref line should be '<hex-hash> <path>[ (peeled|symref-target):<value>'."
+                            ))
+                            .raise_erased());
                         }
                         match attribute {
                             b"peeled" => {
-                                peeled = Some(gix_hash::ObjectId::from_hex(value.as_bytes())?);
+                                peeled = Some(
+                                    gix_hash::ObjectId::from_hex(value.as_bytes())
+                                        .or_raise_erased(|| CorruptionError::new("Could not decode peeled object ID"))?,
+                                );
                             }
                             b"symref-target" => {
                                 symref_target = Some(value);
                             }
                             _ => {
-                                return Err(Error::UnknownAttribute {
-                                    attribute: attribute.to_owned().into(),
-                                    line: trimmed.to_owned().into(),
-                                });
+                                return Err(CorruptionError::new(format!(
+                                    "The ref attribute {attribute:?} is unknown. Found in line {trimmed:?}"
+                                ))
+                                .raise_erased());
                             }
                         }
                     }
-                    _ => return Err(Error::MalformedV2RefLine(trimmed.to_owned().into())),
+                    _ => {
+                        return Err(CorruptionError::new(format!(
+                            "{trimmed:?} could not be parsed. A V2 ref line should be '<hex-hash> <path>[ (peeled|symref-target):<value>'."
+                        ))
+                        .raise_erased());
+                    }
                 }
             }
             if tokens.next().is_some() {
-                return Err(Error::MalformedV2RefLine(trimmed.to_owned().into()));
+                return Err(CorruptionError::new(format!(
+                    "{trimmed:?} could not be parsed. A V2 ref line should be '<hex-hash> <path>[ (peeled|symref-target):<value>'."
+                ))
+                .raise_erased());
             }
             Ok(match (symref_target, peeled) {
                 (Some(target_name), peeled) => match target_name {
                     b"(null)" => match peeled {
                         None => Ref::Direct {
                             full_ref_name: path.into(),
-                            object: id.ok_or(Error::InvariantViolation {
-                                message: "got 'unborn' while (null) was a symref target",
+                            object: id.ok_or_else(|| {
+                                CorruptionError::new("got 'unborn' while (null) was a symref target")
+                                    .raise_erased()
                             })?,
                         },
                         Some(peeled) => Ref::Peeled {
                             full_ref_name: path.into(),
                             object: peeled,
-                            tag: id.ok_or(Error::InvariantViolation {
-                                message: "got 'unborn' while (null) was a symref target",
+                            tag: id.ok_or_else(|| {
+                                CorruptionError::new("got 'unborn' while (null) was a symref target")
+                                    .raise_erased()
                             })?,
                         },
                     },
@@ -273,19 +307,22 @@ pub(in crate::handshake::refs) fn parse_v2(line: &BStr) -> Result<Ref, Error> {
                 (None, Some(peeled)) => Ref::Peeled {
                     full_ref_name: path.into(),
                     object: peeled,
-                    tag: id.ok_or(Error::InvariantViolation {
-                        message: "got 'unborn' as tag target",
+                    tag: id.ok_or_else(|| {
+                        CorruptionError::new("got 'unborn' as tag target").raise_erased()
                     })?,
                 },
                 (None, None) => Ref::Direct {
-                    object: id.ok_or(Error::InvariantViolation {
-                        message: "got 'unborn' as object name of direct reference",
+                    object: id.ok_or_else(|| {
+                        CorruptionError::new("got 'unborn' as object name of direct reference").raise_erased()
                     })?,
                     full_ref_name: path.into(),
                 },
             })
         }
-        _ => Err(Error::MalformedV2RefLine(trimmed.to_owned().into())),
+        _ => Err(CorruptionError::new(format!(
+            "{trimmed:?} could not be parsed. A V2 ref line should be '<hex-hash> <path>[ (peeled|symref-target):<value>'."
+        ))
+        .raise_erased()),
     }
 }
 

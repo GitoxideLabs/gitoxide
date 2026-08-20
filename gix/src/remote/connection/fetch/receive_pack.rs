@@ -1,5 +1,6 @@
 use std::{ops::DerefMut, path::PathBuf, sync::atomic::AtomicBool};
 
+use gix_error::{ResultExt, message};
 use gix_odb::store::RefreshMode;
 use gix_protocol::fetch::{Arguments, negotiate};
 #[cfg(feature = "async-network-client")]
@@ -178,7 +179,7 @@ where
 
         let res = gix_protocol::fetch(
             &mut negotiate,
-            |reader, progress, should_interrupt| -> Result<bool, gix_pack::bundle::write::Error> {
+            |reader, progress, should_interrupt| -> Result<bool, gix_error::Exn> {
                 let mut may_read_to_end = false;
                 write_pack_bundle = if matches!(self.dry_run, fetch::DryRun::No) {
                     let res = gix_pack::Bundle::write_to_directory(
@@ -192,7 +193,8 @@ where
                         })),
                         repo.object_hash(),
                         write_pack_options,
-                    )?;
+                    )
+                    .or_raise_erased(|| message("Failed to write the received pack"))?;
                     may_read_to_end = true;
                     Some(res)
                 } else {
@@ -205,7 +207,8 @@ where
             context,
             fetch_options,
         )
-        .await?;
+        .await
+        .map_err(gix_error::Exn::into_error)?;
         let negotiate = res.map(|v| outcome::Negotiate {
             graph: graph.detach(),
             rounds: v.negotiate.rounds,
@@ -277,7 +280,7 @@ impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
             {
                 let alternates = std::mem::take(&mut self.alternates);
                 let open_options = self.open_options.clone();
-                move || -> Result<_, std::convert::Infallible> {
+                move || {
                     Ok(alternates
                         .into_iter()
                         .filter_map(move |path| {
