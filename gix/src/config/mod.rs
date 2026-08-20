@@ -123,10 +123,7 @@ pub enum Error {
     #[error(transparent)]
     FromEnv(#[from] gix_config::file::init::from_env::Error),
     #[error("The path {path:?} at the 'core.worktree' configuration could not be interpolated")]
-    PathInterpolation {
-        path: BString,
-        source: gix_config::path::interpolate::Error,
-    },
+    PathInterpolation { path: BString, source: gix_error::Error },
     #[error("{source:?} configuration overrides at open or init time could not be applied.")]
     ConfigOverrides {
         #[source]
@@ -256,7 +253,7 @@ pub mod command_context {
         #[error(transparent)]
         Boolean(#[from] config::boolean::Error),
         #[error(transparent)]
-        ParseBool(#[from] gix_config::value::Error),
+        ParseBool(#[from] gix_error::Error),
     }
 }
 
@@ -274,7 +271,7 @@ pub mod exclude_stack {
         #[error(transparent)]
         EnvironmentPermission(#[from] gix_sec::permission::Error<PathBuf>),
         #[error("The value for `core.excludesFile` could not be read from configuration")]
-        ExcludesFilePathInterpolation(#[from] gix_config::path::interpolate::Error),
+        ExcludesFilePathInterpolation(#[from] gix_error::Error),
         #[error(transparent)]
         ParsePreciousEnabled(#[from] config::boolean::Error),
     }
@@ -289,7 +286,7 @@ pub mod attribute_stack {
         #[error("An attribute file could not be read")]
         Io(#[from] std::io::Error),
         #[error("Failed to interpolate the attribute file configured at `core.attributesFile`")]
-        AttributesFileInterpolation(#[from] gix_config::path::interpolate::Error),
+        AttributesFileInterpolation(#[from] gix_error::Error),
     }
 }
 
@@ -412,10 +409,10 @@ pub mod key {
     }
 
     /// A generic key error for use when it doesn't seem worth it say more than 'key is invalid' along with meta-data.
-    pub type GenericError<E = gix_config::value::Error> = Error<E, 'k', 'i'>;
+    pub type GenericError<E = gix_error::Error> = Error<E, 'k', 'i'>;
 
     /// A generic key error which will also contain a value.
-    pub type GenericErrorWithValue<E = gix_config::value::Error> = Error<E, 'v', 'i'>;
+    pub type GenericErrorWithValue<E = gix_error::Error> = Error<E, 'v', 'i'>;
 }
 
 ///
@@ -442,7 +439,7 @@ pub mod checkout {
         use crate::config;
 
         /// The error produced when failing to parse the `checkout.workers` key.
-        pub type Error = config::key::Error<gix_config::value::Error, 'n', 'd'>;
+        pub type Error = config::key::Error<gix_error::Error, 'n', 'd'>;
     }
 }
 
@@ -494,25 +491,25 @@ pub mod commit_signature {
 ///
 pub mod lock_timeout {
     /// The error produced when failing to parse timeout for locks.
-    pub type Error = super::key::Error<gix_config::value::Error, 'i', 'i'>;
+    pub type Error = super::key::Error<gix_error::Error, 'i', 'i'>;
 }
 
 ///
 pub mod duration {
     /// The error produced when failing to parse durations (in milliseconds).
-    pub type Error = super::key::Error<gix_config::value::Error, 'd', 'i'>;
+    pub type Error = super::key::Error<gix_error::Error, 'd', 'i'>;
 }
 
 ///
 pub mod boolean {
     /// The error produced when failing to parse time from configuration.
-    pub type Error = super::key::Error<gix_config::value::Error, 'b', 'i'>;
+    pub type Error = super::key::Error<gix_error::Error, 'b', 'i'>;
 }
 
 ///
 pub mod unsigned_integer {
     /// The error produced when failing to parse a signed integer from configuration.
-    pub type Error = super::key::Error<gix_config::value::Error, 'k', 'u'>;
+    pub type Error = super::key::Error<gix_error::Error, 'k', 'u'>;
 }
 
 ///
@@ -563,12 +560,12 @@ pub mod transport {
         },
         #[error("Could not interpret configuration key {key:?}")]
         ConfigValue {
-            source: gix_config::value::Error,
+            source: gix_error::Error,
             key: &'static str,
         },
         #[error("Could not interpolate path at key {key:?}")]
         InterpolatePath {
-            source: gix_config::path::interpolate::Error,
+            source: gix_error::Error,
             key: &'static str,
         },
         #[error("Could not decode value at key {key:?} as UTF-8 string")]

@@ -260,7 +260,8 @@ mod duration {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<std::time::Duration>, config::duration::Error> {
-            let Some(value) = value.map_err(|err| config::duration::Error::from(self).with_source(err))? else {
+            let Some(value) = value.map_err(|err| config::duration::Error::from(self).with_source(err.into_error()))?
+            else {
                 return Ok(None);
             };
             Ok(Some(match value {
@@ -292,7 +293,9 @@ mod lock_timeout {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<gix_lock::acquire::Fail>, config::lock_timeout::Error> {
-            let Some(value) = value.map_err(|err| config::lock_timeout::Error::from(self).with_source(err))? else {
+            let Some(value) =
+                value.map_err(|err| config::lock_timeout::Error::from(self).with_source(err.into_error()))?
+            else {
                 return Ok(None);
             };
             Ok(Some(match value {
@@ -324,7 +327,9 @@ mod compression {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<gix_zlib::Compression>, config::key::GenericError> {
-            let Some(value) = value.map_err(|err| config::key::GenericError::from(self).with_source(err))? else {
+            let Some(value) =
+                value.map_err(|err| config::key::GenericError::from(self).with_source(err.into_error()))?
+            else {
                 return Ok(None);
             };
             match value {
@@ -427,7 +432,8 @@ mod workers {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<usize>, crate::config::unsigned_integer::Error> {
-            let value = value.map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err))?;
+            let value = value
+                .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
             value
                 .map(|value| {
                     value
@@ -442,7 +448,8 @@ mod workers {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<u64>, crate::config::unsigned_integer::Error> {
-            let value = value.map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err))?;
+            let value = value
+                .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
             value
                 .map(|value| {
                     value
@@ -457,7 +464,8 @@ mod workers {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<u32>, crate::config::unsigned_integer::Error> {
-            let value = value.map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err))?;
+            let value = value
+                .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
             value
                 .map(|value| {
                     value
@@ -525,7 +533,7 @@ mod boolean {
             &'static self,
             value: Result<Option<bool>, gix_config::value::Error>,
         ) -> Result<Option<bool>, config::boolean::Error> {
-            value.map_err(|err| config::boolean::Error::from(self).with_source(err))
+            value.map_err(|err| config::boolean::Error::from(self).with_source(err.into_error()))
         }
     }
 }

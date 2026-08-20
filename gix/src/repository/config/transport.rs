@@ -325,7 +325,10 @@ impl crate::Repository {
                             })
                             .transpose()
                             .with_leniency(lenient)
-                            .map_err(|err| config::transport::Error::InterpolatePath { source: err, key })?;
+                            .map_err(|err| config::transport::Error::InterpolatePath {
+                                source: err.into_error(),
+                                key,
+                            })?;
                     }
 
                     {

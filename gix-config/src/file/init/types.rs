@@ -7,11 +7,17 @@ pub enum Error {
     #[error(transparent)]
     Parse(#[from] parse::Error),
     #[error(transparent)]
-    Interpolate(#[from] interpolate::Error),
+    Interpolate(gix_error::Error),
     #[error(transparent)]
     Includes(#[from] init::includes::Error),
     #[error(transparent)]
     Span(#[from] parse::span::Error),
+}
+
+impl From<interpolate::Error> for Error {
+    fn from(err: interpolate::Error) -> Self {
+        Error::Interpolate(err.into_error())
+    }
 }
 
 /// Options when loading git config using [`File::from_paths_metadata()`][crate::File::from_paths_metadata()].

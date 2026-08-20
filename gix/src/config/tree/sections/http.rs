@@ -134,7 +134,7 @@ mod key_impls {
             Ok(if value.as_bstr().as_bytes() == b"initial" {
                 FollowRedirects::Initial
             } else if let Some(value) = boolean().map_err(|err| {
-                crate::config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err)
+                crate::config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err.into_error())
             })? {
                 if value {
                     FollowRedirects::All
