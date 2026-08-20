@@ -1,6 +1,8 @@
 #![allow(clippy::result_large_err)]
 use std::path::Path;
 
+use gix_error::{ErrorExt, message};
+
 pub use gix_discover::*;
 
 use crate::{ThreadSafeRepository, bstr::BString};
@@ -10,7 +12,7 @@ use crate::{ThreadSafeRepository, bstr::BString};
 #[expect(missing_docs)]
 pub enum Error {
     #[error(transparent)]
-    Discover(#[from] upwards::Error),
+    Discover(#[from] gix_error::Error),
     #[error(transparent)]
     Open(#[from] crate::open::Error),
 }
@@ -36,12 +38,18 @@ impl ThreadSafeRepository {
         trust_map: gix_sec::trust::Mapping<crate::open::Options>,
     ) -> Result<Self, Error> {
         let _span = gix_trace::coarse!("ThreadSafeRepository::discover()");
-        let (path, trust) = upwards_opts(directory.as_ref(), options)?;
+        let (path, trust) =
+            upwards_opts(directory.as_ref(), options).map_err(|err| Error::Discover(err.into_error()))?;
         let (git_dir, worktree_dir) = path.into_repository_and_work_tree_directories();
         let mut options = trust_map.into_value_by_level(trust);
         options.git_dir_trust = trust.into();
         // Note that we will adjust the `current_dir` later so it matches the value of `core.precomposeUnicode`.
-        options.current_dir = Some(gix_fs::current_dir(false).map_err(upwards::Error::CurrentDir)?);
+        options.current_dir = Some(gix_fs::current_dir(false).map_err(|err| {
+            Error::Discover(
+                err.and_raise(message("Could not obtain the current working directory"))
+                    .into_error(),
+            )
+        })?);
         Self::open_from_paths(git_dir, worktree_dir, options).map_err(Into::into)
     }
 

@@ -829,7 +829,8 @@ fn stripped_prefix(prefix: impl AsRef<Path>, source_files: &[PathBuf]) -> Vec<&P
 
 fn probe_gitoxide_dir() -> crate::Result<gix_fs::Capabilities> {
     Ok(gix_fs::Capabilities::probe(
-        &gix_discover::upwards(".".as_ref())?
+        &gix_discover::upwards(".".as_ref())
+            .map_err(gix_discover::upwards::Error::into_error)?
             .0
             .into_repository_and_work_tree_directories()
             .0,
