@@ -4,6 +4,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{ResultExt, message};
 
 use crate::{
     Entry, EntryRef, entry,
@@ -176,7 +177,7 @@ pub fn path(
                         )
                         .map(|platform| platform.excluded_kind())
                 })
-                .map_err(Error::ExcludesAccess)?
+                .or_raise_erased(|| message("Failed to update the excludes stack to see if a path is excluded"))?
                 .filter(|_| filename_start_idx > 0)
             {
                 out.status = entry::Status::Ignored(excluded);
@@ -254,7 +255,7 @@ pub fn path(
                 .at_entry(rela_path.as_bstr(), is_dir, ctx.objects)
                 .map(|platform| platform.excluded_kind())
         })
-        .map_err(Error::ExcludesAccess)?
+        .or_raise_erased(|| message("Failed to update the excludes stack to see if a path is excluded"))?
     {
         if emit_ignored.is_some() {
             if matches!(

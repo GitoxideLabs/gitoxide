@@ -22,6 +22,7 @@ sha1 = ["gix-index/sha1", "gix-worktree/sha1"]
 sha256 = ["gix-index/sha256", "gix-worktree/sha256"]
 
 [dependencies]
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 gix-trace = { version = "^0.1.21", path = "../gix-trace" }
 gix-index = { version = "^0.55.0", path = "../gix-index" }
 gix-discover = { version = "^0.55.0", path = "../gix-discover" }
@@ -34,7 +35,6 @@ gix-ignore = { version = "^0.22.1", path = "../gix-ignore" }
 gix-utils = { version = "^0.3.6", path = "../gix-utils", features = ["bstr"] }
 
 bstr = { version = "1.12.0", default-features = false }
-thiserror = "2.0.18"
 
 [dev-dependencies]
 gix-dir = { path = ".", features = ["sha1", "sha256"] }

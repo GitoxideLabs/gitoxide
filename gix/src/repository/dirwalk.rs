@@ -104,7 +104,8 @@ impl Repository {
             },
             opts,
             delegate,
-        )?;
+        )
+        .map_err(|err| dirwalk::Error::Walk(err.into_error()))?;
 
         Ok(dirwalk::Outcome {
             dirwalk: outcome,
