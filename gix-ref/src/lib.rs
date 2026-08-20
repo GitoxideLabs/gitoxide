@@ -31,6 +31,7 @@ use gix_object::bstr::{BStr, BString};
 mod store_impl;
 pub use store_impl::{file, packed};
 
+mod compare;
 mod fullname;
 ///
 pub mod name;
