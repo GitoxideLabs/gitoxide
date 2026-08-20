@@ -7,20 +7,43 @@ use gix_object::bstr::BString;
 use crate::tree::visit::Relation;
 
 /// The error returned by [`tree()`](super::tree()).
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Find(gix_error::Error),
-    #[error("The delegate cancelled the operation")]
     Cancelled,
-    #[error(transparent)]
-    EntriesDecode(#[from] gix_object::decode::Error),
+    Failure(gix_error::Error),
 }
 
-impl From<gix_object::find::existing_iter::Error> for Error {
-    fn from(err: gix_object::find::existing_iter::Error) -> Self {
-        Error::Find(err.into_error())
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Cancelled => f.write_str("The delegate cancelled the operation"),
+            Error::Failure(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Cancelled => None,
+            Error::Failure(err) => Some(err),
+        }
+    }
+}
+
+impl<E> From<gix_error::Exn<E>> for Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn from(err: gix_error::Exn<E>) -> Self {
+        Error::Failure(err.into_error())
+    }
+}
+
+impl From<gix_object::decode::Error> for Error {
+    fn from(err: gix_object::decode::Error) -> Self {
+        Error::Failure(gix_error::Error::from_error(err))
     }
 }
 
