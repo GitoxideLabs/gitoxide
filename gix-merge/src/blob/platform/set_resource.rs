@@ -1,28 +1,10 @@
-use bstr::{BStr, BString};
+use bstr::BStr;
+use gix_error::{ErrorExt, ResultExt, message};
 
-use crate::blob::{Platform, ResourceKind, pipeline, platform::Resource};
+use crate::blob::{Platform, ResourceKind, platform::Resource};
 
 /// The error returned by [Platform::set_resource](Platform::set_resource).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Can only diff blobs, not {mode:?}")]
-    InvalidMode { mode: gix_object::tree::EntryKind },
-    #[error("Failed to read {kind:?} worktree data from '{rela_path}'")]
-    Io {
-        rela_path: BString,
-        kind: ResourceKind,
-        source: std::io::Error,
-    },
-    #[error("Failed to obtain attributes for {kind:?} resource at '{rela_path}'")]
-    Attributes {
-        rela_path: BString,
-        kind: ResourceKind,
-        source: std::io::Error,
-    },
-    #[error(transparent)]
-    ConvertToMergeable(#[from] pipeline::convert_to_mergeable::Error),
-}
+pub type Error = gix_error::Exn<gix_error::Message>;
 
 /// Preparation
 impl Platform {
@@ -49,16 +31,12 @@ impl Platform {
             mode,
             gix_object::tree::EntryKind::Blob | gix_object::tree::EntryKind::BlobExecutable
         ) {
-            return Err(Error::InvalidMode { mode });
+            return Err(message!("Can only diff blobs, not {mode:?}").raise());
         }
         let entry = self
             .attr_stack
             .at_entry(rela_path, None, objects)
-            .map_err(|err| Error::Attributes {
-                source: err,
-                kind,
-                rela_path: rela_path.to_owned(),
-            })?;
+            .or_raise(|| message!("Failed to obtain attributes for {kind:?} resource at '{rela_path}'"))?;
 
         let storage = match kind {
             ResourceKind::OtherOrTheirs => &mut self.other,
@@ -67,18 +45,21 @@ impl Platform {
         };
 
         let mut buf_storage = Vec::new();
-        let out = self.filter.convert_to_mergeable(
-            &id,
-            mode,
-            rela_path,
-            kind,
-            &mut |_, out| {
-                let _ = entry.matching_attributes(out);
-            },
-            objects,
-            self.filter_mode,
-            storage.as_mut().map_or(&mut buf_storage, |s| &mut s.buffer),
-        )?;
+        let out = self
+            .filter
+            .convert_to_mergeable(
+                &id,
+                mode,
+                rela_path,
+                kind,
+                &mut |_, out| {
+                    let _ = entry.matching_attributes(out);
+                },
+                objects,
+                self.filter_mode,
+                storage.as_mut().map_or(&mut buf_storage, |s| &mut s.buffer),
+            )
+            .or_raise(|| message("Failed to convert resource to mergeable form"))?;
 
         match storage {
             None => {
