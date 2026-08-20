@@ -1,4 +1,4 @@
-type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T = ()> = gix_error::Result<T>;
 
 mod boolean;
 mod color;

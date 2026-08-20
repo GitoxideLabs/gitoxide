@@ -88,7 +88,8 @@ mod key_impls {
                 Ok(Some(value)) => value,
                 Err(err) => {
                     return Err(
-                        crate::config::key::GenericErrorWithValue::from_value(self, "unknown".into()).with_source(err),
+                        crate::config::key::GenericErrorWithValue::from_value(self, "unknown".into())
+                            .with_source(err.into_error()),
                     );
                 }
             };

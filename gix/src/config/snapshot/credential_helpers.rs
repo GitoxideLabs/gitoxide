@@ -10,12 +10,9 @@ mod error {
     #[expect(missing_docs)]
     pub enum Error {
         #[error("Could not parse 'useHttpPath' key in section {section}")]
-        InvalidUseHttpPath {
-            section: BString,
-            source: gix_config::value::Error,
-        },
+        InvalidUseHttpPath { section: BString, source: gix_error::Error },
         #[error("core.askpass could not be read")]
-        CoreAskpass(#[from] gix_config::path::interpolate::Error),
+        CoreAskpass(#[from] gix_error::Error),
         #[error(transparent)]
         BooleanConfig(#[from] crate::config::boolean::Error),
     }
@@ -169,7 +166,7 @@ pub(super) mod function {
                         .map(|val| {
                             gix_config::Boolean::try_from(val)
                                 .map_err(|err| Error::InvalidUseHttpPath {
-                                    source: err,
+                                    source: err.into_error(),
                                     section: section.header().to_bstring(),
                                 })
                                 .map(|b| b.0)
@@ -200,10 +197,10 @@ pub(super) mod function {
                 config,
                 Core::ASKPASS,
                 &mut filter,
-                is_lenient_config,
+                true, // An empty core.askpass is allowed even with strict configuration.
                 environment,
             )
-            .ignore_empty()?,
+            .map_err(gix_error::Exn::into_error)?,
             mode: Credentials::TERMINAL_PROMPT
                 .enrich_error(config.boolean(Credentials::TERMINAL_PROMPT))
                 .with_leniency(is_lenient_config)?
@@ -274,19 +271,5 @@ pub(super) mod function {
             }
         }
         gix_url::parse(pattern).ok()
-    }
-
-    trait IgnoreEmptyPath {
-        fn ignore_empty(self) -> Self;
-    }
-
-    impl IgnoreEmptyPath for Result<Option<std::path::PathBuf>, gix_config::path::interpolate::Error> {
-        fn ignore_empty(self) -> Self {
-            match self {
-                Ok(maybe_path) => Ok(maybe_path),
-                Err(gix_config::path::interpolate::Error::Missing { .. }) => Ok(None),
-                Err(err) => Err(err),
-            }
-        }
     }
 }

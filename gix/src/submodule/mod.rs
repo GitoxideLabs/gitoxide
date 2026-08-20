@@ -149,8 +149,8 @@ impl Submodule<'_> {
     /// Return the `shallow` field from this submodule's configuration, if present, or `None`.
     ///
     /// If `true`, the submodule will be checked out with `depth = 1`. If unset, `false` is assumed.
-    pub fn shallow(&self) -> Result<Option<bool>, gix_config::value::Error> {
-        self.state.modules.shallow(self.name())
+    pub fn shallow(&self) -> Result<Option<bool>, gix_error::Error> {
+        self.state.modules.shallow(self.name()).map_err(Into::into)
     }
 
     /// Returns true if this submodule is considered active and can thus participate in an operation.
@@ -158,16 +158,18 @@ impl Submodule<'_> {
     /// Please see the [plumbing crate documentation](gix_submodule::IsActivePlatform::is_active()) for details.
     pub fn is_active(&self) -> Result<bool, is_active::Error> {
         let (mut platform, mut attributes) = self.state.active_state_mut()?;
-        let is_active = platform.is_active(
-            &self.state.repo.config.resolved,
-            self.name.as_ref(),
-            &mut |relative_path, case, is_dir, out| {
-                attributes
-                    .set_case(case)
-                    .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &self.state.repo.objects)
-                    .is_ok_and(|platform| platform.matching_attributes(out))
-            },
-        )?;
+        let is_active = platform
+            .is_active(
+                &self.state.repo.config.resolved,
+                self.name.as_ref(),
+                &mut |relative_path, case, is_dir, out| {
+                    attributes
+                        .set_case(case)
+                        .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &self.state.repo.objects)
+                        .is_ok_and(|platform| platform.matching_attributes(out))
+                },
+            )
+            .map_err(|err| is_active::Error::QueryIsActive(err.into_error()))?;
         Ok(is_active)
     }
 

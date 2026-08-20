@@ -26,31 +26,7 @@
 #![deny(missing_docs, unsafe_code)]
 
 /// The error returned when any config value couldn't be instantiated due to malformed input.
-#[derive(Debug, thiserror::Error, Eq, PartialEq)]
-#[expect(missing_docs)]
-#[error("Could not decode '{input}': {message}")]
-pub struct Error {
-    pub message: &'static str,
-    pub input: bstr::BString,
-    #[source]
-    pub utf8_err: Option<std::str::Utf8Error>,
-}
-
-impl Error {
-    /// Create a new value error from `message`, with `input` being what's causing the error.
-    pub fn new(message: &'static str, input: impl Into<bstr::BString>) -> Self {
-        Error {
-            message,
-            input: input.into(),
-            utf8_err: None,
-        }
-    }
-
-    pub(crate) fn with_err(mut self, err: std::str::Utf8Error) -> Self {
-        self.utf8_err = Some(err);
-        self
-    }
-}
+pub type Error = gix_error::Exn<gix_error::ValidationError>;
 
 mod boolean;
 /// Color value parsing and the supported color names and attributes.

@@ -9,9 +9,15 @@ pub mod from_environment {
     #[expect(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        ParseValue(#[from] gix_config_value::Error),
+        ParseValue(gix_error::Error),
         #[error("Glob and no-glob settings are mutually exclusive")]
         MixedGlobAndNoGlob,
+    }
+
+    impl From<gix_config_value::Error> for Error {
+        fn from(err: gix_config_value::Error) -> Self {
+            Error::ParseValue(err.into_error())
+        }
     }
 }
 

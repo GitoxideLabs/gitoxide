@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
+use gix_error::ValidationError;
 use gix_features::threading::OwnShared;
 use gix_ref::Category;
 
@@ -251,7 +252,9 @@ fn gitdir_matches(
         let path = match check_interpolation_result(
             err_on_interpolation_failure,
             crate::Path::from(condition_path.to_owned()).interpolate(context),
-        )? {
+        )
+        .map_err(|err| Error::Interpolate(err.into_error()))?
+        {
             Some(p) => p,
             None => return Ok(false),
         };
@@ -292,9 +295,9 @@ fn gitdir_matches(
         return Ok(true);
     }
 
-    let expanded_git_dir = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(gix_path::realpath(
-        gix_path::from_byte_slice(&git_dir),
-    )?));
+    let expanded_git_dir = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(
+        gix_path::realpath(gix_path::from_byte_slice(&git_dir)).map_err(|err| Error::Realpath(err.into_error()))?,
+    ));
     Ok(gix_glob::wildmatch(
         pattern_path.as_bstr(),
         expanded_git_dir.as_ref(),
@@ -311,14 +314,8 @@ fn check_interpolation_result(
     }
     match res {
         Ok(good) => Ok(Some(good.into())),
-        Err(err) => match err {
-            path::interpolate::Error::Missing { .. } | path::interpolate::Error::UserInterpolationUnsupported => {
-                Ok(None)
-            }
-            path::interpolate::Error::UsernameConversion(_) | path::interpolate::Error::Utf8Conversion { .. } => {
-                Err(err)
-            }
-        },
+        Err(err) if err.downcast_any_ref::<ValidationError>().is_some() => Err(err),
+        Err(_) => Ok(None),
     }
 }
 
@@ -332,7 +329,9 @@ fn resolve_path(
         ..
     }: includes::Options<'_>,
 ) -> Result<Option<PathBuf>, Error> {
-    let path = match check_interpolation_result(err_on_interpolation_failure, path.interpolate(context))? {
+    let path = match check_interpolation_result(err_on_interpolation_failure, path.interpolate(context))
+        .map_err(|err| Error::Interpolate(err.into_error()))?
+    {
         Some(p) => p,
         None => return Ok(None),
     };

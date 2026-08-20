@@ -148,7 +148,7 @@ mod binary {
                                 .map(|b| b.0)
                                 .map_err(|err| {
                                     crate::config::key::GenericErrorWithValue::from_value(self, value.into())
-                                        .with_source(err)
+                                        .with_source(err.into_error())
                                 })?,
                         )
                     }
@@ -184,10 +184,15 @@ mod renames {
                 Ok(Some(false)) => Some(Tracking::Disabled),
                 Ok(None) => None,
                 Err(err) => {
-                    let value = &err.input;
+                    let value = err
+                        .error()
+                        .input
+                        .as_ref()
+                        .expect("gix-config-value validation errors retain their input")
+                        .clone();
                     match value.as_bytes() {
                         b"copy" | b"copies" => Some(Tracking::RenamesAndCopies),
-                        _ => return Err(GenericError::from_value(self, value.clone()).with_source(err)),
+                        _ => return Err(GenericError::from_value(self, value).with_source(err.into_error())),
                     }
                 }
             })

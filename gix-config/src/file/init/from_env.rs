@@ -17,13 +17,19 @@ pub enum Error {
     #[error("GIT_CONFIG_VALUE_{} was not set", .value_id)]
     InvalidValueId { value_id: usize },
     #[error(transparent)]
-    PathInterpolationError(#[from] interpolate::Error),
+    PathInterpolationError(gix_error::Error),
     #[error(transparent)]
     Includes(#[from] init::includes::Error),
     #[error(transparent)]
     Section(#[from] section::header::Error),
     #[error(transparent)]
     SectionValue(#[from] file::section::value::Error),
+}
+
+impl From<interpolate::Error> for Error {
+    fn from(err: interpolate::Error) -> Self {
+        Error::PathInterpolationError(err.into_error())
+    }
 }
 
 /// Instantiation from environment variables

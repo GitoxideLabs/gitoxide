@@ -11,7 +11,7 @@ pub mod load {
         #[error("The configured mailmap.blob could not be parsed")]
         BlobSpec(#[from] crate::revision::spec::parse::single::Error),
         #[error(transparent)]
-        PathInterpolate(#[from] gix_config::path::interpolate::Error),
+        PathInterpolate(#[from] gix_error::Error),
         #[error("Could not find object configured in `mailmap.blob`")]
         FindExisting(#[from] crate::object::find::existing::Error),
     }

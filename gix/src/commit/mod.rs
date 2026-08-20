@@ -14,7 +14,7 @@ pub mod verify;
 fn signature_program(
     config: &crate::config::Snapshot<'_>,
     format: gix_object::signature::Format,
-) -> Result<std::ffi::OsString, gix_config::path::interpolate::Error> {
+) -> Result<std::ffi::OsString, gix_error::Error> {
     use crate::config::tree::{Gpg, Key, gpg};
     use gix_object::signature::Format;
 

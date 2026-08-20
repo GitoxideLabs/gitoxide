@@ -18,7 +18,7 @@ pub enum Error {
     #[error(transparent)]
     InvalidTrustLevel(#[from] crate::config::key::GenericErrorWithValue),
     #[error("Could not interpolate a configured signature-verification path")]
-    ConfiguredPath(#[from] gix_config::path::interpolate::Error),
+    ConfiguredPath(#[from] gix_error::Error),
     #[error("gpg.ssh.allowedSignersFile must be configured for SSH signature verification")]
     MissingAllowedSigners,
     #[error(transparent)]

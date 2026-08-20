@@ -1781,6 +1781,7 @@ dependencies = [
  "document-features",
  "gix-config",
  "gix-config-value",
+ "gix-error",
  "gix-features",
  "gix-glob",
  "gix-path",
@@ -1803,10 +1804,10 @@ dependencies = [
  "bitflags 2.13.0",
  "bstr",
  "document-features",
+ "gix-error",
  "gix-path",
  "libc",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2331,6 +2332,7 @@ dependencies = [
  "bstr",
  "gix-attributes",
  "gix-config-value",
+ "gix-error",
  "gix-glob",
  "gix-path",
  "gix-testtools",

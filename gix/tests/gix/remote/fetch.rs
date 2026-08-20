@@ -81,7 +81,6 @@ mod blocking_and_async_io {
         dir.join(name)
     }
 
-    #[expect(clippy::result_large_err)]
     pub(crate) fn try_repo_rw(
         name: &str,
     ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix::open::Error> {
@@ -93,7 +92,6 @@ mod blocking_and_async_io {
         CloneWithShallowSupport,
     }
 
-    #[expect(clippy::result_large_err)]
     pub(crate) fn try_repo_rw_args<S: Into<String>>(
         name: &str,
         args: impl IntoIterator<Item = S>,
