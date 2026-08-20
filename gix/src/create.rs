@@ -23,9 +23,7 @@ pub enum Error {
     #[error("Could not create directory at '{}'", .path.display())]
     CreateDirectory { source: std::io::Error, path: PathBuf },
     #[error(transparent)]
-    Span(#[from] gix_config::parse::span::Error),
-    #[error(transparent)]
-    ConfigValue(#[from] gix_config::file::section::value::Error),
+    Config(#[from] gix_error::ValidationError),
 }
 
 /// The kind of repository to create.

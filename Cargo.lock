@@ -1762,7 +1762,6 @@ dependencies = [
  "serde",
  "serial_test",
  "smallvec",
- "thiserror 2.0.18",
  "unicode-bom",
 ]
 
@@ -2544,6 +2543,7 @@ dependencies = [
  "fs_extra",
  "gix-config",
  "gix-discover",
+ "gix-error",
  "gix-fs",
  "gix-hash",
  "gix-index",

@@ -286,10 +286,7 @@ pub(crate) fn load(
             ..options
         },
     )
-    .map_err(|err| match err {
-        gix_config::file::init::from_paths::Error::Init(err) => Error::from(err),
-        gix_config::file::init::from_paths::Error::Io { source, path } => Error::Io { source, path },
-    })?
+    .map_err(Error::from)?
     .unwrap_or_default();
 
     let local_meta = git_dir_config.as_ref().map(gix_config::File::meta_owned);

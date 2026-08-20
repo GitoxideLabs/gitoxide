@@ -366,20 +366,18 @@ fn sections_by_name_ignores_subsections_and_preserves_file_order() -> crate::Res
 #[test]
 fn unknown_section() -> crate::Result {
     let config = File::default();
-    assert!(matches!(
-        config.section("missing", None).unwrap_err(),
-        gix_config::lookup::existing::Error::SectionMissing
-    ));
+    let err = config.section("missing", None).unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The requested section does not exist");
 
     let config = r#"
     [present]
         key = false
     "#;
     let mut config = File::try_from(config)?;
-    assert!(matches!(
-        config.section("present", Some("subsection".into())).unwrap_err(),
-        gix_config::lookup::existing::Error::SubSectionMissing
-    ));
+    let err = config.section("present", Some("subsection".into())).unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The requested subsection does not exist");
 
     config.set_raw_value_by("present", "subsection", "key", "value")?;
     assert!(config.section("present", Some("subsection".into())).is_ok());
@@ -390,10 +388,9 @@ fn unknown_section() -> crate::Result {
     for id in config.sections_and_ids().map(|(_, id)| id).collect::<Vec<_>>() {
         assert!(config.remove_section_by_id(id).is_some());
     }
-    assert!(matches!(
-        config.section("present", None).unwrap_err(),
-        gix_config::lookup::existing::Error::SectionMissing
-    ));
+    let err = config.section("present", None).unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The requested section does not exist");
 
     Ok(())
 }

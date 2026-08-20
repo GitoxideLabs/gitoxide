@@ -60,13 +60,19 @@ pub mod set_value {
     #[expect(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        SetRaw(#[from] gix_config::file::set_raw_value::Error),
+        SetRaw(gix_error::Error),
         #[error(transparent)]
         Validate(#[from] crate::config::tree::key::validate::Error),
         #[error("The key needs a subsection parameter to be valid.")]
         SubSectionRequired,
         #[error("The key must not be used with a subsection")]
         SubSectionForbidden,
+    }
+
+    impl From<gix_config::file::set_raw_value::Error> for Error {
+        fn from(err: gix_config::file::set_raw_value::Error) -> Self {
+            Error::SetRaw(err.into_error())
+        }
     }
 }
 
@@ -103,15 +109,9 @@ pub enum Error {
         path: std::path::PathBuf,
     },
     #[error(transparent)]
-    Init(#[from] gix_config::file::init::Error),
+    Config(gix_error::Error),
     #[error(transparent)]
-    ResolveIncludes(#[from] gix_config::file::includes::Error),
-    #[error(transparent)]
-    Span(#[from] gix_config::parse::span::Error),
-    #[error(transparent)]
-    ConfigValue(#[from] gix_config::file::section::value::Error),
-    #[error(transparent)]
-    FromEnv(#[from] gix_config::file::init::from_env::Error),
+    ConfigValidation(#[from] gix_error::ValidationError),
     #[error("The path {path:?} at the 'core.worktree' configuration could not be interpolated")]
     PathInterpolation { path: BString, source: gix_error::Error },
     #[error("{source:?} configuration overrides at open or init time could not be applied.")]
@@ -120,6 +120,18 @@ pub enum Error {
         err: overrides::Error,
         source: gix_config::Source,
     },
+}
+
+impl From<gix_error::Exn> for Error {
+    fn from(err: gix_error::Exn) -> Self {
+        Error::Config(err.into_error())
+    }
+}
+
+impl From<gix_error::Exn<gix_error::Message>> for Error {
+    fn from(err: gix_error::Exn<gix_error::Message>) -> Self {
+        Error::Config(err.into_error())
+    }
 }
 
 ///

@@ -120,9 +120,10 @@ impl crate::Repository {
                 .map_err(|err| delete::Error::ConfigLock(err.into_error()))?;
         let mut config = match gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local) {
             Ok(config) => Some(config),
-            // TODO(gix-error): this is what should just be `err.not_found()` in future, anywhere.
-            Err(gix_config::file::init::from_paths::Error::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound =>
+            Err(err)
+                if err
+                    .downcast_any_ref::<std::io::Error>()
+                    .is_some_and(|source| source.kind() == std::io::ErrorKind::NotFound) =>
             {
                 None
             }
