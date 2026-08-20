@@ -10,7 +10,7 @@ mod streaming {
         res: Result<Stream, decode::Error>,
         expected_consumed: usize,
         expected_value: PacketLineRef,
-    ) -> crate::Result {
+    ) -> Result<(), decode::Error> {
         match res? {
             Stream::Complete { line, bytes_consumed } => {
                 assert_eq!(bytes_consumed, expected_consumed);
@@ -108,17 +108,20 @@ mod streaming {
 
     #[test]
     fn flush() -> crate::Result {
-        assert_complete(streaming(b"0000someotherstuff"), 4, PacketLineRef::Flush)
+        assert_complete(streaming(b"0000someotherstuff"), 4, PacketLineRef::Flush)?;
+        Ok(())
     }
 
     #[test]
     fn trailing_line_feeds_are_not_removed_automatically() -> crate::Result {
-        assert_complete(streaming(b"0006a\n"), 6, PacketLineRef::Data(b"a\n"))
+        assert_complete(streaming(b"0006a\n"), 6, PacketLineRef::Data(b"a\n"))?;
+        Ok(())
     }
 
     #[test]
     fn ignore_extra_bytes() -> crate::Result {
-        assert_complete(streaming(b"0006a\nhello"), 6, PacketLineRef::Data(b"a\n"))
+        assert_complete(streaming(b"0006a\nhello"), 6, PacketLineRef::Data(b"a\n"))?;
+        Ok(())
     }
 
     #[test]
@@ -160,7 +163,7 @@ mod streaming {
     mod incomplete {
         use gix_packetline::decode::{self, Stream, streaming};
 
-        fn assert_incomplete(res: Result<Stream, decode::Error>, expected_missing: usize) -> crate::Result {
+        fn assert_incomplete(res: Result<Stream, decode::Error>, expected_missing: usize) -> Result<(), decode::Error> {
             match res? {
                 Stream::Complete { .. } => {
                     panic!("expected parsing to be partial, not complete");
