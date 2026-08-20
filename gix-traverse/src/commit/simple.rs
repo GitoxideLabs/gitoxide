@@ -69,22 +69,7 @@ pub enum Sorting {
 }
 
 /// The error is part of the item returned by the [Ancestors](super::Simple) iterator.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Find(gix_error::Error),
-    #[error(transparent)]
-    ObjectDecode(#[from] gix_object::decode::Error),
-    #[error(transparent)]
-    HiddenGraph(gix_error::Error),
-}
-
-impl From<gix_object::find::existing_iter::Error> for Error {
-    fn from(err: gix_object::find::existing_iter::Error) -> Self {
-        Error::Find(err.into_error())
-    }
-}
+pub type Error = gix_error::Exn;
 
 use Result as Either;
 
@@ -191,20 +176,16 @@ fn compute_hidden_frontier(
     let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
 
     for &visible in visible_tips {
-        graph
-            .get_or_insert_full_commit(visible, |commit| {
-                commit.data |= PaintFlags::VISIBLE;
-                queue.insert(GenThenTime::from(&*commit), visible);
-            })
-            .map_err(|err| Error::HiddenGraph(err.into_error()))?;
+        graph.get_or_insert_full_commit(visible, |commit| {
+            commit.data |= PaintFlags::VISIBLE;
+            queue.insert(GenThenTime::from(&*commit), visible);
+        })?;
     }
     for &hidden in hidden_tips {
-        graph
-            .get_or_insert_full_commit(hidden, |commit| {
-                commit.data |= PaintFlags::HIDDEN;
-                queue.insert(GenThenTime::from(&*commit), hidden);
-            })
-            .map_err(|err| Error::HiddenGraph(err.into_error()))?;
+        graph.get_or_insert_full_commit(hidden, |commit| {
+            commit.data |= PaintFlags::HIDDEN;
+            queue.insert(GenThenTime::from(&*commit), hidden);
+        })?;
     }
 
     while queue.iter_unordered().any(|id| {
@@ -223,14 +204,12 @@ fn compute_hidden_frontier(
         }
 
         for parent_id in commit.parents.clone() {
-            graph
-                .get_or_insert_full_commit(parent_id, |parent| {
-                    if (parent.data & flags) != flags {
-                        parent.data |= flags;
-                        queue.insert(GenThenTime::from(&*parent), parent_id);
-                    }
-                })
-                .map_err(|err| Error::HiddenGraph(err.into_error()))?;
+            graph.get_or_insert_full_commit(parent_id, |parent| {
+                if (parent.data & flags) != flags {
+                    parent.data |= flags;
+                    queue.insert(GenThenTime::from(&*parent), parent_id);
+                }
+            })?;
         }
     }
 
@@ -253,6 +232,7 @@ mod init {
     };
     use crate::commit::{Either, Info, ParentIds, Parents, Simple};
     use gix_date::SecondsSinceUnixEpoch;
+    use gix_error::{CorruptionError, ErrorExt, ResultExt};
     use gix_hash::{ObjectId, oid};
     use gix_object::{CommitRefIter, FindExt};
     use std::{cmp::Reverse, collections::VecDeque};
@@ -409,7 +389,10 @@ mod init {
         buf: &mut Vec<u8>,
     ) -> Result<(), Error> {
         let commit_iter = objects.find_commit_iter(&commit_id, buf)?;
-        let time = commit_iter.committer()?.seconds();
+        let time = commit_iter
+            .committer()
+            .or_raise_erased(|| CorruptionError::new("A commit could not be decoded during traversal"))?
+            .seconds();
         let key = to_queue_key(time, order);
         match (cutoff_time, order) {
             (Some(cutoff_time), _) if time >= cutoff_time => queue.insert(key, commit_id),
@@ -594,11 +577,17 @@ mod init {
                                     );
                                 }
                                 Ok(_unused_token) => break,
-                                Err(err) => return Some(Err(err.into())),
+                                Err(err) => {
+                                    return Some(Err(err
+                                        .and_raise(CorruptionError::new(
+                                            "A commit could not be decoded during traversal",
+                                        ))
+                                        .erased()));
+                                }
                             }
                         }
                     }
-                    Err(err) => return Some(Err(err.into())),
+                    Err(err) => return Some(Err(err)),
                 }
 
                 return Some(Ok(Info {
@@ -659,11 +648,17 @@ mod init {
                                     }
                                 }
                                 Ok(_a_token_past_the_parents) => break,
-                                Err(err) => return Some(Err(err.into())),
+                                Err(err) => {
+                                    return Some(Err(err
+                                        .and_raise(CorruptionError::new(
+                                            "A commit could not be decoded during traversal",
+                                        ))
+                                        .erased()));
+                                }
                             }
                         }
                     }
-                    Err(err) => return Some(Err(err.into())),
+                    Err(err) => return Some(Err(err)),
                 }
 
                 return Some(Ok(Info {
