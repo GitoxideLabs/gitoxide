@@ -171,7 +171,9 @@ where
         }
 
         inflate.reset();
-        inflate.once(&self.data[offset..], out).map_err(Into::into)
+        inflate
+            .once(&self.data[offset..], out)
+            .map_err(|err| Error::ZlibInflate(err.into_error()))
     }
 
     /// Decode an entry, resolving delta's as needed, while growing the `out` vector if there is not enough
