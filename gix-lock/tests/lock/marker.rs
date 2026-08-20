@@ -10,9 +10,13 @@ mod acquire {
         let guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)?;
         assert!(guard.lock_path().ends_with("the-resource.lock"));
         assert!(guard.resource_path().ends_with("the-resource"));
-        let err_str = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)
-            .expect_err("the lock is taken and there is a failure obtaining it again")
-            .to_string();
+        let err = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)
+            .expect_err("the lock is taken and there is a failure obtaining it again");
+        assert!(
+            err.downcast_any_ref::<gix_error::RetryableError>().is_some(),
+            "lock contention is retryable"
+        );
+        let err_str = err.to_string();
 
         assert!(err_str.contains("the-resource' could not be obtained immediately"));
         assert!(err_str.contains("the-resource.lock"), "it mentions the lockfile itself");

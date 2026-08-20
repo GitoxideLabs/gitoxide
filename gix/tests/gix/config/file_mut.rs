@@ -113,13 +113,17 @@ fn honors_core_config_lock_timeout() -> crate::Result {
         Err(err) => err,
     };
     std::fs::remove_file(lock_path)?;
-    assert!(matches!(
-        err,
-        gix::config::file_mut::Error::AcquireLock(gix::lock::acquire::Error::PermanentlyLocked {
-            mode: gix::lock::acquire::Fail::Immediately,
-            ..
-        })
-    ));
+    let gix::config::file_mut::Error::AcquireLock(err) = err else {
+        panic!("a held lock must cause a lock-acquisition error")
+    };
+    assert!(
+        err.downcast_any_ref::<gix::error::RetryableError>().is_some(),
+        "lock contention is retryable"
+    );
+    assert!(
+        err.to_string().contains("immediately"),
+        "the configured zero timeout must be retained in the error"
+    );
     Ok(())
 }
 
