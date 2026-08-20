@@ -15,6 +15,11 @@ autotests = false
 [lib]
 doctest = true
 
+[[bench]]
+name = "dynamic"
+harness = false
+required-features = ["sha1", "parallel"]
+
 [features]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1", "gix-pack/sha1"]
@@ -24,6 +29,8 @@ sha256 = ["gix-hash/sha256", "gix-pack/sha256"]
 serde = ["dep:serde", "gix-hash/serde", "gix-object/serde", "gix-pack/serde"]
 ## Enable support for multi-threaded usage of the object database.
 parallel = ["gix-features/parallel"]
+## Expose deterministic synchronization hooks for tests of concurrent object-database behavior.
+test-support = []
 
 [dependencies]
 gix-features = { version = "^0.49.0", path = "../gix-features", features = ["walkdir", "crc32"] }
@@ -46,7 +53,7 @@ memmap2 = "0.9.11"
 document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
-gix-odb = { path = ".", features = ["sha1", "sha256"] }
+gix-odb = { path = ".", features = ["sha1", "sha256", "test-support"] }
 gix-hash = { path = "../gix-hash" }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-date = { path = "../gix-date" }
@@ -56,6 +63,8 @@ pretty_assertions = "1.0.0"
 filetime = "0.2.29"
 maplit = "1.0.2"
 crossbeam-channel = "0.5.15"
+tar = { version = "0.4.46", default-features = false }
+criterion = "0.8.2"
 
 [[test]]
 name = "odb"

@@ -214,7 +214,7 @@ mod blocking_and_async_io {
                 local_dir.path(),
                 gix::create::Kind::Bare,
                 Default::default(),
-                gix::open::Options::isolated().object_store_slots(Slots::Given(max_packs)),
+                gix::open::Options::isolated().object_store_slots(Slots::Limit(max_packs)),
             )?
             .fetch_only(gix::progress::Discard, &IS_INTERRUPTED)?;
 

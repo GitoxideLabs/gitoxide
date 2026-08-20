@@ -18,6 +18,10 @@ test: clippy check doc unit-tests doc-tests journey-tests-pure journey-tests-sma
 # Run all tests, without clippy, and try building docs
 ci-test: check doc unit-tests check-mode
 
+# Run dynamic ODB state-change scenarios with contending handles
+test-odb-threaded-scenarios:
+    env GIX_ODB_TEST_THREADS=8 cargo test -p gix-odb --features parallel --test odb store::dynamic_scenarios:: -- --test-threads=1
+
 # Run all journey tests - should be run in a fresh clone or after `cargo clean`
 ci-journey-tests: journey-tests-pure journey-tests-small journey-tests-async journey-tests
 
@@ -55,7 +59,7 @@ check:
     ! cargo check -p gitoxide-core --all-features --features gix/sha1 2>/dev/null
     cargo check -p gix-protocol --all-features
     tree="$(cargo --color=never tree -p gix --no-default-features -e normal --prefix none --format '{p}')"; \
-        ! printf '%s\n' "$tree" | rg -q '^gix-imara-diff(-01)? v'
+        ! printf '%s\n' "$tree" | grep -Eq '^gix-imara-diff(-01)? v'
     cargo --color=never tree -p gix --no-default-features -e normal -i gix-submodule \
         2>&1 >/dev/null | grep '^warning: nothing to print\>'
     cargo --color=never tree -p gix --no-default-features -e normal -i gix-pathspec \

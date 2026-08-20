@@ -847,6 +847,46 @@ mod pack_alloc_limit_bytes {
     }
 }
 
+mod object_refresh {
+    use std::time::Duration;
+
+    use gix_odb::store::RefreshMode;
+
+    use crate::util::repo_opts;
+
+    #[test]
+    fn defaults_to_a_configurable_freshness_window() -> crate::Result {
+        let mut default = repo_opts("make_packed_and_loose.sh", crate::util::restricted())?.to_thread_local();
+        assert_eq!(
+            default.objects.refresh_mode(),
+            RefreshMode::AfterDuration(Duration::from_secs(1)),
+            "gix avoids repeated miss-triggered filesystem scans by default"
+        );
+        {
+            let mut config = default.config_snapshot_mut();
+            config.set_raw_value("gitoxide.objects.refreshAfter", "50")?;
+            config.commit()?;
+        }
+        assert_eq!(
+            default.objects.refresh_mode(),
+            RefreshMode::AfterDuration(Duration::from_millis(50)),
+            "committing configuration updates the active object handle"
+        );
+
+        let mut configured = repo_opts(
+            "make_packed_and_loose.sh",
+            gix::open::Options::isolated().config_overrides(["gitoxide.objects.refreshAfter=250"]),
+        )?
+        .to_thread_local();
+        assert_eq!(
+            configured.objects.refresh_mode(),
+            RefreshMode::AfterDuration(Duration::from_millis(250)),
+            "gitoxide.objects.refreshAfter configures the freshness window"
+        );
+        Ok(())
+    }
+}
+
 mod worktree {
     use gix::open;
 
