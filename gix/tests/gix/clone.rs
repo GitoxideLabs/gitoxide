@@ -241,16 +241,14 @@ mod blocking_io {
 
         let checked_out_ref = repo.head_ref()?.expect("head points to ref");
         assert_eq!(
-            checked_out_ref.name().as_bstr(),
-            "refs/heads/b",
+            checked_out_ref, "refs/heads/b",
             "branches win over same-named tags, matching git clone --branch"
         );
         assert_eq!(
             checked_out_ref
                 .remote_ref_name(gix::remote::Direction::Fetch)
                 .transpose()?
-                .unwrap()
-                .as_bstr(),
+                .unwrap(),
             "refs/heads/b",
             "branch merge configuration records the chosen branch"
         );
@@ -633,8 +631,8 @@ mod blocking_io {
             "the object pointed to by HEAD was fetched as well"
         );
         assert_eq!(
-            referent.name().as_bstr(),
-            remote_repo.head_name()?.expect("symbolic").as_bstr(),
+            referent,
+            remote_repo.head_name()?.expect("symbolic"),
             "local clone always adopts the name of the remote"
         );
 
@@ -649,8 +647,7 @@ mod blocking_io {
         );
         assert_eq!(
             repo.branch_remote_ref_name(ref_name, gix::remote::Direction::Fetch)
-                .expect("present")?
-                .as_bstr(),
+                .expect("present")?,
             "refs/heads/main"
         );
 
@@ -897,8 +894,7 @@ mod blocking_io {
         let checked_out_ref = repo.head_ref()?.expect("head points to ref");
         let remote_ref_name = format!("refs/heads/{ref_to_checkout}");
         assert_eq!(
-            checked_out_ref.name().as_bstr(),
-            remote_ref_name,
+            checked_out_ref, remote_ref_name,
             "it's possible to checkout anything with that name, but here we have an ordinary branch"
         );
 
@@ -906,8 +902,7 @@ mod blocking_io {
             checked_out_ref
                 .remote_ref_name(gix::remote::Direction::Fetch)
                 .transpose()?
-                .unwrap()
-                .as_bstr(),
+                .unwrap(),
             remote_ref_name,
             "the merge configuration is using the given name"
         );
@@ -1154,11 +1149,7 @@ mod blocking_io {
             }
 
             let checked_out_ref = repo.head_ref()?.expect("head points to ref");
-            assert_eq!(
-                checked_out_ref.name().as_bstr(),
-                remote_ref_name,
-                "it also works with tags"
-            );
+            assert_eq!(checked_out_ref, remote_ref_name, "it also works with tags");
 
             assert_eq!(
                 checked_out_ref
@@ -1212,13 +1203,13 @@ mod blocking_io {
                 .is_some_and(|cap| cap.supports("unborn").unwrap_or(false));
             if supports_unborn {
                 assert_eq!(
-                    head.referent_name().expect("present").as_bstr(),
+                    head.referent_name().expect("present"),
                     "refs/heads/special",
                     "we pick up the name as present on the server, not the one we default to"
                 );
             } else {
                 assert_eq!(
-                    head.referent_name().expect("present").as_bstr(),
+                    head.referent_name().expect("present"),
                     "refs/heads/main",
                     "we simply keep our own post-init HEAD which defaults to the branch name we configured locally"
                 );

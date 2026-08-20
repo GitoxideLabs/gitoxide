@@ -44,7 +44,7 @@ fn precompose_unicode_journey() -> crate::Result {
         .commit(committer().to_ref(&mut buf))?;
 
     let r = store_decomposed.iter()?.all()?.next().expect("created one ref")?;
-    assert_eq!(r.name.as_bstr(), decomposed_ref, "no transformation happens by default");
+    assert_eq!(r, decomposed_ref, "no transformation happens by default");
 
     // For some reason, `tmpfs` can qualify as decomposing, but it then doesn't really work the same as expected here
     // to the point where the precomposed iteration can't find a single reference.
@@ -67,18 +67,17 @@ fn precompose_unicode_journey() -> crate::Result {
     let precomposed_ref = format!("refs/heads/{precomposed_a}");
     let r = store_precomposed.iter()?.all()?.next().expect("created one ref")?;
     assert_eq!(
-        r.name.as_bstr(),
-        precomposed_ref,
+        r, precomposed_ref,
         "it transforms all refs it sees to precomposed format, in order to unify it with what we store in packed-refs (precomposed)"
     );
 
     assert_eq!(
-        store_precomposed.find(precomposed_a)?.name.as_bstr(),
+        store_precomposed.find(precomposed_a)?,
         precomposed_ref,
         "can find as precomposed, even though on disk is decomposed it is decomposed"
     );
     assert_eq!(
-        store_precomposed.find(decomposed_a)?.name.as_bstr(),
+        store_precomposed.find(decomposed_a)?,
         decomposed_ref,
         "can find as decomposed, and it keeps it as is to not violate expectations of the returned name being equal to the input (when comparing as bytes)"
     );
@@ -90,8 +89,7 @@ fn precompose_unicode_journey() -> crate::Result {
         .prepare(Some(create_at(&decomposed_ref)), Fail::Immediately, Fail::Immediately)?
         .commit(committer().to_ref(&mut buf))?;
     assert_eq!(
-        edits[0].name.as_bstr(),
-        decomposed_ref,
+        edits[0].name, decomposed_ref,
         "it doesn't alter the composition style to allow input and output to remain unchanged"
     );
 
@@ -196,7 +194,7 @@ fn precompose_unicode_journey() -> crate::Result {
         )?
         .commit(committer().to_ref(&mut buf))?;
     assert_eq!(
-        edits[0].change.new_value().unwrap().try_name().unwrap().as_bstr(),
+        edits[0].change.new_value().unwrap().try_name().unwrap(),
         decomposed_ref,
         "the composition doesn't change, it matches the original edit"
     );
@@ -206,8 +204,7 @@ fn precompose_unicode_journey() -> crate::Result {
             .expect("exists")
             .target
             .try_name()
-            .unwrap()
-            .as_bstr(),
+            .unwrap(),
         decomposed_ref,
         "on disk it's stored in the original format as well"
     );

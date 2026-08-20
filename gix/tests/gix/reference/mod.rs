@@ -94,7 +94,7 @@ mod find {
         let repo = repo()?;
         let mut packed_tag_ref = repo.try_find_reference("dt1")?.expect("tag to exist");
         let expected: &FullNameRef = "refs/tags/dt1".try_into()?;
-        assert_eq!(packed_tag_ref.name(), expected);
+        assert_eq!(packed_tag_ref, expected);
 
         assert_eq!(
             packed_tag_ref.inner.target,
@@ -114,11 +114,11 @@ mod find {
         let mut symbolic_ref = repo.find_reference("multi-link-target1")?;
 
         let expected: &FullNameRef = "refs/heads/multi-link-target1".try_into()?;
-        assert_eq!(symbolic_ref.name(), expected);
+        assert_eq!(symbolic_ref, expected);
         assert_eq!(symbolic_ref.peel_to_id()?, the_commit);
 
         let expected: &FullNameRef = "refs/remotes/origin/multi-link-target3".try_into()?;
-        assert_eq!(symbolic_ref.name(), expected, "it follows symbolic refs, too");
+        assert_eq!(symbolic_ref, expected, "it follows symbolic refs, too");
         assert_eq!(symbolic_ref.into_fully_peeled_id()?, the_commit, "idempotency");
 
         let mut tag_ref = repo.find_reference("dt3")?;

@@ -421,7 +421,7 @@ fn symbolic_reference_writes_reflog_if_previous_value_is_set() -> crate::Result 
         .commit(committer().to_ref(&mut TimeBuf::default()))?;
     assert_eq!(edits.len(), 1, "no split was performed");
     let head = store.find_loose(&edits[0].name)?;
-    assert_eq!(head.name.as_bstr(), "refs/heads/symbolic");
+    assert_eq!(head, "refs/heads/symbolic");
     assert_eq!(head.kind(), gix_ref::Kind::Symbolic);
     assert_eq!(
         head.target.to_ref().try_name().map(gix_ref::FullNameRef::as_bstr),
@@ -622,7 +622,7 @@ fn symbolic_head_missing_referent_then_update_referent() -> crate::Result {
         );
 
         let head = store.find_loose(&edits[0].name)?;
-        assert_eq!(head.name.as_bstr(), "HEAD");
+        assert_eq!(head, "HEAD");
         assert_eq!(head.kind(), gix_ref::Kind::Symbolic);
         assert_eq!(
             std::fs::read_to_string(store.git_dir().join("HEAD"))?,

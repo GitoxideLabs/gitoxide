@@ -295,7 +295,7 @@ impl<'repo> Reference<'repo> {
     /// let head = repo.find_reference("HEAD")?;
     /// let branch = head.follow().expect("symbolic")?;
     ///
-    /// assert_eq!(branch.name().as_bstr(), "refs/heads/main");
+    /// assert_eq!(branch, "refs/heads/main");
     /// # Ok(()) }
     /// ```
     pub fn follow(&self) -> Option<Result<Reference<'repo>, gix_ref::file::find::existing::Error>> {

@@ -752,8 +752,7 @@ mod update {
             _ => unreachable!("only updates"),
         }
         assert_eq!(
-            edit.name.as_bstr(),
-            "refs/heads/HEAD",
+            edit.name, "refs/heads/HEAD",
             "it's not possible to refer to the local HEAD with refspecs"
         );
     }
@@ -811,7 +810,7 @@ mod update {
             }
             _ => unreachable!("only updates"),
         }
-        assert_eq!(edit.name.as_bstr(), "refs/remotes/origin/new-HEAD");
+        assert_eq!(edit.name, "refs/remotes/origin/new-HEAD");
     }
 
     #[test]
