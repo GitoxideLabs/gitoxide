@@ -27,6 +27,7 @@
 use std::{borrow::Cow, path::PathBuf};
 
 use bstr::{BStr, BString};
+use gix_error::ErrorExt;
 use gix_utils::AsBStr;
 
 const HTTP_PATH_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
@@ -308,7 +309,9 @@ impl Url {
         if let Scheme::Helper(name) = &scheme
             && !parse::is_valid_remote_helper_name(name.as_bytes())
         {
-            return Err(parse::Error::InvalidRemoteHelperName { name: name.clone() });
+            return Err(
+                gix_error::ValidationError::new_with_input("Invalid remote-helper name", name.as_bytes()).raise(),
+            );
         }
         let is_http = matches!(scheme, Scheme::Http | Scheme::Https);
         let mut parsed = parse(
@@ -753,7 +756,7 @@ impl Url {
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
     #[test]
-    fn legacy_encoded_public_path_is_migrated() -> gix_testtools::Result {
+    fn legacy_encoded_public_path_is_migrated() -> gix_error::TestResult {
         for (input, legacy_path, decoded_path) in [
             ("https://example.com/a%2Fb", "/a%2Fb", "/a/b"),
             ("https://example.com/%20%25", "/ %25", "/ %"),

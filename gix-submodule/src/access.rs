@@ -161,7 +161,7 @@ impl File {
         }
         gix_url::Url::from_bytes(url.as_ref()).map_err(|err| config::url::Error::Parse {
             submodule: name.to_owned(),
-            source: err,
+            source: err.into_error(),
         })
     }
 

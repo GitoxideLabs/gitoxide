@@ -209,7 +209,8 @@ fn handle(
             None => return Ok(()),
         })
         .join(to_relative({
-            let mut path = gix_url::expand_path(None, url.path.as_bstr())?;
+            let mut path =
+                gix_url::expand_path(None, url.path.as_bstr()).map_err(gix::url::expand_path::Error::into_error)?;
             match kind {
                 gix::repository::Kind::Submodule => {
                     unreachable!("BUG: We should not try to relocate submodules and not find them the first place")

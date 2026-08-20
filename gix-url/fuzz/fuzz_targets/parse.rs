@@ -1,10 +1,9 @@
 #![no_main]
-use anyhow::Result;
 use libfuzzer_sys::fuzz_target;
 use std::hint::black_box;
 use std::path::Path;
 
-fn fuzz(data: &[u8]) -> Result<()> {
+fn fuzz(data: &[u8]) -> Result<(), gix_url::parse::Error> {
     let url = gix_url::parse(data)?;
     _ = black_box(url.user());
     _ = black_box(url.password());

@@ -9,7 +9,6 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-anyhow = "1.0.76"
 libfuzzer-sys = "0.4"
 
 [dependencies.gix-url]

@@ -149,7 +149,7 @@ fn configured_credentials_for_current_url(repo: crate::Repository) -> Authentica
                 .ok_or(gix_credentials::protocol::Error::UrlMissing)?;
             let (mut cascade, _action_with_normalized_url, prompt_opts) = repo
                 .config_snapshot()
-                .credential_helpers(gix_url::parse(&url)?)
+                .credential_helpers(gix_url::parse(&url).map_err(gix_error::Exn::into_error)?)
                 .map_err(|source| gix_credentials::protocol::Error::ConfigureCredentialHelpers {
                     source: Box::new(source),
                 })?;
