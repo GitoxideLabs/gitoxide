@@ -33,8 +33,8 @@ impl Repository {
     ///
     /// These are stemming from environment variables which have been converted to [config settings](crate::config::tree::gitoxide::Pathspec),
     /// which now serve as authority for configuration.
-    pub fn pathspec_defaults(&self) -> Result<gix_pathspec::Defaults, gix_pathspec::defaults::from_environment::Error> {
-        self.config.pathspec_defaults()
+    pub fn pathspec_defaults(&self) -> Result<gix_pathspec::Defaults, gix_error::Error> {
+        self.config.pathspec_defaults().map_err(gix_error::Exn::into_error)
     }
 
     /// Similar to [Self::pathspec_defaults()], but will automatically configure the returned defaults to match case-insensitively if the underlying
@@ -43,7 +43,7 @@ impl Repository {
         &self,
         inherit_ignore_case: bool,
     ) -> Result<gix_pathspec::Defaults, crate::repository::pathspec_defaults_ignore_case::Error> {
-        let mut defaults = self.config.pathspec_defaults()?;
+        let mut defaults = self.config.pathspec_defaults().map_err(gix_error::Exn::into_error)?;
         if inherit_ignore_case
             && self
                 .config

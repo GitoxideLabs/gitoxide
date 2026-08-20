@@ -1,24 +1,13 @@
 use std::ffi::OsString;
 
+use gix_error::{ErrorExt, ValidationError};
+
 use crate::{Defaults, MagicSignature, SearchMode};
 
 ///
 pub mod from_environment {
     /// The error returned by [Defaults::from_environment()](super::Defaults::from_environment()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ParseValue(gix_error::Error),
-        #[error("Glob and no-glob settings are mutually exclusive")]
-        MixedGlobAndNoGlob,
-    }
-
-    impl From<gix_config_value::Error> for Error {
-        fn from(err: gix_config_value::Error) -> Self {
-            Error::ParseValue(err.into_error())
-        }
-    }
+    pub type Error = gix_error::Exn<gix_error::ValidationError>;
 }
 
 impl Defaults {
@@ -35,7 +24,7 @@ impl Defaults {
     /// Instead of failing if `GIT_LITERAL_PATHSPECS` is used with glob globals, we ignore these. Also our implementation allows global
     /// `icase` settings in combination with this setting.
     pub fn from_environment(var: &mut dyn FnMut(&str) -> Option<OsString>) -> Result<Self, from_environment::Error> {
-        let mut env_bool = |name: &str| -> Result<Option<bool>, gix_config_value::Error> {
+        let mut env_bool = |name: &str| -> Result<Option<bool>, from_environment::Error> {
             var(name)
                 .map(|val| gix_config_value::Boolean::try_from(val).map(|b| b.0))
                 .transpose()
@@ -59,7 +48,7 @@ impl Defaults {
         search_mode = env_bool("GIT_NOGLOB_PATHSPECS")?
             .map(|no_glob| {
                 if glob.unwrap_or_default() && no_glob {
-                    Err(from_environment::Error::MixedGlobAndNoGlob)
+                    Err(ValidationError::new("Glob and no-glob settings are mutually exclusive").raise())
                 } else {
                     Ok(SearchMode::Literal)
                 }
