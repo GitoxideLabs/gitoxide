@@ -85,7 +85,7 @@ impl<'repo> Tree<'repo> {
 
         loop {
             data = match next_entry(&mut iter, data) {
-                ControlFlow::Continue(oid) => self.repo.find(&oid, buf)?,
+                ControlFlow::Continue(oid) => self.repo.find(&oid, buf).map_err(crate::object::existing_error)?,
                 ControlFlow::Break(entry) => {
                     let mapped = entry.map(|e| Entry {
                         inner: e.into(),
@@ -120,7 +120,10 @@ impl<'repo> Tree<'repo> {
         loop {
             data = match next_entry(&mut iter, data) {
                 ControlFlow::Continue(id) => {
-                    let res = self.repo.find(&id, &mut self.data)?;
+                    let res = self
+                        .repo
+                        .find(&id, &mut self.data)
+                        .map_err(crate::object::existing_error)?;
                     data_id = id;
                     if res.kind.is_tree() {
                         self.id = data_id;
@@ -132,7 +135,9 @@ impl<'repo> Tree<'repo> {
                         let inner = e.into();
                         if e.mode.is_tree() {
                             data_id = e.oid.to_owned();
-                            self.repo.find(&data_id, &mut self.data)?;
+                            self.repo
+                                .find(&data_id, &mut self.data)
+                                .map_err(crate::object::existing_error)?;
                             self.id = data_id;
                         }
 
@@ -143,7 +148,9 @@ impl<'repo> Tree<'repo> {
 
                     if data_id != self.id {
                         // Ensure that our data always matches our id, even if this means an extra lookup.
-                        self.repo.find(&self.id, &mut self.data)?;
+                        self.repo
+                            .find(&self.id, &mut self.data)
+                            .map_err(crate::object::existing_error)?;
                     }
 
                     break Ok(entry);

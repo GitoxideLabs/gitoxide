@@ -130,37 +130,56 @@ impl crate::Repository {
         &self,
         path: &'a (impl gix_utils::AsBStr + ?Sized),
     ) -> Result<Cow<'a, BStr>, crate::repository::normalize_path::Error> {
-        use crate::repository::normalize_path::Error;
-
         let path = gix_path::from_bstr(Cow::Borrowed(path.as_bstr()));
         let path = if gix_path::is_absolute(path.as_ref()) {
             let root = gix_path::realpath_opts(
                 self.workdir().unwrap_or_else(|| self.git_dir()),
                 self.current_dir(),
                 MAX_SYMLINKS,
-            )?;
+            )
+            .map_err(gix_error::Exn::into_error)?;
             let absolute = path.into_owned();
             let relative = if let Ok(relative) = absolute.strip_prefix(&root) {
                 relative.to_owned()
             } else {
-                gix_path::realpath_opts(&absolute, self.current_dir(), MAX_SYMLINKS)?
+                gix_path::realpath_opts(&absolute, self.current_dir(), MAX_SYMLINKS)
+                    .map_err(gix_error::Exn::into_error)?
                     .strip_prefix(&root)
-                    .map_err(|_| Error::AbsolutePathOutsideOfRepository { path: absolute, root })?
+                    .map_err(|_| {
+                        gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                            "The absolute path '{}' is not inside the repository at '{}'",
+                            absolute.display(),
+                            root.display()
+                        )))
+                    })?
                     .to_owned()
             };
             Cow::Owned(relative)
-        } else if let Some(prefix) = self.prefix()?.filter(|prefix| !prefix.as_os_str().is_empty()) {
+        } else if let Some(prefix) = self
+            .prefix()
+            .map_err(gix_error::Exn::into_error)?
+            .filter(|prefix| !prefix.as_os_str().is_empty())
+        {
             Cow::Owned(prefix.join(path.as_ref()))
         } else {
             path
         };
 
         let path = match path {
-            Cow::Borrowed(path) => gix_path::normalize_and_clean(Cow::Borrowed(path), Path::new(""))
-                .ok_or_else(|| Error::OutsideOfRepository { path: path.to_owned() })?,
+            Cow::Borrowed(path) => {
+                gix_path::normalize_and_clean(Cow::Borrowed(path), Path::new("")).ok_or_else(|| {
+                    gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                        "The path '{}' leaves the repository",
+                        path.display()
+                    )))
+                })?
+            }
             Cow::Owned(path) => {
                 if gix_path::normalize_and_clean(Cow::Borrowed(path.as_path()), Path::new("")).is_none() {
-                    return Err(Error::OutsideOfRepository { path });
+                    return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                        "The path '{}' leaves the repository",
+                        path.display()
+                    ))));
                 }
                 gix_path::normalize_and_clean(Cow::Owned(path), Path::new(""))
                     .expect("path was just validated as normalizable")

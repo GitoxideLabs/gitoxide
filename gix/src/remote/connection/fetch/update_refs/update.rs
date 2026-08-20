@@ -4,30 +4,7 @@ use crate::remote::fetch;
 
 mod error {
     /// The error returned when updating references.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        FindReference(#[from] crate::reference::find::Error),
-        #[error(
-            "A remote reference had a name that wasn't considered valid. Corrupt remote repo or insufficient checks on remote?"
-        )]
-        InvalidRefName(#[from] gix_validate::reference::name::Error),
-        #[error("Failed to update references to their new position to match their remote locations")]
-        EditReferences(#[from] crate::reference::edit::Error),
-        #[error("Failed to read or iterate worktree dir")]
-        WorktreeListing(#[from] std::io::Error),
-        #[error("Could not open worktree repository")]
-        OpenWorktreeRepo(#[from] crate::open::Error),
-        #[error("Could not find local commit for fast-forward ancestor check")]
-        FindCommit(#[from] crate::object::find::existing::Error),
-        #[error("Could not peel symbolic local reference to its ID")]
-        PeelToId(#[from] crate::reference::peel::Error),
-        #[error("Failed to follow a symbolic reference to assure worktree isn't affected")]
-        FollowSymref(#[from] gix_ref::file::find::existing::Error),
-        #[error(transparent)]
-        FindObject(#[from] crate::object::find::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 pub use error::Error;

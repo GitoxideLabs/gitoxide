@@ -264,8 +264,7 @@ mod blocking_and_async_io {
 
     #[test]
     #[cfg(feature = "blocking-network-client")]
-    #[expect(clippy::result_large_err)]
-    fn collate_fetch_error() -> Result<(), gix::env::collate::fetch::Error<std::io::Error>> {
+    fn collate_fetch_error() -> Result<(), gix::env::collate::fetch::Error> {
         let (repo, _tmp) = try_repo_rw("two-origins")?;
         let remote = repo
             .head()?
@@ -282,7 +281,7 @@ mod blocking_and_async_io {
             repo.path()
                 .join("HEAD")
                 .metadata()
-                .map_err(gix::env::collate::fetch::Error::Other)?
+                .map_err(gix::Error::from_error)?
                 .is_file(),
             "just to show off the 'Other' error type"
         );
@@ -292,6 +291,8 @@ mod blocking_and_async_io {
     #[test]
     #[cfg(feature = "blocking-network-client")]
     fn fetch_with_alternates_adds_tips_from_alternates() -> crate::Result<()> {
+        use gix::error::ResultExt;
+
         // Isolated repository options don't sanitize the ambient Git config inherited by local `upload-pack`.
         // Use a child to keep this clone parallel with other tests without changing the parent environment.
         if gix_testtools::run_in_isolated_process()? {
@@ -312,10 +313,13 @@ mod blocking_and_async_io {
                     r.repo().objects.store_ref().path().join("info").join("alternates"),
                     format!(
                         "{}\n",
-                        gix::path::realpath(remote_repo.objects.store_ref().path())?.display()
+                        gix::path::realpath(remote_repo.objects.store_ref().path())
+                            .or_erased()?
+                            .display()
                     )
                     .as_bytes(),
-                )?;
+                )
+                .or_erased()?;
                 Ok(r)
             }
         })
