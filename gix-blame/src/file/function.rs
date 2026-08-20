@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use gix_diff::{blob::TokenSource, tree::Visit};
+use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_object::{
     FindExt,
@@ -107,8 +108,14 @@ pub fn file(
         gix_revwalk::PriorityQueue::new();
 
     if let Some(first_suspect) = first_suspect {
-        let commit = find_commit(cache.as_ref(), &odb, &first_suspect, &mut buf).map_err(Error::find_existing_iter)?;
-        queue.insert(commit.commit_time()?, first_suspect);
+        let commit = find_commit(cache.as_ref(), &odb, &first_suspect, &mut buf)
+            .or_raise_erased(|| message("Could not find existing iterator over a tree"))?;
+        queue.insert(
+            commit
+                .commit_time()
+                .or_raise_erased(|| message("Failure to decode commit during traversal"))?,
+            first_suspect,
+        );
     }
 
     let mut diff_state = gix_diff::tree::State::default();
@@ -137,8 +144,11 @@ pub fn file(
             .clone()
             .unwrap_or_else(|| file_path.to_owned());
 
-        let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf).map_err(Error::find_existing_iter)?;
-        let commit_time = commit.commit_time()?;
+        let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)
+            .or_raise_erased(|| message("Could not find existing iterator over a tree"))?;
+        let commit_time = commit
+            .commit_time()
+            .or_raise_erased(|| message("Failure to decode commit during traversal"))?;
 
         if let Some(since) = options.since {
             if commit_time < since.seconds {
@@ -210,7 +220,7 @@ pub fn file(
         {
             let source_blob = odb
                 .find_blob(&entry_id, &mut buf)
-                .map_err(Error::find_existing_object)?
+                .or_raise_erased(|| message("Could not find existing blob or commit"))?
                 .data
                 .to_vec();
             let mut source_interner = gix_diff::blob::Interner::new(source_blob.len() / 100);
@@ -574,21 +584,23 @@ fn tree_diff_at_file_path(
     rewrites: Option<gix_diff::Rewrites>,
 ) -> Result<Option<TreeDiffChange>, Error> {
     let parent_tree_id = find_commit(cache, &odb, &parent_id, commit_buf)
-        .map_err(Error::find_existing_iter)?
-        .tree_id()?;
+        .or_raise_erased(|| message("Could not find existing iterator over a tree"))?
+        .tree_id()
+        .or_raise_erased(|| message("Failure to decode commit during traversal"))?;
 
     let parent_tree_iter = odb
         .find_tree_iter(&parent_tree_id, lhs_tree_buf)
-        .map_err(Error::find_existing_iter)?;
+        .or_raise_erased(|| message("Could not find existing iterator over a tree"))?;
     stats.trees_decoded += 1;
 
     let tree_id = find_commit(cache, &odb, &id, commit_buf)
-        .map_err(Error::find_existing_iter)?
-        .tree_id()?;
+        .or_raise_erased(|| message("Could not find existing iterator over a tree"))?
+        .tree_id()
+        .or_raise_erased(|| message("Failure to decode commit during traversal"))?;
 
     let tree_iter = odb
         .find_tree_iter(&tree_id, rhs_tree_buf)
-        .map_err(Error::find_existing_iter)?;
+        .or_raise_erased(|| message("Could not find existing iterator over a tree"))?;
     stats.trees_decoded += 1;
 
     let result = tree_diff_without_rewrites_at_file_path(&odb, file_path, stats, state, parent_tree_iter, tree_iter)?;
@@ -716,7 +728,7 @@ fn tree_diff_without_rewrites_at_file_path(
 
     match result {
         Ok(_) | Err(gix_diff::tree::Error::Cancelled) => Ok(recorder.change.map(Into::into)),
-        Err(error) => Err(Error::DiffTree(error)),
+        Err(error) => Err(error.raise_erased()),
     }
 }
 
@@ -759,7 +771,7 @@ fn tree_diff_with_rewrites_at_file_path(
         Ok(_) | Err(gix_diff::tree_with_rewrites::Error::Diff(gix_diff::tree::Error::Cancelled)) => {
             Ok(change.map(Into::into))
         }
-        Err(error) => Err(Error::DiffTreeWithRewrites(error)),
+        Err(error) => Err(error.raise_erased()),
     }
 }
 
@@ -774,23 +786,27 @@ fn blob_changes(
     diff_algorithm: gix_diff::blob::Algorithm,
     stats: &mut Statistics,
 ) -> Result<Vec<Change>, Error> {
-    resource_cache.set_resource(
-        previous_oid,
-        // TODO(blame): add a test to show of symlink blaming works.
-        gix_object::tree::EntryKind::Blob,
-        previous_file_path,
-        gix_diff::blob::ResourceKind::OldOrSource,
-        &odb,
-    )?;
-    resource_cache.set_resource(
-        oid,
-        gix_object::tree::EntryKind::Blob,
-        file_path,
-        gix_diff::blob::ResourceKind::NewOrDestination,
-        &odb,
-    )?;
+    resource_cache
+        .set_resource(
+            previous_oid,
+            // TODO(blame): add a test to show of symlink blaming works.
+            gix_object::tree::EntryKind::Blob,
+            previous_file_path,
+            gix_diff::blob::ResourceKind::OldOrSource,
+            &odb,
+        )
+        .or_erased()?;
+    resource_cache
+        .set_resource(
+            oid,
+            gix_object::tree::EntryKind::Blob,
+            file_path,
+            gix_diff::blob::ResourceKind::NewOrDestination,
+            &odb,
+        )
+        .or_erased()?;
 
-    let outcome = resource_cache.prepare_diff()?;
+    let outcome = resource_cache.prepare_diff().or_erased()?;
 
     Ok(blob_changes_from_data(
         outcome.old.data.as_slice().unwrap_or_default(),
@@ -859,16 +875,25 @@ fn find_path_entry_in_commit(
     stats: &mut Statistics,
 ) -> Result<Option<ObjectId>, Error> {
     let tree_id = find_commit(cache, odb, commit, buf)
-        .map_err(Error::find_existing_iter)?
-        .tree_id()?;
-    let tree_iter = odb.find_tree_iter(&tree_id, buf).map_err(Error::find_existing_iter)?;
+        .or_raise_erased(|| message("Could not find existing iterator over a tree"))?
+        .tree_id()
+        .or_raise_erased(|| message("Failure to decode commit during traversal"))?;
+    let tree_iter = odb
+        .find_tree_iter(&tree_id, buf)
+        .or_raise_erased(|| message("Could not find existing iterator over a tree"))?;
     stats.trees_decoded += 1;
 
-    let res = tree_iter.lookup_entry(
-        odb,
-        buf2,
-        file_path.split(|b| *b == b'/').inspect(|_| stats.trees_decoded += 1),
-    )?;
+    let res = tree_iter
+        .lookup_entry(
+            odb,
+            buf2,
+            file_path.split(|b| *b == b'/').inspect(|_| stats.trees_decoded += 1),
+        )
+        .map_err(|err| {
+            gix_error::Error::from_boxed(err)
+                .and_raise(message("Couldn't find commit or tree in the object database"))
+                .erased()
+        })?;
     stats.trees_decoded -= 1;
     Ok(res.map(|e| e.oid))
 }
@@ -888,7 +913,9 @@ fn collect_parents(
                 .as_ref()
                 .expect("find returned a cached commit, so we expect cache to be present");
             for parent_pos in commit.iter_parents() {
-                let parent = cache.commit_at(parent_pos?);
+                let parent = cache.commit_at(
+                    parent_pos.or_raise_erased(|| message("Failed to get parent from commitgraph during traversal"))?,
+                );
                 parent_ids.push((parent.id().to_owned(), parent.committer_timestamp() as i64));
             }
         }
@@ -937,13 +964,14 @@ fn initial_state(
     match start {
         Start::Commit(suspect) => {
             let blamed_file_entry_id = find_path_entry_in_commit(&odb, &suspect, file_path, cache, buf, buf2, stats)?
-                .ok_or_else(|| Error::FileMissing {
-                file_path: file_path.to_owned(),
-                commit_id: suspect,
+                .ok_or_raise_erased(|| {
+                NotFoundError::new(format!(
+                    "The file to blame at '{file_path}' wasn't found in the first commit at {suspect}"
+                ))
             })?;
             let blamed_file_blob = odb
                 .find_blob(&blamed_file_entry_id, buf)
-                .map_err(Error::find_existing_object)?
+                .or_raise_erased(|| message("Could not find existing blob or commit"))?
                 .data
                 .to_vec();
             let num_lines_in_blamed = tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32;
@@ -1017,7 +1045,7 @@ fn initial_state(
 
             let first_suspect_blob = odb
                 .find_blob(&first_suspect_entry_id, buf)
-                .map_err(Error::find_existing_object)?
+                .or_raise_erased(|| message("Could not find existing blob or commit"))?
                 .data
                 .to_vec();
 
