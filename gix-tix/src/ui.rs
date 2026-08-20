@@ -193,20 +193,15 @@ fn changes_pane_areas(
                     vec![
                         ChangesPaneArea {
                             pane: ChangePane::Tree,
-                            outer: Rect::new(
-                                area.x,
-                                area.bottom().saturating_sub(tree_height),
-                                tree_width,
-                                tree_height,
-                            ),
+                            outer: Rect::new(area.x, area.bottom().saturating_sub(height), tree_width, height),
                         },
                         ChangesPaneArea {
                             pane: ChangePane::Worktree,
                             outer: Rect::new(
                                 area.x.saturating_add(tree_width),
-                                area.bottom().saturating_sub(worktree_height),
+                                area.bottom().saturating_sub(height),
                                 worktree_width,
-                                worktree_height,
+                                height,
                             ),
                         },
                     ],
@@ -6352,7 +6347,7 @@ mod tests {
         assert_eq!(layout, ChangesLayout::SideBySide);
         assert_eq!(height, 5);
         assert_eq!(panes[0].outer, Rect::new(0, 15, 60, 5));
-        assert_eq!(panes[1].outer, Rect::new(60, 17, 60, 3));
+        assert_eq!(panes[1].outer, Rect::new(60, 15, 60, 5));
 
         let (layout, panes, height) = changes_pane_areas(Rect::new(0, 0, 60, 20), 10, Some((8, 31)), Some((3, 31)));
         assert_eq!(layout, ChangesLayout::Stacked);
@@ -6416,17 +6411,18 @@ mod tests {
             let right = row.chars().skip(60).collect::<String>();
             (left, right)
         };
-        let (left, _) = halves(rendered_line(&terminal, 5));
+        let (left, right) = halves(rendered_line(&terminal, 5));
         assert!(left.contains("Tree"));
+        assert!(right.contains("Worktree"));
         let (left, right) = halves(rendered_line(&terminal, 6));
         assert!(left.contains("tree-file"));
-        assert!(right.contains("Worktree"));
+        assert!(right.contains("worktree-file"));
         let (left, right) = halves(rendered_line(&terminal, 7));
         assert!(left.contains("tree-file-2"));
-        assert!(right.contains("worktree-file"));
+        assert_eq!(right.trim(), "│");
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(60, 5)].symbol(), "┐");
-        assert_eq!(buffer[(60, 6)].symbol(), "├");
+        assert_eq!(buffer[(60, 5)].symbol(), "┬");
+        assert_eq!(buffer[(60, 6)].symbol(), "│");
         assert_eq!(buffer[(60, 7)].symbol(), "│");
         assert_eq!(buffer[(60, 8)].symbol(), "│");
 
