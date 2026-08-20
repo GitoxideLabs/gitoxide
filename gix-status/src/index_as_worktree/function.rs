@@ -591,11 +591,14 @@ where
     Find: gix_object::Find,
 {
     fn read_blob(self) -> Result<&'a [u8], Error> {
-        Ok(self.objects.find_blob(self.id, self.buf).map(|b| {
-            self.odb_reads.fetch_add(1, Ordering::Relaxed);
-            self.odb_bytes.fetch_add(b.data.len() as u64, Ordering::Relaxed);
-            b.data
-        })?)
+        self.objects
+            .find_blob(self.id, self.buf)
+            .map_err(|err| Error::Find(err.into_error()))
+            .map(|b| {
+                self.odb_reads.fetch_add(1, Ordering::Relaxed);
+                self.odb_bytes.fetch_add(b.data.len() as u64, Ordering::Relaxed);
+                b.data
+            })
     }
 
     fn stream_worktree_file(self) -> Result<Stream<'a>, Error> {
@@ -631,7 +634,7 @@ where
                     &mut |_path, attrs| {
                         platform.matching_attributes(attrs);
                     },
-                    &mut |buf| Ok(self.objects.find_blob(self.id, buf).map(|_| Some(()))?),
+                    &mut |buf| self.objects.find_blob(self.id, buf).map(|_| Some(())),
                 )
                 .map_err(|err| Error::Io(io::Error::other(err)))?;
             let len = match out {

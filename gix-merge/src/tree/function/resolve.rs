@@ -105,7 +105,9 @@ where
     let _span = gix_trace::coarse!("gix_merge::tree", ?base_tree, ?our_tree, ?their_tree, ?labels);
     let (mut base_buf, mut side_buf) = (Vec::new(), Vec::new());
     let mut editor = {
-        let ancestor_tree = objects.find_tree(base_tree, &mut base_buf)?;
+        let ancestor_tree = objects
+            .find_tree(base_tree, &mut base_buf)
+            .map_err(|err| Error::FindTree(err.into_error()))?;
         tree::Editor::new(ancestor_tree.to_owned(), objects, base_tree.kind())
     };
     let resolve_tree_conflicts = options.tree_conflicts;

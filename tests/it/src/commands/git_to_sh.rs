@@ -107,7 +107,10 @@ pub(super) mod function {
                         unreachable!("Can't have trees in indices")
                     }
                     EntryKind::Blob | EntryKind::BlobExecutable => {
-                        let obj = repo.objects.find(&entry.id, &mut blob_buf)?;
+                        let obj = repo
+                            .objects
+                            .find(&entry.id, &mut blob_buf)
+                            .map_err(gix::Exn::into_error)?;
                         if verbatim {
                             (entry.id, Cow::Borrowed(&blob_buf))
                         } else {
@@ -126,7 +129,9 @@ pub(super) mod function {
                         }
                     }
                     EntryKind::Link => {
-                        repo.objects.find(&entry.id, &mut blob_buf)?;
+                        repo.objects
+                            .find(&entry.id, &mut blob_buf)
+                            .map_err(gix::Exn::into_error)?;
                         (entry.id, Cow::Borrowed(&blob_buf))
                     }
                     EntryKind::Commit => continue,

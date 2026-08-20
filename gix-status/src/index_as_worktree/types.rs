@@ -14,7 +14,7 @@ pub enum Error {
     #[error("IO error while writing blob or reading file metadata or changing filetype")]
     Io(#[from] std::io::Error),
     #[error("Failed to obtain blob from object database")]
-    Find(#[from] gix_object::find::existing_object::Error),
+    Find(#[source] gix_error::Error),
     #[error("Could not determine status for submodule at '{rela_path}'")]
     SubmoduleStatus {
         rela_path: BString,

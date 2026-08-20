@@ -13,6 +13,6 @@ pub mod load {
         #[error(transparent)]
         PathInterpolate(#[from] gix_error::Error),
         #[error("Could not find object configured in `mailmap.blob`")]
-        FindExisting(#[from] crate::object::find::existing::Error),
+        FindExisting(#[source] crate::object::find::existing::Error),
     }
 }

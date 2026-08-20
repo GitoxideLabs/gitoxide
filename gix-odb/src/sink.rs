@@ -3,6 +3,7 @@ use std::{
     io::{self, Write},
 };
 
+use gix_error::ResultExt;
 use gix_zlib::stream::deflate;
 
 use crate::Sink;
@@ -43,22 +44,22 @@ impl gix_object::Write for Sink {
 
         let mut hasher = gix_hash::hasher(self.object_hash);
         hasher.update(&header);
-        possibly_compress(&header).map_err(Box::new)?;
+        possibly_compress(&header).or_erased()?;
 
         while size != 0 {
             let bytes = (size as usize).min(buf.len());
-            from.read_exact(&mut buf[..bytes]).map_err(Box::new)?;
+            from.read_exact(&mut buf[..bytes]).or_erased()?;
             hasher.update(&buf[..bytes]);
-            possibly_compress(&buf[..bytes]).map_err(Box::new)?;
+            possibly_compress(&buf[..bytes]).or_erased()?;
             size -= bytes as u64;
         }
         if let Some(compressor) = self.compressor.as_ref() {
             let mut c = compressor.borrow_mut();
-            c.flush().map_err(Box::new)?;
+            c.flush().or_erased()?;
             c.reset();
         }
 
-        Ok(hasher.try_finalize()?)
+        hasher.try_finalize().or_erased()
     }
 
     fn write_stream_with_known_id(
@@ -78,17 +79,17 @@ impl gix_object::Write for Sink {
             Ok(())
         };
 
-        possibly_compress(&header).map_err(Box::new)?;
+        possibly_compress(&header).or_erased()?;
 
         while size != 0 {
             let bytes = (size as usize).min(buf.len());
-            from.read_exact(&mut buf[..bytes]).map_err(Box::new)?;
-            possibly_compress(&buf[..bytes]).map_err(Box::new)?;
+            from.read_exact(&mut buf[..bytes]).or_erased()?;
+            possibly_compress(&buf[..bytes]).or_erased()?;
             size -= bytes as u64;
         }
         if let Some(compressor) = self.compressor.as_ref() {
             let mut c = compressor.borrow_mut();
-            c.flush().map_err(Box::new)?;
+            c.flush().or_erased()?;
             c.reset();
         }
 
