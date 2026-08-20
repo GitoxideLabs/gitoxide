@@ -2500,26 +2500,26 @@ mod tests {
 
         let repository = open()?;
         let graph = super::super::loaded_graph(&repository)?;
-        let pending_middle =
+        let spilled_middle =
             super::super::head::perform(repository.clone(), &graph, super::super::head::Kind::Spill, None)?
                 .expect("spilling changes the middle commit");
         let pending_tip = repository.find_reference("refs/heads/main")?.id().detach();
-        let middle_commit = repository.find_commit(pending_middle)?.decode()?.into_owned()?;
+        let middle_commit = repository.find_commit(spilled_middle)?.decode()?.into_owned()?;
         let tip_commit = repository.find_commit(pending_tip)?.decode()?.into_owned()?;
-        assert!(super::super::rebase::is_pending(&middle_commit));
+        assert!(
+            !super::super::rebase::is_pending(&middle_commit),
+            "the fully spilled commit has its final tree and parent"
+        );
         assert!(
             !super::super::rebase::has_marker(&middle_commit),
             "the authoritative spilled tree needs no original-parent marker"
         );
-        let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
-            history::Authors::default(),
-        ));
-        assert_eq!(
-            history::load_metadata(&repository, pending_middle, &authors)?
-                .0
-                .signature,
-            crate::app::SignatureState::PendingRebase,
-            "an empty signature keeps the authoritative commit visibly pending"
+        assert!(
+            repository
+                .find_commit(spilled_middle)?
+                .verify_signature()?
+                .expect("the fully spilled commit is signed immediately")
+                .is_valid()
         );
         assert!(super::super::rebase::has_marker(&tip_commit));
         drop(repository);
@@ -2529,8 +2529,8 @@ mod tests {
         perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
         let repository = open()?;
         assert_eq!(repository.find_reference("refs/heads/main")?.id().detach(), pending_tip);
-        assert!(super::super::rebase::is_pending(
-            &repository.find_commit(pending_middle)?.decode()?.into_owned()?
+        assert!(!super::super::rebase::is_pending(
+            &repository.find_commit(spilled_middle)?.decode()?.into_owned()?
         ));
         assert!(super::super::rebase::is_pending(
             &repository.find_commit(pending_tip)?.decode()?.into_owned()?
@@ -2539,21 +2539,20 @@ mod tests {
         drop(repository);
 
         let mut rebased = Vec::new();
-        perform_reporting_rebased(&repository_path, false, pending_middle, &graph, &[], &[], false, |id| {
+        perform_reporting_rebased(&repository_path, false, spilled_middle, &graph, &[], &[], false, |id| {
             rebased.push(id);
         })?
         .complete()?;
-        assert_eq!(
-            rebased,
-            [pending_middle, pending_tip],
-            "the selected commit and its pending descendant are reported in replay order"
+        assert!(
+            rebased.is_empty(),
+            "travelling to a final commit does not replay its pending descendant"
         );
 
         let repository = open()?;
         let materialized_middle = repository.head_id()?.detach();
         let still_pending_tip = repository.find_reference("refs/heads/main")?.id().detach();
-        assert_ne!(materialized_middle, pending_middle);
-        assert_ne!(still_pending_tip, pending_tip);
+        assert_eq!(materialized_middle, spilled_middle);
+        assert_eq!(still_pending_tip, pending_tip);
         let middle_commit = repository.find_commit(materialized_middle)?;
         assert!(!super::super::rebase::is_pending(
             &middle_commit.decode()?.into_owned()?
@@ -2561,7 +2560,7 @@ mod tests {
         assert!(
             middle_commit
                 .verify_signature()?
-                .expect("returning to the spilled commit adds its configured signature")
+                .expect("the fully spilled commit retained its configured signature")
                 .is_valid()
         );
         drop(middle_commit);
@@ -2572,7 +2571,7 @@ mod tests {
         assert!(
             history::all_pins(&repository)?
                 .iter()
-                .all(|pin| pin.id != pending_middle),
+                .all(|pin| pin.id != spilled_middle),
             "travelling to a rewritten detached HEAD does not pin its predecessor"
         );
         let graph = super::super::loaded_graph(&repository)?;
