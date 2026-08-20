@@ -73,6 +73,32 @@ struct FillRepository {
     retain: bool,
 }
 
+struct PendingConflictResolution {
+    commit: gix::ObjectId,
+    head: Option<ConflictHead>,
+    ref_changes: Vec<edit::undo::RefChange>,
+    record_undo: bool,
+}
+
+struct ConflictHead {
+    reference: Option<gix::refs::FullName>,
+    parents: Vec<gix::ObjectId>,
+}
+
+enum ExternalConflictResolution {
+    Current,
+    Changed,
+    Complete(gix::ObjectId, Vec<edit::undo::RefChange>, bool),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConflictReconcileStatus {
+    Inactive,
+    Amend,
+    Blocked,
+    Complete,
+}
+
 struct WorktreeWatcher {
     _watcher: RecommendedWatcher,
     events: mpsc::Receiver<notify::Result<notify::Event>>,
@@ -868,10 +894,11 @@ fn event_loop(
     let mut history_status_deadline: Option<Instant> = None;
     let mut pending_terminal_event = None;
     let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
+    let mut pending_conflict_clear_undo_on_accept = false;
     let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
     let mut pending_todo_rebase_plan: Option<edit::rebase::Plan> = None;
     let mut pending_todo_ref_changes = Vec::new();
-    let mut pending_conflict_ref_changes = Vec::new();
+    let mut pending_conflict_resolution: Option<PendingConflictResolution> = None;
     let result: Result<Option<Duration>> = (|| loop {
         if let Some(mut recovered) =
             recover_event_loop_repository(&mut repository_path, &common_dir, &mut repository_is_bare)?
@@ -914,6 +941,7 @@ fn event_loop(
             dirty = true;
             urgent = true;
         }
+        let mut conflict_refresh_due = false;
         let mut worktree_watch_error = None;
         if let Some(watcher) = worktree_watcher.as_mut() {
             let mut received = 0;
@@ -957,6 +985,7 @@ fn event_loop(
             urgent = true;
         }
         if take_due(&mut worktree_refresh_deadline, Instant::now()) {
+            conflict_refresh_due = true;
             if std::mem::take(&mut worktree_watch_set_changed) {
                 match start_worktree_watcher(&repository_path, repository_is_bare) {
                     Ok(watcher) => worktree_watcher = Some(watcher),
@@ -1014,6 +1043,7 @@ fn event_loop(
             schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
         }
         if take_due(&mut ref_refresh_deadline, Instant::now()) {
+            conflict_refresh_due = true;
             app.clear_enrichments();
             if std::mem::take(&mut ref_watch_set_changed) {
                 match start_ref_watcher(&repository_path, &common_dir) {
@@ -1036,6 +1066,19 @@ fn event_loop(
                 dirty = true;
                 urgent = true;
             }
+        }
+        if conflict_refresh_due
+            && reconcile_external_conflict_reporting(
+                &mut app,
+                &repository_path,
+                repository_is_bare,
+                &mut pending_conflict_resolution,
+            ) == ConflictReconcileStatus::Complete
+        {
+            invalidate_worktree_changes(&mut worktree_changes);
+            refresh_pending = true;
+            dirty = true;
+            urgent = true;
         }
         if take_due(&mut watcher_retry_deadline, Instant::now()) {
             let mut retry = false;
@@ -1656,10 +1699,27 @@ fn event_loop(
             fill_repository.retain = false;
             fill_repository.retained = None;
         }
+        let conflict_reconcile = if action == Some(Action::ForceQuit) {
+            ConflictReconcileStatus::Inactive
+        } else {
+            reconcile_external_conflict_reporting(
+                &mut app,
+                &repository_path,
+                repository_is_bare,
+                &mut pending_conflict_resolution,
+            )
+        };
+        if conflict_reconcile == ConflictReconcileStatus::Complete {
+            invalidate_worktree_changes(&mut worktree_changes);
+            refresh_pending = true;
+            dirty = true;
+            urgent = true;
+        }
         if key_pressed
             && action == Some(Action::OpenDiff)
             && app.changes_focus.is_none()
-            && !pending_conflict_ref_changes.is_empty()
+            && pending_conflict_resolution.is_some()
+            && conflict_reconcile == ConflictReconcileStatus::Amend
         {
             action = Some(Action::Amend);
         }
@@ -1669,14 +1729,19 @@ fn event_loop(
             && pending_todo_rebase_conflict.is_none()
             && app.has_rebase_conflict()
         {
-            let recorded = record_and_clear_pending_undo(
-                &repository_path,
-                repository_is_bare,
-                "materialize time-travel conflict",
-                &mut pending_conflict_ref_changes,
-            );
+            let recorded = pending_conflict_resolution.as_mut().and_then(|pending| {
+                pending.record_undo.then(|| {
+                    record_and_clear_pending_undo(
+                        &repository_path,
+                        repository_is_bare,
+                        "materialize time-travel conflict",
+                        &mut pending.ref_changes,
+                    )
+                })
+            });
+            pending_conflict_resolution = None;
             app.clear_rebase_conflict();
-            if let Err(err) = recorded {
+            if let Some(Err(err)) = recorded {
                 app.leave_attention(format!("cancelled conflict; undo history: {err:#}"));
             }
             dirty = true;
@@ -1685,20 +1750,39 @@ fn event_loop(
         }
         if key_pressed && pending_rebase_conflict.is_some() {
             if action == Some(Action::OpenDiff) && app.changes_focus.is_none() {
+                let clear_undo_on_accept = std::mem::take(&mut pending_conflict_clear_undo_on_accept);
+                let record_undo = !clear_undo_on_accept;
                 let conflict = pending_rebase_conflict
                     .take()
                     .expect("a pending conflict was checked before accepting it");
                 let original = conflict.original();
                 match conflict.accept() {
-                    Ok((notice, id, _, ref_changes)) => {
-                        pending_conflict_ref_changes = ref_changes;
+                    Ok((mut notice, id, _, ref_changes)) => {
+                        if clear_undo_on_accept
+                            && let Err(err) = clear_undo_history(&repository_path, repository_is_bare)
+                        {
+                            notice = format!("{notice}; undo history: {err:#}");
+                        }
+                        let head = match conflict_head(&repository_path, repository_is_bare, id) {
+                            Ok(head) => Some(head),
+                            Err(err) => {
+                                notice = format!("{notice}; external-amend detection is unavailable: {err:#}");
+                                None
+                            }
+                        };
+                        pending_conflict_resolution = Some(PendingConflictResolution {
+                            commit: id,
+                            head,
+                            ref_changes,
+                            record_undo,
+                        });
                         tracing::info!(commit_id = %original, rewritten_id = %id, "accepted suspended rebase conflict");
                         app.begin_conflict_resolution();
                         app.leave_attention(notice);
                         app.select_commit_after_refresh(id);
                     }
                     Err(err) => {
-                        pending_conflict_ref_changes.clear();
+                        pending_conflict_resolution = None;
                         tracing::warn!(commit_id = %original, error = %err, "suspended rebase conflict checkout failed");
                         app.clear_rebase_conflict();
                         app.leave_error(format!("conflict checkout: {err:#}"));
@@ -1728,19 +1812,22 @@ fn event_loop(
                 continue;
             }
             if action == Some(Action::Cancel) && app.changes_focus.is_none() {
+                let record_undo = !std::mem::take(&mut pending_conflict_clear_undo_on_accept);
                 let conflict = pending_rebase_conflict
                     .take()
                     .expect("a pending conflict was checked before discarding it");
                 tracing::info!(commit_id = %conflict.original(), "discarded suspended rebase conflict");
                 let mut changes = conflict.into_ref_changes();
-                let recorded = record_and_clear_pending_undo(
-                    &repository_path,
-                    repository_is_bare,
-                    "time travel before conflict",
-                    &mut changes,
-                );
+                let recorded = record_undo.then(|| {
+                    record_and_clear_pending_undo(
+                        &repository_path,
+                        repository_is_bare,
+                        "time travel before conflict",
+                        &mut changes,
+                    )
+                });
                 app.clear_rebase_conflict();
-                if let Err(err) = recorded {
+                if let Some(Err(err)) = recorded {
                     app.leave_attention(format!("cancelled conflict; undo history: {err:#}"));
                 }
                 dirty = true;
@@ -1915,11 +2002,13 @@ fn event_loop(
             urgent = true;
             continue;
         }
-        if !pending_conflict_ref_changes.is_empty()
-            && action != Some(Action::Amend)
+        if pending_conflict_resolution.is_some()
+            && !(action == Some(Action::Amend) && conflict_reconcile == ConflictReconcileStatus::Amend)
             && !action_allowed_during_rebase_continuation(action.as_ref(), app.changes_focus.is_some())
         {
-            app.leave_attention("resolve the checked-out conflict, then press <enter> to amend");
+            if conflict_reconcile == ConflictReconcileStatus::Amend {
+                app.leave_attention("resolve the checked-out conflict, then press <enter> to amend");
+            }
             dirty = true;
             urgent = true;
             continue;
@@ -1944,6 +2033,7 @@ fn event_loop(
             tree_changes.as_ref().map(|(_, changes)| changes),
             worktree_changes.as_ref().map(|(_, changes)| changes),
         );
+        let force_quit = action == Action::ForceQuit;
         dirty = true;
         urgent |= !throttles_draw;
         let previous_changes_mode = app.changes_mode;
@@ -2033,7 +2123,7 @@ fn event_loop(
                             let position = plan.position.clone();
                             match plan.apply(&repository) {
                                 Ok(()) => {
-                                    pending_conflict_ref_changes.clear();
+                                    pending_conflict_resolution = None;
                                     app.show_undo_position(
                                         position.undo,
                                         position.undo + position.redo,
@@ -2139,12 +2229,12 @@ fn event_loop(
                         enhanced_keyboard,
                     );
                     match result {
-                        Ok(Some(edit::reword::Outcome {
+                        Ok(Some(edit::reword::Perform::Complete(edit::reword::Outcome {
                             target,
                             commit: Some(new_id),
                             ref_changes,
                             ..
-                        })) => {
+                        }))) => {
                             leave_recorded_success(
                                 &mut app,
                                 &repository_path,
@@ -2160,12 +2250,12 @@ fn event_loop(
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
-                        Ok(Some(edit::reword::Outcome {
+                        Ok(Some(edit::reword::Perform::Complete(edit::reword::Outcome {
                             target,
                             enrichment: Some(enrichment),
                             ref_changes,
                             ..
-                        })) => {
+                        }))) => {
                             app.clear_enrichments();
                             app.set_enrichment(target, enrichment);
                             leave_recorded_success(
@@ -2181,8 +2271,22 @@ fn event_loop(
                                 refresh_pending = true;
                             }
                         }
+                        Ok(Some(edit::reword::Perform::Conflict(rebase))) => {
+                            let conflict = edit::time_travel::Conflict::from_rebase(
+                                rebase,
+                                &repository_path,
+                                repository_is_bare,
+                                &revisions,
+                                false,
+                            );
+                            let original = conflict.original();
+                            app.arm_rebase_conflict(original);
+                            app.select_commit(original);
+                            pending_conflict_clear_undo_on_accept = false;
+                            pending_rebase_conflict = Some(conflict);
+                        }
                         Ok(None) => {}
-                        Ok(Some(outcome)) => {
+                        Ok(Some(edit::reword::Perform::Complete(outcome))) => {
                             if outcome.target != id {
                                 app.select_commit_after_refresh(outcome.target);
                                 refresh_pending = true;
@@ -2211,7 +2315,7 @@ fn event_loop(
                             )
                         });
                     match result {
-                        Ok(Some(outcome)) => {
+                        Ok(Some(edit::rebase::Perform::Complete(outcome))) => {
                             let new_id = outcome.selected.context("creating a commit did not select it")?;
                             leave_recorded_success(
                                 &mut app,
@@ -2223,6 +2327,20 @@ fn event_loop(
                             );
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
+                        }
+                        Ok(Some(edit::rebase::Perform::Conflict(rebase))) => {
+                            let conflict = edit::time_travel::Conflict::from_rebase(
+                                rebase,
+                                &repository_path,
+                                repository_is_bare,
+                                &revisions,
+                                false,
+                            );
+                            let original = conflict.original();
+                            app.arm_rebase_conflict(original);
+                            app.select_commit(original);
+                            pending_conflict_clear_undo_on_accept = false;
+                            pending_rebase_conflict = Some(conflict);
                         }
                         Ok(None) => app.leave_attention("no commit created: no input was provided"),
                         Err(err) => app.leave_error(format!("new commit: {err:#}")),
@@ -2246,7 +2364,7 @@ fn event_loop(
                             )
                         });
                     match created {
-                        Ok(Some(outcome)) => {
+                        Ok(Some(edit::rebase::Perform::Complete(outcome))) => {
                             let new_id = outcome.selected.context("creating a fork did not select it")?;
                             let ref_changes = outcome.ref_changes;
                             let review_roots: Vec<_> =
@@ -2294,6 +2412,7 @@ fn event_loop(
                                     let original = conflict.original();
                                     app.arm_rebase_conflict(original);
                                     app.select_commit(original);
+                                    pending_conflict_clear_undo_on_accept = false;
                                     pending_rebase_conflict = Some(conflict);
                                 }
                                 Err(err) => {
@@ -2312,6 +2431,20 @@ fn event_loop(
                                     refresh_pending = true;
                                 }
                             }
+                        }
+                        Ok(Some(edit::rebase::Perform::Conflict(rebase))) => {
+                            let conflict = edit::time_travel::Conflict::from_rebase(
+                                rebase,
+                                &repository_path,
+                                repository_is_bare,
+                                &revisions,
+                                false,
+                            );
+                            let original = conflict.original();
+                            app.arm_rebase_conflict(original);
+                            app.select_commit(original);
+                            pending_conflict_clear_undo_on_accept = false;
+                            pending_rebase_conflict = Some(conflict);
                         }
                         Ok(None) => app.leave_attention("no fork created: no input was provided"),
                         Err(err) => app.leave_error(format!("fork: {err:#}")),
@@ -2390,7 +2523,7 @@ fn event_loop(
                             path.and_then(|path| {
                                 let repository = open_repository(&repository_path, repository_is_bare, false)
                                     .context("could not open repository for HEAD edit")?;
-                                if kind == edit::head::Kind::Amend && !pending_conflict_ref_changes.is_empty() {
+                                if kind == edit::head::Kind::Amend && pending_conflict_resolution.is_some() {
                                     stage_resolved_conflict_paths(&repository)?;
                                 }
                                 edit::head::perform_with_changes(
@@ -2398,31 +2531,40 @@ fn event_loop(
                                     graph,
                                     kind,
                                     path.as_ref().map(|(path, parent)| (path, *parent)),
+                                    pending_conflict_resolution.is_some(),
                                 )
                             })
                         });
                     match result {
                         Ok(Some(outcome)) => {
                             let new_id = outcome.selected.context("editing HEAD did not select its result")?;
-                            let mut changes = if kind == edit::head::Kind::Amend {
-                                std::mem::take(&mut pending_conflict_ref_changes)
+                            let pending = if kind == edit::head::Kind::Amend {
+                                pending_conflict_resolution.take()
                             } else {
-                                Vec::new()
+                                None
                             };
-                            let resolved_conflict = !changes.is_empty();
+                            let resolved_conflict = pending.is_some();
+                            let record_undo = pending.as_ref().is_none_or(|pending| pending.record_undo);
+                            let mut changes = pending.map(|pending| pending.ref_changes).unwrap_or_default();
                             changes.extend(outcome.ref_changes.iter().cloned());
-                            leave_recorded_success(
-                                &mut app,
-                                &repository_path,
-                                repository_is_bare,
-                                if resolved_conflict {
-                                    "resolve rebase conflict"
-                                } else {
-                                    verb
-                                },
-                                &changes,
-                                format!("{verb}ed {} as {}", id.to_hex_with_len(7), new_id.to_hex_with_len(7)),
-                            );
+                            let message =
+                                format!("{verb}ed {} as {}", id.to_hex_with_len(7), new_id.to_hex_with_len(7));
+                            if record_undo {
+                                leave_recorded_success(
+                                    &mut app,
+                                    &repository_path,
+                                    repository_is_bare,
+                                    if resolved_conflict {
+                                        "resolve rebase conflict"
+                                    } else {
+                                        verb
+                                    },
+                                    &changes,
+                                    message,
+                                );
+                            } else {
+                                app.leave_success(message);
+                            }
                             invalidate_worktree_changes(&mut worktree_changes);
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
@@ -2475,7 +2617,7 @@ fn event_loop(
                             forget_commit(&repository_path, repository_is_bare, graph, id)
                         });
                     match result {
-                        Ok(outcome) => {
+                        Ok(edit::forget::Perform::Complete(outcome)) => {
                             let ref_changes = outcome.ref_changes.clone();
                             let returned = outcome.review_return.as_ref().map(|name| {
                                 edit::time_travel::checkout_review_return_reporting(
@@ -2540,6 +2682,20 @@ fn event_loop(
                             }
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
+                        }
+                        Ok(edit::forget::Perform::Conflict(conflict)) => {
+                            let conflict = edit::time_travel::Conflict::from_rebase(
+                                conflict.into_rebase(),
+                                &repository_path,
+                                repository_is_bare,
+                                &revisions,
+                                false,
+                            );
+                            let original = conflict.original();
+                            app.arm_rebase_conflict(original);
+                            app.select_commit(original);
+                            pending_conflict_clear_undo_on_accept = false;
+                            pending_rebase_conflict = Some(conflict);
                         }
                         Err(err) => app.leave_error(format!("forget: {err:#}")),
                     }
@@ -2837,12 +2993,12 @@ fn event_loop(
                         .and_then(|graph| {
                             let mut repo = open_repository(&repository_path, repository_is_bare, false)
                                 .context("could not open repository to finish review")?;
-                            edit::undo::clear(&repo).context("could not clear undo history before finishing review")?;
                             repo.object_cache_size(None);
                             edit::review::finish(repo, graph, id, return_to)
                         });
                     match result {
                         Ok(edit::review::Finish::Complete(finished)) => {
+                            let undo_cleared = clear_undo_history(&repository_path, repository_is_bare);
                             let checkout = edit::time_travel::checkout_plan_reporting(
                                 &repository_path,
                                 repository_is_bare,
@@ -2850,10 +3006,13 @@ fn event_loop(
                                 &revisions,
                                 false,
                             );
-                            let message = checkout.map_or_else(
+                            let mut message = checkout.map_or_else(
                                 |err| format!("review applied, return checkout failed: {err:#}"),
                                 |(_, _changes)| format!("finished review as {}", finished.commit.to_hex_with_len(7)),
                             );
+                            if let Err(err) = undo_cleared {
+                                message = format!("{message}; undo history: {err:#}");
+                            }
                             app.dismiss_undo_position();
                             app.leave_success(message);
                             app.select_commit_after_refresh(finished.outcome.selected.unwrap_or(finished.commit));
@@ -2866,6 +3025,20 @@ fn event_loop(
                                     "finish review: no visible return commit descends from the reviewed tip",
                                 );
                             }
+                        }
+                        Ok(edit::review::Finish::Conflict(rebase)) => {
+                            let conflict = edit::time_travel::Conflict::from_rebase(
+                                rebase,
+                                &repository_path,
+                                repository_is_bare,
+                                &revisions,
+                                false,
+                            );
+                            let original = conflict.original();
+                            app.arm_rebase_conflict(original);
+                            app.select_commit(original);
+                            pending_conflict_clear_undo_on_accept = true;
+                            pending_rebase_conflict = Some(conflict);
                         }
                         Err(err) => app.leave_error(format!("finish review: {err:#}")),
                     }
@@ -2949,6 +3122,7 @@ fn event_loop(
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
+                            pending_conflict_clear_undo_on_accept = false;
                             pending_rebase_conflict = Some(conflict);
                         }
                         Err(err) => {
@@ -3094,7 +3268,46 @@ fn event_loop(
                         ids,
                     ));
                 }
-                Effect::Quit => return Ok(None),
+                Effect::Quit if force_quit => return Ok(None),
+                Effect::Quit => {
+                    if let Some(conflict) = pending_rebase_conflict.take() {
+                        let mut changes = conflict.into_ref_changes();
+                        if !std::mem::take(&mut pending_conflict_clear_undo_on_accept)
+                            && let Err(err) = record_and_clear_pending_undo(
+                                &repository_path,
+                                repository_is_bare,
+                                "time travel before conflict",
+                                &mut changes,
+                            )
+                        {
+                            tracing::warn!(error = %err, "could not record suspended conflict before exit");
+                        }
+                    }
+                    if let Some(mut pending) = pending_conflict_resolution.take()
+                        && pending.record_undo
+                        && let Err(err) = record_and_clear_pending_undo(
+                            &repository_path,
+                            repository_is_bare,
+                            "materialize time-travel conflict",
+                            &mut pending.ref_changes,
+                        )
+                    {
+                        tracing::warn!(error = %err, "could not record materialized conflict before exit");
+                    }
+                    let todo_pending =
+                        pending_todo_rebase_conflict.take().is_some() || pending_todo_rebase_plan.take().is_some();
+                    if todo_pending
+                        && let Err(err) = record_and_clear_pending_undo(
+                            &repository_path,
+                            repository_is_bare,
+                            "materialize rebase conflict",
+                            &mut pending_todo_ref_changes,
+                        )
+                    {
+                        tracing::warn!(error = %err, "could not record materialized rebase before exit");
+                    }
+                    return Ok(None);
+                }
             }
         }
     })();
@@ -3390,6 +3603,167 @@ fn record_and_clear_pending_undo(
     let result = record_undo(repository_path, bare, title, changes);
     changes.clear();
     result
+}
+
+fn conflict_head(repository_path: &Path, bare: bool, commit: gix::ObjectId) -> Result<ConflictHead> {
+    let repository = open_repository(repository_path, bare, false)
+        .context("could not reopen the repository after checking out a conflict")?;
+    let head = repository.head().context("could not inspect the conflicted HEAD")?;
+    let id = head
+        .id()
+        .map(gix::Id::detach)
+        .context("the conflicted HEAD is unborn")?;
+    anyhow::ensure!(id == commit, "the conflict checkout did not leave HEAD at {commit}");
+    let reference = head.referent_name().map(ToOwned::to_owned);
+    drop(head);
+    let name = reference
+        .clone()
+        .unwrap_or_else(|| "HEAD".try_into().expect("valid reference name"));
+    anyhow::ensure!(
+        edit::undo::state(&repository, name.as_ref())? == edit::undo::State::Object(commit),
+        "the conflicted HEAD attachment does not directly reference {commit}"
+    );
+    let parents = repository
+        .find_commit(commit)
+        .context("could not find the checked-out conflict commit")?
+        .parent_ids()
+        .map(gix::Id::detach)
+        .collect();
+    Ok(ConflictHead { reference, parents })
+}
+
+fn reconcile_external_conflict(
+    repository_path: &Path,
+    bare: bool,
+    pending: &mut Option<PendingConflictResolution>,
+) -> Result<ExternalConflictResolution> {
+    let state = pending
+        .as_ref()
+        .context("external conflict reconciliation requires pending state")?;
+    let Some(expected) = state.head.as_ref() else {
+        return Ok(ExternalConflictResolution::Current);
+    };
+    let repository =
+        open_repository(repository_path, bare, false).context("could not inspect external conflict resolution")?;
+    let head = repository.head().context("could not inspect HEAD after the conflict")?;
+    let reference = head.referent_name().map(ToOwned::to_owned);
+    anyhow::ensure!(
+        reference == expected.reference,
+        "HEAD attachment changed while resolving the conflict; return to the conflict checkout or exit"
+    );
+    let replacement = head
+        .id()
+        .map(gix::Id::detach)
+        .context("HEAD became unborn while resolving the conflict")?;
+    drop(head);
+    if replacement == state.commit {
+        return Ok(ExternalConflictResolution::Current);
+    }
+
+    let replacement_commit = repository
+        .find_commit(replacement)
+        .context("the replacement HEAD is not a commit")?
+        .decode()
+        .context("could not decode the replacement HEAD commit")?
+        .into_owned()
+        .context("could not own the replacement HEAD commit")?;
+    anyhow::ensure!(
+        replacement_commit.parents.as_slice() == expected.parents,
+        "HEAD moved to an unrelated commit while resolving the conflict; return to the conflict checkout or exit"
+    );
+    let index = repository
+        .open_index()
+        .context("could not inspect the conflict index")?;
+    if index
+        .entries()
+        .iter()
+        .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
+    {
+        return Ok(ExternalConflictResolution::Changed);
+    }
+    if edit::create::index_tree(&repository, &index)? != replacement_commit.tree {
+        return Ok(ExternalConflictResolution::Changed);
+    }
+
+    let name = expected
+        .reference
+        .clone()
+        .unwrap_or_else(|| "HEAD".try_into().expect("valid reference name"));
+    anyhow::ensure!(
+        edit::undo::state(&repository, name.as_ref())? == edit::undo::State::Object(replacement),
+        "HEAD no longer directly references its replacement commit"
+    );
+    let finalized = if edit::rebase::is_pending(&replacement_commit) {
+        drop(index);
+        let graph = edit::loaded_graph(&repository).context("could not load history to finalize the external amend")?;
+        let outcome = edit::head::amend_index_reporting(repository, &graph)
+            .context("could not finalize the externally amended pending commit")?
+            .context("the externally amended pending commit was not finalized")?;
+        let selected = outcome
+            .selected
+            .context("finalizing the externally amended conflict did not select its result")?;
+        Some((selected, outcome.ref_changes))
+    } else {
+        None
+    };
+    let accepted = state.commit;
+    let mut state = pending
+        .take()
+        .expect("the pending conflict was inspected immediately before completion");
+    state.ref_changes.push(edit::undo::RefChange {
+        name,
+        before: edit::undo::State::Object(accepted),
+        after: edit::undo::State::Object(replacement),
+    });
+    let replacement = match finalized {
+        Some((selected, changes)) => {
+            state.ref_changes.extend(changes);
+            selected
+        }
+        None => replacement,
+    };
+    Ok(ExternalConflictResolution::Complete(
+        replacement,
+        state.ref_changes,
+        state.record_undo,
+    ))
+}
+
+fn reconcile_external_conflict_reporting(
+    app: &mut App,
+    repository_path: &Path,
+    bare: bool,
+    pending: &mut Option<PendingConflictResolution>,
+) -> ConflictReconcileStatus {
+    if pending.is_none() {
+        return ConflictReconcileStatus::Inactive;
+    }
+    match reconcile_external_conflict(repository_path, bare, pending) {
+        Ok(ExternalConflictResolution::Complete(replacement, changes, record_undo)) => {
+            let message = format!("resolved rebase conflict as {}", replacement.to_hex_with_len(7));
+            if record_undo {
+                leave_recorded_success(app, repository_path, bare, "resolve rebase conflict", &changes, message);
+            } else {
+                app.leave_success(message);
+            }
+            app.clear_rebase_conflict();
+            app.set_worktree_conflicted(false);
+            app.select_commit_after_refresh(replacement);
+            tracing::info!(commit_id = %replacement, "recognized externally amended conflict resolution");
+            ConflictReconcileStatus::Complete
+        }
+        Ok(ExternalConflictResolution::Current) => ConflictReconcileStatus::Amend,
+        Ok(ExternalConflictResolution::Changed) => {
+            app.leave_attention(
+                "external conflict resolution is incomplete; finish it, return to the conflict checkout, or press q",
+            );
+            ConflictReconcileStatus::Blocked
+        }
+        Err(err) => {
+            app.leave_attention(format!("conflict resolution remains pending: {err:#}"));
+            ConflictReconcileStatus::Blocked
+        }
+    }
 }
 
 fn tracked_ref_update<T>(
@@ -4293,7 +4667,7 @@ fn reword_commit(
     hidden_revisions: &[OsString],
     id: gix::ObjectId,
     enhanced_keyboard: bool,
-) -> Result<Option<edit::reword::Outcome>> {
+) -> Result<Option<edit::reword::Perform>> {
     let (editor, document, change_id) = {
         let mut repository =
             open_repository(repository_path, bare, false).context("could not open repository before editing commit")?;
@@ -4317,7 +4691,7 @@ fn reword_commit(
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
     let (graph, id) = edit::reword::relocate_after_editor(&repository, revisions, hidden_revisions, change_id)?;
-    edit::reword::apply(repository, &graph, id, &edited).map(Some)
+    edit::reword::apply_conflict_reporting(repository, &graph, id, &edited).map(Some)
 }
 
 pub(crate) fn load_rebase_todo_commits(
@@ -4627,7 +5001,7 @@ fn create_commit(
     parent: Option<gix::ObjectId>,
     mode: CreateMode,
     enhanced_keyboard: bool,
-) -> Result<Option<edit::rebase::Outcome>> {
+) -> Result<Option<edit::rebase::Perform>> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before creating commit")?;
     repository.object_cache_size(None);
@@ -4654,9 +5028,10 @@ fn create_commit(
     repository.object_cache_size(None);
     let outcome = match mode {
         CreateMode::Insert | CreateMode::InsertEmpty => {
-            edit::create::apply_reporting(repository, graph, prepared, &edited)
+            edit::create::apply_conflict_reporting(repository, graph, prepared, &edited)
         }
-        CreateMode::Fork => edit::create::apply_fork_reporting(repository, graph, prepared, &edited),
+        CreateMode::Fork => edit::create::apply_fork_reporting(repository, graph, prepared, &edited)
+            .map(edit::rebase::Perform::Complete),
     }?;
     Ok(Some(outcome))
 }
@@ -4695,11 +5070,11 @@ fn forget_commit(
     bare: bool,
     graph: &HistoryGraph,
     id: gix::ObjectId,
-) -> Result<edit::forget::Outcome> {
+) -> Result<edit::forget::Perform> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before forgetting commit")?;
     repository.object_cache_size(None);
-    edit::forget::perform(repository, graph, id)
+    edit::forget::perform_conflict(repository, graph, id)
 }
 
 fn run_external_diff(
@@ -5472,6 +5847,7 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::CopyPath(_)
                 | Action::CopyAuthor
                 | Action::ForceQuit
+                | Action::Quit
         )
     ) || (changes_focused && matches!(action, Some(Action::OpenDiff | Action::Cancel | Action::Quit)))
 }
@@ -5682,6 +6058,126 @@ mod tests {
         assert!(
             repository.try_find_reference(name.as_ref())?.is_none(),
             "the recorded cancellation remains undoable"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn recognizes_an_external_conflict_amend_and_keeps_it_undoable() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let original = repository.head_id()?.detach();
+        let mut commit = repository.find_commit(original)?.decode()?.into_owned()?;
+        let original_parent = commit
+            .parents
+            .first()
+            .copied()
+            .context("the fixture tip has a parent")?;
+        commit
+            .extra_headers
+            .push(("tix-rebase-parent".into(), original_parent.to_string().into()));
+        let accepted = repository.write_object(&commit)?.detach();
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args([
+                "update-ref",
+                "refs/heads/main",
+                &accepted.to_string(),
+                &original.to_string(),
+            ])
+            .status()?;
+        assert!(status.success(), "the fixture checks out a materialized pending commit");
+        let head = conflict_head(fixture.path(), false, accepted)?;
+        let mut pending = Some(PendingConflictResolution {
+            commit: accepted,
+            head: Some(head),
+            ref_changes: Vec::new(),
+            record_undo: true,
+        });
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["commit", "--amend", "-qm", "externally resolved"])
+            .status()?;
+        assert!(status.success(), "git performs the external amend");
+        let replacement = test_repository::open(fixture.path())?.head_id()?.detach();
+        assert_ne!(replacement, accepted, "the external amend replaces HEAD");
+        let replacement_commit = test_repository::open(fixture.path())?
+            .find_commit(replacement)?
+            .decode()?
+            .into_owned()?;
+        assert!(
+            edit::rebase::is_pending(&replacement_commit),
+            "git preserves the pending marker while amending"
+        );
+
+        let mut app = App::new(1);
+        assert_eq!(
+            reconcile_external_conflict_reporting(&mut app, fixture.path(), false, &mut pending),
+            ConflictReconcileStatus::Complete,
+            "a clean same-parent replacement completes conflict resolution"
+        );
+        assert!(pending.is_none(), "completed conflict state is released");
+
+        let repository = test_repository::open(fixture.path())?;
+        let finalized = repository.head_id()?.detach();
+        assert_ne!(finalized, replacement, "Tix strips the preserved pending marker");
+        assert!(
+            !edit::rebase::is_pending(&repository.find_commit(finalized)?.decode()?.into_owned()?),
+            "the recognized resolution is fully materialized"
+        );
+        edit::undo::plan_undo(&repository)?
+            .expect("the external amend was added to the undo queue")
+            .apply(&repository)?;
+        assert_eq!(
+            repository.head_id()?.detach(),
+            accepted,
+            "undo restores the materialized conflict commit"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn external_conflict_resolution_requires_a_commit_and_rejects_unrelated_head_moves() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let accepted = test_repository::open(fixture.path())?.head_id()?.detach();
+        let head = conflict_head(fixture.path(), false, accepted)?;
+        let mut pending = Some(PendingConflictResolution {
+            commit: accepted,
+            head: Some(head),
+            ref_changes: Vec::new(),
+            record_undo: true,
+        });
+        std::fs::write(fixture.path().join("file"), "resolved but not committed\n")?;
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["add", "file"])
+            .status()?;
+        assert!(status.success(), "the resolution is staged");
+        let mut app = App::new(1);
+        assert_eq!(
+            reconcile_external_conflict_reporting(&mut app, fixture.path(), false, &mut pending),
+            ConflictReconcileStatus::Amend,
+            "staging alone still requires an amend"
+        );
+        assert!(pending.is_some(), "staged state remains mandatory");
+
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["reset", "--hard", "HEAD~1"])
+            .status()?;
+        assert!(status.success(), "git moves HEAD away from the conflict checkout");
+        assert_eq!(
+            reconcile_external_conflict_reporting(&mut app, fixture.path(), false, &mut pending),
+            ConflictReconcileStatus::Blocked,
+            "an unrelated external HEAD move is not mistaken for conflict resolution"
+        );
+        assert!(
+            pending.is_some(),
+            "invalid external movement remains explicit until exit"
         );
         Ok(())
     }
@@ -7134,13 +7630,16 @@ mod tests {
             Action::Rebase,
             Action::TimeTravel,
             Action::VerifySignatures,
-            Action::Quit,
         ] {
             assert!(
                 !action_allowed_during_rebase_continuation(Some(&action), false),
                 "{action:?} cannot invalidate a materialized rebase"
             );
         }
+        assert!(
+            action_allowed_during_rebase_continuation(Some(&Action::Quit), false),
+            "history q always remains available"
+        );
         for action in [Action::OpenDiff, Action::Cancel, Action::Quit] {
             assert!(
                 action_allowed_during_rebase_continuation(Some(&action), true),

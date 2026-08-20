@@ -1491,21 +1491,40 @@ mod tests {
     #[test]
     fn an_unchanged_todo_replays_pending_commits_with_normal_plan_semantics() -> gix_testtools::Result {
         let (fixture, repo) = repo()?;
-        let (base, middle, _tip, _) = commits(&repo)?;
+        let (base, middle, old_tip, _) = commits(&repo)?;
         let graph = super::super::loaded_graph(&repo)?;
         let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
         commit.tree = repo.find_commit(base)?.tree_id()?.detach();
-        let marked = rebase::perform(
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "-q", "--detach", &base.to_string()])
+                .status()?
+                .success(),
+            "the pending stack is prepared away from the current checkout"
+        );
+        let marked_outcome = rebase::perform(
             &repo,
             &graph,
             rebase::Edit::Replace { target: middle, commit },
             rebase::Signature::InvalidateExisting,
             rebase::Tree::LeaveAsIsAndMark,
         )?
-        .complete()?
-        .selected
-        .expect("the pending replacement selects its rewritten commit");
-        let tip = repo.head_id()?.detach();
+        .complete()?;
+        let marked = marked_outcome
+            .selected
+            .expect("the pending replacement selects its rewritten commit");
+        let tip = marked_outcome.map(old_tip).context("the pending tip is retained")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "-q", "main"])
+                .status()?
+                .success(),
+            "the pending branch is checked out before preparing its todo"
+        );
         let commits = vec![
             Commit {
                 id: tip,

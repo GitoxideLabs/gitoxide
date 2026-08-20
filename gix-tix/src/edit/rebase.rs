@@ -397,6 +397,7 @@ struct Prepared {
     checkout_after_finish: bool,
     pins: Vec<ObjectId>,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
+    enrichment: Option<(ObjectId, BString)>,
 }
 
 pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[ObjectId]) -> Result<Vec<ExpectedRef>> {
@@ -801,7 +802,63 @@ pub(crate) fn perform(
     signature: Signature,
     tree_mode: Tree,
 ) -> Result<Perform> {
-    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), None, |_| {})
+    perform_inner(
+        repo,
+        graph,
+        edit,
+        signature,
+        tree_mode,
+        Vec::new(),
+        None,
+        false,
+        None,
+        |_| {},
+    )
+    .map(|(perform, _)| perform)
+}
+
+pub(crate) fn perform_with_enrichment(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    edit: Edit,
+    signature: Signature,
+    tree_mode: Tree,
+    headers: &crate::enrich::Headers,
+) -> Result<(Perform, Option<crate::enrich::Enrichment>)> {
+    perform_inner(
+        repo,
+        graph,
+        edit,
+        signature,
+        tree_mode,
+        Vec::new(),
+        None,
+        false,
+        Some(headers),
+        |_| {},
+    )
+}
+
+pub(super) fn perform_allowing_pending_checkout(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    edit: Edit,
+    signature: Signature,
+    tree_mode: Tree,
+) -> Result<Perform> {
+    perform_inner(
+        repo,
+        graph,
+        edit,
+        signature,
+        tree_mode,
+        Vec::new(),
+        None,
+        true,
+        None,
+        |_| {},
+    )
+    .map(|(perform, _)| perform)
 }
 
 pub(crate) fn perform_reporting_rebased(
@@ -812,7 +869,19 @@ pub(crate) fn perform_reporting_rebased(
     tree_mode: Tree,
     report: impl FnMut(ObjectId),
 ) -> Result<Perform> {
-    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), None, report)
+    perform_inner(
+        repo,
+        graph,
+        edit,
+        signature,
+        tree_mode,
+        Vec::new(),
+        None,
+        false,
+        None,
+        report,
+    )
+    .map(|(perform, _)| perform)
 }
 
 pub(super) fn perform_resetting_index_paths(
@@ -823,7 +892,42 @@ pub(super) fn perform_resetting_index_paths(
     tree_mode: Tree,
     paths: Vec<BString>,
 ) -> Result<Perform> {
-    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), Some(paths), |_| {})
+    perform_inner(
+        repo,
+        graph,
+        edit,
+        signature,
+        tree_mode,
+        Vec::new(),
+        Some(paths),
+        false,
+        None,
+        |_| {},
+    )
+    .map(|(perform, _)| perform)
+}
+
+pub(super) fn perform_resetting_index_paths_allowing_pending_checkout(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    edit: Edit,
+    signature: Signature,
+    tree_mode: Tree,
+    paths: Vec<BString>,
+) -> Result<Perform> {
+    perform_inner(
+        repo,
+        graph,
+        edit,
+        signature,
+        tree_mode,
+        Vec::new(),
+        Some(paths),
+        true,
+        None,
+        |_| {},
+    )
+    .map(|(perform, _)| perform)
 }
 
 pub(super) fn perform_deleting_refs(
@@ -834,7 +938,19 @@ pub(super) fn perform_deleting_refs(
     tree_mode: Tree,
     deletions: Vec<(gix::refs::FullName, Target)>,
 ) -> Result<Perform> {
-    perform_inner(repo, graph, edit, signature, tree_mode, deletions, None, |_| {})
+    perform_inner(
+        repo,
+        graph,
+        edit,
+        signature,
+        tree_mode,
+        deletions,
+        None,
+        false,
+        None,
+        |_| {},
+    )
+    .map(|(perform, _)| perform)
 }
 
 #[expect(
@@ -849,8 +965,10 @@ fn perform_inner(
     tree_mode: Tree,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     reset_index_paths: Option<Vec<BString>>,
+    allow_pending_checkout: bool,
+    enrichment_headers: Option<&crate::enrich::Headers>,
     mut report: impl FnMut(ObjectId),
-) -> Result<Perform> {
+) -> Result<(Perform, Option<crate::enrich::Enrichment>)> {
     let mut repo = repo.clone();
     let repeat_checkout = match &edit {
         Edit::Repeat { checkout, .. } => Some(*checkout),
@@ -884,6 +1002,36 @@ fn perform_inner(
             .context("the edited commit is not in the loaded history")?,
         None => Vec::new(),
     };
+    let checkout = if repo.workdir().is_some() {
+        repo.head()?.id().map(gix::Id::detach)
+    } else {
+        None
+    };
+    let checkout_path: HashSet<_> = checkout
+        .into_iter()
+        .flat_map(|checkout| {
+            affected
+                .iter()
+                .copied()
+                .filter(move |id| graph.is_ancestor(*id, checkout))
+        })
+        .collect();
+    if !repeat && !checkout_path.is_empty() {
+        let checkout = checkout.expect("a non-empty checkout path has a checkout");
+        let scan_from = if allow_pending_checkout && root == Some(checkout) {
+            repo.find_commit(checkout)?
+                .decode()?
+                .into_owned()?
+                .parents
+                .first()
+                .copied()
+        } else {
+            Some(checkout)
+        };
+        if let Some(id) = scan_from {
+            reject_pending_checkout_path(&repo, id)?;
+        }
+    }
     validate(&repo, graph, &affected, removed, repeat, tree_mode)?;
 
     let signing = repo
@@ -901,6 +1049,7 @@ fn perform_inner(
     let mut note_rewrites = Vec::new();
     let mut selected = None;
     let mut conflict = None;
+    let mut eager_checkout_rewrite = false;
     if inserted || forked {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
@@ -963,15 +1112,16 @@ fn perform_inner(
         let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
         let original_parents =
             recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
-        let eager =
-            repeat && repeat_checkout.is_some_and(|checkout| graph.is_ancestor(old_id, checkout)) && conflict.is_none();
-        let commit_tree_mode = if repeat {
-            if eager {
-                Tree::CherryPick
+        let eager = conflict.is_none()
+            && if repeat {
+                repeat_checkout.is_some_and(|checkout| graph.is_ancestor(old_id, checkout))
             } else {
-                Tree::LeaveAsIsAndMark
-            }
-        } else if conflict.is_some() {
+                Some(old_id) != root && checkout_path.contains(&old_id)
+            };
+        eager_checkout_rewrite |= !repeat && eager;
+        let commit_tree_mode = if eager {
+            Tree::CherryPick
+        } else if repeat || conflict.is_some() {
             Tree::LeaveAsIsAndMark
         } else {
             tree_mode
@@ -979,7 +1129,11 @@ fn perform_inner(
         let rewritten_tree = rewritten_tree(
             &repo,
             &commit,
-            if !repeat { &old_parents } else { &original_parents },
+            if commit_tree_mode == Tree::CherryPick {
+                &original_parents
+            } else {
+                &old_parents
+            },
             &new_parents,
             commit_tree_mode,
         )?;
@@ -1003,7 +1157,7 @@ fn perform_inner(
         let is_conflicting_commit = new_conflict.is_some();
         let signature = if conflict.is_some() || is_conflicting_commit || (repeat && !eager) {
             Signature::InvalidateExisting
-        } else if repeat {
+        } else if eager {
             Signature::RedoIfNeeded
         } else {
             signature
@@ -1051,9 +1205,10 @@ fn perform_inner(
         root,
         reset_index: if inserted { reset_index } else { marked },
         reset_index_paths,
-        skip_worktree_transitions: inserted
-            || forked
-            || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed),
+        skip_worktree_transitions: !eager_checkout_rewrite
+            && (inserted
+                || forked
+                || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed)),
         selected,
         note_rewrites,
         stash_rewritten: rewritten.clone(),
@@ -1073,17 +1228,20 @@ fn perform_inner(
             Vec::new()
         },
         delete_refs,
+        enrichment: None,
     };
-    match conflict {
-        Some((original, merged_tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
+    let enrichment = prepare_enrichment(&mut prepared, enrichment_headers)?;
+    let perform = match conflict {
+        Some((original, merged_tree, conflicts, commit)) => Perform::Conflict(Conflict {
             prepared,
             conflicts,
             merged_tree,
             commit,
             original,
-        })),
-        None => Ok(Perform::Complete(prepared.finish()?)),
-    }
+        }),
+        None => Perform::Complete(prepared.finish()?),
+    };
+    Ok((perform, enrichment))
 }
 
 #[tracing::instrument(skip_all, fields(%review, %tip))]
@@ -1095,7 +1253,7 @@ pub(super) fn finish_review(
     review_ref: gix::refs::FullName,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     checkout: Option<(ObjectId, Option<gix::refs::FullName>)>,
-) -> Result<Outcome> {
+) -> Result<Perform> {
     let mut repo = repo.clone();
     let signing = repo
         .commit_signing_options_if_enabled()
@@ -1117,6 +1275,26 @@ pub(super) fn finish_review(
         .into_iter()
         .filter(|id| *id != tip && !review_set.contains(id))
         .collect();
+    let checkout_path: HashSet<_> = if repo.workdir().is_some() {
+        checkout
+            .as_ref()
+            .map(|(checkout, _)| {
+                natural_ids
+                    .iter()
+                    .copied()
+                    .filter(|id| graph.is_ancestor(*id, *checkout))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
+    if !checkout_path.is_empty() {
+        reject_pending_checkout_path(
+            &repo,
+            checkout.as_ref().expect("a non-empty checkout path has a checkout").0,
+        )?;
+    }
     for id in review_ids.iter().chain(&natural_ids) {
         if graph
             .parents_of(*id)
@@ -1131,6 +1309,7 @@ pub(super) fn finish_review(
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
     let mut note_rewrites = Vec::new();
     let mut finished_review = None;
+    let mut conflict = None;
     for old in &review_ids {
         let old_parents = graph.parents_of(*old).context("a review descendant is incomplete")?;
         let mut commit = repo.find_commit(*old)?.decode()?.into_owned()?;
@@ -1197,14 +1376,40 @@ pub(super) fn finish_review(
                 }
             })
             .collect();
+        let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
+        let original_parents =
+            recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
+        let eager = conflict.is_none() && checkout_path.contains(&old);
+        let mode = if eager {
+            Tree::CherryPick
+        } else {
+            Tree::LeaveAsIsAndMark
+        };
+        let mut new_conflict = None;
+        commit.tree = match rewritten_tree(&repo, &commit, &original_parents, &new_parents, mode)? {
+            TreeRewrite::Complete(tree) => tree,
+            TreeRewrite::Conflict {
+                ours,
+                merged,
+                conflicts,
+            } => {
+                new_conflict = Some((merged, conflicts));
+                ours
+            }
+        };
         commit.parents = new_parents.into_iter().collect();
+        let pending = !eager || conflict.is_some() || new_conflict.is_some();
         let new = write_commit(
             &repo,
             commit,
             Some(old),
             &committer,
-            CommitState::Pending {
-                original_parent: old_parents.first().copied(),
+            if pending {
+                CommitState::Pending {
+                    original_parent: recorded_parent.flatten().or_else(|| old_parents.first().copied()),
+                }
+            } else {
+                CommitState::Unmarked(Signature::RedoIfNeeded)
             },
             signing.clone(),
         )?;
@@ -1212,6 +1417,9 @@ pub(super) fn finish_review(
             note_rewrites.push((old, new));
         }
         rewritten.insert(old, Some(new));
+        if let Some((tree, conflicts)) = new_conflict {
+            conflict = Some((old, tree, conflicts, new));
+        }
     }
 
     let (selected, checkout_reference) = checkout.map_or((finished_review, None), |(old, reference)| {
@@ -1231,11 +1439,21 @@ pub(super) fn finish_review(
         committer,
         expected_refs: None,
         checkout_reference,
-        checkout_after_finish: false,
+        checkout_after_finish: conflict.is_some(),
         pins: Vec::new(),
         delete_refs,
+        enrichment: None,
     };
-    prepared.finish()
+    match conflict {
+        Some((original, merged_tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
+            prepared,
+            conflicts,
+            merged_tree,
+            commit,
+            original,
+        })),
+        None => Ok(Perform::Complete(prepared.finish()?)),
+    }
 }
 
 pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: Plan) -> Result<PlanPerform> {
@@ -1291,8 +1509,27 @@ pub(crate) fn perform_plan_with_progress(
         }
     }
 
+    let checkout_target = if repo.workdir().is_some() {
+        plan.checkout
+            .as_ref()
+            .map(|checkout| checkout.target)
+            .or(infer_plan_checkout(&repo, graph, &plan)?)
+    } else {
+        None
+    };
+    if plan.checkout.is_none()
+        && checkout_target.is_some()
+        && !plan
+            .steps
+            .iter()
+            .any(|step| matches!(step.commit, PlanCommit::Resolved(_)))
+        && let Some(head) = repo.head()?.id().map(gix::Id::detach)
+        && plan.scope.contains(&head)
+    {
+        reject_pending_checkout_path(&repo, head)?;
+    }
     let mut eager = HashSet::new();
-    let mut cursor = plan.checkout.as_ref().map(|checkout| checkout.target);
+    let mut cursor = checkout_target;
     while let Some(PlanParent::Step(index)) = cursor {
         if !eager.insert(index) {
             anyhow::bail!("the checkout ancestry contains a cycle");
@@ -1621,6 +1858,7 @@ pub(crate) fn perform_plan_with_progress(
         checkout_after_finish: false,
         pins,
         delete_refs,
+        enrichment: None,
     };
     tracing::info!(
         total = progress.total,
@@ -1635,10 +1873,8 @@ pub(crate) fn perform_plan_with_progress(
         return Ok(PlanPerform::Complete(prepared.finish()?));
     };
 
-    let continuation_start = plan
-        .checkout
-        .as_ref()
-        .and_then(|checkout| match checkout.target {
+    let continuation_start = checkout_target
+        .and_then(|checkout| match checkout {
             PlanParent::Step(index) if index < conflict_step => Some(index),
             _ => None,
         })
@@ -1685,6 +1921,69 @@ pub(crate) fn perform_plan_with_progress(
     }))
 }
 
+fn infer_plan_checkout(repo: &gix::Repository, graph: &HistoryGraph, plan: &Plan) -> Result<Option<PlanParent>> {
+    let head = repo.head()?;
+    let Some(name) = head.referent_name() else {
+        return Ok(None);
+    };
+    let Some(expected) = plan
+        .expected_refs
+        .iter()
+        .find(|expected| expected.name.as_bstr() == name.as_bstr())
+    else {
+        return Ok(None);
+    };
+    if let Some(target) = expected.placement {
+        return Ok(Some(target));
+    }
+    let scope: HashSet<_> = plan.scope.iter().copied().collect();
+    let mut source = expected.target;
+    let mut target = loop {
+        if let Some(index) = plan.steps.iter().position(|step| {
+            matches!(
+                step.commit,
+                PlanCommit::Pick(candidate) | PlanCommit::Resolved(candidate) if candidate == source
+            ) || step.squash.contains(&source)
+        }) {
+            break Some(PlanParent::Step(index));
+        }
+        if !scope.contains(&source) {
+            break Some(PlanParent::Existing(source));
+        }
+        let Some(parent) = graph
+            .parents_of(source)
+            .context("a dropped checkout commit is incomplete")?
+            .first()
+            .copied()
+        else {
+            break Some(PlanParent::Existing(plan.base));
+        };
+        source = parent;
+    };
+    if expected.follows_tip {
+        while let Some(parent) = target {
+            let Some(index) = plan.steps.iter().position(|step| step.parent == parent) else {
+                break;
+            };
+            target = Some(PlanParent::Step(index));
+        }
+    }
+    Ok(target.filter(|target| matches!(target, PlanParent::Step(_))))
+}
+
+fn prepare_enrichment(
+    prepared: &mut Prepared,
+    headers: Option<&crate::enrich::Headers>,
+) -> Result<Option<crate::enrich::Enrichment>> {
+    let Some(headers) = headers else { return Ok(None) };
+    let selected = prepared.selected.context("an enriched edit must select its commit")?;
+    let Some((object, data, enrichment)) = crate::enrich::prepare_headers(&prepared.repo, selected, headers)? else {
+        return Ok(None);
+    };
+    prepared.enrichment = Some((object, data));
+    Ok(Some(enrichment))
+}
+
 impl Prepared {
     fn persist_objects(&mut self) -> Result<()> {
         let objects = self
@@ -1704,8 +2003,19 @@ impl Prepared {
     fn finish(&mut self) -> Result<Outcome> {
         let mut resource_edits = super::stash::rewrite_edits(&self.repo, &self.stash_rewritten, &self.removed)?;
         let note_edits = note_rewrite_edits(&self.repo, &self.note_rewrites, &self.committer)?;
+        let enrichment_edits = self
+            .enrichment
+            .take()
+            .map(|(object, data)| enrichment_edits(&self.repo, object, data, &self.committer))
+            .transpose()?
+            .unwrap_or_else(|| super::stash::RewriteEdits {
+                forward: Vec::new(),
+                rollback: Vec::new(),
+            });
         resource_edits.forward.extend(note_edits.forward);
         resource_edits.rollback.extend(note_edits.rollback);
+        resource_edits.forward.extend(enrichment_edits.forward);
+        resource_edits.rollback.extend(enrichment_edits.rollback);
         self.persist_objects()?;
         let _ = self
             .repo
@@ -1862,6 +2172,55 @@ fn note_rewrite_edits(
     let commit = repo
         .new_commit_as(actor, actor, "Notes copied by tix", root, parent)
         .context("could not prepare the rewritten Git notes commit")?
+        .id;
+    Ok(super::stash::RewriteEdits {
+        forward: vec![ref_edit(name.clone(), parent, Some(commit))],
+        rollback: vec![ref_edit(name, Some(commit), parent)],
+    })
+}
+
+fn enrichment_edits(
+    repo: &gix::Repository,
+    object: ObjectId,
+    data: BString,
+    committer: &gix::actor::Signature,
+) -> Result<super::stash::RewriteEdits> {
+    let name: gix::refs::FullName = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
+    let (root, parent) = match repo.try_find_reference(name.as_ref())? {
+        Some(mut reference) => {
+            let parent = reference
+                .try_id()
+                .context("the tix enrich reference must be direct")?
+                .detach();
+            let root = reference
+                .peel_to_tree()
+                .context("could not read the tix enrich tree")?
+                .id;
+            (root, Some(parent))
+        }
+        None => (ObjectId::empty_tree(repo.object_hash()), None),
+    };
+    let note = repo.write_blob(data)?.detach();
+    let tree = gix::note::plumbing::replace(root, object, note, repo)
+        .map_err(gix::Exn::into_error)
+        .context("could not prepare the tix enrichment")?
+        .tree;
+    let author = repo
+        .author()
+        .context("no Git author is configured")?
+        .context("could not resolve the Git author")?
+        .to_owned()?;
+    let mut author_time = gix::date::parse::TimeBuf::default();
+    let mut committer_time = gix::date::parse::TimeBuf::default();
+    let commit = repo
+        .new_commit_as(
+            author.to_ref(&mut author_time),
+            committer.to_ref(&mut committer_time),
+            "Notes added by gitoxide",
+            tree,
+            parent,
+        )
+        .context("could not prepare the tix enrichment commit")?
         .id;
     Ok(super::stash::RewriteEdits {
         forward: vec![ref_edit(name.clone(), parent, Some(commit))],
@@ -2026,6 +2385,21 @@ fn validate(
         && is_pending(&repo.find_commit(parent)?.decode()?.into_owned()?)
     {
         anyhow::bail!("the parent of a repeated rebase must not be pending");
+    }
+    Ok(())
+}
+
+fn reject_pending_checkout_path(repo: &gix::Repository, mut id: ObjectId) -> Result<()> {
+    let mut seen = HashSet::new();
+    while seen.insert(id) {
+        let commit = repo.find_commit(id)?.decode()?.into_owned()?;
+        if is_pending(&commit) {
+            anyhow::bail!("the current checkout has a pending rebase; time-travel to HEAD before editing it");
+        }
+        let Some(parent) = commit.parents.first().copied() else {
+            break;
+        };
+        id = parent;
     }
     Ok(())
 }
@@ -2241,7 +2615,7 @@ pub(super) fn has_marker(commit: &gix::objs::Commit) -> bool {
         .any(|(name, _)| name.as_slice() == ORIGINAL_PARENT)
 }
 
-pub(super) fn is_pending(commit: &gix::objs::Commit) -> bool {
+pub(crate) fn is_pending(commit: &gix::objs::Commit) -> bool {
     has_marker(commit)
         || commit
             .extra_headers
@@ -2877,23 +3251,32 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let old_tip = repo.head_id()?.detach();
         let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
-        commit.tree = repo.find_commit(repo.rev_parse_single("HEAD~2")?)?.tree_id()?.detach();
-        perform(
+        commit.tree = repo.find_commit(base)?.tree_id()?.detach();
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "-q", "--detach", &base.to_string()])
+                .status()?
+                .success(),
+            "the pending stack is prepared away from the current checkout"
+        );
+        let marked = perform(
             &repo,
             &graph,
             Edit::Replace { target: middle, commit },
             Signature::InvalidateExisting,
             Tree::LeaveAsIsAndMark,
         )?
-        .complete()?
-        .selected
-        .expect("marking rewrites the selected commit");
+        .complete()?;
+        let tip = marked.map(old_tip).context("marking retains the pending tip")?;
 
         let graph = super::super::loaded_graph(&repo)?;
-        let tip = repo.head_id()?.detach();
-        perform(
+        let repeated = perform(
             &repo,
             &graph,
             Edit::Repeat {
@@ -2904,7 +3287,8 @@ mod tests {
             Tree::CherryPick,
         )?
         .complete()?;
-        let mut id = Some(repo.head_id()?.detach());
+        let repeated_tip = repeated.map(tip).context("repeating retains the pending tip")?;
+        let mut id = Some(repeated_tip);
         while let Some(current) = id {
             let commit = repo.find_commit(current)?.decode()?.into_owned()?;
             assert!(!has_marker(&commit), "repeating clears every pending marker");
@@ -2913,7 +3297,7 @@ mod tests {
         let files = Command::new("git")
             .arg("-C")
             .arg(fixture.path())
-            .args(["ls-tree", "-r", "--name-only", "HEAD"])
+            .args(["ls-tree", "-r", "--name-only", &repeated_tip.to_string()])
             .output()?;
         assert!(files.status.success());
         assert_eq!(
@@ -2937,11 +3321,21 @@ mod tests {
         );
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~3")?.detach();
         let middle = repo.rev_parse_single("HEAD~2")?.detach();
         let old_tip = repo.rev_parse_single("HEAD~1")?.detach();
         let old_newer = repo.head_id()?.detach();
         let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
-        commit.tree = repo.find_commit(repo.rev_parse_single("HEAD~3")?)?.tree_id()?.detach();
+        commit.tree = repo.find_commit(base)?.tree_id()?.detach();
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "-q", "--detach", &base.to_string()])
+                .status()?
+                .success(),
+            "the legacy pending stack is prepared away from the current checkout"
+        );
         let marked = perform(
             &repo,
             &graph,
@@ -2968,6 +3362,15 @@ mod tests {
             .set_target_id(legacy_newer, "test legacy pending commits")?;
         drop(repo);
 
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "-q", "main"])
+                .status()?
+                .success(),
+            "the legacy pending stack becomes the current checkout"
+        );
         assert!(
             Command::new("git")
                 .arg("-C")
@@ -3102,7 +3505,7 @@ mod tests {
     }
 
     #[test]
-    fn a_conflicting_cherry_pick_leaves_repository_state_unmodified() -> gix_testtools::Result {
+    fn a_lazy_edit_eagerly_detects_checkout_conflicts_without_observable_changes() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
@@ -3120,7 +3523,7 @@ mod tests {
             &graph,
             Edit::Remove { target: middle },
             Signature::RedoIfNeeded,
-            Tree::CherryPick,
+            Tree::LeaveAsIsAndMark,
         )?
         else {
             return Err("the unresolved cherry-pick should suspend the complete rebase".into());
@@ -3141,6 +3544,113 @@ mod tests {
             objects_before,
             "failed in-memory rebases write no objects"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn conflicting_enriched_edits_are_atomic_and_report_one_ref_transaction() -> gix_testtools::Result {
+        let headers = crate::enrich::Headers {
+            todo: true,
+            message: Some("conflict note".into()),
+        };
+        let prepare = |repo: &gix::Repository| -> gix_testtools::Result<(HistoryGraph, ObjectId, gix::objs::Commit)> {
+            let graph = super::super::loaded_graph(repo)?;
+            let middle = repo.rev_parse_single("HEAD~1")?.detach();
+            let base = repo.rev_parse_single("HEAD~2")?.detach();
+            let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
+            commit.tree = repo.find_commit(base)?.tree_id()?.detach();
+            commit.message = "rewritten middle".into();
+            Ok((graph, middle, commit))
+        };
+
+        let cancelled = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repo = open(cancelled.path())?;
+        let (graph, middle, commit) = prepare(&repo)?;
+        let before = gix_testtools::repository::snapshot(cancelled.path())?;
+        let (Perform::Conflict(conflict), enrichment) = perform_with_enrichment(
+            &repo,
+            &graph,
+            Edit::Replace { target: middle, commit },
+            Signature::RedoIfNeeded,
+            Tree::LeaveAsIsAndMark,
+            &headers,
+        )?
+        else {
+            return Err("the enriched edit should suspend on its checkout conflict".into());
+        };
+        assert!(enrichment.is_some(), "the enrichment is prepared in memory");
+        drop(conflict);
+        assert_eq!(
+            gix_testtools::repository::snapshot(cancelled.path())?,
+            before,
+            "cancelling leaks neither history nor enrichment refs"
+        );
+
+        let accepted = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repo = open(accepted.path())?;
+        let (graph, middle, commit) = prepare(&repo)?;
+        let (Perform::Conflict(conflict), _) = perform_with_enrichment(
+            &repo,
+            &graph,
+            Edit::Replace { target: middle, commit },
+            Signature::RedoIfNeeded,
+            Tree::LeaveAsIsAndMark,
+            &headers,
+        )?
+        else {
+            return Err("the enriched edit should suspend on its checkout conflict".into());
+        };
+        let persisted = conflict.persist()?;
+        assert!(
+            persisted
+                .ref_changes
+                .iter()
+                .any(|change| change.name.as_bstr() == crate::enrich::REF_NAME.as_bytes()),
+            "accepted conflict records the enrichment in the same undo change set"
+        );
+        assert!(
+            persisted
+                .ref_changes
+                .iter()
+                .any(|change| change.name.as_bstr() == b"refs/heads/main"),
+            "the same change set also contains the rewritten branch"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_edit_cannot_leave_the_checkout_on_pending_ancestry() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let old_tip = repo.head_id()?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+
+        let mut pending = repo.find_commit(middle)?.decode()?.into_owned()?;
+        pending
+            .extra_headers
+            .push((ORIGINAL_PARENT.into(), base.to_string().into()));
+        let pending = repo.write_object(&pending)?.detach();
+        let mut tip = repo.find_commit(old_tip)?.decode()?.into_owned()?;
+        tip.parents = [pending].into_iter().collect();
+        let tip = repo.write_object(&tip)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(tip, "prepare pending checkout ancestry")?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+
+        let err = match perform(
+            &repo,
+            &graph,
+            Edit::Remove { target: tip },
+            Signature::RedoIfNeeded,
+            Tree::LeaveAsIsAndMark,
+        ) {
+            Ok(_) => return Err("removing HEAD must not expose its pending parent".into()),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("time-travel to HEAD"), "{err:#}");
+        assert_eq!(gix_testtools::repository::snapshot(fixture.path())?, before);
         Ok(())
     }
 
@@ -4261,8 +4771,53 @@ mod tests {
             "the branch advances past the retained ancestor"
         );
         assert!(
+            !is_pending(&repo.find_commit(repo.head_id()?)?.decode()?.into_owned()?),
+            "the inferred checked-out replacement is fully replayed"
+        );
+        assert!(
             crate::history::all_pins(&repo)?.is_empty(),
             "the referenced replacement leaf needs no pin"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_plan_without_checkout_does_not_infer_detached_head() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let plan = Plan {
+            base,
+            scope: vec![middle, tip],
+            steps: vec![
+                PlanStep {
+                    parent: PlanParent::Existing(base),
+                    commit: PlanCommit::Pick(middle),
+                    squash: Vec::new(),
+                },
+                PlanStep {
+                    parent: PlanParent::Step(0),
+                    commit: PlanCommit::Empty("replacement tip".into()),
+                    squash: Vec::new(),
+                },
+            ],
+            checkout: None,
+            expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
+        };
+        assert_eq!(
+            infer_plan_checkout(&repo, &graph, &plan)?,
+            Some(PlanParent::Step(1)),
+            "an attached branch preserves its implicit checkout"
+        );
+
+        git(fixture.path(), &["checkout", "-q", "--detach", &tip.to_string()])?;
+        assert_eq!(
+            infer_plan_checkout(&repo, &graph, &plan)?,
+            None,
+            "a detached HEAD never supplies an implicit checkout"
         );
         Ok(())
     }
