@@ -613,7 +613,10 @@ space first; changes blocks adapt within the remaining history width.
   block shows its distinct status line.
 - `p` cycles the comparison parent while Tree has focus. Merge commits are
   compared to one parent at a time; root commits compare against an empty tree.
-- History navigation leaves enabled changes overlays visible.
+- Repeated history keys, including printable `j`/`k` reported through enhanced
+  keyboard input, and vertical mouse bursts temporarily hide changes
+  overlays. They return after 75 ms of navigation idle, with the same path
+  selection and viewport where possible.
 - Tree diff results, detached diff resources, and line counts use a bounded MRU
   while changes remain enabled. Worktree results are cached separately and
   invalidated by relevant filesystem events.

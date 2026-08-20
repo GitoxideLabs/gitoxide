@@ -541,6 +541,7 @@ pub(crate) struct App {
     pub show_commit: bool,
     pub changes_mode: Option<ChangesMode>,
     worktree_changes_available: bool,
+    pub(crate) changes_suppressed: bool,
     pub(crate) changes_focus: Option<ChangePane>,
     pub(crate) changes_layout: ChangesLayout,
     pub(crate) tree_changes_visible: bool,
@@ -648,6 +649,7 @@ impl App {
             show_commit: false,
             changes_mode: Some(ChangesMode::Both),
             worktree_changes_available: true,
+            changes_suppressed: false,
             changes_focus: None,
             changes_layout: ChangesLayout::SideBySide,
             tree_changes_visible: false,
@@ -1622,6 +1624,7 @@ impl App {
                 self.reset_changes_view();
                 self.changes_parent = 0;
                 if self.changes_mode.is_none() {
+                    self.changes_suppressed = false;
                     self.changes_focus = None;
                 }
             }
@@ -2300,6 +2303,7 @@ impl App {
         self.lane_time = None;
         self.estimated_lane_width = 0;
         self.show_hidden = show_hidden;
+        self.changes_suppressed = false;
         self.horizontal_offset = 0;
         self.focus_history();
         self.reset_commit_view();
@@ -2400,7 +2404,7 @@ impl App {
     }
 
     pub(crate) fn changes_visible(&self) -> bool {
-        self.changes_mode.is_some() && self.pending_rebase_conflict.is_none()
+        self.changes_mode.is_some() && !self.changes_suppressed && self.pending_rebase_conflict.is_none()
     }
 
     fn ensure_changes_visible(&mut self) {

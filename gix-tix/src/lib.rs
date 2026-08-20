@@ -1131,8 +1131,14 @@ fn event_loop(
         }
         if repeat_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             repeat_deadline = None;
-            fill_repository.retain = false;
-            fill_repository.retained = None;
+            if app.changes_suppressed {
+                app.changes_suppressed = false;
+                dirty = true;
+                urgent = true;
+            } else {
+                fill_repository.retain = false;
+                fill_repository.retained = None;
+            }
         }
         if let Some(result) = verification_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
@@ -1667,6 +1673,7 @@ fn event_loop(
             }
             TerminalEvent::FocusLost => {
                 focused = false;
+                app.changes_suppressed = false;
                 repeat_deadline = None;
                 dirty = true;
                 urgent = true;
@@ -1698,6 +1705,14 @@ fn event_loop(
         } else if !is_repeat {
             fill_repository.retain = false;
             fill_repository.retained = None;
+        }
+        if repeats_history && app.changes_mode.is_some() {
+            app.changes_suppressed = true;
+        } else if !is_repeat && app.changes_suppressed {
+            app.changes_suppressed = false;
+            repeat_deadline = None;
+            dirty = true;
+            urgent = true;
         }
         let conflict_reconcile = if action == Some(Action::ForceQuit) {
             ConflictReconcileStatus::Inactive
@@ -7553,11 +7568,9 @@ mod tests {
 
     #[test]
     fn retains_the_fill_repository_only_for_repeated_viewport_navigation() {
-        assert!(retains_fill_repository(
-            KeyEventKind::Repeat,
-            Some(&Action::MoveDown),
-            false
-        ));
+        for action in [Action::MoveDown, Action::PageDown] {
+            assert!(retains_fill_repository(KeyEventKind::Repeat, Some(&action), false));
+        }
         assert!(!retains_fill_repository(
             KeyEventKind::Repeat,
             Some(&Action::MoveDown),
