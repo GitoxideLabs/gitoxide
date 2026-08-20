@@ -35,7 +35,7 @@ mod error {
         UnknownProtocol { source: config::key::GenericErrorWithValue },
         #[error("Could not verify that \"{}\" url is a valid git directory before attempting to use it", url.to_bstring())]
         FileUrl {
-            source: Box<gix_discover::is_git::Error>,
+            source: Box<gix_error::Error>,
             url: gix_url::Url,
         },
     }
@@ -122,7 +122,7 @@ impl<'repo> Remote<'repo> {
                         gix_discover::is_git(dir.as_ref())
                     })
                     .map_err(|err| Error::FileUrl {
-                        source: err.into(),
+                        source: err.into_error().into(),
                         url: url.clone(),
                     })?;
                 let (git_dir, _work_dir) = gix_discover::repository::Path::from_dot_git_dir(

@@ -259,7 +259,7 @@ impl Submodule<'_> {
                     git_dir_try_old_form::Error::InvalidGitDirFileTarget {
                         gitdir_file: worktree_gitdir.clone(),
                         target: None,
-                        source: Some(source),
+                        source: Some(source.into_error()),
                     }
                 })?;
                 if !git_dir.is_dir() {
