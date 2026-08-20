@@ -1110,6 +1110,9 @@ fn perform_inner(
             .iter()
             .filter_map(|parent| rewritten.get(parent).copied().unwrap_or(Some(*parent)))
             .collect();
+        if Some(old_id) != root && old_parents == new_parents && !is_pending(&commit) {
+            continue;
+        }
         let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
         let original_parents =
             recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
@@ -3192,6 +3195,52 @@ mod tests {
     }
 
     #[test]
+    fn an_unchanged_checkout_descendant_retains_its_commit() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let old_middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let old_tip = repo.head_id()?.detach();
+        let mut middle_commit = repo.find_commit(old_middle)?.decode()?.into_owned()?;
+        middle_commit.committer = repo
+            .committer()
+            .context("the test repository has a committer")?
+            .context("the test committer is valid")?
+            .to_owned()?;
+        crate::change_id::inherit(&repo, &mut middle_commit, old_middle)?;
+        let middle = repo.write_object(&middle_commit)?.detach();
+        let mut tip_commit = repo.find_commit(old_tip)?.decode()?.into_owned()?;
+        tip_commit.parents = [middle].into_iter().collect();
+        let tip = repo.write_object(&tip_commit)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(tip, "prepare an unchanged checkout descendant")?;
+        repo.find_reference("refs/patches/middle")?
+            .set_target_id(middle, "prepare an unchanged target")?;
+        repo.find_reference("refs/patches/tip")?
+            .set_target_id(tip, "prepare an unchanged checkout descendant")?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let mut reported = Vec::new();
+
+        let outcome = perform_reporting_rebased(
+            &repo,
+            &graph,
+            Edit::Replace {
+                target: middle,
+                commit: middle_commit,
+            },
+            Signature::Remove,
+            Tree::LeaveAsIsAndMark,
+            |id| reported.push(id),
+        )?
+        .complete()?;
+
+        assert_eq!(outcome.map(middle), Some(middle), "the no-op target retains its ID");
+        assert_eq!(outcome.map(tip), Some(tip), "its unaffected descendant retains its ID");
+        assert_eq!(repo.head_id()?.detach(), tip, "HEAD remains on the original commit");
+        assert_eq!(reported, [middle], "only the explicit target enters commit writing");
+        Ok(())
+    }
+
+    #[test]
     fn git_notes_follow_each_actual_rewritten_successor() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
@@ -3285,6 +3334,7 @@ mod tests {
         )?
         .complete()?;
         assert_eq!(outcome.selected, Some(base), "removal selects its parent");
+        assert_eq!(outcome.map(base), Some(base), "the unaffected parent retains its ID");
         let tip = repo.head_id()?.detach();
         assert_eq!(
             repo.find_commit(tip)?.parent_ids().next().map(gix::Id::detach),

@@ -216,7 +216,8 @@ without trading responsiveness for metadata that is not visible.
   loaded, unless the user navigates first. Once the viewport is known, the row
   is centered with normal history-boundary clamping so surrounding commits are
   visible. While the row is unselected, its title is shown in reverse video and
-  `@` is bold; a selected row keeps only bold `@`.
+  `@` is bold; the selected row's normal inversion replaces that title emphasis
+  while keeping `@` bold.
 - Local branches checked out in other worktrees are displayed as `short-name@`
   in light blue instead of their plain branch decoration. The current worktree's
   symbolic branch is displayed as `@short-name` in the local-reference color.
@@ -236,12 +237,12 @@ without trading responsiveness for metadata that is not visible.
   entries are skipped without failing history loading.
 - The selected row uses `>` at the left. If the displayed worktree block is dirty,
   `🫟` is shown at the `HEAD` row instead; a separately selected row retains `>`.
-- When selection points at the current worktree, inversion covers the left
-  marker, graph, commit marker, and hash. A separately selected row extends that
-  inversion from the row's start through all non-title metadata; its final space
-  and title remain uninverted. The graph background is derived from the
-  commit-marker color. The selected row's right-hand tail and contextual
-  information always have blank margins and never invert an adjacent character.
+- A selected row at the current worktree is inverted from its left edge through
+  the final displayed title character. Any other selected row is inverted through
+  its non-title metadata, leaving the final space and title uninverted. The graph
+  background is derived from the commit-marker color. The selected row's
+  right-hand tail and contextual information remain separate, have blank margins,
+  and never invert an adjacent character.
 - A compared merge parent is cyan, including its commit marker, and its hash is
   inverted.
 - Rows outside active review-base reachability are dimmed. When a changes block has
@@ -791,7 +792,8 @@ space first; changes blocks adapt within the remaining history width.
   remains lazy only behind a pending parent. Other reparented descendants carry
   `tix-rebase-parent`, retaining the original parent needed for later replay.
   Pending forms use a grey commit marker so they remain distinct from unsigned
-  blue.
+  blue. A final descendant whose effective parents did not change retains its
+  exact commit instead of being replayed merely because it is checked out.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
   targets are trees, blobs, or other non-commit objects.
 - Time travel toward a pending destination cherry-picks and signs only the pending
