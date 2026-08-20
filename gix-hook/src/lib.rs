@@ -99,29 +99,30 @@ pub fn run(prepared: gix_command::Prepare) -> std::io::Result<Outcome> {
     Ok(status.into())
 }
 
+/// Hook names whose exit status git ignores, per [`githooks(5)`](https://git-scm.com/docs/githooks).
+/// Every other hook name, including ones not listed here at all, is treated as gating by
+/// [`is_gating()`].
+///
+/// `reference-transaction` is deliberately absent: it only gates during its `prepared` state,
+/// while `committed` and `aborted` calls are always advisory - a single name can't capture that,
+/// so callers driving that hook must check its state argument themselves.
+pub const ADVISORY_HOOKS: &[&str] = &[
+    "post-applypatch",
+    "post-checkout",
+    "post-commit",
+    "post-merge",
+    "post-receive",
+    "post-rewrite",
+    "post-update",
+];
+
 /// Whether a non-zero exit from the hook named `name` aborts the operation it guards, per
-/// [`githooks(5)`](https://git-scm.com/docs/githooks).
+/// [`ADVISORY_HOOKS`].
 ///
-/// Returns `true` for `name`s not listed here, since git only ever invokes hooks it knows
+/// Returns `true` for `name`s not listed there, since git only ever invokes hooks it knows
 /// about, and an unrecognized name is safest treated as gating.
-///
-/// ### `reference-transaction` is state-dependent
-///
-/// That hook only gates during its `prepared` state; `committed` and `aborted` calls are
-/// always advisory regardless of exit code. This function returns `true` for it, matching the
-/// gating case - callers driving `reference-transaction` must additionally check the state
-/// argument themselves.
 pub fn is_gating(name: &str) -> bool {
-    !matches!(
-        name,
-        "post-applypatch"
-            | "post-commit"
-            | "post-merge"
-            | "post-receive"
-            | "post-update"
-            | "post-checkout"
-            | "post-rewrite"
-    )
+    !ADVISORY_HOOKS.contains(&name)
 }
 
 #[cfg(test)]
