@@ -16,8 +16,8 @@ pub enum Error {
     Unimplemented { short_keyword: char },
     #[error("Missing ')' at the end of pathspec signature")]
     MissingClosingParenthesis,
-    #[error("Attribute has non-ascii characters or starts with '-': {attribute:?}")]
-    InvalidAttribute { attribute: BString },
+    #[error(transparent)]
+    InvalidAttribute(#[from] gix_attributes::name::Error),
     #[error("Invalid character in attribute value: {character:?}")]
     InvalidAttributeValue { character: char },
     #[error(r"Escape character '\' is not allowed as the last character in an attribute value")]
@@ -217,9 +217,7 @@ fn parse_attributes(input: &[u8]) -> Result<Vec<gix_attributes::Assignment>, Err
                     None => (attr, gix_attributes::State::Set),
                 },
             };
-            let name = gix_attributes::NameRef::try_from(name.as_bstr()).map_err(|err| Error::InvalidAttribute {
-                attribute: err.attribute,
-            })?;
+            let name = gix_attributes::NameRef::try_from(name.as_bstr())?;
             Ok(gix_attributes::Assignment {
                 name: name.to_owned(),
                 state,
