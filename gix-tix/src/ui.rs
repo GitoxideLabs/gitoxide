@@ -1848,7 +1848,7 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
             );
             let mut spans = vec![Span::raw(format!("─ Tree {label} "))];
             if changes.paths.is_empty() {
-                spans.push(Span::styled("clean", color(Color::Green)));
+                spans.push(Span::styled("empty", color(Color::Green)));
                 spans.push(Span::raw(" "));
             }
             spans.push(Span::raw("── "));
@@ -6161,12 +6161,12 @@ mod tests {
                 Some(&Changes::default()),
             );
         })?;
-        let (clean_y, clean_tree) = (0..12)
+        let (empty_y, empty_tree) = (0..12)
             .map(|y| (y, rendered_line(&terminal, y)))
-            .find(|(_, line)| line.contains("Tree ------- clean"))
-            .expect("an empty tree remains visible and says it is clean");
-        let clean_x = clean_tree.find("clean").expect("clean tree label") as u16;
-        assert_eq!(terminal.backend().buffer()[(clean_x, clean_y)].fg, Color::Green);
+            .find(|(_, line)| line.contains("Tree ------- empty"))
+            .expect("an empty tree remains visible and says it is empty");
+        let empty_x = empty_tree.find("empty").expect("empty tree label") as u16;
+        assert_eq!(terminal.backend().buffer()[(empty_x, empty_y)].fg, Color::Green);
         assert!(!app.tree_changes_visible, "an empty tree block is not focusable");
         Ok(())
     }
