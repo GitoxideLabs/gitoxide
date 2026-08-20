@@ -1,4 +1,5 @@
 use bstr::{BStr, BString};
+use gix_error::{ErrorExt, ValidationError};
 
 use crate::{AsBStrOpt, AsKey, File, file::Metadata, value};
 
@@ -183,7 +184,10 @@ impl File {
             return Ok(None);
         };
         crate::Integer::try_from(BStr::new(&int))
-            .and_then(|b| b.to_decimal().ok_or_else(|| value::Error::new("Integer overflow", int)))
+            .and_then(|b| {
+                b.to_decimal()
+                    .ok_or_else(|| ValidationError::new_with_input("Integer overflow", int).raise())
+            })
             .map(Some)
     }
 
@@ -267,8 +271,10 @@ impl File {
         values
             .into_iter()
             .map(|v| {
-                crate::Integer::try_from(BStr::new(&v))
-                    .and_then(|int| int.to_decimal().ok_or_else(|| value::Error::new("Integer overflow", v)))
+                crate::Integer::try_from(BStr::new(&v)).and_then(|int| {
+                    int.to_decimal()
+                        .ok_or_else(|| ValidationError::new_with_input("Integer overflow", v).raise())
+                })
             })
             .collect::<Result<Vec<_>, _>>()
             .map(Some)

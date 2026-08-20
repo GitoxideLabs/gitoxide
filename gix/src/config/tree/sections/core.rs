@@ -281,7 +281,7 @@ mod filter {
                     return Ok(CrlfRoundTripCheck::Warn);
                 }
                 let value = gix_config::Boolean::try_from(value.as_bstr()).map_err(|err| {
-                    config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err)
+                    config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err.into_error())
                 })?;
                 Ok(if value.into() {
                     CrlfRoundTripCheck::Fail
@@ -308,7 +308,7 @@ mod filter {
                     return Ok(eol::AutoCrlf::Input);
                 }
                 let value = gix_config::Boolean::try_from(value.as_bstr()).map_err(|err| {
-                    config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err)
+                    config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err.into_error())
                 })?;
                 Ok(if value.into() {
                     eol::AutoCrlf::Enabled
@@ -356,7 +356,9 @@ mod shared_repository {
 
             gix_config::Boolean::try_from(value)
                 .map(|value| if value.0 { 0o660 } else { 0 })
-                .map_err(|err| config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err))
+                .map_err(|err| {
+                    config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err.into_error())
+                })
         }
     }
 }
@@ -403,7 +405,11 @@ mod log_all_ref_updates {
                 } else {
                     gix_ref::store::WriteReflog::Disable
                 })),
-                Err(err) => match err.input {
+                Err(err) => match err
+                    .into_inner()
+                    .input
+                    .expect("gix-config-value validation errors retain their input")
+                {
                     val if val.eq_ignore_ascii_case(b"always") => Ok(Some(gix_ref::store::WriteReflog::Always)),
                     val => Err(config::key::GenericErrorWithValue::from_value(self, val)),
                 },

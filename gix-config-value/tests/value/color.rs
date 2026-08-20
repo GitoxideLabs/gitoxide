@@ -15,31 +15,35 @@ mod name {
 
     use gix_config_value::color::Name;
 
+    fn name(input: &str) -> Name {
+        Name::from_str(input).expect("valid color name")
+    }
+
     #[test]
     fn non_bright() {
-        assert_eq!(Name::from_str("normal"), Ok(Name::Normal));
-        assert_eq!(Name::from_str("-1"), Ok(Name::Normal));
-        assert_eq!(Name::from_str("default"), Ok(Name::Default));
-        assert_eq!(Name::from_str("black"), Ok(Name::Black));
-        assert_eq!(Name::from_str("red"), Ok(Name::Red));
-        assert_eq!(Name::from_str("green"), Ok(Name::Green));
-        assert_eq!(Name::from_str("yellow"), Ok(Name::Yellow));
-        assert_eq!(Name::from_str("blue"), Ok(Name::Blue));
-        assert_eq!(Name::from_str("magenta"), Ok(Name::Magenta));
-        assert_eq!(Name::from_str("cyan"), Ok(Name::Cyan));
-        assert_eq!(Name::from_str("white"), Ok(Name::White));
+        assert_eq!(name("normal"), Name::Normal);
+        assert_eq!(name("-1"), Name::Normal);
+        assert_eq!(name("default"), Name::Default);
+        assert_eq!(name("black"), Name::Black);
+        assert_eq!(name("red"), Name::Red);
+        assert_eq!(name("green"), Name::Green);
+        assert_eq!(name("yellow"), Name::Yellow);
+        assert_eq!(name("blue"), Name::Blue);
+        assert_eq!(name("magenta"), Name::Magenta);
+        assert_eq!(name("cyan"), Name::Cyan);
+        assert_eq!(name("white"), Name::White);
     }
 
     #[test]
     fn bright() {
-        assert_eq!(Name::from_str("brightblack"), Ok(Name::BrightBlack));
-        assert_eq!(Name::from_str("brightred"), Ok(Name::BrightRed));
-        assert_eq!(Name::from_str("brightgreen"), Ok(Name::BrightGreen));
-        assert_eq!(Name::from_str("brightyellow"), Ok(Name::BrightYellow));
-        assert_eq!(Name::from_str("brightblue"), Ok(Name::BrightBlue));
-        assert_eq!(Name::from_str("brightmagenta"), Ok(Name::BrightMagenta));
-        assert_eq!(Name::from_str("brightcyan"), Ok(Name::BrightCyan));
-        assert_eq!(Name::from_str("brightwhite"), Ok(Name::BrightWhite));
+        assert_eq!(name("brightblack"), Name::BrightBlack);
+        assert_eq!(name("brightred"), Name::BrightRed);
+        assert_eq!(name("brightgreen"), Name::BrightGreen);
+        assert_eq!(name("brightyellow"), Name::BrightYellow);
+        assert_eq!(name("brightblue"), Name::BrightBlue);
+        assert_eq!(name("brightmagenta"), Name::BrightMagenta);
+        assert_eq!(name("brightcyan"), Name::BrightCyan);
+        assert_eq!(name("brightwhite"), Name::BrightWhite);
     }
 
     #[test]
@@ -53,8 +57,8 @@ mod name {
             ("BRIGHTWHITE", Name::BrightWhite),
         ] {
             assert_eq!(
-                Name::from_str(input),
-                Ok(expected),
+                name(input),
+                expected,
                 "{input:?}: color names and the 'bright' prefix are case-insensitive, like in Git"
             );
         }
@@ -72,15 +76,15 @@ mod name {
 
     #[test]
     fn ansi() {
-        assert_eq!(Name::from_str("255"), Ok(Name::Ansi(255)));
-        assert_eq!(Name::from_str("0"), Ok(Name::Ansi(0)));
+        assert_eq!(name("255"), Name::Ansi(255));
+        assert_eq!(name("0"), Name::Ansi(0));
     }
 
     #[test]
     fn hex() {
-        assert_eq!(Name::from_str("#ff0010"), Ok(Name::Rgb(255, 0, 16)));
-        assert_eq!(Name::from_str("#ffffff"), Ok(Name::Rgb(255, 255, 255)));
-        assert_eq!(Name::from_str("#000000"), Ok(Name::Rgb(0, 0, 0)));
+        assert_eq!(name("#ff0010"), Name::Rgb(255, 0, 16));
+        assert_eq!(name("#ffffff"), Name::Rgb(255, 255, 255));
+        assert_eq!(name("#000000"), Name::Rgb(0, 0, 0));
     }
 
     #[test]
@@ -103,38 +107,42 @@ mod attribute {
 
     use gix_config_value::color::Attribute;
 
+    fn attribute(input: &str) -> Attribute {
+        Attribute::from_str(input).expect("valid color attribute")
+    }
+
     #[test]
     fn non_inverted() {
-        assert_eq!(Attribute::from_str("reset"), Ok(Attribute::RESET));
-        assert_eq!(Attribute::from_str("bold"), Ok(Attribute::BOLD));
-        assert_eq!(Attribute::from_str("dim"), Ok(Attribute::DIM));
-        assert_eq!(Attribute::from_str("ul"), Ok(Attribute::UL));
-        assert_eq!(Attribute::from_str("blink"), Ok(Attribute::BLINK));
-        assert_eq!(Attribute::from_str("reverse"), Ok(Attribute::REVERSE));
-        assert_eq!(Attribute::from_str("italic"), Ok(Attribute::ITALIC));
-        assert_eq!(Attribute::from_str("strike"), Ok(Attribute::STRIKE));
+        assert_eq!(attribute("reset"), Attribute::RESET);
+        assert_eq!(attribute("bold"), Attribute::BOLD);
+        assert_eq!(attribute("dim"), Attribute::DIM);
+        assert_eq!(attribute("ul"), Attribute::UL);
+        assert_eq!(attribute("blink"), Attribute::BLINK);
+        assert_eq!(attribute("reverse"), Attribute::REVERSE);
+        assert_eq!(attribute("italic"), Attribute::ITALIC);
+        assert_eq!(attribute("strike"), Attribute::STRIKE);
     }
 
     #[test]
     fn inverted_no_dash() {
-        assert_eq!(Attribute::from_str("nobold"), Ok(Attribute::NO_BOLD));
-        assert_eq!(Attribute::from_str("nodim"), Ok(Attribute::NO_DIM));
-        assert_eq!(Attribute::from_str("noul"), Ok(Attribute::NO_UL));
-        assert_eq!(Attribute::from_str("noblink"), Ok(Attribute::NO_BLINK));
-        assert_eq!(Attribute::from_str("noreverse"), Ok(Attribute::NO_REVERSE));
-        assert_eq!(Attribute::from_str("noitalic"), Ok(Attribute::NO_ITALIC));
-        assert_eq!(Attribute::from_str("nostrike"), Ok(Attribute::NO_STRIKE));
+        assert_eq!(attribute("nobold"), Attribute::NO_BOLD);
+        assert_eq!(attribute("nodim"), Attribute::NO_DIM);
+        assert_eq!(attribute("noul"), Attribute::NO_UL);
+        assert_eq!(attribute("noblink"), Attribute::NO_BLINK);
+        assert_eq!(attribute("noreverse"), Attribute::NO_REVERSE);
+        assert_eq!(attribute("noitalic"), Attribute::NO_ITALIC);
+        assert_eq!(attribute("nostrike"), Attribute::NO_STRIKE);
     }
 
     #[test]
     fn inverted_dashed() {
-        assert_eq!(Attribute::from_str("no-bold"), Ok(Attribute::NO_BOLD));
-        assert_eq!(Attribute::from_str("no-dim"), Ok(Attribute::NO_DIM));
-        assert_eq!(Attribute::from_str("no-ul"), Ok(Attribute::NO_UL));
-        assert_eq!(Attribute::from_str("no-blink"), Ok(Attribute::NO_BLINK));
-        assert_eq!(Attribute::from_str("no-reverse"), Ok(Attribute::NO_REVERSE));
-        assert_eq!(Attribute::from_str("no-italic"), Ok(Attribute::NO_ITALIC));
-        assert_eq!(Attribute::from_str("no-strike"), Ok(Attribute::NO_STRIKE));
+        assert_eq!(attribute("no-bold"), Attribute::NO_BOLD);
+        assert_eq!(attribute("no-dim"), Attribute::NO_DIM);
+        assert_eq!(attribute("no-ul"), Attribute::NO_UL);
+        assert_eq!(attribute("no-blink"), Attribute::NO_BLINK);
+        assert_eq!(attribute("no-reverse"), Attribute::NO_REVERSE);
+        assert_eq!(attribute("no-italic"), Attribute::NO_ITALIC);
+        assert_eq!(attribute("no-strike"), Attribute::NO_STRIKE);
     }
 
     #[test]

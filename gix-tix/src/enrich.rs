@@ -63,6 +63,7 @@ pub(crate) fn load(notes: &mut gix::note::Platform, change_id: ChangeId) -> Resu
     Ok(Enrichment {
         todo: config
             .boolean("commit.todo")
+            .map_err(gix::Exn::into_error)
             .context("commit.todo is not a boolean")?
             .unwrap_or(false),
         note: config.string("commit.note").filter(|note| !note.is_empty()),
@@ -76,6 +77,7 @@ pub(crate) fn load_tree(notes: &mut gix::note::Platform, tree_id: ObjectId) -> R
     Ok(TreeEnrichment {
         checks_pass: config
             .boolean("tree.checks-pass")
+            .map_err(gix::Exn::into_error)
             .context("tree.checks-pass is not a boolean")?
             .unwrap_or(false),
     })
@@ -103,6 +105,7 @@ pub(crate) fn toggle(repo: &gix::Repository, commit_id: ObjectId) -> Result<Enri
     update(repo, commit_id, |config| {
         let enabled = !config
             .boolean("commit.todo")
+            .map_err(gix::Exn::into_error)
             .context("commit.todo is not a boolean")?
             .unwrap_or(false);
         set_todo(config, enabled)
@@ -148,6 +151,7 @@ pub(crate) fn toggle_checks_pass(repo: &gix::Repository, commit_id: ObjectId) ->
     update_tree(repo, tree_id, |config| {
         let enabled = !config
             .boolean("tree.checks-pass")
+            .map_err(gix::Exn::into_error)
             .context("tree.checks-pass is not a boolean")?
             .unwrap_or(false);
         set_checks_pass(config, enabled)

@@ -77,10 +77,10 @@ fn multiple() -> crate::Result {
     let config = File::from_paths_metadata(into_meta(vec![c_path]), follow_options())?.expect("non-empty");
 
     assert_eq!(config.string_by("core", None, "c"), Some(bstring("12")));
-    assert_eq!(config.integer_by("core", None, "d"), Ok(Some(41)));
-    assert_eq!(config.boolean_by("http", None, "sslVerify"), Ok(Some(false)));
-    assert_eq!(config.boolean_by("diff", None, "renames"), Ok(Some(true)));
-    assert_eq!(config.boolean_by("core", None, "a"), Ok(Some(false)));
+    assert_eq!(config.integer_by("core", None, "d")?, Some(41));
+    assert_eq!(config.boolean_by("http", None, "sslVerify")?, Some(false));
+    assert_eq!(config.boolean_by("diff", None, "renames")?, Some(true));
+    assert_eq!(config.boolean_by("core", None, "a")?, Some(false));
 
     Ok(())
 }
@@ -121,8 +121,8 @@ fn respect_max_depth() -> crate::Result {
 
     let config =
         File::from_paths_metadata(into_meta(vec![dir.path().join("0")]), follow_options())?.expect("non-empty");
-    assert_eq!(config.integers_by("core", None, "i"), Ok(Some(vec![0, 1, 2, 3, 4])));
-    assert_eq!(config.integers("core.i"), Ok(Some(vec![0, 1, 2, 3, 4])));
+    assert_eq!(config.integers_by("core", None, "i")?, Some(vec![0, 1, 2, 3, 4]));
+    assert_eq!(config.integers("core.i")?, Some(vec![0, 1, 2, 3, 4]));
 
     fn make_options(max_depth: u8, error_on_max_depth_exceeded: bool) -> init::Options<'static> {
         init::Options {
@@ -139,8 +139,8 @@ fn respect_max_depth() -> crate::Result {
     // this is equivalent to running git with --no-includes option
     let options = make_options(1, false);
     let config = File::from_paths_metadata(into_meta(vec![dir.path().join("0")]), options)?.expect("non-empty");
-    assert_eq!(config.integer_by("core", None, "i"), Ok(Some(1)));
-    assert_eq!(config.integer("core.i"), Ok(Some(1)));
+    assert_eq!(config.integer_by("core", None, "i")?, Some(1));
+    assert_eq!(config.integer("core.i")?, Some(1));
 
     // with default max_allowed_depth of 10 and 4 levels of includes, last level is read
     let options = init::Options {
@@ -148,12 +148,12 @@ fn respect_max_depth() -> crate::Result {
         ..Default::default()
     };
     let config = File::from_paths_metadata(into_meta(vec![dir.path().join("0")]), options)?.expect("non-empty");
-    assert_eq!(config.integer_by("core", None, "i"), Ok(Some(4)));
+    assert_eq!(config.integer_by("core", None, "i")?, Some(4));
 
     // with max_allowed_depth of 5, the base and 4 levels of includes, last level is read
     let options = make_options(5, false);
     let config = File::from_paths_metadata(into_meta(vec![dir.path().join("0")]), options)?.expect("non-empty");
-    assert_eq!(config.integer_by("core", None, "i"), Ok(Some(4)));
+    assert_eq!(config.integer_by("core", None, "i")?, Some(4));
 
     // with max_allowed_depth of 2 and 4 levels of includes, max_allowed_depth is exceeded and error is returned
     let options = make_options(2, true);
@@ -168,7 +168,7 @@ fn respect_max_depth() -> crate::Result {
     // with max_allowed_depth of 2 and 4 levels of includes and error_on_max_depth_exceeded: false , max_allowed_depth is exceeded and the value of level 2 is returned
     let options = make_options(2, false);
     let config = File::from_paths_metadata(into_meta(vec![dir.path().join("0")]), options)?.expect("non-empty");
-    assert_eq!(config.integer_by("core", None, "i"), Ok(Some(2)));
+    assert_eq!(config.integer_by("core", None, "i")?, Some(2));
 
     // with max_allowed_depth of 0 and 4 levels of includes, max_allowed_depth is exceeded and error is returned
     let options = make_options(0, true);
@@ -214,7 +214,7 @@ fn simple() -> crate::Result {
     )?;
 
     let config = File::from_paths_metadata(into_meta(vec![a_path]), follow_options())?.expect("non-empty");
-    assert_eq!(config.boolean_by("core", None, "b"), Ok(Some(false)));
+    assert_eq!(config.boolean_by("core", None, "b")?, Some(false));
     Ok(())
 }
 
@@ -274,7 +274,7 @@ fn cycle_detection() -> crate::Result {
         ..Default::default()
     };
     let config = File::from_paths_metadata(into_meta(vec![a_path]), options)?.expect("non-empty");
-    assert_eq!(config.integers_by("core", None, "b"), Ok(Some(vec![0, 1, 0, 1, 0])));
+    assert_eq!(config.integers_by("core", None, "b")?, Some(vec![0, 1, 0, 1, 0]));
     Ok(())
 }
 
@@ -319,8 +319,8 @@ fn nested() -> crate::Result {
 
     let config = File::from_paths_metadata(into_meta(vec![c_path]), follow_options())?.expect("non-empty");
 
-    assert_eq!(config.integer_by("core", None, "c"), Ok(Some(1)));
-    assert_eq!(config.boolean_by("core", None, "b"), Ok(Some(true)));
-    assert_eq!(config.boolean_by("core", None, "a"), Ok(Some(false)));
+    assert_eq!(config.integer_by("core", None, "c")?, Some(1));
+    assert_eq!(config.boolean_by("core", None, "b")?, Some(true));
+    assert_eq!(config.boolean_by("core", None, "a")?, Some(false));
     Ok(())
 }
