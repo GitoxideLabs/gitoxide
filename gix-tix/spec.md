@@ -139,8 +139,12 @@ without trading responsiveness for metadata that is not visible.
 - The UI always owns the alternate screen. Raw mode, focus reporting, mouse
   capture, and enhanced keyboard reporting are restored on every exit path.
   Shutdown leaves the alternate screen without clearing it or writing afterward.
-- `Ctrl-C` exits immediately from any normal tix focus. `q` quits from history;
-  `q` or `Escape` in a focused changes block returns focus to history.
+- `Ctrl-C` exits immediately from any normal tix focus without recovery
+  bookkeeping. `q` always quits from history, including while a conflict or
+  rebase continuation is suspended. Before that normal exit, tix journals
+  already-materialized reference progress and drops only in-memory candidates;
+  it never rolls repository state back. `q` or `Escape` in a focused changes
+  block still returns focus to history.
 
 ## History model
 
@@ -804,6 +808,17 @@ space first; changes blocks adapt within the remaining history width.
 - A checked-out unresolved index keeps `C` at `@`, overrides dirty `🫟`, and
   disables time travel until all conflict stages are resolved. The worktree
   changes block is shown for resolution.
+- Accepting a conflict remembers the materialized commit, HEAD attachment,
+  parents, and accumulated reference changes. If the conflict is resolved and
+  amended outside tix, refresh recognizes completion only when HEAD remains
+  attached the same way, moves to a same-parent replacement, and the
+  conflict-free index exactly matches that replacement's tree. Tix then removes
+  any pending-rebase marker preserved by Git's amend, appends both reference
+  transitions to the same undo operation, and clears the mandatory prompt.
+  Staging a resolution without amending remains incomplete. An unrelated HEAD
+  move stays blocked with a diagnostic and can still be left with normal `q`.
+  Tix's own `<enter>` amend also completes an identical-tree resolution so no
+  pending marker can survive merely because the tree did not change.
 - A materialized todo conflict keeps a high-contrast `REBASE PAUSED` attention notice until
   its in-memory continuation is consumed. The notice changes when the index is
   resolved but always advertises `<enter>` to continue and `Esc` to stop. History,
@@ -894,9 +909,13 @@ space first; changes blocks adapt within the remaining history width.
   become reachable through refs.
 - `Tree::LeaveAsIs` rewrites parentage without changing trees;
   `LeaveAsIsAndMark` writes the original first parent to `tix-rebase-parent` only
-  when later replay needs it; and `CherryPick` transplants each tree delta. User
-  edits use `LeaveAsIsAndMark`; time travel is the only eager `CherryPick` caller.
-  A successful repeated rebase clears the marker through its checkout destination.
+  when later replay needs it; and `CherryPick` transplants each tree delta.
+  Any edit that rewrites the current worktree's checked-out ancestry eagerly
+  cherry-picks that affected path before committing the operation. The edited
+  root of a direct amend or spill already has its final tree and does not receive
+  a redundant worktree transition. Descendants on unrelated branches and in
+  other worktrees remain lazy. A successful repeated rebase clears the marker
+  through its checkout destination.
   On conflict, `tix-rebase-parent` identifies the original base and later descendants
   remain marked instead of being cherry-picked.
 - `Signature::RedoIfNeeded` signs every rewritten commit when signing is
@@ -917,6 +936,10 @@ space first; changes blocks adapt within the remaining history width.
   while awaiting an explicit `<enter>` or `Esc` choice. Dropping it writes nothing;
   accepting it consumes the repository immediately after persisting the commit at
   the ours tree and materializing the retained merge result in the worktree and index.
+  Forget, reword, commit insertion, review finishing, and other shared-rebase
+  callers propagate this same suspended result instead of completing their ref
+  transaction first. Thus a checkout-path conflict is reported by the initiating
+  edit itself, and `Esc` leaves its repository snapshot unchanged.
 
 ### History rebase editor
 
@@ -997,7 +1020,9 @@ space first; changes blocks adapt within the remaining history width.
   still their planned parent retain their IDs. Eager cherry-picking and re-signing
   starts at the first pending or structurally changed commit. Any descendants
   above `@` and other resulting stacks retain their trees, receive pending-rebase
-  markers, and invalidate old signatures for later time travel. With no `@`,
+  markers, and invalidate old signatures for later time travel. With no explicit
+  `@`, the current attached branch's resulting destination is inferred and its
+  ancestry is replayed eagerly; a detached checkout is not inferred. Other
   ordinary steps remain lazy while squash groups are still materialized.
   Any conflict while applying a history todo first remains entirely in memory.
   The TUI projects the partial result, selects and centers the actual conflicting

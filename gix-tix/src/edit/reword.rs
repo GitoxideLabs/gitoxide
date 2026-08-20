@@ -31,6 +31,20 @@ pub(crate) struct Outcome {
     pub ref_changes: Vec<super::undo::RefChange>,
 }
 
+pub(crate) enum Perform {
+    Complete(Outcome),
+    Conflict(rebase::Conflict),
+}
+
+impl Perform {
+    fn complete(self) -> Result<Outcome> {
+        match self {
+            Perform::Complete(outcome) => Ok(outcome),
+            Perform::Conflict(_) => anyhow::bail!("rewording the commit would cause a merge conflict"),
+        }
+    }
+}
+
 pub(crate) fn relocate_after_editor(
     repo: &gix::Repository,
     revisions: &[std::ffi::OsString],
@@ -130,6 +144,16 @@ pub(crate) fn apply(
     old_id: gix::ObjectId,
     edited: &[u8],
 ) -> Result<Outcome> {
+    apply_conflict_reporting(repo, graph, old_id, edited)?.complete()
+}
+
+#[tracing::instrument(skip_all, fields(commit_id = %old_id))]
+pub(crate) fn apply_conflict_reporting(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    old_id: gix::ObjectId,
+    edited: &[u8],
+) -> Result<Perform> {
     let edit = parse(edited)?;
     if edit.message.is_empty() {
         anyhow::bail!("the edited commit message is empty");
@@ -144,40 +168,43 @@ pub(crate) fn apply(
         .context("could not own commit after editing")?;
     let author = actor(edit.author, edit.author_time, "author")?;
     let commit_changed = author != commit.author || edit.message != commit.message;
-    let rebased = if commit_changed {
+    let (rebased, enrichment, enrich_change) = if commit_changed {
         commit.author = author;
         commit.committer = actor(edit.committer, edit.committer_time, "committer")?;
         commit.message = edit.message;
-        Some(apply_commit(&repo, graph, old_id, commit)?)
+        let (performed, enrichment) =
+            apply_commit_conflict_with_enrichment(&repo, graph, old_id, commit, &edit.enrichment)?;
+        let outcome = match performed {
+            rebase::Perform::Complete(outcome) => outcome,
+            rebase::Perform::Conflict(conflict) => return Ok(Perform::Conflict(conflict)),
+        };
+        (Some(outcome), enrichment, None)
     } else {
-        None
+        let name: gix::refs::FullName = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
+        let before = super::undo::state(&repo, name.as_ref())?;
+        let enrichment = crate::enrich::apply_headers(&repo, old_id, &edit.enrichment)?;
+        let after = super::undo::state(&repo, name.as_ref())?;
+        let change = (before != after).then_some(super::undo::RefChange { name, before, after });
+        (None, enrichment, change)
     };
     let commit = rebased
         .as_ref()
         .and_then(|outcome| outcome.selected)
         .filter(|new_id| *new_id != old_id);
-    let enrich_ref: gix::refs::FullName = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
-    let enrich_before = super::undo::state(&repo, enrich_ref.as_ref())?;
-    let enrichment = crate::enrich::apply_headers(&repo, commit.unwrap_or(old_id), &edit.enrichment)?;
-    let enrich_after = super::undo::state(&repo, enrich_ref.as_ref())?;
     let (ref_rewrites, mut ref_changes) = rebased.map_or_else(
         || (Vec::new(), Vec::new()),
         |outcome| (outcome.ref_rewrites, outcome.ref_changes),
     );
-    if enrich_before != enrich_after {
-        ref_changes.push(super::undo::RefChange {
-            name: enrich_ref,
-            before: enrich_before,
-            after: enrich_after,
-        });
+    if let Some(change) = enrich_change {
+        ref_changes.push(change);
     }
-    Ok(Outcome {
+    Ok(Perform::Complete(Outcome {
         target: old_id,
         commit,
         enrichment,
         ref_rewrites,
         ref_changes,
-    })
+    }))
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %old_id))]
@@ -231,14 +258,39 @@ fn apply_commit(
     old_id: gix::ObjectId,
     commit: gix::objs::Commit,
 ) -> Result<rebase::Outcome> {
+    apply_commit_conflict(repo, graph, old_id, commit)?.complete()
+}
+
+fn apply_commit_conflict(
+    repo: &gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    old_id: gix::ObjectId,
+    commit: gix::objs::Commit,
+) -> Result<rebase::Perform> {
     rebase::perform(
         repo,
         graph,
         rebase::Edit::Replace { target: old_id, commit },
         rebase::Signature::RedoIfNeeded,
         rebase::Tree::LeaveAsIsAndMark,
-    )?
-    .complete()
+    )
+}
+
+fn apply_commit_conflict_with_enrichment(
+    repo: &gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    old_id: gix::ObjectId,
+    commit: gix::objs::Commit,
+    headers: &crate::enrich::Headers,
+) -> Result<(rebase::Perform, Option<crate::enrich::Enrichment>)> {
+    rebase::perform_with_enrichment(
+        repo,
+        graph,
+        rebase::Edit::Replace { target: old_id, commit },
+        rebase::Signature::RedoIfNeeded,
+        rebase::Tree::LeaveAsIsAndMark,
+        headers,
+    )
 }
 
 pub(super) fn write_headers(
@@ -753,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn marks_only_reworded_descendants_for_lazy_replay() -> gix_testtools::Result {
+    fn eagerly_replays_checked_out_reword_descendants() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repository = crate::test_repository::open_with(
             fixture.path(),
@@ -788,14 +840,14 @@ mod tests {
             "the reworded commit already has its final tree, parent, and signature"
         );
         assert!(
-            rebase::has_marker(&repository.find_commit(new_tip)?.decode()?.into_owned()?),
-            "the reparented descendant retains its original parent for lazy replay"
+            !rebase::is_pending(&repository.find_commit(new_tip)?.decode()?.into_owned()?),
+            "the checked-out descendant is replayed eagerly"
         );
         Ok(())
     }
 
     #[test]
-    fn signed_rewords_leave_pending_descendants_unsigned() -> gix_testtools::Result {
+    fn signed_rewords_sign_eager_checked_out_descendants() -> gix_testtools::Result {
         if !gix_testtools::signature::program_available("ssh-keygen") {
             return Ok(());
         }
@@ -829,15 +881,13 @@ mod tests {
             "the final edited commit receives its configured signature"
         );
 
-        let descendant = repository.find_commit(repository.head_id()?)?.decode()?.into_owned()?;
-        assert!(rebase::has_marker(&descendant), "the descendant remains pending");
         assert!(
-            descendant
-                .extra_headers
-                .iter()
-                .filter(|(name, _)| name == "gpgsig" || name == "gpgsig-sha256")
-                .all(|(_, value)| value.is_empty()),
-            "a pending descendant never carries a usable signature"
+            repository
+                .find_commit(repository.head_id()?)?
+                .verify_signature()?
+                .expect("the eagerly replayed descendant is signed")
+                .is_valid(),
+            "the checked-out descendant receives its configured signature"
         );
         Ok(())
     }

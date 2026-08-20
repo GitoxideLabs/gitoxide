@@ -182,7 +182,25 @@ pub(crate) fn apply_headers(
     commit_id: ObjectId,
     headers: &Headers,
 ) -> Result<Option<Enrichment>> {
-    let current = load(&mut open(repo)?, crate::change_id::for_commit(repo, commit_id)?)?;
+    let Some((object, data, desired)) = prepare_headers(repo, commit_id, headers)? else {
+        return Ok(None);
+    };
+    let reference: FullName = REF_NAME.try_into().expect("the tix enrich reference is valid");
+    open(repo)?
+        .add_to_ref(reference.as_ref(), object, data)
+        .map_err(gix::Exn::into_error)
+        .context("could not write the tix enrichment")?;
+    Ok(Some(desired))
+}
+
+pub(crate) fn prepare_headers(
+    repo: &gix::Repository,
+    commit_id: ObjectId,
+    headers: &Headers,
+) -> Result<Option<(ObjectId, BString, Enrichment)>> {
+    let change_id = crate::change_id::for_commit(repo, commit_id)?;
+    let mut notes = open(repo)?;
+    let current = load(&mut notes, change_id)?;
     let note = match (
         headers.message.as_ref().map(|message| message.as_bstr()),
         current.note.as_ref().map(|note| note.as_bstr()),
@@ -210,24 +228,24 @@ pub(crate) fn apply_headers(
     if desired == current {
         return Ok(None);
     }
-    update(repo, commit_id, |config| {
-        let mut section = config
-            .section_mut_or_create_new("commit", None)
-            .context("could not create the commit enrichment section")?;
-        section
-            .set("todo", if desired.todo { "true" } else { "false" })
-            .context("could not update commit.todo")?;
-        match desired.note.as_ref().map(|note| note.as_bstr()) {
-            Some(note) => {
-                section.set("note", note).context("could not update commit.note")?;
-            }
-            None => {
-                section.remove("note");
-            }
+    let object = ObjectId::from(change_id);
+    let mut config = load_config(&mut notes, object)?.unwrap_or_default();
+    let mut section = config
+        .section_mut_or_create_new("commit", None)
+        .context("could not create the commit enrichment section")?;
+    section
+        .set("todo", if desired.todo { "true" } else { "false" })
+        .context("could not update commit.todo")?;
+    match desired.note.as_ref().map(|note| note.as_bstr()) {
+        Some(note) => {
+            section.set("note", note).context("could not update commit.note")?;
         }
-        Ok(())
-    })
-    .map(Some)
+        None => {
+            section.remove("note");
+        }
+    }
+    drop(section);
+    Ok(Some((object, config.to_bstring(), desired)))
 }
 
 fn update(

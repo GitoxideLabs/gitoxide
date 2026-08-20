@@ -368,7 +368,7 @@ mod tests {
 
         let repository = crate::test_repository::open(path)?;
         let new_tip = repository.head_id()?.detach();
-        assert_ne!(new_tip, old_tip, "the descendant is lazily reparented");
+        assert_ne!(new_tip, old_tip, "the checked-out descendant is reparented");
         assert_eq!(
             repository
                 .find_commit(new_tip)?
@@ -389,8 +389,8 @@ mod tests {
                 .decode()?
                 .extra_headers()
                 .find("tix-rebase-parent")
-                .is_some(),
-            "the descendant remains marked for lazy replay"
+                .is_none(),
+            "the checked-out descendant is replayed eagerly"
         );
         assert_eq!(
             git(path, &["log", "-1", "--format=%s", "HEAD~1"])?,

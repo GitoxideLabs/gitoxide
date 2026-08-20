@@ -174,7 +174,7 @@ fn prepare_inner(
     })
 }
 
-pub(super) fn index_tree(repo: &gix::Repository, index: &gix::index::File) -> Result<ObjectId> {
+pub(crate) fn index_tree(repo: &gix::Repository, index: &gix::index::File) -> Result<ObjectId> {
     let mut editor = repo.empty_tree().edit().context("could not prepare the index tree")?;
     for entry in index.entries() {
         let mode = entry
@@ -291,8 +291,17 @@ pub(crate) fn apply_reporting(
     prepared: Prepared,
     edited: &[u8],
 ) -> Result<rebase::Outcome> {
+    apply_conflict_reporting(repo, graph, prepared, edited)?.complete()
+}
+
+pub(crate) fn apply_conflict_reporting(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    prepared: Prepared,
+    edited: &[u8],
+) -> Result<rebase::Perform> {
     let edit = commit_from_edit(&prepared, edited)?;
-    apply_commit(repo, graph, prepared, edit)
+    apply_commit_conflict(repo, graph, prepared, edit)
 }
 
 pub(crate) fn apply_message_reporting(
@@ -308,15 +317,22 @@ pub(crate) fn apply_message_reporting(
 }
 
 fn apply_commit(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    prepared: Prepared,
+    edit: (gix::objs::Commit, crate::enrich::Headers),
+) -> Result<rebase::Outcome> {
+    apply_commit_conflict(repo, graph, prepared, edit)?.complete()
+}
+
+fn apply_commit_conflict(
     mut repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     mut prepared: Prepared,
     (commit, enrichment): (gix::objs::Commit, crate::enrich::Headers),
-) -> Result<rebase::Outcome> {
-    let repository_path = repo.git_dir().to_owned();
-    let bare = repo.is_bare();
+) -> Result<rebase::Perform> {
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
-    let mut outcome = rebase::perform(
+    let (performed, _) = rebase::perform_with_enrichment(
         &repo,
         graph,
         rebase::Edit::Insert {
@@ -326,22 +342,9 @@ fn apply_commit(
         },
         rebase::Signature::RedoIfNeeded,
         rebase::Tree::LeaveAsIsAndMark,
-    )?
-    .complete()?;
-    let id = outcome
-        .selected
-        .context("inserting a commit did not produce a selection")?;
-    drop(repo);
-    let repo = crate::open_repository(&repository_path, bare, false)?;
-    let name: gix::refs::FullName = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
-    let before = super::undo::state(&repo, name.as_ref())?;
-    crate::enrich::apply_headers(&repo, id, &enrichment)
-        .context("the commit was created, but its enrichment could not be saved")?;
-    let after = super::undo::state(&repo, name.as_ref())?;
-    if before != after {
-        outcome.ref_changes.push(super::undo::RefChange { name, before, after });
-    }
-    Ok(outcome)
+        &enrichment,
+    )?;
+    Ok(performed)
 }
 
 #[tracing::instrument(skip_all, fields(parent = ?prepared.parent))]

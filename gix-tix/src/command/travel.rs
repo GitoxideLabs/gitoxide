@@ -585,6 +585,8 @@ mod tests {
         std::fs::write(path.join("after"), "after\n")?;
         git(path, &["add", "after"])?;
         git(path, &["commit", "-q", "-m", "after"])?;
+        let root = repository.rev_parse_single("HEAD~3")?.detach();
+        git(path, &["checkout", "-q", "--detach", &root.to_string()])?;
         let graph = crate::edit::loaded_graph(&repository)?;
         crate::edit::rebase::perform(
             &repository,
@@ -594,10 +596,10 @@ mod tests {
             crate::edit::rebase::Tree::LeaveAsIsAndMark,
         )?
         .complete()?;
-        let root = repository.rev_parse_single("HEAD~2")?.detach();
         let tip = repository.find_reference("refs/heads/main")?.id().detach();
         drop(repository);
 
+        git(path, &["checkout", "-q", "main"])?;
         run(crate::test_repository::open(path)?, args(&root.to_string()))?;
         let before = gix_testtools::repository::snapshot(path)?;
         let err = run(crate::test_repository::open(path)?, args(&tip.to_string()))

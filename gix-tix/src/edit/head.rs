@@ -18,7 +18,7 @@ pub fn perform(
     kind: Kind,
     selected_path: Option<(&PathChange, Option<ObjectId>)>,
 ) -> Result<Option<ObjectId>> {
-    Ok(perform_inner(repo, graph, kind, selected_path, false)?.and_then(|outcome| outcome.selected))
+    Ok(perform_inner(repo, graph, kind, selected_path, false, false)?.and_then(|outcome| outcome.selected))
 }
 
 pub(crate) fn perform_with_changes(
@@ -26,8 +26,9 @@ pub(crate) fn perform_with_changes(
     graph: &crate::history::HistoryGraph,
     kind: Kind,
     selected_path: Option<(&PathChange, Option<ObjectId>)>,
+    resolve_pending: bool,
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, kind, selected_path, false)
+    perform_inner(repo, graph, kind, selected_path, false, resolve_pending)
 }
 
 pub(crate) fn perform_reporting(
@@ -35,20 +36,20 @@ pub(crate) fn perform_reporting(
     graph: &crate::history::HistoryGraph,
     kind: Kind,
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, kind, None, false)
+    perform_inner(repo, graph, kind, None, false, false)
 }
 
 #[tracing::instrument(skip_all)]
 #[cfg(test)]
 pub fn amend_index(repo: gix::Repository, graph: &crate::history::HistoryGraph) -> Result<Option<ObjectId>> {
-    Ok(perform_inner(repo, graph, Kind::Amend, None, true)?.and_then(|outcome| outcome.selected))
+    Ok(perform_inner(repo, graph, Kind::Amend, None, true, true)?.and_then(|outcome| outcome.selected))
 }
 
 pub(crate) fn amend_index_reporting(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, Kind::Amend, None, true)
+    perform_inner(repo, graph, Kind::Amend, None, true, true)
 }
 
 fn perform_inner(
@@ -57,6 +58,7 @@ fn perform_inner(
     kind: Kind,
     selected_path: Option<(&PathChange, Option<ObjectId>)>,
     index_only: bool,
+    resolve_pending: bool,
 ) -> Result<Option<rebase::Outcome>> {
     let head = repo
         .head_id()
@@ -74,6 +76,7 @@ fn perform_inner(
         .context("could not resolve commit signing configuration")?;
     repo = repo.with_object_memory();
     let old_tree = commit.tree;
+    let pending = rebase::is_pending(&commit);
     let review = super::review::is_review(&commit);
     let parent_tree = match commit.parents.first().copied() {
         Some(parent) => repo.find_commit(parent)?.tree_id()?.detach(),
@@ -102,7 +105,7 @@ fn perform_inner(
                 amend_path_tree(&repo, old_tree, path, &index)?
             } else if review || index_only {
                 let index_tree = create::index_tree(&repo, &index)?;
-                if index_tree == old_tree {
+                if index_tree == old_tree && !pending {
                     return Ok(None);
                 }
                 index_tree
@@ -117,13 +120,15 @@ fn perform_inner(
             }
         }
     };
-    if tree == old_tree {
+    if tree == old_tree && !pending {
         return Ok(None);
     }
     commit.tree = tree;
     let edit = rebase::Edit::Replace { target: head, commit };
     let signature = if review {
         rebase::Signature::Remove
+    } else if pending {
+        rebase::Signature::RedoIfNeeded
     } else {
         rebase::Signature::InvalidateExisting
     };
@@ -133,6 +138,17 @@ fn perform_inner(
         rebase::Tree::LeaveAsIsAndMark
     };
     let performed = match selected_path {
+        Some((path, _)) if kind == Kind::Amend && resolve_pending => {
+            let mut paths = vec![path.path.clone()];
+            if path.kind == ChangeKind::Renamed
+                && let Some(source) = &path.source
+            {
+                paths.push(source.clone());
+            }
+            rebase::perform_resetting_index_paths_allowing_pending_checkout(
+                &repo, graph, edit, signature, tree_mode, paths,
+            )?
+        }
         Some((path, _)) if kind == Kind::Amend => {
             let mut paths = vec![path.path.clone()];
             if path.kind == ChangeKind::Renamed
@@ -141,6 +157,9 @@ fn perform_inner(
                 paths.push(source.clone());
             }
             rebase::perform_resetting_index_paths(&repo, graph, edit, signature, tree_mode, paths)?
+        }
+        _ if kind == Kind::Amend && resolve_pending => {
+            rebase::perform_allowing_pending_checkout(&repo, graph, edit, signature, tree_mode)?
         }
         _ => rebase::perform(&repo, graph, edit, signature, tree_mode)?,
     };
@@ -324,6 +343,86 @@ mod tests {
             b"tracked\n",
             "worktree-only changes remain uncommitted"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn index_only_amend_finalizes_a_pending_commit_even_when_its_tree_is_unchanged() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let old = repo.head_id()?.detach();
+        let mut commit = repo.find_commit(old)?.decode()?.into_owned()?;
+        let parent = commit.parents.first().copied().expect("the fixture HEAD has a parent");
+        commit
+            .extra_headers
+            .push(("tix-rebase-parent".into(), parent.to_string().into()));
+        let pending = repo.write_object(&commit)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(pending, "prepare pending amend")?;
+        let graph = super::super::loaded_graph(&repo)?;
+
+        let finalized = amend_index(repo, &graph)?.expect("a pending commit must be finalized");
+        let repo = open(fixture.path())?;
+        assert_eq!(repo.head_id()?.detach(), finalized);
+        assert!(
+            !super::super::rebase::is_pending(&repo.find_commit(finalized)?.decode()?.into_owned()?),
+            "an all-ours resolution removes the pending marker"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_amend_rejects_a_pending_head_outside_conflict_resolution() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let old = repo.head_id()?.detach();
+        let mut commit = repo.find_commit(old)?.decode()?.into_owned()?;
+        let parent = commit.parents.first().copied().expect("the fixture HEAD has a parent");
+        commit
+            .extra_headers
+            .push(("tix-rebase-parent".into(), parent.to_string().into()));
+        let pending = repo.write_object(&commit)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(pending, "prepare an externally checked-out pending commit")?;
+        let graph = super::super::loaded_graph(&repo)?;
+
+        let err = match perform(repo, &graph, Kind::Amend, None) {
+            Ok(_) => return Err("an ordinary amend must not resolve an arbitrary pending HEAD".into()),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("time-travel to HEAD"), "{err:#}");
+        assert_eq!(open(fixture.path())?.head_id()?.detach(), pending);
+        Ok(())
+    }
+
+    #[test]
+    fn amend_rejects_an_unmarked_head_above_pending_ancestry() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let old_tip = repo.head_id()?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let mut pending = repo.find_commit(middle)?.decode()?.into_owned()?;
+        pending
+            .extra_headers
+            .push(("tix-rebase-parent".into(), base.to_string().into()));
+        let pending = repo.write_object(&pending)?.detach();
+        let mut tip = repo.find_commit(old_tip)?.decode()?.into_owned()?;
+        tip.parents = [pending].into_iter().collect();
+        let tip = repo.write_object(&tip)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(tip, "prepare pending checkout ancestry")?;
+        std::fs::write(fixture.path().join("tip"), b"amended\n")?;
+        git(fixture.path(), &["add", "tip"])?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+
+        let err = match perform(repo, &graph, Kind::Amend, None) {
+            Ok(_) => return Err("amend must not preserve pending checkout ancestry".into()),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("time-travel to HEAD"), "{err:#}");
+        assert_eq!(gix_testtools::repository::snapshot(fixture.path())?, before);
         Ok(())
     }
 
