@@ -1,1 +1,4 @@
-[2KError: The repository path '-oProxyCommand=open$IFS-aCalculator/bar' could be mistaken for a command-line argument
+[2KError: Transport handshake failed
+
+Caused by:
+    The repository path '-oProxyCommand=open$IFS-aCalculator/bar' could be mistaken for a command-line argument
