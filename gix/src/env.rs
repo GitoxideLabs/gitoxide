@@ -83,11 +83,12 @@ pub mod collate {
         }
 
         #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
-        impl<E> crate::protocol::transport::IsSpuriousError for Error<E>
+        impl<E> Error<E>
         where
             E: std::error::Error + Send + Sync + 'static,
         {
-            fn is_spurious(&self) -> bool {
+            /// Return `true` if retrying the failed operation might succeed.
+            pub fn can_retry(&self) -> bool {
                 match self {
                     Error::Open(_)
                     | Error::CredentialHelperConfig(_)
@@ -95,9 +96,9 @@ pub mod collate {
                     | Error::FindExistingReference(_)
                     | Error::FindExistingRemote(_)
                     | Error::Other(_) => false,
-                    Error::Connect(err) => err.is_spurious(),
-                    Error::PrepareFetch(err) => err.is_spurious(),
-                    Error::Fetch(err) => err.is_spurious(),
+                    Error::Connect(err) => err.can_retry(),
+                    Error::PrepareFetch(err) => err.can_retry(),
+                    Error::Fetch(err) => err.can_retry(),
                 }
             }
         }

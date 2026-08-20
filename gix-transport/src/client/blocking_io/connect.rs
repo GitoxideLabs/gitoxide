@@ -6,6 +6,7 @@ pub(crate) mod function {
     #[cfg(all(feature = "http-client-reqwest", not(feature = "http-client-curl")))]
     use crate::client::blocking_io::http::reqwest::Remote as Reqwest;
     use crate::client::{blocking_io::Transport, non_io_types::connect::Error};
+    use gix_error::{ErrorExt, ResultExt, message};
 
     /// A general purpose connector connecting to a repository identified by the given `url`.
     ///
@@ -21,33 +22,37 @@ pub(crate) mod function {
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        let mut url = url.try_into().map_err(gix_error::Error::from_error)?;
+        let mut url = url.try_into().or_raise(|| message("Could not parse URL"))?;
         Ok(match url.scheme {
             gix_url::Scheme::Ext | gix_url::Scheme::Helper(_) | gix_url::Scheme::HelperUrl(_) => {
-                return Err(Error::UnsupportedScheme(url.scheme));
+                return Err(message!("The '{}' protocol is currently unsupported", url.scheme).raise());
             }
             gix_url::Scheme::File => {
                 if url.user().is_some() || url.password().is_some() || url.host().is_some() || url.port.is_some() {
-                    return Err(Error::UnsupportedUrlTokens {
-                        url: url.to_bstring(),
-                        scheme: url.scheme,
-                    });
+                    return Err(message!(
+                        "The url {:?} contains information that would not be used by the {} protocol",
+                        url.to_bstring(),
+                        url.scheme
+                    )
+                    .raise());
                 }
                 Box::new(
                     crate::client::blocking_io::file::connect(url.path, options.version, options.trace)
-                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
+                        .or_raise(|| message("connection failed"))?,
                 )
             }
             gix_url::Scheme::Ssh => Box::new({
                 crate::client::blocking_io::ssh::connect(url, options.version, options.ssh, options.trace)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                    .or_raise(|| message("connection failed"))?
             }),
             gix_url::Scheme::Git => {
                 if url.user().is_some() {
-                    return Err(Error::UnsupportedUrlTokens {
-                        url: url.to_bstring(),
-                        scheme: url.scheme,
-                    });
+                    return Err(message!(
+                        "The url {:?} contains information that would not be used by the {} protocol",
+                        url.to_bstring(),
+                        url.scheme
+                    )
+                    .raise());
                 }
                 Box::new({
                     let path = std::mem::take(&mut url.path);
@@ -58,11 +63,17 @@ pub(crate) mod function {
                         url.port,
                         options.trace,
                     )
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                    .or_raise(|| message("connection failed"))?
                 })
             }
             #[cfg(not(any(feature = "http-client-curl", feature = "http-client-reqwest")))]
-            gix_url::Scheme::Https | gix_url::Scheme::Http => return Err(Error::CompiledWithoutHttp(url.scheme)),
+            gix_url::Scheme::Https | gix_url::Scheme::Http => {
+                return Err(message!(
+                    "'{}' is not compiled in. Compile with the 'http-client-curl' or 'http-client-reqwest' cargo feature",
+                    url.scheme
+                )
+                .raise());
+            }
             #[cfg(feature = "http-client-curl")]
             gix_url::Scheme::Https | gix_url::Scheme::Http => Box::new(
                 crate::client::blocking_io::http::connect::<Curl>(url, options.version, options.trace),

@@ -287,9 +287,7 @@ fn add_shallow_args(
 }
 
 fn transport_error(err: crate::transport::client::Error, context: &'static str) -> Error {
-    use crate::transport::IsSpuriousError;
-
-    if err.is_spurious() {
+    if err.can_retry() {
         RetryableError::new(err).and_raise(message(context)).erased()
     } else {
         err.and_raise(message(context)).erased()

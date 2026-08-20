@@ -2607,7 +2607,6 @@ dependencies = [
  "pin-project-lite",
  "reqwest",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]

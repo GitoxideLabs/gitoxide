@@ -30,10 +30,10 @@ pub enum Error {
     ConfigureCredentials(#[from] crate::config::credential_helpers::Error),
 }
 
-impl gix_protocol::transport::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
+impl Error {
+    pub(crate) fn can_retry(&self) -> bool {
         match self {
-            Error::Transport(err) => err.is_spurious(),
+            Error::Transport(err) => err.can_retry(),
             Error::Handshake(err) => err.can_retry(),
             _ => false,
         }
