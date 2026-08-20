@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use bstr::ByteSlice;
+
 #[test]
 fn consuming_the_entire_prefix_does_not_lead_to_a_single_dot() -> crate::Result {
     let spec = normalized_spec("..", "a", "")?;
@@ -96,31 +98,34 @@ fn absolute_top_patterns_ignore_the_prefix_but_are_made_relative() -> crate::Res
 #[test]
 fn relative_path_breaks_out_of_working_tree() {
     let err = normalized_spec("../a", "", "").unwrap_err();
-    assert_eq!(err.to_string(), "The path '../a' leaves the repository");
+    assert_eq!(err.message, "The path leaves the repository");
+    assert_eq!(err.input.as_ref().expect("offending path").to_str_lossy(), "../a");
     let err = normalized_spec("../../b", "a", "").unwrap_err();
+    assert_eq!(err.message, "The path leaves the repository");
     assert_eq!(
-        err.to_string(),
-        format!(
-            "The path '{}' leaves the repository",
-            if cfg!(windows) { r"a\../../b" } else { "a/../../b" }
-        )
+        err.input.as_ref().expect("offending path").to_str_lossy(),
+        if cfg!(windows) { r"a\../../b" } else { "a/../../b" }
     );
 }
 
 #[test]
 fn absolute_path_breaks_out_of_working_tree() {
     let err = normalized_spec("/path/to/repo/..///./a", "", "/path/to/repo").unwrap_err();
-    assert_eq!(err.to_string(), "The path '..///./a' leaves the repository");
+    assert_eq!(err.message, "The path leaves the repository");
+    assert_eq!(err.input.as_ref().expect("offending path").to_str_lossy(), "..///./a");
     let err = normalized_spec("/path/to/repo/../../../dev", "", "/path/to/repo").unwrap_err();
-    assert_eq!(err.to_string(), "The path '../../../dev' leaves the repository");
+    assert_eq!(err.message, "The path leaves the repository");
+    assert_eq!(
+        err.input.as_ref().expect("offending path").to_str_lossy(),
+        "../../../dev"
+    );
 }
 
 #[test]
 fn absolute_path_escapes_worktree() {
-    assert_eq!(
-        normalized_spec("/dev", "", "/path/to/repo").unwrap_err().to_string(),
-        "The path '/dev' is not inside of the worktree '/path/to/repo'"
-    );
+    let err = normalized_spec("/dev", "", "/path/to/repo").expect_err("the path is outside of the worktree");
+    assert_eq!(err.message, "The path is not inside of the worktree '/path/to/repo'");
+    assert_eq!(err.input.as_ref().expect("offending path").to_str_lossy(), "/dev");
 }
 
 fn normalized_spec(
