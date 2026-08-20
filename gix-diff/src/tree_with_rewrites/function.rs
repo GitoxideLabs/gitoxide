@@ -173,6 +173,7 @@ where
                 let mut delegate = tree_to_changes::Delegate::new(push, self.location);
                 let state = gix_traverse::tree::breadthfirst::State::default();
                 gix_traverse::tree::breadthfirst(self.src_tree, state, self.objects, &mut delegate)
+                    .map_err(gix_error::Exn::into_error)
             },
         )?;
         Ok(Some(outcome))

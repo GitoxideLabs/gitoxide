@@ -18,14 +18,13 @@ fn traverse(
     hidden: impl IntoIterator<Item = ObjectId>,
 ) -> crate::Result<Vec<ObjectId>> {
     let graph = commit_graph(odb.store_ref());
-    Simple::new(tips, odb)
+    Ok(Simple::new(tips, odb)
         .sorting(sorting)?
         .parents(parents)
         .commit_graph(graph)
         .hide(hidden)?
         .map(|res| res.map(|info| info.id))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(Into::into)
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
 /// Run a traversal with both commit-graph enabled and disabled to ensure consistency.

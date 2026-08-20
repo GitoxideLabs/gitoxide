@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use gix_error::{CorruptionError, OptionExt};
 use gix_hash::{ObjectId, oid};
 use gix_revwalk::{PriorityQueue, graph::IdMap};
 
@@ -176,7 +177,10 @@ where
         // the tips, but then in simplify_commit() Git is told to ignore it. For
         // now the tests pass.
         for id in self.tips.iter() {
-            let i = w.indegrees.get(id).ok_or(Error::MissingIndegreeUnexpected)?;
+            let i = w
+                .indegrees
+                .get(id)
+                .ok_or_raise_erased(|| CorruptionError::new("Indegree information is missing"))?;
 
             if *i != 1 {
                 continue;

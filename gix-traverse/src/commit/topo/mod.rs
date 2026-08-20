@@ -3,24 +3,7 @@
 use bitflags::bitflags;
 
 /// The errors that can occur during creation and iteration.
-#[derive(thiserror::Error, Debug)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Indegree information is missing")]
-    MissingIndegreeUnexpected,
-    #[error("Internal state (bitflags) not found")]
-    MissingStateUnexpected,
-    #[error(transparent)]
-    ObjectDecode(#[from] gix_object::decode::Error),
-    #[error(transparent)]
-    Find(gix_error::Error),
-}
-
-impl From<gix_object::find::existing_iter::Error> for Error {
-    fn from(err: gix_object::find::existing_iter::Error) -> Self {
-        Error::Find(err.into_error())
-    }
-}
+pub type Error = gix_error::Exn;
 
 bitflags! {
     /// Set of flags to describe the state of a particular commit while iterating.

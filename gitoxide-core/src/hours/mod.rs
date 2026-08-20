@@ -254,7 +254,7 @@ where
                         }
                         commit_idx += 1;
                     }
-                    Err(gix::traverse::commit::simple::Error::Find { .. }) => {
+                    Err(err) if err.downcast_any_ref::<gix::error::NotFoundError>().is_some() => {
                         is_shallow = true;
                         break;
                     }

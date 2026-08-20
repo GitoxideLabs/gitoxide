@@ -1,3 +1,4 @@
+use gix_error::{CorruptionError, ErrorExt};
 use gix_hash::{ObjectId, oid};
 use gix_revwalk::PriorityQueue;
 use smallvec::SmallVec;
@@ -8,6 +9,14 @@ use crate::commit::{
 };
 
 pub(in crate::commit) type GenAndCommitTime = (u32, i64);
+
+fn missing_indegree() -> Error {
+    CorruptionError::new("Indegree information is missing").raise_erased()
+}
+
+fn missing_state() -> Error {
+    CorruptionError::new("Internal state (bitflags) not found").raise_erased()
+}
 
 // Git's priority queue works as a LIFO stack if no compare function is set,
 // which is the case for `--topo-order.` However, even in that case the initial
@@ -72,7 +81,7 @@ where
             for (id, gen_time) in parents {
                 self.indegrees.entry(id).and_modify(|e| *e += 1).or_insert(2);
 
-                let state = self.states.get_mut(&id).ok_or(Error::MissingStateUnexpected)?;
+                let state = self.states.get_mut(&id).ok_or_else(missing_state)?;
                 if !state.contains(WalkFlags::InDegree) {
                     *state |= WalkFlags::InDegree;
                     self.indegree_queue.insert(gen_time, id);
@@ -99,7 +108,7 @@ where
             self.process_parents(&id, &parents)?;
 
             for (id, gen_time) in parents {
-                let state = self.states.get_mut(&id).ok_or(Error::MissingStateUnexpected)?;
+                let state = self.states.get_mut(&id).ok_or_else(missing_state)?;
 
                 if !state.contains(WalkFlags::Explored) {
                     *state |= WalkFlags::Explored;
@@ -115,7 +124,7 @@ where
         self.process_parents(id, &parents)?;
 
         for (pid, (parent_gen, parent_commit_time)) in parents {
-            let parent_state = self.states.get(&pid).ok_or(Error::MissingStateUnexpected)?;
+            let parent_state = self.states.get(&pid).ok_or_else(missing_state)?;
             if parent_state.contains(WalkFlags::Uninteresting) {
                 continue;
             }
@@ -125,7 +134,7 @@ where
                 self.compute_indegrees_to_depth(self.min_gen)?;
             }
 
-            let i = self.indegrees.get_mut(&pid).ok_or(Error::MissingIndegreeUnexpected)?;
+            let i = self.indegrees.get_mut(&pid).ok_or_else(missing_indegree)?;
             *i -= 1;
             if *i != 1 {
                 continue;
@@ -147,7 +156,7 @@ where
     }
 
     fn process_parents(&mut self, id: &oid, parents: &[(ObjectId, GenAndCommitTime)]) -> Result<(), Error> {
-        let state = self.states.get_mut(id).ok_or(Error::MissingStateUnexpected)?;
+        let state = self.states.get_mut(id).ok_or_else(missing_state)?;
         if state.contains(WalkFlags::Added) {
             return Ok(());
         }
@@ -205,7 +214,7 @@ where
         let i = match self.indegrees.get_mut(&commit.id) {
             Some(i) => i,
             None => {
-                return Some(Err(Error::MissingIndegreeUnexpected));
+                return Some(Err(missing_indegree()));
             }
         };
 
@@ -263,7 +272,11 @@ where
                         }
                     }
                     Ok(_past_parents) => break,
-                    Err(err) => return Err(err.into()),
+                    Err(err) => {
+                        return Err(err
+                            .and_raise(CorruptionError::new("A commit could not be decoded during traversal"))
+                            .erased());
+                    }
                 }
             }
             // Need to check the cache again. That a commit is not in the cache
@@ -312,7 +325,11 @@ pub(super) fn gen_and_commit_time(c: Either<'_, '_>) -> Result<GenAndCommitTime,
                         break;
                     }
                     Ok(_unused_token) => break,
-                    Err(err) => return Err(err.into()),
+                    Err(err) => {
+                        return Err(err
+                            .and_raise(CorruptionError::new("A commit could not be decoded during traversal"))
+                            .erased());
+                    }
                 }
             }
             Ok((gix_commitgraph::GENERATION_NUMBER_INFINITY, commit_time))
