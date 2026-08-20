@@ -4,10 +4,10 @@ use crate::parse::{assert_url, assert_url_roundtrip, url_alternate};
 
 #[test]
 fn address_may_contain_a_url() -> crate::Result {
-    assert_url_roundtrip(
+    Ok(assert_url_roundtrip(
         "codecommit::eu-central-1://myaccount@my-repo",
         helper("codecommit", b"eu-central-1://myaccount@my-repo"),
-    )
+    )?)
 }
 
 #[test]
@@ -65,20 +65,20 @@ fn ext_commands_are_normalized_and_distinguishable_from_other_helpers() -> crate
 fn address_may_be_empty_or_contain_more_separators() -> crate::Result {
     assert_url_roundtrip("foo::", helper("foo", b""))?;
     assert_url_roundtrip("foo::a::b", helper("foo", b"a::b"))?;
-    assert_url_roundtrip("a:::b", helper("a", b":b"))
+    Ok(assert_url_roundtrip("a:::b", helper("a", b":b"))?)
 }
 
 #[test]
 fn address_may_be_an_arbitrary_command_line() -> crate::Result {
     // Helpers can be as flexible as `git-remote-bash` running `eval "$2"`, so nothing about the
     // address may be assumed.
-    assert_url_roundtrip(
+    Ok(assert_url_roundtrip(
         r#"bash::exec git-remote-https "$1" "$(/usr/local/bin/generate-git-https-url)""#,
         helper(
             "bash",
             br#"exec git-remote-https "$1" "$(/usr/local/bin/generate-git-https-url)""#,
         ),
-    )
+    )?)
 }
 
 #[test]
@@ -86,7 +86,7 @@ fn a_single_letter_name_is_not_a_dos_drive_letter() -> crate::Result {
     // A DOS drive letter is followed by a single `:`, so these remain remote helpers on all platforms,
     // just like in Git.
     assert_url_roundtrip("c::foo", helper("c", b"foo"))?;
-    assert_url_roundtrip(r"C::\foo", helper("C", br"\foo"))
+    Ok(assert_url_roundtrip(r"C::\foo", helper("C", br"\foo"))?)
 }
 
 #[test]
@@ -99,7 +99,10 @@ fn helper_names_shadow_built_in_schemes() -> crate::Result {
 
 #[test]
 fn helper_names_are_case_sensitive() -> crate::Result {
-    assert_url_roundtrip("CodeCommit::address", helper("CodeCommit", b"address"))
+    Ok(assert_url_roundtrip(
+        "CodeCommit::address",
+        helper("CodeCommit", b"address"),
+    )?)
 }
 
 #[test]
