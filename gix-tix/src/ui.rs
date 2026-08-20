@@ -577,13 +577,13 @@ pub(crate) fn draw_with_worktree(
             };
             let row = &app.rows[*row_index];
             let row_selected = selected == Some(start + index);
-            let title = row_selected.then(|| app.note(row.id)).flatten().map_or_else(
-                || app.title(row),
-                |note| gix::objs::commit::MessageRef::from_bytes(note).title,
-            );
+            let note_title = row_selected
+                .then(|| app.note(row.id))
+                .flatten()
+                .map(|note| gix::objs::commit::MessageRef::from_bytes(note).title);
             let mut metadata = metadata_columns(
                 row,
-                title,
+                app.title(row),
                 app.attributions(row),
                 decorations,
                 mailmap,
@@ -595,7 +595,7 @@ pub(crate) fn draw_with_worktree(
                     show_emails: app.show_emails,
                     show_trailers,
                     has_notes: !app.notes(row.id).is_empty(),
-                    note: row_selected && app.note(row.id).is_some(),
+                    note_title,
                     use_mailmap: app.use_mailmap && copy_feedback != Some(CopyKind::Author),
                     ref_mode,
                     selected: (row_selected && app.show_selection_tail) || compared_parent == Some(row.id),
@@ -2226,7 +2226,7 @@ fn notification_discs(spans: Vec<Span<'_>>) -> Vec<Span<'_>> {
 }
 
 #[derive(Clone, Copy)]
-struct MetadataOptions {
+struct MetadataOptions<'a> {
     date_mode: DateMode,
     id_mode: IdMode,
     change_id: gix::hash::ChangeId,
@@ -2234,7 +2234,7 @@ struct MetadataOptions {
     show_emails: bool,
     show_trailers: bool,
     has_notes: bool,
-    note: bool,
+    note_title: Option<&'a BStr>,
     use_mailmap: bool,
     ref_mode: RefMode,
     selected: bool,
@@ -2281,7 +2281,7 @@ fn metadata_columns<'a>(
     attributions: &'a [crate::app::Attribution],
     decorations: &'a Decorations,
     mailmap: &'a gix::mailmap::Snapshot,
-    options: MetadataOptions,
+    options: MetadataOptions<'a>,
 ) -> MetadataColumns<'a> {
     debug_assert!(row.metadata_loaded, "visible rows have metadata");
     let MetadataOptions {
@@ -2292,7 +2292,7 @@ fn metadata_columns<'a>(
         show_emails,
         show_trailers,
         has_notes,
-        note,
+        note_title,
         use_mailmap,
         ref_mode,
         selected,
@@ -2500,13 +2500,15 @@ fn metadata_columns<'a>(
     }
     let mut title_spans = Vec::new();
     if !show_emails {
-        let mut title = markdown_title_spans(title);
-        if note {
-            for span in &mut title {
+        if let Some(note_title) = note_title {
+            let mut note_title = markdown_title_spans(note_title);
+            for span in &mut note_title {
                 span.style = span.style.patch(note_style());
             }
+            title_spans.extend(note_title);
+            title_spans.push(Span::raw(" "));
         }
-        title_spans.extend(title);
+        title_spans.extend(markdown_title_spans(title));
     }
     MetadataColumns {
         fields: [
@@ -2526,7 +2528,7 @@ fn metadata_line<'a>(
     attributions: &'a [crate::app::Attribution],
     decorations: &'a Decorations,
     mailmap: &'a gix::mailmap::Snapshot,
-    options: MetadataOptions,
+    options: MetadataOptions<'a>,
 ) -> Line<'a> {
     metadata_columns(row, title, attributions, decorations, mailmap, options).into_line()
 }
@@ -2553,7 +2555,7 @@ pub(crate) fn plain_history_metadata(
             show_emails: app.show_emails,
             show_trailers: app.name_mode == NameMode::All && app.show_trailers,
             has_notes,
-            note: false,
+            note_title: None,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
             selected: false,
@@ -2584,7 +2586,7 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
             show_emails: app.show_emails,
             show_trailers: app.name_mode == crate::app::NameMode::All && app.show_trailers,
             has_notes: !app.notes(row.id).is_empty(),
-            note: false,
+            note_title: None,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
             selected: false,
@@ -3029,14 +3031,36 @@ mod tests {
         assert_eq!(row[(6, 0)].symbol(), ">", "selection directly follows enrichments");
         assert_eq!(row[(8, 0)].symbol(), "●", "the graph remains separate");
         assert!(
-            rendered_line(&terminal, 0).contains("follow-up title"),
-            "the selected todo displays its note title"
+            rendered_line(&terminal, 0).contains("follow-up title subject"),
+            "the selected todo prefixes its title with the note title"
         );
         let title_x = (0..80)
             .find(|x| row[(*x, 0)].symbol() == "f")
             .expect("the note title is visible");
         assert_eq!(row[(title_x, 0)].fg, Color::Black);
         assert_eq!(row[(title_x, 0)].bg, Color::Yellow);
+        let separator = &row[(title_x + 15, 0)];
+        assert_eq!(separator.symbol(), " ", "a space separates both titles");
+        assert_eq!(separator.fg, Color::Reset, "the separator has no foreground color");
+        assert_eq!(separator.bg, Color::Reset, "the separator has no background color");
+        assert!(separator.modifier.is_empty(), "the separator has no modifiers");
+        let commit_title = &row[(title_x + 16, 0)];
+        assert_eq!(commit_title.symbol(), "s", "the commit title follows the note title");
+        assert_eq!(
+            commit_title.fg,
+            Color::Reset,
+            "the commit title has its normal foreground"
+        );
+        assert_eq!(
+            commit_title.bg,
+            Color::Reset,
+            "the commit title has its normal background"
+        );
+        assert_eq!(
+            commit_title.modifier,
+            Modifier::empty(),
+            "the commit title has its normal modifiers"
+        );
         assert!(
             (0..80).any(|x| row[(x, 0)].symbol() == "t" && row[(x, 0)].modifier.contains(Modifier::ITALIC)),
             "the Markdown title is italicized"
@@ -3065,8 +3089,8 @@ mod tests {
         );
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 0).contains("follow-up title"),
-            "a note replaces the selected title independently of todo"
+            rendered_line(&terminal, 0).contains("follow-up title subject"),
+            "a note prefixes the selected title independently of todo"
         );
         assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), " ");
         assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), "📝");
@@ -6819,7 +6843,7 @@ mod tests {
                 show_emails: false,
                 show_trailers: true,
                 has_notes: false,
-                note: false,
+                note_title: None,
                 use_mailmap: false,
                 ref_mode: RefMode::All,
                 selected: false,
@@ -6928,7 +6952,7 @@ mod tests {
                 show_emails: false,
                 show_trailers: false,
                 has_notes: false,
-                note: false,
+                note_title: None,
                 use_mailmap: false,
                 ref_mode: RefMode::None,
                 selected: false,
