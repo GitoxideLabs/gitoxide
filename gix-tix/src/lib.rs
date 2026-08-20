@@ -697,6 +697,7 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
             )
         });
     let keyboard_restore = disable_input(terminal.backend_mut(), enhanced_keyboard);
+    drop(terminal);
     let restore = ratatui::try_restore().context("could not restore terminal");
     let lane_time = result?;
     keyboard_restore.context("could not restore keyboard events")?;
