@@ -1,38 +1,24 @@
-use bstr::BString;
-
 use crate::{DELIMITER_LINE, FLUSH_LINE, MAX_DATA_LEN, MAX_LINE_LEN, PacketLineRef, RESPONSE_END_LINE, U16_HEX_BYTES};
 
 /// The error used in the [`decode`][mod@crate::decode] module
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Failed to decode the first four hex bytes indicating the line length: {err}")]
-    HexDecode { err: String },
-    #[error(
+pub type Error = gix_error::ValidationError;
+
+pub(crate) fn data_length_limit_exceeded(length_in_bytes: usize) -> Error {
+    Error::new(format!(
         "The data received claims to be larger than the maximum allowed size: got {length_in_bytes}, exceeds {MAX_DATA_LEN}"
-    )]
-    DataLengthLimitExceeded { length_in_bytes: usize },
-    #[error("Received an invalid empty line")]
-    DataIsEmpty,
-    #[error("Received an invalid line of length 3")]
-    InvalidLineLength,
-    #[error("{data:?} - consumed {bytes_consumed} bytes")]
-    Line { data: BString, bytes_consumed: usize },
-    #[error("Needing {bytes_needed} additional bytes to decode the line successfully")]
-    NotEnoughData { bytes_needed: usize },
+    ))
+}
+
+pub(crate) fn not_enough_data(bytes_needed: usize) -> Error {
+    Error::new(format!(
+        "Needing {bytes_needed} additional bytes to decode the line successfully"
+    ))
 }
 
 ///
 pub mod band {
     /// The error used in [`PacketLineRef::decode_band()`][super::PacketLineRef::decode_band()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("attempt to decode a non-side channel line or input was malformed: {band_id}")]
-        InvalidSideBand { band_id: u8 },
-        #[error("attempt to decode a non-data line into a side-channel band")]
-        NonDataLine,
-    }
+    pub type Error = gix_error::ValidationError;
 }
 
 /// A utility return type to support incremental parsing of packet lines.
@@ -74,14 +60,18 @@ pub fn hex_prefix(four_bytes: &[u8]) -> Result<PacketLineOrWantedSize<'_>, Error
     }
 
     let mut buf = [0u8; U16_HEX_BYTES / 2];
-    faster_hex::hex_decode(four_bytes, &mut buf).map_err(|err| Error::HexDecode { err: err.to_string() })?;
+    faster_hex::hex_decode(four_bytes, &mut buf).map_err(|err| {
+        Error::new(format!(
+            "Failed to decode the first four hex bytes indicating the line length: {err}"
+        ))
+    })?;
     let wanted_bytes = u16::from_be_bytes(buf);
 
     if wanted_bytes == 3 {
-        return Err(Error::InvalidLineLength);
+        return Err(Error::new("Received an invalid line of length 3"));
     }
     if wanted_bytes == 4 {
-        return Err(Error::DataIsEmpty);
+        return Err(Error::new("Received an invalid empty line"));
     }
     debug_assert!(
         wanted_bytes as usize > U16_HEX_BYTES,
@@ -93,9 +83,7 @@ pub fn hex_prefix(four_bytes: &[u8]) -> Result<PacketLineOrWantedSize<'_>, Error
 /// Obtain a `PacketLine` from `data` after assuring `data` is small enough to fit.
 pub fn to_data_line(data: &[u8]) -> Result<PacketLineRef<'_>, Error> {
     if data.len() > MAX_LINE_LEN {
-        return Err(Error::DataLengthLimitExceeded {
-            length_in_bytes: data.len(),
-        });
+        return Err(data_length_limit_exceeded(data.len()));
     }
 
     Ok(PacketLineRef::Data(data))
@@ -119,9 +107,7 @@ pub fn streaming(data: &[u8]) -> Result<Stream<'_>, Error> {
         }
     } + U16_HEX_BYTES;
     if wanted_bytes > MAX_LINE_LEN {
-        return Err(Error::DataLengthLimitExceeded {
-            length_in_bytes: wanted_bytes,
-        });
+        return Err(data_length_limit_exceeded(wanted_bytes));
     }
     if data_len < wanted_bytes {
         return Ok(Stream::Incomplete {
@@ -142,6 +128,6 @@ pub fn streaming(data: &[u8]) -> Result<Stream<'_>, Error> {
 pub fn all_at_once(data: &[u8]) -> Result<PacketLineRef<'_>, Error> {
     match streaming(data)? {
         Stream::Complete { line, .. } => Ok(line),
-        Stream::Incomplete { bytes_needed } => Err(Error::NotEnoughData { bytes_needed }),
+        Stream::Incomplete { bytes_needed } => Err(not_enough_data(bytes_needed)),
     }
 }

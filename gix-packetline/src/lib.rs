@@ -163,13 +163,21 @@ impl<'a> PacketLineRef<'a> {
 
     /// Decode the band of this [`slice`](PacketLineRef::as_slice())
     pub fn decode_band(&self) -> Result<BandRef<'a>, decode::band::Error> {
-        let d = self.as_slice().ok_or(decode::band::Error::NonDataLine)?;
-        let (&band_id, d) = d.split_first().ok_or(decode::band::Error::NonDataLine)?;
+        let d = self
+            .as_slice()
+            .ok_or_else(|| decode::band::Error::new("attempt to decode a non-data line into a side-channel band"))?;
+        let (&band_id, d) = d
+            .split_first()
+            .ok_or_else(|| decode::band::Error::new("attempt to decode a non-data line into a side-channel band"))?;
         Ok(match band_id {
             1 => BandRef::Data(d),
             2 => BandRef::Progress(d),
             3 => BandRef::Error(d),
-            band => return Err(decode::band::Error::InvalidSideBand { band_id: band }),
+            band => {
+                return Err(decode::band::Error::new(format!(
+                    "attempt to decode a non-side channel line or input was malformed: {band}"
+                )));
+            }
         })
     }
 }

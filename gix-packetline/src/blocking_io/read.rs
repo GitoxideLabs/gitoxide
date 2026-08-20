@@ -35,9 +35,7 @@ where
 
     fn read_line_inner<'a>(reader: &mut T, buf: &'a mut [u8]) -> io::Result<Result<PacketLineRef<'a>, decode::Error>> {
         if buf.len() < U16_HEX_BYTES {
-            return Ok(Err(decode::Error::NotEnoughData {
-                bytes_needed: U16_HEX_BYTES - buf.len(),
-            }));
+            return Ok(Err(decode::not_enough_data(U16_HEX_BYTES - buf.len())));
         }
         let (hex_bytes, data_bytes) = buf.split_at_mut(U16_HEX_BYTES);
         reader.read_exact(hex_bytes)?;
@@ -47,9 +45,7 @@ where
             Err(err) => return Ok(Err(err)),
         };
         if num_data_bytes > data_bytes.len() {
-            return Ok(Err(decode::Error::DataLengthLimitExceeded {
-                length_in_bytes: num_data_bytes + U16_HEX_BYTES,
-            }));
+            return Ok(Err(decode::data_length_limit_exceeded(num_data_bytes + U16_HEX_BYTES)));
         }
 
         let (data_bytes, _) = data_bytes.split_at_mut(num_data_bytes);
