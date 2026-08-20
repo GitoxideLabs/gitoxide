@@ -59,11 +59,12 @@ impl HexDisplay<'_> {
     pub(crate) fn eq_str(&self, other: &str) -> bool {
         let mut hex = Kind::hex_buf();
         let hex = self.inner.hex_to_buf(hex.as_mut());
-        hex[..self.hex_len.min(hex.len())].eq_ignore_ascii_case(other)
+        hex[..self.hex_len.min(hex.len())] == *other
     }
 }
 
-impl_partial_eq_str!(HexDisplay<'_>);
+// Keep this directional as truncated displays aren't uniquely identified by their text.
+impl_partial_eq_str_one_way!(HexDisplay<'_>);
 
 impl std::fmt::Debug for oid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

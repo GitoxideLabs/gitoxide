@@ -103,11 +103,12 @@ impl ReverseHexDisplay<'_> {
     fn eq_str(&self, other: &str) -> bool {
         let mut buf = Kind::hex_buf();
         let reverse_hex = encode_reverse_hex(self.inner, &mut buf);
-        reverse_hex[..self.hex_len.min(reverse_hex.len())].eq_ignore_ascii_case(other)
+        reverse_hex[..self.hex_len.min(reverse_hex.len())] == *other
     }
 }
 
-impl_partial_eq_str!(ReverseHexDisplay<'_>);
+// Keep this directional as truncated displays aren't uniquely identified by their text.
+impl_partial_eq_str_one_way!(ReverseHexDisplay<'_>);
 
 impl std::fmt::Display for ReverseHexDisplay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

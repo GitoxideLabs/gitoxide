@@ -31,7 +31,7 @@
 #[cfg(all(not(feature = "sha1"), not(feature = "sha256")))]
 compile_error!("Please set either the `sha1` or the `sha256` feature flag");
 
-macro_rules! impl_partial_eq_str {
+macro_rules! impl_partial_eq_str_one_way {
     ($type:ty) => {
         impl PartialEq<str> for $type {
             fn eq(&self, other: &str) -> bool {
@@ -50,6 +50,12 @@ macro_rules! impl_partial_eq_str {
                 self.eq_str(other)
             }
         }
+    };
+}
+
+macro_rules! impl_partial_eq_str {
+    ($type:ty) => {
+        impl_partial_eq_str_one_way!($type);
 
         impl PartialEq<$type> for str {
             fn eq(&self, other: &$type) -> bool {
