@@ -1,5 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
+use gix_error::{ResultExt, message};
 use gix_features::{interrupt, parallel::in_parallel_with_finalize};
 use gix_worktree::{Stack, stack};
 
@@ -126,7 +127,8 @@ where
                 ctx.filters
                     .driver_state_mut()
                     .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
-                    .map_err(crate::checkout::Error::FilterShutdownIo)?;
+                    .or_raise(|| message("Could not shut down filter processes"))
+                    .or_erased()?;
                 Ok(out)
             },
             chunk::Reduce {
@@ -153,7 +155,8 @@ where
     ctx.filters
         .driver_state_mut()
         .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
-        .map_err(crate::checkout::Error::FilterShutdownIo)?;
+        .or_raise(|| message("Could not shut down filter processes"))
+        .or_erased()?;
 
     Ok(crate::checkout::Outcome {
         files_updated,
