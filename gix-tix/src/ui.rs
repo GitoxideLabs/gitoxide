@@ -598,7 +598,7 @@ pub(crate) fn draw_with_worktree(
                     note_title,
                     use_mailmap: app.use_mailmap && copy_feedback != Some(CopyKind::Author),
                     ref_mode,
-                    selected: (row_selected && app.show_selection_tail) || compared_parent == Some(row.id),
+                    selected: row_selected || compared_parent == Some(row.id),
                     copy_feedback: if row_selected { copy_feedback } else { None },
                 },
             );
@@ -781,7 +781,7 @@ pub(crate) fn draw_with_worktree(
                     .x
                     .saturating_add(u16::try_from(line_width).unwrap_or(u16::MAX))
                     .saturating_add(1)
-                    .saturating_add(if selected && app.show_selection_tail && selection_info_width > 0 {
+                    .saturating_add(if selected && selection_info_width > 0 {
                         u16::try_from(selection_info_width)
                             .unwrap_or(u16::MAX)
                             .saturating_add(3)
@@ -793,7 +793,7 @@ pub(crate) fn draw_with_worktree(
             })
         });
         let signature_color = signature_color(row.signature);
-        let highlight = if selected && app.show_selection_tail {
+        let highlight = if selected {
             Some(signature_color)
         } else if compared_parent == Some(row.id) {
             Some(COMPARED_PARENT_COLOR)
@@ -862,8 +862,10 @@ pub(crate) fn draw_with_worktree(
             row.signature,
             head_state,
         );
-        if selected && app.show_selection_tail && !head {
-            let end = if title_offset > horizontal_offset {
+        if selected {
+            let end = if head {
+                content.x.saturating_add(u16::try_from(line_width).unwrap_or(u16::MAX))
+            } else if title_offset > horizontal_offset {
                 content
                     .x
                     .saturating_add(u16::try_from(title_offset - horizontal_offset).unwrap_or(u16::MAX))
@@ -877,7 +879,7 @@ pub(crate) fn draw_with_worktree(
                 Style::default().add_modifier(Modifier::REVERSED),
             );
         }
-        if selected && app.show_selection_tail && body.width > 0 {
+        if selected && body.width > 0 {
             let marker_limit = hidden_branch_marker
                 .as_ref()
                 .map_or_else(|| body.right().saturating_sub(1), |(_, x, _)| x.saturating_sub(2));
@@ -894,14 +896,22 @@ pub(crate) fn draw_with_worktree(
                     .min(marker_x.saturating_sub(content.x).saturating_sub(2));
                 let area = Rect::new(marker_x.saturating_sub(width).saturating_sub(1), y, width, 1);
                 if width > 0 {
-                    frame.buffer_mut()[(area.x - 1, y)].set_symbol(" ");
-                    frame.render_widget(Paragraph::new(selection_info.clone()), area);
+                    frame.buffer_mut()[(area.x - 1, y)]
+                        .set_symbol(" ")
+                        .set_style(Style::default().remove_modifier(Modifier::DIM | Modifier::REVERSED));
+                    frame.render_widget(
+                        Paragraph::new(selection_info.clone())
+                            .style(Style::default().remove_modifier(Modifier::REVERSED)),
+                        area,
+                    );
                     selection_info_area = Some(area);
                 }
             }
             let buffer = frame.buffer_mut();
             if marker_x > body.x {
-                buffer[(marker_x - 1, y)].set_symbol(" ");
+                buffer[(marker_x - 1, y)]
+                    .set_symbol(" ")
+                    .set_style(Style::default().remove_modifier(Modifier::REVERSED));
             }
             buffer[(marker_x, y)].set_symbol(" ").set_style(style);
         }
@@ -918,7 +928,10 @@ pub(crate) fn draw_with_worktree(
                     .set_style(Style::default().add_modifier(Modifier::DIM));
             }
             if selected && let Some(area) = selection_info_area {
-                frame.render_widget(Paragraph::new(selection_info.clone()), area);
+                frame.render_widget(
+                    Paragraph::new(selection_info.clone()).style(Style::default().remove_modifier(Modifier::REVERSED)),
+                    area,
+                );
             }
         }
         if let Some((marker, x, width)) = hidden_branch_marker {
@@ -941,7 +954,10 @@ pub(crate) fn draw_with_worktree(
             .buffer_mut()
             .set_style(body, Style::default().add_modifier(Modifier::DIM));
         if let Some(area) = selection_info_area {
-            frame.render_widget(Paragraph::new(selection_info), area);
+            frame.render_widget(
+                Paragraph::new(selection_info).style(Style::default().remove_modifier(Modifier::REVERSED)),
+                area,
+            );
         }
     }
     for (pane_area, underlay) in changes_panes.iter().zip(&changes_pane_underlays) {
@@ -1569,7 +1585,9 @@ fn selection_info_line(changes: Option<&Changes>, relation: Option<SelectionRela
 }
 
 fn selection_color(color: Color) -> Style {
-    Style::default().fg(color).remove_modifier(Modifier::DIM)
+    Style::default()
+        .fg(color)
+        .remove_modifier(Modifier::DIM | Modifier::REVERSED)
 }
 
 fn push_selection_span(spans: &mut Vec<Span<'static>>, span: Span<'static>) {
@@ -3396,6 +3414,10 @@ mod tests {
         assert_eq!(buffer[(info_x, 0)].fg, Color::Green);
         assert_eq!(buffer[(info_x + 3, 0)].fg, Color::LightRed);
         assert!(!buffer[(info_x, 0)].modifier.contains(Modifier::DIM));
+        assert!(
+            !buffer[(info_x, 0)].modifier.contains(Modifier::REVERSED),
+            "contextual selection information stays outside the row inversion"
+        );
         let spacer_x = info_x + info.chars().count() as u16;
         assert_eq!(buffer[(spacer_x, 0)].symbol(), " ", "the marker has a left spacer");
         assert!(
@@ -3414,19 +3436,6 @@ mod tests {
         assert_eq!(buffer[(36, 0)].symbol(), " ", "a plain marker has a left spacer");
         assert_eq!(buffer[(37, 0)].symbol(), " ", "a plain marker never inverts text");
         assert!(buffer[(37, 0)].modifier.contains(Modifier::REVERSED));
-
-        app.show_selection_tail = false;
-        terminal.draw(|frame| {
-            super::draw(
-                frame,
-                &mut app,
-                &Decorations::new(),
-                &gix::mailmap::Snapshot::default(),
-                None,
-                Some(&changes),
-            );
-        })?;
-        assert!(!rendered_row(&terminal).contains(info));
 
         let text = |relation| {
             selection_info_line(None, relation)
@@ -3833,7 +3842,7 @@ mod tests {
         let footer_text = "#0 · view · commit · actions · enrich · copy · refs · ? · quit";
         let selected_line = "      > @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
-        for x in 6..17 {
+        for x in 0..selected_line.chars().count() as u16 {
             expected[(x, 0)].set_style(Style::default().add_modifier(Modifier::REVERSED));
         }
         for x in 6..10 {
@@ -3847,10 +3856,10 @@ mod tests {
             );
         }
         for x in 18..29 {
-            expected[(x, 0)].set_style(Style::default().fg(Color::Blue));
+            expected[(x, 0)].set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         }
         for x in 29..43 {
-            expected[(x, 0)].set_style(Style::default().fg(Color::Green));
+            expected[(x, 0)].set_style(Style::default().fg(Color::Green).add_modifier(Modifier::REVERSED));
         }
         expected[(selected_line.chars().count() as u16 + 2, 0)]
             .set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
@@ -3881,12 +3890,14 @@ mod tests {
 
         let row = terminal.backend().buffer();
         assert!(
-            row[(16, 0)].modifier.contains(Modifier::REVERSED),
-            "selection includes the final hash character"
+            (0..selected_line.chars().count() as u16).all(|x| row[(x, 0)].modifier.contains(Modifier::REVERSED)),
+            "the current worktree selection is reversed through its title"
         );
         assert!(
-            !row[(17, 0)].modifier.contains(Modifier::REVERSED),
-            "selection ends immediately after the hash"
+            !row[(selected_line.chars().count() as u16, 0)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "the current worktree selection ends after its title"
         );
         assert!(
             !rendered_row(&terminal).contains("HEAD"),
@@ -3903,21 +3914,13 @@ mod tests {
         let title_x = rendered[..title_byte].chars().count() as u16;
         let row = terminal.backend().buffer();
         assert!(
-            (0..title_x - 1).all(|x| row[(x, 0)].modifier.contains(Modifier::REVERSED)),
-            "an off-worktree selection reverses the entire non-title prefix"
-        );
-        assert_eq!(
-            row[(title_x - 1, 0)].symbol(),
-            " ",
-            "metadata keeps its title separator"
+            (0..title_x.saturating_sub(1)).all(|x| row[(x, 0)].modifier.contains(Modifier::REVERSED)),
+            "an off-worktree selection reverses through its non-title metadata"
         );
         assert!(
-            !row[(title_x - 1, 0)].modifier.contains(Modifier::REVERSED),
-            "the metadata-title separator is not reversed"
-        );
-        assert!(
-            (title_x..title_x + "subject".len() as u16).all(|x| !row[(x, 0)].modifier.contains(Modifier::REVERSED)),
-            "the selected commit title is not reversed"
+            (title_x.saturating_sub(1)..title_x + "subject".len() as u16)
+                .all(|x| !row[(x, 0)].modifier.contains(Modifier::REVERSED)),
+            "an off-worktree selection leaves a margin and its title uninverted"
         );
 
         app.unseen_filesystem_redraw = true;
@@ -4798,7 +4801,7 @@ mod tests {
     }
 
     #[test]
-    fn reverses_only_an_unselected_head_title_and_bolds_a_non_tip_marker() -> Result<(), Box<dyn std::error::Error>> {
+    fn reverses_an_unselected_head_title_and_the_full_selected_row() -> Result<(), Box<dyn std::error::Error>> {
         let head = gix::ObjectId::Sha1([1; 20]);
         let child = gix::ObjectId::Sha1([2; 20]);
         let commit = |id: gix::ObjectId, parent: Option<gix::ObjectId>| Commit {
@@ -4865,10 +4868,10 @@ mod tests {
         app.selected = Some(1);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(
-            !terminal.backend().buffer()[(title, head_row)]
+            terminal.backend().buffer()[(title, head_row)]
                 .modifier
                 .contains(Modifier::REVERSED),
-            "selection removes the HEAD title emphasis"
+            "selection reverses the HEAD title as part of the full row"
         );
         assert!(
             terminal.backend().buffer()[(8, head_row)]
@@ -5020,6 +5023,12 @@ mod tests {
             terminal.backend().buffer()[(selected_title, 1)].bg,
             Color::Reset,
             "selection takes precedence over foreign HEAD emphasis"
+        );
+        assert!(
+            !terminal.backend().buffer()[(selected_title, 1)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "a selected foreign worktree title stays outside the row inversion"
         );
         Ok(())
     }
@@ -6691,34 +6700,8 @@ mod tests {
             buffer[(23, 1)].modifier.contains(Modifier::REVERSED),
             "a clipped selection marker uses the right border"
         );
-        let hash_color = buffer[(11, 1)].fg;
         assert_eq!(app.selected, Some(2), "drawing preserves the global selection");
         assert_eq!(app.offset, 1, "drawing preserves the global offset");
-
-        app.show_selection_tail = false;
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        let buffer = terminal.backend().buffer();
-        assert!(
-            !buffer[(6, 1)].modifier.contains(Modifier::REVERSED | Modifier::DIM),
-            "the inactive marker has no selection modifiers"
-        );
-        assert!(
-            !buffer[(11, 1)].modifier.contains(Modifier::REVERSED | Modifier::DIM),
-            "the inactive hash has no selection modifiers"
-        );
-        assert_eq!(buffer[(6, 1)].symbol(), ">", "the inactive row keeps its marker");
-        assert_eq!(buffer[(6, 1)].fg, Color::Reset, "the marker uses normal text color");
-        assert_eq!(
-            buffer[(6, 1)].bg,
-            Color::Reset,
-            "the marker has no selection background"
-        );
-        assert_eq!(buffer[(11, 1)].fg, hash_color, "the hash returns to its normal color");
-        assert_eq!(buffer[(11, 1)].bg, Color::Reset, "the hash has no selection background");
-        assert!(
-            !buffer[(23, 1)].modifier.contains(Modifier::REVERSED),
-            "the final frame hides the trailing selection marker"
-        );
         Ok(())
     }
 
