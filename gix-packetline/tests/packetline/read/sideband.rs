@@ -82,10 +82,7 @@ async fn read_pack_with_progress_extraction() -> crate::Result {
     drop(pack_entries);
 
     assert_eq!(
-        last.trailer
-            .expect("trailer to exist on last entry")
-            .to_hex()
-            .to_string(),
+        last.trailer.expect("trailer to exist on last entry"),
         "150a1045f04dc0fc2dbf72313699fda696bf4126"
     );
     assert_eq!(

@@ -9,11 +9,6 @@ mod reference {
 
     const HASH_KIND: gix_hash::Kind = gix_hash::Kind::Sha1;
 
-    /// Convert a hexadecimal hash into its corresponding `ObjectId` or _panic_.
-    fn hex_to_id(hex: &str) -> gix_hash::ObjectId {
-        gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("40 bytes hex")
-    }
-
     #[test]
     fn invalid() {
         let mut input = b"# what looks like a comment".as_slice();
@@ -41,8 +36,8 @@ mod reference {
 
         assert!(input.is_empty(), "exhausted");
         assert_eq!(parsed.name, FullNameRef::new_unchecked("refs/heads/uppercase".into()));
-        assert_eq!(parsed.target(), hex_to_id("d53c4b0f91f1b29769c9430f2d1c0bcab1170c75"));
-        assert_eq!(parsed.object(), hex_to_id("e9cdc958e7ce2290e2d7958cdb5aa9323ef35d37"));
+        assert_eq!(parsed.target(), "d53c4b0f91f1b29769c9430f2d1c0bcab1170c75");
+        assert_eq!(parsed.object(), "e9cdc958e7ce2290e2d7958cdb5aa9323ef35d37");
         Ok(())
     }
 
@@ -71,8 +66,8 @@ mod reference {
                 object: Some("e9cdc958e7ce2290e2d7958cdb5aa9323ef35d37".into())
             }
         );
-        assert_eq!(parsed.target(), hex_to_id("d53c4b0f91f1b29769c9430f2d1c0bcab1170c75"));
-        assert_eq!(parsed.object(), hex_to_id("e9cdc958e7ce2290e2d7958cdb5aa9323ef35d37"));
+        assert_eq!(parsed.target(), "d53c4b0f91f1b29769c9430f2d1c0bcab1170c75");
+        assert_eq!(parsed.object(), "e9cdc958e7ce2290e2d7958cdb5aa9323ef35d37");
 
         let parsed = decode::reference(&mut input, HASH_KIND).unwrap();
         assert!(input.is_empty(), "exhausted");

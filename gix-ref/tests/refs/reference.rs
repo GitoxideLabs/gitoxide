@@ -17,9 +17,9 @@ fn strip_namespace() {
         peeled: None,
     };
     r.strip_namespace(&ns);
-    assert_eq!(r.name.as_bstr(), "refs/heads/main", "name is stripped");
+    assert_eq!(r.name, "refs/heads/main", "name is stripped");
     assert!(
-        matches!(r.target, Target::Symbolic(n) if n.as_bstr() == "refs/tags/foo"),
+        matches!(r.target, Target::Symbolic(n) if n == "refs/tags/foo"),
         "and the symbolic target as well"
     );
 }

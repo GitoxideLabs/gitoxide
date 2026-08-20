@@ -1,4 +1,4 @@
-use crate::{hex_to_id, signature};
+use crate::signature;
 use gix_object::{Kind, TagRef, TagRefIter, bstr::ByteSlice};
 
 use crate::fixture_name;
@@ -189,7 +189,7 @@ sha256-tag-signature
 fn target() -> crate::Result {
     let fixture = fixture_name("tag", "signed.txt");
     let tag_ref = TagRef::from_bytes(&fixture, gix_hash::Kind::Sha1)?;
-    assert_eq!(tag_ref.target(), hex_to_id("ffa700b4aca13b80cb6b98a078e7c96804f8e0ec"));
+    assert_eq!(tag_ref.target(), "ffa700b4aca13b80cb6b98a078e7c96804f8e0ec");
     assert_eq!(tag_ref.target, "ffa700b4aca13b80cb6b98a078e7c96804f8e0ec".as_bytes());
 
     let gix_object::Tag {
@@ -200,7 +200,7 @@ fn target() -> crate::Result {
         message,
         signature,
     } = tag_ref.into_owned()?;
-    assert_eq!(target.to_string(), tag_ref.target);
+    assert_eq!(target, tag_ref.target);
     assert_eq!(target_kind, tag_ref.target_kind);
     assert_eq!(name, tag_ref.name);
     let expected_tagger = tag_ref.tagger()?.map(Into::into);
@@ -362,10 +362,7 @@ tag uppercase-target
 message";
     let tag = TagRef::from_bytes(input, gix_hash::Kind::Sha1)?;
     assert_eq!(tag.target, b"FFA700B4ACA13B80CB6B98A078E7C96804F8E0EC".as_bstr());
-    assert_eq!(
-        tag.target(),
-        crate::hex_to_id("ffa700b4aca13b80cb6b98a078e7c96804f8e0ec")
-    );
+    assert_eq!(tag.target(), "ffa700b4aca13b80cb6b98a078e7c96804f8e0ec");
     Ok(())
 }
 

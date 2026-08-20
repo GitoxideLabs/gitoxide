@@ -70,10 +70,7 @@ mod non_bare {
             ]),
         )?
         .into();
-        assert_eq!(
-            repo.head()?.referent_name().expect("name").as_bstr(),
-            "refs/heads/special"
-        );
+        assert_eq!(repo.head()?.referent_name().expect("name"), "refs/heads/special");
         Ok(())
     }
 
@@ -91,10 +88,7 @@ mod non_bare {
             ]),
         )?
         .into();
-        assert_eq!(
-            repo.head()?.referent_name().expect("name").as_bstr(),
-            "refs/heads/special"
-        );
+        assert_eq!(repo.head()?.referent_name().expect("name"), "refs/heads/special");
         assert_eq!(
             repo.is_pristine(),
             Some(true),

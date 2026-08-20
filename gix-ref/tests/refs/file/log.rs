@@ -109,7 +109,7 @@ mod iter {
         mod with_buffer_big_enough_for_largest_line {
             use gix_ref::log::Line;
 
-            use crate::{file::log::iter::reflog, sha1_hex_to_id};
+            use crate::file::log::iter::reflog;
 
             #[test]
             fn single_line() -> crate::Result {
@@ -129,8 +129,8 @@ mod iter {
                         signature: _,
                         message,
                     } = iter.next().expect("a single line")?;
-                    assert_eq!(previous_oid, sha1_hex_to_id("0000000000000000000000000000000000000000"));
-                    assert_eq!(new_oid, sha1_hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03"));
+                    assert_eq!(previous_oid, "0000000000000000000000000000000000000000");
+                    assert_eq!(new_oid, "134385f6d781b7e97062102c6a483440bfda2a03");
                     assert_eq!(message, "commit (initial): c1");
                     assert!(iter.next().is_none(), "iterator depleted");
                 }
@@ -157,8 +157,8 @@ mod iter {
                             signature: _,
                             message,
                         } = iter.next().expect("a single line")?;
-                        assert_eq!(previous_oid, sha1_hex_to_id("0000000000000000000000000000000000000000"));
-                        assert_eq!(new_oid, sha1_hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03"));
+                        assert_eq!(previous_oid, "0000000000000000000000000000000000000000");
+                        assert_eq!(new_oid, "134385f6d781b7e97062102c6a483440bfda2a03");
                         assert_eq!(message, "commit (initial): c1");
                         let Line {
                             previous_oid,
@@ -167,8 +167,8 @@ mod iter {
                             message,
                         } = iter.next().expect("a single line")?;
                         assert_eq!(message, "commit (initial): c2");
-                        assert_eq!(previous_oid, sha1_hex_to_id("1000000000000000000000000000000000000000"));
-                        assert_eq!(new_oid, sha1_hex_to_id("234385f6d781b7e97062102c6a483440bfda2a03"));
+                        assert_eq!(previous_oid, "1000000000000000000000000000000000000000");
+                        assert_eq!(new_oid, "234385f6d781b7e97062102c6a483440bfda2a03");
                         assert!(iter.next().is_none(), "iterator depleted");
                     }
                 }

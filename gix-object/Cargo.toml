@@ -68,13 +68,14 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 gix-object = { path = ".", features = ["signature", "sha1", "sha256"] }
-criterion = "0.8.2"
-pretty_assertions = "1.0.0"
-insta = "1.46.3"
+gix-hash = { path = "../gix-hash", features = ["bstr"] }
 gix-testtools = { path = "../tests/tools", default-features = false }
 gix-odb = { path = "../gix-odb" }
 gix-path = { path = "../gix-path" }
 termtree = "1.0.0"
+criterion = "0.8.2"
+pretty_assertions = "1.0.0"
+insta = "1.46.3"
 
 [package.metadata.docs.rs]
 all-features = true

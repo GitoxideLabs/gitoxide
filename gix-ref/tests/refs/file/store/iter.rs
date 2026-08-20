@@ -35,18 +35,11 @@ mod with_namespace {
             "refs/namespaces/bar/refs/remotes/origin/multi-link-target3",
             "refs/namespaces/bar/refs/tags/multi-link-target2",
         ];
-        assert_eq!(
-            namespaced_refs
-                .iter()
-                .map(gix_ref::FullName::as_bstr)
-                .collect::<Vec<_>>(),
-            expected_namespaced_refs
-        );
+        assert_eq!(namespaced_refs, expected_namespaced_refs);
         assert_eq!(
             store
                 .loose_iter_prefixed(ns_two.as_bstr().try_into().unwrap())?
                 .map(Result::unwrap)
-                .map(|r| r.name.into_inner())
                 .collect::<Vec<_>>(),
             [
                 "refs/namespaces/bar/refs/heads/multi-link-target1",
@@ -60,7 +53,6 @@ mod with_namespace {
                 .expect("present")
                 .iter_prefixed(ns_two.as_bstr().to_owned())?
                 .map(Result::unwrap)
-                .map(|r| r.name.to_owned().into_inner())
                 .collect::<Vec<_>>(),
             ["refs/namespaces/bar/refs/remotes/origin/multi-link-target3"]
         );
@@ -71,9 +63,7 @@ mod with_namespace {
                 "it finds namespaced items by fully qualified name"
             );
             assert_eq!(
-                store
-                    .find(fullname.as_bstr().splitn_str(2, b"/").nth(1).expect("name").as_bstr())?
-                    .name,
+                store.find(fullname.as_bstr().splitn_str(2, b"/").nth(1).expect("name").as_bstr())?,
                 fullname,
                 "it will find namespaced items just by their shortened (but not shortest) name"
             );
@@ -121,7 +111,7 @@ mod with_namespace {
                     |r: gix_ref::Reference| if r.name.as_bstr().starts_with_str("refs/namespaces") {
                         None
                     } else {
-                        Some(r.name.as_bstr().to_owned())
+                        Some(r)
                     }
                 )
                 .collect::<Vec<_>>(),
@@ -159,14 +149,11 @@ mod with_namespace {
             .map(Result::unwrap)
             .map(|r: gix_ref::Reference| r.name)
             .collect::<Vec<_>>();
-        assert_eq!(
-            ref_names.iter().map(gix_ref::FullName::as_bstr).collect::<Vec<_>>(),
-            expected_refs
-        );
+        assert_eq!(ref_names, expected_refs);
 
         for fullname in ref_names {
             assert_eq!(
-                ns_store.find(fullname.as_bstr())?.name,
+                ns_store.find(fullname.as_bstr())?,
                 fullname,
                 "it finds namespaced items by fully qualified name, excluding namespace"
             );
@@ -177,9 +164,7 @@ mod with_namespace {
                 "it won't find namespaced items by their store-relative name with namespace"
             );
             assert_eq!(
-                ns_store
-                    .find(fullname.as_bstr().splitn_str(2, b"/").nth(1).expect("name").as_bstr())?
-                    .name,
+                ns_store.find(fullname.as_bstr().splitn_str(2, b"/").nth(1).expect("name").as_bstr())?,
                 fullname,
                 "it finds partial names within the namespace"
             );
@@ -191,11 +176,7 @@ mod with_namespace {
             "packed refs have no namespace support at all"
         );
         assert_eq!(
-            ns_store
-                .loose_iter()?
-                .map(Result::unwrap)
-                .map(|r| r.name.into_inner())
-                .collect::<Vec<_>>(),
+            ns_store.loose_iter()?.map(Result::unwrap).collect::<Vec<_>>(),
             [
                 "refs/heads/multi-link-target1",
                 "refs/multi-link",
@@ -207,11 +188,7 @@ mod with_namespace {
         {
             let prev = ns_store.namespace.take();
             assert_eq!(
-                ns_store
-                    .loose_iter()?
-                    .map(Result::unwrap)
-                    .map(|r| r.name.into_inner())
-                    .collect::<Vec<_>>(),
+                ns_store.loose_iter()?.map(Result::unwrap).collect::<Vec<_>>(),
                 [
                     "refs/namespaces/bar/refs/heads/multi-link-target1",
                     "refs/namespaces/bar/refs/multi-link",
@@ -227,12 +204,7 @@ mod with_namespace {
         ns_store.namespace = ns_one.into();
 
         assert_eq!(
-            ns_store
-                .iter()?
-                .all()?
-                .map(Result::unwrap)
-                .map(|r: gix_ref::Reference| r.name.into_inner())
-                .collect::<Vec<_>>(),
+            ns_store.iter()?.all()?.map(Result::unwrap).collect::<Vec<_>>(),
             vec!["refs/d1", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
         );
         Ok(())
@@ -260,11 +232,7 @@ fn packed_file_iter() -> crate::Result {
 fn pseudo_refs_iter() -> crate::Result {
     let store = store_at("make_pseudo_ref_repository.sh")?;
 
-    let actual = store
-        .iter_pseudo()?
-        .map(Result::unwrap)
-        .map(|r: gix_ref::Reference| r.name.as_bstr().to_string())
-        .collect::<Vec<_>>();
+    let actual = store.iter_pseudo()?.map(Result::unwrap).collect::<Vec<_>>();
 
     assert_eq!(actual, ["FETCH_HEAD", "HEAD", "JIRI_HEAD"]);
     Ok(())
@@ -295,10 +263,7 @@ fn loose_iter_with_broken_refs() -> crate::Result {
         actual[first_error].as_ref().expect_err("unparsable ref").to_string(),
         msg
     );
-    let ref_paths: Vec<_> = actual
-        .drain(..first_error)
-        .filter_map(|e| e.ok().map(|e| e.name.into_inner()))
-        .collect();
+    let ref_paths: Vec<_> = actual.drain(..first_error).filter_map(Result::ok).collect();
 
     assert_eq!(
         ref_paths,
@@ -335,23 +300,17 @@ fn loose_iter_with_prefix() -> crate::Result {
     let actual = store()?
         .loose_iter_prefixed(prefix_with_slash.try_into().unwrap())?
         .collect::<Result<Vec<_>, _>>()
-        .expect("no broken ref in this subset")
-        .into_iter()
-        .map(|e| e.name.into_inner())
-        .collect::<Vec<_>>();
+        .expect("no broken ref in this subset");
 
     assert_eq!(
         actual,
-        vec![
+        [
             "refs/heads/A",
             "refs/heads/d1",
             "refs/heads/dt1",
             "refs/heads/main",
             "refs/heads/multi-link-target1",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect::<Vec<_>>(),
+        ],
         "all paths are as expected"
     );
     Ok(())
@@ -363,23 +322,17 @@ fn loose_iter_with_partial_prefix_dir() -> crate::Result {
     let actual = store()?
         .loose_iter_prefixed(prefix_without_slash.try_into().unwrap())?
         .collect::<Result<Vec<_>, _>>()
-        .expect("no broken ref in this subset")
-        .into_iter()
-        .map(|e| e.name.into_inner())
-        .collect::<Vec<_>>();
+        .expect("no broken ref in this subset");
 
     assert_eq!(
         actual,
-        vec![
+        [
             "refs/heads/A",
             "refs/heads/d1",
             "refs/heads/dt1",
             "refs/heads/main",
             "refs/heads/multi-link-target1",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect::<Vec<_>>(),
+        ],
         "all paths are as expected"
     );
     Ok(())
@@ -390,19 +343,9 @@ fn loose_iter_with_partial_prefix() -> crate::Result {
     let actual = store()?
         .loose_iter_prefixed(b"refs/heads/d".as_bstr().try_into().unwrap())?
         .collect::<Result<Vec<_>, _>>()
-        .expect("no broken ref in this subset")
-        .into_iter()
-        .map(|e| e.name.into_inner())
-        .collect::<Vec<_>>();
+        .expect("no broken ref in this subset");
 
-    assert_eq!(
-        actual,
-        vec!["refs/heads/d1", "refs/heads/dt1"]
-            .into_iter()
-            .map(String::from)
-            .collect::<Vec<_>>(),
-        "all paths are as expected"
-    );
+    assert_eq!(actual, ["refs/heads/d1", "refs/heads/dt1"], "all paths are as expected");
     Ok(())
 }
 

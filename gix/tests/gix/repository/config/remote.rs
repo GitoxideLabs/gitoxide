@@ -103,14 +103,13 @@ mod branch_remote {
         assert_eq!(
             repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, remote::Direction::Fetch)
                 .expect("Remote Merge ref exists")
-                .expect("Remote Merge ref is valid")
-                .as_bstr(),
+                .expect("Remote Merge ref is valid"),
             "refs/remotes/remote_repo/main"
         );
         let (upstream, remote_name) = repo
             .upstream_branch_and_remote_for_tracking_branch("refs/remotes/remote_repo/main".try_into()?)?
             .expect("mapping exists");
-        assert_eq!(upstream.as_bstr(), "refs/heads/main");
+        assert_eq!(upstream, "refs/heads/main");
         assert_eq!(
             remote_name.name().expect("non-anonymous remote").as_bstr(),
             "remote_repo"
@@ -140,8 +139,7 @@ mod branch_remote {
         assert_eq!(
             repo.branch_remote_ref_name("refs/heads/broken".try_into()?, remote::Direction::Fetch)
                 .expect("Remote Merge ref exists")
-                .expect("merge ref is turned into a full-name")
-                .as_bstr(),
+                .expect("merge ref is turned into a full-name"),
             "refs/heads/not_a_valid_merge_ref",
             "short names are simply turned into branch names - this doesn't always work, but sometimes."
         );
@@ -158,8 +156,7 @@ mod branch_remote {
         assert_eq!(
             repo.branch_remote_tracking_ref_name("refs/heads/broken".try_into()?, remote::Direction::Fetch)
                 .expect("no error")
-                .expect("valid result")
-                .as_bstr(),
+                .expect("valid result"),
             "refs/remotes/remote_repo/not_a_valid_merge_ref",
             "the merge ref is broken, but we turned it into a full ref name from which everything else was derived",
         );
@@ -179,7 +176,7 @@ mod branch_remote {
                 )?
                 .expect("mapping exists");
             assert_eq!(remote.name().expect("named remote").as_bstr(), expected_remote_name);
-            assert_eq!(upstream.as_bstr(), "refs/heads/main");
+            assert_eq!(upstream, "refs/heads/main");
         }
         let err = repo
             .upstream_branch_and_remote_for_tracking_branch("refs/remotes/with/two/slashes/main".try_into()?)
@@ -195,8 +192,7 @@ mod branch_remote {
             .expect("mapping exists");
         assert_eq!(remote.name().expect("non-anonymous remote").as_bstr(), "with/two");
         assert_eq!(
-            upstream.as_bstr(),
-            "refs/heads/special",
+            upstream, "refs/heads/special",
             "it finds a single mapping even though there are two refspecs"
         );
         Ok(())
@@ -217,8 +213,7 @@ mod branch_remote {
         for direction in [remote::Direction::Fetch, remote::Direction::Push] {
             assert_eq!(
                 repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, direction)
-                    .expect("exists")?
-                    .as_bstr(),
+                    .expect("exists")?,
                 "refs/remotes/remote_repo/main",
                 "this is a 'simple' mapping of an existing branch, using push.default=simple and the default refspec"
             );
@@ -247,15 +242,13 @@ mod branch_remote {
 
         assert_eq!(
             repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, remote::Direction::Push)
-                .expect("exists")?
-                .as_bstr(),
+                .expect("exists")?,
             "refs/remotes/origin/remapped-main",
             "the first matching push-spec maps the branch to another head, then it's mapped with fetch-specs"
         );
         assert_eq!(
             repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, remote::Direction::Fetch)
-                .expect("exists")?
-                .as_bstr(),
+                .expect("exists")?,
             "refs/remotes/origin/main",
             "push.simple is set (or the default), hence it's a one-one mapping along with the standard refspec"
         );
@@ -278,15 +271,13 @@ mod branch_remote {
 
         assert_eq!(
             repo.branch_remote_tracking_ref_name("refs/heads/feature".try_into()?, remote::Direction::Push)
-                .expect("exists")?
-                .as_bstr(),
+                .expect("exists")?,
             "refs/remotes/origin/remapped-feature",
             "this branch is mapped with push-specs, then it's mapped with fetch-specs as well"
         );
         assert_eq!(
             repo.branch_remote_tracking_ref_name("refs/heads/feature".try_into()?, remote::Direction::Fetch)
-                .expect("exists")?
-                .as_bstr(),
+                .expect("exists")?,
             "refs/remotes/origin/main",
             "remapping by branch.feature.merge=main, then mapped by refspec"
         );
