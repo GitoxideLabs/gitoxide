@@ -45,7 +45,8 @@ impl crate::Repository {
                 expected_checksum: None,
                 alloc_limit_bytes: self.config.alloc_limit_bytes,
             },
-        )?;
+        )
+        .map_err(|err| worktree::open_index::Error::IndexFile(err.into_error()))?;
 
         Ok(index)
     }
@@ -74,15 +75,12 @@ impl crate::Repository {
     pub fn index(&self) -> Result<worktree::Index, worktree::open_index::Error> {
         self.try_index().and_then(|opt| match opt {
             Some(index) => Ok(index),
-            None => Err(worktree::open_index::Error::IndexFile(
-                gix_index::file::init::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!(
-                        "Could not find index file at '{index_path}' for opening.",
-                        index_path = self.index_path().display()
-                    ),
+            None => Err(worktree::open_index::Error::IndexFile(gix_error::Error::from_error(
+                gix_error::NotFoundError::new(format!(
+                    "Could not find index file at '{index_path}' for opening.",
+                    index_path = self.index_path().display()
                 )),
-            )),
+            ))),
         })
     }
 
@@ -118,11 +116,7 @@ impl crate::Repository {
             || self.index_path().metadata().and_then(|m| m.modified()).ok(),
             || {
                 self.open_index().map(Some).or_else(|err| match err {
-                    worktree::open_index::Error::IndexFile(gix_index::file::init::Error::Io(err))
-                        if err.kind() == std::io::ErrorKind::NotFound =>
-                    {
-                        Ok(None)
-                    }
+                    worktree::open_index::Error::IndexFile(err) if err.is_not_found() => Ok(None),
                     err => Err(err),
                 })
             },
@@ -208,7 +202,7 @@ impl crate::Repository {
             gix_index::State::from_tree(tree, self, self.config.protect_options()?).map_err(|err| {
                 super::index_from_tree::Error::IndexFromTree {
                     id: tree.into(),
-                    source: err,
+                    source: err.into_error(),
                 }
             })?,
             self.index_path(),

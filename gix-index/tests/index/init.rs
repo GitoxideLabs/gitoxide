@@ -1,4 +1,4 @@
-use std::{error::Error, path::Path};
+use std::path::Path;
 
 use crate::{odb_at, scripted_fixture_read_only};
 use gix_index::State;
@@ -46,9 +46,12 @@ fn from_tree_validation() -> crate::Result {
         let git_dir = worktree_dir.join(".git");
         let odb = odb_at(git_dir.join("objects"))?;
 
-        let err = State::from_tree(&tree_id, &odb, Default::default()).unwrap_err();
+        let err = State::from_tree(&tree_id, &odb, Default::default())
+            .unwrap_err()
+            .into_error();
+        assert!(err.is_validation(), "invalid path components are validation errors");
         assert_eq!(
-            err.source().expect("inner").to_string(),
+            err.probable_cause().to_string(),
             r"Path separators like / or \ are not allowed",
             r"Note that this effectively tests what would happen on Windows, where \ also isn't allowed"
         );
