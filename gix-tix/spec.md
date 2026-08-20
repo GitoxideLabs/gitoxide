@@ -290,9 +290,9 @@ without trading responsiveness for metadata that is not visible.
   field remains visible alongside selection, dirty-worktree, and conflict markers.
   `tix show` emits the same field and aligns unmarked rows when any displayed
   commit has either enrichment.
-- Only the selected history row replaces its commit title with its note title,
-  using black text on a yellow background. Unselected rows and `tix show` retain
-  the commit title.
+- Only the selected history row prefixes its commit title with its note title,
+  using black text on a yellow background followed by one unstyled space.
+  Unselected rows and `tix show` retain only the commit title.
 - Commit and selected-note titles render Markdown styling. Block-shaped title
   output is flattened onto the single history row; plain command output retains
   the rendered text without terminal styling.
