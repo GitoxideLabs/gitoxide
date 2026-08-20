@@ -1,5 +1,6 @@
 use std::ops::Deref;
 
+use gix_error::ResultExt;
 use gix_pack::cache::DecodeEntry;
 
 use crate::store::{handle, load_index};
@@ -354,7 +355,7 @@ where
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
         self.try_find_cached_inner(id, buffer, &mut inflate, pack_cache, &mut snapshot, None)
-            .map_err(|err| Box::new(err) as _)
+            .or_erased()
     }
 
     fn location_by_oid(&self, id: &gix_hash::oid, buf: &mut Vec<u8>) -> Option<gix_pack::data::entry::Location> {
@@ -534,7 +535,7 @@ where
                     size: hdr.size(),
                 })
             })
-            .map_err(|err| Box::new(err) as _)
+            .or_erased()
     }
 }
 

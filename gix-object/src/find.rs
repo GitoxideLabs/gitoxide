@@ -1,65 +1,23 @@
+use gix_error::ResultExt;
+
 /// The error type returned by the [`Find`](crate::Find) trait.
-pub type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
+pub type Error = gix_error::Exn;
 ///
 pub mod existing {
-    use gix_hash::ObjectId;
-
     /// The error returned by the [`find(…)`][crate::FindExt::find()] trait methods.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Find(crate::find::Error),
-        #[error("An object with id {} could not be found", .oid)]
-        NotFound { oid: ObjectId },
-    }
+    pub type Error = gix_error::Exn;
 }
 
 ///
 pub mod existing_object {
-    use gix_hash::ObjectId;
-
     /// The error returned by the various [`find_*()`][crate::FindExt::find_commit()] trait methods.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Find(crate::find::Error),
-        #[error("Could not decode object at {oid}")]
-        Decode {
-            oid: ObjectId,
-            source: crate::decode::Error,
-        },
-        #[error("An object with id {oid} could not be found")]
-        NotFound { oid: ObjectId },
-        #[error("Expected object of kind {expected} but got {actual} at {oid}")]
-        ObjectKind {
-            oid: ObjectId,
-            actual: crate::Kind,
-            expected: crate::Kind,
-        },
-    }
+    pub type Error = gix_error::Exn;
 }
 
 ///
 pub mod existing_iter {
-    use gix_hash::ObjectId;
-
     /// The error returned by the various [`find_*_iter()`][crate::FindExt::find_commit_iter()] trait methods.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Find(crate::find::Error),
-        #[error("An object with id {oid} could not be found")]
-        NotFound { oid: ObjectId },
-        #[error("Expected object of kind {expected} but got {actual} at {oid}")]
-        ObjectKind {
-            oid: ObjectId,
-            actual: crate::Kind,
-            expected: crate::Kind,
-        },
-    }
+    pub type Error = gix_error::Exn;
 }
 
 /// An implementation of object access traits that stores nothing and finds nothing.
@@ -86,7 +44,7 @@ impl super::Exists for Never {
 
 impl super::Write for Never {
     fn write_buf(&self, object: crate::Kind, from: &[u8]) -> Result<gix_hash::ObjectId, crate::write::Error> {
-        crate::compute_hash(gix_hash::Kind::default(), object, from).map_err(Into::into)
+        crate::compute_hash(gix_hash::Kind::default(), object, from).or_erased()
     }
 
     fn write_buf_with_known_id(
@@ -112,7 +70,7 @@ impl super::Write for Never {
             &mut gix_features::progress::Discard,
             &std::sync::atomic::AtomicBool::new(false),
         )
-        .map_err(|err| Box::new(err.into_error()) as crate::write::Error)
+        .or_erased()
     }
 
     fn write_stream_with_known_id(
@@ -125,7 +83,7 @@ impl super::Write for Never {
         let mut buf = [0u8; u16::MAX as usize];
         while size != 0 {
             let bytes = (size as usize).min(buf.len());
-            from.read_exact(&mut buf[..bytes])?;
+            from.read_exact(&mut buf[..bytes]).or_erased()?;
             size -= bytes as u64;
         }
         Ok(id)

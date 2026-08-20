@@ -106,7 +106,9 @@ pub(super) fn collect(
 ) -> Result<SideState, Error> {
     let mut changes = Vec::new();
     if base_tree != side_tree {
-        let side_tree = objects.find_tree_iter(side_tree, side_buf)?;
+        let side_tree = objects
+            .find_tree_iter(side_tree, side_buf)
+            .map_err(|err| Error::FindTreeIter(err.into_error()))?;
         gix_diff::tree_with_rewrites(
             gix_object::TreeRefIter::from_bytes(base_buf, base_tree.kind()),
             side_tree,

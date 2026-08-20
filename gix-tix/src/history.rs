@@ -378,6 +378,7 @@ impl HistoryGraph {
             return Ok(index);
         }
         let commit = gix::traverse::commit::find(cache, &repo.objects, &id, buf)
+            .map_err(gix::Exn::into_error)
             .context("could not load commit for cached history traversal")?;
         let (mut parents, commit_time, generation) = match commit {
             gix::traverse::commit::Either::CommitRefIter(iter) => {

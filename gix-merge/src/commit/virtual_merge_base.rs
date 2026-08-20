@@ -26,7 +26,13 @@ pub enum Error {
     )]
     VirtualMergeBaseConflict,
     #[error("Could not find commit to use as basis for a virtual commit")]
-    FindCommit(#[from] gix_object::find::existing_object::Error),
+    FindCommit(#[source] gix_error::Error),
+}
+
+impl From<gix_object::find::existing_object::Error> for Error {
+    fn from(err: gix_object::find::existing_object::Error) -> Self {
+        Error::FindCommit(err.into_error())
+    }
 }
 
 pub(super) mod function {

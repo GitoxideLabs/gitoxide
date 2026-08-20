@@ -1,5 +1,6 @@
 use std::ops::Deref;
 
+use gix_error::ResultExt;
 use gix_hash::oid;
 
 use super::find::Error;
@@ -185,7 +186,6 @@ where
     fn try_header(&self, id: &oid) -> Result<Option<Header>, gix_object::find::Error> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
-        self.try_header_inner(id, &mut inflate, &mut snapshot, None)
-            .map_err(|err| Box::new(err) as _)
+        self.try_header_inner(id, &mut inflate, &mut snapshot, None).or_erased()
     }
 }

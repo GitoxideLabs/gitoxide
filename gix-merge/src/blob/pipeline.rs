@@ -4,11 +4,12 @@ use std::{
 };
 
 use bstr::BStr;
+use gix_error::{ErrorExt, NotFoundError};
 use gix_filter::{
     driver::apply::{Delay, MaybeDelayed},
     pipeline::convert::{ToGitOutcome, ToWorktreeOutcome, to_worktree},
 };
-use gix_object::tree::EntryKind;
+use gix_object::{FindExt, tree::EntryKind};
 
 use super::{Pipeline, ResourceKind};
 
@@ -130,13 +131,19 @@ pub mod convert_to_mergeable {
         #[error("Entry at '{rela_path}' could not be copied from a filter process to a memory buffer")]
         StreamCopy { rela_path: BString, source: std::io::Error },
         #[error(transparent)]
-        FindObject(#[from] gix_object::find::existing_object::Error),
+        FindObject(#[from] gix_error::Error),
         #[error(transparent)]
         ConvertToWorktree(#[from] gix_filter::pipeline::convert::to_worktree::Error),
         #[error(transparent)]
         ConvertToGit(#[from] gix_filter::pipeline::convert::to_git::Error),
         #[error("Memory allocation failed")]
         OutOfMemory(#[from] TryReserveError),
+    }
+
+    impl From<gix_object::find::existing_object::Error> for Error {
+        fn from(err: gix_object::find::existing_object::Error) -> Self {
+            Error::FindObject(err.into_error())
+        }
     }
 }
 
@@ -261,19 +268,15 @@ impl Pipeline {
                 let data = if id.is_null() {
                     None
                 } else {
-                    let header = objects
-                        .try_header(id)
-                        .map_err(gix_object::find::existing_object::Error::Find)?
-                        .ok_or_else(|| gix_object::find::existing_object::Error::NotFound { oid: id.to_owned() })?;
+                    let header = objects.try_header(id)?.ok_or_else(|| {
+                        NotFoundError::new(format!("An object with id {id} could not be found")).raise_erased()
+                    })?;
                     let is_binary = self.options.large_file_threshold_bytes > 0
                         && header.size > self.options.large_file_threshold_bytes;
                     let data = if is_binary {
                         Data::TooLarge { size: header.size }
                     } else {
-                        objects
-                            .try_find(id, out)
-                            .map_err(gix_object::find::existing_object::Error::Find)?
-                            .ok_or_else(|| gix_object::find::existing_object::Error::NotFound { oid: id.to_owned() })?;
+                        objects.find(id, out)?;
 
                         if convert == Mode::Renormalize {
                             {

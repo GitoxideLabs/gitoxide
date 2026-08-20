@@ -5,6 +5,7 @@ use std::{
 };
 
 use bstr::{BStr, ByteSlice};
+use gix_error::{ErrorExt, NotFoundError};
 use gix_filter::{
     driver::apply::{Delay, MaybeDelayed},
     pipeline::convert::{ToGitOutcome, ToWorktreeOutcome, to_worktree},
@@ -158,13 +159,19 @@ pub mod convert_to_diffable {
             stderr: BString,
         },
         #[error(transparent)]
-        FindObject(#[from] gix_object::find::existing_object::Error),
+        FindObject(gix_error::Error),
         #[error(transparent)]
         ConvertToWorktree(#[from] gix_filter::pipeline::convert::to_worktree::Error),
         #[error(transparent)]
         ConvertToGit(#[from] gix_filter::pipeline::convert::to_git::Error),
         #[error("Memory allocation failed")]
         OutOfMemory(#[from] TryReserveError),
+    }
+
+    impl From<gix_object::find::existing_object::Error> for Error {
+        fn from(err: gix_object::find::existing_object::Error) -> Self {
+            Error::FindObject(err.into_error())
+        }
     }
 }
 
@@ -399,10 +406,9 @@ impl Pipeline {
                 let data = if id.is_null() {
                     None
                 } else {
-                    let header = objects
-                        .try_header(id)
-                        .map_err(gix_object::find::existing_object::Error::Find)?
-                        .ok_or_else(|| gix_object::find::existing_object::Error::NotFound { oid: id.to_owned() })?;
+                    let header = objects.try_header(id)?.ok_or_else(|| {
+                        NotFoundError::new(format!("An object with id {id} could not be found")).raise_erased()
+                    })?;
                     if is_binary.is_none()
                         && self.options.large_file_threshold_bytes > 0
                         && header.size > self.options.large_file_threshold_bytes
@@ -412,10 +418,9 @@ impl Pipeline {
                     let data = if is_binary == Some(true) {
                         Data::Binary { size: header.size }
                     } else {
-                        objects
-                            .try_find(id, out)
-                            .map_err(gix_object::find::existing_object::Error::Find)?
-                            .ok_or_else(|| gix_object::find::existing_object::Error::NotFound { oid: id.to_owned() })?;
+                        objects.try_find(id, out)?.ok_or_else(|| {
+                            NotFoundError::new(format!("An object with id {id} could not be found")).raise_erased()
+                        })?;
                         let mut is_derived = false;
                         if matches!(mode, EntryKind::Blob | EntryKind::BlobExecutable)
                             && convert == Mode::ToWorktreeAndBinaryToText

@@ -28,7 +28,7 @@ pub enum Error<E: std::error::Error + Send + Sync + 'static> {
     PackObjectVerify {
         offset: u64,
         #[source]
-        source: gix_object::data::verify::Error,
+        source: gix_error::Error,
     },
     #[error(
         "The CRC32 of {kind} object at offset {offset} didn't match the checksum in the index file: expected {expected}, got {actual}"

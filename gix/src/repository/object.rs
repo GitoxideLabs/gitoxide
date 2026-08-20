@@ -1,6 +1,7 @@
 #![allow(clippy::result_large_err)]
 use std::ops::DerefMut;
 
+use gix_error::ResultExt;
 use gix_hash::ObjectId;
 use gix_object::{Exists, Find, FindExt, Write};
 use gix_odb::{Header, HeaderExt};
@@ -143,7 +144,7 @@ impl crate::Repository {
                 size: 0,
             });
         }
-        self.objects.header(id)
+        self.objects.header(id).map_err(Into::into)
     }
 
     /// Return `true` if `id` exists in the object database.
@@ -246,16 +247,13 @@ impl crate::Repository {
     /// we avoid writing duplicate objects using slow disks that will eventually have to be garbage collected.
     pub fn write_object(&self, object: impl gix_object::WriteTo) -> Result<Id<'_>, object::write::Error> {
         let mut buf = self.empty_reusable_buffer();
-        object
-            .write_to(buf.deref_mut())
-            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync + 'static>)?;
+        object.write_to(buf.deref_mut()).or_erased()?;
 
         self.write_object_inner(&buf, object.kind())
     }
 
     fn write_object_inner(&self, buf: &[u8], kind: gix_object::Kind) -> Result<Id<'_>, object::write::Error> {
-        let oid = gix_object::compute_hash(self.object_hash(), kind, buf)
-            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)?;
+        let oid = gix_object::compute_hash(self.object_hash(), kind, buf).or_erased()?;
         if self.objects.exists(&oid) {
             return Ok(oid.attach(self));
         }
@@ -285,8 +283,7 @@ impl crate::Repository {
     /// ```
     pub fn write_blob(&self, bytes: impl AsRef<[u8]>) -> Result<Id<'_>, object::write::Error> {
         let bytes = bytes.as_ref();
-        let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, bytes)
-            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)?;
+        let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, bytes).or_erased()?;
         if self.objects.exists(&oid) {
             return Ok(oid.attach(self));
         }
@@ -304,15 +301,13 @@ impl crate::Repository {
     /// If that is prohibitive, use the object database directly.
     pub fn write_blob_stream(&self, mut bytes: impl std::io::Read) -> Result<Id<'_>, object::write::Error> {
         let mut buf = self.empty_reusable_buffer();
-        std::io::copy(&mut bytes, buf.deref_mut())
-            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)?;
+        std::io::copy(&mut bytes, buf.deref_mut()).or_erased()?;
 
         self.write_blob_stream_inner(&buf)
     }
 
     fn write_blob_stream_inner(&self, buf: &[u8]) -> Result<Id<'_>, object::write::Error> {
-        let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, buf)
-            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)?;
+        let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, buf).or_erased()?;
         if self.objects.exists(&oid) {
             return Ok(oid.attach(self));
         }

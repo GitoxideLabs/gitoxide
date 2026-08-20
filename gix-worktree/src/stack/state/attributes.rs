@@ -106,7 +106,7 @@ impl Attributes {
                 if let Ok(idx) = attr_file_in_index {
                     let blob = objects
                         .find_blob(&id_mappings[idx].1, buf)
-                        .map_err(std::io::Error::other)?;
+                        .map_err(|err| std::io::Error::other(err.into_error()))?;
                     let attr_path = gix_path::from_bstring(attr_path_relative.into_owned());
                     self.stack.add_patterns_buffer(
                         blob.data,
@@ -145,7 +145,7 @@ impl Attributes {
                 if let Some(idx) = attr_file_in_index.ok().filter(|_| !added) {
                     let blob = objects
                         .find_blob(&id_mappings[idx].1, buf)
-                        .map_err(std::io::Error::other)?;
+                        .map_err(|err| std::io::Error::other(err.into_error()))?;
                     let attr_path = gix_path::from_bstring(attr_path_relative.into_owned());
                     self.stack.add_patterns_buffer(
                         blob.data,

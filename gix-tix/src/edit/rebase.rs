@@ -2828,7 +2828,10 @@ fn write_commit_timed(
     commit = match (signature, signing) {
         (Signature::RedoIfNeeded, Some(options)) => {
             let started = Instant::now();
-            let signed = commit.sign(options).context("could not sign rebased commit")?;
+            let signed = commit
+                .sign(options)
+                .map_err(gix::Exn::into_error)
+                .context("could not sign rebased commit")?;
             signing_time = Some(started.elapsed());
             signed
         }

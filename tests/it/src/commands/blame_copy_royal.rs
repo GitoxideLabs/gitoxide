@@ -91,7 +91,11 @@ pub(super) mod function {
         for blame_path_entry in &blame_infos {
             let dst = assets.join(format!("{}.commit", blame_path_entry.commit_id));
             if !dry_run {
-                let blob = repo.objects.find_blob(&blame_path_entry.blob_id, &mut buf)?.data;
+                let blob = repo
+                    .objects
+                    .find_blob(&blame_path_entry.blob_id, &mut buf)
+                    .map_err(gix::Exn::into_error)?
+                    .data;
 
                 if verbatim {
                     std::fs::write(dst, blob)?;

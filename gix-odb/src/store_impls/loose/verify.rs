@@ -71,9 +71,7 @@ impl Store {
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
     ) -> Result<integrity::Statistics, integrity::Error> {
-        use gix_object::Write;
         let mut buf = Vec::new();
-        let sink = crate::sink(self.object_hash);
 
         let mut num_objects = 0;
         let start = Instant::now();
@@ -84,9 +82,9 @@ impl Store {
                 .try_find(&id, &mut buf)
                 .map_err(|_| integrity::Error::Retry)?
                 .ok_or(integrity::Error::Retry)?;
-            sink.write_buf(object.kind, object.data)
-                .map_err(|err| integrity::Error::ObjectHasher {
-                    source: *err.downcast().expect("sink can only fail in hasher"),
+            gix_object::compute_hash(self.object_hash, object.kind, object.data)
+                .map_err(|source| integrity::Error::ObjectHasher {
+                    source,
                     kind: object.kind,
                     expected: id,
                 })?
