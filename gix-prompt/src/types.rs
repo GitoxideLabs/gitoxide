@@ -1,22 +1,7 @@
 use std::path::PathBuf;
 
 /// The error returned by [ask()][crate::ask()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Terminal prompts are disabled")]
-    Disabled,
-    #[error("The current platform has no implementation for prompting in the terminal")]
-    UnsupportedPlatform,
-    #[error(
-        "Failed to open terminal at {:?} for writing prompt, or to write it",
-        crate::unix::TTY_PATH
-    )]
-    TtyIo(#[from] std::io::Error),
-    #[cfg(unix)]
-    #[error("Failed to obtain or set terminal configuration")]
-    TerminalConfiguration(#[from] rustix::io::Errno),
-}
+pub type Error = gix_error::Exn<gix_error::Message>;
 
 /// The way the user is prompted.
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]

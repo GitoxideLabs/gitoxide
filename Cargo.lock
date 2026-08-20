@@ -2349,11 +2349,11 @@ dependencies = [
  "expectrl",
  "gix-command",
  "gix-config-value",
+ "gix-error",
  "gix-testtools",
  "parking_lot",
  "rustix",
  "serial_test",
- "thiserror 2.0.18",
 ]
 
 [[package]]
