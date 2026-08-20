@@ -518,6 +518,7 @@ pub(crate) struct App {
     compressed_anchor: Option<ObjectId>,
     compressed_segment: Option<ObjectId>,
     compressed_expanded: HashSet<ObjectId>,
+    time_travel_animation: Option<ObjectId>,
     attributions: Vec<Attribution>,
     #[cfg(test)]
     test_lanes: Vec<String>,
@@ -625,6 +626,7 @@ impl App {
             compressed_anchor: None,
             compressed_segment: None,
             compressed_expanded: HashSet::new(),
+            time_travel_animation: None,
             attributions: Vec::new(),
             #[cfg(test)]
             test_lanes: Vec::new(),
@@ -1182,7 +1184,10 @@ impl App {
     }
 
     fn compressed_history_suspended(&self) -> bool {
-        self.pending_rebase_conflict.is_some() || self.rebase_continuation_pending || self.worktree_conflicted
+        self.time_travel_animation.is_some()
+            || self.pending_rebase_conflict.is_some()
+            || self.rebase_continuation_pending
+            || self.worktree_conflicted
     }
 
     fn rebuild_compressed_history(&mut self) {
@@ -2904,6 +2909,56 @@ impl App {
         if let Some(index) = self.rows.iter().position(|row| row.id == id) {
             self.select(index);
         }
+    }
+
+    pub(crate) fn select_commit_for_time_travel(&mut self, id: ObjectId) {
+        let Some(index) = self.rows.iter().position(|row| row.id == id) else {
+            return;
+        };
+        let previous_offset = self.offset;
+        self.select(index);
+        if let Some(selected) = self
+            .selected_history_index()
+            .filter(|selected| *selected < previous_offset)
+        {
+            self.offset = selected.saturating_sub(self.viewport_rows.max(1) - 1);
+        }
+    }
+
+    pub(crate) fn begin_time_travel_animation(&mut self) {
+        let viewport_row = if self.alignment == Alignment::Compressed {
+            self.selected_history_index()
+                .map(|selected| selected.saturating_sub(self.offset))
+        } else {
+            None
+        };
+        self.time_travel_animation = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+        if let (Some(selected), Some(viewport_row)) = (self.selected_history_index(), viewport_row) {
+            self.offset = selected.saturating_sub(viewport_row);
+        }
+        self.ensure_visible();
+    }
+
+    pub(crate) fn finish_time_travel_animation(&mut self) {
+        let viewport_row = if self.alignment == Alignment::Compressed {
+            self.selected_history_index()
+                .map(|selected| selected.saturating_sub(self.offset))
+        } else {
+            None
+        };
+        if self.time_travel_animation.take().is_none() || self.alignment != Alignment::Compressed {
+            return;
+        }
+        self.compressed_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+        self.rebuild_compressed_history();
+        if let (Some(selected), Some(viewport_row)) = (self.selected_history_index(), viewport_row) {
+            self.offset = selected.saturating_sub(viewport_row);
+        }
+        self.ensure_visible();
+    }
+
+    pub(crate) fn time_travel_animation_origin(&self) -> Option<ObjectId> {
+        self.time_travel_animation
     }
 
     pub(crate) fn select_commit_after_refresh(&mut self, id: ObjectId) {
@@ -4955,6 +5010,65 @@ mod tests {
         );
         app.update(Action::MoveUpBy(2));
         assert_eq!(app.selected, Some(1));
+    }
+
+    #[test]
+    fn time_travel_selection_crosses_each_viewport_before_paging() {
+        let mut app = App::new(4);
+        app.extend_commits((1..=10).map(row).collect::<Vec<_>>());
+        complete(&mut app);
+
+        let mut positions = Vec::new();
+        for commit in (1u16..=10).rev() {
+            app.select_commit_for_time_travel(id(commit));
+            positions.push((app.selected, app.offset));
+        }
+
+        assert_eq!(
+            positions,
+            [
+                (Some(9), 6),
+                (Some(8), 6),
+                (Some(7), 6),
+                (Some(6), 6),
+                (Some(5), 2),
+                (Some(4), 2),
+                (Some(3), 2),
+                (Some(2), 2),
+                (Some(1), 0),
+                (Some(0), 0),
+            ],
+            "selection crosses a full viewport before the next page is bottom-aligned"
+        );
+    }
+
+    #[test]
+    fn time_travel_animation_temporarily_expands_compressed_history() {
+        let mut app = App::new(4);
+        app.extend_commits(
+            (1u16..=10)
+                .rev()
+                .map(|commit| numbered_row(commit, (commit > 1).then_some(commit - 1)))
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        app.set_view_tips(&[id(10)]);
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+        assert!(app.history_len() < app.rows.len(), "the linear history is compressed");
+
+        app.begin_time_travel_animation();
+        assert_eq!(app.history_len(), app.rows.len(), "animation uses canonical rows");
+        let mut offsets = Vec::new();
+        for commit in 1..=10 {
+            app.select_commit_for_time_travel(id(commit));
+            offsets.push(app.offset);
+        }
+        assert_eq!(offsets, [6, 6, 6, 6, 2, 2, 2, 2, 0, 0]);
+        app.finish_time_travel_animation();
+
+        assert_eq!(app.alignment, Alignment::Compressed);
+        assert!(app.history_len() < app.rows.len(), "compression is restored");
     }
 
     #[test]
