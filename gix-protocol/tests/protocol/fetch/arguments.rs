@@ -52,10 +52,7 @@ mod impls {
             self.stateful
         }
 
-        fn configure(
-            &mut self,
-            config: &dyn std::any::Any,
-        ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn configure(&mut self, config: &dyn std::any::Any) -> Result<(), gix_error::Exn> {
             self.inner.configure(config)
         }
     }
@@ -113,10 +110,7 @@ mod impls {
             self.stateful
         }
 
-        fn configure(
-            &mut self,
-            config: &dyn std::any::Any,
-        ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn configure(&mut self, config: &dyn std::any::Any) -> Result<(), gix_error::Exn> {
             self.inner.configure(config)
         }
     }

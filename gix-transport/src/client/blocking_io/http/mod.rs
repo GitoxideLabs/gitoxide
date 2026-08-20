@@ -8,6 +8,7 @@ use std::{
 
 use base64::Engine;
 use bstr::BStr;
+use gix_error::{ErrorExt, message};
 pub use traits::{Error, GetResponse, Http, PostBodyDataKind, PostResponse};
 
 use crate::{
@@ -294,11 +295,13 @@ impl<H: Http> Transport<H> {
                 name.eq_ignore_ascii_case("content-type") && value.trim() == wanted_content_type
             })
         }) {
-            return Err(client::Error::Http(Error::Detail {
-                description: format!(
+            return Err(client::Error::Http(
+                message!(
                     "Didn't find '{wanted_content_type}' header to indicate 'smart' protocol, and 'dumb' protocol is not supported."
-                ),
-            }));
+                )
+                .raise()
+                .into_error(),
+            ));
         }
         Ok(())
     }
@@ -348,7 +351,7 @@ impl<H: Http> client::TransportWithoutIO for Transport<H> {
         false
     }
 
-    fn configure(&mut self, config: &dyn Any) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    fn configure(&mut self, config: &dyn Any) -> Result<(), gix_error::Exn> {
         self.http.configure(config)
     }
 }
@@ -390,7 +393,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             .get(url.as_ref(), &self.url, static_headers.iter().chain(&dynamic_headers))
             .map_err(|err| {
                 self.sync_redirected_base_url();
-                client::Error::from(err)
+                client::Error::Http(err.into_error())
             })?;
         if let Err(err) = <Transport<H>>::check_content_type(service, "advertisement", headers) {
             const MAX_ERROR_BODY_DRAIN_BYTES: u64 = 1024 * 1024;
@@ -418,13 +421,15 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
 
         if let Some(announced_service) = line.as_bstr().strip_prefix(b"# service=") {
             if announced_service != service.as_str().as_bytes() {
-                return Err(client::Error::Http(Error::Detail {
-                    description: format!(
+                return Err(client::Error::Http(
+                    message!(
                         "Expected to see service {:?}, but got {:?}",
                         service.as_str(),
                         announced_service
-                    ),
-                }));
+                    )
+                    .raise()
+                    .into_error(),
+                ));
             }
 
             line_reader.as_read().read_to_end(&mut Vec::new())?;
@@ -476,7 +481,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             .post(&url, &self.url, all_headers, write_mode.into())
             .map_err(|err| {
                 self.sync_redirected_base_url();
-                client::Error::from(err)
+                client::Error::Http(err.into_error())
             })?;
         self.sync_redirected_base_url();
         let line_provider = self
@@ -582,3 +587,68 @@ pub fn connect<H: Http + Default>(url: gix_url::Url, desired_version: Protocol, 
 
 ///
 pub mod redirect;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::blocking_io::Transport as _;
+
+    struct FailingHttp;
+
+    impl Http for FailingHttp {
+        type Headers = std::io::Empty;
+        type ResponseBody = std::io::Empty;
+        type PostBody = std::io::Sink;
+
+        fn get(
+            &mut self,
+            _url: &str,
+            _base_url: &str,
+            _headers: impl IntoIterator<Item = impl AsRef<str>>,
+        ) -> Result<GetResponse<Self::Headers, Self::ResponseBody>, gix_error::Exn<gix_error::Message>> {
+            Err(gix_error::RetryableError::new(message("temporary backend failure")).and_raise(message("GET failed")))
+        }
+
+        fn post(
+            &mut self,
+            _url: &str,
+            _base_url: &str,
+            _headers: impl IntoIterator<Item = impl AsRef<str>>,
+            _body: PostBodyDataKind,
+        ) -> Result<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, gix_error::Exn<gix_error::Message>>
+        {
+            Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused).and_raise(message("POST failed")))
+        }
+
+        fn configure(&mut self, _config: &dyn Any) -> Result<(), gix_error::Exn> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn backend_failures_remain_http_errors() {
+        let mut transport = Transport::new_http(
+            FailingHttp,
+            "http://localhost/repo".try_into().expect("valid URL"),
+            Protocol::V2,
+            false,
+        );
+        let get_error = transport
+            .handshake(Service::UploadPack, &[])
+            .err()
+            .expect("GET fails in the backend");
+        transport.service = Some(Service::UploadPack);
+        let post_error = transport
+            .request(client::WriteMode::Binary, MessageKind::Flush, false)
+            .err()
+            .expect("POST fails in the backend");
+
+        for err in [get_error, post_error] {
+            assert!(
+                matches!(err, client::Error::Http(_)),
+                "HTTP backend failures retain their transport error variant: {err:?}"
+            );
+            assert!(err.can_retry(), "retryable backend causes survive conversion: {err:?}");
+        }
+    }
+}

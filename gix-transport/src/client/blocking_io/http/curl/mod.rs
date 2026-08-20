@@ -6,6 +6,7 @@ use std::{
     thread,
 };
 
+use gix_error::{ResultExt, message};
 use gix_features::io;
 use parking_lot::Mutex;
 
@@ -25,29 +26,9 @@ pub struct Options {
 /// The error returned by the 'remote' helper, a purely internal construct to perform http requests.
 ///
 /// It can be used for downcasting errors, which are boxed to hide the actual implementation.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Curl(#[from] curl::Error),
-    #[error(transparent)]
-    Redirect(#[from] http::redirect::Error),
-    #[error("Could not finish reading all data to post to the remote")]
-    ReadPostBody(#[from] std::io::Error),
-    #[error(transparent)]
-    Authenticate(gix_error::Error),
-}
+pub type Error = gix_error::Exn<gix_error::Message>;
 
-impl crate::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
-        match self {
-            Error::Curl(err) => curl_is_spurious(err),
-            _ => false,
-        }
-    }
-}
-
-pub(crate) fn curl_is_spurious(err: &curl::Error) -> bool {
+pub(crate) fn curl_is_retryable(err: &curl::Error) -> bool {
     err.is_couldnt_connect()
         || err.is_couldnt_resolve_proxy()
         || err.is_couldnt_resolve_host()
@@ -83,7 +64,7 @@ impl Curl {
         self.req = req;
         self.res = res;
         self.redirected_base_url = redirected_base_url;
-        err_that_brought_thread_down.into()
+        err_that_brought_thread_down
     }
 
     fn make_request(
@@ -95,7 +76,15 @@ impl Curl {
     ) -> Result<http::PostResponse<io::pipe::Reader, io::pipe::Reader, io::pipe::Writer>, http::Error> {
         let mut list = curl::easy::List::new();
         for header in headers {
-            list.append(header.as_ref())?;
+            list.append(header.as_ref())
+                .map_err(|err| {
+                    if curl_is_retryable(&err) {
+                        gix_error::Error::from_error(gix_error::RetryableError::new(err))
+                    } else {
+                        gix_error::Error::from_error(err)
+                    }
+                })
+                .or_raise(|| message("Could not add HTTP header"))?;
         }
         if self
             .req
@@ -163,10 +152,7 @@ impl http::Http for Curl {
         self.make_request(url, base_url, headers, Some(body))
     }
 
-    fn configure(
-        &mut self,
-        config: &dyn std::any::Any,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    fn configure(&mut self, config: &dyn std::any::Any) -> Result<(), gix_error::Exn> {
         if let Some(config) = config.downcast_ref::<http::Options>() {
             self.config = config.clone();
         }

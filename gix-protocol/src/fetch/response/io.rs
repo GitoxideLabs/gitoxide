@@ -185,12 +185,8 @@ fn read_error(err: io::Error) -> response::Error {
 }
 
 fn transport_error(err: client::Error) -> response::Error {
-    use crate::transport::IsSpuriousError;
-
     let context = message("Failed to read from line reader");
-    let can_retry =
-        !matches!(&err, client::Error::Io(err) if err.kind() == io::ErrorKind::OutOfMemory) && err.is_spurious();
-    if can_retry {
+    if err.can_retry() {
         RetryableError::new(err).and_raise(context).erased()
     } else {
         err.and_raise(context).erased()
