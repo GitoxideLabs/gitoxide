@@ -31,7 +31,7 @@ mod tree;
 ///   * more configuration
 pub fn objects<Find>(
     db: Find,
-    objects_ids: Box<dyn Iterator<Item = Result<ObjectId, Box<dyn std::error::Error + Send + Sync + 'static>>> + Send>,
+    objects_ids: Box<dyn Iterator<Item = Result<ObjectId, gix_error::Exn>> + Send>,
     objects: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     Options {
@@ -92,7 +92,7 @@ where
 /// Like [`objects()`] but using a single thread only to mostly save on the otherwise required overhead.
 pub fn objects_unthreaded(
     db: &dyn crate::Find,
-    object_ids: &mut dyn Iterator<Item = Result<ObjectId, Box<dyn std::error::Error + Send + Sync + 'static>>>,
+    object_ids: &mut dyn Iterator<Item = Result<ObjectId, gix_error::Exn>>,
     objects: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     input_object_expansion: ObjectExpansion,
@@ -119,6 +119,7 @@ mod expand {
         sync::atomic::{AtomicBool, Ordering},
     };
 
+    use gix_error::{ErrorExt, ResultExt, RetryableError, message};
     use gix_hash::{ObjectId, oid};
     use gix_object::{CommitRefIter, Data, TagRefIter};
 
@@ -137,7 +138,7 @@ mod expand {
         db: &dyn crate::Find,
         input_object_expansion: ObjectExpansion,
         seen_objs: &impl util::InsertImmutable,
-        oids: &mut dyn Iterator<Item = Result<ObjectId, Box<dyn std::error::Error + Send + Sync + 'static>>>,
+        oids: &mut dyn Iterator<Item = Result<ObjectId, gix_error::Exn>>,
         buf1: &mut Vec<u8>,
         buf2: &mut Vec<u8>,
         objects: &gix_features::progress::AtomicStep,
@@ -157,10 +158,10 @@ mod expand {
         let stats = &mut outcome;
         for id in oids {
             if should_interrupt.load(Ordering::Relaxed) {
-                return Err(Error::Interrupted);
+                return Err(RetryableError::new(message("Operation interrupted")).raise_erased());
             }
 
-            let id = id.map_err(Error::InputIteration)?;
+            let id = id.or_raise_erased(|| message("Could not iterate input objects"))?;
             let (obj, location) = db.find(&id, buf1)?;
             stats.input_objects += 1;
             match input_object_expansion {
@@ -197,7 +198,7 @@ mod expand {
                                                 parent_commit_ids.push(id);
                                             }
                                             Ok(_) => break,
-                                            Err(err) => return Err(Error::CommitDecode(err)),
+                                            Err(err) => return Err(err.raise_erased()),
                                         }
                                     }
                                     let (obj, location) = db.find(&tree_id, buf1)?;
@@ -215,8 +216,7 @@ mod expand {
                                         &mut tree_traversal_state,
                                         &objects,
                                         &mut traverse_delegate,
-                                    )
-                                    .map_err(|err| Error::TreeTraverse(err.into_error()))?;
+                                    )?;
                                     out = objects.dissolve(stats);
                                     &traverse_delegate.non_trees
                                 } else {
@@ -260,7 +260,7 @@ mod expand {
                                             &objects,
                                             &mut changes_delegate,
                                         )
-                                        .map_err(Error::TreeChanges)?;
+                                        .or_raise_erased(|| message("Could not compare trees while generating pack"))?;
                                         stats.decoded_objects += objects.into_count();
                                     }
                                     &changes_delegate.objects
@@ -289,8 +289,7 @@ mod expand {
                                         &mut tree_traversal_state,
                                         &objects,
                                         &mut traverse_delegate,
-                                    )
-                                    .map_err(|err| Error::TreeTraverse(err.into_error()))?;
+                                    )?;
                                     out = objects.dissolve(stats);
                                 }
                                 for id in &traverse_delegate.non_trees {

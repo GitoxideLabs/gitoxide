@@ -3,6 +3,13 @@ use std::{cell::RefCell, ops::Deref};
 
 use crate::Store;
 
+fn exn_to_io(err: gix_error::Exn) -> std::io::Error {
+    let kind = err
+        .downcast_any_ref::<std::io::Error>()
+        .map_or(std::io::ErrorKind::Other, std::io::Error::kind);
+    std::io::Error::new(kind, err.into_error())
+}
+
 /// This effectively acts like a handle but exists to be usable from the actual `crate::Handle` implementation which adds caches on top.
 /// Each store is quickly cloned and contains thread-local state for shared packs.
 pub struct Handle<S>

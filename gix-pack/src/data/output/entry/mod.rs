@@ -1,5 +1,6 @@
 use std::io::Write;
 
+use gix_error::{ErrorExt, ResultExt, message};
 use gix_hash::ObjectId;
 
 use crate::{data, data::output, find};
@@ -32,14 +33,7 @@ pub enum Kind {
 }
 
 /// The error returned by [`output::Entry::from_data()`].
-#[expect(missing_docs)]
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("{0}")]
-    ZlibDeflate(#[from] std::io::Error),
-    #[error(transparent)]
-    EntryType(#[from] crate::data::entry::decode::Error),
-}
+pub type Error = gix_error::Exn;
 
 impl output::Entry {
     /// An object which can be identified as invalid easily which happens if objects didn't exist even if they were referred to.
@@ -78,7 +72,7 @@ impl output::Entry {
         let pack_offset_must_be_zero = 0;
         let pack_entry = match data::Entry::from_bytes(&entry.data, pack_offset_must_be_zero, count.id.kind()) {
             Ok(e) => e,
-            Err(err) => return Some(Err(err.into())),
+            Err(err) => return Some(Err(err.raise_erased())),
         };
 
         use crate::data::entry::Header::*;
@@ -92,10 +86,10 @@ impl output::Entry {
                 let Some(base_offset) =
                     crate::data::entry::Header::verified_base_pack_offset(pack_location.pack_offset, base_distance)
                 else {
-                    return Some(Err(crate::data::entry::decode::Error::Corrupt {
-                        message: "an ofs-delta base distance pointing before pack start",
-                    }
-                    .into()));
+                    return Some(Err(gix_error::CorruptionError::new(
+                        "an ofs-delta base distance pointing before pack start",
+                    )
+                    .raise_erased()));
                 };
                 potential_bases
                     .binary_search_by(|e| {
@@ -153,11 +147,14 @@ impl output::Entry {
                 let mut out = gix_zlib::stream::deflate::Write::new(Vec::new(), compression);
                 if let Err(err) = std::io::copy(&mut &*obj.data, &mut out) {
                     match err.kind() {
-                        std::io::ErrorKind::Other => return Err(Error::ZlibDeflate(err)),
+                        std::io::ErrorKind::Other => {
+                            return Err(err.and_raise(message("Failed to compress pack entry")).erased());
+                        }
                         err => unreachable!("Should never see other errors than zlib, but got {:?}", err),
                     }
                 }
-                out.flush()?;
+                out.flush()
+                    .or_raise_erased(|| message("Failed to finish compressing pack entry"))?;
                 out.into_inner()
             },
         })

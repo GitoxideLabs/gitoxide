@@ -1,20 +1,12 @@
 use std::{path::Path, sync::atomic::AtomicBool};
 
+use gix_error::{ErrorExt, ResultExt, RetryableError, message};
 use gix_features::progress::Progress;
 
 ///
 pub mod checksum {
     /// Returned by various methods to verify the checksum of a memory mapped file that might also exist on disk.
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Interrupted by user")]
-        Interrupted,
-        #[error("Failed to hash data")]
-        Hasher(#[source] gix_error::Error),
-        #[error(transparent)]
-        Verify(#[from] gix_hash::verify::Error),
-    }
+    pub type Error = gix_error::Exn;
 }
 
 /// Returns the `index` at which the following `index + 1` value is not an increment over the value at `index`.
@@ -25,8 +17,7 @@ pub fn fan(data: &[u32]) -> Option<usize> {
 }
 
 /// Calculate the hash of the given kind by trying to read the file from disk at `data_path` or falling back on the mapped content in `data`.
-/// `Ok(expected)` or [`checksum::Error::Verify`] is returned if the hash matches or mismatches.
-/// If the [`checksum::Error::Interrupted`] is returned, the operation was interrupted.
+/// `Ok(expected)` is returned if the hash matches, otherwise the error is classified as corruption.
 pub fn checksum_on_disk_or_mmap(
     data_path: &Path,
     data: &[u8],
@@ -45,7 +36,9 @@ pub fn checksum_on_disk_or_mmap(
     ) {
         Ok(id) => id,
         Err(err) => match err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind) {
-            Some(std::io::ErrorKind::Interrupted) => return Err(checksum::Error::Interrupted),
+            Some(std::io::ErrorKind::Interrupted) => {
+                return Err(RetryableError::new(err.into_error()).raise_erased());
+            }
             Some(_) => {
                 let start = std::time::Instant::now();
                 let mut hasher = gix_hash::hasher(object_hash);
@@ -54,13 +47,14 @@ pub fn checksum_on_disk_or_mmap(
                 progress.show_throughput(start);
                 hasher
                     .try_finalize()
-                    .map_err(gix_hash::io::from_hasher)
-                    .map_err(|err| checksum::Error::Hasher(err.into_error()))?
+                    .or_raise_erased(|| message("Failed to hash data"))?
             }
-            None => return Err(checksum::Error::Hasher(err.into_error())),
+            None => return Err(err),
         },
     };
 
-    actual.verify(&expected)?;
+    actual
+        .verify(&expected)
+        .or_raise_erased(|| gix_error::CorruptionError::new("Failed to verify pack file checksum"))?;
     Ok(actual)
 }

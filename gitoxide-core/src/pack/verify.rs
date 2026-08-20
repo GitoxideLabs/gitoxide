@@ -119,13 +119,16 @@ where
     };
     let res = match ext {
         "pack" => {
-            let pack = odb::pack::data::File::at(path, object_hash).with_context(|| "Could not open pack file")?;
+            let pack = odb::pack::data::File::at(path, object_hash)
+                .map_err(gix::Exn::into_error)
+                .with_context(|| "Could not open pack file")?;
             pack.verify_checksum(&mut progress.add_child("Sha1 of pack"), should_interrupt)
                 .map(|id| (id, None))?
         }
         "idx" => {
-            let idx =
-                odb::pack::index::File::at(path, object_hash).with_context(|| "Could not open pack index file")?;
+            let idx = odb::pack::index::File::at(path, object_hash)
+                .map_err(gix::Exn::into_error)
+                .with_context(|| "Could not open pack index file")?;
             let packfile_path = path.with_extension("pack");
             let pack = odb::pack::data::File::at(&packfile_path, object_hash)
                 .map_err(|e| {
@@ -154,6 +157,7 @@ where
                 should_interrupt,
             )
             .map(|o| (o.actual_index_checksum, o.pack_traverse_statistics))
+            .map_err(gix::Exn::into_error)
             .with_context(|| "Verification failure")?
         }
         "" => match path.file_name() {

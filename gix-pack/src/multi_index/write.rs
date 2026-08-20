@@ -2,28 +2,8 @@ use std::time::SystemTime;
 
 use crate::multi_index;
 
-mod error {
-    /// The error returned by [`crate::multi_index::write_from_index_paths()`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Io(#[from] std::io::Error),
-        #[error("Interrupted")]
-        Interrupted,
-        #[error(transparent)]
-        OpenIndex(#[from] crate::index::init::Error),
-        #[error("Too many index entries to fit in memory")]
-        OutOfMemory,
-    }
-
-    impl From<gix_hash::io::Error> for Error {
-        fn from(err: gix_hash::io::Error) -> Self {
-            Error::Io(std::io::Error::other(err.into_error()))
-        }
-    }
-}
-pub use error::Error;
+/// The error returned by [`crate::multi_index::write_from_index_paths()`].
+pub type Error = gix_error::Exn;
 
 /// An entry suitable for sorting and writing
 pub(crate) struct Entry {
@@ -83,6 +63,7 @@ pub(super) mod function {
         time::{Instant, SystemTime},
     };
 
+    use gix_error::{ErrorExt, ResourceExhaustionError, ResourceExhaustionKind, ResultExt, RetryableError, message};
     use gix_features::progress::{Count, DynNestedProgress, Progress};
 
     use crate::{MMap, multi_index};
@@ -126,9 +107,12 @@ pub(super) mod function {
                     .unwrap_or(SystemTime::UNIX_EPOCH);
                 let index = crate::index::File::at(index, object_hash)?;
 
-                entries
-                    .try_reserve(index.num_objects() as usize)
-                    .map_err(|_| Error::OutOfMemory)?;
+                entries.try_reserve(index.num_objects() as usize).or_raise_erased(|| {
+                    ResourceExhaustionError::new(
+                        ResourceExhaustionKind::AllocationFailure,
+                        "Too many index entries to fit in memory",
+                    )
+                })?;
                 entries.extend(index.iter().map(|e| Entry {
                     id: e.oid,
                     pack_index: index_id as u32,
@@ -137,7 +121,7 @@ pub(super) mod function {
                 }));
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(Error::Interrupted);
+                    return Err(RetryableError::new(message("Interrupted")).raise_erased());
                 }
             }
             progress.show_throughput(start);
@@ -154,7 +138,7 @@ pub(super) mod function {
             progress.inc_by(entries.len());
             progress.show_throughput(start);
             if should_interrupt.load(Ordering::Relaxed) {
-                return Err(Error::Interrupted);
+                return Err(RetryableError::new(message("Interrupted")).raise_erased());
             }
             entries
         };
@@ -229,7 +213,7 @@ pub(super) mod function {
                 .map_err(gix_hash::io::from_std_io)?;
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(Error::Interrupted);
+                    return Err(RetryableError::new(message("Interrupted")).raise_erased());
                 }
             }
         }

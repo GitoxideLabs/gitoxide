@@ -33,7 +33,7 @@ pub mod verify {
             progress: &mut dyn DynNestedProgress,
             should_interrupt: &AtomicBool,
             options: crate::index::verify::integrity::Options<F>,
-        ) -> Result<integrity::Outcome, crate::index::traverse::Error<crate::index::verify::integrity::Error>>
+        ) -> Result<integrity::Outcome, crate::index::traverse::Error>
         where
             C: crate::cache::DecodeEntry,
             F: Fn() -> C + Send + Clone,

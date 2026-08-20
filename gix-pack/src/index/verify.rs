@@ -1,7 +1,9 @@
 use std::sync::atomic::AtomicBool;
 
+use gix_error::{ErrorExt, ResultExt};
 use gix_features::progress::{DynNestedProgress, Progress};
 use gix_object::WriteTo;
+use gix_object::bstr::ByteSlice;
 
 use crate::index;
 
@@ -9,30 +11,8 @@ use crate::index;
 pub mod integrity {
     use std::marker::PhantomData;
 
-    use gix_object::bstr::BString;
-
     /// Returned by [`index::File::verify_integrity()`][crate::index::File::verify_integrity()].
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Reserialization of an object failed")]
-        Io(#[from] std::io::Error),
-        #[error("The fan at index {index} is out of order as it's larger then the following value.")]
-        Fan { index: usize },
-        #[error("{kind} object {id} could not be decoded")]
-        ObjectDecode {
-            source: gix_object::decode::Error,
-            kind: gix_object::Kind,
-            id: gix_hash::ObjectId,
-        },
-        #[error("{kind} object {id} wasn't re-encoded without change, wanted\n{expected}\n\nGOT\n\n{actual}")]
-        ObjectEncodeMismatch {
-            kind: gix_object::Kind,
-            id: gix_hash::ObjectId,
-            expected: BString,
-            actual: BString,
-        },
-    }
+    pub type Error = gix_error::Exn;
 
     /// Returned by [`index::File::verify_integrity()`][crate::index::File::verify_integrity()].
     pub struct Outcome {
@@ -174,16 +154,17 @@ where
         pack: Option<PackContext<'_, F, D>>,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
-    ) -> Result<integrity::Outcome, index::traverse::Error<index::verify::integrity::Error>>
+    ) -> Result<integrity::Outcome, index::traverse::Error>
     where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
         D: crate::FileData + Send + Sync,
     {
         if let Some(first_invalid) = crate::verify::fan(&self.fan) {
-            return Err(index::traverse::Error::Processor(integrity::Error::Fan {
-                index: first_invalid,
-            }));
+            return Err(gix_error::CorruptionError::new(format!(
+                "The fan at index {first_invalid} is out of order as it's larger then the following value."
+            ))
+            .raise_erased());
         }
 
         match pack {
@@ -225,7 +206,6 @@ where
                         .add_child_with_id("checksum of index".into(), integrity::ProgressId::ChecksumBytes.into()),
                     should_interrupt,
                 )
-                .map_err(index::traverse::Error::IndexVerify)
                 .map(|id| integrity::Outcome {
                     actual_index_checksum: id,
                     pack_traverse_statistics: None,
@@ -233,6 +213,7 @@ where
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn verify_entry(
         verify_mode: Mode,
         encode_buf: &mut Vec<u8>,
@@ -245,24 +226,26 @@ where
             use gix_object::Kind::*;
             match object_kind {
                 Tree | Commit | Tag => {
-                    let object =
-                        gix_object::ObjectRef::from_bytes(buf, object_kind, index_entry.oid.kind()).map_err(|err| {
-                            integrity::Error::ObjectDecode {
-                                source: err,
-                                kind: object_kind,
-                                id: index_entry.oid,
-                            }
+                    let object = gix_object::ObjectRef::from_bytes(buf, object_kind, index_entry.oid.kind())
+                        .or_raise_erased(|| {
+                            gix_error::CorruptionError::new(format!(
+                                "{object_kind} object {} could not be decoded",
+                                index_entry.oid
+                            ))
                         })?;
                     if let Mode::HashCrc32DecodeEncode = verify_mode {
                         encode_buf.clear();
-                        object.write_to(&mut *encode_buf)?;
+                        object.write_to(&mut *encode_buf).or_raise_erased(|| {
+                            gix_error::CorruptionError::new("Reserialization of an object failed")
+                        })?;
                         if encode_buf.as_slice() != buf {
-                            return Err(integrity::Error::ObjectEncodeMismatch {
-                                kind: object_kind,
-                                id: index_entry.oid,
-                                expected: buf.into(),
-                                actual: encode_buf.clone().into(),
-                            });
+                            return Err(gix_error::CorruptionError::new(format!(
+                                "{object_kind} object {} wasn't re-encoded without change, wanted\n{}\n\nGOT\n\n{}",
+                                index_entry.oid,
+                                buf.as_bstr(),
+                                encode_buf.as_bstr()
+                            ))
+                            .raise_erased());
                         }
                     }
                 }
