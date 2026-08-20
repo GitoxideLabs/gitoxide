@@ -8,6 +8,9 @@
 //! * access to packed objects
 //! * multiple loose objects and pack locations as gathered from `alternates` files.
 //!
+//! Custom error sources retain missing-object, corruption, validation, resource-exhaustion and retry
+//! classifications when raised or converted to [`gix_error::Error`].
+//!
 //! ## Write And Read Loose Objects
 //!
 //! ```
@@ -59,6 +62,21 @@ use arc_swap::ArcSwap;
 use gix_features::threading::OwnShared;
 pub use gix_pack as pack;
 use gix_zlib::stream::deflate;
+
+static NOT_FOUND: gix_error::NotFoundError = gix_error::NotFoundError {
+    message: std::borrow::Cow::Borrowed("Object not found"),
+};
+static CORRUPTION: gix_error::CorruptionError = gix_error::CorruptionError {
+    message: std::borrow::Cow::Borrowed("Object database is malformed or inconsistent"),
+};
+static INVALID_INPUT: gix_error::ValidationError = gix_error::ValidationError {
+    message: std::borrow::Cow::Borrowed("Invalid object database input"),
+    input: None,
+};
+// Global sources must be synchronized even when the `parallel` feature is disabled.
+static RETRYABLE: std::sync::LazyLock<gix_error::RetryableError> = std::sync::LazyLock::new(|| {
+    gix_error::RetryableError::new(gix_error::message("Object database operation can be retried"))
+});
 
 mod store_impls;
 pub use store_impls::{dynamic as store, loose};

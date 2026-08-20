@@ -1,9 +1,26 @@
 /// Returned as part of [`crate::alternate::Error::Parse`]
-#[derive(thiserror::Error, Debug)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Could not obtain an object path for the alternate directory '{}'", String::from_utf8_lossy(.0))]
     PathConversion(Vec<u8>),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::PathConversion(bytes) => write!(
+                f,
+                "Could not obtain an object path for the alternate directory '{}'",
+                String::from_utf8_lossy(bytes)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&crate::INVALID_INPUT)
+    }
 }
 
 pub(super) mod function {

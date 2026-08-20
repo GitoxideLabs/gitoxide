@@ -31,6 +31,7 @@ fn db_small_packs() -> gix_odb::Handle {
 }
 
 pub mod alternate;
+mod error;
 pub mod find;
 pub mod header;
 pub mod memory;

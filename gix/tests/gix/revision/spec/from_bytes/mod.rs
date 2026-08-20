@@ -158,15 +158,11 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         insta::assert_snapshot!(format!("{err:#?}").replace('\\', "/"), @r#"
         delegate.peel_until(ValidObject) failed: "{object}"
         |
-        └─ Loose(Decode(The object header contained an unknown object kind., at gix-object/src/lib.rs:344
+        └─ An error occurred while obtaining an object from the loose object store
         |
-        └─ Unknown object kind: "bad", at gix-object/src/lib.rs:344))
+        └─ ValidationError { message: "The object header contained an unknown object kind.", input: None }
         |
-        └─ Decode(The object header contained an unknown object kind., at gix-object/src/lib.rs:344
-        |
-        └─ Unknown object kind: "bad", at gix-object/src/lib.rs:344)
-            |
-            └─ ValidationError { message: "Unknown object kind", input: Some("bad") }
+        └─ ValidationError { message: "Unknown object kind", input: Some("bad") }
         |
         └─ The object header contained an unknown object kind.
         |
@@ -201,19 +197,7 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         insta::assert_snapshot!(actual, @r#"
         delegate.peel_until(ValidObject) failed: "{object}"
         |
-        └─ Loose(DecompressFile { source: Could not decode zip stream, at gix-zlib/src/inflate.rs:16
-        |
-        └─ Invalid input data, at gix-zlib/src/decompress.rs:67, path: "tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b" })
-        |
-        └─ DecompressFile { source: Could not decode zip stream, at gix-zlib/src/inflate.rs:16
-        |
-        └─ Invalid input data, at gix-zlib/src/decompress.rs:67, path: "tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b" }
-            |
-            └─ Could not decode zip stream, at gix-zlib/src/inflate.rs:16
-        |
-        └─ Invalid input data, at gix-zlib/src/decompress.rs:67
-                |
-                └─ Invalid input data
+        └─ An error occurred while obtaining an object from the loose object store
         |
         └─ decompression of loose object at 'tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b' failed
         |
