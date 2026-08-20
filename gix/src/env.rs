@@ -122,9 +122,10 @@ pub mod collate {
                     Error::Fetch(
                         crate::remote::fetch::Error::PackThreads(_)
                         | crate::remote::fetch::Error::PackIndexVersion(_)
-                        | crate::remote::fetch::Error::RemovePackKeepFile { .. }
-                        | crate::remote::fetch::Error::Fetch(gix_protocol::fetch::Error::Negotiate(_)),
+                        | crate::remote::fetch::Error::RemovePackKeepFile { .. },
                     ) => true,
+                    #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
+                    Error::Fetch(crate::remote::fetch::Error::Fetch(err)) => err.is_corrupted(),
                     _ => false,
                 }
             }
