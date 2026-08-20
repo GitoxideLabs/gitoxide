@@ -84,12 +84,10 @@ impl File {
                 let patterns = patterns
                     .into_iter()
                     .map(|pattern| gix_pathspec::parse(&pattern, defaults))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(gix_pathspec::Search::from_specs(
-                    patterns,
-                    None,
-                    std::path::Path::new(""),
-                )?)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(crate::is_active_platform::Error::ParsePattern)?;
+                gix_pathspec::Search::from_specs(patterns, None, std::path::Path::new(""))
+                    .map_err(crate::is_active_platform::Error::NormalizePattern)
             })
             .transpose()?;
         Ok(IsActivePlatform { search })

@@ -47,7 +47,7 @@ pub mod is_active {
         #[error(transparent)]
         InitAttributes(#[from] crate::config::attribute_stack::Error),
         #[error(transparent)]
-        InitPathspecDefaults(#[from] gix_pathspec::defaults::from_environment::Error),
+        InitPathspecDefaults(gix_error::Error),
         #[error(transparent)]
         ObtainIndex(#[from] crate::repository::index_or_load_from_head::Error),
     }

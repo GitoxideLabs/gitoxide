@@ -48,17 +48,8 @@ pub use gix_attributes as attributes;
 
 ///
 pub mod normalize {
-    use std::path::PathBuf;
-
     /// The error returned by [Pattern::normalize()](super::Pattern::normalize()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The path '{}' is not inside of the worktree '{}'", path.display(), worktree_path.display())]
-        AbsolutePathOutsideOfWorktree { path: PathBuf, worktree_path: PathBuf },
-        #[error("The path '{}' leaves the repository", path.display())]
-        OutsideOfWorktree { path: PathBuf },
-    }
+    pub type Error = gix_error::ValidationError;
 }
 
 mod pattern;

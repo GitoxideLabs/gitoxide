@@ -14,9 +14,9 @@ pub mod init {
         #[error(transparent)]
         Defaults(#[from] crate::repository::pathspec_defaults_ignore_case::Error),
         #[error(transparent)]
-        ParseSpec(#[from] gix_pathspec::parse::Error),
+        ParseSpec(gix_pathspec::parse::Error),
         #[error("Could not obtain the repository prefix as the relative path of the CWD as seen from the working tree")]
-        NormalizeSpec(#[from] gix_pathspec::normalize::Error),
+        NormalizeSpec(#[source] gix_pathspec::normalize::Error),
         #[error(transparent)]
         RepoPrefix(#[from] gix_path::realpath::Error),
     }
@@ -47,7 +47,8 @@ impl<'repo> Pathspec<'repo> {
         let patterns = patterns
             .into_iter()
             .map(move |p| parse(p.as_ref(), defaults))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(init::Error::ParseSpec)?;
         let needs_cache = patterns.iter().any(|p| !p.attributes.is_empty());
         let prefix = if patterns.is_empty() && !empty_patterns_match_prefix {
             None
@@ -62,7 +63,8 @@ impl<'repo> Pathspec<'repo> {
                 repo.options.current_dir_or_empty(),
                 gix_path::realpath::MAX_SYMLINKS,
             )?,
-        )?;
+        )
+        .map_err(init::Error::NormalizeSpec)?;
         let cache = needs_cache.then(make_attributes).transpose()?;
 
         gix_trace::debug!(
