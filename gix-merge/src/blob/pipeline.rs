@@ -4,12 +4,11 @@ use std::{
 };
 
 use bstr::BStr;
-use gix_error::{ErrorExt, NotFoundError};
 use gix_filter::{
     driver::apply::{Delay, MaybeDelayed},
     pipeline::convert::{ToGitOutcome, ToWorktreeOutcome, to_worktree},
 };
-use gix_object::{FindExt, tree::EntryKind};
+use gix_object::tree::EntryKind;
 
 use super::{Pipeline, ResourceKind};
 
@@ -113,36 +112,8 @@ pub enum Data {
 
 ///
 pub mod convert_to_mergeable {
-    use std::collections::TryReserveError;
-
-    use bstr::BString;
-    use gix_object::tree::EntryKind;
-
     /// The error returned by [Pipeline::convert_to_mergeable()](super::Pipeline::convert_to_mergeable()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Entry at '{rela_path}' must be regular file or symlink, but was {actual:?}")]
-        InvalidEntryKind { rela_path: BString, actual: EntryKind },
-        #[error("Entry at '{rela_path}' could not be read as symbolic link")]
-        ReadLink { rela_path: BString, source: std::io::Error },
-        #[error("Entry at '{rela_path}' could not be opened for reading or read from")]
-        OpenOrRead { rela_path: BString, source: std::io::Error },
-        #[error("Entry at '{rela_path}' could not be copied from a filter process to a memory buffer")]
-        StreamCopy { rela_path: BString, source: std::io::Error },
-        #[error(transparent)]
-        FindObject(#[from] gix_error::Error),
-        #[error(transparent)]
-        ConvertToWorktree(gix_error::Error),
-        #[error("Memory allocation failed")]
-        OutOfMemory(#[from] TryReserveError),
-    }
-
-    impl From<gix_object::find::existing_object::Error> for Error {
-        fn from(err: gix_object::find::existing_object::Error) -> Self {
-            Error::FindObject(err.into_error())
-        }
-    }
+    pub type Error = gix_error::Exn;
 }
 
 /// Conversion
@@ -178,11 +149,13 @@ impl Pipeline {
         convert: Mode,
         out: &mut Vec<u8>,
     ) -> Result<Option<Data>, convert_to_mergeable::Error> {
+        use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, message};
+
         if !matches!(mode, EntryKind::Blob | EntryKind::BlobExecutable) {
-            return Err(convert_to_mergeable::Error::InvalidEntryKind {
-                rela_path: rela_path.to_owned(),
-                actual: mode,
-            });
+            return Err(gix_error::ValidationError::new(format!(
+                "Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}"
+            ))
+            .raise_erased());
         }
 
         out.clear();
@@ -193,11 +166,8 @@ impl Pipeline {
                 self.path.push(gix_path::from_bstr(rela_path));
                 let size_in_bytes = (self.options.large_file_threshold_bytes > 0)
                     .then(|| {
-                        none_if_missing(self.path.metadata().map(|md| md.len())).map_err(|err| {
-                            convert_to_mergeable::Error::OpenOrRead {
-                                rela_path: rela_path.to_owned(),
-                                source: err,
-                            }
+                        none_if_missing(self.path.metadata().map(|md| md.len())).or_raise_erased(|| {
+                            message!("Entry at '{rela_path}' could not be opened for reading or read from")
                         })
                     })
                     .transpose()?;
@@ -205,11 +175,8 @@ impl Pipeline {
                     Some(None) => None, // missing as identified by the size check
                     Some(Some(size)) if size > self.options.large_file_threshold_bytes => Some(Data::TooLarge { size }),
                     _ => {
-                        let file = none_if_missing(std::fs::File::open(&self.path)).map_err(|err| {
-                            convert_to_mergeable::Error::OpenOrRead {
-                                rela_path: rela_path.to_owned(),
-                                source: err,
-                            }
+                        let file = none_if_missing(std::fs::File::open(&self.path)).or_raise_erased(|| {
+                            message!("Entry at '{rela_path}' could not be opened for reading or read from")
                         })?;
 
                         if let Some(file) = file {
@@ -230,24 +197,23 @@ impl Pipeline {
 
                                     match res {
                                         ToGitOutcome::Unchanged(mut file) => {
-                                            file.read_to_end(out).map_err(|err| {
-                                                convert_to_mergeable::Error::OpenOrRead {
-                                                    rela_path: rela_path.to_owned(),
-                                                    source: err,
-                                                }
+                                            file.read_to_end(out).or_raise_erased(|| {
+                                                message!(
+                                                    "Entry at '{rela_path}' could not be opened for reading or read from"
+                                                )
                                             })?;
                                         }
                                         ToGitOutcome::Process(mut stream) => {
-                                            stream.read_to_end(out).map_err(|err| {
-                                                convert_to_mergeable::Error::OpenOrRead {
-                                                    rela_path: rela_path.to_owned(),
-                                                    source: err,
-                                                }
+                                            stream.read_to_end(out).or_raise_erased(|| {
+                                                message!(
+                                                    "Entry at '{rela_path}' could not be opened for reading or read from"
+                                                )
                                             })?;
                                         }
                                         ToGitOutcome::Buffer(buf) => {
                                             out.clear();
-                                            out.try_reserve(buf.len())?;
+                                            out.try_reserve(buf.len())
+                                                .or_raise_erased(|| message("Memory allocation failed"))?;
                                             out.extend_from_slice(buf);
                                         }
                                     }
@@ -266,44 +232,50 @@ impl Pipeline {
                 let data = if id.is_null() {
                     None
                 } else {
-                    let header = objects.try_header(id)?.ok_or_else(|| {
-                        NotFoundError::new(format!("An object with id {id} could not be found")).raise_erased()
-                    })?;
+                    let header = objects
+                        .try_header(id)
+                        .or_raise_erased(|| message!("Could not find object header for {id}"))?
+                        .ok_or_raise_erased(|| {
+                            NotFoundError::new(format!("An object with id {id} could not be found"))
+                        })?;
                     let is_binary = self.options.large_file_threshold_bytes > 0
                         && header.size > self.options.large_file_threshold_bytes;
                     let data = if is_binary {
                         Data::TooLarge { size: header.size }
                     } else {
-                        objects.find(id, out)?;
+                        objects
+                            .try_find(id, out)
+                            .or_erased()
+                            .or_raise_erased(|| message!("Could not find object {id}"))?
+                            .ok_or_raise_erased(|| {
+                                NotFoundError::new(format!("An object with id {id} could not be found"))
+                            })?;
 
                         if convert == Mode::Renormalize {
                             {
-                                let res = self
-                                    .filter
-                                    .convert_to_worktree(
-                                        out,
-                                        rela_path,
-                                        attributes,
-                                        to_worktree::Options {
-                                            can_delay: Delay::Forbid,
-                                            unknown_encoding: to_worktree::UnknownEncoding::Fail,
-                                        },
-                                    )
-                                    .map_err(|err| convert_to_mergeable::Error::ConvertToWorktree(err.into_error()))?;
+                                let res = self.filter.convert_to_worktree(
+                                    out,
+                                    rela_path,
+                                    attributes,
+                                    to_worktree::Options {
+                                        can_delay: Delay::Forbid,
+                                        unknown_encoding: to_worktree::UnknownEncoding::Fail,
+                                    },
+                                )?;
 
                                 match res {
                                     ToWorktreeOutcome::Unchanged(_) => {}
                                     ToWorktreeOutcome::Buffer(src) => {
                                         out.clear();
-                                        out.try_reserve(src.len())?;
+                                        out.try_reserve(src.len())
+                                            .or_raise_erased(|| message("Memory allocation failed"))?;
                                         out.extend_from_slice(src);
                                     }
                                     ToWorktreeOutcome::Process(MaybeDelayed::Immediate(mut stream)) => {
-                                        std::io::copy(&mut stream, out).map_err(|err| {
-                                            convert_to_mergeable::Error::StreamCopy {
-                                                rela_path: rela_path.to_owned(),
-                                                source: err,
-                                            }
+                                        std::io::copy(&mut stream, out).or_raise_erased(|| {
+                                            message!(
+                                                "Entry at '{rela_path}' could not be copied from a filter process to a memory buffer"
+                                            )
                                         })?;
                                     }
                                     ToWorktreeOutcome::Process(MaybeDelayed::Delayed(_)) => {
@@ -322,16 +294,14 @@ impl Pipeline {
                             match res {
                                 ToGitOutcome::Unchanged(_) => {}
                                 ToGitOutcome::Process(mut stream) => {
-                                    stream
-                                        .read_to_end(out)
-                                        .map_err(|err| convert_to_mergeable::Error::OpenOrRead {
-                                            rela_path: rela_path.to_owned(),
-                                            source: err,
-                                        })?;
+                                    stream.read_to_end(out).or_raise_erased(|| {
+                                        message!("Entry at '{rela_path}' could not be opened for reading or read from")
+                                    })?;
                                 }
                                 ToGitOutcome::Buffer(buf) => {
                                     out.clear();
-                                    out.try_reserve(buf.len())?;
+                                    out.try_reserve(buf.len())
+                                        .or_raise_erased(|| message("Memory allocation failed"))?;
                                     out.extend_from_slice(buf);
                                 }
                             }

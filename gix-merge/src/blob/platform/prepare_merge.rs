@@ -1,6 +1,7 @@
 use std::{num::NonZeroU8, str::FromStr};
 
-use bstr::{BStr, BString, ByteSlice};
+use bstr::{BStr, ByteSlice};
+use gix_error::{OptionExt, ResultExt, message};
 use gix_filter::attributes;
 
 use crate::blob::{
@@ -10,18 +11,7 @@ use crate::blob::{
 };
 
 /// The error returned by [Platform::prepare_merge_state()](Platform::prepare_merge()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("The 'current', 'ancestor' or 'other' resource for the merge operation were not set")]
-    UnsetResource,
-    #[error("Failed to obtain attributes for {kind:?} resource at '{rela_path}'")]
-    Attributes {
-        rela_path: BString,
-        kind: ResourceKind,
-        source: std::io::Error,
-    },
-}
+pub type Error = gix_error::Exn<gix_error::Message>;
 
 /// Preparation
 impl Platform {
@@ -38,17 +28,25 @@ impl Platform {
         objects: &impl gix_object::Find,
         mut options: merge::Options,
     ) -> Result<PlatformRef<'_>, Error> {
-        let current = self.current.as_ref().ok_or(Error::UnsetResource)?;
-        let ancestor = self.ancestor.as_ref().ok_or(Error::UnsetResource)?;
-        let other = self.other.as_ref().ok_or(Error::UnsetResource)?;
+        let current = self.current.as_ref().ok_or_raise(|| {
+            message("The 'current', 'ancestor' or 'other' resource for the merge operation were not set")
+        })?;
+        let ancestor = self.ancestor.as_ref().ok_or_raise(|| {
+            message("The 'current', 'ancestor' or 'other' resource for the merge operation were not set")
+        })?;
+        let other = self.other.as_ref().ok_or_raise(|| {
+            message("The 'current', 'ancestor' or 'other' resource for the merge operation were not set")
+        })?;
 
         let entry = self
             .attr_stack
             .at_entry(current.rela_path.as_bstr(), None, objects)
-            .map_err(|err| Error::Attributes {
-                source: err,
-                kind: ResourceKind::CurrentOrOurs,
-                rela_path: current.rela_path.clone(),
+            .or_raise(|| {
+                message!(
+                    "Failed to obtain attributes for {:?} resource at '{}'",
+                    ResourceKind::CurrentOrOurs,
+                    current.rela_path
+                )
             })?;
         entry.matching_attributes(&mut self.attrs);
         let mut attrs = self.attrs.iter_selected();
