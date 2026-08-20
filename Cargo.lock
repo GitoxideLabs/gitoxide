@@ -2395,6 +2395,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-reftable"
+version = "0.0.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "gix-hash",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "gix-revision"
 version = "0.48.0"
 dependencies = [
