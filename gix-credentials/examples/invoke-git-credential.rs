@@ -1,5 +1,5 @@
 /// Invokes `git credential` with the passed url as argument and prints obtained credentials.
-pub fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let out = gix_credentials::builtin(gix_credentials::helper::Action::get_for_url(
         std::env::args()
             .nth(1)

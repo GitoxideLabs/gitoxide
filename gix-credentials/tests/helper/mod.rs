@@ -19,7 +19,27 @@ mod invoke_outcome_to_helper_result {
             action,
         )
         .unwrap_err();
-        assert!(matches!(err, protocol::Error::IdentityMissing { .. }));
+        assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    }
+
+    #[test]
+    fn invalid_context_still_reports_missing_identity() {
+        for value in ["invalid\nvalue", "invalid\0value", "invalid\rvalue"] {
+            for context in [
+                protocol::Context::from_url(value, Default::default()),
+                protocol::Context {
+                    path: Some(value.into()),
+                    ..Default::default()
+                },
+            ] {
+                let err = helper_outcome_to_result(None, helper::Action::Get(context))
+                    .expect_err("Missing credentials must return an error even when the context is invalid");
+                assert!(
+                    err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
+                    "Invalid context must not replace the missing-credentials classification"
+                );
+            }
+        }
     }
 
     #[test]
@@ -36,7 +56,10 @@ mod invoke_outcome_to_helper_result {
             action,
         )
         .unwrap_err();
-        assert!(matches!(err, protocol::Error::Quit));
+        assert_eq!(
+            err.to_string(),
+            "The handler asked to stop trying to obtain credentials"
+        );
     }
 }
 
