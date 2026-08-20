@@ -358,22 +358,3 @@ struct Statistics {
     counts: pack::data::output::count::objects::Outcome,
     entries: pack::data::output::entry::iter_from_counts::Outcome,
 }
-
-pub mod input_iteration {
-    use gix::{hash, traverse};
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        #[error("input objects couldn't be iterated completely")]
-        Iteration(#[source] gix::Error),
-        #[error("An error occurred while reading hashes from standard input")]
-        InputLinesIo(#[from] std::io::Error),
-        #[error("Could not decode hex hash provided on standard input")]
-        HashDecode(#[from] hash::decode::Error),
-    }
-
-    impl From<traverse::commit::simple::Error> for Error {
-        fn from(err: traverse::commit::simple::Error) -> Self {
-            Error::Iteration(err.into_error())
-        }
-    }
-}
