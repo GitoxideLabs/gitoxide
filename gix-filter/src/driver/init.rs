@@ -8,20 +8,7 @@ use crate::{
 };
 
 /// The error returned by [State::maybe_launch_process()][super::State::maybe_launch_process()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Failed to spawn driver: {command:?}")]
-    SpawnCommand {
-        source: std::io::Error,
-        command: std::process::Command,
-    },
-    #[error("Process handshake with command {command:?} failed")]
-    ProcessHandshake {
-        source: process::client::handshake::Error,
-        command: std::process::Command,
-    },
-}
+pub type Error = gix_error::Exn<gix_error::Message>;
 
 /// Lifecycle
 impl State {
@@ -41,12 +28,9 @@ impl State {
                     Some(c) => c,
                     None => {
                         let (child, cmd) = spawn_driver(process.clone(), &self.context)?;
-                        process::Client::handshake(child, "git-filter", &[2], &["clean", "smudge", "delay"]).map_err(
-                            |err| Error::ProcessHandshake {
-                                source: err,
-                                command: cmd,
-                            },
-                        )?
+                        use gix_error::{ResultExt, message};
+                        process::Client::handshake(child, "git-filter", &[2], &["clean", "smudge", "delay"])
+                            .or_raise(|| message!("Process handshake with command {cmd:?} failed"))?
                     }
                 };
 
@@ -101,10 +85,8 @@ fn spawn_driver(
     let child = match cmd.spawn() {
         Ok(child) => child,
         Err(err) => {
-            return Err(Error::SpawnCommand {
-                source: err,
-                command: cmd,
-            });
+            use gix_error::ErrorExt;
+            return Err(err.and_raise(gix_error::message!("Failed to spawn driver: {cmd:?}")));
         }
     };
     Ok((child, cmd))

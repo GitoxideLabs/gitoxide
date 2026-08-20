@@ -11,47 +11,18 @@ use crate::driver::{
 ///
 pub mod handshake {
     /// The error returned by [Client::handshake()][super::Client::handshake()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Failed to read or write to the process")]
-        Io(#[from] std::io::Error),
-        #[error("{msg} '{actual}'")]
-        Protocol { msg: String, actual: String },
-        #[error("The server sent the '{name}' capability which isn't among the ones we desire can support")]
-        UnsupportedCapability { name: String },
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 }
 
 ///
 pub mod invoke {
     /// The error returned by [Client::invoke()][super::Client::invoke()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Failed to read or write to the process")]
-        Io(#[from] std::io::Error),
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 
     ///
     pub mod without_content {
         /// The error returned by [Client::invoke_without_content()][super::super::Client::invoke_without_content()].
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error("Failed to read or write to the process")]
-            Io(#[from] std::io::Error),
-            #[error(transparent)]
-            PacketlineDecode(#[from] gix_packetline::decode::Error),
-        }
-
-        impl From<super::Error> for Error {
-            fn from(value: super::Error) -> Self {
-                match value {
-                    super::Error::Io(err) => Error::Io(err),
-                }
-            }
-        }
+        pub type Error = gix_error::Exn<gix_error::Message>;
     }
 }
 
@@ -66,13 +37,18 @@ impl Client {
         versions: &[usize],
         desired_capabilities: &[&str],
     ) -> Result<Self, handshake::Error> {
+        use gix_error::{ErrorExt, ResultExt, message};
+
         let mut out = Writer::new(process.stdin.take().expect("configured stdin when spawning"));
-        out.write_all(format!("{welcome_prefix}-client").as_bytes())?;
+        out.write_all(format!("{welcome_prefix}-client").as_bytes())
+            .or_raise(|| message("Failed to read or write to the process"))?;
         for version in versions {
-            out.write_all(format!("version={version}").as_bytes())?;
+            out.write_all(format!("version={version}").as_bytes())
+                .or_raise(|| message("Failed to read or write to the process"))?;
         }
-        encode::flush_to_write(out.inner_mut())?;
-        out.flush()?;
+        encode::flush_to_write(out.inner_mut()).or_raise(|| message("Failed to read or write to the process"))?;
+        out.flush()
+            .or_raise(|| message("Failed to read or write to the process"))?;
 
         let mut input = StreamingPeekableIter::new(
             process.stdout.take().expect("configured stdout when spawning"),
@@ -81,56 +57,58 @@ impl Client {
         );
         let mut read = input.as_read();
         let mut buf = String::new();
-        read.read_line_to_string(&mut buf)?;
+        read.read_line_to_string(&mut buf)
+            .or_raise(|| message("Failed to read or write to the process"))?;
         if buf
             .strip_prefix(welcome_prefix)
             .is_none_or(|rest| rest.trim_end() != "-server")
         {
-            return Err(handshake::Error::Protocol {
-                msg: format!("Wanted '{welcome_prefix}-server, got "),
-                actual: buf,
-            });
+            return Err(message!("Wanted '{welcome_prefix}-server, got  '{buf}'").raise());
         }
 
         buf.clear();
-        read.read_line_to_string(&mut buf)?;
+        read.read_line_to_string(&mut buf)
+            .or_raise(|| message("Failed to read or write to the process"))?;
         let chosen_version = match buf
             .strip_prefix("version=")
             .and_then(|version| usize::from_str(version.trim_end()).ok())
         {
             Some(version) => version,
             None => {
-                return Err(handshake::Error::Protocol {
-                    msg: "Needed 'version=<integer>', got ".into(),
-                    actual: buf,
-                });
+                return Err(message!("Needed 'version=<integer>', got  '{buf}'").raise());
             }
         };
 
         if !versions.contains(&chosen_version) {
-            return Err(handshake::Error::Protocol {
-                msg: format!("Server offered {chosen_version}, we only support "),
-                actual: versions.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "),
-            });
+            return Err(message!(
+                "Server offered {chosen_version}, we only support  '{}'",
+                versions.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+            )
+            .raise());
         }
 
-        if read.read_line_to_string(&mut buf)? != 0 {
-            return Err(handshake::Error::Protocol {
-                msg: "expected flush packet, got".into(),
-                actual: buf,
-            });
+        if read
+            .read_line_to_string(&mut buf)
+            .or_raise(|| message("Failed to read or write to the process"))?
+            != 0
+        {
+            return Err(message!("expected flush packet, got '{buf}'").raise());
         }
         for capability in desired_capabilities {
-            out.write_all(format!("capability={capability}").as_bytes())?;
+            out.write_all(format!("capability={capability}").as_bytes())
+                .or_raise(|| message("Failed to read or write to the process"))?;
         }
-        encode::flush_to_write(out.inner_mut())?;
-        out.flush()?;
+        encode::flush_to_write(out.inner_mut()).or_raise(|| message("Failed to read or write to the process"))?;
+        out.flush()
+            .or_raise(|| message("Failed to read or write to the process"))?;
 
         read.reset_with(&[gix_packetline::PacketLineRef::Flush]);
         let mut capabilities = HashSet::new();
         loop {
             buf.clear();
-            let num_read = read.read_line_to_string(&mut buf)?;
+            let num_read = read
+                .read_line_to_string(&mut buf)
+                .or_raise(|| message("Failed to read or write to the process"))?;
             if num_read == 0 {
                 break;
             }
@@ -138,7 +116,10 @@ impl Client {
                 Some(cap) => {
                     let cap = cap.trim_end();
                     if !desired_capabilities.contains(&cap) {
-                        return Err(handshake::Error::UnsupportedCapability { name: cap.into() });
+                        return Err(message!(
+                            "The server sent the '{cap}' capability which isn't among the ones we desire can support"
+                        )
+                        .raise());
                     }
                     capabilities.insert(cap.to_owned());
                 }
@@ -163,11 +144,17 @@ impl Client {
         meta: &mut dyn Iterator<Item = (&str, BString)>,
         content: &mut dyn std::io::Read,
     ) -> Result<process::Status, invoke::Error> {
+        use gix_error::{ResultExt, message};
+
         self.send_command_and_meta(command, meta)?;
-        std::io::copy(content, &mut self.input)?;
-        encode::flush_to_write(self.input.inner_mut())?;
-        self.input.flush()?;
-        Ok(self.read_status()?)
+        std::io::copy(content, &mut self.input).or_raise(|| message("Failed to read or write to the process"))?;
+        encode::flush_to_write(self.input.inner_mut())
+            .or_raise(|| message("Failed to read or write to the process"))?;
+        self.input
+            .flush()
+            .or_raise(|| message("Failed to read or write to the process"))?;
+        self.read_status()
+            .or_raise(|| message("Failed to read or write to the process"))
     }
 
     /// Invoke `command` while passing `meta` data, but don't send any content, and return their status.
@@ -180,15 +167,21 @@ impl Client {
         meta: &mut dyn Iterator<Item = (&'a str, BString)>,
         inspect_line: &mut dyn FnMut(&BStr),
     ) -> Result<process::Status, invoke::without_content::Error> {
+        use gix_error::{ResultExt, message};
+
         self.send_command_and_meta(command, meta)?;
         while let Some(data) = self.out.read_line() {
-            let line = data??;
+            let line = data
+                .or_raise(|| message("Failed to read from the process"))?
+                .or_raise(|| message("Failed to decode a packet line from the process"))?;
             if let Some(line) = line.as_text() {
                 inspect_line(line.as_bstr());
             }
         }
         self.out.reset_with(&[gix_packetline::PacketLineRef::Flush]);
-        let status = self.read_status()?;
+        let status = self
+            .read_status()
+            .or_raise(|| message("Failed to read or write to the process"))?;
         Ok(status)
     }
 
@@ -214,16 +207,23 @@ impl Client {
         command: &str,
         meta: &mut dyn Iterator<Item = (&str, BString)>,
     ) -> Result<(), invoke::Error> {
-        self.input.write_all(format!("command={command}").as_bytes())?;
+        use gix_error::{ResultExt, message};
+
+        self.input
+            .write_all(format!("command={command}").as_bytes())
+            .or_raise(|| message("Failed to read or write to the process"))?;
         let mut buf = BString::default();
         for (key, value) in meta {
             buf.clear();
             buf.push_str(key);
             buf.push(b'=');
             buf.push_str(&value);
-            self.input.write_all(&buf)?;
+            self.input
+                .write_all(&buf)
+                .or_raise(|| message("Failed to read or write to the process"))?;
         }
-        encode::flush_to_write(self.input.inner_mut())?;
+        encode::flush_to_write(self.input.inner_mut())
+            .or_raise(|| message("Failed to read or write to the process"))?;
         Ok(())
     }
 }

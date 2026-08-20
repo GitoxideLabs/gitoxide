@@ -190,10 +190,10 @@ fn round_trip_check() -> crate::Result {
     Ok(())
 }
 
-fn no_call(_buf: &mut Vec<u8>) -> Result<Option<()>, Box<dyn std::error::Error + Send + Sync>> {
+fn no_call(_buf: &mut Vec<u8>) -> Result<Option<()>, gix_error::Exn> {
     unreachable!("index function will not be called")
 }
 
-fn no_object_in_index(_buf: &mut Vec<u8>) -> Result<Option<()>, Box<dyn std::error::Error + Send + Sync>> {
+fn no_object_in_index(_buf: &mut Vec<u8>) -> Result<Option<()>, gix_error::Exn> {
     Ok(None)
 }

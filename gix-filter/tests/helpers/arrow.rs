@@ -9,7 +9,7 @@ use gix_filter::driver::process;
 /// Visible marker used to demonstrate clean/smudge round trips in filter-driver tests.
 static PREFIX: &str = "➡";
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut args = std::env::args();
     let sub_command = args.nth(1).ok_or("Need sub-command")?;
     let next_arg = args.next(); // possibly %f
