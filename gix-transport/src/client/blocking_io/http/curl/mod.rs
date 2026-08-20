@@ -35,7 +35,7 @@ pub enum Error {
     #[error("Could not finish reading all data to post to the remote")]
     ReadPostBody(#[from] std::io::Error),
     #[error(transparent)]
-    Authenticate(#[from] gix_credentials::protocol::Error),
+    Authenticate(gix_error::Error),
 }
 
 impl crate::IsSpuriousError for Error {

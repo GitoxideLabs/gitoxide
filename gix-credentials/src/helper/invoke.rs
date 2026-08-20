@@ -1,5 +1,7 @@
 use std::io::Read;
 
+use gix_error::{ErrorExt, ResultExt, RetryableError, message};
+
 use crate::helper::{Action, Context, Error, NextAction, Outcome, Result};
 
 impl Action {
@@ -27,7 +29,7 @@ pub fn invoke(helper: &mut crate::Program, action: &Action) -> Result {
     match raw(helper, action)? {
         None => Ok(None),
         Some(stdout) => {
-            let ctx = Context::from_bytes(stdout.as_slice(), options)?;
+            let ctx = Context::from_bytes(stdout.as_slice(), options).or_erased()?;
             Ok(Some(Outcome {
                 username: ctx.username,
                 password: ctx.password,
@@ -43,11 +45,12 @@ pub fn invoke(helper: &mut crate::Program, action: &Action) -> Result {
 }
 
 pub(crate) fn raw(helper: &mut crate::Program, action: &Action) -> std::result::Result<Option<Vec<u8>>, Error> {
-    let (mut stdin, stdout) = helper.start(action)?;
+    let communication_error = || message("An IO error occurred while communicating to the credentials helper");
+    let (mut stdin, stdout) = helper.start(action).or_raise_erased(communication_error)?;
     if let (Action::Get(_), None) = (&action, &stdout) {
         panic!("BUG: `Helper` impls must return an output handle to read output from if Action::Get is provided")
     }
-    action.send(&mut stdin)?;
+    action.send(&mut stdin).or_raise_erased(communication_error)?;
     drop(stdin);
     let stdout = stdout
         .map(|mut stdout| {
@@ -55,12 +58,12 @@ pub(crate) fn raw(helper: &mut crate::Program, action: &Action) -> std::result::
             stdout.read_to_end(&mut buf).map(|_| buf)
         })
         .transpose()
-        .map_err(|err| Error::CredentialsHelperFailed { source: err })?;
+        .map_err(|err| RetryableError::new(err).raise_erased())?;
     helper.finish().map_err(|err| {
         if err.kind() == std::io::ErrorKind::Other {
-            Error::CredentialsHelperFailed { source: err }
+            RetryableError::new(err).raise_erased()
         } else {
-            err.into()
+            err.and_raise(communication_error()).erased()
         }
     })?;
 

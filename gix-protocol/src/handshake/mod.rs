@@ -164,14 +164,14 @@ mod error {
     use bstr::BString;
     use gix_transport::client;
 
-    use crate::{credentials, handshake::refs};
+    use crate::handshake::refs;
 
     /// The error returned by [`handshake()`][crate::handshake()].
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
     pub enum Error {
         #[error("Failed to obtain credentials")]
-        Credentials(#[from] credentials::protocol::Error),
+        Credentials(#[source] gix_error::Error),
         #[error("No credentials were returned at all as if the credential helper isn't functioning unknowingly")]
         EmptyCredentials,
         #[error("Credentials provided for \"{url}\" were not accepted by the remote")]

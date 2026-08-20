@@ -46,7 +46,6 @@ type Cursor = std::io::Cursor<Vec<u8>>;
 #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
 type Cursor = futures_lite::io::Cursor<Vec<u8>>;
 
-#[expect(clippy::result_large_err)]
 fn helper_unused(_action: gix_credentials::helper::Action) -> gix_credentials::protocol::Result {
     panic!("Call to credentials helper is unexpected")
 }

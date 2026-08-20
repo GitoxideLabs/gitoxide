@@ -136,10 +136,7 @@ username=bob";
     #[test]
     fn null_bytes_when_decoding() {
         let err = Context::from_bytes(b"url=https://foo\0", ContextOptions::default()).unwrap_err();
-        assert!(matches!(
-            err,
-            gix_credentials::protocol::context::decode::Error::Encoding(_)
-        ));
+        assert!(err.message.contains("must not contain null bytes or newlines"));
     }
 
     #[test]
