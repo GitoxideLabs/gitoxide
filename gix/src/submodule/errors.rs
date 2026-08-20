@@ -5,7 +5,7 @@ pub mod open_modules_file {
     #[expect(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        Configuration(#[from] gix_submodule::init::Error),
+        Configuration(#[from] gix_error::Error),
         #[error("Could not read '.gitmodules' file")]
         Io(#[from] std::io::Error),
     }
@@ -41,7 +41,7 @@ pub mod is_active {
     #[expect(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        InitIsActivePlatform(#[from] gix_submodule::is_active_platform::Error),
+        InitIsActivePlatform(gix_error::Error),
         #[error(transparent)]
         QueryIsActive(#[from] gix_error::Error),
         #[error(transparent)]
