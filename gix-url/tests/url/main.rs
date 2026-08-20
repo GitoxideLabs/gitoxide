@@ -1,5 +1,4 @@
-pub type Error = Box<dyn std::error::Error>;
-pub type Result = std::result::Result<(), Error>;
+pub type Result = gix_error::TestResult;
 
 mod access;
 mod baseline;

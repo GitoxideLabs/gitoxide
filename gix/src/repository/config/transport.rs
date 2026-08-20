@@ -26,7 +26,7 @@ impl crate::Repository {
         url: impl Into<&'a BStr>,
         remote_name: Option<&BStr>,
     ) -> Result<Option<Box<dyn Any>>, crate::config::transport::Error> {
-        let url = gix_url::parse(url.into())?;
+        let url = gix_url::parse(url.into()).map_err(gix_error::Exn::into_error)?;
         use gix_url::Scheme::*;
 
         match &url.scheme {
@@ -252,7 +252,8 @@ impl crate::Repository {
                         .as_deref()
                         .filter(|url| !url.is_empty())
                         .map(gix_url::parse)
-                        .transpose()?
+                        .transpose()
+                        .map_err(gix_error::Exn::into_error)?
                         .filter(|url| url.user().is_some())
                         .map(|url| -> Result<_, config::transport::http::Error> {
                             let (mut cascade, action_with_normalized_url, prompt_opts) =
