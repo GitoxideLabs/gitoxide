@@ -21,7 +21,7 @@ pub enum Error {
         source: crate::config::transport::Error,
     },
     #[error("Failed to configure the transport layer")]
-    ConfigureTransport(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+    ConfigureTransport(#[from] gix_error::Error),
     #[error(transparent)]
     Handshake(gix_error::Error),
     #[error(transparent)]
@@ -30,10 +30,10 @@ pub enum Error {
     ConfigureCredentials(#[from] crate::config::credential_helpers::Error),
 }
 
-impl gix_protocol::transport::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
+impl Error {
+    pub(crate) fn can_retry(&self) -> bool {
         match self {
-            Error::Transport(err) => err.is_spurious(),
+            Error::Transport(err) => err.can_retry(),
             Error::Handshake(err) => err.can_retry(),
             _ => false,
         }
@@ -151,7 +151,10 @@ where
                 })?;
         }
         if let Some(config) = self.transport_options.as_ref() {
-            self.transport.inner.configure(&**config)?;
+            self.transport
+                .inner
+                .configure(&**config)
+                .map_err(gix_error::Exn::into_error)?;
         }
         let mut handshake = gix_protocol::handshake(
             &mut self.transport.inner,

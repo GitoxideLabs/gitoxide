@@ -111,10 +111,10 @@ pub mod prepare {
         RefMap(#[from] crate::remote::ref_map::Error),
     }
 
-    impl gix_protocol::transport::IsSpuriousError for Error {
-        fn is_spurious(&self) -> bool {
+    impl Error {
+        pub(crate) fn can_retry(&self) -> bool {
             match self {
-                Error::RefMap(err) => err.is_spurious(),
+                Error::RefMap(err) => err.can_retry(),
                 _ => false,
             }
         }
