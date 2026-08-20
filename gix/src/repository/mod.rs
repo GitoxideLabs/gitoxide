@@ -487,7 +487,7 @@ pub mod pathspec_defaults_ignore_case {
         #[error("Filesystem configuration could not be obtained to learn about case sensitivity")]
         FilesystemConfig(#[from] crate::config::boolean::Error),
         #[error(transparent)]
-        Defaults(#[from] gix_pathspec::defaults::from_environment::Error),
+        Defaults(#[from] gix_error::Error),
     }
 }
 

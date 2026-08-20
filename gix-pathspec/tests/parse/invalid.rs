@@ -1,6 +1,12 @@
-use gix_pathspec::parse::Error;
+use gix_error::ValidationError;
 
 use crate::parse::check_against_baseline;
+
+fn assert_validation(input: &str, message: &str) -> ValidationError {
+    let err = gix_pathspec::parse(input.as_bytes(), Default::default()).expect_err("pathspec is invalid");
+    assert_eq!(err.message, message);
+    err
+}
 
 #[test]
 fn empty_input() {
@@ -8,9 +14,8 @@ fn empty_input() {
 
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
-    let output = gix_pathspec::parse(input.as_bytes(), Default::default());
-    assert!(output.is_err());
-    assert!(matches!(output.unwrap_err(), Error::EmptyString));
+    let err = assert_validation(input, "An empty string is not a valid pathspec");
+    assert_eq!(err.input.as_ref().map(|input| input.as_slice()), Some(b"".as_slice()));
 }
 
 #[test]
@@ -23,9 +28,8 @@ fn invalid_short_signatures() {
     for input in inputs.into_iter() {
         assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
-        let output = gix_pathspec::parse(input.as_bytes(), Default::default());
-        assert!(output.is_err());
-        assert!(matches!(output.unwrap_err(), Error::Unimplemented { .. }));
+        let err = assert_validation(input, "Unimplemented short keyword");
+        assert_eq!(err.input.as_ref().map(|input| input.len()), Some(1));
     }
 }
 
@@ -41,9 +45,8 @@ fn invalid_keywords() {
     for input in inputs.into_iter() {
         assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
-        let output = gix_pathspec::parse(input.as_bytes(), Default::default());
-        assert!(output.is_err());
-        assert!(matches!(output.unwrap_err(), Error::InvalidKeyword { .. }));
+        let err = assert_validation(input, "Found invalid keyword in pathspec signature");
+        assert!(err.input.is_some(), "the invalid keyword is retained");
     }
 }
 
@@ -63,9 +66,8 @@ fn invalid_attributes() {
     for input in inputs {
         assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
-        let output = gix_pathspec::parse(input.as_bytes(), Default::default());
-        assert!(output.is_err(), "This pathspec did not produce an error {input}");
-        assert!(matches!(output.unwrap_err(), Error::InvalidAttribute(_)));
+        let err = assert_validation(input, "Attribute has non-ascii characters or starts with '-'");
+        assert!(err.input.is_some(), "the invalid attribute name is retained");
     }
 }
 
@@ -74,13 +76,8 @@ fn attribute_values_are_not_split_on_non_space_blanks() {
     let input = ":(attr:a=one\tb=two)some/path";
 
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
-    assert!(
-        matches!(
-            gix_pathspec::parse(input.as_bytes(), Default::default()),
-            Err(Error::InvalidAttributeValue { .. })
-        ),
-        "the tab belongs to the value and makes it invalid"
-    );
+    let err = assert_validation(input, "Invalid character in attribute value");
+    assert_eq!(err.input.as_ref().map(|input| input.as_slice()), Some(b"\t".as_slice()));
 }
 
 #[test]
@@ -99,12 +96,8 @@ fn invalid_attribute_values() {
     for input in inputs {
         assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
-        let output = gix_pathspec::parse(input.as_bytes(), Default::default());
-        assert!(output.is_err(), "This pathspec did not produce an error {input}");
-        assert!(
-            matches!(output.unwrap_err(), Error::InvalidAttributeValue { .. }),
-            "Errors did not match for pathspec: {input}"
-        );
+        let err = assert_validation(input, "Invalid character in attribute value");
+        assert_eq!(err.input.as_ref().map(|input| input.len()), Some(1));
     }
 }
 
@@ -119,9 +112,11 @@ fn escape_character_at_end_of_attribute_value() {
     for input in inputs {
         assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
-        let output = gix_pathspec::parse(input.as_bytes(), Default::default());
-        assert!(output.is_err(), "This pathspec did not produce an error {input}");
-        assert!(matches!(output.unwrap_err(), Error::TrailingEscapeCharacter));
+        let err = assert_validation(
+            input,
+            r"Escape character '\' is not allowed as the last character in an attribute value",
+        );
+        assert!(err.input.is_some(), "the invalid attribute value is retained");
     }
 }
 
@@ -131,9 +126,7 @@ fn empty_attribute_specification() {
 
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
-    let output = gix_pathspec::parse(input.as_bytes(), Default::default());
-    assert!(output.is_err());
-    assert!(matches!(output.unwrap_err(), Error::EmptyAttribute));
+    assert_validation(input, "Attribute specification cannot be empty");
 }
 
 #[test]
@@ -142,9 +135,11 @@ fn multiple_attribute_specifications() {
 
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
-    let output = gix_pathspec::parse(input.as_bytes(), Default::default());
-    assert!(output.is_err());
-    assert!(matches!(output.unwrap_err(), Error::MultipleAttributeSpecifications));
+    let err = assert_validation(
+        input,
+        "Only one attribute specification is allowed in the same pathspec",
+    );
+    assert!(err.input.is_some(), "the duplicate attribute specification is retained");
 }
 
 #[test]
@@ -153,9 +148,8 @@ fn missing_parentheses() {
 
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
-    let output = gix_pathspec::parse(input.as_bytes(), Default::default());
-    assert!(output.is_err());
-    assert!(matches!(output.unwrap_err(), Error::MissingClosingParenthesis));
+    let err = assert_validation(input, "Missing ')' at the end of pathspec signature");
+    assert_eq!(err.input.as_ref().map(|input| input.as_slice()), Some(input.as_bytes()));
 }
 
 #[test]
@@ -164,7 +158,12 @@ fn glob_and_literal_keywords_present() {
 
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
-    let output = gix_pathspec::parse(input.as_bytes(), Default::default());
-    assert!(output.is_err());
-    assert!(matches!(output.unwrap_err(), Error::IncompatibleSearchModes));
+    let err = assert_validation(
+        input,
+        "'literal' and 'glob' keywords cannot be used together in the same pathspec",
+    );
+    assert_eq!(
+        err.input.as_ref().map(|input| input.as_slice()),
+        Some(b"literal".as_slice())
+    );
 }

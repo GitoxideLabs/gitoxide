@@ -60,9 +60,13 @@ impl<'repo> SharedState<'repo> {
     ) -> Result<(RefMut<'_, IsActivePlatform>, RefMut<'_, gix_worktree::Stack>), is_active::Error> {
         let mut state = self.is_active.borrow_mut();
         if state.is_none() {
-            let platform = self
-                .modules
-                .is_active_platform(&self.repo.config.resolved, self.repo.config.pathspec_defaults()?)?;
+            let platform = self.modules.is_active_platform(
+                &self.repo.config.resolved,
+                self.repo
+                    .config
+                    .pathspec_defaults()
+                    .map_err(|err| is_active::Error::InitPathspecDefaults(err.into_error()))?,
+            )?;
             let index = self.index()?;
             let attributes = self
                 .repo

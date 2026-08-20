@@ -7,9 +7,9 @@ use crate::IsActivePlatform;
 #[expect(missing_docs)]
 pub enum Error {
     #[error(transparent)]
-    NormalizePattern(#[from] gix_pathspec::normalize::Error),
+    NormalizePattern(gix_pathspec::normalize::Error),
     #[error(transparent)]
-    ParsePattern(#[from] gix_pathspec::parse::Error),
+    ParsePattern(gix_pathspec::parse::Error),
 }
 
 impl IsActivePlatform {
