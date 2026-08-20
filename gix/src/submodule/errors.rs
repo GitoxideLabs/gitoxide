@@ -96,7 +96,7 @@ pub mod git_dir_try_old_form {
             gitdir_file: std::path::PathBuf,
             target: Option<std::path::PathBuf>,
             #[source]
-            source: Option<gix_discover::path::from_gitdir_file::Error>,
+            source: Option<gix_error::Error>,
         },
         #[error(transparent)]
         GitDir(#[from] gix_validate::submodule::name::Error),

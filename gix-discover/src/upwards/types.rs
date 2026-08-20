@@ -1,36 +1,7 @@
 use std::{env, ffi::OsStr, path::PathBuf};
 
 /// The error returned by [`gix_discover::upwards()`][crate::upwards()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Could not obtain the current working directory")]
-    CurrentDir(#[from] std::io::Error),
-    #[error("Relative path \"{}\"tries to reach beyond root filesystem", directory.display())]
-    InvalidInput { directory: PathBuf },
-    #[error("Failed to access a directory, or path is not a directory: '{}'", .path.display())]
-    InaccessibleDirectory { path: PathBuf },
-    #[error("Could not find a git repository in '{}' or in any of its parents", .path.display())]
-    NoGitRepository { path: PathBuf },
-    #[error("Could not find a git repository in '{}' or in any of its parents within ceiling height of {}", .path.display(), .ceiling_height)]
-    NoGitRepositoryWithinCeiling { path: PathBuf, ceiling_height: usize },
-    #[error("Could not find a git repository in '{}' or in any of its parents within device limits below '{}'", .path.display(), .limit.display())]
-    NoGitRepositoryWithinFs { path: PathBuf, limit: PathBuf },
-    #[error("None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.")]
-    NoMatchingCeilingDir,
-    #[error("Could not find a trusted git repository in '{}' or in any of its parents, candidate at '{}' discarded", .path.display(), .candidate.display())]
-    NoTrustedGitRepository {
-        path: PathBuf,
-        candidate: PathBuf,
-        required: gix_sec::Trust,
-    },
-    #[error("Could not determine trust level for path '{}'.", .path.display())]
-    CheckTrust {
-        path: PathBuf,
-        #[source]
-        err: std::io::Error,
-    },
-}
+pub type Error = gix_error::Exn;
 
 /// How to obtain the trust level for a discovered repository.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]

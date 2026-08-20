@@ -82,13 +82,21 @@ impl ThreadSafeRepository {
                     Ok(kind) => (candidate, kind),
                     Err(_) => match gix_discover::is_git(&path) {
                         Ok(kind) => (path, kind),
-                        Err(err) => return Err(Error::NotARepository { source: err, path }),
+                        Err(err) => {
+                            return Err(Error::NotARepository {
+                                source: err.into_error(),
+                                path,
+                            });
+                        }
                     },
                 },
                 None => match gix_discover::is_git(&path) {
                     Ok(kind) => (path, kind),
                     Err(err) => {
-                        return Err(Error::NotARepository { source: err, path });
+                        return Err(Error::NotARepository {
+                            source: err.into_error(),
+                            path,
+                        });
                     }
                 },
             }
@@ -128,7 +136,7 @@ impl ThreadSafeRepository {
         let (path, path_kind): (PathBuf, _) = match overrides.git_dir {
             Some(git_dir) => gix_discover::is_git(&git_dir)
                 .map_err(|err| Error::NotARepository {
-                    source: err,
+                    source: err.into_error(),
                     path: git_dir.clone(),
                 })
                 .map(|kind| (git_dir, kind))?,
@@ -136,7 +144,7 @@ impl ThreadSafeRepository {
                 let fallback_directory = fallback_directory.into();
                 gix_discover::is_git(&fallback_directory)
                     .map_err(|err| Error::NotARepository {
-                        source: err,
+                        source: err.into_error(),
                         path: fallback_directory.clone(),
                     })
                     .map(|kind| (fallback_directory, kind))?
