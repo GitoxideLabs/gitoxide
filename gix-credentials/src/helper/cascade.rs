@@ -169,7 +169,7 @@ impl Cascade {
                     ctx.username = gix_prompt::ask(&message, &prompt)
                         .map_err(|err| protocol::Error::Prompt {
                             prompt: message,
-                            source: err,
+                            source: err.into_error(),
                         })?
                         .into();
                 }
@@ -179,7 +179,7 @@ impl Cascade {
                     ctx.password = gix_prompt::ask(&message, &prompt)
                         .map_err(|err| protocol::Error::Prompt {
                             prompt: message,
-                            source: err,
+                            source: err.into_error(),
                         })?
                         .into();
                 }
