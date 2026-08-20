@@ -181,25 +181,35 @@ mod path {
 
     #[test]
     fn validate_upon_retrieval() {
-        assert!(matches!(
-            submodule_path(if cfg!(windows) {
-                r"c:\\hello"
-            } else {
-                r"/definitely/absolute\\"
-            }),
-            Error::Absolute { .. }
-        ));
-        assert!(matches!(submodule_path(""), Error::Missing { .. }));
-        assert!(matches!(submodule_path("../attack"), Error::OutsideOfWorktree { .. }));
+        let absolute = submodule_path(if cfg!(windows) {
+            r"c:\\hello"
+        } else {
+            r"/definitely/absolute\\"
+        });
+        assert!(absolute.message.contains("needs to be relative"));
+        assert!(submodule_path("").message.contains("missing its 'path'"));
+        assert!(submodule_path("../attack").message.contains("outside"));
 
         {
             let module = submodule("[submodule.a]\n path");
-            assert!(matches!(module.path("a".into()).unwrap_err(), Error::Missing { .. }));
+            assert!(
+                module
+                    .path("a".into())
+                    .unwrap_err()
+                    .message
+                    .contains("missing its 'path'")
+            );
         }
 
         {
             let module = submodule("[submodule.a]\n");
-            assert!(matches!(module.path("a".into()).unwrap_err(), Error::Missing { .. }));
+            assert!(
+                module
+                    .path("a".into())
+                    .unwrap_err()
+                    .message
+                    .contains("missing its 'path'")
+            );
         }
     }
 }
@@ -223,18 +233,32 @@ mod url {
 
     #[test]
     fn validate_upon_retrieval() {
-        assert!(matches!(submodule_url(""), Error::Missing { .. }));
+        assert!(submodule_url("").error().message.contains("missing its 'url'"));
         {
             let module = submodule("[submodule.a]\n url");
-            assert!(matches!(module.url("a".into()).unwrap_err(), Error::Missing { .. }));
+            assert!(
+                module
+                    .url("a".into())
+                    .unwrap_err()
+                    .error()
+                    .message
+                    .contains("missing its 'url'")
+            );
         }
 
         {
             let module = submodule("[submodule.a]\n");
-            assert!(matches!(module.url("a".into()).unwrap_err(), Error::Missing { .. }));
+            assert!(
+                module
+                    .url("a".into())
+                    .unwrap_err()
+                    .error()
+                    .message
+                    .contains("missing its 'url'")
+            );
         }
 
-        assert!(matches!(submodule_url("file://"), Error::Parse { .. }));
+        assert!(submodule_url("file://").error().message.contains("could not be parsed"));
     }
 }
 
@@ -293,13 +317,10 @@ mod update {
 
     #[test]
     fn validate_upon_retrieval() {
-        assert!(matches!(submodule_update(""), Error::Invalid { .. }));
-        assert!(matches!(submodule_update("bogus"), Error::Invalid { .. }));
+        assert!(submodule_update("").message.contains("was invalid"));
+        assert!(submodule_update("bogus").message.contains("was invalid"));
         assert!(
-            matches!(
-                submodule_update("!dangerous"),
-                Error::CommandForbiddenInModulesConfiguration { .. }
-            ),
+            submodule_update("!dangerous").message.contains("command to be shared"),
             "forbidden unless it's an override"
         );
     }
@@ -316,14 +337,13 @@ mod update {
             .append_submodule_overrides(&repo_config)
             .expect("the fixture fits into the backing buffer");
 
+        let err = module.update("a".into()).unwrap_err();
+        assert_eq!(
+            err.input.as_ref().map(|input| input.as_slice()),
+            Some(b"dangerous".as_slice())
+        );
         assert!(
-            matches!(
-                module.update("a".into()),
-                Err(Error::CommandForbiddenInModulesConfiguration {
-                    actual,
-                    ..
-                }) if actual == "dangerous"
-            ),
+            err.message.contains("command to be shared"),
             "a same-named local section must not authorize a command that still originates from .gitmodules"
         );
         Ok(())

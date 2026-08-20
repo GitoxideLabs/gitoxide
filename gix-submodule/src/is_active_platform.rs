@@ -3,14 +3,7 @@ use bstr::BStr;
 use crate::IsActivePlatform;
 
 /// The error returned by [File::names_and_active_state](crate::File::names_and_active_state()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    NormalizePattern(gix_pathspec::normalize::Error),
-    #[error(transparent)]
-    ParsePattern(gix_pathspec::parse::Error),
-}
+pub type Error = gix_error::ValidationError;
 
 impl IsActivePlatform {
     /// Returns `true` if the submodule named `name` is active or `false` otherwise.
