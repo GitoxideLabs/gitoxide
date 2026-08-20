@@ -1,5 +1,7 @@
 use std::iter::Peekable;
 
+use gix_error::message;
+
 use crate::data::input;
 
 /// An implementation of [`Iterator`] to write [encoded entries][input::Entry] to an inner implementation each time
@@ -135,7 +137,7 @@ where
                             Ok(entry)
                         }
                     })
-                    .map_err(input::Error::from),
+                    .map_err(hash_io_error),
                 Err(err) => {
                     self.is_done = true;
                     Err(err)
@@ -143,7 +145,7 @@ where
             }),
             None => match self.write_header_and_digest(None) {
                 Ok(_) => None,
-                Err(err) => Some(Err(err.into())),
+                Err(err) => Some(Err(hash_io_error(err))),
             },
         }
     }
@@ -151,4 +153,9 @@ where
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.input.size_hint()
     }
+}
+
+fn hash_io_error(err: gix_hash::io::Error) -> input::Error {
+    err.raise(message("An IO operation failed while streaming an entry"))
+        .erased()
 }

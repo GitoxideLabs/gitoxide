@@ -1,39 +1,18 @@
-use std::path::{Path, PathBuf};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
+
+use gix_error::{CorruptionError, ErrorExt, ResultExt, ValidationError, message};
 
 use crate::multi_index::{File, Version, chunk};
 
-mod error {
-    use crate::multi_index::chunk;
+/// The error returned by [File::at()].
+pub type Error = gix_error::Exn;
 
-    /// The error returned by [File::at()][super::File::at()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not open multi-index file at '{path}'")]
-        Io {
-            source: std::io::Error,
-            path: std::path::PathBuf,
-        },
-        #[error("{message}")]
-        Corrupt { message: &'static str },
-        #[error("Unsupported multi-index version: {version})")]
-        UnsupportedVersion { version: u8 },
-        #[error("Unsupported hash kind: {kind})")]
-        UnsupportedObjectHash { kind: u8 },
-        #[error(transparent)]
-        ChunkFileQuery(#[from] gix_error::Message),
-        #[error(transparent)]
-        ChunkFileDecode(#[from] gix_error::ValidationError),
-        #[error("The multi-pack fan doesn't have the correct size of 256 * 4 bytes")]
-        MultiPackFanSize,
-        #[error(transparent)]
-        PackNames(#[from] chunk::index_names::decode::Error),
-        #[error("multi-index chunk {:?} has invalid size: {message}", String::from_utf8_lossy(.id))]
-        InvalidChunkSize { id: gix_chunk::Id, message: &'static str },
-    }
+fn corrupt(message: impl Into<Cow<'static, str>>) -> Error {
+    CorruptionError::new(message).raise_erased()
 }
-
-pub use error::Error;
 
 /// Initialization
 impl File<crate::MMap> {
@@ -46,10 +25,8 @@ impl File<crate::MMap> {
     }
 
     fn at_inner(path: &Path, alloc_limit_bytes: Option<usize>) -> Result<Self, Error> {
-        let data = crate::mmap::read_only(path).map_err(|source| Error::Io {
-            source,
-            path: path.to_owned(),
-        })?;
+        let data = crate::mmap::read_only(path)
+            .or_raise_erased(|| message!("Could not open multi-index file at '{}'", path.display()))?;
         Self::from_data(data, path.to_owned(), alloc_limit_bytes)
     }
 }
@@ -73,27 +50,27 @@ where
                 + chunk::fanout::SIZE
                 + TRAILER_LEN
         {
-            return Err(Error::Corrupt {
-                message: "multi-index file is truncated and too short",
-            });
+            return Err(corrupt("multi-index file is truncated and too short"));
         }
 
         let (version, object_hash, num_chunks, num_indices) = {
             let (signature, data) = data.split_at(4);
             if signature != Self::SIGNATURE {
-                return Err(Error::Corrupt {
-                    message: "Invalid signature",
-                });
+                return Err(corrupt("Invalid signature"));
             }
             let (version, data) = data.split_at(1);
             let version = match version[0] {
                 1 => Version::V1,
-                version => return Err(Error::UnsupportedVersion { version }),
+                version => {
+                    return Err(
+                        ValidationError::new(format!("Unsupported multi-index version: {version}")).raise_erased(),
+                    );
+                }
             };
 
             let (object_hash, data) = data.split_at(1);
             let object_hash = gix_hash::Kind::try_from(object_hash[0])
-                .map_err(|unknown| Error::UnsupportedObjectHash { kind: unknown })?;
+                .map_err(|unknown| ValidationError::new(format!("Unsupported hash kind: {unknown}")).raise_erased())?;
             let (num_chunks, data) = data.split_at(1);
             let num_chunks = num_chunks[0];
 
@@ -105,40 +82,43 @@ where
             (version, object_hash, num_chunks, num_indices)
         };
 
-        let chunks = gix_chunk::file::Index::from_bytes(&data, Self::HEADER_LEN, u32::from(num_chunks))?;
+        let chunks = gix_chunk::file::Index::from_bytes(&data, Self::HEADER_LEN, u32::from(num_chunks))
+            .or_raise_erased(|| CorruptionError::new("Could not decode multi-index chunk table"))?;
 
-        let index_names = chunks.data_by_id(&data, chunk::index_names::ID)?;
-        let index_names = chunk::index_names::from_bytes(index_names, num_indices, alloc_limit_bytes)?;
+        let index_names = chunks
+            .data_by_id(&data, chunk::index_names::ID)
+            .or_raise_erased(|| CorruptionError::new("Could not read multi-index pack names"))?;
+        let index_names = chunk::index_names::from_bytes(index_names, num_indices, alloc_limit_bytes).or_erased()?;
 
-        let fan = chunks.data_by_id(&data, chunk::fanout::ID)?;
-        let fan = chunk::fanout::from_bytes(fan).ok_or(Error::MultiPackFanSize)?;
+        let fan = chunks
+            .data_by_id(&data, chunk::fanout::ID)
+            .or_raise_erased(|| CorruptionError::new("Could not read multi-index fan"))?;
+        let fan = chunk::fanout::from_bytes(fan)
+            .ok_or_else(|| corrupt("The multi-index fan doesn't have the correct size of 256 * 4 bytes"))?;
         let num_objects = fan[255];
         validate_fan(&fan)?;
 
-        let lookup = chunks.validated_usize_offset_by_id(chunk::lookup::ID, |offset| {
-            chunk::lookup::is_valid(&offset, object_hash, num_objects)
-                .then_some(offset)
-                .ok_or(Error::InvalidChunkSize {
-                    id: chunk::lookup::ID,
-                    message: "The chunk with alphabetically ordered object ids doesn't have the correct size",
-                })
-        })??;
-        let offsets = chunks.validated_usize_offset_by_id(chunk::offsets::ID, |offset| {
-            chunk::offsets::is_valid(&offset, num_objects)
-                .then_some(offset)
-                .ok_or(Error::InvalidChunkSize {
-                    id: chunk::offsets::ID,
-                    message: "The chunk with offsets into the pack doesn't have the correct size",
-                })
-        })??;
+        let lookup = chunks
+            .validated_usize_offset_by_id(chunk::lookup::ID, |offset| {
+                chunk::lookup::is_valid(&offset, object_hash, num_objects)
+                    .then_some(offset)
+                    .ok_or_else(|| {
+                        corrupt("The chunk with alphabetically ordered object ids doesn't have the correct size")
+                    })
+            })
+            .or_raise_erased(|| CorruptionError::new("Could not find the multi-index object-id lookup chunk"))??;
+        let offsets = chunks
+            .validated_usize_offset_by_id(chunk::offsets::ID, |offset| {
+                chunk::offsets::is_valid(&offset, num_objects)
+                    .then_some(offset)
+                    .ok_or_else(|| corrupt("The chunk with offsets into the pack doesn't have the correct size"))
+            })
+            .or_raise_erased(|| CorruptionError::new("Could not find the multi-index pack-offset chunk"))??;
         let large_offsets = chunks
             .validated_usize_offset_by_id(chunk::large_offsets::ID, |offset| {
                 chunk::large_offsets::is_valid(&offset)
                     .then_some(offset)
-                    .ok_or(Error::InvalidChunkSize {
-                        id: chunk::large_offsets::ID,
-                        message: "The chunk with large offsets into the pack doesn't have the correct size",
-                    })
+                    .ok_or_else(|| corrupt("The chunk with large offsets into the pack doesn't have the correct size"))
             })
             .ok()
             .transpose()?;
@@ -146,9 +126,9 @@ where
         let checksum_offset = chunks.highest_offset() as usize;
         let trailer = &data[checksum_offset..];
         if trailer.len() != object_hash.len_in_bytes() {
-            return Err(Error::Corrupt {
-                message: "Trailing checksum didn't have the expected size or there were unknown bytes after the checksum.",
-            });
+            return Err(corrupt(
+                "Trailing checksum didn't have the expected size or there were unknown bytes after the checksum.",
+            ));
         }
 
         Ok(File {
@@ -171,9 +151,7 @@ where
 
 fn validate_fan(fan: &[u32; 256]) -> Result<(), Error> {
     if !crate::fan_is_monotonically_increasing(fan) {
-        return Err(Error::Corrupt {
-            message: "multi-index fan-out table must be monotonically increasing",
-        });
+        return Err(corrupt("multi-index fan-out table must be monotonically increasing"));
     }
     Ok(())
 }

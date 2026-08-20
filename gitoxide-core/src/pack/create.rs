@@ -1,6 +1,7 @@
 use std::{ffi::OsStr, io, path::Path, str::FromStr, time::Instant};
 
 use anyhow::anyhow;
+use gix::error::ResultExt;
 use gix::{
     Count, NestedProgress, Progress, hash, hash::ObjectId, interrupt, objs::bstr::ByteVec, odb::pack,
     parallel::InOrderIter, prelude::Finalize, progress, traverse,
@@ -106,7 +107,7 @@ where
     P: NestedProgress,
     P::SubProgress: 'static,
 {
-    type ObjectIdIter = dyn Iterator<Item = Result<ObjectId, Box<dyn std::error::Error + Send + Sync>>> + Send;
+    type ObjectIdIter = dyn Iterator<Item = Result<ObjectId, gix::Exn>> + Send;
 
     let repo = gix::discover(repository_path)?;
     let pack_compression = repo.pack_compression()?;
@@ -133,7 +134,7 @@ where
             let handle = repo.objects.into_shared_arc().to_cache_arc();
             let iter = Box::new(
                 traverse::commit::Simple::new(tips, handle.clone())
-                    .map(|res| res.map_err(|err| Box::new(err.into_error()) as Box<_>).map(|c| c.id))
+                    .map(|res| res.map(|c| c.id))
                     .inspect(move |_| progress.inc()),
             );
             (handle, iter)
@@ -149,8 +150,8 @@ where
                         .lines()
                         .map(|hex_id| {
                             hex_id
-                                .map_err(|err| Box::new(err) as Box<_>)
-                                .and_then(|hex_id| ObjectId::from_hex(hex_id.as_bytes()).map_err(Into::into))
+                                .or_erased()
+                                .and_then(|hex_id| ObjectId::from_hex(hex_id.as_bytes()).or_erased())
                         })
                         .inspect(move |_| progress.inc()),
                 ),

@@ -1,5 +1,7 @@
 use std::io::Write;
 
+use gix_error::{ErrorExt, message};
+
 use crate::data::{entry::Header, input};
 
 impl input::Entry {
@@ -59,7 +61,11 @@ fn compress_data(obj: &gix_object::Data<'_>, compression: gix_zlib::Compression)
     let mut out = gix_zlib::stream::deflate::Write::new(Vec::new(), compression);
     if let Err(err) = std::io::copy(&mut &*obj.data, &mut out) {
         match err.kind() {
-            std::io::ErrorKind::Other => return Err(input::Error::Io(err)),
+            std::io::ErrorKind::Other => {
+                return Err(err
+                    .and_raise(message("An IO operation failed while streaming an entry"))
+                    .erased());
+            }
             err => {
                 unreachable!("Should never see other errors than zlib, but got {:?}", err)
             }
