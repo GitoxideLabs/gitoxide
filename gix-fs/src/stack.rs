@@ -9,17 +9,8 @@ use crate::Stack;
 
 ///
 pub mod to_normal_path_components {
-    use std::path::PathBuf;
-
     /// The error used in [`ToNormalPathComponents::to_normal_path_components()`](super::ToNormalPathComponents::to_normal_path_components()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Input path \"{path}\" contains relative or absolute components", path = .0.display())]
-        NotANormalComponent(PathBuf),
-        #[error("Could not convert to UTF8 or from UTF8 due to ill-formed input")]
-        IllegalUtf8,
-    }
+    pub type Error = gix_error::ValidationError;
 }
 
 /// Obtain an iterator over `OsStr`-components which are normal, none-relative and not absolute.
@@ -46,9 +37,10 @@ fn component_to_os_str<'a>(
 ) -> Result<&'a OsStr, to_normal_path_components::Error> {
     match component {
         Component::Normal(os_str) => Ok(os_str),
-        _ => Err(to_normal_path_components::Error::NotANormalComponent(
-            path_with_component.to_owned(),
-        )),
+        _ => Err(to_normal_path_components::Error::new(format!(
+            "Input path \"{}\" contains relative or absolute components",
+            path_with_component.display()
+        ))),
     }
 }
 
@@ -80,9 +72,7 @@ fn bytes_component_to_os_str<'a>(
     if component.is_empty() {
         return None;
     }
-    let component = match gix_path::try_from_byte_slice(component.as_bstr())
-        .map_err(|_| to_normal_path_components::Error::IllegalUtf8)
-    {
+    let component = match gix_path::try_from_byte_slice(component.as_bstr()) {
         Ok(c) => c,
         Err(err) => return Some(Err(err)),
     };
