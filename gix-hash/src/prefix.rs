@@ -185,6 +185,14 @@ impl std::fmt::Display for Prefix {
     }
 }
 
+impl Prefix {
+    fn eq_str(&self, other: &str) -> bool {
+        self.bytes.to_hex_with_len(self.hex_len).eq_str(other)
+    }
+}
+
+impl_partial_eq_str!(Prefix);
+
 impl From<ObjectId> for Prefix {
     fn from(oid: ObjectId) -> Self {
         Prefix {
