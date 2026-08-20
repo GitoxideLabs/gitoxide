@@ -12,30 +12,10 @@ pub struct Outcome {
 }
 
 /// The error returned by [`commit::merge_base()`](crate::commit::virtual_merge_base()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    MergeTree(#[from] crate::tree::Error),
-    #[error("Failed to write tree for merged merge-base or virtual commit")]
-    WriteObject(gix_object::write::Error),
-    #[error("Failed to decode a commit needed to build a virtual merge-base")]
-    DecodeCommit(#[from] gix_object::decode::Error),
-    #[error(
-        "Conflicts occurred when trying to resolve multiple merge-bases by merging them. This is most certainly a bug."
-    )]
-    VirtualMergeBaseConflict,
-    #[error("Could not find commit to use as basis for a virtual commit")]
-    FindCommit(#[source] gix_error::Error),
-}
-
-impl From<gix_object::find::existing_object::Error> for Error {
-    fn from(err: gix_object::find::existing_object::Error) -> Self {
-        Error::FindCommit(err.into_error())
-    }
-}
+pub type Error = gix_error::Exn<gix_error::Message>;
 
 pub(super) mod function {
+    use gix_error::{ErrorExt, ResultExt, message};
     use gix_object::FindExt;
 
     use super::Error;
@@ -101,13 +81,17 @@ pub(super) mod function {
                 content_merge: treat_as_unresolved::ContentMerge::Markers,
                 tree_merge: treat_as_unresolved::TreeMerge::Undecidable,
             }) {
-                return Err(Error::VirtualMergeBaseConflict.into());
+                return Err(message(
+                    "Conflicts occurred when trying to resolve multiple merge-bases by merging them. This is most certainly a bug.",
+                )
+                .raise());
             }
             let merged_tree_id = out
                 .tree_merge
                 .tree
                 .write(|tree| objects.write(tree))
-                .map_err(Error::WriteObject)?;
+                .or_erased()
+                .or_raise(|| message("Failed to write tree for merged merge-base or virtual commit"))?;
 
             tree_id = Some(merged_tree_id);
             merged_commit_id = create_virtual_commit(objects, merged_commit_id, next_commit_id, merged_tree_id)?;
@@ -120,13 +104,15 @@ pub(super) mod function {
             virtual_merge_bases: nonempty::NonEmpty::from_vec(virtual_merge_bases)
                 .expect("the virtual merge-base process always creates at least one commit"),
             commit_id: merged_commit_id,
-            tree_id: tree_id.map_or_else(
-                || {
-                    let mut buf = Vec::new();
-                    objects.find_commit(&merged_commit_id, &mut buf).map(|c| c.tree())
-                },
-                Ok,
-            )?,
+            tree_id: tree_id
+                .map_or_else(
+                    || {
+                        let mut buf = Vec::new();
+                        objects.find_commit(&merged_commit_id, &mut buf).map(|c| c.tree())
+                    },
+                    Ok,
+                )
+                .or_raise(|| message("Could not find commit to use as basis for a virtual commit"))?,
         })
     }
 
@@ -137,10 +123,17 @@ pub(super) mod function {
         tree_id: gix_hash::ObjectId,
     ) -> Result<gix_hash::ObjectId, Error> {
         let mut buf = Vec::new();
-        let commit_ref = objects.find_commit(&parent_a, &mut buf)?;
-        let mut commit = commit_ref.to_owned()?;
+        let commit_ref = objects
+            .find_commit(&parent_a, &mut buf)
+            .or_raise(|| message("Could not find commit to use as basis for a virtual commit"))?;
+        let mut commit = commit_ref
+            .to_owned()
+            .or_raise(|| message("Failed to decode a commit needed to build a virtual merge-base"))?;
         commit.parents = vec![parent_a, parent_b].into();
         commit.tree = tree_id;
-        objects.write(&commit).map_err(Error::WriteObject)
+        objects
+            .write(&commit)
+            .or_erased()
+            .or_raise(|| message("Failed to write tree for merged merge-base or virtual commit"))
     }
 }
