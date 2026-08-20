@@ -43,7 +43,9 @@ impl<'driver> Configuration<'driver> {
             ignore_unknown: bool,
         ) -> Result<Option<&'static encoding_rs::Encoding>, configuration::Error> {
             match attr.assignment.state {
-                StateRef::Set | StateRef::Unset => Err(configuration::Error::InvalidEncoding),
+                StateRef::Set | StateRef::Unset => Err(gix_error::ValidationError::new(
+                    "Encodings must be names, like UTF-16, and cannot be booleans.",
+                )),
                 StateRef::Value(name) => match encoding_rs::Encoding::for_label(name.as_bstr()) {
                     Some(encoding) => Ok({
                         // The working-tree-encoding is the encoding we have to expect in the working tree.
@@ -58,9 +60,10 @@ impl<'driver> Configuration<'driver> {
                         gix_trace::warn!(encoding = %name.as_bstr(), "Ignoring unavailable worktree encoding");
                         Ok(None)
                     }
-                    None => Err(configuration::Error::UnknownEncoding {
-                        name: name.as_bstr().to_owned(),
-                    }),
+                    None => Err(gix_error::ValidationError::new(format!(
+                        "The encoding named '{}' isn't available",
+                        name.as_bstr()
+                    ))),
                 },
                 StateRef::Unspecified => Ok(None),
             }
