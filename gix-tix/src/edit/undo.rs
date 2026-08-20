@@ -192,7 +192,7 @@ pub(crate) fn clear(repo: &gix::Repository) -> Result<()> {
         return Ok(());
     }
     repo.edit_references(edits)
-        .context("could not clear undo history for review")
+        .context("could not clear undo history")
         .map(|_| ())
 }
 
