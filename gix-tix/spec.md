@@ -41,6 +41,13 @@ without trading responsiveness for metadata that is not visible.
   then exits with an error so resolution cannot be mistaken for completion.
 - `tix stash` saves the index and worktree state in a gix stash associated with
   the `HEAD` commit through the same commit-stash operation as the TUI.
+- `tix copy-insert [--materialize-conflicts [CONTINUE]] C I` exposes the TUI
+  copy-insert action without opening it.
+  Both operands accept Git revisions or unambiguous reverse-hex change-ID
+  prefixes from the default Tix view; `C` is the commit to copy and `I` is the
+  commit above which the copy is inserted. A conflict aborts without changing
+  repository state unless explicitly materialized into the ordinary rebase
+  continuation workflow.
 - `tix admin clear-undo` atomically and idempotently deletes the current
   worktree's undo and redo queue. It does not apply or reverse queued operations,
   change their recorded references, or affect another worktree's queue.
@@ -1059,15 +1066,16 @@ space first; changes blocks adapt within the remaining history width.
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
   forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
-- Copy-insert requires a non-root, single-parent `HEAD` that is not an active
-  review commit. It inserts another occurrence of its change above the selected
+- Copy-insert requires a non-root, single-parent source that is not an active
+  review commit. `a y` copies current `HEAD`; `tix copy-insert C I` accepts any
+  resolvable source `C`. It inserts another occurrence of its change above the
   target without removing the source occurrence, including when the target is
-  the source's current parent. The new copy becomes detached `HEAD`; an attached
-  source branch remains visible through the ordinary HEAD pin. If the target is
-  an ancestor of the source, that source occurrence is retained in its original
-  logical position while its branch follows the necessary rewrite. Git notes are
-  copied to the new occurrence. Copy-insert uses the history-todo conflict and
-  continuation rules.
+  the source's current parent. The new copy becomes detached `HEAD`; the branch
+  checked out before the operation remains visible through the ordinary HEAD
+  pin. If the target is an ancestor of the source, that source occurrence is
+  retained in its original logical position while its branch follows the
+  necessary rewrite. Git notes are copied to the new occurrence. Copy-insert
+  uses the history-todo conflict and continuation rules.
 - Move-insert requires a non-root, single-parent `HEAD`. It removes `HEAD` from
   its old position, reconnects its former children to its parent, inserts its
   rewritten change above the selected target, and reparents every former direct

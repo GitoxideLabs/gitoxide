@@ -545,9 +545,6 @@ pub(crate) fn copy_insert_plan(
     source: ObjectId,
     target: ObjectId,
 ) -> Result<Plan> {
-    if repo.head_id()?.detach() != source {
-        anyhow::bail!("the copy source must be the current HEAD");
-    }
     let source_parents = graph
         .parents_of(source)
         .context("the copy source is not in the loaded history")?;
