@@ -9,13 +9,41 @@ pub mod lookup {
     use crate::loose;
 
     /// Returned by [`Handle::lookup_prefix()`][crate::store::Handle::lookup_prefix()]
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("An error occurred looking up a prefix which requires iteration")]
-        LooseWalkDir(#[from] loose::iter::Error),
-        #[error(transparent)]
-        LoadIndex(#[from] crate::store::load_index::Error),
+        LooseWalkDir(loose::iter::Error),
+        LoadIndex(crate::store::load_index::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::LooseWalkDir(_) => f.write_str("An error occurred looking up a prefix which requires iteration"),
+                Error::LoadIndex(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::LooseWalkDir(err) => Some(err),
+                Error::LoadIndex(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<loose::iter::Error> for Error {
+        fn from(err: loose::iter::Error) -> Self {
+            Error::LooseWalkDir(err)
+        }
+    }
+
+    impl From<crate::store::load_index::Error> for Error {
+        fn from(err: crate::store::load_index::Error) -> Self {
+            Error::LoadIndex(err)
+        }
     }
 
     /// A way to indicate if a lookup, despite successful, was ambiguous or yielded exactly
@@ -63,13 +91,43 @@ pub mod disambiguate {
     }
 
     /// Returned by [`Handle::disambiguate_prefix()`][crate::store::Handle::disambiguate_prefix()]
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("An error occurred while trying to determine if a full hash contained in the object database")]
-        Contains(#[from] crate::store::find::Error),
-        #[error(transparent)]
-        Lookup(#[from] super::lookup::Error),
+        Contains(crate::store::find::Error),
+        Lookup(super::lookup::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Contains(_) => f.write_str(
+                    "An error occurred while trying to determine if a full hash contained in the object database",
+                ),
+                Error::Lookup(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Contains(err) => Some(err),
+                Error::Lookup(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<crate::store::find::Error> for Error {
+        fn from(err: crate::store::find::Error) -> Self {
+            Error::Contains(err)
+        }
+    }
+
+    impl From<super::lookup::Error> for Error {
+        fn from(err: super::lookup::Error) -> Self {
+            Error::Lookup(err)
+        }
     }
 }
 
