@@ -45,7 +45,8 @@ impl Repository {
             &mut resource_cache,
             file_path,
             options,
-        )?;
+        )
+        .map_err(|err| blame_file::Error::Blame(err.into_error()))?;
 
         Ok(outcome)
     }

@@ -71,7 +71,8 @@ pub(super) mod function {
             &mut resource_cache,
             file.as_bstr(),
             options,
-        )?;
+        )
+        .map_err(gix::Exn::into_error)?;
 
         let blame_infos = outcome
             .blame_path
