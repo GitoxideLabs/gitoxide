@@ -14,8 +14,16 @@ include = ["/src/**/*", "/LICENSE-*"]
 [lib]
 doctest = true
 
+[features]
+## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
+sha1 = ["gix-config/sha1"]
+## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
+sha256 = ["gix-config/sha256"]
+
 [dependencies]
 gix-command = { version = "^0.9.2", path = "../gix-command" }
+gix-config = { version = "^0.59.0", path = "../gix-config" }
 
 [dev-dependencies]
+gix-hook = { path = ".", features = ["sha1", "sha256"] }
 tempfile = "3.10.0"

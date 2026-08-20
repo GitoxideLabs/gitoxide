@@ -2041,6 +2041,8 @@ name = "gix-hook"
 version = "0.0.0"
 dependencies = [
  "gix-command",
+ "gix-config",
+ "gix-hook",
  "tempfile",
 ]
 

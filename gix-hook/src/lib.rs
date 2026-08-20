@@ -1,13 +1,11 @@
 //! Discover and execute git hooks the way `git` itself does.
 //!
 //! This is an early prototype covering only the client-side basics: locating a hook script
-//! below `$GIT_DIR/hooks` (or a configured `core.hooksPath`) and preparing it for execution
-//! with [`gix-command`]. It intentionally doesn't yet read `core.hooksPath` from configuration
-//! itself - callers pass the already-resolved path, keeping this crate config-agnostic for now.
+//! below `$GIT_DIR/hooks` (or a configured `core.hooksPath`), reading that override from
+//! `gix-config`, and preparing the hook for execution with [`gix-command`].
 //!
 //! Missing, by design, until validated further:
 //! - receive-side / `reference-transaction` hooks and quarantine-aware execution
-//! - `core.hooksPath` discovery from `gix-config`
 //! - Windows executable-extension resolution (`.exe`, `.bat`, `.cmd`, …)
 #![deny(missing_docs, rust_2018_idioms)]
 #![forbid(unsafe_code)]
@@ -32,9 +30,7 @@ pub fn find(name: &str, git_dir: &Path, hooks_path: Option<&Path>) -> Option<Pat
 #[cfg(unix)]
 fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+    std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(not(unix))]
@@ -59,6 +55,20 @@ pub fn command(hook: &Path, git_dir: &Path, cwd: &Path) -> gix_command::Prepare 
             git_dir: Some(git_dir.to_owned()),
             ..Default::default()
         })
+}
+
+/// Resolve `core.hooksPath` from `config`, expanding `~` and `%(prefix)` using `ctx`.
+///
+/// Returns `Ok(None)` if the key isn't set. A relative path is returned as-is, matching `git`:
+/// it's resolved against the current working directory at hook-invocation time, not `git_dir`.
+pub fn hooks_path_from_config(
+    config: &gix_config::File,
+    ctx: gix_config::path::interpolate::Context<'_>,
+) -> Result<Option<PathBuf>, gix_config::path::interpolate::Error> {
+    config
+        .path("core.hooksPath")
+        .map(|path| path.interpolate(ctx))
+        .transpose()
 }
 
 #[cfg(test)]
@@ -109,6 +119,48 @@ mod tests {
         let custom = tempfile::tempdir().unwrap();
         let hook = write_hook(custom.path(), "pre-commit", true);
         assert_eq!(find("pre-commit", dir.path(), Some(custom.path())), Some(hook));
+    }
+
+    mod hooks_path_from_config {
+        use std::path::{Path, PathBuf};
+
+        use crate::hooks_path_from_config;
+
+        fn config(input: &str) -> gix_config::File {
+            input.parse().unwrap()
+        }
+
+        #[test]
+        fn unset_key_is_none() {
+            let cfg = config("[core]\n\tbare = false\n");
+            assert_eq!(hooks_path_from_config(&cfg, Default::default()).unwrap(), None);
+        }
+
+        #[test]
+        fn plain_path_is_returned_unchanged() {
+            let cfg = config("[core]\n\thooksPath = /custom/hooks\n");
+            assert_eq!(
+                hooks_path_from_config(&cfg, Default::default()).unwrap(),
+                Some(PathBuf::from("/custom/hooks"))
+            );
+        }
+
+        #[test]
+        fn tilde_is_expanded_using_home_dir() {
+            let cfg = config("[core]\n\thooksPath = ~/my-hooks\n");
+            let home = Path::new("/home/tester");
+            let ctx = gix_config::path::interpolate::Context {
+                home_dir: Some(home),
+                ..Default::default()
+            };
+            assert_eq!(hooks_path_from_config(&cfg, ctx).unwrap(), Some(home.join("my-hooks")));
+        }
+
+        #[test]
+        fn tilde_without_home_dir_errors() {
+            let cfg = config("[core]\n\thooksPath = ~/my-hooks\n");
+            assert!(hooks_path_from_config(&cfg, Default::default()).is_err());
+        }
     }
 
     #[cfg(unix)]
