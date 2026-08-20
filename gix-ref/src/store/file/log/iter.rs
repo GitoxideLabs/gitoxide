@@ -146,13 +146,41 @@ pub mod reverse {
     use super::decode;
 
     /// The error returned by the [`Reverse`][super::Reverse] iterator
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The buffer could not be filled to make more lines available")]
-        Io(#[from] std::io::Error),
-        #[error("Could not decode log line")]
-        Decode(#[from] decode::Error),
+        Io(std::io::Error),
+        Decode(decode::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(_) => f.write_str("The buffer could not be filled to make more lines available"),
+                Error::Decode(_) => f.write_str("Could not decode log line"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => Some(err),
+                Error::Decode(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<decode::Error> for Error {
+        fn from(err: decode::Error) -> Self {
+            Error::Decode(err)
+        }
     }
 }
 
