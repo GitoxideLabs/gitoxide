@@ -42,6 +42,8 @@ mod _impls {
 }
 
 mod ext {
+    use gix_error::{ErrorExt, NotFoundError};
+
     use crate::find;
     /// An extension trait with convenience functions.
     pub trait HeaderExt: super::Header {
@@ -49,8 +51,8 @@ mod ext {
         fn header(&self, id: impl AsRef<gix_hash::oid>) -> Result<find::Header, gix_object::find::existing::Error> {
             let id = id.as_ref();
             self.try_header(id)
-                .map_err(gix_object::find::existing::Error::Find)?
-                .ok_or_else(|| gix_object::find::existing::Error::NotFound { oid: id.to_owned() })
+                .map_err(|err| gix_error::Error::from_boxed(err).raise_erased())?
+                .ok_or_else(|| NotFoundError::new(format!("An object with id {id} could not be found")).raise_erased())
         }
     }
 

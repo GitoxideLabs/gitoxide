@@ -107,7 +107,7 @@ pub fn file(
         gix_revwalk::PriorityQueue::new();
 
     if let Some(first_suspect) = first_suspect {
-        let commit = find_commit(cache.as_ref(), &odb, &first_suspect, &mut buf)?;
+        let commit = find_commit(cache.as_ref(), &odb, &first_suspect, &mut buf).map_err(Error::find_existing_iter)?;
         queue.insert(commit.commit_time()?, first_suspect);
     }
 
@@ -137,7 +137,7 @@ pub fn file(
             .clone()
             .unwrap_or_else(|| file_path.to_owned());
 
-        let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
+        let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf).map_err(Error::find_existing_iter)?;
         let commit_time = commit.commit_time()?;
 
         if let Some(since) = options.since {
@@ -208,7 +208,11 @@ pub fn file(
         // identical to the corresponding lines in the *Source File*.
         #[cfg(debug_assertions)]
         {
-            let source_blob = odb.find_blob(&entry_id, &mut buf)?.data.to_vec();
+            let source_blob = odb
+                .find_blob(&entry_id, &mut buf)
+                .map_err(Error::find_existing_object)?
+                .data
+                .to_vec();
             let mut source_interner = gix_diff::blob::Interner::new(source_blob.len() / 100);
             let source_lines_as_tokens: Vec<_> = tokens_for_diffing(&source_blob)
                 .tokenize()
@@ -569,14 +573,22 @@ fn tree_diff_at_file_path(
     rhs_tree_buf: &mut Vec<u8>,
     rewrites: Option<gix_diff::Rewrites>,
 ) -> Result<Option<TreeDiffChange>, Error> {
-    let parent_tree_id = find_commit(cache, &odb, &parent_id, commit_buf)?.tree_id()?;
+    let parent_tree_id = find_commit(cache, &odb, &parent_id, commit_buf)
+        .map_err(Error::find_existing_iter)?
+        .tree_id()?;
 
-    let parent_tree_iter = odb.find_tree_iter(&parent_tree_id, lhs_tree_buf)?;
+    let parent_tree_iter = odb
+        .find_tree_iter(&parent_tree_id, lhs_tree_buf)
+        .map_err(Error::find_existing_iter)?;
     stats.trees_decoded += 1;
 
-    let tree_id = find_commit(cache, &odb, &id, commit_buf)?.tree_id()?;
+    let tree_id = find_commit(cache, &odb, &id, commit_buf)
+        .map_err(Error::find_existing_iter)?
+        .tree_id()?;
 
-    let tree_iter = odb.find_tree_iter(&tree_id, rhs_tree_buf)?;
+    let tree_iter = odb
+        .find_tree_iter(&tree_id, rhs_tree_buf)
+        .map_err(Error::find_existing_iter)?;
     stats.trees_decoded += 1;
 
     let result = tree_diff_without_rewrites_at_file_path(&odb, file_path, stats, state, parent_tree_iter, tree_iter)?;
@@ -846,8 +858,10 @@ fn find_path_entry_in_commit(
     buf2: &mut Vec<u8>,
     stats: &mut Statistics,
 ) -> Result<Option<ObjectId>, Error> {
-    let tree_id = find_commit(cache, odb, commit, buf)?.tree_id()?;
-    let tree_iter = odb.find_tree_iter(&tree_id, buf)?;
+    let tree_id = find_commit(cache, odb, commit, buf)
+        .map_err(Error::find_existing_iter)?
+        .tree_id()?;
+    let tree_iter = odb.find_tree_iter(&tree_id, buf).map_err(Error::find_existing_iter)?;
     stats.trees_decoded += 1;
 
     let res = tree_iter.lookup_entry(
@@ -927,7 +941,11 @@ fn initial_state(
                 file_path: file_path.to_owned(),
                 commit_id: suspect,
             })?;
-            let blamed_file_blob = odb.find_blob(&blamed_file_entry_id, buf)?.data.to_vec();
+            let blamed_file_blob = odb
+                .find_blob(&blamed_file_entry_id, buf)
+                .map_err(Error::find_existing_object)?
+                .data
+                .to_vec();
             let num_lines_in_blamed = tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32;
 
             // Binary or otherwise empty?
@@ -997,7 +1015,11 @@ fn initial_state(
                 });
             };
 
-            let first_suspect_blob = odb.find_blob(&first_suspect_entry_id, buf)?.data.to_vec();
+            let first_suspect_blob = odb
+                .find_blob(&first_suspect_entry_id, buf)
+                .map_err(Error::find_existing_object)?
+                .data
+                .to_vec();
 
             let changes = blob_changes_from_data(&first_suspect_blob, &blamed_file_blob, options.diff_algorithm, stats);
             hunks_to_blame = process_changes(hunks_to_blame, changes, null_id, first_suspect);

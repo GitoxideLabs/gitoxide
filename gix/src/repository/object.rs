@@ -146,7 +146,7 @@ impl crate::Repository {
                 size: 0,
             });
         }
-        self.objects.header(id)
+        self.objects.header(id).map_err(Into::into)
     }
 
     /// Return `true` if `id` exists in the object database.

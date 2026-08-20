@@ -55,23 +55,19 @@ impl<'a> Data<'a> {
 
 /// Types supporting object hash verification
 pub mod verify {
+    use gix_error::{CorruptionError, ErrorExt, ResultExt};
+
     /// Returned by [`crate::Data::verify_checksum()`]
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Failed to hash object")]
-        Hasher(#[from] gix_hash::hasher::Error),
-        #[error(transparent)]
-        Verify(gix_hash::verify::Error),
-    }
+    pub type Error = gix_error::Exn<CorruptionError>;
 
     impl crate::Data<'_> {
         /// Compute the checksum of `self` and compare it with the `expected` hash.
         /// If the hashes do not match, an [`Error`] is returned, containing the actual
         /// hash of `self`.
         pub fn verify_checksum(&self, expected: &gix_hash::oid) -> Result<gix_hash::ObjectId, Error> {
-            let actual = crate::compute_hash(expected.kind(), self.kind, self.data)?;
-            actual.verify(expected).map_err(Error::Verify)?;
+            let actual = crate::compute_hash(expected.kind(), self.kind, self.data)
+                .or_raise(|| CorruptionError::new("Failed to hash object"))?;
+            actual.verify(expected).map_err(ErrorExt::raise)?;
             Ok(actual)
         }
     }

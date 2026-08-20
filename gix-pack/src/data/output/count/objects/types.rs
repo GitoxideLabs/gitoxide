@@ -84,7 +84,7 @@ pub enum Error {
     #[error(transparent)]
     CommitDecode(gix_object::decode::Error),
     #[error(transparent)]
-    FindExisting(#[from] gix_object::find::existing::Error),
+    FindExisting(gix_error::Error),
     #[error(transparent)]
     InputIteration(Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error(transparent)]
@@ -93,4 +93,10 @@ pub enum Error {
     TreeChanges(gix_diff::tree::Error),
     #[error("Operation interrupted")]
     Interrupted,
+}
+
+impl From<gix_object::find::existing::Error> for Error {
+    fn from(err: gix_object::find::existing::Error) -> Self {
+        Error::FindExisting(err.into_error())
+    }
 }

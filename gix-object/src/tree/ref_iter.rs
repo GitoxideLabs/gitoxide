@@ -180,7 +180,7 @@ impl<'a> Iterator for TreeRefIter<'a> {
             }
             None => {
                 self.data = &[];
-                Some(Err(crate::decode::Error))
+                Some(Err(crate::decode::empty_error()))
             }
         }
     }
@@ -234,7 +234,7 @@ mod decode {
 
         while !i.is_empty() {
             let Some((rest, entry)) = fast_entry(i, hash_len) else {
-                return Err(crate::decode::Error);
+                return Err(crate::decode::empty_error());
             };
             i = rest;
             out.push(entry);

@@ -225,7 +225,7 @@ where
             .verify_checksum(&index_entry.oid)
             .map_err(|source| Error::PackObjectVerify {
                 offset: index_entry.pack_offset,
-                source,
+                source: source.into_error(),
             })?;
         if let Some(desired_crc32) = index_entry.crc32 {
             let actual_crc32 = pack_entry_crc32();

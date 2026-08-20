@@ -1,9 +1,5 @@
-/// Because the `TryFrom` implementations don't return proper errors
-/// on failure
-#[derive(Debug, thiserror::Error)]
-enum Error {
-    #[error("")]
-    TryFromError,
+fn try_from_error() -> std::io::Error {
+    std::io::Error::other("object type conversion failed")
 }
 
 /// Needed for roundtripping object types that take a `object_hash` parameter.
@@ -54,7 +50,7 @@ macro_rules! round_trip_with_hash_kind {
                     w.write_all(&item.loose_header())?;
                     item.write_to(w)?;
                     let parsed = ObjectRef::from_loose(&output, hash_kind)?;
-                    let item2 = <$borrowed>::try_from(parsed).or(Err(super::Error::TryFromError))?;
+                    let item2 = <$borrowed>::try_from(parsed).map_err(|_| super::try_from_error())?;
                     assert_eq!(item2, item, "object-ref loose: {input_name} {:?}\n{:?}", output.as_bstr(), input.as_bstr());
                 }
 
@@ -65,8 +61,8 @@ macro_rules! round_trip_with_hash_kind {
                 w.write_all(&item.loose_header())?;
                 item.write_to(w)?;
                 let parsed = ObjectRef::from_loose(&output, hash_kind)?;
-                let parsed_borrowed = <$borrowed>::try_from(parsed).or(Err(super::Error::TryFromError))?;
-                let item2: $owned = parsed_borrowed.try_into().or(Err(super::Error::TryFromError))?;
+                let parsed_borrowed = <$borrowed>::try_from(parsed).map_err(|_| super::try_from_error())?;
+                let item2: $owned = parsed_borrowed.try_into().map_err(|_| super::try_from_error())?;
                 assert_eq!(item2, item, "object-ref loose owned: {input_name} {:?}\n{:?}", output.as_bstr(), input.as_bstr());
             }
             Ok(())
@@ -187,7 +183,7 @@ mod blob {
             w.write_all(&item.loose_header())?;
             item.write_to(w)?;
             let parsed = ObjectRef::from_loose(&output, gix_testtools::object_hash())?;
-            let item2 = BlobRef::try_from(parsed).or(Err(super::Error::TryFromError))?;
+            let item2 = BlobRef::try_from(parsed).map_err(|_| super::try_from_error())?;
             assert_eq!(
                 item2,
                 item,
@@ -203,7 +199,7 @@ mod blob {
         w.write_all(&item.loose_header())?;
         item.write_to(w)?;
         let parsed = ObjectRef::from_loose(&output, gix_testtools::object_hash())?;
-        let parsed_borrowed = BlobRef::try_from(parsed).or(Err(super::Error::TryFromError))?;
+        let parsed_borrowed = BlobRef::try_from(parsed).map_err(|_| super::try_from_error())?;
         let item2: Blob = parsed_borrowed.into();
         assert_eq!(
             item2,
@@ -222,7 +218,7 @@ mod loose_header {
     use gix_object::{Kind, decode, encode};
 
     #[test]
-    fn round_trip() -> Result<(), Box<dyn std::error::Error>> {
+    fn round_trip() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         for (kind, size, expected) in &[
             (Kind::Tree, 1234, "tree 1234\0".as_bytes()),
             (Kind::Blob, 0, b"blob 0\0"),

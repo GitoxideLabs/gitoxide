@@ -110,7 +110,7 @@ impl crate::Repository {
     ) -> Result<(gix_worktree_stream::Stream, gix_index::File), crate::repository::worktree_stream::Error> {
         use gix_odb::HeaderExt;
         let id = id.into();
-        let header = self.objects.header(id)?;
+        let header = self.objects.header(id).map_err(gix_error::Exn::into_error)?;
         if !header.kind().is_tree() {
             return Err(crate::repository::worktree_stream::Error::NotATree {
                 id,

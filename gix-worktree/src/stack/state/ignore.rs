@@ -183,7 +183,7 @@ impl Ignore {
                     Ok(idx) => {
                         let ignore_blob = objects
                             .find_blob(&id_mappings[idx].1, buf)
-                            .map_err(std::io::Error::other)?;
+                            .map_err(|err| std::io::Error::other(err.into_error()))?;
                         let ignore_path = gix_path::from_bstring(ignore_path_relative.into_owned());
                         self.stack
                             .add_patterns_buffer(ignore_blob.data, ignore_path, Some(Path::new("")), self.parse);
@@ -212,7 +212,7 @@ impl Ignore {
                         Ok(idx) => {
                             let ignore_blob = objects
                                 .find_blob(&id_mappings[idx].1, buf)
-                                .map_err(std::io::Error::other)?;
+                                .map_err(|err| std::io::Error::other(err.into_error()))?;
                             let ignore_path = gix_path::from_bstring(ignore_path_relative.into_owned());
                             self.stack.add_patterns_buffer(
                                 ignore_blob.data,

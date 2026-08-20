@@ -18,11 +18,11 @@ pub enum Error {
     #[error(transparent)]
     InvalidTrustLevel(#[from] crate::config::key::GenericErrorWithValue),
     #[error("Could not interpolate a configured signature-verification path")]
-    ConfiguredPath(#[from] gix_error::Error),
+    ConfiguredPath(#[source] gix_error::Error),
     #[error("gpg.ssh.allowedSignersFile must be configured for SSH signature verification")]
     MissingAllowedSigners,
     #[error(transparent)]
-    Verify(#[from] gix_object::signature::verify::Error),
+    Verify(gix_error::Error),
 }
 
 pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, Error> {
@@ -35,7 +35,11 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, Erro
         .map(|value| Gpg::MIN_TRUST_LEVEL.try_into_trust_level(value))
         .transpose()?
         .unwrap_or_default();
-    let format = Format::from_signature(&signature).ok_or(gix_object::signature::verify::Error::UnsupportedFormat)?;
+    let format = Format::from_signature(&signature).ok_or_else(|| {
+        Error::Verify(gix_error::Error::from_error(gix_error::CorruptionError::new(
+            "The signature format is unsupported",
+        )))
+    })?;
     let options = match format {
         Format::OpenPgp => gix_object::signature::verify::Options::OpenPgp {
             program: config
@@ -56,10 +60,12 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, Erro
         },
         Format::Ssh => {
             let allowed_signers = config
-                .trusted_path(gpg::Ssh::ALLOWED_SIGNERS_FILE)?
+                .trusted_path(gpg::Ssh::ALLOWED_SIGNERS_FILE)
+                .map_err(Error::ConfiguredPath)?
                 .ok_or(Error::MissingAllowedSigners)?;
             let revocation_file = config
-                .trusted_path(gpg::Ssh::REVOCATION_FILE)?
+                .trusted_path(gpg::Ssh::REVOCATION_FILE)
+                .map_err(Error::ConfiguredPath)?
                 .filter(|path| path.exists());
             gix_object::signature::verify::Options::Ssh {
                 program: config
@@ -74,7 +80,11 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, Erro
             }
         }
     };
-    signed_data.verify(&signature, options).map(Some).map_err(Into::into)
+    let outcome = signed_data
+        .verify(&signature, options)
+        .map_err(gix_error::Exn::into_error)
+        .map_err(Error::Verify)?;
+    Ok(Some(outcome))
 }
 
 fn default_program(key: &crate::config::tree::keys::Program) -> OsString {

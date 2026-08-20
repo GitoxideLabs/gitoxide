@@ -300,8 +300,8 @@ fn non_existing() -> crate::Result {
         matches!(
             err,
             gix_merge::blob::pipeline::convert_to_mergeable::Error::FindObject(
-                gix_object::find::existing_object::Error::NotFound { .. }
-            ),
+                err
+            ) if err.is_not_found(),
         ),
         "missing object database ids are always an error (even though missing objects on disk are allowed)"
     );

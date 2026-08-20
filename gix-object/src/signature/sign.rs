@@ -6,6 +6,7 @@ use std::{
 };
 
 use bstr::{BString, ByteSlice};
+use gix_error::{CorruptionError, ErrorExt, ResultExt, ValidationError, message};
 
 use crate::{Commit, CommitRef, Tag, TagRef, WriteTo};
 
@@ -29,41 +30,12 @@ pub struct Options {
 }
 
 /// The error returned when signing an object.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Decode(#[from] crate::decode::Error),
-    #[error(transparent)]
-    Encode(#[from] std::io::Error),
-    #[error("A signing key is required")]
-    MissingSigningKey,
-    #[error("Could not create or write a temporary signing file")]
-    TemporaryFile(#[source] std::io::Error),
-    #[error("Could not execute signing program {program:?}")]
-    Spawn {
-        program: OsString,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("Could not communicate with signing program {program:?}")]
-    Communicate {
-        program: OsString,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("Signing program {program:?} failed: {output}")]
-    Failed { program: OsString, output: BString },
-    #[error("The OpenPGP/X.509 signer did not report SIG_CREATED")]
-    MissingSignatureConfirmation,
-    #[error("The SSH signer produced no signature")]
-    MissingSshSignature(#[source] std::io::Error),
-}
+pub type Error = gix_error::Exn;
 
 impl CommitRef<'_> {
     /// Return an owned copy of this commit with its active signature replaced by a newly created one.
     pub fn sign(self, options: Options) -> Result<Commit, Error> {
-        self.into_owned()?.sign(options)
+        self.into_owned().or_erased()?.sign(options)
     }
 }
 
@@ -73,7 +45,7 @@ impl Commit {
         let signature_field = crate::commit::signature_field_name(self.tree.kind());
         self.extra_headers.retain(|(name, _)| name != signature_field);
         let mut payload = Vec::new();
-        self.write_to(&mut payload)?;
+        self.write_to(&mut payload).or_erased()?;
         let signature = sign(&payload, &options)?;
         self.extra_headers.push((signature_field.into(), signature));
         Ok(self)
@@ -84,7 +56,7 @@ impl TagRef<'_> {
     /// Return an owned copy of this annotated tag with its in-body signature replaced by a newly created one
     /// according to `options`.
     pub fn sign(self, options: Options) -> Result<Tag, Error> {
-        self.into_owned()?.sign(options)
+        self.into_owned().or_erased()?.sign(options)
     }
 }
 
@@ -93,7 +65,7 @@ impl Tag {
     pub fn sign(mut self, options: Options) -> Result<Tag, Error> {
         self.signature = None;
         let mut payload = Vec::new();
-        self.write_to(&mut payload)?;
+        self.write_to(&mut payload).or_erased()?;
         // Tag signatures follow the message in the object body, separated by a newline which is itself signed. This
         // differs from commit signatures, which are inserted as a header after signing the commit without that header.
         payload.push(b'\n');
@@ -120,7 +92,7 @@ fn command(options: &Options) -> gix_command::Prepare {
 
 fn sign_gpg(payload: &[u8], options: &Options) -> Result<BString, Error> {
     if options.signing_key.is_empty() {
-        return Err(Error::MissingSigningKey);
+        return Err(ValidationError::new("A signing key is required").raise_erased());
     }
     let output = run(
         command(options)
@@ -133,24 +105,26 @@ fn sign_gpg(payload: &[u8], options: &Options) -> Result<BString, Error> {
         payload,
     )?;
     if !output.status.success() {
-        return Err(Error::Failed {
-            program: options.program.clone(),
-            output: output.stderr.into(),
-        });
+        return Err(message!(
+            "Signing program {:?} failed: {}",
+            options.program,
+            output.stderr.as_bstr()
+        )
+        .raise_erased());
     }
     if !output
         .stderr
         .lines()
         .any(|line| line.starts_with(b"[GNUPG:] SIG_CREATED "))
     {
-        return Err(Error::MissingSignatureConfirmation);
+        return Err(CorruptionError::new("The OpenPGP/X.509 signer did not report SIG_CREATED").raise_erased());
     }
     Ok(strip_cr_before_lf(output.stdout).into())
 }
 
 fn sign_ssh(payload: &[u8], options: &Options) -> Result<BString, Error> {
     if options.signing_key.is_empty() {
-        return Err(Error::MissingSigningKey);
+        return Err(ValidationError::new("A signing key is required").raise_erased());
     }
     let mut literal_key_file = None;
     let literal_key = options
@@ -184,23 +158,20 @@ fn sign_ssh(payload: &[u8], options: &Options) -> Result<BString, Error> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|source| Error::Spawn {
-            program: options.program.clone(),
-            source,
-        })?
+        .or_raise_erased(|| message!("Could not execute signing program {:?}", options.program))?
         .wait_with_output()
-        .map_err(|source| Error::Communicate {
-            program: options.program.clone(),
-            source,
-        })?;
+        .or_raise_erased(|| message!("Could not communicate with signing program {:?}", options.program))?;
     drop(literal_key_file);
     if !output.status.success() {
-        return Err(Error::Failed {
-            program: options.program.clone(),
-            output: output.stderr.into(),
-        });
+        return Err(message!(
+            "Signing program {:?} failed: {}",
+            options.program,
+            output.stderr.as_bstr()
+        )
+        .raise_erased());
     }
-    let signature = std::fs::read(&signature_path).map_err(Error::MissingSshSignature);
+    let signature =
+        std::fs::read(&signature_path).or_raise_erased(|| CorruptionError::new("The SSH signer produced no signature"));
     let _ = std::fs::remove_file(signature_path);
     Ok(strip_cr_before_lf(signature?).into())
 }
@@ -221,38 +192,33 @@ fn secure_temporary_file() -> Result<gix_tempfile::Handle<gix_tempfile::handle::
         gix_tempfile::ContainingDirectory::Exists,
         gix_tempfile::AutoRemove::Tempfile,
     )
-    .map_err(Error::TemporaryFile)
+    .or_raise_erased(|| message("Could not create or write a temporary signing file"))
 }
 
 fn write_temporary(file: &mut gix_tempfile::Handle<gix_tempfile::handle::Writable>, data: &[u8]) -> Result<(), Error> {
     file.with_mut(|file| file.write_all(data))
-        .map_err(Error::TemporaryFile)?
-        .map_err(Error::TemporaryFile)
+        .or_raise_erased(|| message("Could not create or write a temporary signing file"))?
+        .or_raise_erased(|| message("Could not create or write a temporary signing file"))
 }
 
 fn temporary_path(file: &mut gix_tempfile::Handle<gix_tempfile::handle::Writable>) -> Result<PathBuf, Error> {
     file.with_mut(|file| file.path().to_owned())
-        .map_err(Error::TemporaryFile)
+        .or_raise_erased(|| message("Could not create or write a temporary signing file"))
 }
 
 fn run(command: gix_command::Prepare, program: &OsStr, input: &[u8]) -> Result<std::process::Output, Error> {
-    let mut child = command.spawn().map_err(|source| Error::Spawn {
-        program: program.to_owned(),
-        source,
-    })?;
+    let mut child = command
+        .spawn()
+        .or_raise_erased(|| message!("Could not execute signing program {program:?}"))?;
     child
         .stdin
         .take()
         .expect("configured as piped")
         .write_all(input)
-        .map_err(|source| Error::Communicate {
-            program: program.to_owned(),
-            source,
-        })?;
-    child.wait_with_output().map_err(|source| Error::Communicate {
-        program: program.to_owned(),
-        source,
-    })
+        .or_raise_erased(|| message!("Could not communicate with signing program {program:?}"))?;
+    child
+        .wait_with_output()
+        .or_raise_erased(|| message!("Could not communicate with signing program {program:?}"))
 }
 
 /// Normalize signer-produced CRLF line endings to LF before embedding the signature in an object.
