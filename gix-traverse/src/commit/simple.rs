@@ -77,7 +77,7 @@ pub enum Error {
     #[error(transparent)]
     ObjectDecode(#[from] gix_object::decode::Error),
     #[error(transparent)]
-    HiddenGraph(#[from] gix_revwalk::graph::get_or_insert_default::Error),
+    HiddenGraph(gix_error::Error),
 }
 
 impl From<gix_object::find::existing_iter::Error> for Error {
@@ -191,16 +191,20 @@ fn compute_hidden_frontier(
     let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
 
     for &visible in visible_tips {
-        graph.get_or_insert_full_commit(visible, |commit| {
-            commit.data |= PaintFlags::VISIBLE;
-            queue.insert(GenThenTime::from(&*commit), visible);
-        })?;
+        graph
+            .get_or_insert_full_commit(visible, |commit| {
+                commit.data |= PaintFlags::VISIBLE;
+                queue.insert(GenThenTime::from(&*commit), visible);
+            })
+            .map_err(|err| Error::HiddenGraph(err.into_error()))?;
     }
     for &hidden in hidden_tips {
-        graph.get_or_insert_full_commit(hidden, |commit| {
-            commit.data |= PaintFlags::HIDDEN;
-            queue.insert(GenThenTime::from(&*commit), hidden);
-        })?;
+        graph
+            .get_or_insert_full_commit(hidden, |commit| {
+                commit.data |= PaintFlags::HIDDEN;
+                queue.insert(GenThenTime::from(&*commit), hidden);
+            })
+            .map_err(|err| Error::HiddenGraph(err.into_error()))?;
     }
 
     while queue.iter_unordered().any(|id| {
@@ -219,12 +223,14 @@ fn compute_hidden_frontier(
         }
 
         for parent_id in commit.parents.clone() {
-            graph.get_or_insert_full_commit(parent_id, |parent| {
-                if (parent.data & flags) != flags {
-                    parent.data |= flags;
-                    queue.insert(GenThenTime::from(&*parent), parent_id);
-                }
-            })?;
+            graph
+                .get_or_insert_full_commit(parent_id, |parent| {
+                    if (parent.data & flags) != flags {
+                        parent.data |= flags;
+                        queue.insert(GenThenTime::from(&*parent), parent_id);
+                    }
+                })
+                .map_err(|err| Error::HiddenGraph(err.into_error()))?;
         }
     }
 
