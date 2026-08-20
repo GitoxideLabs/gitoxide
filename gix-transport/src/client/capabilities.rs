@@ -1,26 +1,11 @@
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{ErrorExt, message};
 
-use crate::Protocol;
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
-use crate::client;
+use crate::{Protocol, client};
 
 /// The error used in [`Capabilities::from_bytes()`] and [`Capabilities::from_lines()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Capabilities were missing entirely as there was no 0 byte")]
-    MissingDelimitingNullByte,
-    #[error("there was not a single capability behind the delimiter")]
-    NoCapabilities,
-    #[error("a version line was expected, but none was retrieved")]
-    MissingVersionLine,
-    #[error("expected 'version X', got {0:?}")]
-    MalformattedVersionLine(BString),
-    #[error("Got unsupported version {actual:?}, expected {}", *desired as u8)]
-    UnsupportedVersion { desired: Protocol, actual: BString },
-    #[error("An IO error occurred while reading V2 lines")]
-    Io(#[from] std::io::Error),
-}
+pub type Error = gix_error::Exn<gix_error::Message>;
 
 /// A structure to represent multiple [capabilities](Capability) or features supported by the server.
 ///
@@ -83,9 +68,11 @@ impl Capabilities {
     ///
     /// Useful in case they are encoded within a `ref` behind a null byte.
     pub fn from_bytes(bytes: &[u8]) -> Result<(Capabilities, usize), Error> {
-        let delimiter_pos = bytes.find_byte(0).ok_or(Error::MissingDelimitingNullByte)?;
+        let delimiter_pos = bytes
+            .find_byte(0)
+            .ok_or_else(|| message("Capabilities were missing entirely as there was no 0 byte").raise())?;
         if delimiter_pos + 1 == bytes.len() {
-            return Err(Error::NoCapabilities);
+            return Err(message("there was not a single capability behind the delimiter").raise());
         }
         let capabilities = &bytes[delimiter_pos + 1..];
         Ok((
@@ -105,20 +92,19 @@ impl Capabilities {
     /// in a non-blocking fashion.
     pub fn from_lines(lines_buf: BString) -> Result<Capabilities, Error> {
         let mut lines = <_ as bstr::ByteSlice>::lines(lines_buf.as_slice().trim());
-        let version_line = lines.next().ok_or(Error::MissingVersionLine)?;
+        let version_line = lines
+            .next()
+            .ok_or_else(|| message("a version line was expected, but none was retrieved").raise())?;
         let (name, value) = version_line.split_at(
             version_line
                 .find(b" ")
-                .ok_or_else(|| Error::MalformattedVersionLine(version_line.to_owned().into()))?,
+                .ok_or_else(|| message!("expected 'version X', got {version_line:?}").raise())?,
         );
         if name != b"version" {
-            return Err(Error::MalformattedVersionLine(version_line.to_owned().into()));
+            return Err(message!("expected 'version X', got {version_line:?}").raise());
         }
         if value != b" 2" {
-            return Err(Error::UnsupportedVersion {
-                desired: Protocol::V2,
-                actual: value.to_owned().into(),
-            });
+            return Err(message!("Got unsupported version {value:?}, expected 2").raise());
         }
         Ok(Capabilities {
             value_sep: b'\n',
