@@ -1,4 +1,4 @@
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let prompt = std::env::args()
         .nth(1)
         .ok_or("First argument must be the prompt to display when asking for a password")?;
