@@ -70,6 +70,16 @@ impl Pattern {
         self.mode.contains(Mode::NEGATIVE)
     }
 
+    /// Return true if `text` contains `*`, `?`, or `[`, which classify it as a wildcard pattern.
+    ///
+    /// Use it to know if [matches](Self::matches()) must be used, or if equality under some definition is sufficient.
+    ///
+    /// These bytes count even when escaped. Unlike [`Self::first_wildcard_pos`], this does not consider
+    /// `\` alone sufficient: an escape ends the literal prefix but does not itself classify the pattern as a wildcard.
+    pub fn has_wildcard(&self) -> bool {
+        self.text.find_byteset(b"*?[").is_some()
+    }
+
     /// Match the given `path` which takes slashes (and only slashes) literally, and is relative to the repository root.
     /// Note that `path` is assumed to be relative to the repository.
     ///

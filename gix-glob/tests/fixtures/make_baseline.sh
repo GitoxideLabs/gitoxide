@@ -72,6 +72,7 @@ foo/** foo
 {**/src/**,foo} abc/src/bar
 {**/src/**,foo} foo
 abc[/]def abc/def
+\ anything
 EOF
 
 while read -r pattern value; do
