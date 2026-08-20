@@ -5820,6 +5820,28 @@ mod tests {
         );
         assert!(!rendered_line(&terminal, 15).contains("<tab> switch"));
 
+        app.changes_suppressed = true;
+        app.information_expanded = true;
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        assert!(
+            !rendered_line(&terminal, 7).contains("files changed"),
+            "repeated history navigation temporarily hides the changes pane"
+        );
+        assert!(
+            app.changes_mode.is_some() && !popup_is_dim(&terminal, "changes"),
+            "temporary suppression leaves the persistent changes setting enabled"
+        );
+        app.changes_suppressed = false;
+
         app.update(Action::ToggleChangesFocus);
         app.update(Action::MoveDown);
         terminal.draw(|frame| {
