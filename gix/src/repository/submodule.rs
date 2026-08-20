@@ -27,11 +27,9 @@ impl Repository {
             return Ok(None);
         }
         let buf = std::fs::read(&path)?;
-        Ok(Some(gix_submodule::File::from_bytes(
-            &buf,
-            path,
-            &self.config.resolved,
-        )?))
+        Ok(Some(
+            gix_submodule::File::from_bytes(&buf, path, &self.config.resolved).map_err(gix_error::Exn::into_error)?,
+        ))
     }
 
     /// Return a shared [`.gitmodules` file](submodule::File) which is updated automatically if the in-memory snapshot
@@ -81,7 +79,7 @@ impl Repository {
                 };
                 Ok(Some(gix_features::threading::OwnShared::new(
                     gix_submodule::File::from_bytes(&self.find_object(id)?.data, None, &self.config.resolved)
-                        .map_err(submodule::open_modules_file::Error::from)?
+                        .map_err(|err| submodule::open_modules_file::Error::from(err.into_error()))?
                         .into(),
                 )))
             }
