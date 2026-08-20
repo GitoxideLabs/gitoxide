@@ -133,8 +133,6 @@ impl Repository {
 
 ///
 pub mod is_dirty {
-    use std::convert::Infallible;
-
     use crate::Repository;
 
     /// The error returned by [Repository::is_dirty()].
@@ -188,7 +186,7 @@ pub mod is_dirty {
                     crate::status::tree_index::TrackRenames::Disabled,
                     |_, _, _| {
                         index_is_dirty = true;
-                        Ok::<_, Infallible>(std::ops::ControlFlow::Break(()))
+                        Ok::<_, gix_error::Exn>(std::ops::ControlFlow::Break(()))
                     },
                 )?;
                 if index_is_dirty {

@@ -4,6 +4,7 @@ use gix_diff::{
     tree::{recorder::Location, visit::Relation},
     tree_with_rewrites::{Change, Options},
 };
+use gix_error::ErrorExt;
 use gix_object::{TreeRefIter, bstr::BStr};
 
 #[test]
@@ -112,7 +113,7 @@ fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
             &mut cache,
             &mut Default::default(),
             &odb,
-            |_change| Err(std::io::Error::other("custom error")),
+            |_change| Err(gix_error::message("custom error").raise_erased()),
             Options::default(),
         )
         .unwrap_err();
@@ -1888,10 +1889,7 @@ fn realistic_renames_3_without_identity() -> crate::Result {
 }
 
 mod util {
-    use std::{
-        convert::Infallible,
-        path::{Path, PathBuf},
-    };
+    use std::path::{Path, PathBuf};
 
     use gix_diff::rewrites;
     use gix_object::{FindExt, TreeRefIter};
@@ -1953,7 +1951,7 @@ mod util {
             &mut cache,
             &mut Default::default(),
             &odb,
-            |change| -> Result<_, Infallible> {
+            |change| -> Result<_, gix_error::Exn> {
                 out.push(change.into_owned());
                 Ok(std::ops::ControlFlow::Continue(()))
             },

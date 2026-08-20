@@ -100,7 +100,7 @@ where
                                     } else {
                                         std::ops::ControlFlow::Continue(())
                                     };
-                                    Ok::<_, std::convert::Infallible>(action)
+                                    Ok::<_, gix_error::Exn>(action)
                                 },
                             )
                         }
@@ -176,7 +176,7 @@ where
                             } else {
                                 std::ops::ControlFlow::Continue(())
                             };
-                            Ok::<_, std::convert::Infallible>(action)
+                            Ok::<_, gix_error::Exn>(action)
                         },
                     )?;
                     (items, Some(tree_index))

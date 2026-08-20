@@ -753,7 +753,7 @@ fn tree_diff_with_rewrites_at_file_path(
         resource_cache,
         state,
         &odb,
-        |change_ref| -> Result<_, std::convert::Infallible> {
+        |change_ref| -> Result<_, gix_error::Exn> {
             if change_ref.location() == file_path {
                 change = Some(change_ref.into_owned());
                 Ok(std::ops::ControlFlow::Break(()))
@@ -766,9 +766,7 @@ fn tree_diff_with_rewrites_at_file_path(
     stats.trees_diffed_with_rewrites += 1;
 
     match result {
-        Ok(_) | Err(gix_diff::tree_with_rewrites::Error::Diff(gix_diff::tree::Error::Cancelled)) => {
-            Ok(change.map(Into::into))
-        }
+        Ok(_) | Err(gix_diff::tree::Error::Cancelled) => Ok(change.map(Into::into)),
         Err(error) => Err(error.raise_erased()),
     }
 }
