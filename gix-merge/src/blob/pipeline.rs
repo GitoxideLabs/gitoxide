@@ -133,9 +133,7 @@ pub mod convert_to_mergeable {
         #[error(transparent)]
         FindObject(#[from] gix_error::Error),
         #[error(transparent)]
-        ConvertToWorktree(#[from] gix_filter::pipeline::convert::to_worktree::Error),
-        #[error(transparent)]
-        ConvertToGit(#[from] gix_filter::pipeline::convert::to_git::Error),
+        ConvertToWorktree(gix_error::Error),
         #[error("Memory allocation failed")]
         OutOfMemory(#[from] TryReserveError),
     }
@@ -280,15 +278,18 @@ impl Pipeline {
 
                         if convert == Mode::Renormalize {
                             {
-                                let res = self.filter.convert_to_worktree(
-                                    out,
-                                    rela_path,
-                                    attributes,
-                                    to_worktree::Options {
-                                        can_delay: Delay::Forbid,
-                                        unknown_encoding: to_worktree::UnknownEncoding::Fail,
-                                    },
-                                )?;
+                                let res = self
+                                    .filter
+                                    .convert_to_worktree(
+                                        out,
+                                        rela_path,
+                                        attributes,
+                                        to_worktree::Options {
+                                            can_delay: Delay::Forbid,
+                                            unknown_encoding: to_worktree::UnknownEncoding::Fail,
+                                        },
+                                    )
+                                    .map_err(|err| convert_to_mergeable::Error::ConvertToWorktree(err.into_error()))?;
 
                                 match res {
                                     ToWorktreeOutcome::Unchanged(_) => {}
