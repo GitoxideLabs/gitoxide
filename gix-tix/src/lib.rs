@@ -2,7 +2,6 @@
 
 #![forbid(unsafe_code)]
 
-mod animation;
 mod app;
 mod change_id;
 pub mod command;
@@ -261,123 +260,6 @@ struct SelectionRelationCache {
     id: gix::ObjectId,
     refs: Vec<SelectionRef>,
     relation: Option<SelectionRelation>,
-}
-
-#[derive(Default)]
-struct MotionState {
-    shown: Option<animation::Snapshot>,
-    pending: Option<animation::Snapshot>,
-    active: Option<animation::Emphasis>,
-    last_tick: Option<Instant>,
-}
-
-impl MotionState {
-    fn capture(&mut self) {
-        if self.pending.is_none() {
-            let source = self
-                .active
-                .as_ref()
-                .map(|emphasis| emphasis.target().clone())
-                .or_else(|| self.shown.clone());
-            if let Some(source) = source {
-                self.pending = Some(source);
-            }
-        }
-    }
-
-    fn has_pending(&self) -> bool {
-        self.pending.is_some()
-    }
-
-    fn transition_ids(&self, target: &animation::Snapshot) -> Vec<gix::ObjectId> {
-        let Some(source) = &self.pending else {
-            return Vec::new();
-        };
-        if source
-            .rows
-            .iter()
-            .map(|row| row.id)
-            .eq(target.rows.iter().map(|row| row.id))
-        {
-            return Vec::new();
-        }
-        source.rows.iter().chain(&target.rows).map(|row| row.id).collect()
-    }
-
-    fn begin(
-        &mut self,
-        target: animation::Snapshot,
-        trees: &HashMap<gix::ObjectId, gix::ObjectId>,
-        now: Instant,
-    ) -> Option<ratatui::buffer::Buffer> {
-        let Some(mut source) = self.pending.take() else {
-            self.shown = Some(target);
-            return None;
-        };
-        if source.buffer.area != target.buffer.area || source.buffer == target.buffer {
-            self.shown = Some(target);
-            self.last_tick = None;
-            return None;
-        }
-        source.set_trees(trees);
-        let mut target = target;
-        target.set_trees(trees);
-        let Some(emphasis) = animation::Emphasis::new(source, target.clone()) else {
-            self.shown = Some(target);
-            self.active = None;
-            self.last_tick = None;
-            return None;
-        };
-        let displayed = emphasis.displayed().clone();
-        self.active = Some(emphasis);
-        self.last_tick = Some(now);
-        Some(displayed)
-    }
-
-    fn timeout(&self, now: Instant) -> Option<Duration> {
-        self.active.as_ref().map(|emphasis| {
-            let since_tick = self
-                .last_tick
-                .map_or(Duration::ZERO, |last_tick| now.saturating_duration_since(last_tick));
-            emphasis.timeout().saturating_sub(since_tick)
-        })
-    }
-
-    fn advance(&mut self, now: Instant) -> Option<ratatui::buffer::Buffer> {
-        let elapsed = self
-            .last_tick
-            .replace(now)
-            .map_or(Duration::ZERO, |previous| now.saturating_duration_since(previous));
-        let emphasis = self.active.as_mut()?;
-        let frame = emphasis.advance(elapsed).cloned();
-        if emphasis.is_complete() {
-            self.shown = Some(emphasis.target().clone());
-            self.active = None;
-            self.last_tick = None;
-        }
-        frame
-    }
-
-    fn finish(&mut self) -> Option<ratatui::buffer::Buffer> {
-        let emphasis = self.active.take()?;
-        let target = emphasis.target().clone();
-        let buffer = target.buffer.clone();
-        self.shown = Some(target);
-        self.last_tick = None;
-        Some(buffer)
-    }
-
-    fn show(&mut self, target: animation::Snapshot) -> ratatui::buffer::Buffer {
-        self.active = None;
-        self.last_tick = None;
-        let buffer = target.buffer.clone();
-        self.shown = Some(target);
-        buffer
-    }
-
-    fn cancel_pending(&mut self) {
-        self.pending = None;
-    }
 }
 
 const TREE_CHANGES_CACHE_SIZE: usize = 8;
@@ -917,7 +799,6 @@ fn event_loop(
     let mut refresh_pending = false;
     let mut ref_tree_refresh_pending = false;
     let mut return_to_history_after_refresh = None;
-    let mut refresh_from_filesystem = false;
     let mut ref_refresh_deadline: Option<Instant> = None;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
@@ -958,7 +839,6 @@ fn event_loop(
     }
     let mut decorations = Decorations::new();
     let mut ref_tree = ref_tree::Tree::default();
-    let mut motion = MotionState::default();
     let mut filesystem_responses = logging::FilesystemResponses::default();
     let mut focused = true;
     draw(
@@ -974,7 +854,6 @@ fn event_loop(
         &mut history_graph,
         &mut selection_relation,
         &mut line_diff_pool,
-        &mut motion,
         focused,
         &mut ref_tree,
         &mut filesystem_responses,
@@ -1029,7 +908,6 @@ fn event_loop(
             app.leave_attention("worktree removed; using the common repository without worktree changes");
             if history_graph.is_some() {
                 refresh_pending = true;
-                refresh_from_filesystem = true;
             }
             dirty = true;
             urgent = true;
@@ -1149,7 +1027,6 @@ fn event_loop(
             }
             let response_ids = filesystem_responses.references_due();
             refresh_pending = true;
-            refresh_from_filesystem = true;
             let invalidated = invalidate_worktree_changes(&mut worktree_changes);
             filesystem_responses.phase(&response_ids, "reference-worktree-cache-invalidation");
             if invalidated {
@@ -1209,14 +1086,8 @@ fn event_loop(
         }
         if repeat_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             repeat_deadline = None;
-            if app.changes_suppressed {
-                app.changes_suppressed = false;
-                dirty = true;
-                urgent = true;
-            } else {
-                fill_repository.retain = false;
-                fill_repository.retained = None;
-            }
+            fill_repository.retain = false;
+            fill_repository.retained = None;
         }
         if let Some(result) = verification_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
@@ -1385,12 +1256,6 @@ fn event_loop(
             let hidden_changed = next.hidden != ref_snapshot.hidden;
             let worktree_tips_changed = ref_tree.is_active() && next.worktrees != ref_snapshot.worktrees;
             let tips_changed = next.view != ref_snapshot.view || hidden_changed || worktree_tips_changed;
-            let from_filesystem = std::mem::take(&mut refresh_from_filesystem);
-            if tips_changed && from_filesystem {
-                motion.capture();
-            } else {
-                motion.cancel_pending();
-            }
             tracing::debug!(
                 ?response_ids,
                 tips_changed,
@@ -1426,18 +1291,6 @@ fn event_loop(
             filesystem_responses.phase(&response_ids, "history-refresh-started");
             tracing::info!(?response_ids, "started history refresh");
         }
-        let now = Instant::now();
-        if motion.timeout(now) == Some(Duration::ZERO)
-            && let Some(frame) = motion.advance(now)
-        {
-            if present_buffer(terminal, &frame)? {
-                filesystem_responses.emphasis_finished("history-emphasis-settled", "completed");
-                filesystem_responses.frame_presented();
-            } else {
-                filesystem_responses.emphasis_aborted("terminal-area-changed");
-            }
-            last_draw = now;
-        }
         if urgent {
             draw(
                 terminal,
@@ -1452,7 +1305,6 @@ fn event_loop(
                 &mut history_graph,
                 &mut selection_relation,
                 &mut line_diff_pool,
-                &mut motion,
                 focused,
                 &mut ref_tree,
                 &mut filesystem_responses,
@@ -1522,7 +1374,6 @@ fn event_loop(
                 &mut history_graph,
                 &mut selection_relation,
                 &mut line_diff_pool,
-                &mut motion,
                 focused,
                 &mut ref_tree,
                 &mut filesystem_responses,
@@ -1540,7 +1391,6 @@ fn event_loop(
         let retry_timeout = watcher_retry_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
         let history_status_timeout =
             history_status_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
-        let animation_timeout = motion.timeout(Instant::now());
         let wake_after = [
             repeat_timeout,
             watcher_timeout,
@@ -1548,7 +1398,6 @@ fn event_loop(
             worktree_timeout,
             retry_timeout,
             history_status_timeout,
-            animation_timeout,
         ]
         .into_iter()
         .flatten()
@@ -1772,17 +1621,7 @@ fn event_loop(
                 (Some(action), repeats_history, true, true)
             }
             TerminalEvent::FocusLost => {
-                if let Some(frame) = motion.finish() {
-                    if present_buffer(terminal, &frame)? {
-                        filesystem_responses.emphasis_finished("emphasis-interrupted-by-focus", "interrupted-by-focus");
-                        filesystem_responses.frame_presented();
-                    } else {
-                        filesystem_responses.emphasis_aborted("terminal-area-changed");
-                    }
-                }
-                motion.cancel_pending();
                 focused = false;
-                app.changes_suppressed = false;
                 repeat_deadline = None;
                 dirty = true;
                 urgent = true;
@@ -1797,34 +1636,12 @@ fn event_loop(
                 continue;
             }
             TerminalEvent::Resize(_, _) => {
-                if let Some(frame) = motion.finish() {
-                    if present_buffer(terminal, &frame)? {
-                        filesystem_responses
-                            .emphasis_finished("emphasis-interrupted-by-resize", "interrupted-by-resize");
-                        filesystem_responses.frame_presented();
-                    } else {
-                        filesystem_responses.emphasis_aborted("terminal-area-changed");
-                    }
-                }
-                motion.cancel_pending();
                 dirty = true;
                 urgent = true;
                 continue;
             }
             _ => continue,
         };
-        if action.as_ref().is_some_and(|action| action != &Action::ForceQuit) {
-            if let Some(frame) = motion.finish() {
-                if present_buffer(terminal, &frame)? {
-                    filesystem_responses.emphasis_finished("emphasis-interrupted-by-input", "interrupted-by-input");
-                    filesystem_responses.frame_presented();
-                } else {
-                    filesystem_responses.emphasis_aborted("terminal-area-changed");
-                }
-                last_draw = Instant::now();
-            }
-            motion.cancel_pending();
-        }
         if !focused {
             continue;
         }
@@ -1836,14 +1653,6 @@ fn event_loop(
         } else if !is_repeat {
             fill_repository.retain = false;
             fill_repository.retained = None;
-        }
-        if repeats_history && app.changes_mode.is_some() {
-            app.changes_suppressed = true;
-        } else if !is_repeat && app.changes_suppressed {
-            app.changes_suppressed = false;
-            repeat_deadline = None;
-            dirty = true;
-            urgent = true;
         }
         if key_pressed
             && action == Some(Action::OpenDiff)
@@ -3085,42 +2894,14 @@ fn event_loop(
                         .as_ref()
                         .context("time-travel requires a completed history graph")
                         .and_then(|graph| {
-                            run_with_rebase_selection(
-                                |report| {
-                                    edit::time_travel::perform_reporting_rebased(
-                                        &repository_path,
-                                        repository_is_bare,
-                                        id,
-                                        graph,
-                                        &review_roots,
-                                        &revisions,
-                                        false,
-                                        report,
-                                    )
-                                },
-                                |id| {
-                                    app.select_commit(id);
-                                    let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
-                                    let tree = tree_changes.as_ref().map(|(_, changes)| changes);
-                                    let worktree = worktree_changes
-                                        .as_ref()
-                                        .filter(|(marker, _)| *marker != usize::MAX)
-                                        .map(|(_, changes)| changes);
-                                    terminal
-                                        .draw(|frame| {
-                                            ui::draw_with_worktree(
-                                                frame,
-                                                &mut app,
-                                                &decorations,
-                                                &mailmap,
-                                                message,
-                                                tree,
-                                                worktree,
-                                            );
-                                        })
-                                        .context("could not draw time-travel animation")?;
-                                    Ok(())
-                                },
+                            edit::time_travel::perform(
+                                &repository_path,
+                                repository_is_bare,
+                                id,
+                                graph,
+                                &review_roots,
+                                &revisions,
+                                false,
                             )
                         });
                     match result {
@@ -3723,7 +3504,6 @@ fn draw(
     history_graph: &mut Option<HistoryGraph>,
     selection_cache: &mut Option<SelectionRelationCache>,
     line_diff_pool: &mut Option<LineDiffPool>,
-    motion: &mut MotionState,
     focused: bool,
     ref_tree: &mut ref_tree::Tree,
     filesystem_responses: &mut logging::FilesystemResponses,
@@ -3733,7 +3513,6 @@ fn draw(
         return Ok(());
     }
     if ref_tree.is_active() {
-        motion.cancel_pending();
         terminal
             .autoresize()
             .context("could not resize the terminal before drawing")?;
@@ -3989,7 +3768,7 @@ fn draw(
     terminal
         .autoresize()
         .context("could not resize the terminal before drawing")?;
-    let layout = {
+    {
         let mut frame = terminal.get_frame();
         ui::draw_with_worktree(
             &mut frame,
@@ -3999,86 +3778,17 @@ fn draw(
             message,
             tree_changes,
             worktree_changes,
-        )
-    };
-    let target = animation::Snapshot::new(terminal.current_buffer_mut().clone(), layout);
-    let ready = matches!(app.state, State::Complete | State::Cancelled);
-    let presented = if motion.has_pending() && ready {
-        let ids = motion.transition_ids(&target);
-        let trees = load_transition_trees(&fill_repository.path, fill_repository.bare, &ids);
-        let started = motion.begin(target.clone(), &trees, Instant::now());
-        if started.is_some() {
-            filesystem_responses.emphasis_started();
-        }
-        started.unwrap_or_else(|| target.buffer.clone())
-    } else {
-        filesystem_responses.emphasis_finished("history-emphasis-superseded", "superseded");
-        let frame = motion.show(target);
-        if ready {
-            let response_ids = filesystem_responses.active_reference_ids().to_vec();
-            filesystem_responses.finish_after_frame(&response_ids, "completed");
-        }
-        frame
-    };
-    terminal.current_buffer_mut().clone_from(&presented);
+        );
+    }
+    if matches!(app.state, State::Complete | State::Cancelled) {
+        let response_ids = filesystem_responses.active_reference_ids().to_vec();
+        filesystem_responses.finish_after_frame(&response_ids, "completed");
+    }
     terminal
         .apply_buffer_with_cursor(None)
         .context("could not draw terminal frame")?;
     filesystem_responses.frame_presented();
     Ok(())
-}
-
-fn load_transition_trees(
-    repository_path: &Path,
-    bare: bool,
-    ids: &[gix::ObjectId],
-) -> HashMap<gix::ObjectId, gix::ObjectId> {
-    if ids.is_empty() {
-        return HashMap::new();
-    }
-    let loaded = (|| -> Result<_> {
-        let mut repository = open_repository(repository_path, bare, true)?;
-        repository.object_cache_size(None);
-        let cache = repository
-            .commit_graph_if_enabled()
-            .context("could not open commit-graph for transition matching")?;
-        let mut buf = Vec::new();
-        let mut trees = HashMap::with_capacity(ids.len());
-        for id in ids {
-            let commit = match gix::traverse::commit::find(cache.as_ref(), &repository.objects, id, &mut buf) {
-                Ok(commit) => commit,
-                Err(err) => {
-                    tracing::debug!(%id, error = %err, "could not load transition commit");
-                    continue;
-                }
-            };
-            match commit.tree_id() {
-                Ok(tree) => {
-                    trees.insert(*id, tree);
-                }
-                Err(err) => tracing::debug!(%id, error = %err, "could not decode transition commit tree"),
-            }
-        }
-        Ok(trees)
-    })();
-    match loaded {
-        Ok(trees) => trees,
-        Err(err) => {
-            tracing::warn!(error = %err, "transition tree matching unavailable");
-            HashMap::new()
-        }
-    }
-}
-
-fn present_buffer(terminal: &mut ratatui::DefaultTerminal, buffer: &ratatui::buffer::Buffer) -> Result<bool> {
-    if terminal.get_frame().area() != buffer.area {
-        return Ok(false);
-    }
-    terminal.current_buffer_mut().clone_from(buffer);
-    terminal
-        .apply_buffer_with_cursor(None)
-        .context("could not draw animation frame")?;
-    Ok(true)
 }
 
 fn open_repository(repository_path: &Path, bare: bool, isolated: bool) -> Result<gix::Repository> {
@@ -4827,80 +4537,6 @@ fn preview_todo_rebase_conflict(
 enum RebaseWorkerEvent<T> {
     Progress(edit::rebase::Progress),
     Complete(Result<T>),
-}
-
-enum TravelWorkerEvent<T> {
-    Rebased(gix::ObjectId),
-    Complete(Result<T>),
-}
-
-fn run_with_rebase_selection<T: Send>(
-    operation: impl FnOnce(&mut dyn FnMut(gix::ObjectId)) -> Result<T> + Send,
-    mut render: impl FnMut(gix::ObjectId) -> Result<()>,
-) -> Result<T> {
-    std::thread::scope(|scope| {
-        let (sender, receiver) = mpsc::channel();
-        let worker = scope.spawn(move || {
-            let mut report = |id| {
-                let _ = sender.send(TravelWorkerEvent::Rebased(id));
-            };
-            let result = operation(&mut report);
-            let _ = sender.send(TravelWorkerEvent::Complete(result));
-        });
-        let mut last_draw: Option<Instant> = None;
-        let mut latest = None;
-        let mut rendered = None;
-        let mut complete = None;
-        let result = loop {
-            let event = if complete.is_some() {
-                None
-            } else if latest != rendered
-                && let Some(last_draw) = last_draw
-            {
-                match receiver.recv_timeout(FRAME_INTERVAL.saturating_sub(last_draw.elapsed())) {
-                    Ok(event) => Some(event),
-                    Err(mpsc::RecvTimeoutError::Timeout) => None,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        break Err(anyhow::anyhow!("time-travel worker stopped unexpectedly"));
-                    }
-                }
-            } else {
-                match receiver.recv() {
-                    Ok(event) => Some(event),
-                    Err(_) => break Err(anyhow::anyhow!("time-travel worker stopped unexpectedly")),
-                }
-            };
-            match event {
-                Some(TravelWorkerEvent::Rebased(id)) => latest = Some(id),
-                Some(TravelWorkerEvent::Complete(result)) => complete = Some(result),
-                None => {}
-            }
-            if latest != rendered
-                && (last_draw.is_none()
-                    || last_draw.is_some_and(|last_draw| last_draw.elapsed() >= FRAME_INTERVAL)
-                    || complete.is_some())
-            {
-                if complete.is_some()
-                    && let Some(last_draw) = last_draw
-                {
-                    std::thread::sleep(FRAME_INTERVAL.saturating_sub(last_draw.elapsed()));
-                }
-                let id = latest.expect("a changed rebased commit is available");
-                if let Err(err) = render(id) {
-                    break Err(err);
-                }
-                rendered = latest;
-                last_draw = Some(Instant::now());
-            }
-            if let Some(result) = complete.take() {
-                break result;
-            }
-        };
-        if worker.join().is_err() {
-            return Err(anyhow::anyhow!("time-travel worker panicked"));
-        }
-        result
-    })
 }
 
 fn run_rebase_plan(
@@ -7882,58 +7518,6 @@ mod tests {
     fn todo_progress_appears_at_three_hundred_milliseconds() {
         assert!(!todo_progress_visible(Duration::from_millis(299)));
         assert!(todo_progress_visible(TODO_PROGRESS_DELAY));
-    }
-
-    #[test]
-    fn fast_time_travel_draws_the_first_and_latest_rebased_commits() -> Result<()> {
-        let ids = [
-            gix::ObjectId::Sha1([1; 20]),
-            gix::ObjectId::Sha1([2; 20]),
-            gix::ObjectId::Sha1([3; 20]),
-        ];
-        let mut rendered = Vec::new();
-
-        run_with_rebase_selection(
-            |report| {
-                for id in ids {
-                    report(id);
-                }
-                Ok(())
-            },
-            |id| {
-                rendered.push(id);
-                Ok(())
-            },
-        )?;
-
-        assert_eq!(rendered, [ids[0], ids[2]], "fast intermediate commits are coalesced");
-        Ok(())
-    }
-
-    #[test]
-    fn slow_time_travel_only_draws_rebased_selections() -> Result<()> {
-        let ids = [gix::ObjectId::Sha1([1; 20]), gix::ObjectId::Sha1([2; 20])];
-        let mut rendered = Vec::new();
-
-        run_with_rebase_selection(
-            |report| {
-                for id in ids {
-                    report(id);
-                    std::thread::sleep(FRAME_INTERVAL * 2);
-                }
-                Ok(())
-            },
-            |id| {
-                rendered.push(id);
-                Ok(())
-            },
-        )?;
-
-        assert_eq!(
-            rendered, ids,
-            "slow travel has no rendering mode besides selection frames"
-        );
-        Ok(())
     }
 
     #[test]

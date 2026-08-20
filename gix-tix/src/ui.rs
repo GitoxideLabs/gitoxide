@@ -151,13 +151,6 @@ fn index_separator(pane: ChangePane, changes: &Changes) -> Option<usize> {
         .then_some(index)
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct FrameLayout {
-    pub history: Rect,
-    pub overlays: Vec<Rect>,
-    pub rows: Vec<(gix::ObjectId, u16)>,
-}
-
 fn changes_pane_areas(
     area: Rect,
     max_height: u16,
@@ -321,7 +314,7 @@ pub(crate) fn draw_with_worktree(
     commit_message: Option<&BStr>,
     tree_changes: Option<&Changes>,
     worktree_changes: Option<&Changes>,
-) -> FrameLayout {
+) {
     let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
     let full_body = body;
     let selected_segment = app.selected_is_segment();
@@ -697,14 +690,6 @@ pub(crate) fn draw_with_worktree(
     let selection_info_width = selection_info.width();
     let mut selection_info_area = None;
 
-    let rows = visible_entries
-        .iter()
-        .enumerate()
-        .filter_map(|(index, entry)| match entry {
-            HistoryEntry::Commit(row_index) => Some((app.rows[*row_index].id, body.y.saturating_add(index as u16))),
-            HistoryEntry::Segment { .. } => None,
-        })
-        .collect();
     for (index, metadata) in metadata.into_iter().enumerate() {
         let lane = lanes.lane(index);
         let y = body.y.saturating_add(index as u16);
@@ -825,7 +810,7 @@ pub(crate) fn draw_with_worktree(
         }
         if conflict {
             frame.render_widget(
-                Paragraph::new("💥").style(color(Color::LightRed).add_modifier(Modifier::SLOW_BLINK)),
+                Paragraph::new("💥").style(color(Color::LightRed)),
                 Rect::new(
                     body.x
                         .saturating_add(enrichment_gutter)
@@ -1363,19 +1348,9 @@ pub(crate) fn draw_with_worktree(
             render_undo_progress(frame, area, notice.kind, applied, total);
         }
     }
-    let prefix_popup_area = prefix_popup
+    let _ = prefix_popup
         .filter(|_| prefix_popup_allowed)
         .and_then(|(anchor, items)| render_prefix_popup(frame, footer, anchor, items));
-    FrameLayout {
-        history: body,
-        overlays: changes_pane_underlays
-            .into_iter()
-            .chain(commit_pane.map(|(outer, _)| outer))
-            .chain(notice_area)
-            .chain(prefix_popup_area)
-            .collect(),
-        rows,
-    }
 }
 
 fn render_undo_progress(frame: &mut Frame<'_>, area: Rect, kind: NoticeKind, applied: usize, total: usize) {
@@ -2820,10 +2795,9 @@ mod tests {
         app.update(Action::ToggleInformation);
         app.show_undo_position(1, 4, "reword commit");
         let mut terminal = Terminal::new(TestBackend::new(80, 5))?;
-        let mut layout = None;
 
         terminal.draw(|frame| {
-            layout = Some(super::draw_with_worktree(
+            super::draw_with_worktree(
                 frame,
                 &mut app,
                 &Decorations::new(),
@@ -2831,12 +2805,9 @@ mod tests {
                 None,
                 None,
                 None,
-            ));
+            );
         })?;
 
-        let layout = layout.as_ref().expect("drawing returns its layout");
-        assert_eq!(layout.history.x, 0, "undo progress does not shift history");
-        assert_eq!(layout.history.width, 80, "history retains the complete width");
         let notice_y = (0..4)
             .find(|y| rendered_line(&terminal, *y).contains("reword commit · 1 undo · 3 redo"))
             .expect("the undo message is visible");
@@ -3244,9 +3215,8 @@ mod tests {
         );
 
         app.information_expanded = true;
-        let mut layout = None;
         terminal.draw(|frame| {
-            layout = Some(super::draw_with_worktree(
+            super::draw_with_worktree(
                 frame,
                 &mut app,
                 &Decorations::new(),
@@ -3254,17 +3224,12 @@ mod tests {
                 None,
                 None,
                 None,
-            ));
+            );
         })?;
         assert!(rendered_line(&terminal, 0).trim_start().starts_with("REBASE PAUSED"));
         assert!(
             rendered_line(&terminal, 1).contains("[ title"),
             "the popup keeps its footer-adjacent row"
-        );
-        assert_eq!(
-            layout.expect("drawing returns its layout").history.height,
-            1,
-            "moving the notice leaves history geometry unchanged"
         );
         app.information_expanded = false;
 
@@ -4170,10 +4135,9 @@ mod tests {
         app.configure_hidden_filter(true);
         app.history_display_expanded = true;
         let mut terminal = Terminal::new(TestBackend::new(180, 2))?;
-        let mut layout = None;
 
         terminal.draw(|frame| {
-            layout = Some(super::draw_with_worktree(
+            super::draw_with_worktree(
                 frame,
                 &mut app,
                 &Decorations::new(),
@@ -4181,7 +4145,7 @@ mod tests {
                 None,
                 None,
                 None,
-            ));
+            );
         })?;
 
         let footer = rendered_line(&terminal, 1);
@@ -4205,13 +4169,6 @@ mod tests {
         );
         assert_reversed_group(&terminal, 1, "view");
         assert_reversed_group(&terminal, 0, &format!(" {view} "));
-        let popup_area = Rect::new(view_x, 0, Line::raw(format!(" {view} ")).width() as u16, 1);
-        let layout = layout.expect("drawing returns its layout");
-        assert_eq!(layout.history.height, 1, "the popout does not reserve history space");
-        assert!(
-            layout.overlays.contains(&popup_area),
-            "animation treats the floating menu as an overlay"
-        );
 
         app.history_display_expanded = false;
         app.commit_expanded = true;
@@ -5101,10 +5058,10 @@ mod tests {
         );
         assert_eq!(terminal.backend().buffer()[(6, 0)].fg, Color::LightRed);
         assert!(
-            terminal.backend().buffer()[(6, 0)]
+            !terminal.backend().buffer()[(6, 0)]
                 .modifier
                 .contains(Modifier::SLOW_BLINK),
-            "the conflict marker remains visually urgent"
+            "the conflict marker remains steady"
         );
 
         terminal.draw(|frame| {
@@ -5468,10 +5425,9 @@ mod tests {
             ..Changes::default()
         };
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
-        let mut layout = None;
 
         terminal.draw(|frame| {
-            layout = Some(super::draw_with_worktree(
+            super::draw_with_worktree(
                 frame,
                 &mut app,
                 &Decorations::new(),
@@ -5479,30 +5435,12 @@ mod tests {
                 None,
                 Some(&changes),
                 None,
-            ));
+            );
         })?;
 
         assert!(rendered_line(&terminal, 3).contains("diff: failed deliberately"));
         assert_eq!(terminal.backend().buffer()[(2, 3)].bg, PANE_STATUS_BACKGROUND);
         assert!(rendered_line(&terminal, 4).contains("[ title"));
-        let layout = layout.expect("drawing returns its layout");
-        assert_eq!(
-            layout.history.height, 5,
-            "moving the changes pane leaves history geometry unchanged"
-        );
-        let popup = layout
-            .overlays
-            .iter()
-            .copied()
-            .find(|area| area.y == 4 && area.height == 1)
-            .expect("the popup is a one-line overlay above the footer");
-        assert!(popup.width < 120, "the popup leaves pane underlay visible on its row");
-        assert!(
-            (0..popup.x)
-                .chain(popup.right()..120)
-                .all(|x| terminal.backend().buffer()[(x, popup.y)].symbol() == " "),
-            "the grown changes pane keeps history covered beneath the floating popup"
-        );
         Ok(())
     }
 
@@ -5804,28 +5742,6 @@ mod tests {
             "the main status keeps its original background"
         );
         assert!(!rendered_line(&terminal, 15).contains("<tab> switch"));
-
-        app.changes_suppressed = true;
-        app.information_expanded = true;
-        terminal.draw(|frame| {
-            super::draw(
-                frame,
-                &mut app,
-                &Decorations::new(),
-                &gix::mailmap::Snapshot::default(),
-                None,
-                Some(&changes),
-            );
-        })?;
-        assert!(
-            !rendered_line(&terminal, 7).contains("files changed"),
-            "repeated history navigation temporarily hides the changes pane"
-        );
-        assert!(
-            app.changes_mode.is_some() && !popup_is_dim(&terminal, "changes"),
-            "temporary suppression leaves the persistent changes setting enabled"
-        );
-        app.changes_suppressed = false;
 
         app.update(Action::ToggleChangesFocus);
         app.update(Action::MoveDown);
@@ -6409,9 +6325,8 @@ mod tests {
         app.leave_success(
             "success success success success success success success success success success success success",
         );
-        let mut notice_layout = None;
         terminal.draw(|frame| {
-            notice_layout = Some(super::draw_with_worktree(
+            super::draw_with_worktree(
                 frame,
                 &mut app,
                 &Decorations::new(),
@@ -6419,9 +6334,8 @@ mod tests {
                 None,
                 Some(&tree),
                 Some(&worktree),
-            ));
+            );
         })?;
-        let notice = Rect::new(62, 4, 56, 2);
         assert_eq!(terminal.backend().buffer()[(62, 4)].bg, Color::Green);
         assert_eq!(
             terminal.backend().buffer()[(60, 4)].bg,
@@ -6432,13 +6346,6 @@ mod tests {
             terminal.backend().buffer()[(60, 9)].bg,
             Color::Reset,
             "the footer is never covered"
-        );
-        assert!(
-            notice_layout
-                .expect("drawing returns its layout")
-                .overlays
-                .contains(&notice),
-            "animation treats the wrapped notice as reserved space"
         );
         Ok(())
     }
@@ -7228,12 +7135,11 @@ mod tests {
         app.show_commit = true;
 
         let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
-        let mut layout = None;
         let decorations = Decorations::new();
         let mailmap = gix::mailmap::Snapshot::default();
         let stale_tree_changes = Changes::default();
         terminal.draw(|frame| {
-            layout = Some(draw_with_worktree(
+            draw_with_worktree(
                 frame,
                 &mut app,
                 &decorations,
@@ -7241,7 +7147,7 @@ mod tests {
                 Some(BStr::new(b"stale commit message")),
                 Some(&stale_tree_changes),
                 None,
-            ));
+            );
         })?;
 
         assert!(
@@ -7263,15 +7169,9 @@ mod tests {
         for hidden in [" · commit", " · actions", " · enrich", " · copy"] {
             assert!(!footer.contains(hidden), "synthetic selection hides {hidden:?}");
         }
-        let layout = layout.expect("drawing returns its layout");
         assert!(
-            layout.overlays.is_empty(),
+            (0..3).all(|y| !rendered_line(&terminal, y).contains("stale commit message")),
             "stale commit-message and tree-change panes stay hidden"
-        );
-        assert_eq!(
-            layout.rows,
-            vec![(ids[0], 0)],
-            "a selectable summary still has no commit identity for animation"
         );
         Ok(())
     }

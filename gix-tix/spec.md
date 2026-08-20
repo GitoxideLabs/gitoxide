@@ -596,10 +596,7 @@ space first; changes blocks adapt within the remaining history width.
   block shows its distinct status line.
 - `p` cycles the comparison parent while Tree has focus. Merge commits are
   compared to one parent at a time; root commits compare against an empty tree.
-- Repeated history keys, including printable `j`/`k` reported through enhanced
-  keyboard input, and vertical mouse bursts temporarily hide changes
-  overlays. They return after 75 ms of navigation idle, with the same path
-  selection and viewport where possible.
+- History navigation leaves enabled changes overlays visible.
 - Tree diff results, detached diff resources, and line counts use a bounded MRU
   while changes remain enabled. Worktree results are cached separately and
   invalidated by relevant filesystem events.
@@ -785,7 +782,7 @@ space first; changes blocks adapt within the remaining history width.
   A conflict retains the ours tree, exact merge-result
   tree, conflict stages, prepared commits, and in-memory objects without changing
   the repository. The actual conflicting row is selected and centered with normal
-  history-boundary clamping and shows a blinking red `C`; `<enter>` persists
+  history-boundary clamping and shows a steady red conflict marker; `<enter>` persists
   the prepared rebase, leaves later descendants lazy, checks out the conflicting
   commit at the ours tree, then checks out the merge result and derives the
   unmerged index from it. `Esc` discards the suspended operation; navigation and
@@ -993,8 +990,8 @@ space first; changes blocks adapt within the remaining history width.
   ordinary steps remain lazy while squash groups are still materialized.
   Any conflict while applying a history todo first remains entirely in memory.
   The TUI projects the partial result, selects and centers the actual conflicting
-  result with normal history-boundary clamping, and marks it with a blinking red
-  `C`; predicted ref decorations remain at their
+  result with normal history-boundary clamping, and marks it with a steady red
+  conflict marker; predicted ref decorations remain at their
   repository positions. Repository-backed overlay content is hidden while these
   candidate objects exist only in memory. History and pane navigation and other
   read-only actions leave the preview armed; repository-changing actions and
@@ -1017,13 +1014,9 @@ space first; changes blocks adapt within the remaining history width.
   requires only that `HEAD` names a commit and the index has no unresolved stages;
   the index tree, including additional staged changes, becomes the resolved tree.
   There is no hidden sequencer state or separate continue/abort command.
-- Interactive todo application and time travel run on a scoped worker so the
-  terminal can remain renderable without cloning the cached history graph.
-  Todo application shows its modal gauge after 300 ms. During TUI time travel,
-  the history selection instead follows each pending commit after it is rebased.
-  The first and latest rows are drawn even for fast multi-commit operations;
-  intermediate rows may be coalesced to keep drawing at or below 60 fps.
-  Command-line `tix rebase apply` and `tix travel` do not animate.
+- Interactive todo application runs on a scoped worker and shows its modal gauge
+  after 300 ms. TUI and command-line time travel complete without intermediate
+  history-selection frames.
 - Displayed mutable refs follow their explicit locations in the edited todo;
   omission deletes them and newly named refs require nonexistence. Refs checked
   out by linked worktrees are displayed normally and may move, with their index
@@ -1137,11 +1130,8 @@ space first; changes blocks adapt within the remaining history width.
   failure while still needed.
 - Refresh status remains hidden for 500 ms so quick background work does not
   flicker the footer.
-- A filesystem history refresh is presented immediately. New or replaced visible
-  rows are bold for 180 ms, matched first by commit ID and then by tree ID so
-  rewords retain visual identity. Removals, unrelated replacements, manual
-  actions, hidden toggles, and worktree-only updates are immediate without
-  emphasis. Input, focus changes, and resizing end emphasis immediately.
+- A filesystem history refresh is presented immediately as one complete frame,
+  without animating or retaining intermediate history layouts.
 - While the terminal is unfocused, filesystem-attributed redraws replace footer
   separators with persistent orange discs. Focus restores normal separators.
 - Filesystem responses receive correlated IDs in daily tracing logs, including
@@ -1205,8 +1195,5 @@ space first; changes blocks adapt within the remaining history width.
 - Unit tests cover navigation, projections, pane layout, status summaries,
   selection restoration, watcher classification, cached graph walks, diff
   preparation, signatures, rewording, and terminal rendering.
-- Filesystem row emphasis uses `insta` snapshots containing every distinct frame;
-  unchanged hold frames are omitted. Run `cargo insta test -p gix-tix -F sha1`
-  and review with `cargo insta review`; never edit snapshots manually.
 - Behavior changes to this specification require corresponding tests and an
   update to this document in the same semantic patch.
