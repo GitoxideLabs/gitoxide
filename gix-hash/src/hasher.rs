@@ -1,10 +1,5 @@
 /// The error returned by [`Hasher::try_finalize()`](crate::Hasher::try_finalize()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Detected SHA-1 collision attack with digest {digest}")]
-    CollisionAttack { digest: crate::ObjectId },
-}
+pub type Error = gix_error::CorruptionError;
 
 pub(super) mod _impl {
     #[cfg(feature = "sha1")]
@@ -80,9 +75,10 @@ pub(super) mod _impl {
                             std::hint::unreachable_unchecked()
                         }
                     }
-                    CollisionResult::Collision(digest) => Err(Error::CollisionAttack {
-                        digest: crate::ObjectId::Sha1(digest.into()),
-                    }),
+                    CollisionResult::Collision(digest) => Err(Error::new(format!(
+                        "Detected SHA-1 collision attack with digest {}",
+                        crate::ObjectId::Sha1(digest.into())
+                    ))),
                 },
                 #[cfg(feature = "sha256")]
                 Hasher::Sha256(sha256) => Ok(crate::ObjectId::Sha256(sha2::Digest::finalize(sha256).into())),

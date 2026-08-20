@@ -17,7 +17,7 @@ mod error {
         #[error(transparent)]
         Header(#[from] decode::header::Error),
         #[error("Could not hash index data")]
-        Hasher(#[from] gix_hash::hasher::Error),
+        Hasher(#[source] std::io::Error),
         #[error("Index data would require more memory than can be reserved")]
         OutOfMemory,
         #[error("Could not parse entry at index {index}")]
@@ -80,7 +80,9 @@ impl State {
     ) -> Result<(Self, Option<gix_hash::ObjectId>), Error> {
         let _span = gix_features::trace::detail!("gix_index::State::from_bytes()", options = ?_options);
         let (version, num_entries, post_header_data) = header::decode(data, object_hash)?;
-        let start_of_extensions = extension::end_of_index_entry::decode(data, object_hash)?;
+        let start_of_extensions = extension::end_of_index_entry::decode(data, object_hash)
+            .map_err(gix_hash::io::from_hasher)
+            .map_err(|err| Error::Hasher(std::io::Error::other(err.into_error())))?;
         if num_entries as usize > entries::max_entries_possible(data.len(), start_of_extensions, object_hash, version) {
             return Err(header::Error::Corrupt("Declared entry count exceeds possible entries for file size").into());
         }

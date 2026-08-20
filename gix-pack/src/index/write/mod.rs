@@ -204,7 +204,7 @@ pub(super) mod function {
 
         root_progress.inc();
 
-        let (resolver, pack) = make_resolver().map_err(gix_hash::io::Error::from)?;
+        let (resolver, pack) = make_resolver().map_err(gix_hash::io::from_std_io)?;
         let sorted_pack_offsets_by_oid = {
             let traverse::Outcome { roots, children } = tree.traverse(
                 resolver,
@@ -249,7 +249,7 @@ pub(super) mod function {
                 let header = crate::data::header::encode(pack_version, 0);
                 let mut hasher = gix_hash::hasher(object_hash);
                 hasher.update(&header);
-                hasher.try_finalize().map_err(gix_hash::io::Error::from)?
+                hasher.try_finalize().map_err(gix_hash::io::from_hasher)?
             }
             None => return Err(Error::IteratorInvariantTrailer),
         };

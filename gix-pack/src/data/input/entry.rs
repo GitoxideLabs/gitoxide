@@ -59,7 +59,7 @@ fn compress_data(obj: &gix_object::Data<'_>, compression: gix_zlib::Compression)
     let mut out = gix_zlib::stream::deflate::Write::new(Vec::new(), compression);
     if let Err(err) = std::io::copy(&mut &*obj.data, &mut out) {
         match err.kind() {
-            std::io::ErrorKind::Other => return Err(input::Error::Io(err.into())),
+            std::io::ErrorKind::Other => return Err(input::Error::Io(err)),
             err => {
                 unreachable!("Should never see other errors than zlib, but got {:?}", err)
             }

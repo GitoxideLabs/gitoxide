@@ -12,7 +12,7 @@ pub enum Error {
     #[error("The clock was off when reading file related metadata after updating a file on disk")]
     Time(#[from] std::time::SystemTimeError),
     #[error("IO error while writing blob or reading file metadata or changing filetype")]
-    Io(#[from] gix_hash::io::Error),
+    Io(#[from] std::io::Error),
     #[error("Failed to obtain blob from object database")]
     Find(#[from] gix_object::find::existing_object::Error),
     #[error("Could not determine status for submodule at '{rela_path}'")]
@@ -20,6 +20,12 @@ pub enum Error {
         rela_path: BString,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+}
+
+impl From<gix_hash::io::Error> for Error {
+    fn from(err: gix_hash::io::Error) -> Self {
+        Error::Io(std::io::Error::other(err.into_error()))
+    }
 }
 
 /// Options that control how the index status with a worktree is computed.

@@ -8,12 +8,18 @@ mod error {
     #[expect(missing_docs)]
     pub enum Error {
         #[error("Could not read index file to generate hash")]
-        Io(#[from] gix_hash::io::Error),
+        Io(#[from] std::io::Error),
         #[error("Index checksum mismatch")]
         Verify(#[from] gix_hash::verify::Error),
     }
 }
 pub use error::Error;
+
+impl From<gix_hash::io::Error> for Error {
+    fn from(err: gix_hash::io::Error) -> Self {
+        Error::Io(std::io::Error::other(err.into_error()))
+    }
+}
 
 impl File {
     /// Verify the integrity of the index to assure its consistency.
@@ -21,7 +27,7 @@ impl File {
         let _span = gix_features::trace::coarse!("gix_index::File::verify_integrity()");
         if let Some(checksum) = self.checksum {
             let num_bytes_to_hash =
-                self.path.metadata().map_err(gix_hash::io::Error::from)?.len() - checksum.as_bytes().len() as u64;
+                self.path.metadata().map_err(gix_hash::io::from_std_io)?.len() - checksum.as_bytes().len() as u64;
             let should_interrupt = AtomicBool::new(false);
             gix_hash::bytes_of_file(
                 &self.path,

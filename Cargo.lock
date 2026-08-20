@@ -2016,13 +2016,13 @@ dependencies = [
  "bstr",
  "document-features",
  "faster-hex",
+ "gix-error",
  "gix-features",
  "gix-hash",
  "gix-testtools",
  "serde",
  "sha1-checked",
  "sha2",
- "thiserror 2.0.18",
 ]
 
 [[package]]

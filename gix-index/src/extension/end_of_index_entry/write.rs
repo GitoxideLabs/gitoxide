@@ -12,18 +12,21 @@ pub fn write_to(
     offset_to_extensions: u32,
     prior_extensions: impl IntoIterator<Item = (Signature, u32)>,
 ) -> Result<(), gix_hash::io::Error> {
-    out.write_all(&SIGNATURE)?;
+    out.write_all(&SIGNATURE).map_err(gix_hash::io::from_std_io)?;
     let extension_size: u32 = 4 + object_hash.len_in_bytes() as u32;
-    out.write_all(&extension_size.to_be_bytes())?;
+    out.write_all(&extension_size.to_be_bytes())
+        .map_err(gix_hash::io::from_std_io)?;
 
-    out.write_all(&offset_to_extensions.to_be_bytes())?;
+    out.write_all(&offset_to_extensions.to_be_bytes())
+        .map_err(gix_hash::io::from_std_io)?;
 
     let mut hasher = gix_hash::hasher(object_hash);
     for (signature, size) in prior_extensions {
         hasher.update(&signature);
         hasher.update(&size.to_be_bytes());
     }
-    out.write_all(hasher.try_finalize()?.as_slice())?;
+    out.write_all(hasher.try_finalize().map_err(gix_hash::io::from_hasher)?.as_slice())
+        .map_err(gix_hash::io::from_std_io)?;
 
     Ok(())
 }

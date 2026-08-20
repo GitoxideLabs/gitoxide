@@ -9,11 +9,14 @@ impl ChangeId {
     pub fn from_reverse_hex(buffer: &[u8]) -> Result<Self, crate::decode::Error> {
         let len = buffer.len();
         if crate::Kind::from_hex_len(len).is_none_or(|kind| kind.len_in_hex() != len) {
-            return Err(crate::decode::Error::InvalidHexEncodingLength(len));
+            return Err(crate::decode::Error::new(format!(
+                "A hash sized {len} hexadecimal characters is invalid"
+            )));
         }
 
         let mut hex = Kind::hex_buf();
-        reverse_hex_to_hex(buffer, &mut hex[..len]).map_err(|()| crate::decode::Error::Invalid)?;
+        reverse_hex_to_hex(buffer, &mut hex[..len])
+            .map_err(|()| crate::decode::Error::new("Invalid character encountered"))?;
         ObjectId::from_hex(&hex[..len]).map(ChangeId)
     }
 

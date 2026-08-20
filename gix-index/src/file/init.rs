@@ -82,10 +82,12 @@ impl File {
                         &mut gix_features::progress::Discard,
                         &Default::default(),
                     )
-                    .map_err(|err| match err {
-                        gix_hash::io::Error::Io(err) => Error::Io(err),
-                        gix_hash::io::Error::Hasher(err) => Error::Decode(err.into()),
-                    })?
+                    .map_err(
+                        |err| match err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind) {
+                            Some(kind) => Error::Io(std::io::Error::new(kind, err.into_error())),
+                            None => Error::Decode(decode::Error::Hasher(std::io::Error::other(err.into_error()))),
+                        },
+                    )?
                     .verify(&expected)
                     .map_err(decode::Error::from)?;
                 }
