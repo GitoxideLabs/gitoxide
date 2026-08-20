@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+#[cfg(feature = "parallel")]
+use gix_error::ErrorExt;
+
 use super::Iter;
 use crate::{
     PathspecDetached, Repository, bstr::BString, dirwalk, util::OwnedOrStaticAtomicBool,
@@ -81,10 +84,13 @@ impl Iter {
                             index,
                             excludes: out.excludes.detach(),
                             pathspec: out.pathspec.detach().map_err(|err| {
-                                dirwalk::Error::Walk(gix_dir::walk::Error::ReadDir {
-                                    path: repo.git_dir().to_owned(),
-                                    source: err,
-                                })
+                                dirwalk::Error::Walk(
+                                    err.and_raise(gix_error::message!(
+                                        "Could not detach the pathspec at '{}'",
+                                        repo.git_dir().display()
+                                    ))
+                                    .into_error(),
+                                )
                             })?,
                             traversal_root: out.traversal_root,
                             dirwalk: out.dirwalk,

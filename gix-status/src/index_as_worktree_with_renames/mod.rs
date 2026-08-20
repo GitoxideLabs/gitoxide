@@ -117,7 +117,7 @@ pub(super) mod function {
                                     options,
                                     &mut collect,
                                 )
-                                .map_err(Error::DirWalk)
+                                .map_err(|err| Error::DirWalk(err.into_error()))
                             }
                         })
                         .map_err(Error::SpawnThread)
