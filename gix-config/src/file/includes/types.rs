@@ -1,30 +1,7 @@
-use std::path::PathBuf;
-
-use crate::{parse, path::interpolate};
+use crate::path::interpolate;
 
 /// The error returned when following includes.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Failed to copy configuration file into buffer")]
-    CopyBuffer(#[source] std::io::Error),
-    #[error("Could not read included configuration file at '{}'", path.display())]
-    Io { path: PathBuf, source: std::io::Error },
-    #[error(transparent)]
-    Parse(#[from] parse::Error),
-    #[error(transparent)]
-    Span(#[from] parse::span::Error),
-    #[error(transparent)]
-    Interpolate(gix_error::Error),
-    #[error("The maximum allowed length {} of the file include chain built by following nested resolve_includes is exceeded", .max_depth)]
-    IncludeDepthExceeded { max_depth: u8 },
-    #[error("Include paths from environment variables must not be relative as no config file paths exists as root")]
-    MissingConfigPath,
-    #[error("The git directory must be provided to support `gitdir:` conditional includes")]
-    MissingGitDir,
-    #[error(transparent)]
-    Realpath(gix_error::Error),
-}
+pub type Error = gix_error::Exn;
 
 /// Options to handle includes, like `include.path` or `includeIf.<condition>.path`,
 #[derive(Clone, Copy)]

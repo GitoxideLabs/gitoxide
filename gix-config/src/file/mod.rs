@@ -27,31 +27,13 @@ pub mod section;
 ///
 pub mod rename_section {
     /// The error returned by [`File::rename_section(…)`][crate::File::rename_section()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Lookup(#[from] crate::lookup::existing::Error),
-        #[error(transparent)]
-        Section(#[from] crate::parse::section::header::Error),
-    }
+    pub type Error = gix_error::Exn;
 }
 
 ///
 pub mod set_raw_value {
     /// The error returned by [`File::set_raw_value(…)`][crate::File::set_raw_value()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Lookup(#[from] crate::lookup::existing::Error),
-        #[error(transparent)]
-        Header(#[from] crate::parse::section::header::Error),
-        #[error(transparent)]
-        ValueName(#[from] crate::parse::section::value_name::Error),
-        #[error(transparent)]
-        Span(#[from] crate::parse::span::Error),
-    }
+    pub type Error = gix_error::Exn;
 }
 
 /// Convert ergonomic subsection inputs into an optional owned name.

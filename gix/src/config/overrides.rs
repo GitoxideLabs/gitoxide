@@ -7,11 +7,7 @@ pub enum Error {
     #[error("{input:?} is not a valid configuration key. Examples are 'core.abbrev' or 'remote.origin.url'")]
     InvalidKey { input: BString },
     #[error(transparent)]
-    SectionHeader(#[from] gix_config::parse::section::header::Error),
-    #[error(transparent)]
-    Span(#[from] gix_config::parse::span::Error),
-    #[error(transparent)]
-    ConfigValue(#[from] gix_config::file::section::value::Error),
+    Config(#[from] gix_error::ValidationError),
 }
 
 pub(crate) fn append(

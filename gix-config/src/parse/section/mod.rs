@@ -27,9 +27,7 @@ mod types {
             ///
             pub mod $module {
                 /// The error returned when `TryFrom` is invoked to create an instance.
-                #[derive(Debug, thiserror::Error, Copy, Clone)]
-                #[error($err_doc)]
-                pub struct Error;
+                pub type Error = gix_error::ValidationError;
             }
 
             #[doc = $comment]
@@ -104,7 +102,7 @@ mod types {
                     if $validate(s.as_slice().as_bstr()) {
                         Ok(Self(s.into()))
                     } else {
-                        Err($module::Error)
+                        Err(gix_error::ValidationError::new_with_input($err_doc, s))
                     }
                 }
             }
@@ -116,7 +114,7 @@ mod types {
                     if $validate(s) {
                         Ok(Self(s.into()))
                     } else {
-                        Err($module::Error)
+                        Err(gix_error::ValidationError::new_with_input($err_doc, s))
                     }
                 }
             }

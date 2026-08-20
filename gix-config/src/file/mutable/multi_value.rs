@@ -74,7 +74,7 @@ impl MultiValueMut<'_> {
         }
 
         if values.is_empty() {
-            return Err(lookup::existing::Error::KeyMissing);
+            return Err(lookup::existing::key_missing());
         }
 
         Ok(values)

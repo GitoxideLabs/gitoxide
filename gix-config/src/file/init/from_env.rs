@@ -1,36 +1,9 @@
 use bstr::ByteSlice;
 
-use crate::{File, KeyRef, file, file::init, parse::section, path::interpolate};
+use crate::{File, KeyRef, file, file::init};
 
 /// Represents the errors that may occur when calling [`File::from_env()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Configuration {kind} at index {index} contained illformed UTF-8")]
-    IllformedUtf8 { index: usize, kind: &'static str },
-    #[error("GIT_CONFIG_COUNT was not a positive integer: {}", .input)]
-    InvalidConfigCount { input: String },
-    #[error("GIT_CONFIG_KEY_{} was not set", .key_id)]
-    InvalidKeyId { key_id: usize },
-    #[error("GIT_CONFIG_KEY_{} was set to an invalid value: {}", .key_id, .key_val)]
-    InvalidKeyValue { key_id: usize, key_val: String },
-    #[error("GIT_CONFIG_VALUE_{} was not set", .value_id)]
-    InvalidValueId { value_id: usize },
-    #[error(transparent)]
-    PathInterpolationError(gix_error::Error),
-    #[error(transparent)]
-    Includes(#[from] init::includes::Error),
-    #[error(transparent)]
-    Section(#[from] section::header::Error),
-    #[error(transparent)]
-    SectionValue(#[from] file::section::value::Error),
-}
-
-impl From<interpolate::Error> for Error {
-    fn from(err: interpolate::Error) -> Self {
-        Error::PathInterpolationError(err.into_error())
-    }
-}
+pub type Error = gix_error::Exn;
 
 /// Instantiation from environment variables
 impl File {
@@ -41,9 +14,12 @@ impl File {
     ///
     /// [`git-config`'s documentation]: https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGCOUNT
     pub fn from_env(options: init::Options<'_>) -> Result<Option<File>, Error> {
+        use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, ValidationError, message};
         use std::env;
         let count: usize = match env::var("GIT_CONFIG_COUNT") {
-            Ok(v) => v.parse().map_err(|_| Error::InvalidConfigCount { input: v })?,
+            Ok(v) => v.parse::<usize>().or_raise_erased(|| {
+                ValidationError::new_with_input("GIT_CONFIG_COUNT was not a positive integer", v)
+            })?,
             Err(_) => return Ok(None),
         };
 
@@ -60,33 +36,41 @@ impl File {
         let mut config = File::new(meta);
         for i in 0..count {
             let key = gix_path::os_string_into_bstring(
-                env::var_os(format!("GIT_CONFIG_KEY_{i}")).ok_or(Error::InvalidKeyId { key_id: i })?,
+                env::var_os(format!("GIT_CONFIG_KEY_{i}"))
+                    .ok_or_raise_erased(|| NotFoundError::new(format!("GIT_CONFIG_KEY_{i} was not set")))?,
             )
-            .map_err(|_| Error::IllformedUtf8 { index: i, kind: "key" })?;
-            let value = env::var_os(format!("GIT_CONFIG_VALUE_{i}")).ok_or(Error::InvalidValueId { value_id: i })?;
-            let key = KeyRef::parse_unvalidated(key.as_ref()).ok_or_else(|| Error::InvalidKeyValue {
-                key_id: i,
-                key_val: key.to_string(),
+            .or_raise_erased(|| {
+                ValidationError::new(format!("Configuration key at index {i} contained illformed UTF-8"))
+            })?;
+            let value = env::var_os(format!("GIT_CONFIG_VALUE_{i}"))
+                .ok_or_raise_erased(|| NotFoundError::new(format!("GIT_CONFIG_VALUE_{i} was not set")))?;
+            let key = KeyRef::parse_unvalidated(key.as_ref()).ok_or_else(|| {
+                ValidationError::new_with_input(format!("GIT_CONFIG_KEY_{i} was set to an invalid value"), key.clone())
+                    .raise_erased()
             })?;
 
             config
-                .section_mut_or_create_new_inner(key.section_name, key.subsection_name)?
+                .section_mut_or_create_new_inner(key.section_name, key.subsection_name)
+                .or_erased()?
                 .push(
                     key.value_name,
                     Some(
                         gix_path::os_str_into_bstr(&value)
-                            .map_err(|_| Error::IllformedUtf8 {
-                                index: i,
-                                kind: "value",
+                            .or_raise_erased(|| {
+                                ValidationError::new(format!(
+                                    "Configuration value at index {i} contained illformed UTF-8"
+                                ))
                             })?
                             .as_bytes()
                             .into(),
                     ),
-                )?;
+                )
+                .or_erased()?;
         }
 
         let mut buf = Vec::new();
-        init::includes::resolve(&mut config, &mut buf, options)?;
+        init::includes::resolve(&mut config, &mut buf, options)
+            .or_raise_erased(|| message("Could not resolve includes in environment configuration"))?;
         Ok(Some(config))
     }
 }

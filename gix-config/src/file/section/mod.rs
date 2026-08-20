@@ -18,14 +18,7 @@ use crate::file::{SectionId, write::platform_newline};
 /// Errors related to changing values in a section.
 pub mod value {
     /// The error returned when adding or changing a value in a section.
-    #[derive(Debug, thiserror::Error)]
-    #[allow(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ValueName(#[from] crate::parse::section::value_name::Error),
-        #[error(transparent)]
-        Span(#[from] crate::parse::span::Error),
-    }
+    pub type Error = gix_error::ValidationError;
 }
 
 impl std::ops::Deref for SectionData {

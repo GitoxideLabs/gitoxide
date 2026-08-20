@@ -17,8 +17,11 @@ mod from_path_no_includes {
         let config_path = dir.path().join("config");
 
         let err = gix_config::File::from_path_no_includes(config_path, gix_config::Source::Local).unwrap_err();
-        assert!(
-            matches!(err,  gix_config::file::init::from_paths::Error::Io{source: io_error, ..} if io_error.kind() == std::io::ErrorKind::NotFound)
+        assert_eq!(
+            err.downcast_any_ref::<std::io::Error>()
+                .expect("the I/O source is retained")
+                .kind(),
+            std::io::ErrorKind::NotFound
         );
     }
 

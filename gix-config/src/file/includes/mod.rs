@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
-use gix_error::ValidationError;
+use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, ValidationError, message};
 use gix_features::threading::OwnShared;
 use gix_ref::Category;
 
@@ -53,9 +53,11 @@ fn resolve_includes_recursive(
 ) -> Result<(), Error> {
     if depth == options.includes.max_depth {
         return if options.includes.err_on_max_depth_exceeded {
-            Err(Error::IncludeDepthExceeded {
-                max_depth: options.includes.max_depth,
-            })
+            Err(ValidationError::new(format!(
+                "The maximum allowed length {} of the file include chain built by following nested resolve_includes is exceeded",
+                options.includes.max_depth
+            ))
+            .raise_erased())
         } else {
             Ok(())
         };
@@ -109,13 +111,15 @@ fn insert_includes_recursively(
 
         buf.clear();
         std::io::copy(
-            &mut std::fs::File::open(&config_path).map_err(|err| Error::Io {
-                source: err,
-                path: config_path.to_owned(),
+            &mut std::fs::File::open(&config_path).or_raise_erased(|| {
+                message!(
+                    "Could not read included configuration file at '{}'",
+                    config_path.display()
+                )
             })?,
             buf,
         )
-        .map_err(Error::CopyBuffer)?;
+        .or_raise_erased(|| message("Failed to copy configuration file into buffer"))?;
         let config_meta = Metadata {
             path: Some(config_path),
             trust: meta.trust,
@@ -127,16 +131,13 @@ fn insert_includes_recursively(
             ..options
         };
 
-        let mut include_config =
-            File::from_bytes_owned(buf, config_meta, no_follow_options).map_err(|err| match err {
-                init::Error::Parse(err) => Error::Parse(err),
-                init::Error::Interpolate(err) => Error::Interpolate(err),
-                init::Error::Span(err) => Error::Span(err),
-                init::Error::Includes(_) => unreachable!("BUG: {:?} not possible due to no-follow options", err),
-            })?;
+        let mut include_config = File::from_bytes_owned(buf, config_meta, no_follow_options)
+            .or_raise_erased(|| message("Could not parse included configuration file"))?;
         resolve_includes_recursive(Some(target_config), &mut include_config, depth + 1, buf, options)?;
 
-        target_config.append_or_insert(include_config, Some(section_id))?;
+        target_config
+            .append_or_insert(include_config, Some(section_id))
+            .or_raise_erased(|| message("Could not append included configuration"))?;
     }
     Ok(())
 }
@@ -246,14 +247,16 @@ fn gitdir_matches(
     if !err_on_interpolation_failure && git_dir.is_none() {
         return Ok(false);
     }
-    let git_dir = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(git_dir.ok_or(Error::MissingGitDir)?));
+    let git_dir = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(git_dir.ok_or_raise_erased(|| {
+        NotFoundError::new("The git directory must be provided to support `gitdir:` conditional includes")
+    })?));
 
     let mut pattern_path: BString = {
         let path = match check_interpolation_result(
             err_on_interpolation_failure,
             crate::Path::from(condition_path.to_owned()).interpolate(context),
         )
-        .map_err(|err| Error::Interpolate(err.into_error()))?
+        .or_raise_erased(|| message("Could not interpolate conditional include path"))?
         {
             Some(p) => p,
             None => return Ok(false),
@@ -270,7 +273,11 @@ fn gitdir_matches(
             return Ok(false);
         }
         let parent_dir = target_config_path
-            .ok_or(Error::MissingConfigPath)?
+            .ok_or_raise_erased(|| {
+                NotFoundError::new(
+                    "Include paths from environment variables must not be relative as no config file path exists as root",
+                )
+            })?
             .parent()
             .expect("config path can never be /");
         let mut joined_path = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(parent_dir)).into_owned();
@@ -296,7 +303,8 @@ fn gitdir_matches(
     }
 
     let expanded_git_dir = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(
-        gix_path::realpath(gix_path::from_byte_slice(&git_dir)).map_err(|err| Error::Realpath(err.into_error()))?,
+        gix_path::realpath(gix_path::from_byte_slice(&git_dir))
+            .or_raise_erased(|| message("Could not resolve the git directory to its real path"))?,
     ));
     Ok(gix_glob::wildmatch(
         pattern_path.as_bstr(),
@@ -330,7 +338,7 @@ fn resolve_path(
     }: includes::Options<'_>,
 ) -> Result<Option<PathBuf>, Error> {
     let path = match check_interpolation_result(err_on_interpolation_failure, path.interpolate(context))
-        .map_err(|err| Error::Interpolate(err.into_error()))?
+        .or_raise_erased(|| message("Could not interpolate include path"))?
     {
         Some(p) => p,
         None => return Ok(None),
@@ -340,7 +348,11 @@ fn resolve_path(
             return Ok(None);
         }
         target_config_path
-            .ok_or(Error::MissingConfigPath)?
+            .ok_or_raise_erased(|| {
+                NotFoundError::new(
+                    "Include paths from environment variables must not be relative as no config file path exists as root",
+                )
+            })?
             .parent()
             .expect("path is a config file which naturally lives in a directory")
             .join(path)

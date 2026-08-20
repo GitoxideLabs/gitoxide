@@ -189,25 +189,28 @@ mod set {
 }
 
 mod value_name_validation {
-    use gix_config::file::section::value;
-
     #[test]
     fn mutations_validate_names_and_leave_the_section_unchanged_on_error() -> crate::Result {
         let mut config = gix_config::File::default();
         let mut section = config.new_section("core", None)?;
 
-        assert!(matches!(
-            section.push("not.valid", Some("value".into())),
-            Err(value::Error::ValueName(_))
-        ));
-        assert!(matches!(
-            section.push_with_comment("1invalid", Some("value".into()), "comment"),
-            Err(value::Error::ValueName(_))
-        ));
-        assert!(matches!(
-            section.set("also invalid", "value"),
-            Err(value::Error::ValueName(_))
-        ));
+        let err: gix_error::ValidationError = section.push("not.valid", Some("value".into())).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.: \"not.valid\""
+        );
+        let err: gix_error::ValidationError = section
+            .push_with_comment("1invalid", Some("value".into()), "comment")
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.: \"1invalid\""
+        );
+        let err: gix_error::ValidationError = section.set("also invalid", "value").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.: \"also invalid\""
+        );
         assert_eq!(section.num_values(), 0, "validation happens before mutation");
         Ok(())
     }

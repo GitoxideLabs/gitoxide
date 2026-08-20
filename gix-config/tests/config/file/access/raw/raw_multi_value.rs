@@ -1,4 +1,4 @@
-use gix_config::{File, lookup};
+use gix_config::File;
 
 use crate::file::bstring;
 
@@ -94,30 +94,27 @@ fn values_with_sections_filter_returns_values_from_accepted_sections() -> crate:
 #[test]
 fn section_not_found() -> crate::Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
-    assert!(matches!(
-        config.raw_values("foo.a"),
-        Err(lookup::existing::Error::SectionMissing)
-    ));
+    let err = config.raw_values("foo.a").unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The requested section does not exist");
     Ok(())
 }
 
 #[test]
 fn subsection_not_found() -> crate::Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
-    assert!(matches!(
-        config.raw_values("core.a.a"),
-        Err(lookup::existing::Error::SubSectionMissing)
-    ));
+    let err = config.raw_values("core.a.a").unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The requested subsection does not exist");
     Ok(())
 }
 
 #[test]
 fn key_not_found() -> crate::Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
-    assert!(matches!(
-        config.raw_values("core.aaaaaa"),
-        Err(lookup::existing::Error::KeyMissing)
-    ));
+    let err = config.raw_values("core.aaaaaa").unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The key does not exist in the requested section");
     Ok(())
 }
 
