@@ -17,12 +17,12 @@ pub mod main_worktree {
         #[error("Could not create index from tree at {id}")]
         IndexFromTree {
             id: gix_hash::ObjectId,
-            source: gix_index::init::from_tree::Error,
+            source: gix_error::Error,
         },
         #[error("Couldn't obtain configuration for core.protect*")]
         BooleanConfig(#[from] crate::config::boolean::Error),
         #[error(transparent)]
-        WriteIndex(#[from] gix_index::file::write::Error),
+        WriteIndex(gix_error::Error),
         #[error(transparent)]
         CheckoutOptions(#[from] crate::config::checkout_options::Error),
         #[error(transparent)]
@@ -114,7 +114,7 @@ pub mod main_worktree {
             let index = gix_index::State::from_tree(&root_tree, &repo.objects, repo.config.protect_options()?)
                 .map_err(|err| Error::IndexFromTree {
                     id: root_tree,
-                    source: err,
+                    source: err.into_error(),
                 })?;
             let mut index = gix_index::File::from_state(index, repo.index_path());
 
@@ -141,7 +141,9 @@ pub mod main_worktree {
             files.show_throughput(start);
             bytes.show_throughput(start);
 
-            index.write(Default::default())?;
+            index
+                .write(Default::default())
+                .map_err(|err| Error::WriteIndex(err.into_error()))?;
             Ok((self.repo.take().expect("still present").clone(), outcome))
         }
     }

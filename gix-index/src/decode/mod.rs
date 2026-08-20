@@ -6,38 +6,9 @@ mod entries;
 ///
 pub mod header;
 
-mod error {
-    use crate::{decode, extension};
-    use std::collections::TryReserveError;
-
-    /// The error returned by [`State::from_bytes()`][crate::State::from_bytes()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Header(#[from] decode::header::Error),
-        #[error("Could not hash index data")]
-        Hasher(#[source] std::io::Error),
-        #[error("Index data would require more memory than can be reserved")]
-        OutOfMemory,
-        #[error("Could not parse entry at index {index}")]
-        Entry { index: u32 },
-        #[error("Mandatory extension wasn't implemented or malformed.")]
-        Extension(#[from] extension::decode::Error),
-        #[error("Index trailer should have been {expected} bytes long, but was {actual}")]
-        UnexpectedTrailerLength { expected: usize, actual: usize },
-        #[error("Shared index checksum mismatch")]
-        Verify(#[from] gix_hash::verify::Error),
-    }
-
-    impl From<TryReserveError> for Error {
-        #[cold]
-        fn from(_: TryReserveError) -> Self {
-            Self::OutOfMemory
-        }
-    }
-}
-pub use error::Error;
+/// The error returned by [`State::from_bytes()`][crate::State::from_bytes()].
+pub type Error = gix_error::Exn;
+use gix_error::{CorruptionError, ErrorExt, ResultExt, message};
 use gix_features::parallel::InOrderIter;
 
 use crate::util::read_u32;
@@ -81,10 +52,11 @@ impl State {
         let _span = gix_features::trace::detail!("gix_index::State::from_bytes()", options = ?_options);
         let (version, num_entries, post_header_data) = header::decode(data, object_hash)?;
         let start_of_extensions = extension::end_of_index_entry::decode(data, object_hash)
-            .map_err(gix_hash::io::from_hasher)
-            .map_err(|err| Error::Hasher(std::io::Error::other(err.into_error())))?;
+            .or_raise_erased(|| message("Could not hash index data"))?;
         if num_entries as usize > entries::max_entries_possible(data.len(), start_of_extensions, object_hash, version) {
-            return Err(header::Error::Corrupt("Declared entry count exceeds possible entries for file size").into());
+            return Err(
+                CorruptionError::new("Declared entry count exceeds possible entries for file size").raise_erased(),
+            );
         }
 
         let mut num_threads = gix_features::parallel::num_threads(thread_limit);
@@ -98,7 +70,7 @@ impl State {
         ensure_in_alloc_limit(
             (num_entries as usize)
                 .checked_mul(std::mem::size_of::<Entry>())
-                .ok_or(Error::OutOfMemory)?,
+                .ok_or_else(allocation_error)?,
             alloc_limit_bytes,
         )?;
         ensure_in_alloc_limit(path_backing_buffer_size, alloc_limit_bytes)?;
@@ -218,7 +190,7 @@ impl State {
                     );
                     (entries_res, ext_res)
                 });
-                let (ext, data) = ext_res?;
+                let (ext, data) = ext_res.or_erased()?;
                 (entries_res?.0, ext, data)
             }
             None | Some(_) => {
@@ -229,22 +201,26 @@ impl State {
                     object_hash,
                     version,
                 )?;
-                let (ext, data) = extension::decode::all(data, object_hash, alloc_limit_bytes)?;
+                let (ext, data) = extension::decode::all(data, object_hash, alloc_limit_bytes).or_erased()?;
                 (entries, ext, data)
             }
         };
 
         if data.len() != object_hash.len_in_bytes() {
-            return Err(Error::UnexpectedTrailerLength {
-                expected: object_hash.len_in_bytes(),
-                actual: data.len(),
-            });
+            return Err(CorruptionError::new(format!(
+                "Index trailer should have been {} bytes long, but was {}",
+                object_hash.len_in_bytes(),
+                data.len()
+            ))
+            .raise_erased());
         }
 
         let checksum = gix_hash::ObjectId::from_bytes_or_panic(data);
         let checksum = (!checksum.is_null()).then_some(checksum);
         if let Some((expected_checksum, actual_checksum)) = expected_checksum.zip(checksum) {
-            actual_checksum.verify(&expected_checksum)?;
+            actual_checksum
+                .verify(&expected_checksum)
+                .or_raise_erased(|| message("Shared index checksum mismatch"))?;
         }
         let EntriesOutcome {
             entries,
@@ -293,7 +269,8 @@ struct EntriesOutcome {
 
 fn vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
     let mut vec = Vec::new();
-    vec.try_reserve(capacity).map_err(|_| Error::OutOfMemory)?;
+    vec.try_reserve(capacity)
+        .or_raise_erased(|| message("Index data would require more memory than can be reserved"))?;
     Ok(vec)
 }
 
@@ -358,7 +335,11 @@ pub(crate) fn stat(data: &[u8]) -> Option<(entry::Stat, &[u8])> {
 
 fn ensure_in_alloc_limit(size: usize, alloc_limit_bytes: Option<usize>) -> Result<(), Error> {
     if alloc_limit_bytes.is_some_and(|limit| size > limit) {
-        return Err(Error::OutOfMemory);
+        return Err(allocation_error());
     }
     Ok(())
+}
+
+fn allocation_error() -> Error {
+    message("Index data would require more memory than can be reserved").raise_erased()
 }

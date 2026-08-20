@@ -793,7 +793,8 @@ fn checkout_index_in_tmp_dir_opts(
         gix_testtools::object_hash(),
         false,
         Default::default(),
-    )?;
+    )
+    .map_err(gix_error::Exn::into_error)?;
     let odb = odb_at(git_dir.join("objects"))?.into_inner().into_arc()?;
     let destination = gix_testtools::tempfile::tempdir_in(std::env::current_dir()?)?;
     prep_dest(destination.path()).expect("preparation must succeed");

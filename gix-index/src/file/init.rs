@@ -2,24 +2,12 @@
 
 use std::path::{Path, PathBuf};
 
+use gix_error::{ResultExt, message};
+
 use crate::{File, State, decode, extension};
 
-mod error {
-
-    /// The error returned by [File::at()][super::File::at()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("An IO error occurred while opening the index")]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        Decode(#[from] crate::decode::Error),
-        #[error(transparent)]
-        LinkExtension(#[from] crate::extension::link::decode::Error),
-    }
-}
-
-pub use error::Error;
+/// The error returned by [File::at()][File::at()].
+pub type Error = gix_error::Exn;
 
 /// Initialization
 impl File {
@@ -37,7 +25,11 @@ impl File {
         let path = path.into();
         Ok(match Self::at(&path, object_hash, skip_hash, options) {
             Ok(f) => f,
-            Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            Err(err)
+                if err
+                    .downcast_any_ref::<std::io::Error>()
+                    .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
+            {
                 File::from_state(State::new(object_hash), path)
             }
             Err(err) => return Err(err),
@@ -59,10 +51,12 @@ impl File {
         let _span = gix_features::trace::detail!("gix_index::File::at()");
         let path = path.into();
         let (data, mtime) = {
-            let mut file = std::fs::File::open(&path)?;
+            let mut file = std::fs::File::open(&path)
+                .or_raise_erased(|| message("An IO error occurred while opening the index"))?;
             // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
             #[expect(unsafe_code)]
-            let data = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&file)? };
+            let data = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&file) }
+                .or_raise_erased(|| message("An IO error occurred while opening the index"))?;
 
             if !skip_hash {
                 // Note that even though it's trivial to offload this into a thread, which is worth it for all but the smallest
@@ -73,7 +67,9 @@ impl File {
                     gix_hash::ObjectId::from_bytes_or_panic(&data[data.len() - object_hash.len_in_bytes()..]);
                 if !expected.is_null() {
                     let _span = gix_features::trace::detail!("gix::open_index::hash_index", path = ?path);
-                    let meta = file.metadata()?;
+                    let meta = file
+                        .metadata()
+                        .or_raise_erased(|| message("An IO error occurred while opening the index"))?;
                     let num_bytes_to_hash = meta.len() - object_hash.len_in_bytes() as u64;
                     gix_hash::bytes(
                         &mut file,
@@ -82,18 +78,20 @@ impl File {
                         &mut gix_features::progress::Discard,
                         &Default::default(),
                     )
-                    .map_err(
-                        |err| match err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind) {
-                            Some(kind) => Error::Io(std::io::Error::new(kind, err.into_error())),
-                            None => Error::Decode(decode::Error::Hasher(std::io::Error::other(err.into_error()))),
-                        },
-                    )?
+                    .or_raise_erased(|| message("Could not hash index data"))?
                     .verify(&expected)
-                    .map_err(decode::Error::from)?;
+                    .or_raise_erased(|| message("Shared index checksum mismatch"))?;
                 }
             }
 
-            (data, filetime::FileTime::from_last_modification_time(&file.metadata()?))
+            (
+                data,
+                filetime::FileTime::from_last_modification_time(
+                    &file
+                        .metadata()
+                        .or_raise_erased(|| message("An IO error occurred while opening the index"))?,
+                ),
+            )
         };
 
         let (state, checksum) = State::from_bytes(&data, mtime, object_hash, options)?;
