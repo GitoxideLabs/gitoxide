@@ -1,4 +1,5 @@
 use bstr::BString;
+use gix_error::ErrorExt;
 
 use crate::driver::State;
 
@@ -10,14 +11,7 @@ pub struct Outcome {
 }
 
 /// A filter process that exited unsuccessfully during shutdown.
-#[derive(Debug, thiserror::Error)]
-#[error("Filter process {command:?} failed with {status}")]
-pub struct Error {
-    /// The command that launched the process.
-    pub command: BString,
-    /// Its unsuccessful exit status.
-    pub status: std::process::ExitStatus,
-}
+pub type Error = gix_error::Exn<gix_error::Message>;
 
 impl Outcome {
     /// Return this outcome if all observed processes exited successfully, or the first failure otherwise.
@@ -32,10 +26,7 @@ impl Outcome {
                 .filter(|status| !status.success())
                 .map(|status| (command, status))
         }) {
-            return Err(Error {
-                command: command.clone(),
-                status: *status,
-            });
+            return Err(gix_error::message!("Filter process {command:?} failed with {status}").raise());
         }
         Ok(self)
     }
