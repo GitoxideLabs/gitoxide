@@ -23,7 +23,7 @@ pub enum Error {
     #[error(transparent)]
     FilesystemOptions(#[from] config::boolean::Error),
     #[error(transparent)]
-    IndexAsWorktreeWithRenames(#[from] gix_status::index_as_worktree_with_renames::Error),
+    IndexAsWorktreeWithRenames(gix_error::Error),
     #[error(transparent)]
     StatOptions(#[from] config::stat_options::Error),
     #[error(transparent)]
@@ -87,7 +87,7 @@ impl Repository {
     ///
     /// This is a lower-level method, prefer the [`status`](Repository::status()) method for greater ease of use.
     #[expect(clippy::too_many_arguments)]
-    pub fn index_worktree_status<'index, T, U, E>(
+    pub fn index_worktree_status<'index, T, U>(
         &self,
         index: &'index gix_index::State,
         patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
@@ -97,7 +97,7 @@ impl Repository {
             SubmoduleStatus = U,
         >,
         compare: impl CompareBlobs<Output = T> + Send + Clone,
-        submodule: impl SubmoduleStatus<Output = U, Error = E> + Send + Clone,
+        submodule: impl SubmoduleStatus<Output = U> + Send + Clone,
         progress: &mut dyn gix_features::progress::Progress,
         should_interrupt: &AtomicBool,
         options: Options,
@@ -105,7 +105,6 @@ impl Repository {
     where
         T: Send + Clone,
         U: Send + Clone,
-        E: std::error::Error + Send + Sync + 'static,
     {
         let _span = gix_trace::coarse!("gix::index_worktree_status");
         let workdir = self.workdir().ok_or(Error::MissingWorkDir)?;
@@ -168,7 +167,8 @@ impl Repository {
                 dirwalk: options.dirwalk_options.map(Into::into),
                 rewrites: options.rewrites,
             },
-        )?;
+        )
+        .map_err(|err| Error::IndexAsWorktreeWithRenames(err.into_error()))?;
         Ok(out)
     }
 
@@ -212,6 +212,8 @@ pub struct BuiltinSubmoduleStatus {
 
 ///
 mod submodule_status {
+    use gix_error::ResultExt;
+
     use crate::config::cache::util::ApplyLeniency;
     use crate::{
         bstr,
@@ -247,22 +249,14 @@ mod submodule_status {
         }
     }
 
-    /// The error returned submodule status checks.
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        #[error(transparent)]
-        SubmoduleStatus(#[from] crate::submodule::status::Error),
-        #[error(transparent)]
-        IgnoreConfig(#[from] crate::submodule::config::Error),
-        #[error(transparent)]
-        DiffSubmoduleIgnoreConfig(#[from] config::key::GenericErrorWithValue),
-    }
-
     impl gix_status::index_as_worktree::traits::SubmoduleStatus for BuiltinSubmoduleStatus {
         type Output = crate::submodule::Status;
-        type Error = Error;
 
-        fn status(&mut self, _entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>, Self::Error> {
+        fn status(
+            &mut self,
+            _entry: &gix_index::Entry,
+            rela_path: &BStr,
+        ) -> Result<Option<Self::Output>, gix_error::Exn> {
             use bstr::ByteSlice;
             if self
                 .submodule_paths
@@ -291,18 +285,19 @@ mod submodule_status {
                         .string(config::tree::Diff::IGNORE_SUBMODULES)
                         .map(|value| config::tree::Diff::IGNORE_SUBMODULES.try_into_ignore(value))
                         .transpose()
-                        .with_leniency(repo.config.lenient_config)?;
+                        .with_leniency(repo.config.lenient_config)
+                        .or_erased()?;
                     if let Some(ignore) = global_ignore {
                         (ignore, check_dirty)
                     } else {
                         // If no global ignore is set, use the submodule's ignore setting.
-                        let ignore = sm.ignore()?.unwrap_or_default();
+                        let ignore = sm.ignore().or_erased()?.unwrap_or_default();
                         (ignore, check_dirty)
                     }
                 }
                 Submodule::Given { ignore, check_dirty } => (ignore, check_dirty),
             };
-            let status = sm.status(ignore, check_dirty)?;
+            let status = sm.status(ignore, check_dirty).or_erased()?;
             Ok(status.is_dirty().and_then(|dirty| dirty.then_some(status)))
         }
     }

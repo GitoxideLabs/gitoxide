@@ -267,9 +267,8 @@ pub(super) struct SubmoduleStatusMock {
 
 impl SubmoduleStatus for SubmoduleStatusMock {
     type Output = ();
-    type Error = std::convert::Infallible;
 
-    fn status(&mut self, _entry: &Entry, _rela_path: &BStr) -> Result<Option<Self::Output>, Self::Error> {
+    fn status(&mut self, _entry: &Entry, _rela_path: &BStr) -> Result<Option<Self::Output>, gix_error::Exn> {
         Ok(self.dirty.then_some(()))
     }
 }

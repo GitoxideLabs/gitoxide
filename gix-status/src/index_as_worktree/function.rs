@@ -1,5 +1,4 @@
 use std::{
-    io,
     path::Path,
     slice::Chunks,
     sync::atomic::{AtomicUsize, Ordering},
@@ -7,6 +6,7 @@ use std::{
 
 use bstr::BStr;
 use filetime::FileTime;
+use gix_error::{ErrorExt, ResultExt, message};
 use gix_features::parallel::{Reduce, in_parallel_if};
 use gix_filter::pipeline::convert::ToGitOutcome;
 use gix_object::FindExt;
@@ -52,12 +52,12 @@ use crate::{
 /// Thus, some care has to be taken to do the right thing when letting the index match the worktree by evaluating the changes observed
 /// by the `collector`.
 #[expect(clippy::too_many_arguments)]
-pub fn index_as_worktree<'index, T, U, Find, E>(
+pub fn index_as_worktree<'index, T, U, Find>(
     index: &'index gix_index::State,
     worktree: &Path,
     collector: &mut impl VisitEntry<'index, ContentChange = T, SubmoduleStatus = U>,
     compare: impl CompareBlobs<Output = T> + Send + Clone,
-    submodule: impl SubmoduleStatus<Output = U, Error = E> + Send + Clone,
+    submodule: impl SubmoduleStatus<Output = U> + Send + Clone,
     objects: Find,
     progress: &mut dyn gix_features::progress::Progress,
     Context {
@@ -71,7 +71,6 @@ pub fn index_as_worktree<'index, T, U, Find, E>(
 where
     T: Send,
     U: Send,
-    E: std::error::Error + Send + Sync + 'static,
     Find: gix_object::Find + Send + Clone,
 {
     // the order is absolutely critical here we use the old timestamp to detect racy index entries
@@ -260,19 +259,18 @@ type StatusResult<'index, T, U> = Result<(&'index gix_index::Entry, usize, &'ind
 
 impl<'index> State<'_, 'index> {
     #[expect(clippy::too_many_arguments)]
-    fn process<T, U, Find, E>(
+    fn process<T, U, Find>(
         &mut self,
         entries: &'index [gix_index::Entry],
         entry: &'index gix_index::Entry,
         entry_index: usize,
         pathspec: &mut gix_pathspec::Search,
         diff: &mut impl CompareBlobs<Output = T>,
-        submodule: &mut impl SubmoduleStatus<Output = U, Error = E>,
+        submodule: &mut impl SubmoduleStatus<Output = U>,
         objects: &Find,
         outer_entry_index: &mut usize,
     ) -> Option<StatusResult<'index, T, U>>
     where
-        E: std::error::Error + Send + Sync + 'static,
         Find: gix_object::Find,
     {
         if entry.flags.intersects(
@@ -370,16 +368,15 @@ impl<'index> State<'_, 'index> {
     /// which is a constant.
     ///
     /// Adapted from [here](https://github.com/GitoxideLabs/gitoxide/pull/805#discussion_r1164676777).
-    fn compute_status<T, U, Find, E>(
+    fn compute_status<T, U, Find>(
         &mut self,
         entry: &gix_index::Entry,
         rela_path: &BStr,
         diff: &mut impl CompareBlobs<Output = T>,
-        submodule: &mut impl SubmoduleStatus<Output = U, Error = E>,
+        submodule: &mut impl SubmoduleStatus<Output = U>,
         objects: &Find,
     ) -> Result<Option<EntryStatus<T, U>>, Error>
     where
-        E: std::error::Error + Send + Sync + 'static,
         Find: gix_object::Find,
     {
         let worktree_path = match self.path_stack.verified_path(gix_path::from_bstr(rela_path).as_ref()) {
@@ -388,7 +385,11 @@ impl<'index> State<'_, 'index> {
             Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => {
                 return Ok(Some(Change::Removed.into()));
             }
-            Err(err) => return Err(Error::Io(err)),
+            Err(err) => {
+                return Err(err
+                    .and_raise(gix_error::message!("Could not access worktree path {rela_path:?}"))
+                    .erased());
+            }
         };
 
         // Acquire metadata. On Windows we consult the precomputed stats first and
@@ -418,12 +419,9 @@ impl<'index> State<'_, 'index> {
         // The only exception here are submodules which are part of the index despite being directories.
         if metadata.is_dir() {
             if entry.mode.is_submodule() {
-                let status = submodule
-                    .status(entry, rela_path)
-                    .map_err(|err| Error::SubmoduleStatus {
-                        rela_path: rela_path.into(),
-                        source: Box::new(err),
-                    })?;
+                let status = submodule.status(entry, rela_path).or_raise_erased(|| {
+                    gix_error::message!("Could not determine status for submodule at '{rela_path}'")
+                })?;
                 return Ok(status.map(|status| Change::SubmoduleModification(status).into()));
             } else {
                 return Ok(Some(Change::Removed.into()));
@@ -435,9 +433,12 @@ impl<'index> State<'_, 'index> {
         }
 
         #[cfg(windows)]
-        let new_stat = metadata.to_stat()?;
+        let new_stat = metadata
+            .to_stat()
+            .or_raise_erased(|| message("The clock was off when reading file metadata"))?;
         #[cfg(not(windows))]
-        let new_stat = gix_index::entry::Stat::from_fs(&metadata)?;
+        let new_stat = gix_index::entry::Stat::from_fs(&metadata)
+            .or_raise_erased(|| message("The clock was off when reading file metadata"))?;
 
         #[cfg(windows)]
         let mode_change = metadata.mode_change(entry.mode, self.options.fs.symlink, self.options.fs.executable_bit);
@@ -593,7 +594,7 @@ where
     fn read_blob(self) -> Result<&'a [u8], Error> {
         self.objects
             .find_blob(self.id, self.buf)
-            .map_err(|err| Error::Find(err.into_error()))
+            .or_raise_erased(|| message("Failed to obtain blob from object database"))
             .map(|b| {
                 self.odb_reads.fetch_add(1, Ordering::Relaxed);
                 self.odb_bytes.fetch_add(b.data.len() as u64, Ordering::Relaxed);
@@ -636,7 +637,7 @@ where
                     },
                     &mut |buf| self.objects.find_blob(self.id, buf).map(|_| Some(())),
                 )
-                .map_err(|err| Error::Io(io::Error::other(err)))?;
+                .or_raise_erased(|| message("Could not convert worktree file to Git format"))?;
             let len = match out {
                 ToGitOutcome::Unchanged(_) => Some(self.file_len),
                 ToGitOutcome::Process(_) | ToGitOutcome::Buffer(_) => None,
@@ -735,6 +736,11 @@ fn live_metadata(worktree_path: &Path) -> Result<Option<gix_index::fs::Metadata>
     match gix_index::fs::Metadata::from_path_no_follow(worktree_path) {
         Ok(md) => Ok(Some(md)),
         Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => Ok(None),
-        Err(err) => Err(Error::Io(err)),
+        Err(err) => Err(err
+            .and_raise(gix_error::message!(
+                "Could not read metadata for worktree path '{}'",
+                worktree_path.display()
+            ))
+            .erased()),
     }
 }
