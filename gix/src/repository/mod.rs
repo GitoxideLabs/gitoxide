@@ -119,7 +119,7 @@ pub mod blame_file {
         #[error(transparent)]
         DiffResourceCache(#[from] super::diff_resource_cache::Error),
         #[error(transparent)]
-        Blame(#[from] gix_blame::Error),
+        Blame(gix_error::Error),
     }
 }
 
