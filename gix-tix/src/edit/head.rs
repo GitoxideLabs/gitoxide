@@ -127,7 +127,7 @@ fn perform_inner(
     let edit = rebase::Edit::Replace { target: head, commit };
     let signature = if review {
         rebase::Signature::Remove
-    } else if pending {
+    } else if kind == Kind::Amend || pending {
         rebase::Signature::RedoIfNeeded
     } else {
         rebase::Signature::InvalidateExisting
@@ -319,6 +319,63 @@ mod tests {
         assert!(
             !super::super::rebase::is_pending(&commit),
             "an unsigned amended commit already has its final tree and parent"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn signed_worktree_amend_is_finalized_immediately() -> gix_testtools::Result {
+        if !gix_testtools::signature::program_available("ssh-keygen") {
+            return Ok(());
+        }
+        let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        git(fixture.path(), &["reset", "-q", "HEAD", "--", "tracked"])?;
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            [
+                "user.name=editor".to_owned(),
+                "user.email=editor@example.com".to_owned(),
+                "commit.gpgSign=true".to_owned(),
+                "gpg.format=ssh".to_owned(),
+                format!("user.signingKey={}", key.display()),
+                format!(
+                    "gpg.ssh.allowedSignersFile={}",
+                    gix_testtools::signature::fixture("ssh-allowed-signers").display()
+                ),
+            ],
+        )?;
+        let old = repo.head_id()?.detach();
+        let signed = repo.find_commit(old)?.decode()?.sign(
+            repo.commit_signing_options_if_enabled()?
+                .expect("commit signing is configured"),
+        )?;
+        let signed = repo.write_object(&signed)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(signed, "prepare signed worktree amend")?;
+        let graph = super::super::loaded_graph(&repo)?;
+
+        let amended = perform(repo.clone(), &graph, Kind::Amend, None)?.expect("the worktree change amends HEAD");
+        assert_eq!(repo.head_id()?.detach(), amended, "HEAD follows the amended commit");
+        assert!(
+            git(fixture.path(), &["diff", "--cached", "--name-only"])?.is_empty(),
+            "the amended index is clean"
+        );
+        assert!(
+            git(fixture.path(), &["diff", "--name-only"])?.is_empty(),
+            "the amended worktree is clean"
+        );
+        let commit = repo.find_commit(amended)?;
+        assert!(
+            !super::super::rebase::is_pending(&commit.decode()?.into_owned()?),
+            "the checked-out amended commit needs no later replay"
+        );
+        assert!(
+            commit
+                .verify_signature()?
+                .expect("the amended commit is signed")
+                .is_valid(),
+            "the amended commit receives a valid configured signature"
         );
         Ok(())
     }
