@@ -58,10 +58,10 @@ fn exclude_by_dir_is_handled_just_like_git() {
     impl gix_object::Find for FindError {
         fn try_find<'a>(
             &self,
-            _id: &gix_hash::oid,
-            _buffer: &'a mut Vec<u8>,
+            id: &gix_hash::oid,
+            buffer: &'a mut Vec<u8>,
         ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
-            Err(std::io::Error::other("unreachable").into())
+            gix_object::FindExt::find(&gix_object::find::Never, id, buffer).map(Some)
         }
     }
     for (relative_entry, source_and_line) in expectations {

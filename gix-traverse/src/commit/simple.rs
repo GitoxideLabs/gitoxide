@@ -73,11 +73,17 @@ pub enum Sorting {
 #[expect(missing_docs)]
 pub enum Error {
     #[error(transparent)]
-    Find(#[from] gix_object::find::existing_iter::Error),
+    Find(gix_error::Error),
     #[error(transparent)]
     ObjectDecode(#[from] gix_object::decode::Error),
     #[error(transparent)]
     HiddenGraph(#[from] gix_revwalk::graph::get_or_insert_default::Error),
+}
+
+impl From<gix_object::find::existing_iter::Error> for Error {
+    fn from(err: gix_object::find::existing_iter::Error) -> Self {
+        Error::Find(err.into_error())
+    }
 }
 
 use Result as Either;

@@ -8,11 +8,17 @@ use gix_hash::ObjectId;
 #[expect(missing_docs)]
 pub enum Error {
     #[error(transparent)]
-    Find(#[from] gix_object::find::existing_iter::Error),
+    Find(gix_error::Error),
     #[error("The delegate cancelled the operation")]
     Cancelled,
     #[error(transparent)]
     ObjectDecode(#[from] gix_object::decode::Error),
+}
+
+impl From<gix_object::find::existing_iter::Error> for Error {
+    fn from(err: gix_object::find::existing_iter::Error) -> Self {
+        Error::Find(err.into_error())
+    }
 }
 
 /// The state used and potentially shared by multiple tree traversals.

@@ -1,5 +1,6 @@
 use std::{fmt::Formatter, ops::Index};
 
+use gix_error::ErrorExt;
 use gix_hash::oid;
 use smallvec::SmallVec;
 
@@ -21,11 +22,17 @@ mod errors {
         #[expect(missing_docs)]
         pub enum Error {
             #[error(transparent)]
-            Lookup(#[from] gix_object::find::existing_iter::Error),
+            Lookup(gix_error::Error),
             #[error("A commit could not be decoded during traversal")]
             Decode(#[from] gix_object::decode::Error),
             #[error(transparent)]
             Parent(#[from] iter_parents::Error),
+        }
+
+        impl From<gix_object::find::existing_iter::Error> for Error {
+            fn from(err: gix_object::find::existing_iter::Error) -> Self {
+                Error::Lookup(err.into_error())
+            }
         }
     }
 
@@ -38,9 +45,15 @@ mod errors {
         #[expect(missing_docs)]
         pub enum Error {
             #[error(transparent)]
-            Lookup(#[from] gix_object::find::existing_iter::Error),
+            Lookup(gix_error::Error),
             #[error(transparent)]
             ToOwned(#[from] to_owned::Error),
+        }
+
+        impl From<gix_object::find::existing_iter::Error> for Error {
+            fn from(err: gix_object::find::existing_iter::Error) -> Self {
+                Error::Lookup(err.into_error())
+            }
         }
     }
 }
@@ -355,8 +368,10 @@ impl<'cache, T> Graph<'_, 'cache, T> {
         &mut self,
         id: &gix_hash::oid,
     ) -> Result<LazyCommit<'_, 'cache>, gix_object::find::existing_iter::Error> {
+        use gix_error::NotFoundError;
+
         self.try_lookup(id)?
-            .ok_or(gix_object::find::existing_iter::Error::NotFound { oid: id.to_owned() })
+            .ok_or_else(|| NotFoundError::new(format!("An object with id {id} could not be found")).raise_erased())
     }
 }
 
@@ -374,18 +389,13 @@ fn try_lookup<'graph, 'cache>(
             backing: Either::Right((cache, pos)),
         }));
     }
-    Ok(
-        match objects
-            .try_find(id, buf)
-            .map_err(gix_object::find::existing_iter::Error::Find)?
-        {
-            Some(data) => data.kind.is_commit().then_some(LazyCommit {
-                object_hash: data.object_hash,
-                backing: Either::Left(buf),
-            }),
-            None => None,
-        },
-    )
+    Ok(match objects.try_find(id, buf)? {
+        Some(data) => data.kind.is_commit().then_some(LazyCommit {
+            object_hash: data.object_hash,
+            backing: Either::Left(buf),
+        }),
+        None => None,
+    })
 }
 
 impl<'a, T> Index<&'a gix_hash::oid> for Graph<'_, '_, T> {

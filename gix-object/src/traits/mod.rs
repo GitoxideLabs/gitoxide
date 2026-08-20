@@ -1,5 +1,7 @@
 use std::io;
 
+use gix_error::ResultExt;
+
 use crate::Kind;
 
 /// Describe the capability to write git objects into an object store.
@@ -8,7 +10,7 @@ pub trait Write {
     /// returning id to reference it in subsequent reads.
     fn write(&self, object: &dyn WriteTo) -> Result<gix_hash::ObjectId, crate::write::Error> {
         let mut buf = Vec::with_capacity(2048);
-        object.write_to(&mut buf)?;
+        object.write_to(&mut buf).or_erased()?;
         self.write_stream(object.kind(), buf.len() as u64, &mut buf.as_slice())
     }
     /// As [`write`](Write::write), but takes an [`object` kind](Kind) along with its encoded bytes.

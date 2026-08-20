@@ -25,7 +25,7 @@ mod locate {
         use crate::{PACKS_AND_INDICES, fixture_path};
 
         #[test]
-        fn all() -> Result<(), Box<dyn std::error::Error>> {
+        fn all() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             for (index_path, data_path) in PACKS_AND_INDICES {
                 // both paths are equivalent
                 pack::Bundle::at(fixture_path(index_path), gix_hash::Kind::Sha1)?;

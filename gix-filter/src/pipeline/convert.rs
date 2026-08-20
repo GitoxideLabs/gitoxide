@@ -170,7 +170,7 @@ impl Pipeline {
             &self.bufs.src,
             digest,
             &mut self.bufs.dest,
-            &mut |buf| index_object(buf),
+            &mut |buf| index_object(buf).map_err(Into::into),
             eol::convert_to_git::Options {
                 round_trip_check: self.options.crlf_roundtrip_check.to_eol_roundtrip_check(rela_path),
                 config: self.options.eol_config,

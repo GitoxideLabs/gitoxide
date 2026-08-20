@@ -5,6 +5,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
+use gix_error::{ErrorExt, ValidationError};
 use gix_hash::ObjectId;
 
 use crate::{
@@ -32,16 +33,7 @@ impl std::fmt::Debug for Editor<'_> {
 }
 
 /// The error returned by [Editor] or [Cursor] edit operation.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Empty path components are not allowed")]
-    EmptyPathComponent,
-    #[error(transparent)]
-    FindExistingObject(#[from] crate::find::existing_object::Error),
-    #[error("Cannot remove '{rela_path}' as leaf entry because it is a tree")]
-    CannotRemoveNonLeaf { rela_path: BString },
-}
+pub type Error = gix_error::Exn;
 
 /// Lifecycle
 impl<'a> Editor<'a> {
@@ -278,7 +270,7 @@ impl Editor<'_> {
         while let Some(name) = rela_path.next() {
             let name = name.as_ref();
             if name.is_empty() {
-                return Err(Error::EmptyPathComponent);
+                return Err(ValidationError::new("Empty path components are not allowed").raise_erased());
             }
             let is_last = rela_path.peek().is_none();
             let mut needs_sorting = false;
@@ -304,9 +296,11 @@ impl Editor<'_> {
                         EditMode::Remove(mode) => {
                             if is_last {
                                 if mode == RemoveMode::LeafOnly && cursor.entries[idx].mode.is_tree() {
-                                    return Err(Error::CannotRemoveNonLeaf {
-                                        rela_path: path_with_component(path_buf.as_bstr(), name),
-                                    });
+                                    let rela_path = path_with_component(path_buf.as_bstr(), name);
+                                    return Err(ValidationError::new(format!(
+                                        "Cannot remove '{rela_path}' as leaf entry because it is a tree"
+                                    ))
+                                    .raise_erased());
                                 }
                                 cursor.entries.remove(idx);
                                 break;
