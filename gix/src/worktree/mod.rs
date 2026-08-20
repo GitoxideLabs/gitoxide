@@ -127,9 +127,7 @@ pub mod open_index {
         #[error(transparent)]
         ConfigSkipHash(#[from] crate::config::boolean::Error),
         #[error(transparent)]
-        IndexFile(#[from] gix_index::file::init::Error),
-        #[error(transparent)]
-        IndexCorrupt(#[from] gix_index::file::verify::Error),
+        IndexFile(#[from] gix_error::Error),
     }
 
     impl crate::Worktree<'_> {

@@ -689,10 +689,8 @@ fn v2_split_index() {
 #[test]
 fn v2_split_index_recursion_is_handled_gracefully() {
     let err = try_file("v2_split_index_recursive", false).expect_err("recursion fails gracefully");
-    assert!(matches!(
-        err,
-        gix_index::file::init::Error::Decode(gix_index::decode::Error::Verify(_))
-    ));
+    assert_eq!(err.to_string(), "Shared index checksum mismatch");
+    assert!(err.downcast_any_ref::<gix_error::CorruptionError>().is_some());
 }
 
 #[test]
