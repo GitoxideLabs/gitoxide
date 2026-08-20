@@ -22,7 +22,7 @@ pub fn discover(repo: &Path, mut out: impl std::io::Write) -> anyhow::Result<()>
 
     writeln!(out)?;
     writeln!(out, "discover (plumbing) from {}:", repo.display())?;
-    has_err |= print_result(&mut out, gix::discover::upwards(repo))?;
+    has_err |= print_result(&mut out, gix::discover::upwards(repo).map_err(gix::Exn::into_error))?;
 
     if has_err {
         writeln!(out)?;
