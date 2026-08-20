@@ -207,6 +207,15 @@ impl std::fmt::Display for Prefix {
     }
 }
 
+impl Prefix {
+    fn eq_str(&self, other: &str) -> bool {
+        self.bytes.to_hex_with_len(self.hex_len).eq_str(other)
+    }
+}
+
+// Keep this directional as the hash kind and unused suffix aren't uniquely identified by the displayed prefix.
+impl_partial_eq_str_one_way!(Prefix);
+
 impl From<ObjectId> for Prefix {
     fn from(oid: ObjectId) -> Self {
         Prefix {

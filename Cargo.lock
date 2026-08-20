@@ -1985,6 +1985,7 @@ dependencies = [
 name = "gix-hash"
 version = "0.26.1"
 dependencies = [
+ "bstr",
  "document-features",
  "faster-hex",
  "gix-features",

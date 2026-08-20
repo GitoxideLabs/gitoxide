@@ -182,34 +182,6 @@ where
 /// Extension methods for results containing an already boxed error.
 ///
 /// This complements [`ResultExt`], whose blanket implementation cannot accept boxed trait objects.
-///
-/// Without it, a boxed error has to be converted explicitly:
-///
-/// ```
-/// use std::error::Error;
-/// use gix_error::{ResultExt, message};
-///
-/// type BoxedError = Box<dyn Error + Send + Sync + 'static>;
-///
-/// fn before(result: Result<(), BoxedError>) -> Result<(), gix_error::Exn<gix_error::Message>> {
-///     result
-///         .map_err(gix_error::Error::from_boxed)
-///         .or_raise(|| message("operation failed"))
-/// }
-/// ```
-///
-/// With `BoxedResultExt`, the boxed error can be turned into erased `Exn` directly.
-///
-/// ```
-/// use std::error::Error;
-/// use gix_error::{BoxedResultExt, ResultExt, message};
-///
-/// type BoxedError = Box<dyn Error + Send + Sync + 'static>;
-///
-/// fn after(result: Result<(), BoxedError>) -> Result<(), gix_error::Exn<gix_error::Message>> {
-///     result.or_erased().or_raise(|| message("operation failed"))
-/// }
-/// ```
 pub trait BoxedResultExt {
     /// The `Ok` type.
     type Success;
