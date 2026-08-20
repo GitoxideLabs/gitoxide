@@ -20,6 +20,7 @@ serde = ["dep:serde", "bstr/serde", "gix-sec/serde"]
 
 [dependencies]
 gix-sec = { version = "^0.14.2", path = "../gix-sec" }
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 gix-url = { version = "^0.38.0", path = "../gix-url" }
 gix-path = { version = "^0.12.5", path = "../gix-path" }
 gix-quote = { version = "^0.8.0", path = "../gix-quote" }

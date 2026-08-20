@@ -1,7 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error(transparent)]
-    UrlParse(#[from] gix::url::parse::Error),
+    UrlParse(#[from] gix::Error),
     #[error(transparent)]
     Configuration(#[from] gix::config::credential_helpers::Error),
     #[error(transparent)]
@@ -24,13 +24,14 @@ pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program
                 .or_else(|| context.to_url())
                 .ok_or(Error::Protocol(gix::credentials::protocol::Error::UrlMissing))?;
 
+            let url = gix::url::parse(&url).map_err(gix::Exn::into_error)?;
             let (mut cascade, _action, prompt_options) = match repo {
-                Some(ref repo) => repo.config_snapshot().credential_helpers(gix::url::parse(&url)?)?,
+                Some(ref repo) => repo.config_snapshot().credential_helpers(url)?,
                 None => {
                     let config = gix::config::File::from_globals()?;
                     let environment = gix::open::permissions::Environment::all();
                     gix::config::credential_helpers(
-                        gix::url::parse(&url)?,
+                        url,
                         &config,
                         false,    /* lenient config */
                         |_| true, /* section filter */
