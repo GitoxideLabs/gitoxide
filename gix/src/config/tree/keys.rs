@@ -107,7 +107,7 @@ impl<T: Validate> Any<T> {
         let value = value.as_bstr();
         gix_refspec::parse(value.as_bstr(), op)
             .map(|spec| spec.to_owned())
-            .map_err(|err| config::refspec::Error::from_value(self, value.into()).with_source(err))
+            .map_err(|err| config::refspec::Error::from_value(self, value.into()).with_source(err.into_error()))
     }
 
     /// Try to interpret `value` as UTF-8 encoded string.
@@ -695,7 +695,7 @@ pub mod validate {
     pub struct PushRefSpec;
     impl Validate for PushRefSpec {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            gix_refspec::parse(value, gix_refspec::parse::Operation::Push)?;
+            gix_refspec::parse(value, gix_refspec::parse::Operation::Push).map_err(gix_error::Exn::into_error)?;
             Ok(())
         }
     }
@@ -705,7 +705,7 @@ pub mod validate {
     pub struct FetchRefSpec;
     impl Validate for FetchRefSpec {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            gix_refspec::parse(value, gix_refspec::parse::Operation::Fetch)?;
+            gix_refspec::parse(value, gix_refspec::parse::Operation::Fetch).map_err(gix_error::Exn::into_error)?;
             Ok(())
         }
     }

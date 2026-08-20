@@ -205,7 +205,7 @@ impl File {
             .map_err(|err| config::branch::Error {
                 submodule: name.to_owned(),
                 actual: branch,
-                source: err,
+                source: err.into_error(),
             })
     }
 
