@@ -3,6 +3,21 @@ mod options;
 mod ask {
     use gix_testtools::bstr::ByteSlice;
 
+    #[test]
+    #[cfg(unix)]
+    fn disabled_is_a_message_without_a_source() {
+        let err = gix_prompt::ask(
+            "ignored",
+            &gix_prompt::Options {
+                mode: gix_prompt::Mode::Disable,
+                askpass: None,
+            },
+        )
+        .expect_err("terminal prompting is disabled");
+        assert_eq!(err.error().to_string(), "Terminal prompts are disabled");
+        assert_eq!(err.iter().count(), 1, "there is no underlying operation error");
+    }
+
     /// Evaluates Cargo's target directory for this project at runtime to adjust for the concrete
     /// execution environment. This is necessary because certain environment variables and
     /// configuration options can change its location (e.g. CARGO_TARGET_DIR).
@@ -37,7 +52,19 @@ mod ask {
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
     fn askpass_only() {
         let mut cmd = std::process::Command::new(env!("CARGO"));
-        cmd.args(["build", "--example", "use-askpass", "--example", "askpass"]);
+        cmd.args([
+            "build",
+            "-p",
+            "gix-prompt",
+            "-p",
+            "gix-hash",
+            "--features",
+            "sha1",
+            "--example",
+            "use-askpass",
+            "--example",
+            "askpass",
+        ]);
         cmd.spawn().unwrap().wait().expect("example builds OK");
 
         let mut p = expectrl::spawn(evaluate_target_dir() + "/debug/examples/use-askpass").unwrap();
@@ -51,7 +78,17 @@ mod ask {
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
     fn username_password() {
         let mut cmd = std::process::Command::new(env!("CARGO"));
-        cmd.args(["build", "--example", "credentials"]);
+        cmd.args([
+            "build",
+            "-p",
+            "gix-prompt",
+            "-p",
+            "gix-hash",
+            "--features",
+            "sha1",
+            "--example",
+            "credentials",
+        ]);
         cmd.spawn().unwrap().wait().expect("example builds OK");
 
         let mut p = expectrl::spawn(evaluate_target_dir() + "/debug/examples/credentials").unwrap();
