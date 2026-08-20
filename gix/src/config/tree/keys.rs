@@ -378,7 +378,7 @@ mod url {
         pub fn try_into_url(&'static self, value: impl gix_utils::AsBStr) -> Result<gix_url::Url, config::url::Error> {
             let value = value.as_bstr();
             gix_url::parse(value.as_bstr())
-                .map_err(|err| config::url::Error::from_value(self, value.into()).with_source(err))
+                .map_err(|err| config::url::Error::from_value(self, value.into()).with_source(err.into_error()))
         }
     }
 }

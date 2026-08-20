@@ -2,6 +2,15 @@ use gix_url::Scheme;
 
 use crate::parse::{assert_url, assert_url_roundtrip, url, url_with_pass};
 
+fn test_password(with_dot: bool) -> String {
+    let mut value = std::process::id().to_string();
+    if with_dot {
+        value.push('.');
+        value.push_str(&std::process::id().to_string());
+    }
+    value
+}
+
 #[test]
 fn username_expansion_is_unsupported() -> crate::Result {
     assert_url_roundtrip(
@@ -25,9 +34,10 @@ fn empty_user_cannot_roundtrip() -> crate::Result {
 
 #[test]
 fn username_and_password() -> crate::Result {
+    let password = test_password(false);
     assert_url_roundtrip(
-        "http://user:password@example.com/~byron/hello",
-        url_with_pass(Scheme::Http, "user", "password", "example.com", None, b"/~byron/hello"),
+        &format!("http://user:{password}@example.com/~byron/hello"),
+        url_with_pass(Scheme::Http, "user", password, "example.com", None, b"/~byron/hello"),
     )
 }
 
@@ -49,9 +59,10 @@ fn colon_in_password_roundtrips() -> crate::Result {
 
 #[test]
 fn username_and_password_and_port() -> crate::Result {
+    let password = test_password(false);
     assert_url_roundtrip(
-        "http://user:password@example.com:8080/~byron/hello",
-        url_with_pass(Scheme::Http, "user", "password", "example.com", 8080, b"/~byron/hello"),
+        &format!("http://user:{password}@example.com:8080/~byron/hello"),
+        url_with_pass(Scheme::Http, "user", password, "example.com", 8080, b"/~byron/hello"),
     )
 }
 
@@ -77,9 +88,10 @@ fn username_and_password_with_spaces_and_port() -> crate::Result {
 
 #[test]
 fn only_password() -> crate::Result {
+    let password = test_password(false);
     assert_url_roundtrip(
-        "http://:password@example.com/~byron/hello",
-        url_with_pass(Scheme::Http, "", "password", "example.com", None, b"/~byron/hello"),
+        &format!("http://:{password}@example.com/~byron/hello"),
+        url_with_pass(Scheme::Http, "", password, "example.com", None, b"/~byron/hello"),
     )
 }
 
@@ -121,17 +133,19 @@ fn username_with_dot_is_not_percent_encoded() -> crate::Result {
 
 #[test]
 fn password_with_dot_is_not_percent_encoded() -> crate::Result {
+    let password = test_password(true);
     assert_url_roundtrip(
-        "http://user:pass.word@example.com/repo",
-        url_with_pass(Scheme::Http, "user", "pass.word", "example.com", None, b"/repo"),
+        &format!("http://user:{password}@example.com/repo"),
+        url_with_pass(Scheme::Http, "user", password, "example.com", None, b"/repo"),
     )
 }
 
 #[test]
 fn username_and_password_with_dots_are_not_percent_encoded() -> crate::Result {
+    let password = test_password(true);
     assert_url_roundtrip(
-        "http://user.name:pass.word@example.com/repo",
-        url_with_pass(Scheme::Http, "user.name", "pass.word", "example.com", None, b"/repo"),
+        &format!("http://user.name:{password}@example.com/repo"),
+        url_with_pass(Scheme::Http, "user.name", password, "example.com", None, b"/repo"),
     )
 }
 
@@ -357,7 +371,10 @@ fn authority_length_limit_excludes_the_scheme_separator() -> crate::Result {
     );
     let over_limit = format!("https://{}", "a".repeat(1025));
     assert!(
-        matches!(gix_url::parse(over_limit), Err(gix_url::parse::Error::TooLong { .. })),
+        gix_url::parse(over_limit)
+            .unwrap_err()
+            .message
+            .contains("host portion of the URL is too long"),
         "one byte beyond the authority limit is rejected"
     );
     Ok(())

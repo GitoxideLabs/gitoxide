@@ -13,9 +13,9 @@ pub(crate) mod function {
     pub async fn connect<Url, E>(url: Url, options: super::Options) -> Result<Box<dyn Transport + Send>, Error>
     where
         Url: TryInto<gix_url::Url, Error = E>,
-        gix_url::parse::Error: From<E>,
+        E: std::error::Error + Send + Sync + 'static,
     {
-        let mut url = url.try_into().map_err(gix_url::parse::Error::from)?;
+        let mut url = url.try_into().map_err(gix_error::Error::from_error)?;
         Ok(match url.scheme {
             gix_url::Scheme::Git => {
                 if url.user().is_some() {

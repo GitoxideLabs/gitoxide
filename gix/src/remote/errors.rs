@@ -35,7 +35,7 @@ pub mod find {
             #[error(transparent)]
             Find(#[from] super::Error),
             #[error("remote name could not be parsed as URL")]
-            UrlParse(#[from] gix_url::parse::Error),
+            UrlParse(#[from] gix_error::Error),
             #[error("The remote named {name:?} did not exist")]
             NotFound { name: BString },
         }
@@ -54,7 +54,7 @@ pub mod find {
             #[error("Could not initialize a URL remote")]
             Init(#[from] crate::remote::init::Error),
             #[error("remote name could not be parsed as URL")]
-            UrlParse(#[from] gix_url::parse::Error),
+            UrlParse(#[from] gix_error::Error),
             #[error("No configured remote could be found, or too many were available")]
             ExactlyOneRemoteNotAvailable,
         }

@@ -1789,6 +1789,7 @@ dependencies = [
  "gix-command",
  "gix-config-value",
  "gix-date",
+ "gix-error",
  "gix-path",
  "gix-prompt",
  "gix-quote",
@@ -2508,6 +2509,7 @@ version = "0.34.0"
 dependencies = [
  "bstr",
  "gix-config",
+ "gix-error",
  "gix-features",
  "gix-path",
  "gix-pathspec",
@@ -2599,6 +2601,7 @@ dependencies = [
  "futures-lite",
  "gix-command",
  "gix-credentials",
+ "gix-error",
  "gix-features",
  "gix-hash",
  "gix-pack",
@@ -2646,13 +2649,13 @@ dependencies = [
  "assert_matches",
  "bstr",
  "document-features",
+ "gix-error",
  "gix-path",
  "gix-testtools",
  "gix-utils",
  "percent-encoding",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -107,9 +107,11 @@ fn no_relative_paths_if_protocol() -> crate::Result {
             "we are just as none-sensical as git here due to special handling."
         );
     } else {
-        assert_matches::assert_matches!(
-            gix_url::parse(r"file://.\"),
-            Err(gix_url::parse::Error::MissingRepositoryPath { .. }),
+        assert!(
+            gix_url::parse(r"file://.\")
+                .unwrap_err()
+                .message
+                .contains("does not specify a path to a repository"),
             "DEVIATION: on windows, this parses with git into something nonsensical Diag: url=file://./ Diag: protocol=file Diag: hostandport=./ Diag: path=//./"
         );
     }
