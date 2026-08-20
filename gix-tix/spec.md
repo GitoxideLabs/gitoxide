@@ -41,6 +41,9 @@ without trading responsiveness for metadata that is not visible.
   then exits with an error so resolution cannot be mistaken for completion.
 - `tix stash` saves the index and worktree state in a gix stash associated with
   the `HEAD` commit through the same commit-stash operation as the TUI.
+- `tix admin clear-undo` atomically and idempotently deletes the current
+  worktree's undo and redo queue. It does not apply or reverse queued operations,
+  change their recorded references, or affect another worktree's queue.
 - `tix enrich commit todo [--clear] [REVSPEC]`, `tix enrich commit note
   [REVSPEC]`, `tix enrich commit git-note [REVSPEC]`, and `tix enrich tree
   checks-pass [--clear] [REVSPEC]` expose the TUI's enrichment actions without

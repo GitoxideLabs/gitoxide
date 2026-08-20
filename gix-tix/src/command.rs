@@ -38,6 +38,9 @@ enum Command {
     /// Print the complete history view without opening the terminal UI.
     #[command(visible_alias = "status")]
     Show(Show),
+    /// Perform repository maintenance.
+    #[command(subcommand)]
+    Admin(Admin),
     /// Manage commit and tree enrichments.
     #[command(subcommand)]
     Enrich(enrich::Command),
@@ -60,6 +63,12 @@ enum Command {
     /// Generate or apply a self-contained history-rebase todo.
     #[command(subcommand)]
     Rebase(rebase::Command),
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum Admin {
+    /// Clear this worktree's undo and redo history.
+    ClearUndo,
 }
 
 #[derive(Debug, clap::Args)]
@@ -188,6 +197,7 @@ impl Platform {
                 println!("{}", notice_with_change_id(&repository, &notice, id)?);
             }
             Command::Pin(args) => pin(&repository, args)?,
+            Command::Admin(Admin::ClearUndo) => crate::edit::undo::clear(&repository)?,
             Command::Travel(args) => return travel::run(repository, args),
             Command::Reword(args) => return reword::run(repository, args),
             Command::New(args) => return new::run(repository, args),
@@ -821,6 +831,13 @@ mod tests {
                 .command,
             Some(Command::Stash)
         ));
+        assert!(matches!(
+            Cli::try_parse_from(["tix", "admin", "clear-undo"])
+                .expect("clear-undo parses")
+                .platform
+                .command,
+            Some(Command::Admin(Admin::ClearUndo))
+        ));
         let pin = Cli::try_parse_from(["tix", "pin", "main", "HEAD~2"])
             .expect("one or more pin revisions parse")
             .platform
@@ -1100,6 +1117,8 @@ mod tests {
             &["pin"],
             &["travel"],
             &["reword"],
+            &["admin"],
+            &["admin", "clear-undo"],
             &["enrich"],
             &["enrich", "commit"],
             &["enrich", "commit", "todo"],
@@ -1144,6 +1163,80 @@ mod tests {
         let cli = Cli::try_parse_from(["tix", "--", "amend"]).expect("-- makes amend a revision");
         assert!(cli.platform.command.is_none());
         assert_eq!(cli.platform.revisions, ["amend"]);
+    }
+
+    #[test]
+    fn clear_undo_is_worktree_local_and_idempotent() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let linked = gix_testtools::tempfile::tempdir()?;
+        let linked_path = linked.path().join("linked");
+        assert!(
+            ProcessCommand::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["worktree", "add", "-q", "--detach"])
+                .arg(&linked_path)
+                .arg("topic")
+                .status()?
+                .success(),
+            "git creates the linked worktree"
+        );
+        let main = crate::test_repository::open(fixture.path())?;
+        let linked = crate::test_repository::open(&linked_path)?;
+        let retained_ref: gix::refs::FullName = "refs/worktree/tix/admin-clear-test"
+            .try_into()
+            .expect("valid worktree reference");
+        for repository in [&main, &linked] {
+            let id = repository.head_id()?.detach();
+            repository.reference(
+                retained_ref.clone(),
+                id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "test clear-undo",
+            )?;
+            crate::edit::undo::record(
+                repository,
+                "create test ref",
+                &[crate::edit::undo::RefChange {
+                    name: retained_ref.clone(),
+                    before: crate::edit::undo::State::Missing,
+                    after: crate::edit::undo::State::Object(id),
+                }],
+            )?;
+        }
+        let main_position = crate::edit::undo::position(&main)?;
+        let linked_target = linked.find_reference(retained_ref.as_ref())?.id().detach();
+
+        Platform {
+            quit_on_finish: false,
+            hide: Vec::new(),
+            command: Some(Command::Admin(Admin::ClearUndo)),
+            revisions: Vec::new(),
+        }
+        .run(linked.into_sync())?;
+
+        let linked = crate::test_repository::open(&linked_path)?;
+        assert!(linked.try_find_reference(crate::edit::undo::TIP_REF)?.is_none());
+        assert!(linked.try_find_reference(crate::edit::undo::CURSOR_REF)?.is_none());
+        assert_eq!(
+            linked.find_reference(retained_ref.as_ref())?.id().detach(),
+            linked_target,
+            "clearing history does not apply or reverse a recorded operation"
+        );
+        assert_eq!(
+            crate::edit::undo::position(&main)?,
+            main_position,
+            "another worktree keeps its private queue"
+        );
+
+        Platform {
+            quit_on_finish: false,
+            hide: Vec::new(),
+            command: Some(Command::Admin(Admin::ClearUndo)),
+            revisions: Vec::new(),
+        }
+        .run(linked.into_sync())?;
+        Ok(())
     }
 
     #[test]
