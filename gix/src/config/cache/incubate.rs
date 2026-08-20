@@ -5,6 +5,7 @@ use crate::config::{
     cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
     tree::{Core, Extensions, gitoxide},
 };
+use gix_error::{ErrorExt, ResultExt};
 
 /// A utility to deal with the cyclic dependency between the ref store and the configuration. The ref-store needs the
 /// object hash kind, and the configuration needs the current branch name to resolve conditional includes with `onbranch`.
@@ -46,9 +47,17 @@ impl StageOne {
         let object_hash = match (repo_format_version, config.string(Extensions::OBJECT_FORMAT)) {
             // objectFormat is a repository format version 1 extension.
             (1, Some(format)) => Extensions::OBJECT_FORMAT.try_into_object_format(format)?,
-            (0, Some(_)) => return Err(Error::ObjectFormatRequiresV1),
+            (0, Some(_)) => {
+                return Err(gix_error::Error::from_error(gix_error::ValidationError::new(
+                    "extensions.objectFormat is a v1-only extension, but the repository format version is 0; set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build)",
+                )));
+            }
             (0 | 1, None) => legacy_object_hash()?,
-            (version, _) => return Err(Error::UnsupportedRepositoryFormatVersion { version }),
+            (version, _) => {
+                return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                    "Unsupported repository format version {version}; only versions 0 and 1 are supported"
+                ))));
+            }
         };
 
         let extension_worktree = util::config_bool(
@@ -67,12 +76,12 @@ impl StageOne {
                 lossy,
                 lenient,
             )?;
-            config.append(worktree_config)?;
+            config.append(worktree_config).or_erased()?;
         }
         let precompose_unicode = Core::PRECOMPOSE_UNICODE
             .enrich_error(config.boolean(Core::PRECOMPOSE_UNICODE))
             .with_leniency(lenient)
-            .map_err(Error::ConfigBoolean)?
+            .map_err(gix_error::Error::from)?
             .unwrap_or_default();
 
         const IS_WINDOWS: bool = cfg!(windows);
@@ -107,7 +116,9 @@ fn legacy_object_hash() -> Result<gix_hash::Kind, Error> {
     }
     #[cfg(not(feature = "sha1"))]
     {
-        Err(Error::UnsupportedObjectFormat { name: "sha1".into() })
+        Err(gix_error::Error::from_error(gix_error::ValidationError::new(
+            "Cannot handle objects formatted as \"sha1\"",
+        )))
     }
 }
 
@@ -126,10 +137,10 @@ fn load_config(
         Ok(f) => f,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(gix_config::File::new(metadata)),
         Err(err) => {
-            let err = Error::Io {
-                source: err,
-                path: config_path,
-            };
+            let err = gix_error::Error::from(err.and_raise(gix_error::message!(
+                "Could not read configuration file at \"{}\"",
+                config_path.display()
+            )));
             if lenient {
                 gix_trace::warn!("ignoring: {err:#?}");
                 return Ok(gix_config::File::new(metadata));
@@ -141,10 +152,10 @@ fn load_config(
 
     buf.clear();
     if let Err(err) = std::io::copy(&mut file, buf) {
-        let err = Error::Io {
-            source: err,
-            path: config_path,
-        };
+        let err = gix_error::Error::from(err.and_raise(gix_error::message!(
+            "Could not read configuration file at \"{}\"",
+            config_path.display()
+        )));
         if lenient {
             gix_trace::warn!("ignoring: {err:#?}");
             buf.clear();
@@ -160,7 +171,8 @@ fn load_config(
             includes: gix_config::file::includes::Options::no_follow(),
             ..util::base_options(lossy, lenient)
         },
-    )?;
+    )
+    .map_err(gix_error::Exn::into_error)?;
 
     Ok(config)
 }

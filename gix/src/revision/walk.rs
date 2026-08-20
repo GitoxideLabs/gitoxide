@@ -1,3 +1,5 @@
+use gix_error::ResultExt;
+
 use gix_hash::ObjectId;
 use gix_object::FindExt;
 use gix_traverse::commit::simple::CommitTimeOrder;
@@ -5,22 +7,7 @@ use gix_traverse::commit::simple::CommitTimeOrder;
 use crate::{Repository, ext::ObjectIdExt, revision};
 
 /// The error returned by [`Platform::all()`] and [`Platform::selected()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    SimpleTraversal(crate::Error),
-    #[error(transparent)]
-    ShallowCommits(#[from] crate::Error),
-    #[error(transparent)]
-    ConfigBoolean(#[from] crate::config::boolean::Error),
-}
-
-impl From<gix_traverse::commit::simple::Error> for Error {
-    fn from(err: gix_traverse::commit::simple::Error) -> Self {
-        Error::SimpleTraversal(err.into_error())
-    }
-}
+pub type Error = gix_error::Error;
 
 /// Specify how to sort commits during a [revision::Walk] traversal.
 ///
@@ -326,16 +313,19 @@ impl<'repo> Platform<'repo> {
                         }
                     }
                 })
-                .sorting(sorting.into_simple().expect("for now there is nothing else"))?
+                .sorting(sorting.into_simple().expect("for now there is nothing else"))
+                .map_err(gix_error::Exn::into_error)?
                 .parents(parents)
                 .commit_graph(
                     commit_graph.or(use_commit_graph
-                        .map_or_else(|| self.repo.config.may_use_commit_graph(), Ok)?
+                        .map_or_else(|| self.repo.config.may_use_commit_graph(), Ok)
+                        .or_erased()?
                         .then(|| self.repo.commit_graph().ok())
                         .flatten()),
                 )
-                .hide(hidden)?
-                .map(|res| res.map_err(iter::Error::from)),
+                .hide(hidden)
+                .map_err(gix_error::Exn::into_error)?
+                .map(|res| res.map_err(gix_error::Exn::into_error)),
             ),
         })
     }
@@ -353,18 +343,7 @@ impl<'repo> Platform<'repo> {
 ///
 pub mod iter {
     /// The error returned by the [Walk](crate::revision::Walk) iterator.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        SimpleTraversal(crate::Error),
-    }
-
-    impl From<gix_traverse::commit::simple::Error> for Error {
-        fn from(err: gix_traverse::commit::simple::Error) -> Self {
-            Error::SimpleTraversal(err.into_error())
-        }
-    }
+    pub type Error = gix_error::Error;
 }
 
 pub(crate) mod iter_impl {

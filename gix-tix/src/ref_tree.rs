@@ -825,7 +825,7 @@ pub(crate) fn pin_references_reporting(
     {
         let mut reference = match reference {
             Ok(reference) => reference,
-            Err(err) if crate::history::is_missing_ref(&*err) => continue,
+            Err(err) if crate::history::is_missing_ref(&err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read reference to pin: {err}")),
         };
         let name = reference.name().to_owned();

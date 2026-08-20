@@ -167,14 +167,7 @@ pub struct Stats {
 ///
 pub mod stats {
     /// The error returned by [`stats()`](super::Platform::stats()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        CreateResourceCache(#[from] crate::repository::diff_resource_cache::Error),
-        #[error(transparent)]
-        ForEachChange(#[from] crate::object::tree::diff::for_each::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 /// Convenience

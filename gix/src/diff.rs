@@ -6,13 +6,7 @@ pub mod options {
     ///
     pub mod init {
         /// The error returned when instantiating [diff options](crate::diff::Options).
-        #[derive(Debug, thiserror::Error)]
-        #[cfg_attr(feature = "blob-diff", expect(missing_docs))]
-        pub enum Error {
-            #[cfg(feature = "blob-diff")]
-            #[error(transparent)]
-            RewritesConfiguration(#[from] crate::diff::new_rewrites::Error),
-        }
+        pub type Error = gix_error::Error;
     }
 }
 
@@ -131,6 +125,7 @@ pub mod rename {
 #[cfg(feature = "blob-diff")]
 pub(crate) mod utils {
     use gix_diff::{Rewrites, rewrites::Copies};
+    use gix_error::ResultExt;
 
     use crate::{
         Repository,
@@ -141,33 +136,13 @@ pub(crate) mod utils {
     ///
     pub mod new_rewrites {
         /// The error returned by [`new_rewrites()`](super::new_rewrites()).
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            ConfigDiffRenames(#[from] crate::config::key::GenericError),
-            #[error(transparent)]
-            ConfigDiffRenameLimit(#[from] crate::config::unsigned_integer::Error),
-        }
+        pub type Error = gix_error::Error;
     }
 
     ///
     pub mod resource_cache {
         /// The error returned by [`resource_cache()`](super::resource_cache()).
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            DiffAlgorithm(#[from] crate::config::diff::algorithm::Error),
-            #[error(transparent)]
-            WorktreeFilterOptions(#[from] crate::filter::pipeline::options::Error),
-            #[error(transparent)]
-            DiffDrivers(#[from] crate::config::diff::drivers::Error),
-            #[error(transparent)]
-            DiffPipelineOptions(#[from] crate::config::diff::pipeline_options::Error),
-            #[error(transparent)]
-            CommandContext(#[from] crate::config::command_context::Error),
-        }
+        pub type Error = gix_error::Error;
     }
 
     /// Create an instance by reading all relevant information from the `config`uration, while being `lenient` or not.
@@ -189,7 +164,8 @@ pub(crate) mod utils {
     ) -> Result<(Option<Rewrites>, bool), new_rewrites::Error> {
         let copies = match renames
             .try_into_renames(config.boolean(renames))
-            .with_leniency(lenient)?
+            .with_leniency(lenient)
+            .or_erased()?
         {
             Some(renames) => match renames {
                 Tracking::Disabled => return Ok((None, true)),
@@ -205,7 +181,8 @@ pub(crate) mod utils {
                 copies,
                 limit: rename_limit
                     .try_into_usize(config.integer(rename_limit))
-                    .with_leniency(lenient)?
+                    .with_leniency(lenient)
+                    .or_erased()?
                     .unwrap_or(default.limit),
                 ..default
             }
@@ -229,7 +206,7 @@ pub(crate) mod utils {
         attr_stack: gix_worktree::Stack,
         roots: gix_diff::blob::pipeline::WorktreeRoots,
     ) -> Result<gix_diff::blob::Platform, resource_cache::Error> {
-        let diff_algo = repo.config.diff_algorithm()?;
+        let diff_algo = repo.config.diff_algorithm().or_erased()?;
         let diff_cache = gix_diff::blob::Platform::new(
             gix_diff::blob::platform::Options {
                 algorithm: Some(diff_algo),

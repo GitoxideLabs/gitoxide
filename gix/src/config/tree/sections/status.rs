@@ -56,12 +56,15 @@ impl Section for Status {
 
 mod validate {
     use crate::{bstr::BStr, config::tree::keys};
+    use gix_error::ResultExt;
 
     #[derive(Clone, Copy)]
     pub struct ShowUntrackedFiles;
     impl keys::Validate for ShowUntrackedFiles {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Status::SHOW_UNTRACKED_FILES.try_into_show_untracked_files(value)?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Status::SHOW_UNTRACKED_FILES
+                .try_into_show_untracked_files(value)
+                .or_erased()?;
             Ok(())
         }
     }
