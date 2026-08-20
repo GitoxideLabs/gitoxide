@@ -10,13 +10,13 @@ pub struct Collision {
     pub error_kind: std::io::ErrorKind,
 }
 
-/// A path that encountered an IO error.
+/// A path that encountered an error.
 #[derive(Debug)]
 pub struct ErrorRecord {
     /// the path that encountered the error.
     pub path: BString,
-    /// The error
-    pub error: Box<dyn std::error::Error + Send + Sync + 'static>,
+    /// The error.
+    pub error: gix_error::Error,
 }
 
 /// The outcome of checking out an entire index.
@@ -75,32 +75,7 @@ pub struct Options {
 }
 
 /// The error returned by the [checkout()][crate::checkout()] function.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Could not convert path to UTF8: {}", .path)]
-    IllformedUtf8 { path: BString },
-    #[error("The clock was off when reading file related metadata after updating a file on disk")]
-    Time(#[from] std::time::SystemTimeError),
-    #[error("IO error while writing blob or reading file metadata or changing filetype")]
-    Io(#[from] std::io::Error),
-    #[error("object for checkout at {} could not be retrieved from object database", .path.display())]
-    Find {
-        #[source]
-        err: gix_error::Error,
-        path: std::path::PathBuf,
-    },
-    #[error(transparent)]
-    Filter(#[from] gix_filter::pipeline::convert::to_worktree::Error),
-    #[error(transparent)]
-    FilterListDelayed(#[from] gix_filter::driver::delayed::list::Error),
-    #[error(transparent)]
-    FilterFetchDelayed(#[from] gix_filter::driver::delayed::fetch::Error),
-    #[error("The entry at path '{rela_path}' was listed as delayed by the filter process, but we never passed it")]
-    FilterPathUnknown { rela_path: BString },
-    #[error("The following paths were delayed and apparently forgotten to be processed by the filter driver: ")]
-    FilterPathsUnprocessed { rela_paths: Vec<BString> },
-}
+pub type Error = gix_error::Exn;
 
 mod chunk;
 mod entry;

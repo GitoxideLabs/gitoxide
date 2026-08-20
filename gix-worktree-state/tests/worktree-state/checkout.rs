@@ -238,6 +238,27 @@ fn delayed_driver_process() -> crate::Result {
     Ok(())
 }
 
+#[test]
+fn forgotten_delayed_path_is_a_corruption_error() {
+    let mut opts = opts_from_probe();
+    opts.filter_process_delay = gix_filter::driver::apply::Delay::Allow;
+    setup_filter_pipeline(opts.filters.options_mut());
+    opts.filters.options_mut().drivers[0].process = Some((driver_exe() + " process forget-delayed").into());
+
+    let err = checkout_index_in_tmp_dir_opts(
+        opts,
+        "make_mixed_without_submodules_and_symlinks",
+        None,
+        |_| true,
+        |_| Ok(()),
+    )
+    .expect_err("a required filter must not silently forget a delayed path");
+    let err = err
+        .downcast_ref::<gix_error::Error>()
+        .expect("checkout errors retain their classification");
+    assert!(err.is_corrupted());
+}
+
 #[cfg(unix)]
 #[test]
 fn delayed_driver_process_removes_obsolete_executable_bits() -> crate::Result {
@@ -594,17 +615,14 @@ fn safety_checks_dotdot_trees() {
     let err =
         checkout_index_in_tmp_dir(opts.clone(), "make_traverse_trees", Some("traverse_dotdot_trees")).unwrap_err();
     let expected_err_msg = "Input path \"../outside\" contains relative or absolute components";
-    assert_eq!(err.source().expect("inner").to_string(), expected_err_msg);
+    assert_eq!(err.to_string(), expected_err_msg);
 
     opts.keep_going = true;
     let (_source_tree, _destination, _index, outcome) =
         checkout_index_in_tmp_dir(opts, "make_traverse_trees", Some("traverse_dotdot_trees"))
             .expect("keep-going checks out as much as possible");
     assert_eq!(outcome.errors.len(), 1, "one path could not be checked out");
-    assert_eq!(
-        outcome.errors[0].error.source().expect("inner").to_string(),
-        expected_err_msg
-    );
+    assert_eq!(outcome.errors[0].error.to_string(), expected_err_msg);
 }
 
 #[test]
@@ -612,10 +630,7 @@ fn safety_checks_dotgit_trees() {
     let opts = opts_from_probe();
     let err =
         checkout_index_in_tmp_dir(opts.clone(), "make_traverse_trees", Some("traverse_dotgit_trees")).unwrap_err();
-    assert_eq!(
-        err.source().expect("inner").to_string(),
-        "The .git name may never be used"
-    );
+    assert_eq!(err.to_string(), "The .git name may never be used");
 }
 
 #[test]
@@ -624,7 +639,7 @@ fn safety_checks_dotgit_ntfs_stream() {
     let err =
         checkout_index_in_tmp_dir(opts.clone(), "make_traverse_trees", Some("traverse_dotgit_stream")).unwrap_err();
     assert_eq!(
-        err.source().expect("inner").to_string(),
+        err.to_string(),
         "The .git name may never be used",
         "note how it is still discovered even though the path is `.git::$INDEX_ALLOCATION`"
     );
@@ -819,7 +834,8 @@ fn checkout_index_in_tmp_dir_opts(
         &progress::Discard,
         &AtomicBool::default(),
         opts,
-    )?;
+    )
+    .map_err(gix_error::Exn::into_error)?;
     Ok((source_tree, destination, index, outcome))
 }
 

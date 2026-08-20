@@ -26,7 +26,7 @@ pub mod main_worktree {
         #[error(transparent)]
         CheckoutOptions(#[from] crate::config::checkout_options::Error),
         #[error(transparent)]
-        IndexCheckout(#[from] gix_worktree_state::checkout::Error),
+        IndexCheckout(#[from] gix_error::Error),
         #[error(transparent)]
         Peel(#[from] crate::reference::peel::Error),
         #[error("Failed to reopen object database as Arc (only if thread-safety wasn't compiled in)")]
@@ -136,7 +136,8 @@ pub mod main_worktree {
                 &bytes,
                 should_interrupt,
                 opts,
-            )?;
+            )
+            .map_err(gix_error::Exn::into_error)?;
             files.show_throughput(start);
             bytes.show_throughput(start);
 

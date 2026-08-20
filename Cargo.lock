@@ -2720,7 +2720,6 @@ dependencies = [
  "gix-worktree",
  "gix-worktree-state",
  "io-close",
- "thiserror 2.0.18",
  "walkdir",
 ]
 
