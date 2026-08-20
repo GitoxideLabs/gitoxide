@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
+use gix::error::{ErrorExt, NotFoundError, message};
 use gix::{
     NestedProgress,
     hash::ObjectId,
@@ -62,32 +63,6 @@ impl From<SafetyCheck> for pack::index::traverse::SafetyCheck {
             }
         }
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-enum Error {
-    #[error("An IO error occurred while writing an object")]
-    Io(#[from] std::io::Error),
-    #[error("An object could not be written to the database")]
-    OdbWrite(#[from] loose::write::Error),
-    #[error("Failed to write {kind} object {id}")]
-    Write {
-        source: Box<dyn std::error::Error + Send + Sync>,
-        kind: object::Kind,
-        id: ObjectId,
-    },
-    #[error("Object didn't verify after right after writing it")]
-    Verify(#[source] std::io::Error),
-    #[error("{kind} object wasn't re-encoded without change")]
-    ObjectEncodeMismatch {
-        #[source]
-        source: gix::hash::verify::Error,
-        kind: object::Kind,
-    },
-    #[error("The recently written file for loose object {id} could not be found")]
-    WrittenFileMissing { id: ObjectId },
-    #[error("The recently written file for loose object {id} cold not be read")]
-    WrittenFileCorrupt { source: loose::find::Error, id: ObjectId },
 }
 
 #[expect(
@@ -228,11 +203,15 @@ pub fn pack_or_pack_index(
                     .flatten();
                 let mut read_buf = Vec::new();
                 move |object_kind, buf, index_entry, progress| {
-                    let written_id = out.write_buf(object_kind, buf).map_err(|err| Error::Write {
-                        source: err.into(),
-                        kind: object_kind,
-                        id: index_entry.oid,
-                    })?;
+                    let written_id = out
+                        .write_buf(object_kind, buf)
+                        .map_err(|err| {
+                            err.raise(message!(
+                                "Failed to write {object_kind} object {}",
+                                index_entry.oid
+                            ))
+                            .into_error()
+                        })?;
                     if let Err(err) = written_id.verify(&index_entry.oid) {
                         if let object::Kind::Tree = object_kind {
                             progress.info(format!(
@@ -240,22 +219,28 @@ pub fn pack_or_pack_index(
                                 index_entry.oid, written_id
                             ));
                         } else {
-                            return Err(Error::ObjectEncodeMismatch {
-                                source: err,
-                                kind: object_kind,
-                            });
+                            return Err(err
+                                .and_raise(message!("{object_kind} object wasn't re-encoded without change"))
+                                .into_error());
                         }
                     }
                     if let Some(verifier) = loose_odb.as_ref() {
                         let obj = verifier
                             .try_find(&written_id, &mut read_buf)
-                            .map_err(|err| Error::WrittenFileCorrupt {
-                                source: err,
-                                id: written_id,
+                            .map_err(|err| {
+                                err.and_raise(message!(
+                                    "The recently written file for loose object {written_id} could not be read"
+                                ))
+                                .into_error()
                             })?
-                            .ok_or(Error::WrittenFileMissing { id: written_id })?;
-                        obj.verify_checksum(&written_id)
-                            .map_err(|err| Error::Verify(std::io::Error::other(err.into_error())))?;
+                            .ok_or_else(|| {
+                                NotFoundError::new(format!(
+                                    "The recently written file for loose object {written_id} could not be found"
+                                ))
+                                .raise()
+                                .into_error()
+                            })?;
+                        obj.verify_checksum(&written_id).map_err(gix::Exn::into_error)?;
                     }
                     Ok(())
                 }
