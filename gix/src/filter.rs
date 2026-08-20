@@ -27,10 +27,7 @@ pub mod pipeline {
             #[error(transparent)]
             SafeCrlf(#[from] config::key::GenericErrorWithValue),
             #[error("Could not interpret 'filter.{name}.required' configuration")]
-            Driver {
-                name: BString,
-                source: gix_config::value::Error,
-            },
+            Driver { name: BString, source: gix_error::Error },
             #[error(transparent)]
             CommandContext(#[from] config::command_context::Error),
         }
@@ -327,7 +324,7 @@ fn extract_drivers(repo: &Repository) -> Result<Vec<gix_filter::Driver>, pipelin
             driver.required = gix_config::Boolean::try_from(BStr::new(&value))
                 .map_err(|source| pipeline::options::Error::Driver {
                     name: name.to_owned(),
-                    source,
+                    source: source.into_error(),
                 })?
                 .into();
         }

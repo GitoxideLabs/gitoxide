@@ -1,6 +1,7 @@
 use std::{borrow::Cow, path::PathBuf};
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, ValidationError};
 
 use crate::Path;
 
@@ -31,20 +32,7 @@ pub mod interpolate {
     }
 
     /// The error returned by [`Path::interpolate()`][crate::Path::interpolate()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("{} is missing", .what)]
-        Missing { what: &'static str },
-        #[error("Ill-formed UTF-8 in {}", .what)]
-        Utf8Conversion {
-            what: &'static str,
-            #[source]
-            err: gix_path::Utf8Error,
-        },
-        #[error("Ill-formed UTF-8 in username")]
-        UsernameConversion(#[from] std::str::Utf8Error),
-    }
+    pub type Error = gix_error::Exn;
 
     /// Obtain the home directory for the given user `name` or return `None` if the user wasn't found
     /// or any other error occurred.
@@ -168,21 +156,20 @@ impl Path {
         }: interpolate::Context<'_>,
     ) -> Result<PathBuf, interpolate::Error> {
         if self.is_empty() {
-            return Err(interpolate::Error::Missing { what: "path" });
+            return Err(NotFoundError::new("path is missing").raise_erased());
         }
 
         const PREFIX: &[u8] = b"%(prefix)/";
         if self.starts_with(PREFIX) {
-            let git_install_dir = git_install_dir.ok_or(interpolate::Error::Missing {
-                what: "git install dir",
-            })?;
+            let git_install_dir =
+                git_install_dir.ok_or_raise_erased(|| NotFoundError::new("git install dir is missing"))?;
             let (_prefix, path_without_trailing_slash) = self.split_at(PREFIX.len());
             let path_without_trailing_slash =
-                gix_path::try_from_bstring(path_without_trailing_slash).map_err(|err| {
-                    interpolate::Error::Utf8Conversion {
-                        what: "path past %(prefix)",
-                        err,
-                    }
+                gix_path::try_from_bstring(path_without_trailing_slash).or_raise_erased(|| {
+                    ValidationError::new_with_input(
+                        "Ill-formed UTF-8 in path past %(prefix)",
+                        path_without_trailing_slash,
+                    )
                 })?;
             Ok(git_install_dir.join(path_without_trailing_slash))
         } else if let Some(val) = self.strip_prefix(b"~") {
@@ -193,7 +180,7 @@ impl Path {
             let (mut home, what) = if username.is_empty() {
                 (
                     home_dir
-                        .ok_or(interpolate::Error::Missing { what: "home dir" })?
+                        .ok_or_raise_erased(|| NotFoundError::new("home dir is missing"))?
                         .to_path_buf(),
                     "path past ~/",
                 )
@@ -201,18 +188,15 @@ impl Path {
                 (
                     Self::home_for_username(
                         username,
-                        home_for_user.ok_or(interpolate::Error::Missing {
-                            what: "home for user lookup",
-                        })?,
+                        home_for_user.ok_or_raise_erased(|| NotFoundError::new("home for user lookup is missing"))?,
                     )?,
                     "path past ~user/",
                 )
             };
             if let Some(path) = path {
-                home.push(
-                    gix_path::try_from_byte_slice(path)
-                        .map_err(|err| interpolate::Error::Utf8Conversion { what, err })?,
-                );
+                home.push(gix_path::try_from_byte_slice(path).or_raise_erased(|| {
+                    ValidationError::new_with_input(format!("Ill-formed UTF-8 in {what}"), path)
+                })?);
             }
             Ok(home)
         } else {
@@ -224,7 +208,8 @@ impl Path {
         username: &[u8],
         home_for_user: fn(&str) -> Option<PathBuf>,
     ) -> Result<PathBuf, interpolate::Error> {
-        let username = std::str::from_utf8(username)?;
-        home_for_user(username).ok_or(interpolate::Error::Missing { what: "pwd user info" })
+        let username = std::str::from_utf8(username)
+            .or_raise_erased(|| ValidationError::new_with_input("Ill-formed UTF-8 in username", username))?;
+        home_for_user(username).ok_or_raise_erased(|| NotFoundError::new("pwd user info is missing"))
     }
 }

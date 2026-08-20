@@ -64,8 +64,12 @@ impl FetchRecurse {
             }),
             Ok(None) => None,
             Err(err) => {
-                if err.input != "on-demand" {
-                    return Err(err.input);
+                let input = err
+                    .into_inner()
+                    .input
+                    .expect("gix-config-value validation errors retain their input");
+                if input != "on-demand" {
+                    return Err(input);
                 }
                 Some(FetchRecurse::OnDemand)
             }

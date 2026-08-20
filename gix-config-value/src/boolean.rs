@@ -1,11 +1,12 @@
 use std::{borrow::Cow, ffi::OsString, fmt::Display};
 
 use bstr::{BStr, BString};
+use gix_error::{ErrorExt, ResultExt, ValidationError};
 
 use crate::{Boolean, Error, Integer};
 
-fn bool_err(input: impl Into<BString>) -> Error {
-    Error::new(
+fn bool_err(input: impl Into<BString>) -> ValidationError {
+    ValidationError::new_with_input(
         "Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number",
         input,
     )
@@ -15,8 +16,9 @@ impl TryFrom<OsString> for Boolean {
     type Error = Error;
 
     fn try_from(value: OsString) -> Result<Self, Self::Error> {
-        let value = gix_path::os_str_into_bstr(&value)
-            .map_err(|_| Error::new("Illformed UTF-8", std::path::Path::new(&value).display().to_string()))?;
+        let value = gix_path::os_str_into_bstr(&value).or_raise(|| {
+            ValidationError::new_with_input("Illformed UTF-8", std::path::Path::new(&value).display().to_string())
+        })?;
         Self::try_from(value)
     }
 }
@@ -46,7 +48,7 @@ impl TryFrom<&BStr> for Boolean {
         } else if let Some(integer) = Integer::try_from(value).ok().and_then(|integer| integer.to_decimal()) {
             Ok(Boolean(integer != 0))
         } else {
-            Err(bool_err(value))
+            Err(bool_err(value).raise())
         }
     }
 }

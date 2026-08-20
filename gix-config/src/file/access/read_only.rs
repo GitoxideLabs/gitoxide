@@ -37,12 +37,12 @@ impl File {
     ///         a = 10k
     ///         c = false
     /// "#;
-    /// let git_config = gix_config::File::try_from(config)?;
+    /// let git_config = gix_config::File::try_from(config).expect("valid config");
     /// // You can either use the turbofish to determine the type...
     /// let a_value = git_config.value::<Integer>("core.a")?;
     /// // ... or explicitly declare the type to avoid the turbofish
     /// let c_value: Boolean = git_config.value("core.c")?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # Ok::<(), gix_config::lookup::Error<gix_config::value::Error>>(())
     /// ```
     pub fn value<T: TryFrom<BString>>(&self, key: impl AsKey) -> Result<T, lookup::Error<T::Error>> {
         let key = key.as_key();
@@ -71,12 +71,12 @@ impl File {
     ///         a = 10k
     ///         c = false
     /// "#;
-    /// let git_config = gix_config::File::try_from(config)?;
+    /// let git_config = gix_config::File::try_from(config).expect("valid config");
     /// // You can either use the turbofish to determine the type...
     /// let a_value = git_config.value_by::<Integer>("core", None, "a")?;
     /// // ... or explicitly declare the type to avoid the turbofish
     /// let c_value: Boolean = git_config.value_by("core", None, "c")?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # Ok::<(), gix_config::lookup::Error<gix_config::value::Error>>(())
     /// ```
     pub fn value_by<T: TryFrom<BString>>(
         &self,
@@ -162,7 +162,7 @@ impl File {
     ///         a
     ///         a = false
     /// "#;
-    /// let git_config = gix_config::File::try_from(config).unwrap();
+    /// let git_config = gix_config::File::try_from(config).expect("valid config");
     /// // You can either use the turbofish to determine the type...
     /// let a_value = git_config.values::<Boolean>("core.a")?;
     /// assert_eq!(
@@ -174,9 +174,9 @@ impl File {
     ///     ]
     /// );
     /// // ... or explicitly declare the type to avoid the turbofish
-    /// let c_value: Vec<Boolean> = git_config.values("core.c").unwrap();
+    /// let c_value: Vec<Boolean> = git_config.values("core.c")?;
     /// assert_eq!(c_value, vec![Boolean(false)]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # Ok::<(), gix_config::lookup::Error<gix_config::value::Error>>(())
     /// ```
     ///
     /// [`value`]: crate::value
@@ -216,7 +216,7 @@ impl File {
     ///         a
     ///         a = false
     /// "#;
-    /// let git_config = gix_config::File::try_from(config).unwrap();
+    /// let git_config = gix_config::File::try_from(config).expect("valid config");
     /// // You can either use the turbofish to determine the type...
     /// let a_value = git_config.values_by::<Boolean>("core", None, "a")?;
     /// assert_eq!(
@@ -228,9 +228,9 @@ impl File {
     ///     ]
     /// );
     /// // ... or explicitly declare the type to avoid the turbofish
-    /// let c_value: Vec<Boolean> = git_config.values_by("core", None, "c").unwrap();
+    /// let c_value: Vec<Boolean> = git_config.values_by("core", None, "c")?;
     /// assert_eq!(c_value, vec![Boolean(false)]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # Ok::<(), gix_config::lookup::Error<gix_config::value::Error>>(())
     /// ```
     ///
     /// [`value`]: crate::value
