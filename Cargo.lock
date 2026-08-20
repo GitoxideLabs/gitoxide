@@ -2234,6 +2234,7 @@ dependencies = [
  "filetime",
  "gix-actor",
  "gix-date",
+ "gix-error",
  "gix-features",
  "gix-fs",
  "gix-hash",
@@ -2783,8 +2784,8 @@ name = "gix-zlib"
 version = "0.1.0"
 dependencies = [
  "bstr",
+ "gix-error",
  "serde",
- "thiserror 2.0.18",
  "zlib-rs",
 ]
 
