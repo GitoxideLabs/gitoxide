@@ -29,9 +29,7 @@ pub enum Error {
     #[error(transparent)]
     ApplyConfig(#[from] crate::config::Error),
     #[error(transparent)]
-    Span(#[from] gix_config::parse::span::Error),
-    #[error(transparent)]
-    ConfigValue(#[from] gix_config::file::section::value::Error),
+    Config(#[from] gix_error::ValidationError),
     #[error("Failed to load repo-local git configuration before writing")]
     LoadConfig(#[from] gix_config::file::init::from_paths::Error),
     #[error("Failed to store configured remote in memory")]

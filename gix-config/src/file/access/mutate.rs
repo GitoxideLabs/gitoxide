@@ -72,7 +72,7 @@ impl File {
 
     /// Returns the last found mutable section with a given `key`, identifying the name and subsection name like `core` or `remote.origin`.
     pub fn section_mut_by_key(&mut self, key: impl crate::AsBStr) -> Result<SectionMut<'_>, lookup::existing::Error> {
-        let key = section::unvalidated::KeyRef::parse(&key).ok_or(lookup::existing::Error::KeyMissing)?;
+        let key = section::unvalidated::KeyRef::parse(&key).ok_or_else(lookup::existing::key_missing)?;
         self.section_mut_inner(key.section_name, key.subsection_name)
     }
 
@@ -172,7 +172,7 @@ impl File {
         key: impl crate::AsBStr,
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<Option<file::SectionMut<'_>>, lookup::existing::Error> {
-        let key = section::unvalidated::KeyRef::parse(&key).ok_or(lookup::existing::Error::KeyMissing)?;
+        let key = section::unvalidated::KeyRef::parse(&key).ok_or_else(lookup::existing::key_missing)?;
         self.section_mut_filter_inner(key.section_name, key.subsection_name, filter)
     }
 
@@ -358,8 +358,7 @@ impl File {
     ///
     /// Existing sections with the target name are preserved.
     ///
-    /// Note that the otherwise unused [`lookup::existing::Error::KeyMissing`] variant is used to indicate
-    /// that the `filter` rejected all candidates, leading to no section being renamed after all.
+    /// A not-found error indicates that the `filter` rejected all candidates, leading to no section being renamed.
     pub fn rename_section_filter(
         &mut self,
         name: impl AsRef<str>,
@@ -373,9 +372,11 @@ impl File {
             .filter(|id| filter(&self.sections.get(id).expect("each id has a section").meta))
             .collect();
         if ids.is_empty() {
-            return Err(rename_section::Error::Lookup(lookup::existing::Error::KeyMissing));
+            return Err(lookup::existing::key_missing());
         }
-        let header = section::HeaderData::new_in(new_name, new_subsection_name.into_bstring_opt(), &mut self.backing)?;
+        use gix_error::ResultExt;
+        let header = section::HeaderData::new_in(new_name, new_subsection_name.into_bstring_opt(), &mut self.backing)
+            .or_erased()?;
         for id in ids {
             file::util::set_section_header(
                 self.sections

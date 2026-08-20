@@ -38,21 +38,28 @@ mod header {
         }
     }
     mod new {
-        use gix_config::parse::section;
-
         use crate::parse::section::header::serialized;
 
         #[test]
         fn names_must_be_mostly_ascii() {
             for name in ["🤗", "x.y", "x y", "x\ny"] {
-                assert_eq!(serialized(name, None), Err(section::header::Error::InvalidName));
+                assert_eq!(
+                    serialized(name, None).expect_err("name must be rejected").message,
+                    "section names can only be ascii, '-'"
+                );
             }
         }
 
         #[test]
         fn subsections_with_newlines_and_null_bytes_are_rejected() {
-            assert_eq!(serialized("a", "a\nb"), Err(section::header::Error::InvalidSubSection));
-            assert_eq!(serialized("a", "a\0b"), Err(section::header::Error::InvalidSubSection));
+            for subsection in ["a\nb", "a\0b"] {
+                assert_eq!(
+                    serialized("a", subsection)
+                        .expect_err("subsection must be rejected")
+                        .message,
+                    "sub-section names must not contain newlines or null bytes"
+                );
+            }
         }
     }
 }
