@@ -1,4 +1,4 @@
-use gix_zlib::{DecompressError, Inflate, Status, inflate};
+use gix_zlib::{Inflate, Status};
 
 use crate::stream::deflate::compressed;
 
@@ -20,24 +20,16 @@ fn once_reports_progress_and_reset_allows_reuse() {
 }
 
 #[test]
-fn errors_expose_their_variants_and_messages() {
-    let write = inflate::Error::from(std::io::Error::other("broken writer"));
-    assert!(matches!(write, inflate::Error::WriteInflated(_)));
-    assert_eq!(
-        write.to_string(),
-        "Could not write all bytes when decompressing content"
-    );
+fn corrupt_streams_keep_classification_and_context() {
+    let mut input = compressed(b"the zlib header protects this stream");
+    input[0] = 0xff;
+    let err = Inflate::default()
+        .once(&input, &mut [0; 64])
+        .expect_err("the corrupt header must be rejected");
 
-    let decode = inflate::Error::from(DecompressError::DataError);
-    assert!(matches!(decode, inflate::Error::Inflate(DecompressError::DataError)));
-    assert_eq!(
-        decode.to_string(),
-        "Could not decode zip stream, status was 'Invalid input data'"
-    );
-
-    let status = inflate::Error::Status(Status::BufError);
-    assert_eq!(
-        status.to_string(),
-        "The zlib status indicated an error, status was 'BufError'"
+    assert_eq!(err, "Could not decode zip stream");
+    assert!(
+        err.downcast_any_ref::<gix_error::CorruptionError>().is_some(),
+        "the underlying invalid stream should be classified as corruption"
     );
 }
