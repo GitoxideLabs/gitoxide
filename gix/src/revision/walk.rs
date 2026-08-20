@@ -11,7 +11,7 @@ pub enum Error {
     #[error(transparent)]
     SimpleTraversal(#[from] gix_traverse::commit::simple::Error),
     #[error(transparent)]
-    ShallowCommits(#[from] crate::shallow::read::Error),
+    ShallowCommits(#[from] crate::Error),
     #[error(transparent)]
     ConfigBoolean(#[from] crate::config::boolean::Error),
 }

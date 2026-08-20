@@ -14,9 +14,9 @@ pub enum Error {
         description: &'static str,
     },
     #[error("Could not write 'shallow' file to incorporate remote updates after fetching")]
-    WriteShallowFile(#[from] gix_shallow::write::Error),
+    WriteShallowFile(#[source] gix_error::Error),
     #[error("Could not read 'shallow' file to send current shallow boundary")]
-    ReadShallowFile(#[from] gix_shallow::read::Error),
+    ReadShallowFile(#[source] gix_error::Error),
     #[error("'shallow' file could not be locked in preparation for writing changes")]
     LockShallowFile(#[source] std::io::Error),
     #[error("Receiving objects from shallow remotes is prohibited due to the value of `clone.rejectShallow`")]
