@@ -399,7 +399,7 @@ pub mod index_from_tree {
         #[error("Could not create index from tree at {id}")]
         IndexFromTree {
             id: gix_hash::ObjectId,
-            source: gix_index::init::from_tree::Error,
+            source: gix_error::Error,
         },
         #[error("Couldn't obtain configuration for core.protect*")]
         BooleanConfig(#[from] crate::config::boolean::Error),
