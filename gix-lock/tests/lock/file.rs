@@ -142,8 +142,13 @@ mod acquire {
     fn lock_non_existing_dir_fails() -> crate::Result {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("a").join("resource.ext");
-        let res = gix_lock::File::acquire_to_update_resource(&resource, fail_immediately(), None);
-        assert!(matches!(res, Err(acquire::Error::Io(err)) if err.kind() == ErrorKind::NotFound));
+        let err = gix_lock::File::acquire_to_update_resource(&resource, fail_immediately(), None)
+            .expect_err("the containing directory does not exist");
+        assert_eq!(
+            err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),
+            Some(ErrorKind::NotFound),
+            "the original I/O error is retained"
+        );
         assert!(dir.path().is_dir(), "it won't meddle with the containing directory");
         assert!(!resource.is_file(), "the resource is not created");
         assert!(

@@ -52,10 +52,13 @@ impl Transaction<'_, '_> {
     /// burying them in [`Error::LockAcquire`], which is reserved for actual contention.
     // This happens for path collisions where `a` is a ref file, and `a/b` is the lock to be created.
     fn lock_acquire_error(err: gix_lock::acquire::Error, full_name: &str) -> Error {
-        match err {
-            gix_lock::acquire::Error::Io(err) => Error::Io(err),
-            source => Error::LockAcquire {
-                source,
+        match (
+            err.downcast_any_ref::<gix_error::RetryableError>().is_some(),
+            err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),
+        ) {
+            (false, Some(kind)) => Error::Io(std::io::Error::new(kind, err.into_error())),
+            _ => Error::LockAcquire {
+                source: std::io::Error::other(err.into_error()),
                 full_name: full_name.into(),
             },
         }
@@ -360,7 +363,7 @@ impl Transaction<'_, '_> {
                                     self.store.precompose_unicode,
                                     self.store.namespace.clone(),
                                 )
-                                .map_err(Error::PackedTransactionAcquire)
+                                .map_err(|err| Error::PackedTransactionAcquire(std::io::Error::other(err.into_error())))
                             })
                             .transpose()?
                     };
@@ -477,7 +480,7 @@ mod error {
         #[error("The packed ref buffer could not be loaded")]
         Packed(#[from] packed::buffer::open::Error),
         #[error("The lock for the packed-ref file could not be obtained")]
-        PackedTransactionAcquire(#[source] gix_lock::acquire::Error),
+        PackedTransactionAcquire(#[source] std::io::Error),
         #[error("The packed transaction could not be prepared")]
         PackedTransactionPrepare(#[from] packed::transaction::prepare::Error),
         #[error("The packed ref file could not be parsed")]
@@ -485,10 +488,7 @@ mod error {
         #[error("Edit preprocessing failed with an error")]
         PreprocessingFailed(#[source] std::io::Error),
         #[error("A lock could not be obtained for reference {full_name:?}")]
-        LockAcquire {
-            source: gix_lock::acquire::Error,
-            full_name: BString,
-        },
+        LockAcquire { source: std::io::Error, full_name: BString },
         #[error("An IO error occurred while applying an edit")]
         Io(#[from] std::io::Error),
         #[error("The reference {full_name:?} for deletion did not exist or could not be parsed")]

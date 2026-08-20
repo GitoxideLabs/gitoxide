@@ -18,7 +18,7 @@
 //! ## Examples
 //!
 //! ```
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 //! use std::io::Write;
 //!
 //! # let dir = tempfile::tempdir()?;

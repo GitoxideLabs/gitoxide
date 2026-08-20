@@ -39,7 +39,7 @@ pub mod delete {
         #[error("Failed to follow a symbolic reference while inspecting worktrees")]
         FollowSymref(#[source] gix_ref::file::find::existing::Error),
         #[error("Could not acquire the local configuration lock")]
-        ConfigLock(#[source] gix_lock::acquire::Error),
+        ConfigLock(#[source] gix_error::Error),
         #[error("Could not read the local configuration")]
         ConfigRead(#[source] gix_config::file::init::from_paths::Error),
         #[error("Could not delete local branches")]
@@ -117,7 +117,7 @@ impl crate::Repository {
         let config_path = self.common_dir().join("config");
         let mut config_lock =
             gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)
-                .map_err(delete::Error::ConfigLock)?;
+                .map_err(|err| delete::Error::ConfigLock(err.into_error()))?;
         let mut config = match gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local) {
             Ok(config) => Some(config),
             // TODO(gix-error): this is what should just be `err.not_found()` in future, anywhere.

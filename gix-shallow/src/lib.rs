@@ -15,7 +15,8 @@
 //!     &shallow_file,
 //!     gix_lock::acquire::Fail::Immediately,
 //!     None,
-//! )?;
+//! )
+//! .map_err(|err| err.into_error())?;
 //! gix_shallow::write(lock, Some(shallow), &[gix_shallow::Update::Shallow(second)])?;
 //!
 //! let ids = gix_shallow::read(&shallow_file)?.unwrap().into_iter().collect::<Vec<_>>();
