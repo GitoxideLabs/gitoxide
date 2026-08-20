@@ -637,7 +637,7 @@ fn decompress_all_at_once_with(
     resize_with_limit(out, decompressed_len, alloc_limit_bytes)?;
     inflate.reset();
     inflate.once(b, out).map_err(|err| Error::ZlibInflate {
-        source: err,
+        source: err.into_error(),
         message: "Failed to decompress entry",
     })?;
     Ok(())
