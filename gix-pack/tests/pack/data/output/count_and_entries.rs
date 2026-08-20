@@ -42,13 +42,11 @@ fn invalid_ofs_delta_base_distance_is_an_error() -> crate::Result {
             gix_pack::data::Version::V2,
         );
 
+        let err = result
+            .and_then(Result::err)
+            .expect("an invalid OFS_DELTA base distance must fail");
         assert!(
-            matches!(
-                result,
-                Some(Err(entry::Error::EntryType(
-                    gix_pack::data::entry::decode::Error::Corrupt { .. }
-                )))
-            ),
+            err.downcast_any_ref::<gix_error::CorruptionError>().is_some(),
             "an invalid packed delta is reported as corrupt"
         );
     }
@@ -440,7 +438,7 @@ fn tree_additions_from_each_merge_parent_are_kept() -> crate::Result {
         .take_object_memory()
         .expect("in-memory object storage is still enabled");
     let db = gix_pack::testing::Memory::new(objects.drain());
-    let mut input = std::iter::once(Ok::<_, Box<dyn std::error::Error + Send + Sync>>(merge_commit_id));
+    let mut input = std::iter::once(Ok::<_, gix_error::Exn>(merge_commit_id));
 
     let (counts, stats) = output::count::objects_unthreaded(
         &db,

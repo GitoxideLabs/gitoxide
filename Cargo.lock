@@ -2283,7 +2283,6 @@ dependencies = [
  "parking_lot",
  "serde",
  "smallvec",
- "thiserror 2.0.18",
  "uluru",
 ]
 

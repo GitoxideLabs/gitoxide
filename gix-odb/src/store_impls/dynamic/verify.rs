@@ -26,17 +26,17 @@ pub mod integrity {
     #[expect(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        MultiIndexIntegrity(#[from] pack::index::traverse::Error<pack::multi_index::verify::integrity::Error>),
+        MultiIndexIntegrity(gix_error::Error),
         #[error(transparent)]
-        IndexIntegrity(#[from] pack::index::traverse::Error<pack::index::verify::integrity::Error>),
+        IndexIntegrity(gix_error::Error),
         #[error(transparent)]
-        IndexOpen(#[from] pack::index::init::Error),
+        IndexOpen(gix_error::Error),
         #[error(transparent)]
         LooseObjectStoreIntegrity(#[from] crate::loose::verify::integrity::Error),
         #[error(transparent)]
-        MultiIndexOpen(#[from] pack::multi_index::init::Error),
+        MultiIndexOpen(gix_error::Error),
         #[error(transparent)]
-        PackOpen(#[from] pack::data::init::Error),
+        PackOpen(gix_error::Error),
         #[error(transparent)]
         InitializeODB(#[from] crate::store::load_index::Error),
         #[error("The disk on state changed while performing the operation, and we observed the change.")]
@@ -158,7 +158,8 @@ impl super::Store {
                         let index = match bundle.index.loaded() {
                             Some(index) => index.deref(),
                             None => {
-                                index = pack::index::File::at(bundle.index.path(), self.object_hash)?;
+                                index = pack::index::File::at(bundle.index.path(), self.object_hash)
+                                    .map_err(|err| integrity::Error::IndexOpen(err.into_error()))?;
                                 &index
                             }
                         };
@@ -166,7 +167,8 @@ impl super::Store {
                         let data = match bundle.data.loaded() {
                             Some(pack) => pack.deref(),
                             None => {
-                                pack = pack::data::File::at(bundle.data.path(), self.object_hash)?
+                                pack = pack::data::File::at(bundle.data.path(), self.object_hash)
+                                    .map_err(|err| integrity::Error::PackOpen(err.into_error()))?
                                     .with_alloc_limit_bytes(self.alloc_limit_bytes);
                                 &pack
                             }
@@ -175,14 +177,16 @@ impl super::Store {
                             "verify index".into(),
                             integrity::ProgressId::VerifyIndex(Default::default()).into(),
                         );
-                        let outcome = index.verify_integrity(
-                            Some(pack::index::verify::PackContext {
-                                data,
-                                options: options.clone(),
-                            }),
-                            &mut child_progress,
-                            should_interrupt,
-                        )?;
+                        let outcome = index
+                            .verify_integrity(
+                                Some(pack::index::verify::PackContext {
+                                    data,
+                                    options: options.clone(),
+                                }),
+                                &mut child_progress,
+                                should_interrupt,
+                            )
+                            .map_err(|err| integrity::Error::IndexIntegrity(err.into_error()))?;
                         statistics.push(IndexStatistics {
                             path: bundle.index.path().to_owned(),
                             statistics: SingleOrMultiStatistics::Single(
@@ -198,7 +202,8 @@ impl super::Store {
                         let index = match bundle.multi_index.loaded() {
                             Some(index) => index.deref(),
                             None => {
-                                index = pack::multi_index::File::at(bundle.multi_index.path(), self.alloc_limit_bytes)?;
+                                index = pack::multi_index::File::at(bundle.multi_index.path(), self.alloc_limit_bytes)
+                                    .map_err(|err| integrity::Error::MultiIndexOpen(err.into_error()))?;
                                 &index
                             }
                         };
@@ -206,7 +211,9 @@ impl super::Store {
                             "verify multi-index".into(),
                             integrity::ProgressId::VerifyMultiIndex(Default::default()).into(),
                         );
-                        let outcome = index.verify_integrity(&mut child_progress, should_interrupt, options.clone())?;
+                        let outcome = index
+                            .verify_integrity(&mut child_progress, should_interrupt, options.clone())
+                            .map_err(|err| integrity::Error::MultiIndexIntegrity(err.into_error()))?;
 
                         let index_dir = bundle.multi_index.path().parent().expect("file in a directory");
                         statistics.push(IndexStatistics {

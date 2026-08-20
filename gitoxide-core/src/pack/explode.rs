@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use gix::error::{ErrorExt, NotFoundError, message};
+use gix::error::{ErrorExt, NotFoundError, ResultExt, message};
 use gix::{
     NestedProgress,
     hash::ObjectId,
@@ -159,12 +159,14 @@ pub fn pack_or_pack_index(
     use anyhow::Context;
 
     let path = pack_path.as_ref();
-    let bundle = pack::Bundle::at(path, object_hash).with_context(|| {
-        format!(
-            "Could not find .idx or .pack file from given file at '{}'",
-            path.display()
-        )
-    })?;
+    let bundle = pack::Bundle::at(path, object_hash)
+        .map_err(gix::Exn::into_error)
+        .with_context(|| {
+            format!(
+                "Could not find .idx or .pack file from given file at '{}'",
+                path.display()
+            )
+        })?;
 
     if !object_path.as_ref().is_none_or(|p| p.as_ref().is_dir()) {
         return Err(anyhow!(
@@ -210,7 +212,7 @@ pub fn pack_or_pack_index(
                                 "Failed to write {object_kind} object {}",
                                 index_entry.oid
                             ))
-                            .into_error()
+                            .erased()
                         })?;
                     if let Err(err) = written_id.verify(&index_entry.oid) {
                         if let object::Kind::Tree = object_kind {
@@ -221,7 +223,7 @@ pub fn pack_or_pack_index(
                         } else {
                             return Err(err
                                 .and_raise(message!("{object_kind} object wasn't re-encoded without change"))
-                                .into_error());
+                                .erased());
                         }
                     }
                     if let Some(verifier) = loose_odb.as_ref() {
@@ -231,16 +233,15 @@ pub fn pack_or_pack_index(
                                 err.and_raise(message!(
                                     "The recently written file for loose object {written_id} could not be read"
                                 ))
-                                .into_error()
+                                .erased()
                             })?
                             .ok_or_else(|| {
                                 NotFoundError::new(format!(
                                     "The recently written file for loose object {written_id} could not be found"
                                 ))
-                                .raise()
-                                .into_error()
+                                .raise_erased()
                             })?;
-                        obj.verify_checksum(&written_id).map_err(gix::Exn::into_error)?;
+                        obj.verify_checksum(&written_id).or_erased()?;
                     }
                     Ok(())
                 }
@@ -253,6 +254,7 @@ pub fn pack_or_pack_index(
                 make_pack_lookup_cache: pack::cache::lru::StaticLinkedList::<64>::default,
             },
         )
+        .map_err(gix::Exn::into_error)
         .with_context(|| "Failed to explode the entire pack - some loose objects may have been created nonetheless")?;
 
     let (index_path, data_path) = (bundle.index.path().to_owned(), bundle.pack.path().to_owned());
