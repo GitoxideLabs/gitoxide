@@ -6,7 +6,7 @@ use crate::config;
 #[expect(missing_docs)]
 pub enum Error {
     #[error(transparent)]
-    Fetch(#[from] gix_protocol::fetch::Error),
+    Fetch(#[from] gix_error::Error),
     #[error("The value to configure pack threads should be 0 to auto-configure or the amount of threads to use")]
     PackThreads(#[from] config::unsigned_integer::Error),
     #[error("The value to configure the pack index version should be 1 or 2")]
@@ -41,7 +41,7 @@ pub enum Error {
 impl gix_protocol::transport::IsSpuriousError for Error {
     fn is_spurious(&self) -> bool {
         match self {
-            Error::Fetch(err) => err.is_spurious(),
+            Error::Fetch(err) => err.can_retry(),
             Error::Client(err) => err.is_spurious(),
             _ => false,
         }

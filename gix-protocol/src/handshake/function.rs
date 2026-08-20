@@ -1,5 +1,7 @@
 use crate::bisync::bisync;
+use gix_error::{ErrorExt, ResultExt, ValidationError, message};
 use gix_features::{progress, progress::Progress};
+use gix_transport::IsSpuriousError;
 use gix_transport::{Service, client};
 
 use super::Error;
@@ -52,20 +54,31 @@ where
                 progress.set_name("authentication".into());
                 let credentials::protocol::Outcome { identity, next } =
                     authenticate(credentials::helper::Action::get_for_url(url.clone()))
-                        .map_err(|err| Error::Credentials(err.into_error()))?
-                        .ok_or(Error::EmptyCredentials)?;
-                transport.set_identity(identity)?;
+                        .or_raise_erased(|| message("Failed to obtain credentials"))?
+                        .ok_or_else(|| {
+                            message(
+                        "No credentials were returned at all as if the credential helper isn't functioning unknowingly",
+                    )
+                    .raise_erased()
+                        })?;
+                transport
+                    .set_identity(identity)
+                    .or_raise_erased(|| message("Could not set transport identity"))?;
                 progress.step();
                 progress.set_name("handshake (authenticated)".into());
                 match transport.handshake(service, &extra_parameters).await {
                     Ok(v) => {
-                        authenticate(next.store()).map_err(|err| Error::Credentials(err.into_error()))?;
+                        authenticate(next.store()).or_raise_erased(|| message("Failed to store credentials"))?;
                         Ok(v)
                     }
                     // Still no permission? Reject the credentials.
                     Err(client::Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                        authenticate(next.erase()).map_err(|err| Error::Credentials(err.into_error()))?;
-                        return Err(Error::InvalidCredentials { url, source: err });
+                        authenticate(next.erase()).or_raise_erased(|| message("Failed to erase credentials"))?;
+                        return Err(err
+                            .and_raise(message!(
+                                "Credentials provided for \"{url}\" were not accepted by the remote"
+                            ))
+                            .erased());
                     }
                     // Otherwise, do nothing, as we don't know if it actually got to try the credentials.
                     // If they were previously stored, they remain. In the worst case, the user has to enter them again
@@ -74,12 +87,21 @@ where
                 }
             }
             Err(err) => Err(err),
-        }?;
+        }
+        .map_err(|err| {
+            let context = message("Transport handshake failed");
+            if err.is_spurious() {
+                gix_error::RetryableError::new(err).and_raise(context).erased()
+            } else {
+                err.and_raise(context).erased()
+            }
+        })?;
 
         if !supported_versions.is_empty() && !supported_versions.contains(&actual_protocol) {
-            return Err(Error::TransportProtocolPolicyViolation {
-                actual_version: actual_protocol,
-            });
+            return Err(ValidationError::new(format!(
+                "The transport didn't accept the advertised server version {actual_protocol:?} and closed the connection client side"
+            ))
+            .raise_erased());
         }
 
         let parsed_refs = match refs {

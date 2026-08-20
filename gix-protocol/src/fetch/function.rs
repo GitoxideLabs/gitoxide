@@ -3,6 +3,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use gix_error::{ErrorExt, ResultExt, RetryableError, ValidationError, message};
 use gix_features::progress::DynNestedProgress;
 
 use crate::fetch::{
@@ -36,9 +37,13 @@ use crate::transport::client::blocking_io::{ExtendedBufRead, HandleProgress, Tra
 /// Return `Ok(None)` if there was nothing to do because all remote refs are at the same state as they are locally,
 /// or there was nothing wanted, or `Ok(Some(outcome))` to inform about all the changes that were made.
 #[crate::bisync::bisync]
-pub async fn fetch<P, T, E>(
+pub async fn fetch<P, T>(
     negotiate: &mut impl Negotiate,
-    consume_pack: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool, E>,
+    consume_pack: impl FnOnce(
+        &mut dyn std::io::BufRead,
+        &mut dyn DynNestedProgress,
+        &AtomicBool,
+    ) -> Result<bool, gix_error::Exn>,
     mut progress: P,
     should_interrupt: &AtomicBool,
     Context {
@@ -58,7 +63,6 @@ where
     P: gix_features::progress::NestedProgress,
     P::SubProgress: 'static,
     T: Transport,
-    E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
 {
     let _span = gix_trace::coarse!("gix_protocol::fetch()");
     let v1_shallow_updates = handshake.v1_shallow_updates.take();
@@ -76,12 +80,10 @@ where
     let mut arguments = Arguments::new(protocol_version, fetch_features, trace_packetlines);
     if matches!(tags, Tags::Included) {
         if !arguments.can_use_include_tag() {
-            return Err(Error::MissingServerFeature {
-                    feature: "include-tag",
-                    description:
-                    // NOTE: if this is an issue, we could probably do what's proposed here.
-                    "To make this work we would have to implement another pass to fetch attached tags separately",
-                });
+            return Err(ValidationError::new(
+                "Server lack feature \"include-tag\": To make this work we would have to implement another pass to fetch attached tags separately",
+            )
+            .raise_erased());
         }
         arguments.use_include_tag();
     }
@@ -91,7 +93,9 @@ where
         "negotiate",
         protocol_version = handshake.server_protocol_version as usize
     );
-    let action = negotiate.mark_complete_and_common_ref()?;
+    let action = negotiate
+        .mark_complete_and_common_ref()
+        .or_raise_erased(|| message("Failed to prepare fetch negotiation"))?;
     let mut previous_response = None::<crate::fetch::Response>;
     match &action {
         negotiate::Action::NoChange | negotiate::Action::SkipToRefUpdate => Ok(None),
@@ -109,26 +113,28 @@ where
                 progress.step();
                 progress.set_name(format!("negotiate (round {})", rounds.len() + 1));
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(Error::Negotiate(negotiate::Error::NegotiationFailed {
-                        rounds: rounds.len(),
-                    }));
+                    return Err(RetryableError::new(gix_error::message!(
+                        "We were unable to figure out what objects the server should send after {} round(s)",
+                        rounds.len()
+                    ))
+                    .raise_erased());
                 }
 
-                let is_done = match negotiate.one_round(&mut state, &mut arguments, previous_response.as_ref()) {
-                    Ok((round, is_done)) => {
-                        rounds.push(round);
-                        is_done
-                    }
-                    Err(err) => {
-                        return Err(err.into());
-                    }
-                };
-                let mut reader = arguments.send(transport, is_done).await?;
+                let (round, is_done) = negotiate
+                    .one_round(&mut state, &mut arguments, previous_response.as_ref())
+                    .or_raise_erased(|| message("Failed to negotiate objects with the server"))?;
+                rounds.push(round);
+                let mut reader = arguments
+                    .send(transport, is_done)
+                    .await
+                    .map_err(|err| transport_error(err, "Failed to send fetch arguments"))?;
                 if sideband_all {
                     setup_remote_progress(&mut progress, &mut reader, should_interrupt);
                 }
                 let response =
-                    crate::fetch::Response::from_line_reader(protocol_version, &mut reader, is_done, !is_done).await?;
+                    crate::fetch::Response::from_line_reader(protocol_version, &mut reader, is_done, !is_done)
+                        .await
+                        .or_raise_erased(|| message("Could not decode server reply"))?;
                 let has_pack = response.has_pack();
                 previous_response = Some(response);
                 if has_pack {
@@ -147,7 +153,10 @@ where
             previous_response.append_v1_shallow_updates(v1_shallow_updates);
             if !previous_response.shallow_updates().is_empty() && shallow_lock.is_none() {
                 if reject_shallow_remote {
-                    return Err(Error::RejectShallowRemote);
+                    return Err(ValidationError::new(
+                        "Receiving objects from shallow remotes is prohibited due to the value of `clone.rejectShallow`",
+                    )
+                    .raise_erased());
                 }
                 shallow_lock = acquire_shallow_lock(&shallow_file).map(Some)?;
             }
@@ -159,7 +168,9 @@ where
                 // Assure the final flush packet is consumed.
                 let has_read_to_end = reader.stopped_at().is_some();
                 if !has_read_to_end {
-                    read_remaining(&mut reader).await.map_err(Error::ReadRemainingBytes)?;
+                    read_remaining(&mut reader)
+                        .await
+                        .or_raise_erased(|| message("Failed to read remaining bytes in stream"))?;
                 }
             }
             drop(reader);
@@ -167,7 +178,9 @@ where
             if let Some(shallow_lock) = shallow_lock {
                 if !previous_response.shallow_updates().is_empty() {
                     gix_shallow::write(shallow_lock, shallow_commits, previous_response.shallow_updates())
-                        .map_err(|err| Error::WriteShallowFile(err.into_error()))?;
+                        .or_raise_erased(|| {
+                            message("Could not write 'shallow' file to incorporate remote updates after fetching")
+                        })?;
                 }
             }
             Ok(Some(Outcome {
@@ -179,35 +192,33 @@ where
 }
 
 #[crate::bisync::only_async]
-fn consume_received_pack<R, E>(
+fn consume_received_pack<R>(
     reader: R,
-    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool, E>,
+    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool, gix_error::Exn>,
     progress: &mut dyn DynNestedProgress,
     should_interrupt: &AtomicBool,
 ) -> Result<(R, bool), Error>
 where
     R: crate::futures_io::AsyncBufRead + Unpin,
-    E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
 {
     let mut reader = crate::futures_lite::io::BlockOn::new(reader);
-    let may_read_to_end =
-        consume(&mut reader, progress, should_interrupt).map_err(|err| Error::ConsumePack(err.into()))?;
+    let may_read_to_end = consume(&mut reader, progress, should_interrupt)
+        .or_raise_erased(|| message("Failed to consume the pack sent by the remote"))?;
     Ok((reader.into_inner(), may_read_to_end))
 }
 
 #[crate::bisync::only_sync]
-fn consume_received_pack<R, E>(
+fn consume_received_pack<R>(
     mut reader: R,
-    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool, E>,
+    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool, gix_error::Exn>,
     progress: &mut dyn DynNestedProgress,
     should_interrupt: &AtomicBool,
 ) -> Result<(R, bool), Error>
 where
     R: std::io::BufRead,
-    E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
 {
-    let may_read_to_end =
-        consume(&mut reader, progress, should_interrupt).map_err(|err| Error::ConsumePack(err.into()))?;
+    let may_read_to_end = consume(&mut reader, progress, should_interrupt)
+        .or_raise_erased(|| message("Failed to consume the pack sent by the remote"))?;
     Ok((reader, may_read_to_end))
 }
 
@@ -225,7 +236,7 @@ fn read_remaining(reader: &mut impl std::io::Read) -> std::io::Result<()> {
 
 fn acquire_shallow_lock(shallow_file: &Path) -> Result<gix_lock::File, Error> {
     gix_lock::File::acquire_to_update_resource(shallow_file, gix_lock::acquire::Fail::Immediately, None)
-        .map_err(|err| Error::LockShallowFile(std::io::Error::other(err.into_error())))
+        .or_raise_erased(|| message("'shallow' file could not be locked in preparation for writing changes"))
 }
 
 fn add_shallow_args(
@@ -236,13 +247,14 @@ fn add_shallow_args(
     let expect_change = *shallow != Shallow::NoChange;
     let shallow_lock = expect_change.then(|| acquire_shallow_lock(shallow_file)).transpose()?;
 
-    let shallow_commits = gix_shallow::read(shallow_file).map_err(|err| Error::ReadShallowFile(err.into_error()))?;
+    let shallow_commits = gix_shallow::read(shallow_file)
+        .or_raise_erased(|| message("Could not read 'shallow' file to send current shallow boundary"))?;
     if (shallow_commits.is_some() || expect_change) && !args.can_use_shallow() {
         // NOTE: if this is an issue, we can always unshallow the repo ourselves.
-        return Err(Error::MissingServerFeature {
-            feature: "shallow",
-            description: "shallow clones need server support to remain shallow, otherwise bigger than expected packs are sent effectively unshallowing the repository",
-        });
+        return Err(ValidationError::new(
+            "Server lack feature \"shallow\": shallow clones need server support to remain shallow, otherwise bigger than expected packs are sent effectively unshallowing the repository",
+        )
+        .raise_erased());
     }
     if let Some(shallow_commits) = &shallow_commits {
         for commit in shallow_commits.iter() {
@@ -274,6 +286,16 @@ fn add_shallow_args(
     Ok((shallow_commits, shallow_lock))
 }
 
+fn transport_error(err: crate::transport::client::Error, context: &'static str) -> Error {
+    use crate::transport::IsSpuriousError;
+
+    if err.is_spurious() {
+        RetryableError::new(err).and_raise(message(context)).erased()
+    } else {
+        err.and_raise(message(context)).erased()
+    }
+}
+
 fn setup_remote_progress<'a>(
     progress: &mut dyn gix_features::progress::DynNestedProgress,
     reader: &mut Box<dyn ExtendedBufRead<'a> + Unpin + 'a>,
@@ -290,4 +312,22 @@ fn setup_remote_progress<'a>(
             }
         }
     }) as HandleProgress<'a>));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn transport_errors_keep_retryability() {
+        let err = super::transport_error(
+            crate::transport::client::Error::Io(std::io::ErrorKind::TimedOut.into()),
+            "transport failed",
+        )
+        .into_error();
+
+        assert!(err.can_retry(), "the transport classifier remains visible");
+        assert!(
+            err.downcast_any_ref::<std::io::Error>().is_some(),
+            "the original I/O error remains in the chain"
+        );
+    }
 }

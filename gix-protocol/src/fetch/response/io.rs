@@ -4,7 +4,8 @@ use std::io;
 use crate::transport::client::async_io::ExtendedBufRead;
 #[crate::bisync::only_sync]
 use crate::transport::client::blocking_io::ExtendedBufRead;
-use gix_transport::{Protocol, client::MessageKind};
+use gix_error::{CorruptionError, ErrorExt, RetryableError, message};
+use gix_transport::{Protocol, client, client::MessageKind};
 
 use crate::fetch::{
     Response, response,
@@ -19,7 +20,7 @@ async fn parse_v2_section<'a, T>(
     parse: impl Fn(&str) -> Result<T, response::Error>,
 ) -> Result<bool, response::Error> {
     line.clear();
-    while reader.readline_str(line).await? != 0 {
+    while reader.readline_str(line).await.map_err(read_error)? != 0 {
         res.push(parse(line)?);
         line.clear();
     }
@@ -70,8 +71,8 @@ impl Response {
                         // to deal with this correctly.
                         // For now this is acceptable, as V2 can be used as a workaround, which also is the default.
                         Some(Err(err)) if err.kind() == io::ErrorKind::UnexpectedEof => break 'lines false,
-                        Some(Err(err)) => return Err(err.into()),
-                        Some(Ok(Err(err))) => return Err(err.into()),
+                        Some(Err(err)) => return Err(read_error(err)),
+                        Some(Ok(Err(err))) => return Err(transport_error(err)),
                         None => {
                             // maybe we saw a shallow flush packet, let's reset and retry
                             debug_assert_eq!(
@@ -79,12 +80,12 @@ impl Response {
                                 Some(MessageKind::Flush),
                                 "If this isn't a flush packet, we don't know what's going on"
                             );
-                            reader.readline_str(&mut line).await?;
+                            reader.readline_str(&mut line).await.map_err(read_error)?;
                             reader.reset(Protocol::V1);
                             match reader.peek_data_line().await {
                                 Some(Ok(Ok(line))) => String::from_utf8_lossy(line),
-                                Some(Err(err)) => return Err(err.into()),
-                                Some(Ok(Err(err))) => return Err(err.into()),
+                                Some(Err(err)) => return Err(read_error(err)),
+                                Some(Ok(Err(err))) => return Err(transport_error(err)),
                                 None => break 'lines false, // EOF
                             }
                         }
@@ -94,7 +95,7 @@ impl Response {
                         break 'lines true;
                     }
                     assert_ne!(
-                        reader.readline_str(&mut line).await?,
+                        reader.readline_str(&mut line).await.map_err(read_error)?,
                         0,
                         "consuming a peeked line works"
                     );
@@ -123,8 +124,8 @@ impl Response {
                 let mut wanted_refs = Vec::<WantedRef>::new();
                 let has_pack = 'section: loop {
                     line.clear();
-                    if reader.readline_str(&mut line).await? == 0 {
-                        return Err(response::Error::Io(io::Error::new(
+                    if reader.readline_str(&mut line).await.map_err(read_error)? == 0 {
+                        return Err(read_error(io::Error::new(
                             io::ErrorKind::UnexpectedEof,
                             "Could not read message headline",
                         )));
@@ -150,7 +151,11 @@ impl Response {
                             // what follows is the packfile itself, which can be read with a sideband enabled reader
                             break 'section true;
                         }
-                        _ => return Err(response::Error::UnknownSectionHeader { header: line }),
+                        _ => {
+                            return Err(
+                                CorruptionError::new(format!("Unknown or unsupported header: {line:?}")).raise_erased()
+                            );
+                        }
                     }
                 };
                 Ok(Response {
@@ -161,5 +166,31 @@ impl Response {
                 })
             }
         }
+    }
+}
+
+fn read_error(err: io::Error) -> response::Error {
+    let err = if err.kind() == io::ErrorKind::Other {
+        match err.into_inner() {
+            Some(err) => match err.downcast::<gix_transport::packetline::read::Error>() {
+                Ok(err) => return (*err).and_raise(message("Failed to read from line reader")).erased(),
+                Err(err) => io::Error::other(err),
+            },
+            None => io::ErrorKind::Other.into(),
+        }
+    } else {
+        err
+    };
+    err.and_raise(message("Failed to read from line reader")).erased()
+}
+
+fn transport_error(err: client::Error) -> response::Error {
+    use crate::transport::IsSpuriousError;
+
+    let context = message("Failed to read from line reader");
+    if err.is_spurious() {
+        RetryableError::new(err).and_raise(context).erased()
+    } else {
+        err.and_raise(context).erased()
     }
 }

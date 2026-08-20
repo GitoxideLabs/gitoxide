@@ -1,1 +1,4 @@
-Error: Username '-Fconfigfile' could be mistaken for a command-line argument
+Error: Transport handshake failed
+
+Caused by:
+    Username '-Fconfigfile' could be mistaken for a command-line argument

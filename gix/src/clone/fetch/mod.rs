@@ -6,6 +6,10 @@ use gix_ref::Category;
 
 use crate::config::tree::Key;
 
+fn mapping_validation(err: &gix_error::Error) -> Option<&gix_refspec::match_group::validate::Error> {
+    err.downcast_any_ref()
+}
+
 /// The error returned by [`PrepareFetch::fetch_only()`].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]
@@ -320,17 +324,18 @@ impl PrepareFetch {
             };
             match connection.prepare_fetch(&repo, &mut progress, fetch_opts.clone()).await {
                 Ok(prepare) => prepare,
-                Err(remote::fetch::prepare::Error::RefMap(remote::ref_map::Error::InitRefMap(
-                    gix_protocol::fetch::refmap::init::Error::MappingValidation(err),
-                ))) if err.issues.len() == 1
-                    && fetch_opts.extra_refspecs.contains(&head_refspec)
-                    && matches!(
-                        err.issues.first(),
-                        Some(gix_refspec::match_group::validate::Issue::Conflict {
-                            destination_full_ref_name,
-                            ..
-                        }) if *destination_full_ref_name == head_local_tracking_branch
-                    ) =>
+                Err(remote::fetch::prepare::Error::RefMap(remote::ref_map::Error::InitRefMap(err)))
+                    if mapping_validation(&err).is_some_and(|err| {
+                        err.issues.len() == 1
+                            && fetch_opts.extra_refspecs.contains(&head_refspec)
+                            && matches!(
+                                err.issues.first(),
+                                Some(gix_refspec::match_group::validate::Issue::Conflict {
+                                    destination_full_ref_name,
+                                    ..
+                                }) if *destination_full_ref_name == head_local_tracking_branch
+                            )
+                    }) =>
                 {
                     let head_refspec_idx = fetch_opts
                         .extra_refspecs
