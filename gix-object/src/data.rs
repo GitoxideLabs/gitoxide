@@ -62,7 +62,7 @@ pub mod verify {
         #[error("Failed to hash object")]
         Hasher(#[from] gix_hash::hasher::Error),
         #[error(transparent)]
-        Verify(#[from] gix_hash::verify::Error),
+        Verify(gix_hash::verify::Error),
     }
 
     impl crate::Data<'_> {
@@ -71,7 +71,7 @@ pub mod verify {
         /// hash of `self`.
         pub fn verify_checksum(&self, expected: &gix_hash::oid) -> Result<gix_hash::ObjectId, Error> {
             let actual = crate::compute_hash(expected.kind(), self.kind, self.data)?;
-            actual.verify(expected)?;
+            actual.verify(expected).map_err(Error::Verify)?;
             Ok(actual)
         }
     }

@@ -1,17 +1,24 @@
 use crate::hasher;
+use gix_error::{ErrorExt, message};
 
 /// The error type for I/O operations that compute hashes.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error("Failed to hash data")]
-    Hasher(#[from] hasher::Error),
+pub type Error = gix_error::Exn;
+
+/// Convert an I/O error into this module's error type without changing its message.
+pub fn from_std_io(source: std::io::Error) -> Error {
+    source.raise_erased()
+}
+
+/// Convert a hashing error into this module's error type and add operation context.
+pub fn from_hasher(source: hasher::Error) -> Error {
+    source.and_raise(message("Failed to hash data")).erased()
 }
 
 pub(super) mod _impl {
-    use crate::{Hasher, hasher, io::Error};
+    use crate::{
+        Hasher, hasher,
+        io::{Error, from_hasher, from_std_io},
+    };
 
     /// Compute the hash of `kind` for the bytes in the file at `path`, hashing only the first `num_bytes_from_start`
     /// while initializing and calling `progress`.
@@ -30,7 +37,7 @@ pub(super) mod _impl {
         should_interrupt: &std::sync::atomic::AtomicBool,
     ) -> Result<crate::ObjectId, Error> {
         bytes(
-            &mut std::fs::File::open(path)?,
+            &mut std::fs::File::open(path).map_err(from_std_io)?,
             num_bytes_from_start,
             kind,
             progress,
@@ -70,16 +77,19 @@ pub(super) mod _impl {
 
         while bytes_left > 0 {
             let out = &mut buf[..BUF_SIZE.min(bytes_left as usize)];
-            read.read_exact(out)?;
+            read.read_exact(out).map_err(from_std_io)?;
             bytes_left -= out.len() as u64;
             progress.inc_by(out.len());
             hasher.update(out);
             if should_interrupt.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(std::io::Error::other("Interrupted").into());
+                return Err(from_std_io(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "Interrupted",
+                )));
             }
         }
 
-        let id = hasher.try_finalize()?;
+        let id = hasher.try_finalize().map_err(from_hasher)?;
         progress.show_throughput(start);
         Ok(id)
     }
