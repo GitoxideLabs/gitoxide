@@ -164,7 +164,7 @@ pub mod branch {
     pub struct Error {
         pub submodule: BString,
         pub actual: BString,
-        pub source: gix_refspec::parse::Error,
+        pub source: gix_error::Error,
     }
 }
 

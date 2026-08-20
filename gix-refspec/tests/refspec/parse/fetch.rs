@@ -1,18 +1,11 @@
-use gix_refspec::{
-    Instruction,
-    instruction::Fetch,
-    parse::{Error, Operation},
-};
+use gix_refspec::{Instruction, instruction::Fetch, parse::Operation};
 
-use crate::parse::{assert_parse, b, try_parse};
+use crate::parse::{assert_parse, assert_reference_error, assert_unsupported_pattern, assert_validation, b};
 
 #[test]
 fn revspecs_are_disallowed() {
     for spec in ["main~1", "^@^{}", "HEAD:main~1"] {
-        assert!(matches!(
-            try_parse(spec, Operation::Fetch).unwrap_err(),
-            Error::ReferenceName(_)
-        ));
+        assert_reference_error(spec, Operation::Fetch);
     }
 }
 
@@ -40,27 +33,26 @@ fn object_hash_destination_are_valid_as_they_might_be_a_strange_partial_branch_n
 
 #[test]
 fn negative_must_not_be_empty() {
-    assert!(matches!(
-        try_parse("^", Operation::Fetch).unwrap_err(),
-        Error::NegativeEmpty
-    ));
+    assert_validation("^", Operation::Fetch, "Negative specs must not be empty");
 }
 
 #[test]
 fn negative_must_not_be_object_hash() {
-    assert!(matches!(
-        try_parse("^e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", Operation::Fetch).unwrap_err(),
-        Error::NegativeObjectHash
-    ));
+    assert_validation(
+        "^e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        Operation::Fetch,
+        "Negative specs must not be object hashes",
+    );
 }
 
 #[test]
 fn negative_with_destination() {
     for spec in ["^a:b", "^a:", "^:", "^:b"] {
-        assert!(matches!(
-            try_parse(spec, Operation::Fetch).unwrap_err(),
-            Error::NegativeWithDestination
-        ));
+        assert_validation(
+            spec,
+            Operation::Fetch,
+            "Negative refspecs cannot have destinations as they exclude sources",
+        );
     }
 }
 
@@ -184,10 +176,11 @@ fn empty_refspec_is_enough_for_fetching_head_into_fetchhead() {
 #[test]
 fn glob_patterns_need_a_destination() {
     for spec in ["refs/heads/*", "refs/heads/*:", ":refs/heads/*"] {
-        assert!(matches!(
-            try_parse(spec, Operation::Fetch).unwrap_err(),
-            Error::PatternUnbalanced
-        ));
+        assert_validation(
+            spec,
+            Operation::Fetch,
+            "Both sides of a two-sided specification need a pattern, like 'a/*:b/*'",
+        );
     }
 }
 
@@ -198,9 +191,6 @@ fn patterns_with_multiple_asterisks_are_rejected() {
         "refs/*/*:refs/remotes/*",
         "a/*/c/*:b/*",
     ] {
-        assert!(matches!(
-            try_parse(spec, Operation::Fetch).unwrap_err(),
-            Error::PatternUnsupported { .. }
-        ));
+        assert_unsupported_pattern(spec, Operation::Fetch);
     }
 }

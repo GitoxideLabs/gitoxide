@@ -136,7 +136,7 @@ impl Remote<'_> {
         &mut self,
         specs: impl IntoIterator<Item = Spec>,
         direction: remote::Direction,
-    ) -> Result<(), gix_refspec::parse::Error>
+    ) -> Result<(), gix_error::Error>
     where
         Spec: AsRef<BStr>,
     {
