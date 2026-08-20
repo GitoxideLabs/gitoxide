@@ -4,6 +4,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{ErrorExt, OptionExt, ResultExt, ValidationError};
 
 use crate::{
     EntryRef, entry,
@@ -88,7 +89,10 @@ pub fn walk(
     );
     if !can_recurse {
         if buf.is_empty() && !root_info.disk_kind.is_some_and(|kind| kind.is_dir()) {
-            return Err(Error::WorktreeRootIsFile { root: root.to_owned() });
+            return Err(
+                ValidationError::new(format!("Worktree root at '{}' is not a directory", root.display()))
+                    .raise_erased(),
+            );
         }
         if options.precompose_unicode {
             buf = gix_utils::str::precompose_bstr(buf.into()).into_owned();
@@ -136,21 +140,25 @@ fn assure_no_symlink_in_root<'root>(
     let worktree_relative = root
         .strip_prefix(worktree_root)
         .expect("BUG: root was created from worktree_root + prefix");
-    let worktree_relative = gix_path::normalize(worktree_relative.into(), Path::new(""))
-        .ok_or(Error::NormalizeRoot { root: root.to_owned() })?;
+    let worktree_relative = gix_path::normalize(worktree_relative.into(), Path::new("")).ok_or_raise_erased(|| {
+        ValidationError::new(format!(
+            "Traversal root '{}' contains relative path components and could not be normalized",
+            root.display()
+        ))
+    })?;
 
     for (idx, component) in worktree_relative.components().enumerate() {
         current.push(component);
-        let meta = current.symlink_metadata().map_err(|err| Error::SymlinkMetadata {
-            source: err,
-            path: current.to_owned(),
-        })?;
+        let meta = current
+            .symlink_metadata()
+            .or_raise_erased(|| gix_error::message!("Could not obtain symlink metadata on '{}'", current.display()))?;
         if meta.is_symlink() {
-            return Err(Error::SymlinkInRoot {
-                root: root.to_owned(),
-                worktree_root: worktree_root.to_owned(),
-                component_index: idx,
-            });
+            return Err(ValidationError::new(format!(
+                "A symlink was found at component {idx} of traversal root '{}' as seen from worktree root '{}'",
+                root.display(),
+                worktree_root.display()
+            ))
+            .raise_erased());
         }
     }
     Ok((current, worktree_relative))
