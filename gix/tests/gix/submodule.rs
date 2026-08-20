@@ -766,7 +766,6 @@ mod open {
 
 #[cfg(unix)]
 mod advisory {
-    use gix::bstr::BString;
 
     /// Reproducer for GHSA-p3hw-mv63-rf9w and GHSA-fr8x-3vfx-f45h: a crafted submodule name with
     /// traversal components is reused to derive `.git/modules/<name>`, so `Submodule::state()` and
@@ -835,16 +834,12 @@ mod advisory {
             .expect("submodules present")
             .next()
             .expect("one submodule");
-        match sm.update() {
-            Err(gix::submodule::config::update::Error::CommandForbiddenInModulesConfiguration {
-                submodule,
-                actual,
-            }) => {
-                assert_eq!(submodule, BString::from("sub"));
-                assert_eq!(actual, BString::from("touch pwned"));
-            }
-            other => panic!("expected forbidden command from `.gitmodules`, got {other:?}"),
-        }
+        let err = sm.update().expect_err("commands from `.gitmodules` are forbidden");
+        assert!(err.message.contains("command to be shared"));
+        assert_eq!(
+            err.input.as_ref().map(|input| input.as_slice()),
+            Some(b"touch pwned".as_slice())
+        );
         Ok(())
     }
 }

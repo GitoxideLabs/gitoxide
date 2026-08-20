@@ -96,6 +96,8 @@ impl File {
 pub mod init {
     use std::path::PathBuf;
 
+    use gix_error::{ResultExt, ValidationError};
+
     use crate::File;
 
     impl std::fmt::Debug for File {
@@ -112,18 +114,7 @@ pub mod init {
 
     /// Lifecycle
     /// The error returned when parsing a submodule configuration file.
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        /// The configuration could not be parsed.
-        #[error(transparent)]
-        Parse(#[from] gix_config::parse::Error),
-        /// Applying configuration overrides exceeded the supported span size.
-        #[error(transparent)]
-        Span(#[from] gix_config::parse::span::Error),
-        /// Applying configuration overrides failed.
-        #[error(transparent)]
-        SectionValue(#[from] gix_config::file::section::value::Error),
-    }
+    pub type Error = gix_error::Exn<ValidationError>;
 
     impl File {
         /// Parse `bytes` as git configuration, typically from `.gitmodules`, without doing any further validation.
@@ -149,12 +140,14 @@ pub mod init {
                 meta
             };
             let modules = gix_config::File::from_parse_events_no_includes(
-                gix_config::parse::Events::from_bytes(bytes, None)?,
+                gix_config::parse::Events::from_bytes(bytes, None)
+                    .or_raise(|| ValidationError::new("Could not parse submodule configuration"))?,
                 metadata,
             );
 
             let mut res = Self { config: modules };
-            res.append_submodule_overrides(config)?;
+            res.append_submodule_overrides(config)
+                .or_raise(|| ValidationError::new("Could not apply submodule configuration overrides"))?;
             Ok(res)
         }
 
