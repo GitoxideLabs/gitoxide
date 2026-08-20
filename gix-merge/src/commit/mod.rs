@@ -1,29 +1,5 @@
 /// The error returned by [`commit()`](crate::commit()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Failed to obtain the merge base between the two commits to be merged")]
-    MergeBase(#[from] gix_revision::merge_base::Error),
-    #[error(transparent)]
-    VirtualMergeBase(#[from] virtual_merge_base::Error),
-    #[error(transparent)]
-    MergeTree(#[from] crate::tree::Error),
-    #[error("No common ancestor between {our_commit_id} and {their_commit_id}")]
-    NoMergeBase {
-        /// The commit on our side that was to be merged.
-        our_commit_id: gix_hash::ObjectId,
-        /// The commit on their side that was to be merged.
-        their_commit_id: gix_hash::ObjectId,
-    },
-    #[error("Could not find ancestor, our or their commit to extract tree from")]
-    FindCommit(#[source] gix_error::Error),
-}
-
-impl From<gix_object::find::existing_object::Error> for Error {
-    fn from(err: gix_object::find::existing_object::Error) -> Self {
-        Error::FindCommit(err.into_error())
-    }
-}
+pub type Error = gix_error::Exn<gix_error::Message>;
 
 /// A way to configure [`commit()`](crate::commit()).
 #[derive(Default, Debug, Clone)]

@@ -289,7 +289,7 @@ fn fuzz(data: &[u8]) {
             Ok(outcome) => outcome,
             // Resolving a binary add/add conflict with its absent ancestor cannot
             // produce a resource. This is a valid configuration-dependent error.
-            Err(gix_merge::tree::Error::MergeResourceNotFound) => continue,
+            Err(err) if err.downcast_any_ref::<gix_error::NotFoundError>().is_some() => continue,
             Err(err) => panic!("generated trees and objects are valid: {err:?}"),
         };
         outcome
