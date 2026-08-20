@@ -313,6 +313,7 @@ pub(crate) fn draw_with_worktree(
     let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
     let full_body = body;
     let selected_segment = app.selected_is_segment();
+    let time_travel_animation = app.time_travel_animation_origin().is_some();
     let compared_parent = if app.changes_visible() && !selected_segment {
         tree_changes.and_then(|changes| changes.parent.map(|parent| parent.id))
     } else {
@@ -680,11 +681,13 @@ pub(crate) fn draw_with_worktree(
         .min(u16::MAX as usize);
     let horizontal_offset = app.horizontal_offset.min(max_offset);
     let selection_info = selection_info_line(
-        (!selected_segment && app.changes_visible())
+        (!time_travel_animation && !selected_segment && app.changes_visible())
             .then_some(tree_changes)
             .flatten()
             .filter(|changes| changes.is_visible()),
-        (!selected_segment).then_some(app.selection_relation).flatten(),
+        (!time_travel_animation && !selected_segment)
+            .then_some(app.selection_relation)
+            .flatten(),
     );
     let selection_info_width = selection_info.width();
     let mut selection_info_area = None;
@@ -1878,9 +1881,9 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
         ChangePane::Tree => {
             let label = changes.range.map_or_else(
                 || {
-                    app.selected
-                        .and_then(|index| app.rows.get(index))
-                        .map_or_else(|| "-------".into(), |row| row.id.to_hex_with_len(7).to_string())
+                    app.time_travel_animation_origin()
+                        .or_else(|| app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id))
+                        .map_or_else(|| "-------".into(), |id| id.to_hex_with_len(7).to_string())
                 },
                 |range| format!("{}..{}", range.base.to_hex_with_len(7), range.tip.to_hex_with_len(7)),
             );
@@ -2807,6 +2810,41 @@ mod tests {
         assert_eq!(Line::from(spans.clone()).to_string(), "copy");
         assert!(spans[1].style.add_modifier.contains(Modifier::UNDERLINED));
         assert!(spans[1].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn time_travel_animation_keeps_the_tree_summary_on_its_origin() {
+        let ids = [1, 2].map(|byte| gix::ObjectId::Sha1([byte; 20]));
+        let mut app = App::new(ids.len());
+        app.extend_commits(
+            ids.into_iter()
+                .map(|id| Commit {
+                    id,
+                    parent_ids: Default::default(),
+                    author_time: gix::date::Time::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: "subject".into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    is_review: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        app.select_commit(ids[1]);
+        app.begin_time_travel_animation();
+        app.select_commit_for_time_travel(ids[0]);
+
+        assert!(
+            changes_summary(ChangePane::Tree, &app, &Changes::default())
+                .to_string()
+                .contains("0202020"),
+            "the cached tree diff remains labelled with its origin while selection moves"
+        );
+        app.finish_time_travel_animation();
     }
 
     #[test]
