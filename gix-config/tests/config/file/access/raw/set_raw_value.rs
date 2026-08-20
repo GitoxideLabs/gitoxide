@@ -79,9 +79,11 @@ fn accepts_short_lived_keys() -> crate::Result {
 #[test]
 fn invalid_value_names_fail_without_creating_a_section() {
     let mut file = gix_config::File::default();
-    assert!(matches!(
-        file.set_raw_value_by("new", None, "not.valid", "value"),
-        Err(gix_config::file::set_raw_value::Error::ValueName(_))
-    ));
+    let err = file.set_raw_value_by("new", None, "not.valid", "value").unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+    assert_eq!(
+        err.to_string(),
+        "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.: \"not.valid\""
+    );
     assert_eq!(file.sections().count(), 0, "validation precedes section creation");
 }

@@ -10,10 +10,38 @@ use gix_config::{
 use crate::file::bstring;
 
 fn lookup_error(err: gix_config::lookup::Error<gix_error::Exn<gix_error::ValidationError>>) -> gix_error::Error {
-    match err {
-        gix_config::lookup::Error::ValueMissing(err) => gix_error::Error::from_error(err),
-        gix_config::lookup::Error::FailedConversion(err) => err.into_error(),
+    err.into_error()
+}
+
+#[test]
+fn typed_lookup_errors_can_be_erased() -> crate::Result {
+    use gix_error::ResultExt;
+
+    let config = File::try_from("[core]\nvalue = invalid\n")?;
+    for result in [
+        config.value::<Boolean>("core.value").map(|_| ()),
+        config.value::<Integer>("core.value").map(|_| ()),
+        config.value::<Color>("core.value").map(|_| ()),
+        config.values::<Boolean>("core.value").map(|_| ()),
+        config.values::<Integer>("core.value").map(|_| ()),
+        config.values::<Color>("core.value").map(|_| ()),
+    ] {
+        let err = result
+            .map_err(gix_config::lookup::Error::into_error)
+            .or_erased()
+            .expect_err("invalid typed values must fail conversion")
+            .into_error();
+        assert!(
+            err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
+            "erasure retains the conversion error"
+        );
     }
+    let err = config
+        .value::<Boolean>("core.missing")
+        .expect_err("the key does not exist")
+        .into_error();
+    assert!(err.is_not_found(), "erasure retains missing-value classification");
+    Ok(())
 }
 
 #[test]
@@ -368,20 +396,18 @@ fn sections_by_name_ignores_subsections_and_preserves_file_order() -> crate::Res
 #[test]
 fn unknown_section() -> crate::Result {
     let config = File::default();
-    assert!(matches!(
-        config.section("missing", None).unwrap_err(),
-        gix_config::lookup::existing::Error::SectionMissing
-    ));
+    let err = config.section("missing", None).unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The requested section does not exist");
 
     let config = r#"
     [present]
         key = false
     "#;
     let mut config = File::try_from(config)?;
-    assert!(matches!(
-        config.section("present", Some("subsection".into())).unwrap_err(),
-        gix_config::lookup::existing::Error::SubSectionMissing
-    ));
+    let err = config.section("present", Some("subsection".into())).unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The requested subsection does not exist");
 
     config.set_raw_value_by("present", "subsection", "key", "value")?;
     assert!(config.section("present", Some("subsection".into())).is_ok());
@@ -392,10 +418,9 @@ fn unknown_section() -> crate::Result {
     for id in config.sections_and_ids().map(|(_, id)| id).collect::<Vec<_>>() {
         assert!(config.remove_section_by_id(id).is_some());
     }
-    assert!(matches!(
-        config.section("present", None).unwrap_err(),
-        gix_config::lookup::existing::Error::SectionMissing
-    ));
+    let err = config.section("present", None).unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The requested section does not exist");
 
     Ok(())
 }

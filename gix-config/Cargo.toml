@@ -31,7 +31,6 @@ gix-ref = { version = "^0.67.0", path = "../gix-ref" }
 gix-glob = { version = "^0.27.1", path = "../gix-glob" }
 gix-utils = { version = "^0.3.6", path = "../gix-utils", features = ["bstr"] }
 
-thiserror = "2.0.18"
 unicode-bom = { version = "2.0.3" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
