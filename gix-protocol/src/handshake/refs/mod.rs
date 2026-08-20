@@ -13,7 +13,7 @@ pub mod parse {
         #[error(transparent)]
         Io(#[from] std::io::Error),
         #[error(transparent)]
-        DecodePacketline(#[from] gix_transport::packetline::decode::Error),
+        DecodePacketline(gix_error::Error),
         #[error(transparent)]
         Id(#[from] gix_hash::decode::Error),
         #[error("{symref:?} could not be parsed. A symref is expected to look like <NAME>:<target>.")]
