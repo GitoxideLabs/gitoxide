@@ -116,6 +116,22 @@ mod impls {
 
     use crate::{Id, Object, ObjectDetached};
 
+    macro_rules! impl_partial_eq_text {
+        ($text:ty) => {
+            impl PartialEq<$text> for Id<'_> {
+                fn eq(&self, other: &$text) -> bool {
+                    self.inner.eq(other)
+                }
+            }
+
+            impl<'repo> PartialEq<Id<'repo>> for $text {
+                fn eq(&self, other: &Id<'repo>) -> bool {
+                    self.eq(&other.inner)
+                }
+            }
+        };
+    }
+
     // Eq, Hash, Ord, PartialOrd,
 
     impl std::hash::Hash for Id<'_> {
@@ -147,6 +163,10 @@ mod impls {
             self == &other.inner
         }
     }
+
+    impl_partial_eq_text!(str);
+    impl_partial_eq_text!(&str);
+    impl_partial_eq_text!(String);
 
     impl PartialEq<oid> for Id<'_> {
         fn eq(&self, other: &oid) -> bool {
