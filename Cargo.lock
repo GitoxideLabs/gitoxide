@@ -2252,7 +2252,6 @@ dependencies = [
  "parking_lot",
  "serde",
  "smallvec",
- "thiserror 2.0.18",
  "uluru",
 ]
 
@@ -2539,7 +2538,6 @@ dependencies = [
  "fs_extra",
  "gix-config",
  "gix-discover",
- "gix-error",
  "gix-fs",
  "gix-hash",
  "gix-index",

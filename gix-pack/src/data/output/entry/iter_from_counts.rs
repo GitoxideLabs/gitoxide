@@ -1,6 +1,7 @@
 pub(crate) mod function {
     use std::{cmp::Ordering, sync::Arc};
 
+    use gix_error::{BoxedResultExt, ResultExt, message};
     use gix_features::{
         parallel,
         parallel::SequenceId,
@@ -212,19 +213,27 @@ pub(crate) mod function {
                                         stats.objects_copied_from_pack += 1;
                                         entry
                                     }
-                                    None => match db.try_find(&count.id, buf).map_err(Error::Find)? {
-                                        Some((obj, _location)) => {
-                                            stats.decoded_and_recompressed_objects += 1;
-                                            output::Entry::from_data(count, &obj, compression)
+                                    None => {
+                                        match db.try_find(&count.id, buf).or_erased().or_raise_erased(|| {
+                                            message("Could not find object while generating pack")
+                                        })? {
+                                            Some((obj, _location)) => {
+                                                stats.decoded_and_recompressed_objects += 1;
+                                                output::Entry::from_data(count, &obj, compression)
+                                            }
+                                            None => {
+                                                stats.missing_objects += 1;
+                                                Ok(output::Entry::invalid())
+                                            }
                                         }
-                                        None => {
-                                            stats.missing_objects += 1;
-                                            Ok(output::Entry::invalid())
-                                        }
-                                    },
+                                    }
                                 }
                             }
-                            None => match db.try_find(&count.id, buf).map_err(Error::Find)? {
+                            None => match db
+                                .try_find(&count.id, buf)
+                                .or_erased()
+                                .or_raise_erased(|| message("Could not find object while generating pack"))?
+                            {
                                 Some((obj, _location)) => {
                                     stats.decoded_and_recompressed_objects += 1;
                                     output::Entry::from_data(count, &obj, compression)
@@ -321,8 +330,6 @@ mod reduce {
 }
 
 mod types {
-    use crate::data::output::entry;
-
     /// Information gathered during the run of [`iter_from_counts()`][crate::data::output::entry::iter_from_counts()].
     #[derive(Default, PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -409,14 +416,7 @@ mod types {
     }
 
     /// The error returned by the pack generation function [`iter_from_counts()`][crate::data::output::entry::iter_from_counts()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Find(gix_object::find::Error),
-        #[error(transparent)]
-        NewEntry(#[from] entry::Error),
-    }
+    pub type Error = gix_error::Exn;
 
     /// The progress ids used in [`write_to_directory()`][crate::Bundle::write_to_directory()].
     ///

@@ -170,10 +170,9 @@ fn declared_object_size_over_alloc_limit_bytes_is_reported_as_out_of_memory() {
     }));
 
     assert!(
-        matches!(
-            result.expect("configured allocation limits must not cause panics"),
-            Err(gix_pack::data::decode::Error::OutOfMemory)
-        ),
+        result
+            .expect("configured allocation limits must not cause panics")
+            .is_err_and(|err| err.to_string() == "Entry too large to fit in memory"),
         "pack-controlled allocations larger than the configured limit must be rejected"
     );
 }

@@ -1,5 +1,6 @@
 use std::{fs, io};
 
+use gix_error::{CorruptionError, ErrorExt, ResultExt, message};
 use gix_hash::{Hasher, ObjectId};
 use gix_zlib::Decompress;
 
@@ -52,7 +53,7 @@ where
         object_hash: gix_hash::Kind,
     ) -> Result<BytesToEntriesIter<BR>, input::Error> {
         let mut header_data = [0u8; 12];
-        read.read_exact(&mut header_data).map_err(gix_hash::io::from_std_io)?;
+        read.read_exact(&mut header_data).map_err(io_error)?;
 
         let (version, num_objects) = crate::data::header::decode(&header_data)?;
         assert_eq!(
@@ -97,7 +98,7 @@ where
             }
             None => crate::data::Entry::from_read(&mut self.read, self.offset, self.hash_len),
         }
-        .map_err(gix_hash::io::from_std_io)?;
+        .map_err(io_error)?;
 
         // Decompress object to learn its compressed bytes
         let compressed_buf = self.compressed_buf.take().unwrap_or_else(|| Vec::with_capacity(4096));
@@ -117,12 +118,13 @@ where
             decompressor: &mut self.decompressor,
         };
 
-        let bytes_copied = io::copy(&mut decompressed_reader, &mut io::sink()).map_err(gix_hash::io::from_std_io)?;
+        let bytes_copied = io::copy(&mut decompressed_reader, &mut io::sink()).map_err(io_error)?;
         if bytes_copied != entry.decompressed_size {
-            return Err(input::Error::IncompletePack {
-                actual: bytes_copied,
-                expected: entry.decompressed_size,
-            });
+            return Err(CorruptionError::new(format!(
+                "pack is incomplete: it was decompressed into {bytes_copied} bytes but {} bytes where expected.",
+                entry.decompressed_size
+            ))
+            .raise_erased());
         }
 
         let pack_offset = self.offset;
@@ -144,7 +146,7 @@ where
             let header_len = entry
                 .header
                 .write_to(bytes_copied, &mut header_buf.as_mut())
-                .map_err(gix_hash::io::from_std_io)?;
+                .map_err(io_error)?;
             let state = gix_features::hash::crc32_update(0, &header_buf[..header_len]);
             Some(gix_features::hash::crc32_update(state, &compressed))
         } else {
@@ -178,22 +180,31 @@ where
             let mut id = gix_hash::ObjectId::null(self.object_hash);
             if let Err(err) = self.read.read_exact(id.as_mut_slice()) {
                 if self.mode != input::Mode::Restore {
-                    return Err(input::Error::Io(err));
+                    return Err(io_error(err));
                 }
             }
 
             if let Some(hash) = self.hash.take() {
-                let actual_id = hash.try_finalize().map_err(gix_hash::io::from_hasher)?;
+                let actual_id = hash
+                    .try_finalize()
+                    .map_err(gix_hash::io::from_hasher)
+                    .map_err(hash_io_error)?;
                 if self.mode == input::Mode::Restore {
                     id = actual_id;
                 } else {
-                    actual_id.verify(&id)?;
+                    actual_id
+                        .verify(&id)
+                        .or_raise_erased(|| message("Failed to verify pack checksum in trailer"))?;
                 }
             }
             Some(id)
         } else if self.mode == input::Mode::Restore {
             let hash = self.hash.clone().expect("in restore mode a hash is set");
-            Some(hash.try_finalize().map_err(gix_hash::io::from_hasher)?)
+            Some(
+                hash.try_finalize()
+                    .map_err(gix_hash::io::from_hasher)
+                    .map_err(hash_io_error)?,
+            )
         } else {
             None
         })
@@ -278,8 +289,7 @@ where
 {
     /// Returns an iterator over [`Entries`][crate::data::input::Entry], without making use of the memory mapping.
     pub fn streaming_iter(&self) -> Result<BytesToEntriesIter<impl io::BufRead>, input::Error> {
-        let reader =
-            io::BufReader::with_capacity(4096 * 8, fs::File::open(&self.path).map_err(gix_hash::io::from_std_io)?);
+        let reader = io::BufReader::with_capacity(4096 * 8, fs::File::open(&self.path).map_err(io_error)?);
         BytesToEntriesIter::new_from_header(
             reader,
             input::Mode::Verify,
@@ -287,6 +297,16 @@ where
             self.object_hash,
         )
     }
+}
+
+fn io_error(err: io::Error) -> input::Error {
+    err.and_raise(message("An IO operation failed while streaming an entry"))
+        .erased()
+}
+
+fn hash_io_error(err: gix_hash::io::Error) -> input::Error {
+    err.raise(message("An IO operation failed while streaming an entry"))
+        .erased()
 }
 
 /// The boxed variant is faster for what we do (moving the decompressor in and out a lot)

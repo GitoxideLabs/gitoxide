@@ -2,39 +2,15 @@
 pub mod index_names {
     use std::path::{Path, PathBuf};
 
-    use gix_object::bstr::{BString, ByteSlice};
+    use gix_object::bstr::ByteSlice;
 
     /// The ID used for the index-names chunk.
     pub const ID: gix_chunk::Id = *b"PNAM";
 
     ///
     pub mod decode {
-        use std::collections::TryReserveError;
-
-        use gix_object::bstr::BString;
-
         /// The error returned by [`from_bytes()`][super::from_bytes()].
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error("The pack names were not ordered alphabetically.")]
-            NotOrderedAlphabetically,
-            #[error("Each pack path name must be terminated with a null byte")]
-            MissingNullByte,
-            #[error("Entry too large to fit in memory")]
-            OutOfMemory,
-            #[error("Couldn't turn path '{path}' into OS path due to encoding issues")]
-            PathEncoding { path: BString },
-            #[error("non-padding bytes found after all paths were read.")]
-            UnknownTrailerBytes,
-        }
-
-        impl From<TryReserveError> for Error {
-            #[cold]
-            fn from(_: TryReserveError) -> Self {
-                Self::OutOfMemory
-            }
-        }
+        pub type Error = gix_error::Exn<gix_error::CorruptionError>;
     }
 
     /// Parse null-separated index names from the given `chunk` of bytes.
@@ -55,32 +31,41 @@ pub mod index_names {
         num_packs: u32,
         alloc_limit_bytes: Option<usize>,
     ) -> Result<Vec<PathBuf>, decode::Error> {
+        use gix_error::{CorruptionError, ErrorExt, OptionExt, ResultExt};
+
         let mut out = Vec::new();
-        let num_packs = usize::try_from(num_packs).map_err(|_| decode::Error::OutOfMemory)?;
+        let num_packs =
+            usize::try_from(num_packs).or_raise(|| CorruptionError::new("Pack count does not fit into memory"))?;
         let vec_allocation = num_packs
             .checked_mul(std::mem::size_of::<PathBuf>())
-            .ok_or(decode::Error::OutOfMemory)?;
+            .ok_or_raise(|| CorruptionError::new("Pack names require more memory than allowed"))?;
         if alloc_limit_bytes.is_some_and(|limit| vec_allocation > limit) {
-            return Err(decode::Error::OutOfMemory);
+            return Err(CorruptionError::new("Pack names require more memory than allowed").raise());
         }
-        out.try_reserve(num_packs)?;
+        out.try_reserve(num_packs)
+            .or_raise(|| CorruptionError::new("Pack names require more memory than can be reserved"))?;
 
         for _ in 0..num_packs {
-            let null_byte_pos = chunk.find_byte(b'\0').ok_or(decode::Error::MissingNullByte)?;
+            let null_byte_pos = chunk
+                .find_byte(b'\0')
+                .ok_or_raise(|| CorruptionError::new("Each pack path name must be terminated with a null byte"))?;
 
             let path = &chunk[..null_byte_pos];
             if alloc_limit_bytes.is_some_and(|limit| path.len() > limit) {
-                return Err(decode::Error::OutOfMemory);
+                return Err(CorruptionError::new("Pack path requires more memory than allowed").raise());
             }
             let path = gix_path::try_from_byte_slice(path)
-                .map_err(|_| decode::Error::PathEncoding {
-                    path: BString::from(path),
+                .or_raise(|| {
+                    CorruptionError::new(format!(
+                        "Couldn't turn path '{}' into OS path due to encoding issues",
+                        path.as_bstr()
+                    ))
                 })?
                 .to_owned();
 
             if let Some(previous) = out.last() {
                 if previous >= &path {
-                    return Err(decode::Error::NotOrderedAlphabetically);
+                    return Err(CorruptionError::new("The pack names were not ordered alphabetically").raise());
                 }
             }
             out.push(path);
@@ -89,7 +74,7 @@ pub mod index_names {
         }
 
         if !chunk.is_empty() && !chunk.iter().all(|b| *b == 0) {
-            return Err(decode::Error::UnknownTrailerBytes);
+            return Err(CorruptionError::new("Non-padding bytes found after all paths were read").raise());
         }
         // NOTE: git writes garbage into this chunk, usually extra \0 bytes, which we simply ignore. If we were strict
         // about it we couldn't read this chunk data at all.

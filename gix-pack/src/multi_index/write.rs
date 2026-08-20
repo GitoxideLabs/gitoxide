@@ -2,26 +2,8 @@ use std::time::SystemTime;
 
 use crate::multi_index;
 
-mod error {
-    /// The error returned by [`crate::multi_index::write_from_index_paths()`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Io(#[from] std::io::Error),
-        #[error("Interrupted")]
-        Interrupted,
-        #[error(transparent)]
-        OpenIndex(#[from] crate::index::init::Error),
-    }
-
-    impl From<gix_hash::io::Error> for Error {
-        fn from(err: gix_hash::io::Error) -> Self {
-            Error::Io(std::io::Error::other(err.into_error()))
-        }
-    }
-}
-pub use error::Error;
+/// The error returned by [`crate::multi_index::write_from_index_paths()`].
+pub type Error = gix_error::Exn;
 
 /// An entry suitable for sorting and writing
 pub(crate) struct Entry {
@@ -81,6 +63,7 @@ pub(super) mod function {
         time::{Instant, SystemTime},
     };
 
+    use gix_error::{ErrorExt, RetryableError, message};
     use gix_features::progress::{Count, DynNestedProgress, Progress};
 
     use crate::{MMap, multi_index};
@@ -133,7 +116,7 @@ pub(super) mod function {
                 }));
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(Error::Interrupted);
+                    return Err(RetryableError::new(message("Interrupted")).raise_erased());
                 }
             }
             progress.show_throughput(start);
@@ -150,7 +133,7 @@ pub(super) mod function {
             progress.inc_by(entries.len());
             progress.show_throughput(start);
             if should_interrupt.load(Ordering::Relaxed) {
-                return Err(Error::Interrupted);
+                return Err(RetryableError::new(message("Interrupted")).raise_erased());
             }
             entries
         };
@@ -225,7 +208,7 @@ pub(super) mod function {
                 .map_err(gix_hash::io::from_std_io)?;
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(Error::Interrupted);
+                    return Err(RetryableError::new(message("Interrupted")).raise_erased());
                 }
             }
         }

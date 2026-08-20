@@ -5,6 +5,8 @@ use gix_pack::cache::DecodeEntry;
 use crate::store::{handle, load_index};
 
 pub(crate) mod error {
+    use gix_error::Error as GixError;
+
     use crate::{loose, pack};
 
     /// Returned by [`Handle::try_find()`][gix_pack::Find::try_find()]
@@ -14,7 +16,7 @@ pub(crate) mod error {
         #[error("An error occurred while obtaining an object from the loose object store")]
         Loose(#[from] loose::find::Error),
         #[error("An error occurred while obtaining an object from the packed object store")]
-        Pack(#[from] pack::data::decode::Error),
+        Pack(#[from] GixError),
         #[error(transparent)]
         LoadIndex(#[from] crate::store::load_index::Error),
         #[error(transparent)]
@@ -44,6 +46,12 @@ pub(crate) mod error {
             /// The original object to lookup
             id: gix_hash::ObjectId,
         },
+    }
+
+    impl From<pack::data::decode::Error> for Error {
+        fn from(err: pack::data::decode::Error) -> Self {
+            Error::Pack(err.into_error())
+        }
     }
 
     #[derive(Copy, Clone)]
@@ -172,7 +180,13 @@ where
                                     entry_size: r.compressed_size + header_size,
                                 }),
                             )),
-                            Err(gix_pack::data::decode::Error::DeltaBaseUnresolved(base_id)) => {
+                            Err(err) => {
+                                let Some(base_id) = err
+                                    .downcast_any_ref::<gix_pack::data::decode::DeltaBaseUnresolved>()
+                                    .map(|err| err.0)
+                                else {
+                                    return Err(err.into());
+                                };
                                 // Only with multi-pack indices it's allowed to jump to refer to other packs within this
                                 // multi-pack. Otherwise this would constitute a thin pack which is only allowed in transit.
                                 // However, if we somehow end up with that, we will resolve it safely, even though we could
@@ -276,7 +290,6 @@ where
                                     )
                                 })
                             }
-                            Err(err) => Err(err),
                         }?;
 
                         if idx != 0 {

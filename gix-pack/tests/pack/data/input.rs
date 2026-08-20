@@ -199,18 +199,15 @@ mod lookup_ref_delta_objects {
 
     #[test]
     fn inner_errors_are_passed_on() {
+        use gix_error::ErrorExt;
+
+        let object_id = gix_hash::Kind::Sha1.null();
         let input = vec![
             Ok(entry(base(), D_A)),
-            Err(input::Error::NotFound {
-                object_id: gix_hash::Kind::Sha1.null(),
-            }),
-            Ok(entry(base(), D_B)),
-        ];
-        let expected = vec![
-            Ok(entry(base(), D_A)),
-            Err(input::Error::NotFound {
-                object_id: gix_hash::Kind::Sha1.null(),
-            }),
+            Err(
+                gix_error::NotFoundError::new(format!("The object {object_id} could not be decoded or wasn't found"))
+                    .raise_erased(),
+            ),
             Ok(entry(base(), D_B)),
         ];
         let actual = LookupRefDeltaObjectsIter::new(
@@ -219,8 +216,20 @@ mod lookup_ref_delta_objects {
             gix_zlib::Compression::BEST_SPEED,
         )
         .collect::<Vec<_>>();
-        for (actual, expected) in actual.into_iter().zip(expected) {
-            assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
-        }
+        assert_eq!(
+            actual[0].as_ref().expect("first entry passes through"),
+            &entry(base(), D_A)
+        );
+        assert_eq!(
+            actual[1]
+                .as_ref()
+                .expect_err("the inner error passes through")
+                .to_string(),
+            format!("The object {object_id} could not be decoded or wasn't found")
+        );
+        assert_eq!(
+            actual[2].as_ref().expect("last entry passes through"),
+            &entry(base(), D_B)
+        );
     }
 }

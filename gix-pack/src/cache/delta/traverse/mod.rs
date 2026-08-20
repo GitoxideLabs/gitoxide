@@ -1,5 +1,6 @@
-use std::{collections::TryReserveError, sync::atomic::AtomicBool};
+use std::sync::atomic::AtomicBool;
 
+use gix_error::{ErrorExt, NotFoundError, RetryableError, message};
 use gix_features::{
     progress::{self, DynNestedProgress, Progress},
     threading,
@@ -18,49 +19,15 @@ pub(crate) mod util;
 pub(super) type SharedRefDeltaChildren = OwnShared<Mutable<super::tree::RefDeltaChildren>>;
 
 /// Returned by [`Tree::traverse()`]
-#[derive(thiserror::Error, Debug)]
-#[allow(missing_docs)]
-pub enum Error {
-    #[error("{message}")]
-    ZlibInflate {
-        source: gix_error::Error,
-        message: &'static str,
-    },
-    #[error("The resolver failed to obtain the pack entry bytes for the entry at {pack_offset}")]
-    ResolveFailed { pack_offset: u64 },
-    #[error(transparent)]
-    EntryType(#[from] crate::data::entry::decode::Error),
-    #[error("One of the object inspectors failed")]
-    Inspect(#[from] Box<dyn std::error::Error + Send + Sync>),
-    #[error("Interrupted")]
-    Interrupted,
-    #[error("Entry too large to fit in memory")]
-    OutOfMemory,
-    #[error(
-        "The base at {base_pack_offset} was referred to by a ref-delta, but it was never added to the tree as if the pack was still thin."
-    )]
-    OutOfPackRefDelta {
-        /// The base's offset which was from a resolved ref-delta that didn't actually get added to the tree
-        base_pack_offset: crate::data::Offset,
-    },
-    #[error("The ref-delta base object {base_id} could not be found")]
-    UnresolvedRefDelta {
-        /// The id named by one or more unresolved ref-delta entries.
-        base_id: gix_hash::ObjectId,
-    },
-    #[error("Failed to hash an object while resolving in-pack ref-deltas")]
-    ObjectHash(#[from] gix_hash::hasher::Error),
-    #[error("Failed to spawn thread when switching to work-stealing mode")]
-    SpawnThread(#[from] std::io::Error),
-    #[error(transparent)]
-    Delta(#[from] crate::data::delta::apply::Error),
+pub type Error = gix_error::Exn;
+
+#[cold]
+pub(super) fn out_of_memory() -> Error {
+    message("Entry too large to fit in memory").raise_erased()
 }
 
-impl From<TryReserveError> for Error {
-    #[cold]
-    fn from(_: TryReserveError) -> Self {
-        Self::OutOfMemory
-    }
+pub(super) fn interrupted() -> Error {
+    RetryableError::new(message("Interrupted")).raise_erased()
 }
 
 /// Additional context passed to the `inspect_object(…)` function of the [`Tree::traverse()`] method.
@@ -124,7 +91,7 @@ where
     /// This method returns a vector of all tree items, along with their potentially modified custom node data.
     ///
     /// _Note_ that this method consumed the Tree to assure safe parallel traversal with mutation support.
-    pub fn traverse<F, MBFN, E, R>(
+    pub fn traverse<F, MBFN, R>(
         mut self,
         resolve: F,
         resolve_data: &R,
@@ -142,8 +109,7 @@ where
     where
         F: for<'r> Fn(EntryRange, &'r R) -> Option<&'r [u8]> + Send + Clone,
         R: Send + Sync,
-        MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> Result<(), E> + Send + Clone,
-        E: std::error::Error + Send + Sync + 'static,
+        MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> Result<(), gix_error::Exn> + Send + Clone,
     {
         self.set_pack_entries_end_and_resolve_ref_offsets(pack_entries_end)?;
 
@@ -185,7 +151,10 @@ where
 
         if let Some(ref_delta_children) = ref_delta_children {
             if let Some((base_id, _children)) = threading::lock(&ref_delta_children).first_key_value() {
-                return Err(Error::UnresolvedRefDelta { base_id: *base_id });
+                return Err(
+                    NotFoundError::new(format!("The ref-delta base object {base_id} could not be found"))
+                        .raise_erased(),
+                );
             }
         }
 
