@@ -2,6 +2,7 @@ use std::{
     collections::HashSet,
     ffi::{OsStr, OsString},
     io::Write,
+    path::PathBuf,
     sync::atomic::AtomicBool,
 };
 
@@ -54,6 +55,8 @@ enum Command {
     Stash,
     /// Pin one or more commits as persistent history tips.
     Pin(Pin),
+    /// Copy the change introduced by one commit above another commit.
+    CopyInsert(CopyInsert),
     /// Travel to a commit while preserving reachable history through tix pins.
     Travel(travel::Args),
     /// Edit a commit and lazily rebase every descendant retained by a tix pin.
@@ -122,6 +125,28 @@ struct Pin {
     /// Revisions resolving to commits to pin.
     #[arg(required = true, value_name = "REVSPEC")]
     revisions: Vec<OsString>,
+}
+
+#[derive(Debug, clap::Args)]
+#[command(
+    after_long_help = "Conflicts change nothing by default. To materialize one and write a continuation todo:\n  tix copy-insert --materialize-conflicts=todo.continue.md C I\nResolve the index, then run:\n  tix rebase apply todo.continue.md\nUse --materialize-conflicts=- to write a continuation to non-terminal stdout."
+)]
+struct CopyInsert {
+    /// On conflict, materialize it and write a continuation todo to FILE, or stdout if omitted or '-'.
+    #[arg(
+        long,
+        value_name = "CONTINUE",
+        num_args = 0..=1,
+        default_missing_value = "-",
+        require_equals = true
+    )]
+    materialize_conflicts: Option<PathBuf>,
+    /// Revision resolving to the commit to copy.
+    #[arg(value_name = "SOURCE")]
+    source: OsString,
+    /// Revision resolving to the commit above which to insert the copy.
+    #[arg(value_name = "TARGET")]
+    target: OsString,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -197,6 +222,7 @@ impl Platform {
                 println!("{}", notice_with_change_id(&repository, &notice, id)?);
             }
             Command::Pin(args) => pin(&repository, args)?,
+            Command::CopyInsert(args) => return copy_insert(repository, args),
             Command::Admin(Admin::ClearUndo) => crate::edit::undo::clear(&repository)?,
             Command::Travel(args) => return travel::run(repository, args),
             Command::Reword(args) => return reword::run(repository, args),
@@ -441,6 +467,45 @@ fn resolve_commit(
                 None => Err(revision_error).with_context(|| format!("could not resolve {description} {revision:?}")),
             }
         }
+    }
+}
+
+fn copy_insert(repository: gix::Repository, args: CopyInsert) -> Result<()> {
+    repository.workdir().context("copy-insert requires a worktree")?;
+    let (source, _) = resolve_commit(&repository, &args.source, "copy source")?;
+    let (target, _) = resolve_commit(&repository, &args.target, "copy target")?;
+    let revisions = [
+        OsString::from("HEAD"),
+        OsString::from(source.to_string()),
+        OsString::from(target.to_string()),
+    ];
+    let graph = crate::edit::loaded_view_graph_with(&repository, &revisions)?;
+    let plan = crate::edit::rebase::copy_insert_plan(&repository, &graph, source, target)?;
+    let repository_path = repository.git_dir().to_owned();
+    let bare = repository.is_bare();
+    match crate::edit::rebase::perform_plan(&repository, &graph, plan)? {
+        crate::edit::rebase::PlanPerform::Complete(outcome) => {
+            let copied = outcome.selected.context("copy-insert did not produce a selection")?;
+            let (_, changes) =
+                match crate::edit::time_travel::checkout_plan_reporting(&repository_path, bare, &outcome, &[], false) {
+                    Ok(result) => result,
+                    Err(err) => {
+                        record_undo(&repository, "copy-insert commit", Ok(outcome.ref_changes));
+                        return Err(err).context("copy-insert applied, but could not check out the copied commit");
+                    }
+                };
+            println!("{}", crate::change_id::display(&repository, copied, 7)?);
+            print_ref_rewrites(&repository, &outcome.ref_rewrites)?;
+            record_undo(&repository, "copy-insert commit", Ok(changes));
+            Ok(())
+        }
+        crate::edit::rebase::PlanPerform::Conflict(conflict) => rebase::handle_plan_conflict(
+            &repository,
+            conflict,
+            args.materialize_conflicts.as_deref(),
+            &[],
+            "copy-insert",
+        ),
     }
 }
 
@@ -842,6 +907,31 @@ mod tests {
             panic!("pin was expected")
         };
         assert_eq!(pin.revisions, ["main", "HEAD~2"]);
+        let copy_insert = Cli::try_parse_from([
+            "tix",
+            "copy-insert",
+            "--materialize-conflicts=continue.md",
+            "main",
+            "HEAD~1",
+        ])
+        .expect("copy-insert parses")
+        .platform
+        .command;
+        let Some(Command::CopyInsert(copy_insert)) = copy_insert else {
+            panic!("copy-insert was expected")
+        };
+        assert_eq!(copy_insert.source, "main");
+        assert_eq!(copy_insert.target, "HEAD~1");
+        assert_eq!(copy_insert.materialize_conflicts, Some("continue.md".into()));
+        let Some(Command::CopyInsert(copy_insert)) =
+            Cli::try_parse_from(["tix", "copy-insert", "--materialize-conflicts", "HEAD", "main~1"])
+                .expect("copy-insert defaults continuation output to stdout")
+                .platform
+                .command
+        else {
+            panic!("copy-insert was expected")
+        };
+        assert_eq!(copy_insert.materialize_conflicts, Some("-".into()));
         let travel = Cli::try_parse_from(["tix", "travel", "--materialize-conflicts", "HEAD~1"])
             .expect("travel parses")
             .platform
@@ -1044,6 +1134,247 @@ mod tests {
     }
 
     #[test]
+    fn copy_insert_command_rewrites_the_target_stack_and_is_undoable() -> gix_testtools::Result {
+        fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
+            let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
+            if !output.status.success() {
+                return Err(format!(
+                    "git {} failed: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&output.stderr)
+                )
+                .into());
+            }
+            Ok(output.stdout)
+        }
+
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        git(path, &["checkout", "-q", "-b", "destination", "HEAD~2"])?;
+        std::fs::write(path.join("destination"), b"target\n")?;
+        git(path, &["add", "destination"])?;
+        git(path, &["commit", "-q", "-m", "destination target"])?;
+        let target = crate::test_repository::open(path)?.head_id()?.detach();
+        std::fs::write(path.join("destination-child"), b"child\n")?;
+        git(path, &["add", "destination-child"])?;
+        git(path, &["commit", "-q", "-m", "destination child"])?;
+        let destination_before = crate::test_repository::open(path)?.head_id()?.detach();
+        git(path, &["checkout", "-q", "-b", "excluded", &target.to_string()])?;
+        std::fs::write(path.join("excluded"), b"excluded\n")?;
+        git(path, &["add", "excluded"])?;
+        git(path, &["commit", "-q", "-m", "excluded child"])?;
+        let excluded_before = crate::test_repository::open(path)?.head_id()?.detach();
+        git(path, &["checkout", "-q", "destination"])?;
+
+        let repository = crate::test_repository::open(path)?;
+        let source = repository.rev_parse_single("main")?.detach();
+        copy_insert(
+            repository,
+            CopyInsert {
+                materialize_conflicts: None,
+                source: "main".into(),
+                target: target.to_string().into(),
+            },
+        )?;
+
+        let repository = crate::test_repository::open(path)?;
+        let copied = repository.head_id()?.detach();
+        assert!(repository.head()?.is_detached(), "the new copy is checked out detached");
+        assert_eq!(
+            repository.find_reference("refs/heads/main")?.id().detach(),
+            source,
+            "the source branch remains at the original occurrence"
+        );
+        assert_eq!(
+            repository.find_reference("refs/heads/excluded")?.id().detach(),
+            excluded_before,
+            "an unpinned branch outside the command view is not rewritten"
+        );
+        assert_eq!(
+            repository.find_commit(copied)?.parent_ids().next().map(gix::Id::detach),
+            Some(target),
+            "the copy is inserted immediately above the target"
+        );
+        let destination_after = repository.find_reference("refs/heads/destination")?.id().detach();
+        assert_ne!(
+            destination_after, destination_before,
+            "the target descendant is rewritten"
+        );
+        assert_eq!(
+            repository
+                .find_commit(destination_after)?
+                .parent_ids()
+                .next()
+                .map(gix::Id::detach),
+            Some(copied),
+            "the rewritten descendant follows the copy"
+        );
+        assert_eq!(
+            crate::edit::undo::position(&repository)?.title,
+            "copy-insert commit",
+            "the command records one undoable operation"
+        );
+        let pins = crate::history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 1, "the previous checkout receives one HEAD pin");
+        assert_eq!(
+            pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(gix::bstr::BStr::new(b"refs/heads/destination")),
+            "the HEAD pin remembers the destination branch"
+        );
+
+        crate::edit::undo::plan_undo(&repository)?
+            .context("copy-insert can be undone")?
+            .apply(&repository)?;
+        let repository = crate::test_repository::open(path)?;
+        assert_eq!(
+            repository.head_id()?.detach(),
+            destination_before,
+            "undo restores the previous checkout"
+        );
+        assert_eq!(
+            repository.head()?.referent_name().map(ToOwned::to_owned),
+            Some("refs/heads/destination".try_into().expect("valid branch name")),
+            "undo reattaches HEAD"
+        );
+        assert_eq!(
+            repository.find_reference("refs/heads/destination")?.id().detach(),
+            destination_before,
+            "undo restores the target branch"
+        );
+        assert_eq!(repository.find_reference("refs/heads/main")?.id().detach(), source);
+        assert_eq!(
+            repository.find_reference("refs/heads/excluded")?.id().detach(),
+            excluded_before
+        );
+        assert!(
+            crate::history::all_pins(&repository)?.is_empty(),
+            "undo removes the checkout pin"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn copy_insert_conflicts_are_atomic_or_materialize_a_continuation() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let path = fixture.path();
+        let repository = crate::test_repository::open(path)?;
+        let source = repository.head_id()?.detach();
+        let target = repository.rev_parse_single("HEAD~2")?.detach();
+        let before = gix_testtools::repository::snapshot(path)?;
+        let err = copy_insert(
+            repository,
+            CopyInsert {
+                materialize_conflicts: None,
+                source: source.to_string().into(),
+                target: target.to_string().into(),
+            },
+        )
+        .expect_err("copy-insert conflicts are atomic by default");
+        assert!(format!("{err:#}").contains("pass --materialize-conflicts"));
+        assert_eq!(
+            gix_testtools::repository::snapshot(path)?,
+            before,
+            "the default conflict leaves the repository unchanged"
+        );
+
+        let output_dir = gix_testtools::tempfile::tempdir()?;
+        let continuation = output_dir.path().join("continue.md");
+        let repository = crate::test_repository::open(path)?;
+        let err = copy_insert(
+            repository,
+            CopyInsert {
+                materialize_conflicts: Some(continuation.clone()),
+                source: source.to_string().into(),
+                target: target.to_string().into(),
+            },
+        )
+        .expect_err("materializing a conflict exits unsuccessfully");
+        assert!(format!("{err:#}").contains("copy-insert stopped at a materialized conflict"));
+        let document = std::fs::read(&continuation)?;
+        let repository = crate::test_repository::open(path)?;
+        assert!(
+            crate::edit::todo::parse(&repository, &document)?.is_some(),
+            "the continuation is accepted by the ordinary rebase parser"
+        );
+        assert_eq!(
+            crate::edit::undo::position(&repository)?.title,
+            "materialize rebase conflict",
+            "materialization is independently undoable"
+        );
+        let unresolved = ProcessCommand::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["diff", "--name-only", "--diff-filter=U"])
+            .output()?;
+        assert!(unresolved.status.success());
+        assert_eq!(
+            unresolved.stdout, b"file\n",
+            "materialization writes the unmerged index"
+        );
+
+        std::fs::write(path.join("file"), b"base\n")?;
+        assert!(
+            ProcessCommand::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(["add", "file"])
+                .status()?
+                .success()
+        );
+        rebase::run(
+            crate::test_repository::open(path)?,
+            rebase::Command::Apply(rebase::Apply {
+                materialize_conflicts: None,
+                file: Some(continuation),
+            }),
+        )?;
+        let unresolved = ProcessCommand::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["diff", "--name-only", "--diff-filter=U"])
+            .output()?;
+        assert!(unresolved.status.success());
+        assert!(
+            unresolved.stdout.is_empty(),
+            "the continuation consumes the resolved index"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn copy_insert_rejects_a_bare_repository_before_rewriting_it() -> gix_testtools::Result {
+        let source = gix_testtools::scripted_fixture_read_only("rebase_edit.sh")?;
+        let fixture = gix_testtools::tempfile::tempdir()?;
+        assert!(
+            ProcessCommand::new("git")
+                .args(["clone", "-q", "--bare"])
+                .arg(source)
+                .arg(fixture.path())
+                .status()?
+                .success()
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        let before = repository.head_id()?.detach();
+        let target = repository.rev_parse_single("HEAD~2")?.detach();
+        let err = copy_insert(
+            repository,
+            CopyInsert {
+                materialize_conflicts: None,
+                source: before.to_string().into(),
+                target: target.to_string().into(),
+            },
+        )
+        .expect_err("copy-insert requires a checkout");
+        assert!(format!("{err:#}").contains("requires a worktree"));
+        assert_eq!(
+            crate::test_repository::open(fixture.path())?.head_id()?.detach(),
+            before,
+            "the attached branch is unchanged"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn ref_tree_omits_explicit_and_inferred_hidden_references() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -1111,6 +1442,7 @@ mod tests {
             &["split"],
             &["stash"],
             &["pin"],
+            &["copy-insert"],
             &["travel"],
             &["reword"],
             &["admin"],

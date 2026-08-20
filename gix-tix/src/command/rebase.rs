@@ -236,63 +236,77 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
             super::record_undo(&repo, "rebase history", Ok(changes));
             Ok(())
         }
-        rebase::PlanPerform::Conflict(mut conflict) => {
-            let Some(destination) = materialize_conflicts else {
-                anyhow::bail!(
-                    "rebase aborted without changes: conflict while applying {}; pass --materialize-conflicts to opt in",
-                    conflict.original().to_hex_with_len(7)
-                );
-            };
-            if destination == Path::new("-") && std::io::stdout().is_terminal() {
-                anyhow::bail!(
-                    "rebase aborted without changes: refusing to materialize a conflict without a continuation output file"
-                );
-            }
-            conflict.persist_objects()?;
-            let plan = conflict.continuation_plan();
-            let mapped_tips = tips.iter().filter_map(|id| conflict.map(*id)).collect();
-            let continuation = todo::prepare_continuation(conflict.repository(), &plan, mapped_tips, true)?.document;
-            let revisions = mapped_revisions(&tips, |id| conflict.map(id));
-            if destination == Path::new("-") {
-                let mut stdout = std::io::stdout().lock();
-                stdout
-                    .write_all(&continuation)
-                    .and_then(|_| stdout.flush())
-                    .context("could not write the continuation rebase todo")?;
-            } else {
-                let mut output = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(destination)
-                    .with_context(|| {
-                        format!("could not create continuation rebase todo at {}", destination.display())
-                    })?;
-                output.write_all(&continuation).with_context(|| {
-                    format!("could not write continuation rebase todo at {}", destination.display())
-                })?;
-            }
-            let materialized = edit::time_travel::materialize_plan_conflict_reporting(
-                conflict,
-                &repository_path,
-                bare,
-                &revisions,
-                false,
-            );
-            let (notice, _, ref_rewrites, ref_changes) = match materialized {
-                Ok(materialized) => materialized,
-                Err(err) => {
-                    if destination != Path::new("-") {
-                        let _ = std::fs::remove_file(destination);
-                    }
-                    return Err(err);
-                }
-            };
-            super::print_ref_rewrites(&repo, &ref_rewrites)?;
-            super::record_undo(&repo, "materialize rebase conflict", Ok(ref_changes));
-            eprintln!("{notice}; continue with `tix rebase apply {}`", destination.display());
-            anyhow::bail!("rebase stopped at a materialized conflict")
+        rebase::PlanPerform::Conflict(conflict) => {
+            handle_plan_conflict(&repo, conflict, materialize_conflicts, &tips, "rebase")
         }
     }
+}
+
+pub(super) fn handle_plan_conflict(
+    repo: &gix::Repository,
+    mut conflict: rebase::PlanConflict,
+    materialize_conflicts: Option<&Path>,
+    tips: &[ObjectId],
+    operation: &str,
+) -> Result<()> {
+    let Some(destination) = materialize_conflicts else {
+        anyhow::bail!(
+            "{operation} aborted without changes: conflict while applying {}; pass --materialize-conflicts to opt in",
+            conflict.original().to_hex_with_len(7)
+        );
+    };
+    if destination == Path::new("-") && std::io::stdout().is_terminal() {
+        anyhow::bail!(
+            "{operation} aborted without changes: refusing to materialize a conflict without a continuation output file"
+        );
+    }
+    conflict.persist_objects()?;
+    let plan = conflict.continuation_plan();
+    let mapped_tips = tips.iter().filter_map(|id| conflict.map(*id)).collect();
+    let continuation = todo::prepare_continuation(conflict.repository(), &plan, mapped_tips, true)?.document;
+    let revisions = mapped_revisions(tips, |id| conflict.map(id));
+    if destination == Path::new("-") {
+        let mut stdout = std::io::stdout().lock();
+        stdout
+            .write_all(&continuation)
+            .and_then(|_| stdout.flush())
+            .context("could not write the continuation rebase todo")?;
+    } else {
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)
+            .with_context(|| format!("could not create continuation rebase todo at {}", destination.display()))?;
+        output
+            .write_all(&continuation)
+            .with_context(|| format!("could not write continuation rebase todo at {}", destination.display()))?;
+    }
+    let materialized = edit::time_travel::materialize_plan_conflict_reporting(
+        conflict,
+        repo.git_dir(),
+        repo.is_bare(),
+        &revisions,
+        false,
+    );
+    let (notice, _, ref_rewrites, ref_changes) = match materialized {
+        Ok(materialized) => materialized,
+        Err(err) => {
+            if destination != Path::new("-") {
+                let _ = std::fs::remove_file(destination);
+            }
+            return Err(err);
+        }
+    };
+    if destination == Path::new("-") {
+        for line in super::ref_rewrite_lines(repo, &ref_rewrites)? {
+            eprintln!("{line}");
+        }
+    } else {
+        super::print_ref_rewrites(repo, &ref_rewrites)?;
+    }
+    super::record_undo(repo, "materialize rebase conflict", Ok(ref_changes));
+    eprintln!("{notice}; continue with `tix rebase apply {}`", destination.display());
+    anyhow::bail!("{operation} stopped at a materialized conflict")
 }
 
 fn mapped_revisions(tips: &[ObjectId], mut map: impl FnMut(ObjectId) -> Option<ObjectId>) -> Vec<OsString> {
