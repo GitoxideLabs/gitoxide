@@ -10,9 +10,18 @@ where
     E: std::error::Error + 'static,
 {
     #[error(transparent)]
-    Io(#[from] gix_hash::io::Error),
+    Io(#[from] std::io::Error),
     #[error(transparent)]
     Input(E),
+}
+
+impl<E> From<gix_hash::io::Error> for Error<E>
+where
+    E: std::error::Error + 'static,
+{
+    fn from(err: gix_hash::io::Error) -> Self {
+        Error::Io(std::io::Error::other(err.into_error()))
+    }
 }
 
 /// An implementation of [`Iterator`] to write [encoded entries][output::Entry] to an inner implementation each time
@@ -97,7 +106,7 @@ where
             let header_bytes = crate::data::header::encode(version, num_entries);
             self.output
                 .write_all(&header_bytes[..])
-                .map_err(gix_hash::io::Error::from)?;
+                .map_err(gix_hash::io::from_std_io)?;
             self.written += header_bytes.len() as u64;
         }
         match self.input.next() {
@@ -117,9 +126,9 @@ where
                     });
                     self.written += header
                         .write_to(entry.decompressed_size as u64, &mut self.output)
-                        .map_err(gix_hash::io::Error::from)? as u64;
+                        .map_err(gix_hash::io::from_std_io)? as u64;
                     self.written += std::io::copy(&mut &*entry.compressed_data, &mut self.output)
-                        .map_err(gix_hash::io::Error::from)?;
+                        .map_err(gix_hash::io::from_std_io)?;
                 }
             }
             None => {
@@ -128,13 +137,13 @@ where
                     .hash
                     .clone()
                     .try_finalize()
-                    .map_err(gix_hash::io::Error::from)?;
+                    .map_err(gix_hash::io::from_hasher)?;
                 self.output
                     .inner
                     .write_all(digest.as_slice())
-                    .map_err(gix_hash::io::Error::from)?;
+                    .map_err(gix_hash::io::from_std_io)?;
                 self.written += digest.as_slice().len() as u64;
-                self.output.inner.flush().map_err(gix_hash::io::Error::from)?;
+                self.output.inner.flush().map_err(gix_hash::io::from_std_io)?;
                 self.is_done = true;
                 self.trailer = Some(digest);
             }

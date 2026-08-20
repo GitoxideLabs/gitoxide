@@ -112,7 +112,7 @@ impl super::Write for Never {
             &mut gix_features::progress::Discard,
             &std::sync::atomic::AtomicBool::new(false),
         )
-        .map_err(Into::into)
+        .map_err(|err| Box::new(err.into_error()) as crate::write::Error)
     }
 
     fn write_stream_with_known_id(

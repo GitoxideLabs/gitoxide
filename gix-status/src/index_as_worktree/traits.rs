@@ -143,15 +143,15 @@ impl CompareBlobs for HashEq {
         match stream.as_bytes() {
             Some(buffer) => {
                 let file_hash = gix_object::compute_hash(entry.id.kind(), gix_object::Kind::Blob, buffer)
-                    .map_err(gix_hash::io::Error::from)?;
+                    .map_err(gix_hash::io::from_hasher)?;
                 Ok((entry.id != file_hash).then_some(file_hash))
             }
             None => {
                 let file_hash = match stream.size() {
                     None => {
-                        stream.read_to_end(buf).map_err(gix_hash::io::Error::from)?;
+                        stream.read_to_end(buf).map_err(gix_hash::io::from_std_io)?;
                         gix_object::compute_hash(entry.id.kind(), gix_object::Kind::Blob, buf)
-                            .map_err(gix_hash::io::Error::from)?
+                            .map_err(gix_hash::io::from_hasher)?
                     }
                     Some(len) => gix_object::compute_stream_hash(
                         entry.id.kind(),
