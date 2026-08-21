@@ -64,6 +64,7 @@ const REF_EVENT_IDLE: Duration = Duration::from_millis(100);
 const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
 const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const LINE_DIFF_POOL_IDLE: Duration = Duration::from_secs(10);
 const THEME_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
 
 struct FillRepository {
@@ -355,16 +356,20 @@ enum LineDiffResult {
 }
 
 struct LineDiffPool {
+    repository_path: PathBuf,
+    bare: bool,
+    parallelism: usize,
+    active: Option<LineDiffWorkers>,
+    last_used: Option<Instant>,
+}
+
+struct LineDiffWorkers {
     jobs: Vec<mpsc::Sender<LineDiffMessage>>,
     results: mpsc::Receiver<LineDiffResult>,
     workers: Vec<std::thread::JoinHandle<()>>,
 }
 
-type LineDiffState = (
-    gix::Repository,
-    gix::diff::blob::Platform,
-    Option<gix::diff::blob::Platform>,
-);
+type LineDiffState = (gix::diff::blob::Platform, Option<gix::diff::blob::Platform>);
 
 fn worktree_diff_cache(
     repository: &gix::Repository,
@@ -440,24 +445,65 @@ fn line_counts_for_change(
     Ok(counts.map(|counts| (counts.insertions, counts.removals)))
 }
 
-fn open_line_diff_state(repository_path: &Path, bare: bool) -> Result<LineDiffState> {
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not open repository for parallel line diffs")?;
-    repository.object_cache_size(OBJECT_CACHE_SIZE);
+fn line_diff_state(repository: &gix::Repository) -> Result<LineDiffState> {
     let tree_cache = repository
         .diff_resource_cache_for_tree_diff()
         .context("could not initialize parallel line diffs")?;
-    let worktree_cache = if bare {
-        None
-    } else {
-        worktree_diff_cache(&repository, gix::diff::blob::pipeline::Mode::ToGit)?
-    };
-    Ok((repository, tree_cache, worktree_cache))
+    let worktree_cache = worktree_diff_cache(repository, gix::diff::blob::pipeline::Mode::ToGit)?;
+    Ok((tree_cache, worktree_cache))
 }
 
 impl LineDiffPool {
+    fn new(repository_path: &Path, bare: bool, parallelism: usize) -> Self {
+        LineDiffPool {
+            repository_path: repository_path.to_owned(),
+            bare,
+            parallelism: parallelism.max(1),
+            active: None,
+            last_used: None,
+        }
+    }
+
+    fn line_counts(&mut self, changes: Vec<FileChange>) -> Result<Vec<(FileChange, LineCounts)>> {
+        if self.active.is_none() {
+            self.active = Some(LineDiffWorkers::new(
+                &self.repository_path,
+                self.bare,
+                self.parallelism,
+            )?);
+        }
+        let result = self
+            .active
+            .as_mut()
+            .expect("line diff workers were just initialized")
+            .line_counts(changes);
+        self.last_used = Some(Instant::now());
+        result
+    }
+
+    fn expire(&mut self, now: Instant) -> bool {
+        let expired = self
+            .last_used
+            .is_some_and(|last_used| now.saturating_duration_since(last_used) >= LINE_DIFF_POOL_IDLE);
+        if expired {
+            self.active = None;
+            self.last_used = None;
+        }
+        expired
+    }
+
+    fn idle_timeout(&self, now: Instant) -> Option<Duration> {
+        self.last_used
+            .map(|last_used| LINE_DIFF_POOL_IDLE.saturating_sub(now.saturating_duration_since(last_used)))
+    }
+}
+
+impl LineDiffWorkers {
     fn new(repository_path: &Path, bare: bool, parallelism: usize) -> Result<Self> {
-        drop(open_line_diff_state(repository_path, bare)?);
+        let repository = open_repository(repository_path, bare, false)
+            .context("could not open repository for parallel line diffs")?;
+        drop(line_diff_state(&repository)?);
+        let repository = repository.into_sync();
         let (result_sender, results) = mpsc::channel();
         let mut jobs = Vec::with_capacity(parallelism);
         let workers = (0..parallelism)
@@ -465,20 +511,22 @@ impl LineDiffPool {
                 let (job_sender, job_receiver) = mpsc::channel();
                 jobs.push(job_sender);
                 let result_sender = result_sender.clone();
-                let repository_path = repository_path.to_owned();
+                let repository = repository.clone();
                 std::thread::spawn(move || {
+                    let mut repository = repository.to_thread_local();
+                    repository.object_cache_size(OBJECT_CACHE_SIZE);
                     let mut state: Option<LineDiffState> = None;
                     while let Ok(message) = job_receiver.recv() {
                         match message {
                             LineDiffMessage::Job(job) => {
                                 let result = (|| {
                                     if state.is_none() {
-                                        state = Some(open_line_diff_state(&repository_path, bare)?);
+                                        state = Some(line_diff_state(&repository)?);
                                     }
-                                    let (repository, tree_cache, worktree_cache) =
+                                    let (tree_cache, worktree_cache) =
                                         state.as_mut().expect("line diff state was just initialized");
                                     let result = line_counts_for_change(
-                                        repository,
+                                        &repository,
                                         &job.change,
                                         tree_cache,
                                         worktree_cache.as_mut(),
@@ -507,7 +555,7 @@ impl LineDiffPool {
                 })
             })
             .collect();
-        Ok(LineDiffPool { jobs, results, workers })
+        Ok(LineDiffWorkers { jobs, results, workers })
     }
 
     fn line_counts(&mut self, changes: Vec<FileChange>) -> Result<Vec<(FileChange, LineCounts)>> {
@@ -551,7 +599,7 @@ impl LineDiffPool {
     }
 }
 
-impl Drop for LineDiffPool {
+impl Drop for LineDiffWorkers {
     fn drop(&mut self) {
         self.jobs.clear();
         for worker in self.workers.drain(..) {
@@ -566,13 +614,12 @@ fn sync_line_diff_pool(
     repository_path: &Path,
     bare: bool,
     parallelism: usize,
-) -> Result<()> {
+) {
     if visible && pool.is_none() {
-        *pool = Some(LineDiffPool::new(repository_path, bare, parallelism.max(1))?);
+        *pool = Some(LineDiffPool::new(repository_path, bare, parallelism));
     } else if !visible {
         *pool = None;
     }
-    Ok(())
 }
 
 enum FileDiff {
@@ -916,7 +963,7 @@ fn event_loop(
         &repository_path,
         repository_is_bare,
         line_diff_parallelism,
-    )?;
+    );
     if worktree_watcher_needed(repository_is_bare, app.changes_mode) {
         match start_worktree_watcher(&repository_path, repository_is_bare) {
             Ok(watcher) => worktree_watcher = Some(watcher),
@@ -962,6 +1009,9 @@ fn event_loop(
     let mut pending_todo_ref_changes = Vec::new();
     let mut pending_conflict_resolution: Option<PendingConflictResolution> = None;
     let result: Result<Option<Duration>> = (|| loop {
+        if let Some(pool) = line_diff_pool.as_mut() {
+            pool.expire(Instant::now());
+        }
         if let Some(mut recovered) =
             recover_event_loop_repository(&mut repository_path, &common_dir, &mut repository_is_bare)?
         {
@@ -985,7 +1035,7 @@ fn event_loop(
                 &repository_path,
                 true,
                 line_diff_parallelism,
-            )?;
+            );
             tracing::warn!(common_dir = %repository_path.display(), "worktree disappeared; recovered with common repository");
             ref_watcher = match start_ref_watcher(&repository_path, &repository_path) {
                 Ok(watcher) => Some(watcher),
@@ -1511,6 +1561,9 @@ fn event_loop(
         let retry_timeout = watcher_retry_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
         let history_status_timeout =
             history_status_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        let line_diff_timeout = line_diff_pool
+            .as_ref()
+            .and_then(|pool| pool.idle_timeout(Instant::now()));
         let wake_after = [
             repeat_timeout,
             watcher_timeout,
@@ -1518,6 +1571,7 @@ fn event_loop(
             worktree_timeout,
             retry_timeout,
             history_status_timeout,
+            line_diff_timeout,
         ]
         .into_iter()
         .flatten()
@@ -1889,7 +1943,7 @@ fn event_loop(
                     &repository_path,
                     repository_is_bare,
                     line_diff_parallelism,
-                )?;
+                );
                 if worktree_watcher.is_none() {
                     match start_worktree_watcher(&repository_path, repository_is_bare) {
                         Ok(watcher) => worktree_watcher = Some(watcher),
@@ -2155,7 +2209,7 @@ fn event_loop(
                 &repository_path,
                 repository_is_bare,
                 line_diff_parallelism,
-            )?;
+            );
             if app.changes_mode == Some(ChangesMode::Both) {
                 invalidate_worktree_changes(&mut worktree_changes);
                 worktree_watch_set_changed = false;
@@ -6963,19 +7017,13 @@ mod tests {
     fn loads_changes_against_each_merge_parent() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
         let repository = crate::test_repository::open(&fixture)?;
-        let mut line_diff_pool = None;
-        sync_line_diff_pool(&mut line_diff_pool, true, &fixture, false, 2)?;
-        assert_eq!(
-            line_diff_pool.as_ref().map(|pool| pool.workers.len()),
-            Some(2),
-            "showing changes creates the requested worker pool"
+        let mut line_diff_pool_slot = None;
+        sync_line_diff_pool(&mut line_diff_pool_slot, true, &fixture, false, 2);
+        let line_diff_pool = line_diff_pool_slot.as_mut().expect("changes enable the line diff pool");
+        assert!(
+            line_diff_pool.active.is_none(),
+            "workers start only with an uncached diff"
         );
-        sync_line_diff_pool(&mut line_diff_pool, false, &fixture, false, 2)?;
-        assert!(line_diff_pool.is_none(), "hiding changes destroys the worker pool");
-        sync_line_diff_pool(&mut line_diff_pool, true, &fixture, false, 2)?;
-        let line_diff_pool = line_diff_pool
-            .as_mut()
-            .expect("showing changes recreates the worker pool");
 
         let root = load_changes(
             &repository,
@@ -6985,6 +7033,28 @@ mod tests {
             },
             line_diff_pool,
         )?;
+        assert_eq!(
+            line_diff_pool.active.as_ref().map(|active| active.workers.len()),
+            Some(2),
+            "an uncached diff creates the requested workers"
+        );
+        let started = Instant::now();
+        line_diff_pool.last_used = Some(started);
+        let just_before_expiry = started + LINE_DIFF_POOL_IDLE.saturating_sub(Duration::from_nanos(1));
+        assert_eq!(
+            line_diff_pool.idle_timeout(just_before_expiry),
+            Some(Duration::from_nanos(1)),
+            "the event loop can wake exactly when workers expire"
+        );
+        assert!(
+            !line_diff_pool.expire(just_before_expiry),
+            "workers remain available until their idle timeout"
+        );
+        assert!(
+            line_diff_pool.expire(started + LINE_DIFF_POOL_IDLE),
+            "workers expire exactly at their idle timeout"
+        );
+        assert!(line_diff_pool.active.is_none(), "expiry releases every worker");
         assert_eq!(
             root.paths,
             [PathChange {
@@ -7055,6 +7125,10 @@ mod tests {
             parent: 0,
         };
         let topic = load_changes(&repository, topic_target, line_diff_pool)?;
+        assert!(
+            line_diff_pool.active.is_some(),
+            "the next uncached diff recreates workers"
+        );
         assert_eq!(
             topic.paths,
             [
@@ -7255,6 +7329,11 @@ mod tests {
             first_parent.parent,
             "parent selection wraps around"
         );
+        sync_line_diff_pool(&mut line_diff_pool_slot, false, &fixture, false, 2);
+        assert!(
+            line_diff_pool_slot.is_none(),
+            "hiding changes immediately releases the pool"
+        );
         Ok(())
     }
 
@@ -7269,8 +7348,17 @@ mod tests {
             Some(true),
             "repository configuration suppresses worktree operations"
         );
-        assert!(
-            LineDiffPool::new(&git_dir, true, 1).is_ok(),
+        let mut line_diff_pool = LineDiffPool::new(&git_dir, true, 1);
+        let root = repository.rev_parse_single("v1^{}")?.detach();
+        assert_eq!(
+            load_changes(
+                &repository,
+                app::TreeDiffTarget::Commit { id: root, parent: 0 },
+                &mut line_diff_pool,
+            )?
+            .paths
+            .len(),
+            1,
             "tree changes remain available without a worktree"
         );
         Ok(())
@@ -7399,7 +7487,7 @@ mod tests {
         std::fs::write(path.join("ignored"), "ignored\n")?;
 
         let repository = test_repository::open(path)?;
-        let mut line_diff_pool = LineDiffPool::new(path, false, 2)?;
+        let mut line_diff_pool = LineDiffPool::new(path, false, 2);
         let changes = load_worktree_changes(&repository, &mut line_diff_pool)?;
         let rows: Vec<_> = changes
             .paths

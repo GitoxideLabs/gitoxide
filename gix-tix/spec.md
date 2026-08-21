@@ -642,8 +642,12 @@ space first; changes blocks adapt within the remaining history width.
 - Tree diff results, detached diff resources, and line counts use a bounded MRU
   while changes remain enabled. Worktree results are cached separately and
   invalidated by relevant filesystem events.
-- Per-file line information is computed once in an `available_parallelism`
-  worker pool that exists only while changes are enabled.
+- Per-file line information is computed once in a lazily activated
+  `available_parallelism` worker pool. One repository is opened per activation
+  and cheaply cloned into thread-local worker handles; per-batch diff platforms
+  are discarded after use. Ten seconds without a completed line-count batch
+  joins the workers and releases their repositories. The next uncached diff
+  reactivates the pool, while hiding changes drops it immediately.
 
 ### Diffs
 
@@ -1224,7 +1228,9 @@ space first; changes blocks adapt within the remaining history width.
 ## Resource and responsiveness invariants
 
 - No `gix::Repository`, commit-graph, object platform, notes platform, or other
-  repository-owning value may remain in idle application/event-loop state.
+  repository-owning value may remain in idle application/event-loop state,
+  except line-diff worker repositories during their bounded ten-second reuse
+  window.
 - Hidden-revision startup validation returns only detached revision and warning
   data; its temporary repository is dropped before terminal initialization and
   the event loop.
@@ -1236,8 +1242,10 @@ space first; changes blocks adapt within the remaining history width.
   during continuous key-repeat or mouse navigation. It is dropped after the
   75 ms idle boundary.
 - Traversal and incremental refresh workers may use a bounded object cache and
-  must drop their repository when finished. Lane, verification, and line-diff
-  workers exist only for active work and do not form persistent pools.
+  must drop their repository when finished. Lane and verification workers exist
+  only for active work. Line-diff workers may remain for ten seconds after their
+  latest batch, then are joined together and release their shared repository
+  resources.
 - Change IDs are scanned only while configured hidden tips are actively excluded.
   Unrestricted and explicitly expanded views perform no scan. A refresh keeps
   the current projection's IDs until it has synchronously scanned the replacement,
