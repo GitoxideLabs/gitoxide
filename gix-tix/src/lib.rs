@@ -3266,6 +3266,7 @@ fn event_loop(
                     match result {
                         Ok(edit::time_travel::Perform::Complete {
                             notice: Some(notice),
+                            selected,
                             ref_changes,
                             ..
                         }) => {
@@ -3278,20 +3279,18 @@ fn event_loop(
                                 &ref_changes,
                                 notice,
                             );
-                            if let Ok(head) = open_repository(&repository_path, repository_is_bare, false)
-                                .and_then(|repo| Ok(repo.head_id()?.detach()))
-                            {
-                                app.select_commit_after_refresh(head);
-                            }
+                            app.select_commit_after_refresh(selected);
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
                         Ok(edit::time_travel::Perform::Complete {
                             notice: None,
+                            selected,
                             ref_changes,
                             ..
                         }) => {
                             if !ref_changes.is_empty() {
+                                app.select_commit_after_refresh(selected);
                                 leave_recorded_success(
                                     &mut app,
                                     &repository_path,
@@ -3300,6 +3299,8 @@ fn event_loop(
                                     &ref_changes,
                                     "time-travelled",
                                 );
+                                invalidate_worktree_changes(&mut worktree_changes);
+                                refresh_pending = true;
                             }
                         }
                         Ok(edit::time_travel::Perform::Conflict(conflict)) => {
