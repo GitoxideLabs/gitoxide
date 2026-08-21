@@ -1,3 +1,20 @@
+mod hex_output {
+    use crate::hex_to_id;
+
+    #[test]
+    fn writes_only_the_significant_hex_digits() {
+        let prefix =
+            gix_hash::Prefix::new(&hex_to_id("abcdefabcdefabcdefabcdefabcdefabcdefabcd"), 7).expect("valid prefix");
+        let mut buf = [0; 7];
+        assert_eq!(prefix.hex_to_buf(&mut buf), "abcdefa");
+        assert_eq!(prefix.to_string(), "abcdefa");
+
+        let mut written = Vec::new();
+        prefix.write_hex_to(&mut written).expect("in-memory writes succeed");
+        assert_eq!(written, b"abcdefa");
+    }
+}
+
 mod cmp_oid {
     use std::cmp::Ordering;
 
