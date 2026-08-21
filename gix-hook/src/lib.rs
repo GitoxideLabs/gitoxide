@@ -19,6 +19,9 @@
 //! [`reference_transaction_args()`], [`reference_transaction_stdin()`]) rather than reusing the
 //! receive-side helpers, since its stdin values may be `ref:`-prefixed symbolic targets instead
 //! of always being object ids.
+//!
+//! [`no_editor_env()`] sets `GIT_EDITOR=:` for `pre-commit`/`pre-merge-commit`, when the
+//! caller's own commit flow won't show an editor.
 #![deny(missing_docs, rust_2018_idioms)]
 #![forbid(unsafe_code)]
 
@@ -166,6 +169,24 @@ pub const ADVISORY_HOOKS: &[&str] = &[
 /// about, and an unrecognized name is safest treated as gating.
 pub fn is_gating(name: &str) -> bool {
     !ADVISORY_HOOKS.contains(&name)
+}
+
+/// Set `GIT_EDITOR=:` for the `pre-commit`/`pre-merge-commit` hooks, telling them no editor
+/// will be launched to modify the commit message for the pending commit.
+///
+/// Per `githooks(5)`: "All the git commit hooks are invoked with the environment variable
+/// `GIT_EDITOR=:` if the command will not bring up an editor to modify the commit message." So
+/// call this only when the caller's own commit flow won't show one (for example, `git commit
+/// -m` never does) - the same "caller decides whether it applies" shape as
+/// [`push_option_env()`].
+///
+/// Git itself hardcodes `":"` unconditionally, with no platform-specific branching (see
+/// `commit.c`'s `run_commit_hook()`: `if (!editor_is_used) strvec_push(&opt.env,
+/// "GIT_EDITOR=:");`) - even on Windows, where `:` isn't a native `cmd.exe` no-op, because Git
+/// for Windows' own hook execution runs through its bundled MSYS2 `sh`, where it behaves the
+/// same as on Unix. This function matches that: the same value on every platform.
+pub fn no_editor_env(prepared: gix_command::Prepare) -> gix_command::Prepare {
+    prepared.env("GIT_EDITOR", ":")
 }
 
 /// Add the push options git passes to `pre-receive` and `post-receive` when invoked via
@@ -410,6 +431,17 @@ mod tests {
             assert!(env.contains(&("GIT_PUSH_OPTION_COUNT".into(), "2".into())));
             assert!(env.contains(&("GIT_PUSH_OPTION_0".into(), "ci.skip".into())));
             assert!(env.contains(&("GIT_PUSH_OPTION_1".into(), "reviewer=jane".into())));
+        }
+    }
+
+    mod no_editor_env {
+        use crate::{command, no_editor_env};
+
+        #[test]
+        fn sets_git_editor_to_a_no_op() {
+            let prepared = command("pre-commit".as_ref(), "/repo/.git".as_ref(), "/repo".as_ref());
+            let env = super::env_of(no_editor_env(prepared));
+            assert!(env.contains(&("GIT_EDITOR".into(), ":".into())));
         }
     }
 
