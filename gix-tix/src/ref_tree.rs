@@ -355,9 +355,9 @@ impl Tree {
                 _ => return Input::Handled,
             };
             if key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('U' | 'D' | 'B' | 'F')) {
-                self.page(direction, amount);
-            } else {
                 self.pan(direction, amount);
+            } else {
+                self.page(direction, amount);
             }
             return Input::Handled;
         }
@@ -503,7 +503,7 @@ impl Tree {
                 |id| format!("Space counts:{}", self.node_label(id)),
             );
             format!(
-                "ref-tree · {counts} · g top · G root · T tags:{tags} · Shift+directions topo · mouse/pages pan · Shift+mouse/pages cursor · <enter> pin · e edit · t/Esc history"
+                "ref-tree · {counts} · g top · G root · T tags:{tags} · Shift+directions topo · mouse pan · Shift+mouse cursor · pages cursor · Shift+pages pan · <enter> pin · e edit · t/Esc history"
             )
         };
         frame.render_widget(
@@ -779,9 +779,9 @@ impl Tree {
     fn page_or_pan(&mut self, direction: Direction, modifiers: KeyModifiers) {
         let amount = self.offset().page_height.max(1);
         if modifiers.contains(KeyModifiers::SHIFT) {
-            self.page(direction, amount);
-        } else {
             self.pan(direction, amount);
+        } else {
+            self.page(direction, amount);
         }
     }
 
@@ -2273,7 +2273,7 @@ mod tests {
     }
 
     #[test]
-    fn plain_pages_and_mouse_pan_while_shift_moves_the_cursor() {
+    fn plain_pages_move_the_cursor_while_shift_pages_and_plain_mouse_pan() {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
@@ -2296,32 +2296,37 @@ mod tests {
             .height
             .saturating_sub(tree.offset.page_height);
         tree.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
-        assert_eq!(tree.selected, Some(first), "plain PageDown leaves the cursor alone");
-        assert!(tree.offset.y > 0, "plain PageDown pans the viewport");
-
-        tree.offset.y = 0;
-        tree.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT));
         let full_page = tree.selected.expect("PageDown retains a selection");
         let full_page_y = points[full_page].y;
-        assert!(full_page_y > first_y, "Shift-PageDown advances the ref-tree cursor");
+        assert!(full_page_y > first_y, "plain PageDown advances the ref-tree cursor");
         assert!(
             tree.ensure_visible,
-            "shifted page navigation keeps the new cursor visible"
+            "plain page navigation keeps the new cursor visible"
         );
 
         tree.selected = Some(first);
-        tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
-        assert_eq!(tree.selected, Some(first), "plain Ctrl-d leaves the cursor alone");
+        tree.offset.y = 0;
+        tree.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT));
+        assert_eq!(tree.selected, Some(first), "Shift-PageDown leaves the cursor alone");
+        assert!(tree.offset.y > 0, "Shift-PageDown pans the viewport");
 
+        tree.selected = Some(first);
+        tree.offset.y = 0;
+        tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        let half_page_y = points[tree.selected.expect("Ctrl-d retains a selection")].y;
+        assert!(
+            half_page_y > first_y && half_page_y <= full_page_y,
+            "plain half-page navigation advances no farther than a full page"
+        );
+
+        tree.selected = Some(first);
+        tree.offset.y = 0;
         tree.handle_key(KeyEvent::new(
             KeyCode::Char('d'),
             KeyModifiers::CONTROL | KeyModifiers::SHIFT,
         ));
-        let half_page_y = points[tree.selected.expect("Ctrl-d retains a selection")].y;
-        assert!(
-            half_page_y > first_y && half_page_y <= full_page_y,
-            "half-page navigation advances no farther than a full page"
-        );
+        assert_eq!(tree.selected, Some(first), "Shift-Ctrl-d leaves the cursor alone");
+        assert!(tree.offset.y > 0, "Shift-Ctrl-d pans by half a viewport");
 
         tree.selected = Some(first);
         tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));

@@ -362,10 +362,10 @@ without trading responsiveness for metadata that is not visible.
   toward roots, and Left/Right chooses a remembered child; `i/n` and an
   emphasized edge always show the choice.
 - `g` selects the top ref-tree node, and `Shift-G` selects the root of the current
-  component. Unshifted mouse and full- or half-page Ctrl/Page input pan the
-  viewport without moving the cursor. Shift-mouse moves to the nearest node;
-  shifted Ctrl/Page input moves the cursor by the corresponding viewport
-  distance and keeps it visible, matching history navigation.
+  component. Unshifted mouse pans the viewport, while Shift-mouse moves to the
+  nearest node. Unshifted full- or half-page Ctrl/Page input moves the cursor by
+  the corresponding viewport distance and keeps it visible; shifted Ctrl/Page
+  input pans the viewport without moving the cursor.
 - `e` opens node-level reference editing. `d` deletes every eligible local branch
   immediately. `e r` is offered only when selected remote-tracking references
   map uniquely through a named remote's fetch refspecs; it deletes every resolved
