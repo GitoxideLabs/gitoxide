@@ -143,6 +143,12 @@ pub(crate) fn materialize_plan_conflict_reporting(
     Vec<super::undo::RefChange>,
 )> {
     let original = conflict.original();
+    let mapped_head = conflict
+        .repository()
+        .head()?
+        .id()
+        .map(gix::Id::detach)
+        .map(|id| (id, conflict.map(id)));
     let mut conflict = conflict.into_conflict().persist()?;
     let mut ref_changes = std::mem::take(&mut conflict.ref_changes);
     let (notice, mut checkout_changes) = move_head_to_reporting(
@@ -152,7 +158,10 @@ pub(crate) fn materialize_plan_conflict_reporting(
         None,
         revisions,
         include_worktrees,
-        |id| conflict.map(id),
+        |id| match mapped_head {
+            Some((head, mapped)) if head == id => mapped,
+            _ => conflict.map(id),
+        },
     )?;
     ref_changes.append(&mut checkout_changes);
     let mut deletion_changes = delete_deferred_refs(repository_path, bare, &conflict.deferred_ref_deletions)?;
@@ -178,17 +187,16 @@ pub(crate) fn checkout_without_replay(
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<Option<String>> {
-    Ok(checkout_without_replay_reporting(repository_path, bare, selected, revisions, include_worktrees)?.0)
-}
-
-pub(crate) fn checkout_without_replay_reporting(
-    repository_path: &Path,
-    bare: bool,
-    selected: ObjectId,
-    revisions: &[OsString],
-    include_worktrees: bool,
-) -> Result<(Option<String>, Vec<super::undo::RefChange>)> {
-    move_head(repository_path, bare, selected, revisions, include_worktrees)
+    Ok(move_head_to_reporting(
+        repository_path,
+        bare,
+        selected,
+        None,
+        revisions,
+        include_worktrees,
+        Some,
+    )?
+    .0)
 }
 
 #[cfg(test)]
@@ -276,24 +284,6 @@ pub(crate) fn checkout_plan_reporting(
     let mut deletion_changes = delete_deferred_refs(repository_path, bare, &outcome.deferred_ref_deletions)?;
     ref_changes.append(&mut deletion_changes);
     Ok((notice, ref_changes))
-}
-
-fn move_head(
-    repository_path: &Path,
-    bare: bool,
-    selected: ObjectId,
-    revisions: &[OsString],
-    include_worktrees: bool,
-) -> Result<(Option<String>, Vec<super::undo::RefChange>)> {
-    move_head_to_reporting(
-        repository_path,
-        bare,
-        selected,
-        None,
-        revisions,
-        include_worktrees,
-        Some,
-    )
 }
 
 #[cfg(test)]

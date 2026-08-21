@@ -597,7 +597,7 @@ mod tests {
             "the materialized conflict commit records the ours tree"
         );
 
-        std::fs::write(fixture.path().join("file"), b"base\n")?;
+        std::fs::write(fixture.path().join("file"), b"resolved first\n")?;
         assert!(
             Command::new("git")
                 .arg("-C")
@@ -606,16 +606,32 @@ mod tests {
                 .status()?
                 .success()
         );
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["commit", "-q", "--amend", "--no-edit"])
+                .status()?
+                .success(),
+            "resolving through the CLI may amend the materialized conflict before continuing"
+        );
         let repo = crate::test_repository::open_with(
             fixture.path(),
             ["user.name=todo author", "user.email=todo@example.com"],
         )?;
+        let first_resolution = repo.head_id()?.detach();
         let next_output = output_dir.path().join("continue-again.md");
         let err = apply_document(repo, &continuation, Some(&next_output))
             .expect_err("the descendant conflict stops the continuation");
         assert!(
             format!("{err:#}").contains("materialized conflict"),
             "the second conflict is materialized: {err:#}"
+        );
+        assert!(
+            crate::history::all_pins(&crate::test_repository::open(fixture.path())?)?
+                .iter()
+                .all(|pin| pin.id != first_resolution),
+            "continuing does not pin the superseded CLI resolution"
         );
         std::fs::write(fixture.path().join("file"), b"resolved again\n")?;
         assert!(
@@ -625,6 +641,15 @@ mod tests {
                 .args(["add", "file"])
                 .status()?
                 .success()
+        );
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["commit", "-q", "--amend", "--no-edit"])
+                .status()?
+                .success(),
+            "the final conflict may also be amended before continuing"
         );
         let repo = crate::test_repository::open_with(
             fixture.path(),
