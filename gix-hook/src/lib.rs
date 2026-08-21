@@ -172,6 +172,14 @@ pub fn is_gating(name: &str) -> bool {
 /// Per `githooks(5)`: "If it is negotiated to not use the push options phase, the environment
 /// variables will not be set" - so omit this call entirely rather than passing an empty slice
 /// when push options were never negotiated for the push.
+///
+/// Option values are passed through unvalidated, unlike [`receive_stdin()`]'s ref names: git
+/// itself treats push options as free-form text with no format to check against, and each one
+/// becomes a single, discrete environment variable via [`Prepare::env()`](gix_command::Prepare::env())
+/// rather than a field in a wire format this crate constructs - so there's no delimiter for a
+/// crafted value to inject through. The one real OS-level hazard, an embedded NUL byte, is
+/// already handled: `std::process::Command` reports that as an `io::Error` at `spawn()` rather
+/// than silently corrupting or truncating anything.
 pub fn push_option_env(prepared: gix_command::Prepare, options: &[impl AsRef<str>]) -> gix_command::Prepare {
     let mut prepared = prepared.env("GIT_PUSH_OPTION_COUNT", options.len().to_string());
     for (index, option) in options.iter().enumerate() {
