@@ -24,6 +24,9 @@
 
 use std::path::{Path, PathBuf};
 
+mod error;
+pub use error::Error;
+
 /// The default directory name, relative to `$GIT_DIR`, that holds hook scripts.
 pub const HOOKS_DIR: &str = "hooks";
 
@@ -98,11 +101,11 @@ pub fn command(hook: &Path, git_dir: &Path, cwd: &Path) -> gix_command::Prepare 
 pub fn hooks_path_from_config(
     config: &gix_config::File,
     ctx: gix_config::path::interpolate::Context<'_>,
-) -> Result<Option<PathBuf>, gix_config::path::interpolate::Error> {
-    config
+) -> Result<Option<PathBuf>, Error> {
+    Ok(config
         .path("core.hooksPath")
         .map(|path| path.interpolate(ctx))
-        .transpose()
+        .transpose()?)
 }
 
 /// The result of a hook process running to completion.
@@ -128,7 +131,7 @@ impl From<std::process::ExitStatus> for Outcome {
 }
 
 /// Spawn `prepared` and wait for it to exit, classifying the result as an [`Outcome`].
-pub fn run(prepared: gix_command::Prepare) -> std::io::Result<Outcome> {
+pub fn run(prepared: gix_command::Prepare) -> Result<Outcome, Error> {
     let status = prepared.spawn()?.wait()?;
     Ok(status.into())
 }
@@ -255,7 +258,7 @@ pub fn update_args(
     ref_name: &str,
     old_oid: &gix_hash::oid,
     new_oid: &gix_hash::oid,
-) -> Result<gix_command::Prepare, gix_validate::reference::name::Error> {
+) -> Result<gix_command::Prepare, Error> {
     gix_validate::reference::name(ref_name.into())?;
     Ok(prepared
         .arg(ref_name)
@@ -275,7 +278,7 @@ pub fn update_args(
 /// example, one containing a newline) could otherwise inject a bogus extra line.
 pub fn receive_stdin<'a>(
     updates: impl IntoIterator<Item = (&'a gix_hash::oid, &'a gix_hash::oid, &'a str)>,
-) -> Result<Vec<u8>, gix_validate::reference::name::Error> {
+) -> Result<Vec<u8>, Error> {
     use std::io::Write;
 
     let mut buf = Vec::new();
@@ -348,7 +351,7 @@ pub enum TransactionValue<'a> {
 /// so it's validated the same way as `ref_name` - not just the object-id case.
 pub fn reference_transaction_stdin<'a>(
     updates: impl IntoIterator<Item = (TransactionValue<'a>, TransactionValue<'a>, &'a str)>,
-) -> Result<Vec<u8>, gix_validate::reference::name::Error> {
+) -> Result<Vec<u8>, Error> {
     use std::io::Write;
 
     fn validate_and_write(

@@ -25,6 +25,7 @@ gix-command = { version = "^0.9.2", path = "../gix-command" }
 gix-config = { version = "^0.59.0", path = "../gix-config" }
 gix-hash = { version = "^0.26.0", path = "../gix-hash" }
 gix-validate = { version = "^0.11.3", path = "../gix-validate" }
+thiserror = "2.0.18"
 
 [dev-dependencies]
 gix-hook = { path = ".", features = ["sha1", "sha256"] }
