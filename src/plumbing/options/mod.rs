@@ -165,12 +165,7 @@ pub enum Subcommands {
     Log(log::Platform),
     /// Interactively browse commits and their graph.
     #[cfg(feature = "tix")]
-    #[clap(
-        visible_alias = "tui",
-        visible_alias = "interactive",
-        visible_alias = "i",
-        disable_help_flag = true
-    )]
+    #[clap(visible_alias = "tui", visible_alias = "interactive", visible_alias = "i")]
     Tix(gix_tix::command::Platform),
     Worktree(worktree::Platform),
     /// Subcommands that need no Git repository to run.
