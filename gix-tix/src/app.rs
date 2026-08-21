@@ -340,6 +340,12 @@ pub(crate) enum Action {
     MoveDown,
     MoveUpBy(usize),
     MoveDownBy(usize),
+    TopologicalUp,
+    TopologicalDown,
+    PanUpBy(usize),
+    PanDownBy(usize),
+    PreviousChild,
+    NextChild,
     CycleDuplicate,
     ScrollLeft,
     ScrollRight,
@@ -524,6 +530,7 @@ pub(crate) struct App {
     test_lanes: Vec<String>,
     pub selected: Option<usize>,
     pub offset: usize,
+    viewport_panned: bool,
     pub state: State,
     pub(crate) deferred_history_state: Option<State>,
     pub viewport_rows: usize,
@@ -570,6 +577,7 @@ pub(crate) struct App {
     pub(crate) actions_expanded: bool,
     pub(crate) enrich_expanded: bool,
     pub(crate) information_expanded: bool,
+    topo_children: HashMap<ObjectId, ObjectId>,
     forget_confirmation: Option<ObjectId>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
@@ -632,6 +640,7 @@ impl App {
             test_lanes: Vec::new(),
             selected: None,
             offset: 0,
+            viewport_panned: false,
             state: State::Loading,
             deferred_history_state: None,
             viewport_rows,
@@ -678,6 +687,7 @@ impl App {
             actions_expanded: false,
             enrich_expanded: false,
             information_expanded: false,
+            topo_children: HashMap::new(),
             forget_confirmation: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
@@ -1144,6 +1154,13 @@ impl App {
         )
     }
 
+    fn history_row(&self, index: usize) -> Option<&CommitRow> {
+        self.active_compressed_history().map_or_else(
+            || self.rows.get(index).map(Arc::as_ref),
+            |history| history.rows.get(index).map(Arc::as_ref),
+        )
+    }
+
     pub(crate) fn history_index(&self, canonical_index: usize) -> Option<usize> {
         self.active_compressed_history().map_or_else(
             || (canonical_index < self.rows.len()).then_some(canonical_index),
@@ -1253,6 +1270,136 @@ impl App {
                 .is_some_and(|members| members.iter().copied().any(selectable)),
             None => false,
         }
+    }
+
+    fn topological_positions(&self) -> HashMap<ObjectId, usize> {
+        (0..self.history_len())
+            .filter_map(|index| self.history_row(index).map(|row| (row.id, index)))
+            .collect()
+    }
+
+    fn topological_graph(&self) -> Option<&Graph> {
+        self.active_compressed_history()
+            .map(|history| &history.graph)
+            .or(self.graph.as_ref())
+    }
+
+    fn topological_parent_from_rows(
+        &self,
+        index: usize,
+        positions: &HashMap<ObjectId, usize>,
+        stop: Option<usize>,
+    ) -> Option<usize> {
+        let mut parent = self.history_row(index)?.parent_ids.first().copied();
+        while let Some(id) = parent {
+            let index = *positions.get(&id)?;
+            if stop == Some(index) || self.history_entry_selectable(index) {
+                return Some(index);
+            }
+            parent = self.history_row(index)?.parent_ids.first().copied();
+        }
+        None
+    }
+
+    fn topological_parent(&self, index: usize, stop: Option<usize>) -> Option<usize> {
+        if let Some(graph) = self.topological_graph() {
+            let mut parent = graph.first_parents.get(index).copied().flatten();
+            while let Some(index) = parent {
+                if stop == Some(index) || self.history_entry_selectable(index) {
+                    return Some(index);
+                }
+                parent = graph.first_parents.get(index).copied().flatten();
+            }
+            return None;
+        }
+        self.topological_parent_from_rows(index, &self.topological_positions(), stop)
+    }
+
+    fn topological_children(&self, parent: usize) -> Vec<usize> {
+        if let Some(graph) = self.topological_graph() {
+            let mut pending = graph
+                .first_parent_children
+                .get(parent)
+                .into_iter()
+                .flatten()
+                .rev()
+                .copied()
+                .collect::<Vec<_>>();
+            let mut children = Vec::new();
+            while let Some(child) = pending.pop() {
+                if self.history_entry_selectable(child) {
+                    children.push(child);
+                } else if let Some(descendants) = graph.first_parent_children.get(child) {
+                    pending.extend(descendants.iter().rev().copied());
+                }
+            }
+            children.sort_unstable();
+            return children;
+        }
+        let positions = self.topological_positions();
+        (0..self.history_len())
+            .filter(|index| {
+                self.history_entry_selectable(*index)
+                    && self.topological_parent_from_rows(*index, &positions, Some(parent)) == Some(parent)
+            })
+            .collect()
+    }
+
+    fn topological_child_index(&self, parent: usize, children: &[usize]) -> usize {
+        self.history_row(parent)
+            .and_then(|row| self.topo_children.get(&row.id))
+            .and_then(|chosen| {
+                children
+                    .iter()
+                    .position(|child| self.history_row(*child).is_some_and(|row| row.id == *chosen))
+            })
+            .unwrap_or_default()
+    }
+
+    fn move_topologically(&mut self, down: bool) -> bool {
+        let Some(selected) = self.selected_history_index() else {
+            return false;
+        };
+        let next = if down {
+            self.topological_parent(selected, None)
+        } else {
+            let children = self.topological_children(selected);
+            children.get(self.topological_child_index(selected, &children)).copied()
+        };
+        let Some(next) = next else { return false };
+        self.select_history_index(next);
+        true
+    }
+
+    fn adjust_topological_child(&mut self, right: bool) {
+        let Some(selected) = self.selected_history_index() else {
+            return;
+        };
+        let children = self.topological_children(selected);
+        let Some(last) = children.len().checked_sub(1) else {
+            return;
+        };
+        let current = self.topological_child_index(selected, &children);
+        let next = if right {
+            current.saturating_add(1).min(last)
+        } else {
+            current.saturating_sub(1)
+        };
+        let Some((parent, child)) = self
+            .history_row(selected)
+            .zip(self.history_row(children[next]))
+            .map(|(parent, child)| (parent.id, child.id))
+        else {
+            return;
+        };
+        self.topo_children.insert(parent, child);
+    }
+
+    pub(crate) fn topological_choice(&self) -> Option<(usize, usize)> {
+        self.topological_graph()?;
+        let selected = self.selected_history_index()?;
+        let children = self.topological_children(selected);
+        (children.len() > 1).then(|| (self.topological_child_index(selected, &children) + 1, children.len()))
     }
 
     fn select_history_index(&mut self, display: usize) {
@@ -1435,10 +1582,24 @@ impl App {
             Action::MoveDown if self.changes_focus.is_some() => self.move_changes(1, true),
             Action::MoveUpBy(distance) if self.changes_focus.is_some() => self.move_changes(distance, false),
             Action::MoveDownBy(distance) if self.changes_focus.is_some() => self.move_changes(distance, true),
-            Action::MoveUp => self.move_reachable(1, false),
-            Action::MoveDown => self.move_reachable(1, true),
-            Action::MoveUpBy(distance) => self.move_reachable(distance, false),
-            Action::MoveDownBy(distance) => self.move_reachable(distance, true),
+            Action::MoveUp => self.move_selection(1, false),
+            Action::MoveDown => self.move_selection(1, true),
+            Action::MoveUpBy(distance) => self.move_selection(distance, false),
+            Action::MoveDownBy(distance) => self.move_selection(distance, true),
+            Action::TopologicalUp => {
+                self.pending_initial_selection = None;
+                self.move_topologically(false);
+            }
+            Action::TopologicalDown => {
+                self.pending_initial_selection = None;
+                self.move_topologically(true);
+            }
+            Action::PanUpBy(distance) => self.pan_history(distance, false),
+            Action::PanDownBy(distance) => self.pan_history(distance, true),
+            Action::PreviousChild if self.changes_focus.is_some() => self.pan_horizontal(false),
+            Action::NextChild if self.changes_focus.is_some() => self.pan_horizontal(true),
+            Action::PreviousChild => self.adjust_topological_child(false),
+            Action::NextChild => self.adjust_topological_child(true),
             Action::CycleDuplicate => {
                 if self.changes_focus.is_none()
                     && self.reachable_rows.is_none()
@@ -1447,23 +1608,8 @@ impl App {
                     self.select(selected);
                 }
             }
-            Action::ScrollLeft => {
-                if self.changes_focus.is_some() {
-                    self.pan_changes(false);
-                } else {
-                    self.horizontal_offset = self.horizontal_offset.saturating_sub(self.horizontal_page);
-                }
-            }
-            Action::ScrollRight => {
-                if self.changes_focus.is_some() {
-                    self.pan_changes(true);
-                } else {
-                    self.horizontal_offset = self
-                        .horizontal_offset
-                        .saturating_add(self.horizontal_page)
-                        .min(self.horizontal_max);
-                }
-            }
+            Action::ScrollLeft => self.pan_horizontal(false),
+            Action::ScrollRight => self.pan_horizontal(true),
             Action::HalfPageUp if self.changes_focus.is_some() => {
                 self.move_changes((self.focused_changes().visible_paths() / 2).max(1), false);
             }
@@ -2272,7 +2418,7 @@ impl App {
         {
             self.center_selection();
         } else {
-            self.ensure_visible();
+            self.prepare_history_viewport();
         }
     }
 
@@ -2304,6 +2450,7 @@ impl App {
         self.test_lanes.clear();
         self.selected = None;
         self.offset = 0;
+        self.viewport_panned = false;
         self.state = State::Loading;
         self.lane_time = None;
         self.estimated_lane_width = 0;
@@ -2428,6 +2575,31 @@ impl App {
         };
     }
 
+    fn pan_horizontal(&mut self, right: bool) {
+        if self.changes_focus.is_some() {
+            self.pan_changes(right);
+        } else if right {
+            self.horizontal_offset = self
+                .horizontal_offset
+                .saturating_add(self.horizontal_page)
+                .min(self.horizontal_max);
+        } else {
+            self.horizontal_offset = self.horizontal_offset.saturating_sub(self.horizontal_page);
+        }
+    }
+
+    fn pan_history(&mut self, distance: usize, down: bool) {
+        self.pending_initial_selection = None;
+        self.follow_tail = false;
+        self.viewport_panned = true;
+        let max = self.history_len().saturating_sub(self.viewport_rows.max(1));
+        self.offset = if down {
+            self.offset.saturating_add(distance.max(1)).min(max)
+        } else {
+            self.offset.saturating_sub(distance.max(1))
+        };
+    }
+
     fn move_selection(&mut self, distance: usize, down: bool) {
         self.pending_initial_selection = None;
         let Some(display_selected) = self.selected_history_index() else {
@@ -2469,10 +2641,6 @@ impl App {
         ((selected + 1)..self.rows.len())
             .chain(0..selected)
             .find(|index| self.change_id(self.rows[*index].id) == change_id)
-    }
-
-    fn move_reachable(&mut self, distance: usize, down: bool) {
-        self.move_selection(distance, down);
     }
 
     fn compute_reachable_rows(&mut self) {
@@ -3001,6 +3169,7 @@ impl App {
     }
 
     pub(crate) fn ensure_visible(&mut self) {
+        self.viewport_panned = false;
         let Some(selected) = self.selected_history_index() else {
             return;
         };
@@ -3011,6 +3180,16 @@ impl App {
             self.offset = selected + 1 - height;
         }
         self.offset = self.offset.min(self.history_len().saturating_sub(height));
+    }
+
+    pub(crate) fn prepare_history_viewport(&mut self) {
+        if self.viewport_panned {
+            self.offset = self
+                .offset
+                .min(self.history_len().saturating_sub(self.viewport_rows.max(1)));
+        } else {
+            self.ensure_visible();
+        }
     }
 
     pub(crate) fn center_initial_selection(&mut self) {
@@ -3058,6 +3237,10 @@ impl App {
         self.commit_page = page.max(1);
         self.commit_max = max;
         self.commit_offset = self.commit_offset.min(max);
+    }
+
+    pub(crate) fn commit_paging_active(&self) -> bool {
+        self.show_commit && self.commit_max > 0
     }
 
     pub(crate) fn reset_commit_view(&mut self) {
@@ -3333,15 +3516,32 @@ pub(crate) struct Graph {
     offsets: Vec<usize>,
     columns: Vec<ObjectId>,
     visual_counts: Vec<usize>,
+    first_parents: Vec<Option<usize>>,
+    first_parent_children: Vec<Vec<usize>>,
 }
 
 impl Graph {
     fn new(rows: &[SharedCommitRow]) -> Self {
+        let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
+        let mut first_parent_children = vec![Vec::new(); rows.len()];
+        let first_parents = rows
+            .iter()
+            .enumerate()
+            .map(|(child, row)| {
+                row.parent_ids
+                    .first()
+                    .and_then(|parent| positions.get(parent))
+                    .copied()
+                    .inspect(|parent| first_parent_children[*parent].push(child))
+            })
+            .collect();
         let mut state = LaneState::default();
         let mut graph = Graph {
             offsets: Vec::with_capacity(rows.len().div_ceil(CHECKPOINT_INTERVAL) + 1),
             columns: Vec::new(),
             visual_counts: visual_counts(rows),
+            first_parents,
+            first_parent_children,
         };
         for (index, row) in rows.iter().enumerate() {
             if index % CHECKPOINT_INTERVAL == 0 {
@@ -5013,6 +5213,124 @@ mod tests {
     }
 
     #[test]
+    fn topological_navigation_follows_first_parents_and_remembers_children() {
+        let mut app = App::new(5);
+        app.extend_commits(vec![
+            row_with_parents(5, &[3]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2, 1]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+
+        app.update(Action::TopologicalDown);
+        assert_eq!(app.rows[app.selected.expect("the fork is selected")].id, id(3));
+        assert_eq!(app.topological_choice(), Some((1, 2)));
+        app.update(Action::TopologicalUp);
+        assert_eq!(app.rows[app.selected.expect("the first child is selected")].id, id(5));
+        app.update(Action::TopologicalDown);
+
+        app.update(Action::NextChild);
+        app.update(Action::NextChild);
+        assert_eq!(app.topological_choice(), Some((2, 2)), "branch choices saturate");
+        app.update(Action::TopologicalUp);
+        assert_eq!(app.rows[app.selected.expect("the second child is selected")].id, id(4));
+        app.update(Action::TopologicalDown);
+        assert_eq!(
+            app.topological_choice(),
+            Some((2, 2)),
+            "returning to a fork restores its choice"
+        );
+
+        app.update(Action::PreviousChild);
+        app.update(Action::TopologicalDown);
+        assert_eq!(
+            app.rows[app.selected.expect("the first parent is selected")].id,
+            id(2),
+            "secondary merge parents are not topo-walk edges"
+        );
+        app.update(Action::TopologicalDown);
+        app.update(Action::TopologicalDown);
+        assert_eq!(app.rows[app.selected.expect("the root remains selected")].id, id(1));
+
+        app.update(Action::TopologicalUp);
+        app.update(Action::TopologicalUp);
+        assert_eq!(app.rows[app.selected.expect("the fork is selected again")].id, id(3));
+        app.update(Action::MoveUp);
+        assert_eq!(
+            app.rows[app.selected.expect("ordinary navigation is restored")].id,
+            id(4),
+            "ordinary movement remains display ordered after topological movement"
+        );
+    }
+
+    #[test]
+    fn topological_navigation_contracts_unselectable_rows() {
+        let mut app = App::new(4);
+        app.extend_commits(vec![
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        app.reachable_rows = Some(vec![true, false, true, true]);
+
+        app.update(Action::TopologicalDown);
+        assert_eq!(app.rows[app.selected.expect("the ancestor is selected")].id, id(2));
+        app.update(Action::TopologicalUp);
+        assert_eq!(
+            app.rows[app.selected.expect("the descendant is selected")].id,
+            id(4),
+            "the contracted edge works in both directions"
+        );
+
+        app.selected = Some(1);
+        app.update(Action::TopologicalUp);
+        assert_eq!(
+            app.rows[app.selected.expect("the selectable child is selected")].id,
+            id(4),
+            "an ineligible current row still anchors its child walk"
+        );
+    }
+
+    #[test]
+    fn viewport_navigation_pans_without_moving_the_cursor() {
+        let mut app = App::new(2);
+        app.extend_commits(
+            (1..=6)
+                .rev()
+                .map(|commit| numbered_row(commit, (commit > 1).then_some(commit - 1)))
+                .collect::<Vec<_>>(),
+        );
+
+        app.update(Action::PanDownBy(3));
+        app.prepare_history_viewport();
+        assert_eq!((app.selected, app.offset), (Some(0), 3));
+        app.update(Action::PanDownBy(app.viewport_rows));
+        assert_eq!(
+            (app.selected, app.offset),
+            (Some(0), 4),
+            "page movement clamps the viewport"
+        );
+        app.update(Action::TopologicalDown);
+        assert_eq!(
+            (app.selected, app.offset),
+            (Some(1), 1),
+            "a topo step brings its destination back into view"
+        );
+        app.update(Action::PanDownBy(app.viewport_rows));
+        app.update(Action::PanUpBy((app.viewport_rows / 2).max(1)));
+        assert_eq!((app.selected, app.offset), (Some(1), 2));
+        complete(&mut app);
+        assert_eq!(
+            (app.selected, app.offset),
+            (Some(1), 2),
+            "lane completion preserves a detached viewport"
+        );
+    }
+
+    #[test]
     fn time_travel_selection_crosses_each_viewport_before_paging() {
         let mut app = App::new(4);
         app.extend_commits((1..=10).map(row).collect::<Vec<_>>());
@@ -5125,6 +5443,47 @@ mod tests {
             app.selected_history_index().is_some(),
             "a programmatic jump rebuilds compression around the destination"
         );
+    }
+
+    #[test]
+    fn topological_navigation_walks_compressed_segments_as_nodes() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![
+            row_with_parents(6, &[5]),
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.set_view_tips(&[id(6)]);
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+        let compressed_len = app.history_len();
+        assert!(compressed_len < app.rows.len());
+
+        app.update(Action::TopologicalDown);
+        assert!(
+            app.selected_is_segment(),
+            "the compressed quotient edge reaches its summary"
+        );
+        assert_eq!(
+            app.history_len(),
+            compressed_len,
+            "topo movement does not expand a summary"
+        );
+        app.update(Action::TopologicalDown);
+        assert_eq!(
+            app.rows[app.selected.expect("the compressed root is selected")].id,
+            id(1)
+        );
+        app.update(Action::TopologicalUp);
+        assert!(
+            app.selected_is_segment(),
+            "the quotient edge is traversable in both directions"
+        );
+        assert_eq!(app.history_len(), compressed_len);
     }
 
     #[test]

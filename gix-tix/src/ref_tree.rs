@@ -21,13 +21,6 @@ use crate::{
     ui::{decoration_style, notice_area, render_notice},
 };
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum Motion {
-    #[default]
-    Nearest,
-    Topological,
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 struct Offset {
     x: usize,
@@ -151,7 +144,6 @@ pub(crate) struct SelectionFallback {
 #[derive(Default)]
 pub(crate) struct Tree {
     active: bool,
-    motion: Motion,
     overview: Option<Overview>,
     alternate_overview: Option<Overview>,
     overlay: Option<Overlay>,
@@ -353,31 +345,29 @@ impl Tree {
             self.toggle_tags();
             return Input::Handled;
         }
-        if key.code == KeyCode::Tab {
-            self.motion = match self.motion {
-                Motion::Nearest => Motion::Topological,
-                Motion::Topological => Motion::Nearest,
-            };
-            return Input::Handled;
-        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             let amount = self.offset().page_height.max(1);
-            match key.code {
-                KeyCode::Char('u') => self.page(Direction::Up, (amount / 2).max(1)),
-                KeyCode::Char('d') => self.page(Direction::Down, (amount / 2).max(1)),
-                KeyCode::Char('b') => self.page(Direction::Up, amount),
-                KeyCode::Char('f') => self.page(Direction::Down, amount),
+            let (direction, amount) = match key.code {
+                KeyCode::Char('u' | 'U') => (Direction::Up, (amount / 2).max(1)),
+                KeyCode::Char('d' | 'D') => (Direction::Down, (amount / 2).max(1)),
+                KeyCode::Char('b' | 'B') => (Direction::Up, amount),
+                KeyCode::Char('f' | 'F') => (Direction::Down, amount),
                 _ => return Input::Handled,
+            };
+            if key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('U' | 'D' | 'B' | 'F')) {
+                self.page(direction, amount);
+            } else {
+                self.pan(direction, amount);
             }
             return Input::Handled;
         }
         match key.code {
             KeyCode::PageUp => {
-                self.page(Direction::Up, self.offset().page_height.max(1));
+                self.page_or_pan(Direction::Up, key.modifiers);
                 return Input::Handled;
             }
             KeyCode::PageDown => {
-                self.page(Direction::Down, self.offset().page_height.max(1));
+                self.page_or_pan(Direction::Down, key.modifiers);
                 return Input::Handled;
             }
             _ => {}
@@ -385,15 +375,13 @@ impl Tree {
         let Some(direction) = direction(key.code) else {
             return Input::Handled;
         };
-        if key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('H' | 'J' | 'K' | 'L')) {
-            self.pan(direction, 1);
-        } else {
-            self.navigate(direction);
-        }
+        let topological =
+            key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('H' | 'J' | 'K' | 'L'));
+        self.navigate(direction, topological);
         Input::Handled
     }
 
-    pub(crate) fn handle_mouse(&mut self, kind: MouseEventKind, distance: usize) -> bool {
+    pub(crate) fn handle_mouse(&mut self, kind: MouseEventKind, modifiers: KeyModifiers, distance: usize) -> bool {
         let direction = match kind {
             MouseEventKind::ScrollUp => Direction::Up,
             MouseEventKind::ScrollDown => Direction::Down,
@@ -401,7 +389,11 @@ impl Tree {
             MouseEventKind::ScrollRight => Direction::Right,
             _ => return false,
         };
-        self.pan(direction, distance.max(1));
+        if modifiers.contains(KeyModifiers::SHIFT) {
+            self.navigate(direction, false);
+        } else {
+            self.pan(direction, distance.max(1));
+        }
         true
     }
 
@@ -484,7 +476,6 @@ impl Tree {
             placed,
             offset,
             selected,
-            self.motion,
             &self.choices,
             &self.history_commits,
         );
@@ -506,17 +497,13 @@ impl Tree {
                 format!("ref-tree · e edit ({})", actions.join(" · "))
             }
         } else {
-            let motion = match self.motion {
-                Motion::Nearest => "nearest",
-                Motion::Topological => "topo ↑ leaves · ↓ roots · ←/→ branch",
-            };
             let tags = if self.hide_tags { "off" } else { "on" };
             let counts = self.count_anchor.map_or_else(
                 || "Space counts:auto".into(),
                 |id| format!("Space counts:{}", self.node_label(id)),
             );
             format!(
-                "ref-tree · {motion} · {counts} · g top · G root · T tags:{tags} · Shift+directions pan · <enter> pin · e edit · t/Esc history"
+                "ref-tree · {counts} · g top · G root · T tags:{tags} · Shift+directions topo · mouse/pages pan · Shift+mouse/pages cursor · <enter> pin · e edit · t/Esc history"
             )
         };
         frame.render_widget(
@@ -642,24 +629,25 @@ impl Tree {
             .unwrap_or_else(|| id.to_hex_with_len(7).to_string())
     }
 
-    fn navigate(&mut self, direction: Direction) {
+    fn navigate(&mut self, direction: Direction, topological: bool) {
         let Some(overview) = self.overview.as_ref() else { return };
         let Some(selected) = self.selected else { return };
-        let next = if self.motion == Motion::Topological {
+        let next = if topological {
             match direction {
                 Direction::Up => overview.nodes[selected]
                     .children
                     .get(self.choices[selected].min(overview.nodes[selected].children.len().saturating_sub(1)))
                     .copied(),
                 Direction::Down => overview.nodes[selected].parent,
-                Direction::Left => {
-                    self.choices[selected] = self.choices[selected].saturating_sub(1);
-                    None
-                }
-                Direction::Right => {
-                    self.choices[selected] = self.choices[selected]
-                        .saturating_add(1)
-                        .min(overview.nodes[selected].children.len().saturating_sub(1));
+                Direction::Left | Direction::Right => {
+                    let last = overview.nodes[selected].children.len().saturating_sub(1);
+                    let choice = self.choices[selected].min(last);
+                    let next = if matches!(direction, Direction::Left) {
+                        choice.saturating_sub(1)
+                    } else {
+                        choice.saturating_add(1).min(last)
+                    };
+                    self.choices[selected] = next;
                     None
                 }
             }
@@ -785,6 +773,15 @@ impl Tree {
             self.selected = Some(next);
             self.selection_changed();
             self.ensure_visible = true;
+        }
+    }
+
+    fn page_or_pan(&mut self, direction: Direction, modifiers: KeyModifiers) {
+        let amount = self.offset().page_height.max(1);
+        if modifiers.contains(KeyModifiers::SHIFT) {
+            self.page(direction, amount);
+        } else {
+            self.pan(direction, amount);
         }
     }
 
@@ -1298,7 +1295,6 @@ fn draw_nodes(
     placed: &Placed,
     offset: Offset,
     selected: Option<usize>,
-    motion: Motion,
     choices: &[usize],
     history_commits: &HashSet<ObjectId>,
 ) {
@@ -1312,7 +1308,7 @@ fn draw_nodes(
         }
         let count = overlay.and_then(|overlay| overlay.counts[index]);
         let mut text = rail_label(node, count);
-        if selected == Some(index) && motion == Motion::Topological && node.children.len() > 1 {
+        if selected == Some(index) && node.children.len() > 1 {
             write!(
                 text,
                 " {}/{}",
@@ -1346,19 +1342,7 @@ fn draw_nodes(
                 style = style.add_modifier(Modifier::DIM);
             }
         }
-        let marker_style = if selected == Some(index) && node.is_anchor {
-            style.remove_modifier(Modifier::REVERSED)
-        } else {
-            style
-        };
-        put(
-            frame,
-            area,
-            offset,
-            point,
-            if node.is_head { '@' } else { '●' },
-            marker_style,
-        );
+        put(frame, area, offset, point, if node.is_head { '@' } else { '●' }, style);
         draw_text(
             frame,
             area,
@@ -1963,7 +1947,6 @@ mod tests {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
-        tree.motion = Motion::Topological;
         let mut terminal = Terminal::new(TestBackend::new(100, 18))?;
         terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
         let main = tree
@@ -1974,7 +1957,7 @@ mod tests {
 
         tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
         assert_eq!(tree.count_anchor, Some(main), "Space anchors counts to the cursor");
-        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
         assert!(tree.overlay.is_some(), "anchored navigation retains reachability");
         assert!(tree.placed.is_some(), "anchored navigation retains tree placement");
         assert_eq!(
@@ -2017,7 +2000,7 @@ mod tests {
             "Space on the anchor restores automatic counts"
         );
         assert!(tree.overlay.is_some(), "clearing at the cursor reuses the same overlay");
-        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
         assert!(
             tree.overlay.is_none(),
             "automatic counts invalidate when the cursor moves"
@@ -2231,21 +2214,49 @@ mod tests {
     }
 
     #[test]
-    fn topological_navigation_and_g_shortcuts_reach_the_top_and_root() {
+    fn shift_navigation_is_topological_without_retaining_a_mode() {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
-        tree.motion = Motion::Topological;
         let overview = tree.overview.as_ref().expect("overview exists");
         let root = overview.by_commit[&graph.index(id(1)).expect("root exists")];
         let fork = overview.by_commit[&graph.index(id(2)).expect("fork exists")];
         let main = overview.by_commit[&graph.index(id(6)).expect("main exists")];
         tree.selected = Some(root);
 
-        tree.navigate(Direction::Up);
-        assert_eq!(tree.selected, Some(fork), "up moves toward a leaf");
-        tree.navigate(Direction::Down);
-        assert_eq!(tree.selected, Some(root), "down moves toward the root");
+        tree.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        assert_eq!(tree.selected, Some(fork), "Shift-Up moves toward a leaf");
+        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        assert_eq!(tree.selected, Some(root), "Shift-Down moves toward the root");
+
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        let nearest = nearest(
+            &tree.placed.as_ref().expect("the ref-tree is placed").nodes,
+            root,
+            Direction::Up,
+        );
+        tree.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(tree.selected, nearest, "plain Up immediately returns to nearest motion");
+
+        tree.selected = Some(fork);
+        tree.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        assert_eq!(
+            tree.selected,
+            Some(fork),
+            "a usable branch choice does not move the cursor"
+        );
+        tree.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        assert_eq!(tree.selected, Some(fork), "a saturated branch choice is a no-op");
+        let chosen = tree.overview.as_ref().expect("overview exists").nodes[fork].children[1];
+        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
+        assert_eq!(
+            tree.selected,
+            Some(chosen),
+            "uppercase navigation is treated as shifted"
+        );
+
+        tree.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(tree.selected, Some(chosen), "Tab no longer toggles a motion mode");
 
         tree.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
         assert_eq!(tree.selected, Some(main), "plain g reaches the top selectable node");
@@ -2262,7 +2273,7 @@ mod tests {
     }
 
     #[test]
-    fn page_keys_move_the_cursor_while_mouse_scrolling_only_pans() {
+    fn plain_pages_and_mouse_pan_while_shift_moves_the_cursor() {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
@@ -2278,23 +2289,54 @@ mod tests {
         tree.selected = Some(first);
         let first_y = points[first].y;
 
+        tree.offset.max_y = tree
+            .placed
+            .as_ref()
+            .expect("the ref-tree is placed")
+            .height
+            .saturating_sub(tree.offset.page_height);
         tree.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(tree.selected, Some(first), "plain PageDown leaves the cursor alone");
+        assert!(tree.offset.y > 0, "plain PageDown pans the viewport");
+
+        tree.offset.y = 0;
+        tree.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT));
         let full_page = tree.selected.expect("PageDown retains a selection");
         let full_page_y = points[full_page].y;
-        assert!(full_page_y > first_y, "PageDown advances the ref-tree cursor");
-        assert!(tree.ensure_visible, "page navigation keeps the new cursor visible");
+        assert!(full_page_y > first_y, "Shift-PageDown advances the ref-tree cursor");
+        assert!(
+            tree.ensure_visible,
+            "shifted page navigation keeps the new cursor visible"
+        );
 
         tree.selected = Some(first);
         tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(tree.selected, Some(first), "plain Ctrl-d leaves the cursor alone");
+
+        tree.handle_key(KeyEvent::new(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
         let half_page_y = points[tree.selected.expect("Ctrl-d retains a selection")].y;
         assert!(
             half_page_y > first_y && half_page_y <= full_page_y,
             "half-page navigation advances no farther than a full page"
         );
 
-        let selected = tree.selected;
-        tree.handle_mouse(MouseEventKind::ScrollDown, 2);
-        assert_eq!(tree.selected, selected, "mouse scrolling remains viewport-only");
+        tree.selected = Some(first);
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        tree.handle_mouse(MouseEventKind::ScrollDown, KeyModifiers::NONE, 2);
+        assert_eq!(
+            tree.selected,
+            Some(first),
+            "plain mouse scrolling remains viewport-only"
+        );
+        tree.handle_mouse(MouseEventKind::ScrollDown, KeyModifiers::SHIFT, 1);
+        assert_ne!(
+            tree.selected,
+            Some(first),
+            "Shift-mouse scrolling moves the nearest cursor"
+        );
     }
 
     #[test]
@@ -2549,10 +2591,10 @@ mod tests {
         let point = placed.nodes[selected];
         let rail_width = placed.rail_width;
         assert!(
-            !terminal.backend().buffer()[(point.x as u16, point.y as u16)]
+            terminal.backend().buffer()[(point.x as u16, point.y as u16)]
                 .modifier
                 .contains(Modifier::REVERSED),
-            "the selected disk is not inverted"
+            "the selected disk is inverted with its label"
         );
         assert!(
             terminal.backend().buffer()[(rail_width as u16, point.y as u16)]
@@ -2587,6 +2629,20 @@ mod tests {
                 .modifier
                 .contains(Modifier::REVERSED),
             "a selected synthetic node keeps its disk inverted"
+        );
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .chunks(100)
+                .nth(point.y)
+                .expect("the selected fork has a rendered row")
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+                .contains("1/2"),
+            "a selected fork always identifies its chosen child"
         );
         tree.leave_error("remote deletion failed");
         terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;

@@ -498,7 +498,7 @@ pub(crate) fn draw_with_worktree(
         .unwrap_or(body.height)
         .max(1) as usize;
     app.center_initial_selection();
-    app.ensure_visible();
+    app.prepare_history_viewport();
     let start = app.offset.min(app.history_len());
     let render_end = start.saturating_add(body.height as usize).min(app.history_len());
     let visible_entries: Vec<_> = (start..render_end)
@@ -688,6 +688,7 @@ pub(crate) fn draw_with_worktree(
         (!time_travel_animation && !selected_segment)
             .then_some(app.selection_relation)
             .flatten(),
+        app.topological_choice(),
     );
     let selection_info_width = selection_info.width();
     let mut selection_info_area = None;
@@ -1354,7 +1355,9 @@ pub(crate) fn draw_with_worktree(
                 });
             }
         }
-        items.push(Span::raw(" · ↑↓/jk move · h/l pan"));
+        items.push(Span::raw(
+            " · ↑↓/jk move · h/l pan · Shift+directions topo · wheel/page pan · Shift+wheel/page move",
+        ));
         if app.changes_focus.is_none() {
             items.push(Span::raw(if selected_segment {
                 " · <enter> expand"
@@ -1536,8 +1539,21 @@ fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app:
     }
 }
 
-fn selection_info_line(changes: Option<&Changes>, relation: Option<SelectionRelation>) -> Line<'static> {
+fn selection_info_line(
+    changes: Option<&Changes>,
+    relation: Option<SelectionRelation>,
+    topological_choice: Option<(usize, usize)>,
+) -> Line<'static> {
     let mut spans = Vec::new();
+    if let Some((choice, total)) = topological_choice {
+        push_selection_span(
+            &mut spans,
+            Span::styled(
+                format!("{choice}/{total}"),
+                selection_color(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+        );
+    }
     if let Some(changes) = changes {
         if changes.lines_added > 0 {
             push_selection_span(
@@ -3471,7 +3487,7 @@ mod tests {
         assert!(buffer[(37, 0)].modifier.contains(Modifier::REVERSED));
 
         let text = |relation| {
-            selection_info_line(None, relation)
+            selection_info_line(None, relation, None)
                 .spans
                 .into_iter()
                 .map(|span| span.content.into_owned())
@@ -3480,8 +3496,52 @@ mod tests {
         assert_eq!(text(Some(SelectionRelation::Tracking { ahead: 0, behind: 2 })), "⇣2");
         assert_eq!(text(Some(SelectionRelation::Tracking { ahead: 0, behind: 0 })), "");
         assert!(
-            selection_info_line(Some(&Changes::default()), None).spans.is_empty(),
+            selection_info_line(Some(&Changes::default()), None, None)
+                .spans
+                .is_empty(),
             "selection information hides empty diff counts"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn renders_the_topological_child_choice_outside_selection_inversion() -> Result<(), Box<dyn std::error::Error>> {
+        let ids = [1, 2, 3].map(|byte| gix::ObjectId::Sha1([byte; 20]));
+        let commit = |id, parent: Option<gix::ObjectId>, title: &'static str| Commit {
+            id,
+            parent_ids: parent.into_iter().collect(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: title.into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            signature: SignatureState::Unsigned,
+        };
+        let mut app = App::new(3);
+        app.extend_commits(vec![
+            commit(ids[2], Some(ids[0]), "first child"),
+            commit(ids[1], Some(ids[0]), "second child"),
+            commit(ids[0], None, "fork"),
+        ]);
+        complete(&mut app);
+        app.select_commit(ids[0]);
+        app.update(Action::NextChild);
+        let mut terminal = Terminal::new(TestBackend::new(80, 4))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        let row = rendered_line(&terminal, 2);
+        let choice_byte = row.find("2/2").expect("the selected fork shows its child choice");
+        let choice_x = row[..choice_byte].chars().count() as u16;
+        let cell = &terminal.backend().buffer()[(choice_x, 2)];
+        assert_eq!(cell.fg, Color::Yellow);
+        assert!(cell.modifier.contains(Modifier::BOLD));
+        assert!(
+            !cell.modifier.contains(Modifier::REVERSED),
+            "the choice annotation does not extend row inversion"
         );
         Ok(())
     }
@@ -4247,7 +4307,7 @@ mod tests {
         app.changes_mode = None;
         app.configure_hidden_filter(true);
         app.history_display_expanded = true;
-        let mut terminal = Terminal::new(TestBackend::new(180, 2))?;
+        let mut terminal = Terminal::new(TestBackend::new(240, 2))?;
 
         terminal.draw(|frame| {
             super::draw_with_worktree(
@@ -4311,7 +4371,7 @@ mod tests {
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(rendered_line(&terminal, 1).trim_end(), compact);
-        let information = "[ title · ref-tree · message · changes · ↑↓/jk move · h/l pan · <enter> diff";
+        let information = "[ title · ref-tree · message · changes · ↑↓/jk move · h/l pan · Shift+directions topo · wheel/page pan · Shift+wheel/page move · <enter> diff";
         assert!(rendered_line(&terminal, 0).contains(information));
         assert_reversed_group(&terminal, 1, "?");
         assert_reversed_group(&terminal, 0, &format!(" {information} "));
@@ -5782,7 +5842,7 @@ mod tests {
         })?;
         assert!(
             rendered_line(&footer_terminal, 14).contains(
-                " [ title · ref-tree · message · changes · <tab> switch · ↑↓/jk move · h/l pan · <enter> diff "
+                " [ title · ref-tree · message · changes · <tab> switch · ↑↓/jk move · h/l pan · Shift+directions topo · wheel/page pan · Shift+wheel/page move · <enter> diff "
             ),
             "the expanded information prefix floats its actions above the footer"
         );
