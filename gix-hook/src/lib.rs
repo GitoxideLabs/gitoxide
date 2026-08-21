@@ -5,11 +5,10 @@
 //! `gix-config`, and preparing the hook for execution with [`gix-command`].
 //!
 //! Receive-side hooks get env-var helpers ([`push_option_env()`], [`quarantine_env()`],
-//! [`push_cert_env()`]), but not yet stdin/argv formatting for `pre-receive`/`update`/
-//! `post-receive`, or `reference-transaction` state handling.
+//! [`push_cert_env()`]), stdin formatting ([`receive_stdin()`]) for `pre-receive`/`post-receive`,
+//! and argument formatting ([`update_args()`]) for `update`.
 //!
 //! Missing, by design, until validated further:
-//! - `pre-receive`/`post-receive` stdin formatting and `update`'s positional ref arguments
 //! - `reference-transaction` state handling
 //! - Windows executable-extension resolution (`.exe`, `.bat`, `.cmd`, …)
 #![deny(missing_docs, rust_2018_idioms)]
@@ -208,6 +207,36 @@ pub fn push_cert_env(prepared: gix_command::Prepare, cert: &PushCert<'_>) -> gix
     }
 }
 
+/// Add the three positional arguments git passes to the `update` hook, per `githooks(5)`:
+/// the ref being updated, then its old object name, then its new object name.
+pub fn update_args(
+    prepared: gix_command::Prepare,
+    ref_name: &str,
+    old_oid: &str,
+    new_oid: &str,
+) -> gix_command::Prepare {
+    prepared.arg(ref_name).arg(old_oid).arg(new_oid)
+}
+
+/// Format the `pre-receive`/`post-receive` stdin payload: one line per ref update, as
+/// `<old-oid> SP <new-oid> SP <ref-name> LF`, per `githooks(5)`.
+///
+/// `post-receive` receives a line only for refs that were actually updated, unlike
+/// `pre-receive`, which receives one for every ref requested - filtering `updates` down to
+/// the successful ones for `post-receive` is the caller's responsibility.
+pub fn receive_stdin<'a>(updates: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>) -> Vec<u8> {
+    let mut buf = Vec::new();
+    for (old_oid, new_oid, ref_name) in updates {
+        buf.extend_from_slice(old_oid.as_bytes());
+        buf.push(b' ');
+        buf.extend_from_slice(new_oid.as_bytes());
+        buf.push(b' ');
+        buf.extend_from_slice(ref_name.as_bytes());
+        buf.push(b'\n');
+    }
+    buf
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +334,53 @@ mod tests {
             };
             let env = super::env_of(push_cert_env(prepared(), &cert));
             assert!(env.contains(&("GIT_PUSH_CERT_NONCE_SLOP".into(), "5".into())));
+        }
+    }
+
+    mod update_args {
+        use crate::{command, update_args};
+
+        #[test]
+        fn args_are_ref_name_old_oid_new_oid_in_order() {
+            let prepared = update_args(
+                command("update".as_ref(), "/repo/.git".as_ref(), "/repo/.git".as_ref()),
+                "refs/heads/main",
+                "0000000000000000000000000000000000000000",
+                "1111111111111111111111111111111111111111",
+            );
+            let cmd = std::process::Command::from(prepared);
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+            assert_eq!(
+                args,
+                [
+                    "refs/heads/main",
+                    "0000000000000000000000000000000000000000",
+                    "1111111111111111111111111111111111111111",
+                ]
+            );
+        }
+    }
+
+    mod receive_stdin {
+        use crate::receive_stdin;
+
+        #[test]
+        fn no_updates_is_empty() {
+            assert_eq!(receive_stdin(std::iter::empty::<(&str, &str, &str)>()), b"");
+        }
+
+        #[test]
+        fn one_line_per_update_old_new_ref() {
+            let updates = [
+                ("aaaa", "bbbb", "refs/heads/main"),
+                ("0000000000000000000000000000000000000000", "cccc", "refs/heads/feature"),
+            ];
+            assert_eq!(
+                receive_stdin(updates),
+                b"aaaa bbbb refs/heads/main\n\
+                  0000000000000000000000000000000000000000 cccc refs/heads/feature\n"
+                    .as_slice()
+            );
         }
     }
 
