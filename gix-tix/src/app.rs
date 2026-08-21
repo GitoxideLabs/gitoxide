@@ -524,7 +524,7 @@ pub(crate) struct App {
     compressed_anchor: Option<ObjectId>,
     compressed_segment: Option<ObjectId>,
     compressed_expanded: HashSet<ObjectId>,
-    time_travel_animation: Option<ObjectId>,
+    time_travel_animation: Option<(ObjectId, usize)>,
     attributions: Vec<Attribution>,
     #[cfg(test)]
     test_lanes: Vec<String>,
@@ -2339,6 +2339,12 @@ impl App {
             return;
         }
         let select_top = std::mem::take(&mut self.select_top_after_refresh);
+        let previous_selection = if select_top { None } else { self.selected };
+        let previous_visual_position = previous_selection.and_then(|index| {
+            let count = self.visual_count(index)?;
+            let base = self.rows.get(index.checked_add(count)?)?.id;
+            Some((base, count, index))
+        });
         let segment = (!select_top && self.selection_after_refresh.is_none())
             .then_some(self.compressed_segment)
             .flatten();
@@ -2395,8 +2401,33 @@ impl App {
         self.graph = Some(graph);
         self.lane_time = Some(lane_time);
         self.update_worktree_head_descendants();
+        let visual_counts = &self
+            .graph
+            .as_ref()
+            .expect("the completed graph was just stored")
+            .visual_counts;
+        let visual_selection = previous_visual_position.and_then(|(base, count, previous)| {
+            self.rows
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| {
+                    visual_counts.get(*index) == Some(&count)
+                        && index
+                            .checked_add(count)
+                            .and_then(|base_index| self.rows.get(base_index))
+                            .is_some_and(|row| row.id == base)
+                })
+                .min_by_key(|(index, _)| index.abs_diff(previous))
+                .map(|(index, _)| index)
+        });
         self.selected = selected
             .and_then(|id| self.rows.iter().position(|row| row.id == id))
+            .or(visual_selection)
+            .or_else(|| {
+                previous_selection
+                    .filter(|_| !self.rows.is_empty())
+                    .map(|index| index.min(self.rows.len() - 1))
+            })
             .or_else(|| (!self.rows.is_empty()).then_some(0));
         self.compressed_segment = segment;
         if self.compressed_segment.is_some() {
@@ -3094,13 +3125,13 @@ impl App {
     }
 
     pub(crate) fn begin_time_travel_animation(&mut self) {
-        let viewport_row = if self.alignment == Alignment::Compressed {
-            self.selected_history_index()
-                .map(|selected| selected.saturating_sub(self.offset))
-        } else {
-            None
-        };
-        self.time_travel_animation = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+        let viewport_row = self
+            .selected_history_index()
+            .map(|selected| selected.saturating_sub(self.offset));
+        self.time_travel_animation = self
+            .selected
+            .and_then(|index| self.rows.get(index))
+            .map(|row| (row.id, viewport_row.unwrap_or_default()));
         if let (Some(selected), Some(viewport_row)) = (self.selected_history_index(), viewport_row) {
             self.offset = selected.saturating_sub(viewport_row);
         }
@@ -3108,25 +3139,23 @@ impl App {
     }
 
     pub(crate) fn finish_time_travel_animation(&mut self) {
-        let viewport_row = if self.alignment == Alignment::Compressed {
-            self.selected_history_index()
-                .map(|selected| selected.saturating_sub(self.offset))
-        } else {
-            None
-        };
-        if self.time_travel_animation.take().is_none() || self.alignment != Alignment::Compressed {
+        let Some((origin, viewport_row)) = self.time_travel_animation else {
             return;
+        };
+        self.select_commit(origin);
+        self.time_travel_animation = None;
+        if self.alignment == Alignment::Compressed {
+            self.compressed_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+            self.rebuild_compressed_history();
         }
-        self.compressed_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
-        self.rebuild_compressed_history();
-        if let (Some(selected), Some(viewport_row)) = (self.selected_history_index(), viewport_row) {
+        if let Some(selected) = self.selected_history_index() {
             self.offset = selected.saturating_sub(viewport_row);
         }
         self.ensure_visible();
     }
 
     pub(crate) fn time_travel_animation_origin(&self) -> Option<ObjectId> {
-        self.time_travel_animation
+        self.time_travel_animation.map(|(origin, _)| origin)
     }
 
     pub(crate) fn select_commit_after_refresh(&mut self, id: ObjectId) {
@@ -4246,6 +4275,60 @@ mod tests {
     }
 
     #[test]
+    fn refresh_restores_a_rewritten_selection_by_its_visual_position() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![
+            row_with_parents(6, &[5]),
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.select_commit(id(4));
+        assert_eq!(app.visual_count(app.selected.expect("commit 4 is selected")), Some(3));
+        assert_eq!(app.offset, 0, "the original selection is at the bottom of the viewport");
+
+        let rows = app.store_commits(
+            vec![
+                numbered_row(17, Some(16)),
+                numbered_row(16, Some(15)),
+                numbered_row(15, Some(14)),
+                numbered_row(14, Some(13)),
+                numbered_row(13, Some(2)),
+                numbered_row(2, Some(1)),
+                numbered_row(1, None),
+            ]
+            .into(),
+        );
+        app.state = State::Computing;
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(14)),
+            "the same base and displayed entry number identify the rewritten commit"
+        );
+        assert_eq!(
+            app.offset, 1,
+            "the restored selection stays at the bottom of the viewport"
+        );
+
+        let rows = app.store_commits(vec![numbered_row(9, Some(8)), numbered_row(8, None)].into());
+        app.state = State::Computing;
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(8)),
+            "a missing visual position clamps the previous row before falling back to the top"
+        );
+    }
+
+    #[test]
     fn selected_head_follows_an_external_rewrite() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
@@ -5357,6 +5440,49 @@ mod tests {
                 (Some(0), 0),
             ],
             "selection crosses a full viewport before the next page is bottom-aligned"
+        );
+    }
+
+    #[test]
+    fn time_travel_animation_returns_to_its_origin() {
+        let mut app = App::new(4);
+        app.extend_commits(
+            (1u16..=10)
+                .rev()
+                .map(|commit| numbered_row(commit, (commit > 1).then_some(commit - 1)))
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        app.select_commit(id(6));
+        assert_eq!((app.selected, app.offset), (Some(4), 1));
+
+        app.begin_time_travel_animation();
+        app.select_commit_for_time_travel(id(10));
+        app.finish_time_travel_animation();
+
+        assert_eq!(
+            (app.selected.map(|index| app.rows[index].id), app.offset),
+            (Some(id(6)), 1),
+            "the animated cursor returns to the requested entry and viewport row"
+        );
+
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+        let viewport_row = app
+            .selected_history_index()
+            .expect("the origin is displayed in compressed history")
+            .saturating_sub(app.offset);
+        app.begin_time_travel_animation();
+        app.select_commit_for_time_travel(id(10));
+        app.finish_time_travel_animation();
+
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(6)));
+        assert_eq!(
+            app.selected_history_index()
+                .expect("the origin remains displayed")
+                .saturating_sub(app.offset),
+            viewport_row,
+            "compressed history restores the origin to its former viewport row"
         );
     }
 
