@@ -2042,7 +2042,9 @@ version = "0.0.0"
 dependencies = [
  "gix-command",
  "gix-config",
+ "gix-hash",
  "gix-hook",
+ "gix-validate",
  "tempfile",
 ]
 

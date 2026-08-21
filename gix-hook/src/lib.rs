@@ -175,7 +175,7 @@ pub fn quarantine_env(
 #[derive(Debug, Clone, Copy)]
 pub struct PushCert<'a> {
     /// The object name of the blob holding the push certificate (`GIT_PUSH_CERT`).
-    pub blob: &'a str,
+    pub blob: &'a gix_hash::oid,
     /// The signer's name and email as recorded in the certificate (`GIT_PUSH_CERT_SIGNER`).
     pub signer: &'a str,
     /// The GPG key id used to sign the certificate (`GIT_PUSH_CERT_KEY`).
@@ -195,7 +195,7 @@ pub struct PushCert<'a> {
 /// `post-receive` when the push was signed (`git push --signed`).
 pub fn push_cert_env(prepared: gix_command::Prepare, cert: &PushCert<'_>) -> gix_command::Prepare {
     let prepared = prepared
-        .env("GIT_PUSH_CERT", cert.blob)
+        .env("GIT_PUSH_CERT", cert.blob.to_hex().to_string())
         .env("GIT_PUSH_CERT_SIGNER", cert.signer)
         .env("GIT_PUSH_CERT_KEY", cert.key)
         .env("GIT_PUSH_CERT_STATUS", cert.status)
@@ -209,13 +209,20 @@ pub fn push_cert_env(prepared: gix_command::Prepare, cert: &PushCert<'_>) -> gix
 
 /// Add the three positional arguments git passes to the `update` hook, per `githooks(5)`:
 /// the ref being updated, then its old object name, then its new object name.
+///
+/// Rejects `ref_name` if it fails [`gix_validate::reference::name()`], rather than handing a
+/// hook process a ref name that couldn't have come from git itself.
 pub fn update_args(
     prepared: gix_command::Prepare,
     ref_name: &str,
-    old_oid: &str,
-    new_oid: &str,
-) -> gix_command::Prepare {
-    prepared.arg(ref_name).arg(old_oid).arg(new_oid)
+    old_oid: &gix_hash::oid,
+    new_oid: &gix_hash::oid,
+) -> Result<gix_command::Prepare, gix_validate::reference::name::Error> {
+    gix_validate::reference::name(ref_name.into())?;
+    Ok(prepared
+        .arg(ref_name)
+        .arg(old_oid.to_hex().to_string())
+        .arg(new_oid.to_hex().to_string()))
 }
 
 /// Format the `pre-receive`/`post-receive` stdin payload: one line per ref update, as
@@ -224,17 +231,22 @@ pub fn update_args(
 /// `post-receive` receives a line only for refs that were actually updated, unlike
 /// `pre-receive`, which receives one for every ref requested - filtering `updates` down to
 /// the successful ones for `post-receive` is the caller's responsibility.
-pub fn receive_stdin<'a>(updates: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>) -> Vec<u8> {
+///
+/// Rejects any ref name that fails [`gix_validate::reference::name()`]: since this function
+/// owns the line-oriented wire format it writes, a ref name that isn't actually valid (for
+/// example, one containing a newline) could otherwise inject a bogus extra line.
+pub fn receive_stdin<'a>(
+    updates: impl IntoIterator<Item = (&'a gix_hash::oid, &'a gix_hash::oid, &'a str)>,
+) -> Result<Vec<u8>, gix_validate::reference::name::Error> {
+    use std::io::Write;
+
     let mut buf = Vec::new();
     for (old_oid, new_oid, ref_name) in updates {
-        buf.extend_from_slice(old_oid.as_bytes());
-        buf.push(b' ');
-        buf.extend_from_slice(new_oid.as_bytes());
-        buf.push(b' ');
-        buf.extend_from_slice(ref_name.as_bytes());
-        buf.push(b'\n');
+        gix_validate::reference::name(ref_name.into())?;
+        writeln!(buf, "{} {} {}", old_oid.to_hex(), new_oid.to_hex(), ref_name)
+            .expect("writing to a Vec<u8> never fails");
     }
-    buf
+    Ok(buf)
 }
 
 #[cfg(test)]
@@ -293,6 +305,11 @@ mod tests {
         }
     }
 
+    /// A valid, arbitrary SHA-1 `ObjectId` for use as test data - never parsed from untrusted input.
+    fn oid(hex: &str) -> gix_hash::ObjectId {
+        gix_hash::ObjectId::from_hex(hex.as_bytes()).unwrap()
+    }
+
     mod push_cert_env {
         use crate::{PushCert, command, push_cert_env};
 
@@ -302,8 +319,9 @@ mod tests {
 
         #[test]
         fn sets_all_required_fields() {
+            let blob = super::oid("0000000000000000000000000000000000000000");
             let cert = PushCert {
-                blob: "abc123",
+                blob: &blob,
                 signer: "Jane Doe <jane@example.com>",
                 key: "0xDEADBEEF",
                 status: "G",
@@ -312,7 +330,10 @@ mod tests {
                 nonce_slop: None,
             };
             let env = super::env_of(push_cert_env(prepared(), &cert));
-            assert!(env.contains(&("GIT_PUSH_CERT".into(), "abc123".into())));
+            assert!(env.contains(&(
+                "GIT_PUSH_CERT".into(),
+                "0000000000000000000000000000000000000000".into()
+            )));
             assert!(env.contains(&("GIT_PUSH_CERT_SIGNER".into(), "Jane Doe <jane@example.com>".into())));
             assert!(env.contains(&("GIT_PUSH_CERT_KEY".into(), "0xDEADBEEF".into())));
             assert!(env.contains(&("GIT_PUSH_CERT_STATUS".into(), "G".into())));
@@ -323,8 +344,9 @@ mod tests {
 
         #[test]
         fn nonce_slop_is_set_only_when_present() {
+            let blob = super::oid("0000000000000000000000000000000000000000");
             let cert = PushCert {
-                blob: "abc123",
+                blob: &blob,
                 signer: "Jane Doe <jane@example.com>",
                 key: "0xDEADBEEF",
                 status: "G",
@@ -342,12 +364,15 @@ mod tests {
 
         #[test]
         fn args_are_ref_name_old_oid_new_oid_in_order() {
+            let old = super::oid("0000000000000000000000000000000000000000");
+            let new = super::oid("1111111111111111111111111111111111111111");
             let prepared = update_args(
                 command("update".as_ref(), "/repo/.git".as_ref(), "/repo/.git".as_ref()),
                 "refs/heads/main",
-                "0000000000000000000000000000000000000000",
-                "1111111111111111111111111111111111111111",
-            );
+                &old,
+                &new,
+            )
+            .unwrap();
             let cmd = std::process::Command::from(prepared);
             let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
             assert_eq!(
@@ -359,6 +384,19 @@ mod tests {
                 ]
             );
         }
+
+        #[test]
+        fn invalid_ref_name_is_rejected() {
+            let old = super::oid("0000000000000000000000000000000000000000");
+            let new = super::oid("1111111111111111111111111111111111111111");
+            let result = update_args(
+                command("update".as_ref(), "/repo/.git".as_ref(), "/repo/.git".as_ref()),
+                "refs/heads/../escape",
+                &old,
+                &new,
+            );
+            assert!(result.is_err(), "a ref name with a repeated dot must be rejected");
+        }
     }
 
     mod receive_stdin {
@@ -366,21 +404,33 @@ mod tests {
 
         #[test]
         fn no_updates_is_empty() {
-            assert_eq!(receive_stdin(std::iter::empty::<(&str, &str, &str)>()), b"");
+            assert_eq!(
+                receive_stdin(std::iter::empty::<(&gix_hash::oid, &gix_hash::oid, &str)>()).unwrap(),
+                b""
+            );
         }
 
         #[test]
         fn one_line_per_update_old_new_ref() {
-            let updates = [
-                ("aaaa", "bbbb", "refs/heads/main"),
-                ("0000000000000000000000000000000000000000", "cccc", "refs/heads/feature"),
-            ];
+            let a = super::oid("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            let b = super::oid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+            let zero = super::oid("0000000000000000000000000000000000000000");
+            let c = super::oid("cccccccccccccccccccccccccccccccccccccccc");
+            let updates = [(&a, &b, "refs/heads/main"), (&zero, &c, "refs/heads/feature")];
             assert_eq!(
-                receive_stdin(updates),
-                b"aaaa bbbb refs/heads/main\n\
-                  0000000000000000000000000000000000000000 cccc refs/heads/feature\n"
+                receive_stdin(updates.map(|(old, new, name)| (old.as_ref(), new.as_ref(), name))).unwrap(),
+                b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/main\n\
+                  0000000000000000000000000000000000000000 cccccccccccccccccccccccccccccccccccccccc refs/heads/feature\n"
                     .as_slice()
             );
+        }
+
+        #[test]
+        fn invalid_ref_name_is_rejected() {
+            let old = super::oid("0000000000000000000000000000000000000000");
+            let new = super::oid("1111111111111111111111111111111111111111");
+            let result = receive_stdin([(old.as_ref(), new.as_ref(), "refs/heads/../escape")]);
+            assert!(result.is_err(), "a ref name with a repeated dot must be rejected");
         }
     }
 
