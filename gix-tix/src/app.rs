@@ -2009,7 +2009,7 @@ impl App {
                 )];
             }
             Action::Attach if self.can_attach() => return vec![Effect::Attach],
-            Action::TimeTravel if self.time_travel_shortcut_visible() => {
+            Action::TimeTravel if self.can_time_travel() => {
                 return vec![Effect::TimeTravel(
                     self.rows[self.selected.expect("time-travel requires a selection")].id,
                 )];
@@ -3169,6 +3169,10 @@ impl App {
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && self.selected.and_then(|index| self.rows.get(index)).is_some()
+    }
+
+    fn can_time_travel(&self) -> bool {
+        self.state == State::Complete && self.time_travel_shortcut_visible()
     }
 
     fn last_selectable(&self) -> Option<usize> {
@@ -4618,6 +4622,18 @@ mod tests {
         assert!(app.update(Action::TimeTravel).is_empty());
         complete(&mut app);
         assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(1))]);
+        app.deferred_history_state = Some(State::Complete);
+        app.state = State::Computing;
+        assert!(
+            app.time_travel_shortcut_visible(),
+            "the shortcut remains stable during deferred lane computation"
+        );
+        assert!(
+            app.update(Action::TimeTravel).is_empty(),
+            "time travel waits for the current lane generation"
+        );
+        app.deferred_history_state = None;
+        app.state = State::Complete;
         app.set_worktree_branch(Some((id(1), true)));
         app.set_worktree_head(Some(id(1)), false);
         assert!(app.can_attach());

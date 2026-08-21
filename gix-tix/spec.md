@@ -1089,12 +1089,12 @@ space first; changes blocks adapt within the remaining history width.
   There is no hidden sequencer state or separate continue/abort command.
 - Interactive todo application runs on a scoped worker and shows its modal gauge
   after 300 ms. TUI time travel also runs on a scoped worker and follows completed
-  pending rebases with the history selection. The selection traverses each fixed
-  viewport from bottom to top; crossing its top jumps the viewport by one page and
-  places the selection at the bottom again. Compressed history temporarily uses
-  its canonical rows for these frames and is restored afterward. The first and
-  latest rows are drawn even for fast operations, with intermediate rows
-  coalesced to at most 60 fps. Command-line time travel does not animate.
+  pending rebases on the destination ancestry. The history selection traverses
+  each fixed viewport from bottom to top; crossing its top jumps the viewport
+  by one page and places the selection at the bottom again. Compressed history
+  temporarily uses its canonical rows for these frames and is restored afterward.
+  The first and latest rows are drawn even for fast operations, with intermediate
+  rows coalesced to at most 60 fps. Command-line time travel does not animate.
 - Displayed mutable refs follow their explicit locations in the edited todo;
   omission deletes them and newly named refs require nonexistence. Refs checked
   out by linked worktrees are displayed normally and may move, with their index
