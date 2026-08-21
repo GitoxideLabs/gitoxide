@@ -1675,7 +1675,7 @@ fn event_loop(
                     }
                     ref_tree::Input::Quit => return Ok(None),
                 },
-                TerminalEvent::Mouse(mouse) if ref_tree.handle_mouse(mouse.kind, 1) => {
+                TerminalEvent::Mouse(mouse) if ref_tree.handle_mouse(mouse.kind, mouse.modifiers, 1) => {
                     dirty = true;
                     urgent = true;
                     continue;
@@ -1689,26 +1689,22 @@ fn event_loop(
                 let action = if diagnostic_input {
                     diagnostic_action(key, &app)
                 } else {
-                    action_with_shortcut_groups(
-                        key,
-                        app.history_display_expanded,
-                        app.commit_expanded,
-                        app.actions_expanded,
-                        app.enrich_expanded,
-                        app.information_expanded || app.changes_focus.is_some(),
-                    )
+                    app_action(key, &app)
                 };
                 let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
                 (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
             }
             TerminalEvent::Mouse(mouse) => {
                 let kind = mouse.kind;
+                let modifiers = mouse.modifiers;
                 let mut distance = 1;
                 if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
                     while distance < EVENT_BATCH_SIZE && event::poll(Duration::ZERO)? {
                         let next = event::read()?;
                         match next {
-                            TerminalEvent::Mouse(next) if next.kind == kind => distance += 1,
+                            TerminalEvent::Mouse(next) if next.kind == kind && next.modifiers == modifiers => {
+                                distance += 1;
+                            }
                             next => {
                                 pending_terminal_event = Some(next);
                                 break;
@@ -1716,7 +1712,7 @@ fn event_loop(
                         }
                     }
                 }
-                let Some(action) = mouse_scroll_action(kind, distance) else {
+                let Some(action) = mouse_scroll_action(kind, modifiers, distance, app.changes_focus.is_some()) else {
                     continue;
                 };
                 let repeats_history = app.changes_focus.is_none() && repeats_viewport(&action);
@@ -4035,7 +4031,7 @@ fn draw(
         app.set_worktree_conflicted(changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
     }
     app.viewport_rows = app.viewport_rows.min(render_rows.max(1));
-    app.ensure_visible();
+    app.prepare_history_viewport();
     let start = app.offset.min(app.history_len());
     let end = start.saturating_add(render_rows).min(app.history_len());
     let visible_indices = app.visible_history_indices(start..end);
@@ -6040,15 +6036,7 @@ fn next_diagnostic_input(inputs: &mut VecDeque<KeyEvent>, state: State, lane_com
 }
 
 fn diagnostic_action(key: KeyEvent, app: &App) -> Option<Action> {
-    action_with_shortcut_groups(
-        key,
-        app.history_display_expanded,
-        app.commit_expanded,
-        app.actions_expanded,
-        app.enrich_expanded,
-        app.information_expanded || app.changes_focus.is_some(),
-    )
-    .filter(|action| {
+    app_action(key, app).filter(|action| {
         (action_allowed_during_rebase_continuation(Some(action), app.changes_focus.is_some())
             || matches!(
                 action,
@@ -6061,6 +6049,70 @@ fn diagnostic_action(key: KeyEvent, app: &App) -> Option<Action> {
     })
 }
 
+fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
+    if key.kind != KeyEventKind::Release {
+        let shifted =
+            key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('H' | 'J' | 'K' | 'L'));
+        if shifted {
+            if app.changes_focus.is_none() {
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k' | 'K') => return Some(Action::TopologicalUp),
+                    KeyCode::Down | KeyCode::Char('j' | 'J') => return Some(Action::TopologicalDown),
+                    KeyCode::Left | KeyCode::Char('h' | 'H') => return Some(Action::PreviousChild),
+                    KeyCode::Right | KeyCode::Char('l' | 'L') => return Some(Action::NextChild),
+                    _ => {}
+                }
+            } else {
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k' | 'K') => return Some(Action::MoveUp),
+                    KeyCode::Down | KeyCode::Char('j' | 'J') => return Some(Action::MoveDown),
+                    KeyCode::Left | KeyCode::Char('h' | 'H') => return Some(Action::ScrollLeft),
+                    KeyCode::Right | KeyCode::Char('l' | 'L') => return Some(Action::ScrollRight),
+                    _ => {}
+                }
+            }
+        }
+
+        let paging = match key.code {
+            KeyCode::PageUp => Some((Action::PageUp, app.viewport_rows.max(1), false)),
+            KeyCode::PageDown => Some((Action::PageDown, app.viewport_rows.max(1), true)),
+            KeyCode::Char('u' | 'U') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some((Action::HalfPageUp, (app.viewport_rows / 2).max(1), false))
+            }
+            KeyCode::Char('d' | 'D') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some((Action::HalfPageDown, (app.viewport_rows / 2).max(1), true))
+            }
+            KeyCode::Char('b' | 'B') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some((Action::PageUp, app.viewport_rows.max(1), false))
+            }
+            KeyCode::Char('f' | 'F') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some((Action::PageDown, app.viewport_rows.max(1), true))
+            }
+            _ => None,
+        };
+        if let Some((cursor_action, distance, down)) = paging {
+            let shifted =
+                key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('U' | 'D' | 'B' | 'F'));
+            if shifted || app.changes_focus.is_some() || app.commit_paging_active() {
+                return Some(cursor_action);
+            }
+            return Some(if down {
+                Action::PanDownBy(distance)
+            } else {
+                Action::PanUpBy(distance)
+            });
+        }
+    }
+    action_with_shortcut_groups(
+        key,
+        app.history_display_expanded,
+        app.commit_expanded,
+        app.actions_expanded,
+        app.enrich_expanded,
+        app.information_expanded || app.changes_focus.is_some(),
+    )
+}
+
 fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_focused: bool) -> bool {
     matches!(
         action,
@@ -6069,6 +6121,12 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::MoveDown
                 | Action::MoveUpBy(_)
                 | Action::MoveDownBy(_)
+                | Action::PanUpBy(_)
+                | Action::PanDownBy(_)
+                | Action::TopologicalUp
+                | Action::TopologicalDown
+                | Action::PreviousChild
+                | Action::NextChild
                 | Action::CycleDuplicate
                 | Action::ScrollLeft
                 | Action::ScrollRight
@@ -6225,6 +6283,10 @@ fn repeats_viewport(action: &Action) -> bool {
             | Action::MoveDown
             | Action::MoveUpBy(_)
             | Action::MoveDownBy(_)
+            | Action::PanUpBy(_)
+            | Action::PanDownBy(_)
+            | Action::TopologicalUp
+            | Action::TopologicalDown
             | Action::HalfPageUp
             | Action::HalfPageDown
             | Action::PageUp
@@ -6238,10 +6300,20 @@ fn retains_fill_repository(kind: KeyEventKind, action: Option<&Action>, changes_
     !changes_focused && kind == KeyEventKind::Repeat && action.is_some_and(repeats_viewport)
 }
 
-fn mouse_scroll_action(kind: MouseEventKind, distance: usize) -> Option<Action> {
+fn mouse_scroll_action(
+    kind: MouseEventKind,
+    modifiers: KeyModifiers,
+    distance: usize,
+    changes_focused: bool,
+) -> Option<Action> {
+    let shifted = modifiers.contains(KeyModifiers::SHIFT);
     match kind {
-        MouseEventKind::ScrollUp => Some(Action::MoveUpBy(distance.max(1))),
-        MouseEventKind::ScrollDown => Some(Action::MoveDownBy(distance.max(1))),
+        MouseEventKind::ScrollUp if shifted || changes_focused => Some(Action::MoveUpBy(distance.max(1))),
+        MouseEventKind::ScrollDown if shifted || changes_focused => Some(Action::MoveDownBy(distance.max(1))),
+        MouseEventKind::ScrollUp => Some(Action::PanUpBy(distance.max(1))),
+        MouseEventKind::ScrollDown => Some(Action::PanDownBy(distance.max(1))),
+        MouseEventKind::ScrollLeft if shifted => Some(Action::PreviousChild),
+        MouseEventKind::ScrollRight if shifted => Some(Action::NextChild),
         MouseEventKind::ScrollLeft => Some(Action::ScrollLeft),
         MouseEventKind::ScrollRight => Some(Action::ScrollRight),
         _ => None,
@@ -7822,6 +7894,94 @@ mod tests {
     }
 
     #[test]
+    fn shift_applies_topology_to_directions_and_cursor_movement_to_pages() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let shifted = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
+        let mut app = App::new(8);
+        app.information_expanded = true;
+        assert_eq!(
+            app_action(key(KeyCode::Char('o')), &app),
+            None,
+            "the topo toggle is gone"
+        );
+        app.information_expanded = false;
+
+        for (key, expected) in [
+            (shifted(KeyCode::Up), Action::TopologicalUp),
+            (shifted(KeyCode::Char('k')), Action::TopologicalUp),
+            (key(KeyCode::Char('K')), Action::TopologicalUp),
+            (shifted(KeyCode::Down), Action::TopologicalDown),
+            (shifted(KeyCode::Char('j')), Action::TopologicalDown),
+            (key(KeyCode::Char('J')), Action::TopologicalDown),
+            (shifted(KeyCode::Left), Action::PreviousChild),
+            (shifted(KeyCode::Char('h')), Action::PreviousChild),
+            (key(KeyCode::Char('H')), Action::PreviousChild),
+            (shifted(KeyCode::Right), Action::NextChild),
+            (shifted(KeyCode::Char('l')), Action::NextChild),
+            (key(KeyCode::Char('L')), Action::NextChild),
+        ] {
+            assert_eq!(app_action(key, &app), Some(expected));
+        }
+
+        assert_eq!(app_action(key(KeyCode::Up), &app), Some(Action::MoveUp));
+        app.history_display_expanded = true;
+        assert_eq!(app_action(key(KeyCode::Char('h')), &app), Some(Action::ToggleHidden));
+        assert_eq!(
+            app_action(shifted(KeyCode::Char('h')), &app),
+            Some(Action::PreviousChild),
+            "shifted navigation outranks an open shortcut group"
+        );
+        app.history_display_expanded = false;
+
+        let control = |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
+        let control_shift =
+            |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        for (key, expected) in [
+            (key(KeyCode::PageUp), Action::PanUpBy(8)),
+            (key(KeyCode::PageDown), Action::PanDownBy(8)),
+            (control('u'), Action::PanUpBy(4)),
+            (control('d'), Action::PanDownBy(4)),
+            (control('b'), Action::PanUpBy(8)),
+            (control('f'), Action::PanDownBy(8)),
+            (shifted(KeyCode::PageUp), Action::PageUp),
+            (shifted(KeyCode::PageDown), Action::PageDown),
+            (control_shift('u'), Action::HalfPageUp),
+            (control_shift('d'), Action::HalfPageDown),
+            (control_shift('b'), Action::PageUp),
+            (control_shift('f'), Action::PageDown),
+        ] {
+            assert_eq!(app_action(key, &app), Some(expected));
+        }
+        assert_eq!(
+            app_action(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::CONTROL), &app),
+            Some(Action::HalfPageUp),
+            "uppercase Ctrl paging retains its Shift meaning instead of invoking redo"
+        );
+
+        app.changes_focus = Some(ChangePane::Tree);
+        app.history_display_expanded = true;
+        assert_eq!(
+            app_action(key(KeyCode::Char('H')), &app),
+            Some(Action::ScrollLeft),
+            "shifted directions remain pane-local while changes are focused"
+        );
+        assert_eq!(
+            app_action(key(KeyCode::PageUp), &app),
+            Some(Action::PageUp),
+            "focused panes retain their own paging"
+        );
+
+        app.changes_focus = None;
+        app.show_commit = true;
+        app.set_commit_bounds(2, 1);
+        assert_eq!(
+            app_action(key(KeyCode::PageUp), &app),
+            Some(Action::PageUp),
+            "overflowing commit messages retain their own paging"
+        );
+    }
+
+    #[test]
     fn diagnostic_inputs_wait_for_completed_lanes() {
         let key = diagnostic_key('j');
         let mut inputs = VecDeque::from([key]);
@@ -7950,29 +8110,39 @@ mod tests {
     }
 
     #[test]
-    fn maps_continuous_mouse_scrolling_to_navigation() {
+    fn shift_switches_mouse_scrolling_from_viewport_to_cursor_navigation() {
         assert_eq!(
-            mouse_scroll_action(MouseEventKind::ScrollUp, 4),
-            Some(Action::MoveUpBy(4))
+            mouse_scroll_action(MouseEventKind::ScrollUp, KeyModifiers::NONE, 4, false),
+            Some(Action::PanUpBy(4))
         );
         assert_eq!(
-            mouse_scroll_action(MouseEventKind::ScrollDown, 3),
+            mouse_scroll_action(MouseEventKind::ScrollDown, KeyModifiers::SHIFT, 3, false),
             Some(Action::MoveDownBy(3))
         );
         assert_eq!(
-            mouse_scroll_action(MouseEventKind::ScrollLeft, 1),
+            mouse_scroll_action(MouseEventKind::ScrollLeft, KeyModifiers::NONE, 1, false),
             Some(Action::ScrollLeft)
         );
         assert_eq!(
-            mouse_scroll_action(MouseEventKind::ScrollRight, 1),
-            Some(Action::ScrollRight)
+            mouse_scroll_action(MouseEventKind::ScrollRight, KeyModifiers::SHIFT, 1, false),
+            Some(Action::NextChild)
         );
-        assert_eq!(mouse_scroll_action(MouseEventKind::Moved, 1), None);
+        assert_eq!(
+            mouse_scroll_action(MouseEventKind::ScrollUp, KeyModifiers::NONE, 2, true),
+            Some(Action::MoveUpBy(2)),
+            "focused changes retain cursor navigation"
+        );
+        assert_eq!(
+            mouse_scroll_action(MouseEventKind::Moved, KeyModifiers::NONE, 1, false),
+            None
+        );
         assert!(repeats_viewport(
-            &mouse_scroll_action(MouseEventKind::ScrollDown, 2).expect("vertical scrolling has an action")
+            &mouse_scroll_action(MouseEventKind::ScrollDown, KeyModifiers::NONE, 2, false)
+                .expect("vertical scrolling has an action")
         ));
         assert!(!repeats_viewport(
-            &mouse_scroll_action(MouseEventKind::ScrollRight, 1).expect("horizontal scrolling has an action")
+            &mouse_scroll_action(MouseEventKind::ScrollRight, KeyModifiers::NONE, 1, false)
+                .expect("horizontal scrolling has an action")
         ));
     }
 

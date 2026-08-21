@@ -350,18 +350,18 @@ without trading responsiveness for metadata that is not visible.
   `●` disk is the node marker, while the smaller `•` is the commit-count unit.
   Referenced or raw-tip nodes whose commits are present in history use the
   current-history cyan; other linked-worktree nodes use dark green.
-  Selection emphasizes the label without inverting the disk, while a selected
-  synthetic node inverts its otherwise-unlabelled disk.
+  Selection inverts both the node disk and its label, including synthetic nodes
+  whose disk is otherwise unlabelled.
 - Rendering clips lanes and node labels to the viewport.
-- `Tab` switches nearest-direction and topological movement.
-  Nearest movement chooses the closest node in the requested screen direction.
-  Topological Up moves toward leaves, Down toward roots, and Left/Right chooses
-  a remembered child; `i/n` and an emphasized edge show the choice.
+- Plain directions choose the nearest node in the requested screen direction.
+  Shift-directions instead navigate topologically: Up moves toward leaves, Down
+  toward roots, and Left/Right chooses a remembered child; `i/n` and an
+  emphasized edge always show the choice.
 - `g` selects the top ref-tree node, and `Shift-G` selects the root of the current
-  component. Shift-modified directions and the mouse pan the ref-tree viewport.
-  The existing full- and half-page Ctrl/Page keys move the cursor by the
-  corresponding viewport distance and keep it visible, matching history
-  navigation.
+  component. Unshifted mouse and full- or half-page Ctrl/Page input pan the
+  viewport without moving the cursor. Shift-mouse moves to the nearest node;
+  shifted Ctrl/Page input moves the cursor by the corresponding viewport
+  distance and keeps it visible, matching history navigation.
 - `e` opens node-level reference editing. `d` deletes every eligible local branch
   immediately. `e r` is offered only when selected remote-tracking references
   map uniquely through a named remote's fetch refspecs; it deletes every resolved
@@ -401,11 +401,11 @@ without trading responsiveness for metadata that is not visible.
 
 | Key | Behavior |
 | --- | --- |
-| `j`/Down, `k`/Up | Move one selectable row or changed path. |
-| Mouse/trackpad vertical scroll | Move history by the coalesced scroll distance; move paths when a changes block is focused. |
-| `h`/`l` | Pan history or the focused changes block horizontally. |
-| `Ctrl-u`/`Ctrl-d` | Move half a page. |
-| `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move a page; scroll an overflowing commit message when applicable. |
+| `j`/Down, `k`/Up | Move one selectable row or changed path. Shift follows the first parent or chosen child. |
+| Mouse/trackpad vertical scroll | Pan history by the coalesced scroll distance without moving its cursor; Shift moves the cursor instead. Mouse input continues to move paths when a changes block is focused. |
+| `h`/`l` | Pan history or the focused changes block horizontally. Shift chooses a remembered topological child. Shift-horizontal mouse input does the same. |
+| `Ctrl-u`/`Ctrl-d` | Pan half a page; Shift moves the cursor half a page. |
+| `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Pan a page; Shift moves the cursor a page. Both forms scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
 | `?` | Toggle the information key group. |
 | `t` | Toggle the rounded ref-tree overview. |
@@ -433,6 +433,14 @@ Alignment uses only rows in the current viewport to determine widths and starts
 in title mode. Horizontal navigation pans the complete padded row in title and
 full-column alignment so clipped fields can be reached.
 
+Topological navigation treats the displayed history as a first-parent forest.
+Down moves toward roots, Up moves toward leaves, and Left/Right or `h`/`l`
+select among a fork's children in display order. The choice is remembered per
+fork and shown as `i/n` beside the selected row without extending its inverted
+selection style. Movement stops at missing roots or leaves and never follows a
+merge's secondary parents. A viewport panned away with the mouse or page keys
+stays detached until the next cursor movement makes its destination visible.
+
 Compressed history keeps the visible reference, pin, and worktree tips, the
 commit selected when compression begins, every graph endpoint or junction, and
 every hidden boundary as full, selectable commit rows. Each remaining maximal
@@ -440,6 +448,9 @@ linear segment of at least two commits is represented by a selectable hollow
 node followed by its exact commit count, such as `○ [12]`; a singleton remains
 a full commit row. Pressing Enter on a summary expands that one segment in place;
 expansions accumulate until the display is the ordinary title-aligned history.
+Topological navigation treats each unexpanded segment summary as one node and
+does not expand it implicitly.
+
 Modal review and rewrite-target pickers retain the
 compressed projection so its points of interest remain available as targets,
 while conflict selection continues to show the full history. Leaving and
@@ -448,8 +459,8 @@ reload, discards accumulated expansions.
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. The `?` group similarly remains open
-for signature verification, alignment, message, and changes actions. The footer
-keeps every prefix compact. Opening one reverses its label and shows its available
+for signature verification, alignment, message, and changes actions. The
+footer keeps every prefix compact. Opening one reverses its label and shows its available
 items in a reversed, single-row popout immediately above and connected to that
 label; the `?` popout also contains its pane-switching and navigation hints through
 `<enter> diff`. The popout has horizontal padding, shifts left or clips at the
