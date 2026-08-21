@@ -106,6 +106,9 @@ without trading responsiveness for metadata that is not visible.
   frame, allowing navigation such as `--quit-on-finish=jjjl`. Inputs that would
   mutate the repository, launch another program, or copy data are ignored. The
   frame is drawn on the normal screen and remains visible after exit.
+- `--no-alt-screen` runs the interactive UI in a full-height inline viewport on
+  the normal screen, retaining its frame and panic output for diagnostics. Input
+  handling otherwise matches the default interactive mode.
 - `tix rebase todo [-x HIDDEN...] [--no-auto-hide]
   [--onto REV | --update-base] [TIP...]`
   writes a self-contained Markdown history-rebase plan to stdout. Visible tips
@@ -140,10 +143,11 @@ without trading responsiveness for metadata that is not visible.
 - Revisions must resolve and peel to commits. Invalid or non-commit visible
   revisions are errors. An unavailable hidden revision emits a warning and is
   ignored when another hidden revision resolves; if none resolve, startup fails.
-- The interactive UI owns the alternate screen. Raw mode, focus reporting, mouse
-  capture, and enhanced keyboard reporting are restored on every exit path.
+- The interactive UI owns the alternate screen by default. `--no-alt-screen`
+  instead draws interactively on the normal screen. Raw mode, focus reporting,
+  mouse capture, and enhanced keyboard reporting are restored on every exit path.
   Shutdown leaves the alternate screen without clearing it or writing afterward.
-  `--quit-on-finish` instead draws without input reporting on the normal screen.
+  `--quit-on-finish` draws without input reporting on the normal screen.
 - `Ctrl-C` exits immediately from any normal tix focus without recovery
   bookkeeping. `q` always quits from history, including while a conflict or
   rebase continuation is suspended. Before that normal exit, tix journals

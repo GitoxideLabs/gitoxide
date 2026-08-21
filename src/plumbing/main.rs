@@ -1853,6 +1853,7 @@ mod tests {
 
         for arguments in [
             vec!["gix", "tix", "-x", "main", "--hide", "tag", "topic"],
+            vec!["gix", "tix", "--no-alt-screen"],
             vec!["gix", "tix", "amend"],
             vec!["gix", "tix", "spill"],
         ] {
@@ -1869,7 +1870,7 @@ mod tests {
                 .expect_err("screen selection is no longer supported")
                 .kind(),
             clap::error::ErrorKind::UnknownArgument,
-            "alternate-screen operation has no command-line mode"
+            "the removed --screen option remains unsupported"
         );
         for help in ["-h", "--help"] {
             assert_eq!(
