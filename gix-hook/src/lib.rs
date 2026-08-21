@@ -28,6 +28,17 @@
 //! `push-to-checkout`, `post-update`, `post-rewrite`, `sendemail-validate`,
 //! `post-index-change`, `applypatch-msg`) - everything except `update` and
 //! `reference-transaction`, which stay on their own dedicated, fallible functions.
+//!
+//! [`pre_push_stdin()`] formats `pre-push`'s stdin the same way [`receive_stdin()`] and
+//! [`reference_transaction_stdin()`] do, and [`cwd_for()`] picks the right working directory for
+//! a hook per `githooks(5)`'s documented `$GIT_DIR`-vs-worktree-root exception.
+//!
+//! Every stdin writer above has a read-side counterpart for a hook *implementation* reading its
+//! own input, rather than a caller spawning the hook: [`parse_receive_stdin()`],
+//! [`parse_reference_transaction_stdin()`], [`parse_pre_push_stdin()`],
+//! [`TransactionState::parse()`], and [`parse_push_options()`]. These parse genuinely untrusted
+//! bytes - from a pushing client, potentially hostile - so they're strict: malformed lines,
+//! non-hex object ids, and invalid ref names are all rejected rather than passed through.
 #![deny(missing_docs, rust_2018_idioms)]
 #![forbid(unsafe_code)]
 
@@ -324,6 +335,47 @@ pub fn receive_stdin<'a>(
     Ok(buf)
 }
 
+/// One parsed line of [`receive_stdin()`]'s wire format.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiveUpdate {
+    /// The old object name stored in the ref (all-zeroes for a newly created ref).
+    pub old_oid: gix_hash::ObjectId,
+    /// The new object name to be stored in the ref.
+    pub new_oid: gix_hash::ObjectId,
+    /// The full name of the ref.
+    pub ref_name: String,
+}
+
+/// Parse [`receive_stdin()`]'s wire format back into structured updates - the read-side
+/// counterpart used by a `pre-receive`/`post-receive` hook implementation reading its own
+/// stdin, as opposed to [`receive_stdin()`] itself, which is for the *caller* spawning the hook.
+///
+/// This is exactly where the format's raw bytes come from a pushing client that may be
+/// hostile, so parsing is strict: a line with the wrong field count, a non-hex-encoded oid, or a
+/// ref name that fails [`gix_validate::reference::name()`] is rejected rather than passed
+/// through as best-effort.
+pub fn parse_receive_stdin(input: &[u8]) -> Result<Vec<ReceiveUpdate>, Error> {
+    let mut updates = Vec::new();
+    for line in input.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let line =
+            std::str::from_utf8(line).map_err(|_| Error::MalformedLine(String::from_utf8_lossy(line).into_owned()))?;
+        let mut fields = line.splitn(3, ' ');
+        let (Some(old_oid), Some(new_oid), Some(ref_name)) = (fields.next(), fields.next(), fields.next()) else {
+            return Err(Error::MalformedLine(line.to_owned()));
+        };
+        gix_validate::reference::name(ref_name.into())?;
+        updates.push(ReceiveUpdate {
+            old_oid: gix_hash::ObjectId::from_hex(old_oid.as_bytes())?,
+            new_oid: gix_hash::ObjectId::from_hex(new_oid.as_bytes())?,
+            ref_name: ref_name.to_owned(),
+        });
+    }
+    Ok(updates)
+}
+
 /// The three states git calls the `reference-transaction` hook with, per `githooks(5)`.
 ///
 /// Verified against git's own source at tag `v2.47.0`, the same tag `windows_find()`'s docs
@@ -349,6 +401,19 @@ impl TransactionState {
             Self::Prepared => "prepared",
             Self::Committed => "committed",
             Self::Aborted => "aborted",
+        }
+    }
+
+    /// Parse the hook's single positional argument back into a `TransactionState` - the
+    /// read-side counterpart used by a `reference-transaction` hook implementation reading its
+    /// own `argv[1]`, as opposed to [`as_str()`](Self::as_str()), which is for the *caller*
+    /// spawning the hook. Returns `None` for anything git itself wouldn't have passed.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "prepared" => Some(Self::Prepared),
+            "committed" => Some(Self::Committed),
+            "aborted" => Some(Self::Aborted),
+            _ => None,
         }
     }
 
@@ -413,6 +478,64 @@ pub fn reference_transaction_stdin<'a>(
     Ok(buf)
 }
 
+/// An owned, parsed [`TransactionValue`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedTransactionValue {
+    /// An object id.
+    Oid(gix_hash::ObjectId),
+    /// A symbolic reference's target name, with the `ref:` prefix already stripped.
+    SymbolicTarget(String),
+}
+
+/// One parsed line of [`reference_transaction_stdin()`]'s wire format.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceTransactionUpdate {
+    /// The old value passed into the reference transaction.
+    pub old: ParsedTransactionValue,
+    /// The new value to be stored in the ref.
+    pub new: ParsedTransactionValue,
+    /// The full name of the ref.
+    pub ref_name: String,
+}
+
+/// Parse [`reference_transaction_stdin()`]'s wire format back into structured updates - the
+/// read-side counterpart used by a `reference-transaction` hook implementation reading its own
+/// stdin. Strict for the same reason [`parse_receive_stdin()`] is: a symbolic target is itself a
+/// ref name and is validated via [`gix_validate::reference::name()`], same as `ref_name`.
+pub fn parse_reference_transaction_stdin(input: &[u8]) -> Result<Vec<ReferenceTransactionUpdate>, Error> {
+    fn parse_value(field: &str) -> Result<ParsedTransactionValue, Error> {
+        match field.strip_prefix("ref:") {
+            Some(target) => {
+                gix_validate::reference::name(target.into())?;
+                Ok(ParsedTransactionValue::SymbolicTarget(target.to_owned()))
+            }
+            None => Ok(ParsedTransactionValue::Oid(gix_hash::ObjectId::from_hex(
+                field.as_bytes(),
+            )?)),
+        }
+    }
+
+    let mut updates = Vec::new();
+    for line in input.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let line =
+            std::str::from_utf8(line).map_err(|_| Error::MalformedLine(String::from_utf8_lossy(line).into_owned()))?;
+        let mut fields = line.splitn(3, ' ');
+        let (Some(old), Some(new), Some(ref_name)) = (fields.next(), fields.next(), fields.next()) else {
+            return Err(Error::MalformedLine(line.to_owned()));
+        };
+        gix_validate::reference::name(ref_name.into())?;
+        updates.push(ReferenceTransactionUpdate {
+            old: parse_value(old)?,
+            new: parse_value(new)?,
+            ref_name: ref_name.to_owned(),
+        });
+    }
+    Ok(updates)
+}
+
 /// Format the `pre-push` stdin payload: one line per ref being considered for push, as
 /// `<local-ref> SP <local-oid> SP <remote-ref> SP <remote-oid> LF`, per `githooks(5)`.
 ///
@@ -445,6 +568,75 @@ pub fn pre_push_stdin<'a>(
         .expect("writing to a Vec<u8> never fails");
     }
     Ok(buf)
+}
+
+/// One parsed line of [`pre_push_stdin()`]'s wire format.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrePushUpdate {
+    /// The local ref being pushed, `"(delete)"` for a deletion, or arbitrary text if the push
+    /// source wasn't an expandable ref name - see [`pre_push_stdin()`] for why this isn't
+    /// validated as a ref name.
+    pub local_ref: String,
+    /// The local object name for `local_ref`.
+    pub local_oid: gix_hash::ObjectId,
+    /// The destination ref on the remote.
+    pub remote_ref: String,
+    /// The remote object name for `remote_ref`, or the all-zeroes id if it doesn't exist yet.
+    pub remote_oid: gix_hash::ObjectId,
+}
+
+/// Parse [`pre_push_stdin()`]'s wire format back into structured updates - the read-side
+/// counterpart used by a `pre-push` hook implementation reading its own stdin.
+///
+/// Mirrors [`pre_push_stdin()`]'s own asymmetry: `remote_ref` is validated via
+/// [`gix_validate::reference::name()`], but `local_ref` only rejects control bytes, for the
+/// same reason the writer doesn't validate it as a ref name either.
+pub fn parse_pre_push_stdin(input: &[u8]) -> Result<Vec<PrePushUpdate>, Error> {
+    let mut updates = Vec::new();
+    for line in input.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let line =
+            std::str::from_utf8(line).map_err(|_| Error::MalformedLine(String::from_utf8_lossy(line).into_owned()))?;
+        let mut fields = line.splitn(4, ' ');
+        let (Some(local_ref), Some(local_oid), Some(remote_ref), Some(remote_oid)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            return Err(Error::MalformedLine(line.to_owned()));
+        };
+        if contains_control_byte(local_ref) {
+            return Err(Error::ControlByteInField(local_ref.to_owned()));
+        }
+        gix_validate::reference::name(remote_ref.into())?;
+        updates.push(PrePushUpdate {
+            local_ref: local_ref.to_owned(),
+            local_oid: gix_hash::ObjectId::from_hex(local_oid.as_bytes())?,
+            remote_ref: remote_ref.to_owned(),
+            remote_oid: gix_hash::ObjectId::from_hex(remote_oid.as_bytes())?,
+        });
+    }
+    Ok(updates)
+}
+
+/// Read the push options git set via [`push_option_env()`] back out of an environment lookup -
+/// the read-side counterpart used by a `pre-receive`/`post-receive` hook implementation reading
+/// its own environment, as opposed to [`push_option_env()`] itself, which is for the *caller*
+/// spawning the hook.
+///
+/// Takes a lookup function rather than reading `std::env::var` directly, so callers pass
+/// `|k| std::env::var(k).ok()` at the real call site while tests can pass a plain map - and so
+/// this crate, which forbids `unsafe`, never needs `std::env::set_var()`, itself `unsafe` as of
+/// Rust 2024 because mutating the process environment isn't thread-safe.
+///
+/// Returns an empty `Vec` both when no options were sent and when the push-options phase wasn't
+/// negotiated at all - `githooks(5)` documents both as indistinguishable to a reader: "the
+/// environment variables will not be set" versus "the count variable will be set to zero."
+pub fn parse_push_options(env: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    let count: usize = env("GIT_PUSH_OPTION_COUNT").and_then(|s| s.parse().ok()).unwrap_or(0);
+    (0..count)
+        .filter_map(|i| env(&format!("GIT_PUSH_OPTION_{i}")))
+        .collect()
 }
 
 /// Hook names git always executes in `$GIT_DIR`, regardless of whether the repository is bare -
@@ -1545,6 +1737,201 @@ mod tests {
                     "{name} must always run in $GIT_DIR per githooks(5), even with a worktree present"
                 );
             }
+        }
+    }
+
+    mod parse_receive_stdin {
+        use crate::parse_receive_stdin;
+
+        #[test]
+        fn empty_input_is_no_updates() {
+            assert_eq!(parse_receive_stdin(b"").unwrap(), []);
+        }
+
+        #[test]
+        fn round_trips_what_receive_stdin_writes() {
+            let old = super::oid("1111111111111111111111111111111111111111");
+            let new = super::oid("2222222222222222222222222222222222222222");
+            let written = crate::receive_stdin([(old.as_ref(), new.as_ref(), "refs/heads/main")]).unwrap();
+            let parsed = parse_receive_stdin(&written).unwrap();
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].old_oid, old);
+            assert_eq!(parsed[0].new_oid, new);
+            assert_eq!(parsed[0].ref_name, "refs/heads/main");
+        }
+
+        #[test]
+        fn multiple_lines_are_all_parsed() {
+            let a = super::oid("1111111111111111111111111111111111111111");
+            let b = super::oid("2222222222222222222222222222222222222222");
+            let input = format!(
+                "{} {} refs/heads/main\n{} {} refs/heads/topic\n",
+                a.to_hex(),
+                b.to_hex(),
+                b.to_hex(),
+                a.to_hex()
+            );
+            let parsed = parse_receive_stdin(input.as_bytes()).unwrap();
+            assert_eq!(parsed.len(), 2);
+            assert_eq!(parsed[1].ref_name, "refs/heads/topic");
+        }
+
+        #[test]
+        fn too_few_fields_is_malformed() {
+            assert!(parse_receive_stdin(b"onlyonefield\n").is_err());
+        }
+
+        #[test]
+        fn non_hex_oid_is_rejected() {
+            assert!(
+                parse_receive_stdin(b"not-hex 2222222222222222222222222222222222222222 refs/heads/main\n").is_err()
+            );
+        }
+
+        #[test]
+        fn invalid_ref_name_is_rejected() {
+            let line = b"1111111111111111111111111111111111111111 \
+                          2222222222222222222222222222222222222222 refs/heads/../escape\n";
+            assert!(parse_receive_stdin(line).is_err());
+        }
+    }
+
+    mod parse_reference_transaction_stdin {
+        use crate::{ParsedTransactionValue, parse_reference_transaction_stdin};
+
+        #[test]
+        fn round_trips_an_oid_update() {
+            let old = super::oid("1111111111111111111111111111111111111111");
+            let new = super::oid("2222222222222222222222222222222222222222");
+            let written = crate::reference_transaction_stdin([(
+                crate::TransactionValue::Oid(old.as_ref()),
+                crate::TransactionValue::Oid(new.as_ref()),
+                "refs/heads/main",
+            )])
+            .unwrap();
+            let parsed = parse_reference_transaction_stdin(&written).unwrap();
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].old, ParsedTransactionValue::Oid(old));
+            assert_eq!(parsed[0].new, ParsedTransactionValue::Oid(new));
+            assert_eq!(parsed[0].ref_name, "refs/heads/main");
+        }
+
+        #[test]
+        fn round_trips_a_symbolic_update() {
+            let written = crate::reference_transaction_stdin([(
+                crate::TransactionValue::SymbolicTarget("refs/heads/old-default"),
+                crate::TransactionValue::SymbolicTarget("refs/heads/main"),
+                "HEAD",
+            )])
+            .unwrap();
+            let parsed = parse_reference_transaction_stdin(&written).unwrap();
+            assert_eq!(
+                parsed[0].old,
+                ParsedTransactionValue::SymbolicTarget("refs/heads/old-default".into())
+            );
+            assert_eq!(
+                parsed[0].new,
+                ParsedTransactionValue::SymbolicTarget("refs/heads/main".into())
+            );
+        }
+
+        #[test]
+        fn invalid_symbolic_target_is_rejected() {
+            let line = b"ref:refs/heads/../escape 0000000000000000000000000000000000000000 HEAD\n";
+            assert!(parse_reference_transaction_stdin(line).is_err());
+        }
+    }
+
+    mod parse_pre_push_stdin {
+        use crate::parse_pre_push_stdin;
+
+        #[test]
+        fn round_trips_a_normal_update() {
+            let local = super::oid("1111111111111111111111111111111111111111");
+            let remote = super::oid("2222222222222222222222222222222222222222");
+            let written = crate::pre_push_stdin([(
+                "refs/heads/master",
+                local.as_ref(),
+                "refs/heads/foreign",
+                remote.as_ref(),
+            )])
+            .unwrap();
+            let parsed = parse_pre_push_stdin(&written).unwrap();
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].local_ref, "refs/heads/master");
+            assert_eq!(parsed[0].local_oid, local);
+            assert_eq!(parsed[0].remote_ref, "refs/heads/foreign");
+            assert_eq!(parsed[0].remote_oid, remote);
+        }
+
+        #[test]
+        fn delete_marker_round_trips_without_validation() {
+            let zero = super::oid("0000000000000000000000000000000000000000");
+            let remote = super::oid("2222222222222222222222222222222222222222");
+            let written =
+                crate::pre_push_stdin([("(delete)", zero.as_ref(), "refs/heads/foreign", remote.as_ref())]).unwrap();
+            let parsed = parse_pre_push_stdin(&written).unwrap();
+            assert_eq!(parsed[0].local_ref, "(delete)");
+        }
+
+        #[test]
+        fn invalid_remote_ref_is_rejected() {
+            let line = b"refs/heads/master 1111111111111111111111111111111111111111 \
+                          refs/heads/../escape 2222222222222222222222222222222222222222\n";
+            assert!(parse_pre_push_stdin(line).is_err());
+        }
+    }
+
+    mod transaction_state_parse {
+        use crate::TransactionState;
+
+        #[test]
+        fn parses_all_three_states() {
+            assert_eq!(TransactionState::parse("prepared"), Some(TransactionState::Prepared));
+            assert_eq!(TransactionState::parse("committed"), Some(TransactionState::Committed));
+            assert_eq!(TransactionState::parse("aborted"), Some(TransactionState::Aborted));
+        }
+
+        #[test]
+        fn rejects_unrecognized_input() {
+            assert_eq!(TransactionState::parse("bogus"), None);
+        }
+    }
+
+    mod parse_push_options {
+        use std::collections::HashMap;
+
+        use crate::parse_push_options;
+
+        #[test]
+        fn no_count_var_is_no_options() {
+            let env: HashMap<&str, &str> = HashMap::new();
+            assert_eq!(
+                parse_push_options(|k| env.get(k).map(std::string::ToString::to_string)),
+                Vec::<String>::new()
+            );
+        }
+
+        #[test]
+        fn reads_count_then_each_indexed_option() {
+            let env = HashMap::from([
+                ("GIT_PUSH_OPTION_COUNT", "2"),
+                ("GIT_PUSH_OPTION_0", "ci.skip"),
+                ("GIT_PUSH_OPTION_1", "reviewer=jane"),
+            ]);
+            assert_eq!(
+                parse_push_options(|k| env.get(k).map(std::string::ToString::to_string)),
+                vec!["ci.skip".to_string(), "reviewer=jane".to_string()]
+            );
+        }
+
+        #[test]
+        fn zero_count_is_no_options() {
+            let env = HashMap::from([("GIT_PUSH_OPTION_COUNT", "0")]);
+            assert_eq!(
+                parse_push_options(|k| env.get(k).map(std::string::ToString::to_string)),
+                Vec::<String>::new()
+            );
         }
     }
 }
