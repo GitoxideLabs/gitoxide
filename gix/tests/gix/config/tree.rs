@@ -51,6 +51,7 @@ mod keys {
                 &gix::config::tree::Clone::DEFAULT_REMOTE_NAME as &dyn Key,
                 BStr::new(b"origin"),
             ),
+            (&gix::config::tree::Core::NOTES_REF, BStr::new(b"refs/notes/commits")),
             (&gix::config::tree::Diff::ALGORITHM, BStr::new(b"myers")),
             (&gix::config::tree::Gpg::FORMAT, BStr::new(b"openpgp")),
             (&gix::config::tree::Gpg::PROGRAM, BStr::new(b"gpg")),
@@ -172,6 +173,18 @@ mod branch {
     fn merge() {
         assert!(branch::Merge::try_into_fullrefname("refs/heads/main").is_ok());
         assert!(branch::Merge::try_into_fullrefname("main").is_err());
+        assert!(
+            Branch::MERGE.validate("refs/heads/main".into()).is_ok(),
+            "a fully qualified merge reference is valid"
+        );
+        assert!(
+            Branch::MERGE.validate("main".into()).is_err(),
+            "a partial merge reference is invalid"
+        );
+        assert!(
+            Branch::MERGE.validate("".into()).is_err(),
+            "a merge reference cannot be empty"
+        );
 
         assert!(Branch::MERGE.full_name(None).is_err());
         assert_eq!(
@@ -455,6 +468,22 @@ mod core {
 
     fn signed(value: i64) -> Result<Option<i64>, gix_config::value::Error> {
         Ok(Some(value))
+    }
+
+    #[test]
+    fn notes_ref_is_a_full_reference_or_empty() {
+        assert!(
+            Core::NOTES_REF.validate("refs/notes/review".into()).is_ok(),
+            "a fully qualified notes reference is valid"
+        );
+        assert!(
+            Core::NOTES_REF.validate("review".into()).is_err(),
+            "a partial notes reference is invalid"
+        );
+        assert!(
+            Core::NOTES_REF.validate("".into()).is_ok(),
+            "an empty value disables the default notes reference"
+        );
     }
 
     #[test]
@@ -932,6 +961,54 @@ mod gpg {
             );
         }
         assert!(Gpg::MIN_TRUST_LEVEL.validate("unknown".into()).is_err());
+    }
+}
+
+mod notes {
+    use gix::config::tree::{Key, Notes};
+    use gix_object::bstr::BString;
+
+    #[test]
+    fn display_ref_metadata() {
+        assert_eq!(Notes::DISPLAY_REF.logical_name(), "notes.displayRef");
+        assert_eq!(
+            Notes::DISPLAY_REF.the_environment_override(),
+            "GIT_NOTES_DISPLAY_REF",
+            "the key declares its corresponding environment variable"
+        );
+    }
+
+    #[test]
+    fn display_ref_parsing() -> crate::Result {
+        assert_eq!(
+            Notes::DISPLAY_REF.try_into_display_refs(":refs/notes/review::refs/notes/*:")?,
+            vec![BString::from("refs/notes/review"), BString::from("refs/notes/*")],
+            "empty fields are ignored while literal and glob references retain their order"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn display_ref_validation() {
+        for valid in [
+            "",
+            "refs/notes/review",
+            "refs/notes/*",
+            "refs/notes/revie?",
+            "refs/notes/[rs]eview",
+            "refs/notes/review:refs/notes/*",
+        ] {
+            assert!(
+                Notes::DISPLAY_REF.validate(valid.into()).is_ok(),
+                "{valid:?} is a valid display-reference list"
+            );
+        }
+        for invalid in ["review", "refs/notes/review:security", r"refs/notes/review\literal"] {
+            assert!(
+                Notes::DISPLAY_REF.validate(invalid.into()).is_err(),
+                "{invalid:?} contains a reference that is neither fully qualified nor a glob"
+            );
+        }
     }
 }
 

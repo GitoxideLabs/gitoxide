@@ -616,6 +616,33 @@ pub mod validate {
         }
     }
 
+    /// Values that are full reference names.
+    #[derive(Default, Clone, Copy)]
+    pub struct FullNameRef {
+        allow_empty: bool,
+    }
+
+    impl FullNameRef {
+        /// Create a validator that requires a full reference name.
+        pub const fn new() -> Self {
+            FullNameRef { allow_empty: false }
+        }
+
+        /// Create a validator that also accepts an empty value.
+        pub const fn or_empty() -> Self {
+            FullNameRef { allow_empty: true }
+        }
+    }
+
+    impl Validate for FullNameRef {
+        fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+            if !self.allow_empty || !value.is_empty() {
+                gix_ref::FullName::try_from(value.to_owned())?;
+            }
+            Ok(())
+        }
+    }
+
     /// Values that are git remotes, symbolic or urls
     #[derive(Default, Clone, Copy)]
     pub struct RemoteName;

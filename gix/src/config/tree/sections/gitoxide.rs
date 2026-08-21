@@ -33,6 +33,7 @@ impl Gitoxide {
     pub const USER_AGENT: keys::Any = keys::Any::new("userAgent", &config::Tree::GITOXIDE).with_note(
         "The user agent presented on the git protocol layer, serving as fallback for when no `http.userAgent` is set",
     );
+
     /// The `gitoxide.tracePacket` Key.
     pub const TRACE_PACKET: keys::Boolean = keys::Boolean::new_boolean("tracePacket", &config::Tree::GITOXIDE)
         .with_environment_override("GIT_TRACE_PACKET");

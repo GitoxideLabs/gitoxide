@@ -1573,6 +1573,7 @@ dependencies = [
  "gix-mailmap",
  "gix-merge",
  "gix-negotiate",
+ "gix-note",
  "gix-object",
  "gix-odb",
  "gix-pack",
@@ -2155,6 +2156,15 @@ dependencies = [
 [[package]]
 name = "gix-note"
 version = "0.0.0"
+dependencies = [
+ "gix-error",
+ "gix-hash",
+ "gix-hashtable",
+ "gix-note",
+ "gix-object",
+ "gix-odb",
+ "gix-testtools",
+]
 
 [[package]]
 name = "gix-object"

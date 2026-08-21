@@ -58,6 +58,7 @@ uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns bel
 
 Follow "purposeful conventional commits" style:
 
+- Write commit messages in Markdown, and use the body to share everything known about what motivated the change, not merely what changed
 - Use conventional commit prefixes ONLY if message should appear in changelog
 - Breaking changes MUST use `!` before the colon: `change!:`, `remove!:`, `rename!:`, or _scoped_ forms like `feat(gix-odb)!:`
 - Features/fixes visible to users: `feat:`, `fix:`
@@ -77,6 +78,7 @@ Follow "purposeful conventional commits" style:
 - No `.unwrap()` - use `.expect("context")` if you are sure this can't fail.
 - Prefer references in plumbing crates to avoid expensive clones
 - Avoid calling `.detach()` unless an owned value is explicitly required. Many `gix` APIs accept attached ids and references directly, so prefer keeping repository-backed handles like `gix::Id` when possible.
+- Name variables holding untyped Git object IDs `<type>_id` or `*_<type>_id` (for example, `commit_id`, `root_tree_id`, or `note_blob_id`) so the object kind is always explicit.
 - Use `gix_features::threading::*` for interior mutability primitives
 
 ### Path Handling
@@ -151,7 +153,7 @@ Follow "purposeful conventional commits" style:
 - Ubuntu-latest git version is the compatibility target
 - `cargo smart-release` for releases (driven by commit messages)
 - Every commit must be self-contained and pass CI independently
-   - Feel free to run `etc/scripts/ci-check-local.sh` until it passes as proxy, as running every commit against CI isn't feasible.
+   - Feel free to run `etc/scripts/ci-check-local.sh --thorough` until it passes as proxy, as running every commit against CI isn't feasible.
 - Keep breaking changes and all adaptations required to build and test the workspace in the same commit
 - When such a commit touches multiple crates, _scope_ its conventional commit message to the crate whose changelog should receive the entry
 

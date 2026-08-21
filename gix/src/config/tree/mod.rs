@@ -53,6 +53,8 @@ pub(crate) mod root {
         pub const MAILMAP: sections::Mailmap = sections::Mailmap;
         /// The `merge` section.
         pub const MERGE: sections::Merge = sections::Merge;
+        /// The `notes` section.
+        pub const NOTES: sections::Notes = sections::Notes;
         /// The `pack` section.
         pub const PACK: sections::Pack = sections::Pack;
         /// The `protocol` section.
@@ -95,6 +97,7 @@ pub(crate) mod root {
                 &Self::INIT,
                 &Self::MAILMAP,
                 &Self::MERGE,
+                &Self::NOTES,
                 &Self::PACK,
                 &Self::PROTOCOL,
                 &Self::PUSH,
@@ -113,8 +116,8 @@ pub(crate) mod root {
 mod sections;
 pub use sections::{
     Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, Extensions, Fetch, Gitoxide, Gpg, Http,
-    Index, Init, Mailmap, Merge, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, branch, checkout, commit, core,
-    credential, extensions, fetch, gitoxide, gpg, http, index, protocol, push, remote, ssh,
+    Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, branch, checkout, commit,
+    core, credential, extensions, fetch, gitoxide, gpg, http, index, notes, protocol, push, remote, ssh,
 };
 #[cfg(feature = "blob-diff")]
 pub use sections::{Diff, diff};

@@ -1,3 +1,22 @@
+mod to_prefix {
+    #[test]
+    fn turns_byte_ranges_into_standalone_prefixes() {
+        for id_hex in [
+            "0123456789abcdef123456789abcdef123456789",
+            "0123456789abcdef123456789abcdef1234567890123456789abcdef12345678",
+        ] {
+            let id = gix_hash::ObjectId::from_hex(id_hex.as_bytes()).expect("valid input");
+            let prefix = id.to_prefix(1..3);
+            assert_eq!(prefix.hex_len(), 4);
+            assert_eq!(prefix.to_string(), &id_hex[2..6]);
+
+            let empty = id.to_prefix(0..0);
+            assert_eq!(empty.hex_len(), 0);
+            assert_eq!(empty.to_string(), "");
+        }
+    }
+}
+
 mod to_hex_with_len {
     #[test]
     fn display_entire_range_sha1() {

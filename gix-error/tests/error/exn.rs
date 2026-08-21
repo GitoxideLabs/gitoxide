@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ErrorWithSource, debug_string, fixup_paths, new_tree_error};
+use crate::{ErrorWithSource, fixup_paths, new_tree_error};
 use gix_error::OptionExt;
 use gix_error::ResultExt;
 use gix_error::{ErrorExt, message};
@@ -25,7 +25,7 @@ fn raise_chain() {
     let e3 = e2.raise(message("E3"));
     let e4 = e3.raise(message("E4"));
     let e5 = e4.raise(message("E5"));
-    insta::assert_debug_snapshot!(e5, @r"
+    insta::assert_debug_snapshot!(e5, "raised errors render newest context first", @r"
     E5
     |
     └─ E4
@@ -36,7 +36,7 @@ fn raise_chain() {
     |
     └─ E1
     ");
-    insta::assert_snapshot!(debug_string(&e5), @"
+    insta::assert_compact_debug_snapshot!(&e5, "raised frames retain their caller locations", @"
     E5, at gix-error/tests/error/exn.rs:27
     |
     └─ E4, at gix-error/tests/error/exn.rs:26
@@ -49,7 +49,7 @@ fn raise_chain() {
     ");
 
     let e = e5.erased();
-    insta::assert_debug_snapshot!(e, @r"
+    insta::assert_debug_snapshot!(e, "type erasure preserves the rendered error chain", @r"
     E5
     |
     └─ E4
@@ -60,7 +60,7 @@ fn raise_chain() {
     |
     └─ E1
     ");
-    insta::assert_snapshot!(format!("{e:#}"), @r#"
+    insta::assert_snapshot!(format!("{e:#}"), "alternate display exposes erased message types", @r#"
     Message("E5")
     |
     └─ Message("E4")
@@ -71,9 +71,9 @@ fn raise_chain() {
                 |
                 └─ Message("E1")
     "#);
-    insta::assert_snapshot!(format!("{e:}"), @"E5");
+    insta::assert_snapshot!(format!("{e:}"), "standard display shows only the top message", @"E5");
 
-    insta::assert_snapshot!(debug_string(&e), @"
+    insta::assert_compact_debug_snapshot!(&e, "type erasure preserves caller locations", @"
     E5, at gix-error/tests/error/exn.rs:27
     |
     └─ E4, at gix-error/tests/error/exn.rs:26
@@ -87,7 +87,7 @@ fn raise_chain() {
 
     // Double-erase
     let e = e.erased();
-    insta::assert_debug_snapshot!(e, @r"
+    insta::assert_debug_snapshot!(e, "repeated erasure preserves the rendered chain", @r"
     E5
     |
     └─ E4
@@ -99,7 +99,7 @@ fn raise_chain() {
     └─ E1
     ");
 
-    insta::assert_snapshot!(format!("{e:#}"), @r#"
+    insta::assert_snapshot!(format!("{e:#}"), "repeated erasure preserves alternate display", @r#"
     Message("E5")
     |
     └─ Message("E4")
@@ -121,16 +121,19 @@ fn raise_chain() {
 fn and_raise() {
     let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
     let exn = io_err.and_raise(message("could not read config"));
-    insta::assert_debug_snapshot!(exn, @r"
+    insta::assert_debug_snapshot!(exn, "and_raise links context above its source", @r"
     could not read config
     |
     └─ file not found
     ");
 
-    // and_raise is equivalent to raise().raise() (compare with {:#?} to omit locations)
     let io_err2 = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
     let exn2 = io_err2.raise().raise(message("could not read config"));
-    assert_eq!(format!("{exn:#?}"), format!("{exn2:#?}"));
+    assert_eq!(
+        format!("{exn:#?}"),
+        format!("{exn2:#?}"),
+        "and_raise is equivalent to raise().raise() (compare with {{:#?}} to omit locations)"
+    );
 }
 
 #[test]
@@ -138,7 +141,7 @@ fn raise_all() {
     let e = message("Top").raise_all(
         (1..5).map(|idx| message!("E{}", idx).raise_all((0..idx).map(|sidx| message!("E{}-{}", idx, sidx)))),
     );
-    insta::assert_debug_snapshot!(e, @r"
+    insta::assert_debug_snapshot!(e, "raise_all preserves nested child order", @r"
     Top
     |
     └─ E1
@@ -169,40 +172,40 @@ fn raise_all() {
         |
         └─ E4-3
     ");
-    insta::assert_snapshot!(debug_string(&e), @"
-    Top, at gix-error/tests/error/exn.rs:138
+    insta::assert_compact_debug_snapshot!(&e, "raise_all retains every caller location", @"
+    Top, at gix-error/tests/error/exn.rs:141
     |
-    └─ E1, at gix-error/tests/error/exn.rs:139
+    └─ E1, at gix-error/tests/error/exn.rs:142
     |   |
-    |   └─ E1-0, at gix-error/tests/error/exn.rs:139
+    |   └─ E1-0, at gix-error/tests/error/exn.rs:142
     |
-    └─ E2, at gix-error/tests/error/exn.rs:139
+    └─ E2, at gix-error/tests/error/exn.rs:142
     |   |
-    |   └─ E2-0, at gix-error/tests/error/exn.rs:139
+    |   └─ E2-0, at gix-error/tests/error/exn.rs:142
     |   |
-    |   └─ E2-1, at gix-error/tests/error/exn.rs:139
+    |   └─ E2-1, at gix-error/tests/error/exn.rs:142
     |
-    └─ E3, at gix-error/tests/error/exn.rs:139
+    └─ E3, at gix-error/tests/error/exn.rs:142
     |   |
-    |   └─ E3-0, at gix-error/tests/error/exn.rs:139
+    |   └─ E3-0, at gix-error/tests/error/exn.rs:142
     |   |
-    |   └─ E3-1, at gix-error/tests/error/exn.rs:139
+    |   └─ E3-1, at gix-error/tests/error/exn.rs:142
     |   |
-    |   └─ E3-2, at gix-error/tests/error/exn.rs:139
+    |   └─ E3-2, at gix-error/tests/error/exn.rs:142
     |
-    └─ E4, at gix-error/tests/error/exn.rs:139
+    └─ E4, at gix-error/tests/error/exn.rs:142
         |
-        └─ E4-0, at gix-error/tests/error/exn.rs:139
+        └─ E4-0, at gix-error/tests/error/exn.rs:142
         |
-        └─ E4-1, at gix-error/tests/error/exn.rs:139
+        └─ E4-1, at gix-error/tests/error/exn.rs:142
         |
-        └─ E4-2, at gix-error/tests/error/exn.rs:139
+        └─ E4-2, at gix-error/tests/error/exn.rs:142
         |
-        └─ E4-3, at gix-error/tests/error/exn.rs:139
+        └─ E4-3, at gix-error/tests/error/exn.rs:142
     ");
 
     let e = e.chain_all((1..3).map(|idx| message!("SE{}", idx)));
-    insta::assert_debug_snapshot!(e, @r"
+    insta::assert_debug_snapshot!(e, "chain_all appends sibling frames", @r"
     Top
     |
     └─ E1
@@ -238,7 +241,7 @@ fn raise_all() {
     └─ SE2
     ");
 
-    insta::assert_snapshot!(format!("{:#}", e), @r#"
+    insta::assert_snapshot!(format!("{:#}", e), "alternate display preserves the full error tree", @r#"
     Message("Top")
     |
     └─ Message("E1")
@@ -289,7 +292,7 @@ fn inverse_error_call_chain() {
     let e3 = e2.chain(message("E3"));
     let e4 = e3.chain(message("E4"));
     let e5 = e4.chain(message("E5"));
-    insta::assert_debug_snapshot!(e5, @r"
+    insta::assert_debug_snapshot!(e5, "chain appends errors in call order", @r"
     E1
     |
     └─ E2
@@ -300,19 +303,19 @@ fn inverse_error_call_chain() {
     |
     └─ E5
     ");
-    insta::assert_snapshot!(debug_string(&e5), @"
-    E1, at gix-error/tests/error/exn.rs:287
+    insta::assert_compact_debug_snapshot!(&e5, "chain retains caller locations in call order", @"
+    E1, at gix-error/tests/error/exn.rs:290
     |
-    └─ E2, at gix-error/tests/error/exn.rs:288
+    └─ E2, at gix-error/tests/error/exn.rs:291
     |
-    └─ E3, at gix-error/tests/error/exn.rs:289
+    └─ E3, at gix-error/tests/error/exn.rs:292
     |
-    └─ E4, at gix-error/tests/error/exn.rs:290
+    └─ E4, at gix-error/tests/error/exn.rs:293
     |
-    └─ E5, at gix-error/tests/error/exn.rs:291
+    └─ E5, at gix-error/tests/error/exn.rs:294
     ");
 
-    insta::assert_snapshot!(format!("{e5:#}"), @r#"
+    insta::assert_snapshot!(format!("{e5:#}"), "alternate display follows chained order", @r#"
     Message("E1")
     |
     └─ Message("E2")
@@ -330,7 +333,7 @@ fn inverse_error_call_chain() {
 #[test]
 fn error_tree() {
     let mut err = new_tree_error();
-    insta::assert_debug_snapshot!(err, @r"
+    insta::assert_debug_snapshot!(err, "tree errors preserve their hierarchy", @r"
     E6
     |
     └─ E5
@@ -355,7 +358,7 @@ fn error_tree() {
         |
         └─ E7
     ");
-    insta::assert_snapshot!(debug_string(&err), @"
+    insta::assert_compact_debug_snapshot!(&err, "tree errors retain caller locations", @"
     E6, at gix-error/tests/error/main.rs:25
     |
     └─ E5, at gix-error/tests/error/main.rs:17
@@ -380,7 +383,7 @@ fn error_tree() {
         |
         └─ E7, at gix-error/tests/error/main.rs:22
     ");
-    insta::assert_debug_snapshot!(err.frame().iter_frames().map(ToString::to_string).collect::<Vec<_>>(), @r#"
+    insta::assert_debug_snapshot!(err.frame().iter_frames().map(ToString::to_string).collect::<Vec<_>>(), "frame iteration is breadth-first", @r#"
     [
         "E6",
         "E5",
@@ -398,7 +401,7 @@ fn error_tree() {
     "#);
 
     let new_e = message("E-New").raise_all(err.drain_children());
-    insta::assert_debug_snapshot!(new_e, @r"
+    insta::assert_debug_snapshot!(new_e, "drained children retain their subtrees", @r"
     E-New
     |
     └─ E5
@@ -423,17 +426,17 @@ fn error_tree() {
         |
         └─ E7
     ");
-    insta::assert_snapshot!(err, @"E6");
+    insta::assert_snapshot!(err, "draining children leaves the root frame", @"E6");
 }
 
 #[test]
 fn result_ext() {
     let result: Result<(), Message> = Err(message("An error"));
     let result = result.or_raise(|| message("Another error"));
-    insta::assert_snapshot!(debug_string(result.unwrap_err()), @"
-    Another error, at gix-error/tests/error/exn.rs:432
+    insta::assert_compact_debug_snapshot!(result.unwrap_err(), "or_raise records context and source at the call site", @"
+    Another error, at gix-error/tests/error/exn.rs:435
     |
-    └─ An error, at gix-error/tests/error/exn.rs:432
+    └─ An error, at gix-error/tests/error/exn.rs:435
     ");
 }
 
@@ -441,7 +444,7 @@ fn result_ext() {
 fn option_ext() {
     let result: Option<()> = None;
     let result = result.ok_or_raise(|| message("An error"));
-    insta::assert_snapshot!(debug_string(result.unwrap_err()), @"An error, at gix-error/tests/error/exn.rs:443");
+    insta::assert_compact_debug_snapshot!(result.unwrap_err(), "ok_or_raise records the failure call site", @"An error, at gix-error/tests/error/exn.rs:446");
 }
 
 #[test]
@@ -452,13 +455,13 @@ fn from_message() {
     }
 
     let result = foo();
-    insta::assert_snapshot!(debug_string(result.unwrap_err()),@"An error, at gix-error/tests/error/exn.rs:450");
+    insta::assert_compact_debug_snapshot!(result.unwrap_err(), "question-mark conversion records the propagation site", @"An error, at gix-error/tests/error/exn.rs:453");
 }
 
 #[test]
 fn new_with_source() {
     let e = Exn::new(ErrorWithSource("top", message("source")));
-    insta::assert_debug_snapshot!(e,@r"
+    insta::assert_debug_snapshot!(e, "Exn::new retains the standard error source", @r"
     top
     |
     └─ source
@@ -472,7 +475,7 @@ fn bail() {
     }
 
     let result = foo();
-    insta::assert_snapshot!(debug_string(result.unwrap_err()), @"An error, at gix-error/tests/error/exn.rs:471");
+    insta::assert_compact_debug_snapshot!(result.unwrap_err(), "bail records the invocation site", @"An error, at gix-error/tests/error/exn.rs:474");
 }
 
 #[test]
@@ -493,7 +496,7 @@ fn ensure_fail() {
     }
 
     let result = foo();
-    insta::assert_snapshot!(debug_string(result.unwrap_err()), @"An error, at gix-error/tests/error/exn.rs:491");
+    insta::assert_compact_debug_snapshot!(result.unwrap_err(), "ensure failure records the invocation site", @"An error, at gix-error/tests/error/exn.rs:494");
 }
 
 #[test]
@@ -530,7 +533,7 @@ fn raise_chain_anyhow() {
     let root = e2.raise(Message::new("root"));
 
     // It's a linked list as linked up with the first child, but also has multiple children.
-    insta::assert_snapshot!(format!("{root:#}"), @r#"
+    insta::assert_snapshot!(format!("{root:#}"), "alternate display preserves mixed linear and branched chains", @r#"
     Message("root")
     |
     └─ Message("E2")
@@ -550,18 +553,18 @@ fn raise_chain_anyhow() {
                 └─ Message("E1c2-2")
     "#);
 
-    insta::assert_snapshot!(remove_stackstrace(format!("{:?}", anyhow::Error::from(root))), @"
-    root, at gix-error/tests/error/exn.rs:530
+    insta::assert_snapshot!(remove_stackstrace(format!("{:?}", anyhow::Error::from(root))), "anyhow traverses every error frame in order", @"
+    root, at gix-error/tests/error/exn.rs:533
 
     Caused by:
-        0: E2, at gix-error/tests/error/exn.rs:529
-        1: E1, at gix-error/tests/error/exn.rs:526
-        2: E1-2, at gix-error/tests/error/exn.rs:527
-        3: E1-3, at gix-error/tests/error/exn.rs:528
-        4: E1c1-1, at gix-error/tests/error/exn.rs:527
-        5: E1c1-2, at gix-error/tests/error/exn.rs:527
-        6: E1c2-1, at gix-error/tests/error/exn.rs:528
-        7: E1c2-2, at gix-error/tests/error/exn.rs:528
+        0: E2, at gix-error/tests/error/exn.rs:532
+        1: E1, at gix-error/tests/error/exn.rs:529
+        2: E1-2, at gix-error/tests/error/exn.rs:530
+        3: E1-3, at gix-error/tests/error/exn.rs:531
+        4: E1c1-1, at gix-error/tests/error/exn.rs:530
+        5: E1c1-2, at gix-error/tests/error/exn.rs:530
+        6: E1c2-1, at gix-error/tests/error/exn.rs:531
+        7: E1c2-2, at gix-error/tests/error/exn.rs:531
     ");
 }
 
@@ -573,7 +576,7 @@ fn inverse_error_call_chain_anyhow() {
     let e3 = e2.chain(message("E3"));
     let e4 = e3.chain(message("E4"));
     let e5 = e4.chain(message("E5"));
-    insta::assert_debug_snapshot!(e5, @"
+    insta::assert_debug_snapshot!(e5, "inverse chains render in insertion order", @"
     E1
     |
     └─ E2
@@ -585,14 +588,14 @@ fn inverse_error_call_chain_anyhow() {
     └─ E5
     ");
 
-    insta::assert_snapshot!(remove_stackstrace(format!("{:?}", anyhow::Error::from(e5))), @"
-    E1, at gix-error/tests/error/exn.rs:571
+    insta::assert_snapshot!(remove_stackstrace(format!("{:?}", anyhow::Error::from(e5))), "anyhow preserves inverse chain source order", @"
+    E1, at gix-error/tests/error/exn.rs:574
 
     Caused by:
-        0: E2, at gix-error/tests/error/exn.rs:572
-        1: E3, at gix-error/tests/error/exn.rs:573
-        2: E4, at gix-error/tests/error/exn.rs:574
-        3: E5, at gix-error/tests/error/exn.rs:575
+        0: E2, at gix-error/tests/error/exn.rs:575
+        1: E3, at gix-error/tests/error/exn.rs:576
+        2: E4, at gix-error/tests/error/exn.rs:577
+        3: E5, at gix-error/tests/error/exn.rs:578
     ");
 }
 
@@ -609,7 +612,7 @@ fn into_chain() {
     let e2 = e1.raise(message("E2"));
     let root = e2.raise(Message::new("root"));
 
-    insta::assert_snapshot!(format!("{root:#}"), @r#"
+    insta::assert_snapshot!(format!("{root:#}"), "alternate display preserves the source tree before flattening", @r#"
     Message("root")
     |
     └─ Message("E2")
@@ -632,22 +635,22 @@ fn into_chain() {
     // It's a linked list as linked up with the first child, but also has multiple children.
     let root = root.into_chain();
     // By default, there is paths displayed, just like everywhere.
-    insta::assert_debug_snapshot!(causes_display(&root, Style::Normal), @r#"
+    insta::assert_debug_snapshot!(causes_display(&root, Style::Normal), "into_chain exposes locations for every source", @r#"
     [
-        "root, at gix-error/tests/error/exn.rs:610",
-        "E2, at gix-error/tests/error/exn.rs:609",
-        "E1, at gix-error/tests/error/exn.rs:606",
-        "E1-2, at gix-error/tests/error/exn.rs:607",
-        "E1-3, at gix-error/tests/error/exn.rs:608",
-        "E1c1-1, at gix-error/tests/error/exn.rs:607",
-        "E1c1-2, at gix-error/tests/error/exn.rs:607",
-        "E1c2-1, at gix-error/tests/error/exn.rs:608",
-        "E1c2-2, at gix-error/tests/error/exn.rs:608",
+        "root, at gix-error/tests/error/exn.rs:613",
+        "E2, at gix-error/tests/error/exn.rs:612",
+        "E1, at gix-error/tests/error/exn.rs:609",
+        "E1-2, at gix-error/tests/error/exn.rs:610",
+        "E1-3, at gix-error/tests/error/exn.rs:611",
+        "E1c1-1, at gix-error/tests/error/exn.rs:610",
+        "E1c1-2, at gix-error/tests/error/exn.rs:610",
+        "E1c2-1, at gix-error/tests/error/exn.rs:611",
+        "E1c2-2, at gix-error/tests/error/exn.rs:611",
     ]
     "#);
 
     // But these can also be turned off
-    insta::assert_debug_snapshot!(causes_display(&root, Style::Alternate), @r#"
+    insta::assert_debug_snapshot!(causes_display(&root, Style::Alternate), "alternate source display omits locations", @r#"
     [
         "root",
         "E2",
@@ -663,18 +666,18 @@ fn into_chain() {
 
     // This should look similar.
     #[cfg(feature = "anyhow")]
-    insta::assert_snapshot!(remove_stackstrace(format!("{:?}", anyhow::Error::from(root))), @"
-    root, at gix-error/tests/error/exn.rs:610
+    insta::assert_snapshot!(remove_stackstrace(format!("{:?}", anyhow::Error::from(root))), "into_chain matches anyhow source traversal", @"
+    root, at gix-error/tests/error/exn.rs:613
 
     Caused by:
-        0: E2, at gix-error/tests/error/exn.rs:609
-        1: E1, at gix-error/tests/error/exn.rs:606
-        2: E1-2, at gix-error/tests/error/exn.rs:607
-        3: E1-3, at gix-error/tests/error/exn.rs:608
-        4: E1c1-1, at gix-error/tests/error/exn.rs:607
-        5: E1c1-2, at gix-error/tests/error/exn.rs:607
-        6: E1c2-1, at gix-error/tests/error/exn.rs:608
-        7: E1c2-2, at gix-error/tests/error/exn.rs:608
+        0: E2, at gix-error/tests/error/exn.rs:612
+        1: E1, at gix-error/tests/error/exn.rs:609
+        2: E1-2, at gix-error/tests/error/exn.rs:610
+        3: E1-3, at gix-error/tests/error/exn.rs:611
+        4: E1c1-1, at gix-error/tests/error/exn.rs:610
+        5: E1c1-2, at gix-error/tests/error/exn.rs:610
+        6: E1c2-1, at gix-error/tests/error/exn.rs:611
+        7: E1c2-2, at gix-error/tests/error/exn.rs:611
     ");
 }
 
@@ -721,14 +724,14 @@ fn erased_frames_still_expose_the_original_error() {
 }
 
 /// Mirrors the pattern that broke in https://github.com/GitoxideLabs/gitoxide/issues/2694, where
-/// a caller of `Error::sources()` downcasts each error to react to a specific one.
+/// a caller of `Error::iter_errors()` downcasts each error to react to a specific one.
 #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
 #[test]
-fn erased_errors_are_found_by_source_iteration() {
+fn erased_errors_are_found_by_error_iteration() {
     let e: gix_error::Error = message("E1").raise_erased().into();
     assert!(
-        e.sources().any(|err| err.downcast_ref::<Message>().is_some()),
-        "sources() yields the original error type even after type-erasure"
+        e.iter_errors().any(|err| err.downcast_ref::<Message>().is_some()),
+        "iter_errors() yields the original error type even after type-erasure"
     );
 }
 
@@ -741,5 +744,100 @@ fn erased_into_inner_preserves_source_chain() {
             .to_string(),
         "E1-source",
         "type erasure remains transparent to std-style source traversal"
+    );
+}
+
+#[test]
+fn native_sources_are_retained_and_traversed_lazily() {
+    let e = Exn::new(ErrorWithSource("top", ErrorWithSource("middle", message("bottom"))));
+    assert!(
+        e.frame().children().is_empty(),
+        "native sources remain owned by their error instead of becoming mutable Frame children"
+    );
+
+    let middle = e
+        .frame()
+        .error()
+        .source()
+        .expect("the original error exposes its middle source");
+    assert!(
+        middle.is::<ErrorWithSource<Message>>(),
+        "native traversal preserves the concrete middle-error type"
+    );
+    assert_eq!(
+        middle
+            .source()
+            .expect("the middle error retains its original source")
+            .to_string(),
+        "bottom",
+        "the retained native source chain reaches its leaf"
+    );
+    assert!(
+        e.downcast_any_ref::<ErrorWithSource<Message>>().is_some(),
+        "Exn downcasting lazily traverses concrete native source types"
+    );
+    assert!(
+        e.downcast_any_ref::<Message>().is_some(),
+        "Exn downcasting reaches the concrete native source leaf"
+    );
+}
+
+#[test]
+fn new_does_not_inspect_native_sources() {
+    #[derive(Debug)]
+    struct CountedSource {
+        source_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        source: Message,
+    }
+
+    impl std::fmt::Display for CountedSource {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("counted")
+        }
+    }
+
+    impl std::error::Error for CountedSource {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.source_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Some(&self.source)
+        }
+    }
+
+    let source_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let e = Exn::new(CountedSource {
+        source_calls: std::sync::Arc::clone(&source_calls),
+        source: message("source"),
+    });
+    assert_eq!(
+        source_calls.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "constructing an Exn neither traverses nor snapshots native sources"
+    );
+
+    assert!(
+        e.downcast_any_ref::<Message>().is_some(),
+        "the source becomes reachable when a source-aware operation requests it"
+    );
+    assert!(
+        source_calls.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        "source-aware operations traverse native sources on demand"
+    );
+}
+
+#[test]
+fn into_boxed_std_error() {
+    let err: Box<dyn std::error::Error + Send + Sync> = message("failure").raise().into();
+    let err = err
+        .downcast_ref::<gix_error::Error>()
+        .expect("conversion retains the gix error boundary type");
+    assert_eq!(err.probable_cause().to_string(), "failure");
+}
+
+#[test]
+fn erased_validation_error_remains_classified() {
+    let err = gix_error::ValidationError::new("invalid").raise_erased().into_error();
+    assert!(
+        err.is_validation(),
+        "the tree-backed Error classifies the original ValidationError exposed by Frame::error() after type erasure"
     );
 }

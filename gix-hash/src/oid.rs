@@ -1,6 +1,6 @@
-use std::hash;
+use std::{hash, ops::Range};
 
-use crate::{Kind, ObjectId};
+use crate::{Kind, ObjectId, Prefix};
 
 #[cfg(feature = "sha1")]
 use crate::{EMPTY_BLOB_SHA1, EMPTY_TREE_SHA1, SIZE_OF_SHA1_DIGEST};
@@ -153,6 +153,26 @@ impl oid {
         HexDisplay {
             inner: self,
             hex_len: self.bytes.len() * 2,
+        }
+    }
+
+    /// Return the bytes in `range` as a standalone, byte-aligned [`Prefix`].
+    ///
+    /// The range addresses raw hash bytes, not hexadecimal digits. Thus, each selected byte contributes two hexadecimal
+    /// digits to the returned prefix. The selected bytes become the beginning of the prefix, independently of where they
+    /// occurred in this object ID.
+    ///
+    /// # Panics
+    ///
+    /// If `range` is out of bounds or has its start after its end.
+    #[inline]
+    pub fn to_prefix(&self, range: Range<usize>) -> Prefix {
+        let selected = &self.bytes[range];
+        let mut bytes = ObjectId::null(self.kind());
+        bytes.as_mut_slice()[..selected.len()].copy_from_slice(selected);
+        Prefix {
+            bytes,
+            hex_len: selected.len() * 2,
         }
     }
 

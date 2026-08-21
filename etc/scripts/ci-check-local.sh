@@ -2,6 +2,27 @@
 
 set -euo pipefail
 
+usage() {
+    printf 'usage: %s (--fast|--thorough)\n' "${0##*/}"
+}
+
+if [[ "$#" -ne 1 ]]; then
+    usage >&2
+    exit 2
+fi
+
+case "$1" in
+--fast | --thorough)
+    mode="$1"
+    ;;
+*)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+# Run with a real PTY: non-CI journey snapshots exercise TUI output, and
+# macOS script(1) changes the byte stream they are meant to verify.
 repo_root="$(git rev-parse --show-toplevel)"
 cd -- "$repo_root"
 
@@ -30,13 +51,30 @@ require_clean() {
     fi
 }
 
+run_fast_checks() {
+    run cargo fmt --all -- --check
+    run cargo machete
+    run just clippy -D warnings -A unknown-lints --no-deps
+    # cargo-deny 0.20 accepts workspace/features before the check subcommand.
+    run cargo deny --workspace --all-features check bans licenses sources
+}
+
+if [[ "$mode" == --fast ]]; then
+    run_fast_checks
+    exit 0
+fi
+
 require_clean
-run cargo fmt --all -- --check
-run cargo machete
-run just clippy -D warnings -A unknown-lints --no-deps
-run cargo deny check bans licenses sources --workspace --all-features
+run_fast_checks
+# Normal CI avoids rewriting platform-specific fixture archives. The explicit
+# nextest run below still executes the full workspace with archive creation.
 run env GIX_TEST_IGNORE_ARCHIVES=1 just ci-test
 run just doc-tests
 run env GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI=1 cargo nextest run --workspace --no-fail-fast --exclude gix-error
+# Archive-generating tests legitimately rewrite these tracked fixtures. Restore
+# only this known class so every other mutation stays visible.
+git restore -- ':(glob)**/tests/fixtures/generated-archives/*.tar'
 run just ci-journey-tests
 require_clean
+run tix enrich tree checks-pass
+run cargo clean
