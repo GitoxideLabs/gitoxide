@@ -2,7 +2,7 @@
 //!
 //! This is an early prototype covering only the client-side basics: locating a hook script
 //! below `$GIT_DIR/hooks` (or a configured `core.hooksPath`), reading that override from
-//! `gix-config`, and preparing the hook for execution with [`gix-command`].
+//! `gix-config`, and preparing the hook for execution with [`gix_command`].
 //!
 //! Receive-side hooks get env-var helpers ([`push_option_env()`], [`quarantine_env()`],
 //! [`push_cert_env()`]), stdin formatting ([`receive_stdin()`]) for `pre-receive`/`post-receive`,
@@ -37,7 +37,7 @@ pub const HOOKS_DIR: &str = "hooks";
 ///
 /// Like `git`, a hook that exists but isn't executable is treated as absent - on Unix that
 /// means the executable permission bit; on Windows, where that bit doesn't exist, it means
-/// resolving `name` the way git's own `find_hook()` does (see [`windows_find()`]).
+/// resolving `name` the way git's own `find_hook()` does (see `windows_find()` below).
 pub fn find(name: &str, git_dir: &Path, hooks_path: Option<&Path>) -> Option<PathBuf> {
     let base = hooks_path.map_or_else(|| git_dir.join(HOOKS_DIR), Path::to_owned);
     if cfg!(windows) {
@@ -292,7 +292,7 @@ pub fn receive_stdin<'a>(
 
 /// The three states git calls the `reference-transaction` hook with, per `githooks(5)`.
 ///
-/// Verified against git's own source at tag `v2.47.0`, the same tag [`windows_find()`]'s docs
+/// Verified against git's own source at tag `v2.47.0`, the same tag `windows_find()`'s docs
 /// and `tests/fixtures/git-hook-names.txt` are pinned to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionState {
