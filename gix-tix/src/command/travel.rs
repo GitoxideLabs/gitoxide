@@ -58,8 +58,10 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let (selected, resolved_graph) = match (&args.revision, args.to) {
         (Some(revision), None) => super::resolve_commit(&repository, revision, "time-travel destination")?,
         (None, Some(to)) => {
-            let graph = crate::edit::loaded_view_graph(&repository)?;
-            let selected = relative_destination(&repository, &graph, head_id, to)?;
+            let hidden = crate::history::available_hidden_revisions(&repository, &[], true)?.0;
+            let hidden_tips = crate::history::snapshot(&repository, &[], &hidden, false)?.hidden_tips;
+            let graph = crate::edit::loaded_view_graph_with_hidden(&repository, &[], &hidden)?;
+            let selected = relative_destination(&repository, &graph, &hidden_tips, head_id, to)?;
             (selected, Some(graph))
         }
         _ => anyhow::bail!("exactly one time-travel destination is required"),
@@ -131,10 +133,14 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
 fn relative_destination(
     repository: &gix::Repository,
     graph: &crate::history::HistoryGraph,
+    hidden_tips: &[gix::ObjectId],
     head: gix::ObjectId,
     to: To,
 ) -> Result<gix::ObjectId> {
-    let order = graph.stored_commit_ids().collect::<Vec<_>>();
+    let order = graph
+        .stored_commit_ids()
+        .filter(|id| !hidden_tips.iter().any(|hidden| graph.is_ancestor(*id, *hidden)))
+        .collect::<Vec<_>>();
     let stored = order.iter().copied().collect::<HashSet<_>>();
     if !stored.contains(&head) {
         anyhow::bail!("HEAD is not present in the default Tix view");
@@ -483,6 +489,35 @@ mod tests {
             repository.head()?.referent_name().map(|name| name.as_bstr().to_owned()),
             Some(b"refs/heads/main".as_bstr().to_owned()),
             "travelling to the branch tip reattaches HEAD"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn first_stops_above_the_inferred_hidden_base() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        git(path, &["config", "remote.origin.url", "."])?;
+        git(
+            path,
+            &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+        )?;
+        git(path, &["update-ref", "refs/remotes/origin/main", "main"])?;
+        git(
+            path,
+            &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
+        )?;
+        git(path, &["checkout", "-q", "-b", "topic"])?;
+        git(path, &["commit", "-q", "--allow-empty", "-m", "first topic commit"])?;
+        let first = crate::test_repository::open(path)?.head_id()?.detach();
+        git(path, &["commit", "-q", "--allow-empty", "-m", "topic tip"])?;
+
+        run(crate::test_repository::open(path)?, relative_args(To::First))?;
+
+        assert_eq!(
+            crate::test_repository::open(path)?.head_id()?.detach(),
+            first,
+            "first selects the oldest commit displayed above the inferred base"
         );
         Ok(())
     }
