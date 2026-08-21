@@ -436,10 +436,11 @@ full-column alignment so clipped fields can be reached.
 Compressed history keeps the visible reference, pin, and worktree tips, the
 commit selected when compression begins, every graph endpoint or junction, and
 every hidden boundary as full, selectable commit rows. Each remaining maximal
-linear segment is represented by a selectable hollow node followed by its exact
-commit count, such as `○ [12]`. Pressing Enter on a summary expands that one
-segment in place; expansions accumulate until the display is the ordinary
-title-aligned history. Modal review and rewrite-target pickers retain the
+linear segment of at least two commits is represented by a selectable hollow
+node followed by its exact commit count, such as `○ [12]`; a singleton remains
+a full commit row. Pressing Enter on a summary expands that one segment in place;
+expansions accumulate until the display is the ordinary title-aligned history.
+Modal review and rewrite-target pickers retain the
 compressed projection so its points of interest remain available as targets,
 while conflict selection continues to show the full history. Leaving and
 re-entering compressed mode through the `[` cycle, or performing a full history
