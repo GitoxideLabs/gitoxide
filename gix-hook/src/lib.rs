@@ -8,9 +8,15 @@
 //! [`push_cert_env()`]), stdin formatting ([`receive_stdin()`]) for `pre-receive`/`post-receive`,
 //! and argument formatting ([`update_args()`]) for `update`.
 //!
+//! Windows hook resolution matches git's own `find_hook()` (`hook.c`): try the exact name
+//! first, and only fall back to appending `.exe` if that's missing (the reverse order of
+//! `gix-command`'s general-purpose `PATH` lookup, which prefers `.exe` first - a different
+//! algorithm for a different problem, not reused here). `.bat`/`.cmd` aren't tried, matching
+//! git upstream: its own fallback is hardcoded to `STRIP_EXTENSION`, defined as `".exe"` for
+//! both the MinGW and MSVC Windows builds.
+//!
 //! Missing, by design, until validated further:
 //! - `reference-transaction` state handling
-//! - Windows executable-extension resolution (`.exe`, `.bat`, `.cmd`, …)
 #![deny(missing_docs, rust_2018_idioms)]
 #![forbid(unsafe_code)]
 
@@ -24,11 +30,17 @@ pub const HOOKS_DIR: &str = "hooks";
 /// `git_dir` is the repository's `.git` directory. `hooks_path`, if set, overrides the
 /// default `$GIT_DIR/hooks` location, mirroring `core.hooksPath`.
 ///
-/// Like `git`, a hook that exists but isn't executable is treated as absent.
+/// Like `git`, a hook that exists but isn't executable is treated as absent - on Unix that
+/// means the executable permission bit; on Windows, where that bit doesn't exist, it means
+/// resolving `name` the way git's own `find_hook()` does (see [`windows_find()`]).
 pub fn find(name: &str, git_dir: &Path, hooks_path: Option<&Path>) -> Option<PathBuf> {
     let base = hooks_path.map_or_else(|| git_dir.join(HOOKS_DIR), Path::to_owned);
-    let candidate = base.join(name);
-    is_executable_file(&candidate).then_some(candidate)
+    if cfg!(windows) {
+        windows_find(&base, name)
+    } else {
+        let candidate = base.join(name);
+        is_executable_file(&candidate).then_some(candidate)
+    }
 }
 
 #[cfg(unix)]
@@ -37,11 +49,27 @@ fn is_executable_file(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
-#[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
-    // Executability isn't governed by a permission bit on these platforms;
-    // git relies on file extensions and its own launcher logic instead.
-    path.is_file()
+/// Resolve a hook named `name` in directory `base` the way git's own `find_hook()` (`hook.c`)
+/// does on Windows: try `base/<name>` first, and only if that's missing, retry with `.exe`
+/// appended - the reverse order of `gix-command`'s general-purpose `PATH` lookup, which favors
+/// `.exe` first. `STRIP_EXTENSION`, git's name for the appended suffix, is defined as `".exe"`
+/// for both the MinGW and MSVC Windows builds; `.bat`/`.cmd` aren't tried, matching upstream.
+///
+/// Verified against git's own source at tag `v2.47.0` (`hook.c`, `config.mak.uname`) - the same
+/// tag `tests/fixtures/git-hook-names.txt` is pinned to. `find_hook()`'s order has been stable
+/// for a long time, but if a much newer git changes it, that's the tag to re-check against.
+///
+/// Not gated to `#[cfg(windows)]` so it stays compilable and testable on every platform;
+/// [`find()`] only calls it behind a `cfg!(windows)` runtime check.
+fn windows_find(base: &Path, name: &str) -> Option<PathBuf> {
+    let candidate = base.join(name);
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    let mut with_exe = candidate.into_os_string();
+    with_exe.push(".exe");
+    let with_exe = PathBuf::from(with_exe);
+    with_exe.is_file().then_some(with_exe)
 }
 
 /// Prepare `hook` for execution the way `git` does for client-side hooks: run it directly,
@@ -478,6 +506,43 @@ mod tests {
         let custom = tempfile::tempdir().unwrap();
         let hook = write_hook(custom.path(), "pre-commit", true);
         assert_eq!(find("pre-commit", dir.path(), Some(custom.path())), Some(hook));
+    }
+
+    /// `find()`'s Windows branch (`cfg!(windows)`) is dead code when compiled and tested on
+    /// Unix, so these test `windows_find()` directly - the same thing `find()` calls -
+    /// mirroring how gix-command's own test suite exercises its Windows-only lookup logic
+    /// unconditionally rather than gating it to Windows-only CI.
+    mod windows_find {
+        use crate::windows_find;
+
+        #[test]
+        fn exact_name_is_preferred_over_exe() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("pre-commit"), b"").unwrap();
+            std::fs::write(dir.path().join("pre-commit.exe"), b"").unwrap();
+            assert_eq!(
+                windows_find(dir.path(), "pre-commit"),
+                Some(dir.path().join("pre-commit")),
+                "matches git's own find_hook() in hook.c: it tries the exact name via access(X_OK) \
+                 first, and only appends STRIP_EXTENSION (\".exe\") if that's missing"
+            );
+        }
+
+        #[test]
+        fn falls_back_to_exe_when_exact_name_is_missing() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("pre-commit.exe"), b"").unwrap();
+            assert_eq!(
+                windows_find(dir.path(), "pre-commit"),
+                Some(dir.path().join("pre-commit.exe"))
+            );
+        }
+
+        #[test]
+        fn missing_hook_is_none() {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(windows_find(dir.path(), "pre-commit"), None);
+        }
     }
 
     mod hooks_path_from_config {
