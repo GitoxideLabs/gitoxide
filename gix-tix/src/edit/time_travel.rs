@@ -797,7 +797,9 @@ pub(crate) fn perform_reporting_rebased(
             |id| {
                 let original = original_ids.get(&id).copied().unwrap_or(id);
                 rebased.push((id, original));
-                report(original);
+                if graph.is_ancestor(id, selected) {
+                    report(original);
+                }
             },
         )?;
         let outcome = match outcome {
@@ -2439,6 +2441,84 @@ mod tests {
             repository.find_reference("refs/heads/unrelated")?.id().detach(),
             unrelated,
             "time-travel leaves the unrelated incomplete history untouched"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn time_travel_reports_only_the_completed_destination_path() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let root = repository.rev_parse_single("HEAD~2")?.detach();
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        let common = repository.head_id()?.detach();
+        drop(repository);
+
+        git(fixture.path(), &["checkout", "-q", "-b", "sibling"])?;
+        std::fs::write(fixture.path().join("sibling"), "sibling\n")?;
+        git(fixture.path(), &["add", "sibling"])?;
+        git(fixture.path(), &["commit", "-q", "-m", "sibling"])?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let destination = repository.head_id()?.detach();
+        drop(repository);
+
+        git(fixture.path(), &["checkout", "-q", "main"])?;
+        std::fs::write(fixture.path().join("main"), "main\n")?;
+        git(fixture.path(), &["add", "main"])?;
+        git(fixture.path(), &["commit", "-q", "-m", "main"])?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let other_tip = repository.head_id()?.detach();
+        let graph = super::super::loaded_graph(&repository)?;
+        let mut replacement = repository.find_commit(middle)?.decode()?.into_owned()?;
+        replacement.message = "rewritten middle".into();
+        git(fixture.path(), &["checkout", "-q", "--detach", &root.to_string()])?;
+        let marked = super::super::rebase::perform(
+            &repository,
+            &graph,
+            super::super::rebase::Edit::Replace {
+                target: middle,
+                commit: replacement,
+            },
+            super::super::rebase::Signature::InvalidateExisting,
+            super::super::rebase::Tree::LeaveAsIsAndMark,
+        )?
+        .complete()?;
+        let pending_common = marked.map(common).context("the shared commit is retained")?;
+        let pending_destination = marked.map(destination).context("the destination is retained")?;
+        let pending_other_tip = marked.map(other_tip).context("the sibling tip is retained")?;
+        drop(repository);
+
+        let repository = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repository)?;
+        drop(repository);
+        let mut reported = Vec::new();
+        perform_reporting_rebased(
+            &repository_path,
+            false,
+            pending_destination,
+            &graph,
+            &[],
+            &[],
+            false,
+            |id| reported.push(id),
+        )?
+        .complete()?;
+
+        assert_eq!(
+            reported,
+            [pending_common, pending_destination],
+            "animation follows the completed path and omits lazy sibling rewrites"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        let rewritten_other_tip = repository.find_reference("refs/heads/main")?.id().detach();
+        assert_ne!(
+            rewritten_other_tip, pending_other_tip,
+            "the omitted sibling is still rewritten when its parent changes"
+        );
+        assert!(
+            super::super::rebase::is_pending(&repository.find_commit(rewritten_other_tip)?.decode()?.into_owned()?),
+            "the sibling remains lazy"
         );
         Ok(())
     }
