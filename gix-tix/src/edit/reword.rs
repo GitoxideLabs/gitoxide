@@ -247,7 +247,7 @@ pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
     })
 }
 
-fn cleanup_message(input: &[u8], comment_char: Option<&[u8]>) -> BString {
+pub(crate) fn cleanup_message(input: &[u8], comment_char: Option<&[u8]>) -> BString {
     let mut out = Vec::new();
     let mut empty_lines = 0;
     for line in input.lines_with_terminator() {

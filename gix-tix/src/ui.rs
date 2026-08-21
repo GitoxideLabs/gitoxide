@@ -22,10 +22,34 @@ const FILESYSTEM_NOTIFICATION_COLOR: Color = Color::Rgb(255, 165, 0);
 const NOTE_COLOR: Color = Color::LightMagenta;
 const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
 
+#[derive(Clone)]
+struct MarkdownStyle;
+
+impl tui_markdown::StyleSheet for MarkdownStyle {
+    fn heading_marker(&self, _level: u8) -> &'static str {
+        ""
+    }
+
+    fn code_block_fence(&self) -> &'static str {
+        ""
+    }
+}
+
+fn note_style() -> Style {
+    Style::default()
+        .fg(Color::Black)
+        .bg(Color::Yellow)
+        .remove_modifier(Modifier::REVERSED)
+}
+
 pub(crate) fn notice_area(notice: &Notice, horizontal: Rect, top: u16, bottom: u16) -> Option<Rect> {
     if horizontal.width == 0 || top >= bottom {
         return None;
     }
+    let horizontal = horizontal.inner(Margin {
+        horizontal: 2.min(horizontal.width.saturating_sub(1) / 2),
+        vertical: 0,
+    });
     let height = u16::try_from(
         Paragraph::new(notice.text.as_str())
             .wrap(Wrap { trim: false })
@@ -299,11 +323,10 @@ pub(crate) fn draw_with_worktree(
         let width = COMMIT_PANE_WIDTH.min(full_body.width / 2);
         let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(full_body);
         body.width = body.width.min(commits.width);
-        let mut content = message.inner(Margin {
+        let content = message.inner(Margin {
             horizontal: 2,
-            vertical: 0,
+            vertical: 1,
         });
-        content.height = content.height.saturating_sub(1);
         (message, content)
     });
     let pane_height = |changes: &Changes| u16::try_from(changes.paths.len()).unwrap_or(u16::MAX).saturating_add(2);
@@ -431,10 +454,16 @@ pub(crate) fn draw_with_worktree(
             && matches!(row.signature, SignatureState::Unverified | SignatureState::Verifying)
     });
     let lanes = app.render_lanes(start..render_end);
+    let enrichment_gutter = visible_rows
+        .iter()
+        .map(|row| Line::raw(crate::enrich::marker(app.todo(row.id), app.note(row.id).is_some())).width())
+        .max()
+        .unwrap_or_default() as u16;
+    let status_x = body.x.saturating_add(enrichment_gutter);
     let content = Rect::new(
-        body.x.saturating_add(2),
+        status_x.saturating_add(2),
         body.y,
-        body.width.saturating_sub(2),
+        body.width.saturating_sub(enrichment_gutter.saturating_add(2)),
         body.height,
     );
     let rendered_lane_width = lanes
@@ -466,9 +495,14 @@ pub(crate) fn draw_with_worktree(
         .iter()
         .enumerate()
         .map(|(index, row)| {
+            let row_selected = selected == Some(start + index);
+            let title = row_selected.then(|| app.note(row.id)).flatten().map_or_else(
+                || app.title(row),
+                |note| gix::objs::commit::MessageRef::from_bytes(note).title,
+            );
             metadata_line(
                 row,
-                app.title(row),
+                title,
                 app.attributions(row),
                 decorations,
                 mailmap,
@@ -481,15 +515,11 @@ pub(crate) fn draw_with_worktree(
                     show_emails: app.show_emails,
                     show_trailers,
                     has_notes: !app.notes(row.id).is_empty(),
+                    note: row_selected && app.note(row.id).is_some(),
                     use_mailmap: app.use_mailmap && copy_feedback != Some(CopyKind::Author),
                     ref_mode,
-                    selected: (selected == Some(start + index) && app.show_selection_tail)
-                        || compared_parent == Some(row.id),
-                    copy_feedback: if selected == Some(start + index) {
-                        copy_feedback
-                    } else {
-                        None
-                    },
+                    selected: (row_selected && app.show_selection_tail) || compared_parent == Some(row.id),
+                    copy_feedback: if row_selected { copy_feedback } else { None },
                 },
             )
         })
@@ -577,6 +607,16 @@ pub(crate) fn draw_with_worktree(
             color(highlight).add_modifier(Modifier::REVERSED)
         });
         let conflict = app.conflict_marker(visible_rows[index].id, head);
+        let enrichment_marker = crate::enrich::marker(
+            app.todo(visible_rows[index].id),
+            app.note(visible_rows[index].id).is_some(),
+        );
+        if !enrichment_marker.is_empty() {
+            frame.render_widget(
+                Paragraph::new(enrichment_marker),
+                Rect::new(body.x, y, enrichment_gutter, 1),
+            );
+        }
         frame.render_widget(
             Paragraph::new(if conflict {
                 "C "
@@ -594,7 +634,7 @@ pub(crate) fn draw_with_worktree(
             } else {
                 Style::default()
             }),
-            Rect::new(body.x, y, body.width.min(2), 1),
+            Rect::new(status_x, y, body.right().saturating_sub(status_x).min(2), 1),
         );
 
         let row_area = Rect::new(content.x, y, content.width, 1);
@@ -793,12 +833,10 @@ pub(crate) fn draw_with_worktree(
                 .set_style(outer, Style::default().bg(Color::Rgb(red, green, blue)));
         }
         let max_offset = if let Some(message) = commit_message {
-            let notes = app
-                .selected
-                .and_then(|index| app.rows.get(index))
-                .map(|row| app.notes(row.id))
-                .unwrap_or_default();
-            render_commit_message(frame, area, message, notes, app.commit_offset)
+            let selected = app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id);
+            let notes = selected.map(|id| app.notes(id)).unwrap_or_default();
+            let note = selected.and_then(|id| app.note(id));
+            render_commit_message(frame, area, message, note, notes, app.commit_offset)
         } else {
             0
         };
@@ -1004,6 +1042,26 @@ pub(crate) fn draw_with_worktree(
     let mut ordered = vec![Span::raw(history_position(app))];
     ordered.append(&mut view_prefix_spans);
     ordered.append(&mut edit_prefix_spans);
+    ordered.push(Span::raw(" · "));
+    let enrich_prefix_start = ordered.len();
+    ordered.extend(shortcut("enrich", 'n', true));
+    if app.enrich_expanded {
+        ordered.push(Span::raw(" ("));
+        if app.can_reword() {
+            let (todo, note) = app
+                .selected
+                .and_then(|index| app.rows.get(index))
+                .map(|row| (app.todo(row.id), app.note(row.id).is_some()))
+                .unwrap_or_default();
+            ordered.extend(shortcut("todo", 't', todo));
+            ordered.push(Span::raw(" · "));
+            ordered.extend(shortcut("note", 'o', note));
+        } else {
+            ordered.push(Span::raw("no actions"));
+        }
+        ordered.push(Span::raw(")"));
+        emphasize_prefix(&mut ordered[enrich_prefix_start..]);
+    }
     if let Some(label) = time_travel {
         ordered.push(Span::raw(" · "));
         ordered.extend(shortcut(label, '@', true));
@@ -1530,7 +1588,14 @@ fn append_change_aggregate(
     }
 }
 
-fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr, notes: &[BString], offset: usize) -> usize {
+fn render_commit_message(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    message: &BStr,
+    note: Option<&BStr>,
+    notes: &[BString],
+    offset: usize,
+) -> usize {
     let parsed = gix::objs::commit::MessageRef::from_bytes(message);
     let mut body_message = BString::default();
     let mut trailers = Vec::new();
@@ -1546,7 +1611,7 @@ fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr, note
         return render_scrolling_paragraph(
             frame,
             area,
-            Paragraph::new(commit_text(parsed.title, parsed.body, notes)).wrap(Wrap { trim: false }),
+            Paragraph::new(commit_text(note, parsed.title, parsed.body, notes, area.width)).wrap(Wrap { trim: false }),
             offset,
         );
     }
@@ -1560,11 +1625,12 @@ fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr, note
             return render_scrolling_paragraph(
                 frame,
                 area,
-                Paragraph::new(commit_text(parsed.title, parsed.body, notes)).wrap(Wrap { trim: false }),
+                Paragraph::new(commit_text(note, parsed.title, parsed.body, notes, area.width))
+                    .wrap(Wrap { trim: false }),
                 offset,
             );
         }
-        let mut text = commit_text(parsed.title, body_message, notes);
+        let mut text = commit_text(note, parsed.title, body_message, notes, area.width);
         text.lines.push(Line::default());
         for trailer in trailers {
             text.lines.extend(
@@ -1580,7 +1646,7 @@ fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr, note
     }
     let key_width = key_width as u16;
 
-    let text = commit_text(parsed.title, body_message, notes);
+    let text = commit_text(note, parsed.title, body_message, notes, area.width);
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     let body_height = paragraph.line_count(area.width);
     let value_x = area.x.saturating_add(key_width).saturating_add(2);
@@ -1651,14 +1717,23 @@ fn render_scrolling_paragraph(frame: &mut Frame<'_>, area: Rect, paragraph: Para
     max_offset
 }
 
-fn commit_text<'a>(title: &'a BStr, body: Option<&'a BStr>, notes: &'a [BString]) -> Text<'a> {
-    let mut text = Text::raw(title.to_str_lossy());
-    for line in &mut text.lines {
-        line.style = Style::default().add_modifier(Modifier::BOLD);
-    }
-    if let Some(body) = body.filter(|body| !body.is_empty()) {
-        text.lines.push(Line::default());
-        text.lines.extend(Text::raw(body.to_str_lossy()).lines);
+fn commit_text<'a>(
+    note: Option<&'a BStr>,
+    title: &'a BStr,
+    body: Option<&'a BStr>,
+    notes: &'a [BString],
+    width: u16,
+) -> Text<'a> {
+    let mut text = message_text(title, body);
+    if let Some(note) = note {
+        let parsed = gix::objs::commit::MessageRef::from_bytes(note);
+        let mut prefixed = message_text(parsed.title, parsed.body);
+        prefixed.lines.push(Line::styled(
+            "─".repeat(width as usize),
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+        prefixed.lines.append(&mut text.lines);
+        text = prefixed;
     }
     for note in notes {
         text.lines.push(Line::default());
@@ -1666,13 +1741,59 @@ fn commit_text<'a>(title: &'a BStr, body: Option<&'a BStr>, notes: &'a [BString]
             Span::styled("Notes", color(NOTE_COLOR).add_modifier(Modifier::BOLD)),
             Span::styled(":", color(NOTE_COLOR)),
         ]));
-        let mut note = Text::raw(note.to_str_lossy());
-        for line in &mut note.lines {
-            line.style = color(NOTE_COLOR);
-        }
-        text.lines.extend(note.lines);
+        text.lines.extend(markdown_text(note.as_bstr()).lines);
     }
     text
+}
+
+fn message_text(title: &BStr, body: Option<&BStr>) -> Text<'static> {
+    let mut text = markdown_text(title);
+    for line in &mut text.lines {
+        line.style = line.style.add_modifier(Modifier::BOLD);
+    }
+    if let Some(body) = body.filter(|body| !body.is_empty()) {
+        text.lines.push(Line::default());
+        text.lines.extend(markdown_text(body).lines);
+    }
+    text
+}
+
+fn markdown_text(input: &BStr) -> Text<'static> {
+    let input = input.to_str_lossy();
+    let rendered = tui_markdown::from_str_with_options(&input, &tui_markdown::Options::new(MarkdownStyle));
+    Text {
+        alignment: rendered.alignment,
+        style: rendered.style,
+        lines: rendered
+            .lines
+            .into_iter()
+            .map(|line| Line {
+                style: line.style,
+                alignment: line.alignment,
+                spans: line
+                    .spans
+                    .into_iter()
+                    .map(|span| Span::styled(span.content.into_owned(), span.style))
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+fn markdown_title_spans(title: &BStr) -> Vec<Span<'static>> {
+    let text = markdown_text(title);
+    let text_style = text.style;
+    let mut out = Vec::new();
+    for line in text.lines.into_iter().filter(|line| !line.spans.is_empty()) {
+        if !out.is_empty() {
+            out.push(Span::raw(" "));
+        }
+        out.extend(line.spans.into_iter().map(|mut span| {
+            span.style = text_style.patch(line.style).patch(span.style);
+            span
+        }));
+    }
+    out
 }
 
 fn toggle(label: &'static str, enabled: bool) -> Span<'static> {
@@ -1733,6 +1854,7 @@ struct MetadataOptions {
     show_emails: bool,
     show_trailers: bool,
     has_notes: bool,
+    note: bool,
     use_mailmap: bool,
     ref_mode: RefMode,
     selected: bool,
@@ -1757,6 +1879,7 @@ fn metadata_line<'a>(
         show_emails,
         show_trailers,
         has_notes,
+        note,
         use_mailmap,
         ref_mode,
         selected,
@@ -1969,7 +2092,13 @@ fn metadata_line<'a>(
         spans.push(Span::styled("[N] ", color(NOTE_COLOR)));
     }
     if !show_emails {
-        spans.push(Span::raw(title.to_str_lossy()));
+        let mut title = markdown_title_spans(title);
+        if note {
+            for span in &mut title {
+                span.style = span.style.patch(note_style());
+            }
+        }
+        spans.extend(title);
     }
     Line::from(spans)
 }
@@ -1996,6 +2125,7 @@ pub(crate) fn plain_history_metadata(
             show_emails: app.show_emails,
             show_trailers: app.name_mode == NameMode::All && app.show_trailers,
             has_notes,
+            note: false,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
             selected: false,
@@ -2026,6 +2156,7 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
             show_emails: app.show_emails,
             show_trailers: app.name_mode == crate::app::NameMode::All && app.show_trailers,
             has_notes: !app.notes(row.id).is_empty(),
+            note: false,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
             selected: false,
@@ -2043,7 +2174,11 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
         if !out.is_empty() {
             out.push(' ');
         }
-        out.push_str(&title.to_str_lossy());
+        let rendered = markdown_title_spans(title)
+            .into_iter()
+            .map(|span| span.content.into_owned())
+            .collect::<String>();
+        out.push_str(&rendered);
     }
     out
 }
@@ -2255,6 +2390,85 @@ mod tests {
     }
 
     #[test]
+    fn enrichments_have_a_gutter_beside_selection_and_the_graph() -> Result<(), Box<dyn std::error::Error>> {
+        let id = gix::ObjectId::Sha1([1; 20]);
+        let mut app = App::new(1);
+        app.extend_commits(vec![Commit {
+            id,
+            parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        complete(&mut app);
+        app.set_enrichment(
+            id,
+            crate::enrich::Enrichment {
+                todo: true,
+                note: Some("follow-up *title*\n\nwhy it matters\n".into()),
+            },
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 2))?;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        let row = terminal.backend().buffer();
+        assert_eq!(row[(0, 0)].symbol(), "🚧", "todo leads the row");
+        assert_eq!(row[(2, 0)].symbol(), "📝", "note directly follows todo");
+        assert_eq!(row[(5, 0)].symbol(), ">", "selection retains its own field");
+        assert_eq!(row[(7, 0)].symbol(), "●", "the graph remains separate");
+        assert!(
+            rendered_line(&terminal, 0).contains("follow-up title"),
+            "the selected todo displays its note title"
+        );
+        let title_x = (0..80)
+            .find(|x| row[(*x, 0)].symbol() == "f")
+            .expect("the note title is visible");
+        assert_eq!(row[(title_x, 0)].fg, Color::Black);
+        assert_eq!(row[(title_x, 0)].bg, Color::Yellow);
+        assert!(
+            (0..80).any(|x| row[(x, 0)].symbol() == "t" && row[(x, 0)].modifier.contains(Modifier::ITALIC)),
+            "the Markdown title is italicized"
+        );
+        app.enrich_expanded = true;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 1).contains("enrich (todo · note)"),
+            "the enrich group advertises both actions"
+        );
+        app.enrich_expanded = false;
+
+        app.selected = None;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 0).contains("subject"),
+            "unselected rows retain their commit title"
+        );
+        app.selected = Some(0);
+        app.set_enrichment(
+            id,
+            crate::enrich::Enrichment {
+                todo: false,
+                note: Some("follow-up *title*\n\nwhy it matters\n".into()),
+            },
+        );
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 0).contains("follow-up title"),
+            "a note replaces the selected title independently of todo"
+        );
+        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "📝");
+        assert_eq!(terminal.backend().buffer()[(3, 0)].symbol(), ">");
+        assert_eq!(terminal.backend().buffer()[(5, 0)].symbol(), "●");
+        Ok(())
+    }
+
+    #[test]
     fn keeps_the_completed_footer_while_background_progress_is_deferred() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
         app.extend_commits(vec![Commit {
@@ -2288,7 +2502,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let computing = rendered_line(&terminal, 1);
         assert!(
-            computing.contains("1 commits · view · edit · copy") && computing.contains("computing"),
+            computing.contains("1 commits · view · edit · enrich · copy") && computing.contains("computing"),
             "expired deferral reveals computation progress"
         );
         assert_ne!(computing, completed, "visible progress changes the footer");
@@ -2317,14 +2531,16 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let notice = rendered_line(&terminal, 1);
         assert!(
-            notice.starts_with("REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop"),
+            notice
+                .trim_start()
+                .starts_with("REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop"),
             "an unresolved continuation owns the notice: {notice:?}"
         );
         assert!(
             notice.contains("materialized conflict"),
             "operation context is retained beside the persistent prompt"
         );
-        assert_eq!(terminal.backend().buffer()[(0, 1)].bg, Color::Yellow);
+        assert_eq!(terminal.backend().buffer()[(2, 1)].bg, Color::Yellow);
         assert!(
             rendered_line(&terminal, 2).contains("view"),
             "the ordinary footer remains visible"
@@ -2333,17 +2549,21 @@ mod tests {
         app.update(Action::MoveDown);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).starts_with("REBASE PAUSED"),
+            rendered_line(&terminal, 1).trim_start().starts_with("REBASE PAUSED"),
             "navigation cannot dismiss the continuation"
         );
         app.leave_error("continue failed");
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert_eq!(terminal.backend().buffer()[(0, 1)].bg, Color::LightRed);
+        assert_eq!(terminal.backend().buffer()[(2, 1)].bg, Color::LightRed);
         app.update(Action::MoveDown);
         app.set_worktree_conflicted(false);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert_eq!(terminal.backend().buffer()[(0, 1)].bg, Color::Yellow);
-        assert!(rendered_line(&terminal, 1).starts_with("REBASE PAUSED · <enter> continue · Esc stop"));
+        assert_eq!(terminal.backend().buffer()[(2, 1)].bg, Color::Yellow);
+        assert!(
+            rendered_line(&terminal, 1)
+                .trim_start()
+                .starts_with("REBASE PAUSED · <enter> continue · Esc stop")
+        );
 
         app.clear_rebase_continuation();
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -2841,7 +3061,7 @@ mod tests {
             "todo commit metadata uses the author date and excludes separately represented refs"
         );
 
-        let footer_text = "#1 · view · edit · copy · refs · ? · quit";
+        let footer_text = "#1 · view · edit · enrich · copy · refs · ? · quit";
         let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
@@ -2868,6 +3088,7 @@ mod tests {
         for (label, key) in [
             ("view", 'v'),
             ("edit", 'e'),
+            ("enrich", 'n'),
             ("copy", 'y'),
             ("refs", 'r'),
             ("quit", 'q'),
@@ -2938,7 +3159,7 @@ mod tests {
             "worktree removed; using common repository",
             "recovery information uses the body row above the status"
         );
-        assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::Yellow);
+        assert_eq!(terminal.backend().buffer()[(2, 0)].bg, Color::Yellow);
         assert_eq!(
             rendered_line(&terminal, 1).trim(),
             footer_text,
@@ -2964,7 +3185,7 @@ mod tests {
         );
         app.leave_error("operation failed");
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
-        assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::LightRed);
+        assert_eq!(terminal.backend().buffer()[(2, 0)].bg, Color::LightRed);
         app.update(Action::ToggleMailmap);
 
         app.update(Action::ToggleDate);
@@ -3138,7 +3359,7 @@ mod tests {
         );
         assert!(
             rendered_line(&terminal, 1)
-                .contains("edit (reword · new · new-empty · fork · d forget · unpin) · @ return · copy"),
+                .contains("edit (reword · new · new-empty · fork · d forget · unpin) · enrich · @ return · copy"),
             "time travel stays outside the active edit prefix"
         );
         assert!(!rendered_line(&terminal, 1).contains(" · edit ·"));
@@ -3181,7 +3402,7 @@ mod tests {
         let footer = rendered_line(&terminal, 1);
         let view = "view (author date · ids · emails · names · mailmap · trailers · refs · show hidden)";
         assert!(
-            footer.starts_with(&format!("0 commits · {view} · copy · refs · ?")),
+            footer.starts_with(&format!("0 commits · {view} · enrich · copy · refs · ?")),
             "the active view prefix follows the history position"
         );
         let active = footer[..footer.find("view (").expect("the active view prefix is visible")]
@@ -3199,18 +3420,27 @@ mod tests {
         app.edit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · copy · refs · ?"),
+            rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · enrich · copy · refs · ?"),
             "the edit prefix follows the view prefix even when no action is available"
         );
         assert_reversed_group(&terminal, 1, "edit (no actions)");
 
         app.edit_expanded = false;
+        app.enrich_expanded = true;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 1).starts_with("0 commits · view · edit · enrich (no actions) · copy · refs · ?"),
+            "the enrich prefix follows the edit prefix"
+        );
+        assert_reversed_group(&terminal, 1, "enrich (no actions)");
+
+        app.enrich_expanded = false;
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let footer = rendered_line(&terminal, 1);
         assert!(
             footer.starts_with(
-                    "0 commits · view · edit · copy · refs · ? ([ align · ref-tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
+                    "0 commits · view · edit · enrich · copy · refs · ? ([ align · ref-tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
                 ),
             "the information prefix contains every following action except quit: {footer}"
         );
@@ -3929,9 +4159,9 @@ mod tests {
             );
         })?;
         assert_eq!(
-            terminal.backend().buffer()[(62, 0)].symbol(),
+            terminal.backend().buffer()[(62, 1)].symbol(),
             "s",
-            "the title starts on the first pane row after two columns of horizontal margin"
+            "the title starts after horizontal and vertical margins"
         );
         assert_eq!(
             terminal.backend().buffer()[(60, 0)].symbol(),
@@ -3944,7 +4174,7 @@ mod tests {
             "the commit pane has the derived terminal-background shade"
         );
         assert_eq!(
-            terminal.backend().buffer()[(62, 0)].bg,
+            terminal.backend().buffer()[(62, 1)].bg,
             Color::Rgb(15, 16, 17),
             "the shade extends behind the commit message"
         );
@@ -3954,7 +4184,7 @@ mod tests {
             "the history background is unchanged"
         );
         assert_eq!(
-            terminal.backend().buffer()[(62, 2)].symbol(),
+            terminal.backend().buffer()[(62, 3)].symbol(),
             "b",
             "the commit body remains separated from its title"
         );
@@ -3990,18 +4220,18 @@ mod tests {
             );
         })?;
         assert_eq!(
-            wide_terminal.backend().buffer()[(118, 0)].symbol(),
+            wide_terminal.backend().buffer()[(118, 1)].symbol(),
             "x",
             "the pane reserves eighty content columns on a wide screen"
         );
         assert!(
-            rendered_line(&wide_terminal, 0)
+            rendered_line(&wide_terminal, 1)
                 .chars()
                 .skip(118)
                 .take(80)
                 .collect::<String>()
                 .ends_with(" word")
-                && rendered_line(&wide_terminal, 1)
+                && rendered_line(&wide_terminal, 2)
                     .chars()
                     .skip(118)
                     .take(80)
@@ -4899,9 +5129,13 @@ mod tests {
                 Some(&worktree),
             ));
         })?;
-        let notice = Rect::new(60, 4, 60, 2);
-        assert_eq!(terminal.backend().buffer()[(60, 4)].bg, Color::Green);
-        assert_eq!(terminal.backend().buffer()[(59, 4)].bg, Color::Reset);
+        let notice = Rect::new(62, 4, 56, 2);
+        assert_eq!(terminal.backend().buffer()[(62, 4)].bg, Color::Green);
+        assert_eq!(
+            terminal.backend().buffer()[(60, 4)].bg,
+            Color::Reset,
+            "the notice has horizontal margin within the worktree pane"
+        );
         assert_eq!(
             terminal.backend().buffer()[(60, 9)].bg,
             Color::Reset,
@@ -4923,7 +5157,7 @@ mod tests {
         let message = b"subject\n\nbody\n\nShort: one two three four five six seven\nCo-authored-by: Alice".as_bstr();
 
         terminal.draw(|frame| {
-            render_commit_message(frame, frame.area(), message, &[], 0);
+            render_commit_message(frame, frame.area(), message, None, &[], 0);
         })?;
 
         assert_eq!(
@@ -4965,7 +5199,14 @@ mod tests {
 
         let mut plain_terminal = Terminal::new(TestBackend::new(40, 4))?;
         plain_terminal.draw(|frame| {
-            render_commit_message(frame, frame.area(), b"plain subject\n\nplain body".as_bstr(), &[], 0);
+            render_commit_message(
+                frame,
+                frame.area(),
+                b"plain subject\n\nplain body".as_bstr(),
+                None,
+                &[],
+                0,
+            );
         })?;
         assert!(
             plain_terminal.backend().buffer()[(0, 0)]
@@ -4983,28 +5224,75 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(60, 8))?;
         let message = b"subject\n\nnot a trailer\nSigned-off-by: Alice\nanother note\nSigned-off-by: Bob".as_bstr();
         terminal.draw(|frame| {
-            render_commit_message(frame, frame.area(), message, &[], 0);
+            render_commit_message(frame, frame.area(), message, None, &[], 0);
         })?;
         assert!(
-            rendered_line(&terminal, 2).contains("not a trailer")
-                && rendered_line(&terminal, 3).contains("another note"),
-            "mixed message parts are combined ahead of the trailers"
+            rendered_line(&terminal, 2).contains("not a trailer another note"),
+            "Markdown soft breaks combine message lines ahead of the trailers"
         );
         assert!(
-            rendered_line(&terminal, 4).trim().is_empty(),
+            rendered_line(&terminal, 3).trim().is_empty(),
             "the combined message remains separated from its trailers"
         );
         assert_eq!(
-            rendered_line(&terminal, 5).find("Alice"),
+            rendered_line(&terminal, 4).find("Alice"),
             Some(15),
             "the first trailer moves below all message parts"
         );
         assert_eq!(
-            rendered_line(&terminal, 6).find("Bob"),
+            rendered_line(&terminal, 5).find("Bob"),
             Some(15),
             "later trailer runs share the aligned value column"
         );
         Ok(())
+    }
+
+    #[test]
+    fn note_precedes_the_commit_message_and_its_trailers() -> Result<(), Box<dyn std::error::Error>> {
+        let mut terminal = Terminal::new(TestBackend::new(40, 10))?;
+        terminal.draw(|frame| {
+            render_commit_message(
+                frame,
+                frame.area(),
+                b"commit *subject*\n\ncommit ~~body~~\n\nSigned-off-by: Alice".as_bstr(),
+                Some(b"todo *subject*\n\ntodo **body**".as_bstr()),
+                &[],
+                0,
+            );
+        })?;
+
+        assert_eq!(rendered_line(&terminal, 0).trim(), "todo subject");
+        assert_eq!(rendered_line(&terminal, 2).trim(), "todo body");
+        assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::Reset);
+        assert_eq!(terminal.backend().buffer()[(0, 2)].bg, Color::Reset);
+        assert!(terminal.backend().buffer()[(5, 0)].modifier.contains(Modifier::ITALIC));
+        assert!(terminal.backend().buffer()[(5, 2)].modifier.contains(Modifier::BOLD));
+        assert!(
+            rendered_line(&terminal, 3).chars().all(|char| char == '─'),
+            "a horizontal rule separates note from the commit"
+        );
+        assert_eq!(rendered_line(&terminal, 4).trim(), "commit subject");
+        assert_eq!(rendered_line(&terminal, 6).trim(), "commit body");
+        assert!(terminal.backend().buffer()[(7, 4)].modifier.contains(Modifier::ITALIC));
+        assert!(
+            terminal.backend().buffer()[(7, 6)]
+                .modifier
+                .contains(Modifier::CROSSED_OUT)
+        );
+        assert!(
+            rendered_line(&terminal, 8).contains("Alice"),
+            "commit trailers retain their layout"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn markdown_hides_structural_delimiters() {
+        let text = markdown_text(b"# Heading\n\n```rust\nlet value = 1;\n```".as_bstr());
+        let rendered = text.to_string();
+        assert!(rendered.contains("Heading") && rendered.contains("let value = 1;"));
+        assert!(!rendered.contains('#') && !rendered.contains("```"));
+        assert!(text.lines[0].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -5024,7 +5312,7 @@ mod tests {
             is_review: false,
             signature: SignatureState::Unsigned,
         }]);
-        app.set_notes(id, vec!["review note".into()]);
+        app.set_notes(id, vec!["review *note*".into()]);
         app.selected = None;
         let mut history = Terminal::new(TestBackend::new(100, 2))?;
         history.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -5044,12 +5332,14 @@ mod tests {
                 frame,
                 frame.area(),
                 b"subject\n\nbody\n\nSigned-off-by: Alice".as_bstr(),
-                &["review note".into()],
+                None,
+                &["review *note*".into()],
                 0,
             );
         })?;
         assert_eq!(rendered_line(&message, 4).trim(), "Notes:");
         assert_eq!(rendered_line(&message, 5).trim(), "review note");
+        assert!(message.backend().buffer()[(7, 5)].modifier.contains(Modifier::ITALIC));
         assert!(rendered_line(&message, 7).contains("Alice"), "trailers follow notes");
         let notes_label = &message.backend().buffer()[(0, 4)];
         assert_eq!(notes_label.fg, NOTE_COLOR);
@@ -5324,6 +5614,7 @@ mod tests {
                 show_emails: false,
                 show_trailers: true,
                 has_notes: false,
+                note: false,
                 use_mailmap: false,
                 ref_mode: RefMode::All,
                 selected: false,
@@ -5423,6 +5714,7 @@ mod tests {
                 show_emails: false,
                 show_trailers: false,
                 has_notes: false,
+                note: false,
                 use_mailmap: false,
                 ref_mode: RefMode::None,
                 selected: false,

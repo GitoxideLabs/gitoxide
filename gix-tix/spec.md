@@ -186,6 +186,24 @@ without trading responsiveness for metadata that is not visible.
   purple `[A]` before its title.
 - A commit with notes in the configured notes ref receives a matching `[N]`.
   Notes are loaded lazily for visible commits.
+- Tix enrichments are stored separately as Git notes headed at the worktree-local
+  `refs/worktree/tix/enrich` ref. Enrichments are keyed by the commit's effective
+  change ID and use human-readable Git config. Independent `[commit]` keys store
+  `todo = true` and an optional multiline `note` value.
+  Consequently, rewritten commits retain their metadata and commits sharing a
+  change ID share it as well. Malformed enrichments are ignored for display and
+  diagnosed, while mutation refuses to overwrite them.
+- Todo and note enrichments receive a leading `🚧` and `📝` respectively before
+  the graph, with no gap between them when both are present. The dedicated field
+  remains visible alongside selection, dirty-worktree, and conflict markers.
+  `tix show` emits the same field and aligns unmarked rows when any displayed
+  commit has either enrichment.
+- Only the selected history row replaces its commit title with its note title,
+  using black text on a yellow background. Unselected rows and `tix show` retain
+  the commit title.
+- Commit and selected-note titles render Markdown styling. Block-shaped title
+  output is flattened onto the single history row; plain command output retains
+  the rendered text without terminal styling.
 
 ### Selection context
 
@@ -423,9 +441,14 @@ space first; changes blocks adapt within the remaining history width.
 - Its history-status action says `message`, avoiding confusion with the edit
   group's commit-creation action.
 - The panel has a minimally shaded background derived from the detected terminal
-  background, with the default background as fallback.
-- The title begins on the first content row and is bold. Body text follows, then
-  each note with a bold purple `Notes` prefix, then aligned trailers.
+  background, with the default background as fallback. Its content has two
+  columns and one row of margin; an overflow status uses the bottom margin.
+- A note renders its bold Markdown title and body first without a separate
+  background, followed by a horizontal rule and the commit's bold Markdown title
+  and body. Standard Git notes retain their bold purple `Notes`
+  prefix and render their content as Markdown. Heading markers and code fences
+  are hidden, fenced code uses generic styling without syntax highlighting, and
+  commit trailers remain plain and aligned last.
 - Overflow is page-scrollable and gets a distinct pane status line only when
   scrolling is possible.
 
@@ -903,6 +926,12 @@ space first; changes blocks adapt within the remaining history width.
   says `no actions`.
 - While the `v` group is open, `d`, `e`, `r`, and `t` retain their display
   meanings for dates, emails, references, and trailers.
+- The `n` in `enrich` toggles its shortcut group. On any commit eligible for rewording,
+  `n t` toggles `[commit] todo`, preserving a saved note, and `n o` opens
+  `[commit] note` in Git's editor as Markdown. Saving or removing a note preserves
+  the todo flag, and toggling todo preserves the note. The group is mutually
+  exclusive with the view, edit, and information groups and otherwise follows
+  their closing behavior.
 
 ## Refresh, focus, and diagnostics
 
@@ -972,8 +1001,8 @@ space first; changes blocks adapt within the remaining history width.
   errors.
 - Global command and recovery feedback uses one transient notice channel in the
   history and ref-tree views. It reserves a wrapped, content-height block above
-  worktree changes until the next recognized user action, matching that pane's
-  horizontal bounds when visible and otherwise using the main view. It never
+  worktree changes until the next recognized user action, inset by two columns
+  within that pane when visible and otherwise within the main view. It never
   covers the main or pane-local status lines. Green indicates success, yellow
   indicates attention, no-op, recovery, partial success, or an armed prompt, and
   red indicates failure. Forget, review selection and recovery, suspended
