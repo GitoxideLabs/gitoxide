@@ -22,6 +22,12 @@
 //!
 //! [`no_editor_env()`] sets `GIT_EDITOR=:` for `pre-commit`/`pre-merge-commit`, when the
 //! caller's own commit flow won't show an editor.
+//!
+//! [`HookArgs`] covers every other named hook's own positional-argument contract in one place
+//! (`commit-msg`, `prepare-commit-msg`, `pre-rebase`, `post-checkout`, `post-merge`, `pre-push`,
+//! `push-to-checkout`, `post-update`, `post-rewrite`, `sendemail-validate`,
+//! `post-index-change`, `applypatch-msg`) - everything except `update` and
+//! `reference-transaction`, which stay on their own dedicated, fallible functions.
 #![deny(missing_docs, rust_2018_idioms)]
 #![forbid(unsafe_code)]
 
@@ -398,6 +404,207 @@ pub fn reference_transaction_stdin<'a>(
         writeln!(buf, " {ref_name}").expect("writing to a Vec<u8> never fails");
     }
     Ok(buf)
+}
+
+/// Where `git commit` got the default log message from, per `prepare-commit-msg`'s second
+/// positional argument.
+#[derive(Debug, Clone, Copy)]
+pub enum CommitMessageSource<'a> {
+    /// A `-m` or `-F` option was given.
+    Message,
+    /// A `-t` option was given, or `commit.template` is set.
+    Template,
+    /// The commit is a merge, or a `.git/MERGE_MSG` file exists.
+    Merge,
+    /// A `.git/SQUASH_MSG` file exists.
+    Squash,
+    /// A `-c`, `-C`, or `--amend` option named this commit.
+    Commit(&'a gix_hash::oid),
+}
+
+impl CommitMessageSource<'_> {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Message => "message",
+            Self::Template => "template",
+            Self::Merge => "merge",
+            Self::Squash => "squash",
+            Self::Commit(_) => "commit",
+        }
+    }
+}
+
+/// Which command triggered a `post-rewrite` call - its first positional argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostRewriteCommand {
+    /// `git commit --amend`.
+    Amend,
+    /// `git rebase`.
+    Rebase,
+}
+
+impl PostRewriteCommand {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Amend => "amend",
+            Self::Rebase => "rebase",
+        }
+    }
+}
+
+/// Positional arguments for hooks whose argv construction can't fail - every named hook with
+/// its own argument contract except `update` and `reference-transaction`, whose own dedicated
+/// functions ([`update_args()`], [`reference_transaction_args()`]) validate a ref name and so
+/// return `Result`, unlike everything here.
+///
+/// Hooks with no positional arguments at all - `pre-applypatch`, `post-applypatch`,
+/// `pre-commit`, `pre-merge-commit`, `post-commit`, `pre-receive`, `post-receive`,
+/// `proc-receive`, `pre-auto-gc` - have no variant here either; there's nothing to build.
+///
+/// `p4-*` and `fsmonitor-watchman` are deliberately out of scope: the former are `git-p4`
+/// (Perforce bridge)-specific, and the latter uses a NUL-delimited stdout protocol rather than
+/// a plain argv/stdin contract - neither is relevant to a Gitaly-style git server.
+///
+/// Verified against git's own source at tag `v2.47.0`, the same tag every other hook-contract
+/// claim in this crate is pinned to.
+#[derive(Debug, Clone, Copy)]
+pub enum HookArgs<'a> {
+    /// `applypatch-msg`: the file holding the proposed commit log message.
+    ApplypatchMsg {
+        /// The file holding the proposed commit log message.
+        message_file: &'a Path,
+    },
+    /// `commit-msg`: the file holding the proposed commit log message.
+    CommitMsg {
+        /// The file holding the proposed commit log message.
+        message_file: &'a Path,
+    },
+    /// `prepare-commit-msg`: the message file, and where the default message came from.
+    PrepareCommitMsg {
+        /// The file holding the proposed commit log message.
+        message_file: &'a Path,
+        /// Where the default message came from.
+        source: CommitMessageSource<'a>,
+    },
+    /// `pre-rebase`: the upstream the series was forked from, and the branch being rebased -
+    /// `None` when rebasing the current branch.
+    PreRebase {
+        /// The upstream the series was forked from.
+        upstream: &'a str,
+        /// The branch being rebased, or `None` when rebasing the current branch.
+        branch: Option<&'a str>,
+    },
+    /// `post-checkout`: the previous and new `HEAD`, and whether this was a branch checkout.
+    /// For `git clone`/`git worktree add` (unless `--no-checkout`), `previous_head` is the
+    /// all-zeroes id and this is always a branch checkout.
+    PostCheckout {
+        /// The ref of the previous `HEAD`, or the all-zeroes id for a fresh clone/worktree.
+        previous_head: &'a gix_hash::oid,
+        /// The ref of the new `HEAD`.
+        new_head: &'a gix_hash::oid,
+        /// `true` for a branch checkout (changing branches), `false` for a file checkout
+        /// (retrieving a file from the index).
+        is_branch_checkout: bool,
+    },
+    /// `post-merge`: whether the merge being done was a squash merge.
+    PostMerge {
+        /// Whether the merge being done was a squash merge.
+        is_squash: bool,
+    },
+    /// `pre-push`: the destination remote's name and location (URL) - the same value for both
+    /// if no named remote is used.
+    PrePush {
+        /// The destination remote's name.
+        remote_name: &'a str,
+        /// The destination remote's location (URL).
+        remote_location: &'a str,
+    },
+    /// `push-to-checkout`: the commit the currently checked-out branch's tip is being updated to.
+    PushToCheckout {
+        /// The commit the currently checked-out branch's tip is being updated to.
+        commit: &'a gix_hash::oid,
+    },
+    /// `post-update`: the refs that were actually updated. Unlike [`update_args()`], these
+    /// aren't validated as ref names - git only ever calls this hook with names it produced
+    /// itself, so there's no untrusted input to guard against here the way there is for values
+    /// arriving over the wire from a pusher.
+    PostUpdate {
+        /// The refs that were actually updated.
+        updated_refs: &'a [&'a str],
+    },
+    /// `post-rewrite`: which command triggered the rewrite.
+    PostRewrite {
+        /// Which command triggered the rewrite.
+        command: PostRewriteCommand,
+    },
+    /// `sendemail-validate`: the file holding the email body, and the file holding its SMTP headers.
+    SendemailValidate {
+        /// The file holding the contents of the email to be sent.
+        email_file: &'a Path,
+        /// The file holding the SMTP headers of the email.
+        headers_file: &'a Path,
+    },
+    /// `post-index-change`: whether the working directory was updated, and whether the index's
+    /// skip-worktree bits may have changed. Git documents that both are never `true` together.
+    PostIndexChange {
+        /// Whether the working directory was updated.
+        working_directory_updated: bool,
+        /// Whether the index was updated and the skip-worktree bit could have changed.
+        skip_worktree_bits_changed: bool,
+    },
+}
+
+impl HookArgs<'_> {
+    /// Add this variant's positional arguments to `prepared`, in the order git documents them.
+    pub fn apply(self, prepared: gix_command::Prepare) -> gix_command::Prepare {
+        fn flag(value: bool) -> &'static str {
+            if value { "1" } else { "0" }
+        }
+
+        match self {
+            Self::ApplypatchMsg { message_file } | Self::CommitMsg { message_file } => prepared.arg(message_file),
+            Self::PrepareCommitMsg { message_file, source } => {
+                let prepared = prepared.arg(message_file).arg(source.as_str());
+                match source {
+                    CommitMessageSource::Commit(oid) => prepared.arg(oid.to_hex().to_string()),
+                    _ => prepared,
+                }
+            }
+            Self::PreRebase { upstream, branch } => {
+                let prepared = prepared.arg(upstream);
+                match branch {
+                    Some(branch) => prepared.arg(branch),
+                    None => prepared,
+                }
+            }
+            Self::PostCheckout {
+                previous_head,
+                new_head,
+                is_branch_checkout,
+            } => prepared
+                .arg(previous_head.to_hex().to_string())
+                .arg(new_head.to_hex().to_string())
+                .arg(flag(is_branch_checkout)),
+            Self::PostMerge { is_squash } => prepared.arg(flag(is_squash)),
+            Self::PrePush {
+                remote_name,
+                remote_location,
+            } => prepared.arg(remote_name).arg(remote_location),
+            Self::PushToCheckout { commit } => prepared.arg(commit.to_hex().to_string()),
+            Self::PostUpdate { updated_refs } => updated_refs.iter().fold(prepared, |p, r| p.arg(*r)),
+            Self::PostRewrite { command } => prepared.arg(command.as_str()),
+            Self::SendemailValidate {
+                email_file,
+                headers_file,
+            } => prepared.arg(email_file).arg(headers_file),
+            Self::PostIndexChange {
+                working_directory_updated,
+                skip_worktree_bits_changed,
+            } => prepared
+                .arg(flag(working_directory_updated))
+                .arg(flag(skip_worktree_bits_changed)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -945,6 +1152,190 @@ mod tests {
             assert!(
                 reference_transaction_stdin(updates).is_err(),
                 "a symbolic target is itself a ref name and must be validated the same way"
+            );
+        }
+    }
+
+    mod hook_args {
+        use std::path::Path;
+
+        use crate::{CommitMessageSource, HookArgs, PostRewriteCommand, command};
+
+        fn args(hook_args: HookArgs<'_>) -> Vec<String> {
+            let prepared = hook_args.apply(command("hook".as_ref(), "/repo/.git".as_ref(), "/repo".as_ref()));
+            std::process::Command::from(prepared)
+                .get_args()
+                .map(|a| a.to_str().unwrap().to_owned())
+                .collect()
+        }
+
+        #[test]
+        fn applypatch_msg_is_the_message_file() {
+            assert_eq!(
+                args(HookArgs::ApplypatchMsg {
+                    message_file: Path::new("/repo/.git/COMMIT_EDITMSG")
+                }),
+                ["/repo/.git/COMMIT_EDITMSG"]
+            );
+        }
+
+        #[test]
+        fn commit_msg_is_the_message_file() {
+            assert_eq!(
+                args(HookArgs::CommitMsg {
+                    message_file: Path::new("/repo/.git/COMMIT_EDITMSG")
+                }),
+                ["/repo/.git/COMMIT_EDITMSG"]
+            );
+        }
+
+        #[test]
+        fn prepare_commit_msg_without_commit_source_has_two_args() {
+            assert_eq!(
+                args(HookArgs::PrepareCommitMsg {
+                    message_file: Path::new("/repo/.git/COMMIT_EDITMSG"),
+                    source: CommitMessageSource::Message,
+                }),
+                ["/repo/.git/COMMIT_EDITMSG", "message"]
+            );
+        }
+
+        #[test]
+        fn prepare_commit_msg_with_commit_source_adds_the_oid() {
+            let oid = super::oid("1111111111111111111111111111111111111111");
+            assert_eq!(
+                args(HookArgs::PrepareCommitMsg {
+                    message_file: Path::new("/repo/.git/COMMIT_EDITMSG"),
+                    source: CommitMessageSource::Commit(oid.as_ref()),
+                }),
+                [
+                    "/repo/.git/COMMIT_EDITMSG",
+                    "commit",
+                    "1111111111111111111111111111111111111111"
+                ]
+            );
+        }
+
+        #[test]
+        fn pre_rebase_without_branch_has_one_arg() {
+            assert_eq!(
+                args(HookArgs::PreRebase {
+                    upstream: "origin/main",
+                    branch: None
+                }),
+                ["origin/main"]
+            );
+        }
+
+        #[test]
+        fn pre_rebase_with_branch_has_two_args() {
+            assert_eq!(
+                args(HookArgs::PreRebase {
+                    upstream: "origin/main",
+                    branch: Some("topic")
+                }),
+                ["origin/main", "topic"]
+            );
+        }
+
+        #[test]
+        fn post_checkout_args_are_prev_new_flag_in_order() {
+            let prev = super::oid("0000000000000000000000000000000000000000");
+            let new = super::oid("1111111111111111111111111111111111111111");
+            assert_eq!(
+                args(HookArgs::PostCheckout {
+                    previous_head: prev.as_ref(),
+                    new_head: new.as_ref(),
+                    is_branch_checkout: true,
+                }),
+                [
+                    "0000000000000000000000000000000000000000",
+                    "1111111111111111111111111111111111111111",
+                    "1"
+                ]
+            );
+        }
+
+        #[test]
+        fn post_merge_flag_is_0_or_1() {
+            assert_eq!(args(HookArgs::PostMerge { is_squash: false }), ["0"]);
+            assert_eq!(args(HookArgs::PostMerge { is_squash: true }), ["1"]);
+        }
+
+        #[test]
+        fn pre_push_args_are_name_then_location() {
+            assert_eq!(
+                args(HookArgs::PrePush {
+                    remote_name: "origin",
+                    remote_location: "git@example.com:repo.git"
+                }),
+                ["origin", "git@example.com:repo.git"]
+            );
+        }
+
+        #[test]
+        fn push_to_checkout_is_the_target_commit() {
+            let commit = super::oid("2222222222222222222222222222222222222222");
+            assert_eq!(
+                args(HookArgs::PushToCheckout {
+                    commit: commit.as_ref()
+                }),
+                ["2222222222222222222222222222222222222222"]
+            );
+        }
+
+        #[test]
+        fn post_update_lists_every_updated_ref() {
+            assert_eq!(
+                args(HookArgs::PostUpdate {
+                    updated_refs: &["refs/heads/main", "refs/heads/topic"]
+                }),
+                ["refs/heads/main", "refs/heads/topic"]
+            );
+        }
+
+        #[test]
+        fn post_rewrite_command_is_amend_or_rebase() {
+            assert_eq!(
+                args(HookArgs::PostRewrite {
+                    command: PostRewriteCommand::Amend
+                }),
+                ["amend"]
+            );
+            assert_eq!(
+                args(HookArgs::PostRewrite {
+                    command: PostRewriteCommand::Rebase
+                }),
+                ["rebase"]
+            );
+        }
+
+        #[test]
+        fn sendemail_validate_args_are_email_then_headers() {
+            assert_eq!(
+                args(HookArgs::SendemailValidate {
+                    email_file: Path::new("/tmp/0001-patch.eml"),
+                    headers_file: Path::new("/tmp/headers"),
+                }),
+                ["/tmp/0001-patch.eml", "/tmp/headers"]
+            );
+        }
+
+        #[test]
+        fn post_index_change_flags_are_0_or_1_in_order() {
+            assert_eq!(
+                args(HookArgs::PostIndexChange {
+                    working_directory_updated: true,
+                    skip_worktree_bits_changed: false,
+                }),
+                ["1", "0"]
+            );
+            assert_eq!(
+                args(HookArgs::PostIndexChange {
+                    working_directory_updated: false,
+                    skip_worktree_bits_changed: true,
+                }),
+                ["0", "1"]
             );
         }
     }
