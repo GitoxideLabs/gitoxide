@@ -63,6 +63,13 @@ fn is_executable_file(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
+/// Whether `s` contains a byte in the same control-byte range `gix_validate::reference::name()`
+/// rejects (`\0..=\x1F` or `\x7F`), for fields this crate can't run full ref-name validation on
+/// but still shouldn't hand a hook process control bytes in.
+fn contains_control_byte(s: &str) -> bool {
+    s.bytes().any(|b| matches!(b, 0x00..=0x1F | 0x7F))
+}
+
 /// Resolve a hook named `name` in directory `base` the way git's own `find_hook()` (`hook.c`)
 /// does on Windows: try `base/<name>` first, and only if that's missing, retry with `.exe`
 /// appended - the reverse order of `gix-command`'s general-purpose `PATH` lookup, which favors
@@ -389,7 +396,7 @@ pub fn reference_transaction_stdin<'a>(
             TransactionValue::Oid(oid) => write!(buf, "{}", oid.to_hex()).expect("writing to a Vec<u8> never fails"),
             TransactionValue::SymbolicTarget(target) => {
                 gix_validate::reference::name(target.into())?;
-                write!(buf, "ref: {target}").expect("writing to a Vec<u8> never fails");
+                write!(buf, "ref:{target}").expect("writing to a Vec<u8> never fails");
             }
         }
         Ok(())
@@ -404,6 +411,62 @@ pub fn reference_transaction_stdin<'a>(
         writeln!(buf, " {ref_name}").expect("writing to a Vec<u8> never fails");
     }
     Ok(buf)
+}
+
+/// Format the `pre-push` stdin payload: one line per ref being considered for push, as
+/// `<local-ref> SP <local-oid> SP <remote-ref> SP <remote-oid> LF`, per `githooks(5)`.
+///
+/// Unlike `remote_ref`, `local_ref` is *not* validated as a ref name: git documents that it may
+/// be the literal `"(delete)"` when a ref is being deleted, or "supplied as it was originally
+/// given" when the push source wasn't an expandable ref name (for example `HEAD~`, or a bare
+/// object id) - both legitimately violate `check-ref-format`. It's still rejected if it contains
+/// a control byte (`\0..=\x1F` or `\x7F`, the same range [`gix_validate::reference::name()`]
+/// itself rejects) - a raw newline would corrupt this function's own line framing regardless of
+/// whether the value is a "valid ref name", and a raw NUL has no legitimate reason to appear
+/// either. Non-ASCII Unicode, including combining marks, is left alone: git's own ref-name rules
+/// allow it, so restricting it here would just be incompatible with real git, not safer.
+pub fn pre_push_stdin<'a>(
+    updates: impl IntoIterator<Item = (&'a str, &'a gix_hash::oid, &'a str, &'a gix_hash::oid)>,
+) -> Result<Vec<u8>, Error> {
+    use std::io::Write;
+
+    let mut buf = Vec::new();
+    for (local_ref, local_oid, remote_ref, remote_oid) in updates {
+        if contains_control_byte(local_ref) {
+            return Err(Error::ControlByteInField(local_ref.to_owned()));
+        }
+        gix_validate::reference::name(remote_ref.into())?;
+        writeln!(
+            buf,
+            "{local_ref} {} {remote_ref} {}",
+            local_oid.to_hex(),
+            remote_oid.to_hex()
+        )
+        .expect("writing to a Vec<u8> never fails");
+    }
+    Ok(buf)
+}
+
+/// Hook names git always executes in `$GIT_DIR`, regardless of whether the repository is bare -
+/// the push-triggered hooks, per `githooks(5)`: "An exception are hooks triggered during a push
+/// ('pre-receive', 'update', 'post-receive', 'post-update', 'push-to-checkout') which are always
+/// executed in `$GIT_DIR`."
+pub const ALWAYS_GIT_DIR_HOOKS: &[&str] = &[
+    "pre-receive",
+    "update",
+    "post-receive",
+    "post-update",
+    "push-to-checkout",
+];
+
+/// The directory git itself would run the hook named `name` in, per `githooks(5)`: `$GIT_DIR`
+/// for [`ALWAYS_GIT_DIR_HOOKS`] and for bare repositories (`worktree_dir` is `None`), otherwise
+/// `worktree_dir`.
+pub fn cwd_for<'a>(name: &str, git_dir: &'a Path, worktree_dir: Option<&'a Path>) -> &'a Path {
+    match worktree_dir {
+        Some(worktree_dir) if !ALWAYS_GIT_DIR_HOOKS.contains(&name) => worktree_dir,
+        _ => git_dir,
+    }
 }
 
 /// Where `git commit` got the default log message from, per `prepare-commit-msg`'s second
@@ -1125,7 +1188,9 @@ mod tests {
             )];
             assert_eq!(
                 reference_transaction_stdin(updates).unwrap(),
-                b"ref: refs/heads/old-default ref: refs/heads/main HEAD\n".as_slice()
+                b"ref:refs/heads/old-default ref:refs/heads/main HEAD\n".as_slice(),
+                "no space between \"ref:\" and the target - confirmed against refs.c's \
+                 strbuf_addf(&buf, \"ref:%s \", ...)"
             );
         }
 
@@ -1337,6 +1402,149 @@ mod tests {
                 }),
                 ["0", "1"]
             );
+        }
+    }
+
+    mod pre_push_stdin {
+        use crate::pre_push_stdin;
+
+        #[test]
+        fn normal_update_matches_the_documented_field_order() {
+            let local = super::oid("1111111111111111111111111111111111111111");
+            let remote = super::oid("2222222222222222222222222222222222222222");
+            let updates = [(
+                "refs/heads/master",
+                local.as_ref(),
+                "refs/heads/foreign",
+                remote.as_ref(),
+            )];
+            assert_eq!(
+                pre_push_stdin(updates).unwrap(),
+                b"refs/heads/master 1111111111111111111111111111111111111111 \
+                  refs/heads/foreign 2222222222222222222222222222222222222222\n"
+                    .as_slice()
+            );
+        }
+
+        #[test]
+        fn delete_marker_is_not_validated_as_a_ref_name() {
+            let zero = super::oid("0000000000000000000000000000000000000000");
+            let remote = super::oid("2222222222222222222222222222222222222222");
+            let updates = [("(delete)", zero.as_ref(), "refs/heads/foreign", remote.as_ref())];
+            assert!(
+                pre_push_stdin(updates).is_ok(),
+                "\"(delete)\" is documented, not a ref name"
+            );
+        }
+
+        #[test]
+        fn arbitrary_local_source_text_is_not_validated_as_a_ref_name() {
+            let local = super::oid("1111111111111111111111111111111111111111");
+            let remote = super::oid("2222222222222222222222222222222222222222");
+            let updates = [("HEAD~", local.as_ref(), "refs/heads/foreign", remote.as_ref())];
+            assert!(
+                pre_push_stdin(updates).is_ok(),
+                "git documents local-ref may be supplied as originally given, e.g. HEAD~"
+            );
+        }
+
+        #[test]
+        fn local_ref_with_embedded_newline_is_rejected() {
+            let local = super::oid("1111111111111111111111111111111111111111");
+            let remote = super::oid("2222222222222222222222222222222222222222");
+            let updates = [(
+                "evil\nrefs/heads/injected",
+                local.as_ref(),
+                "refs/heads/foreign",
+                remote.as_ref(),
+            )];
+            assert!(pre_push_stdin(updates).is_err());
+        }
+
+        #[test]
+        fn local_ref_with_embedded_nul_is_rejected() {
+            let local = super::oid("1111111111111111111111111111111111111111");
+            let remote = super::oid("2222222222222222222222222222222222222222");
+            let updates = [(
+                "evil\0refs/heads/injected",
+                local.as_ref(),
+                "refs/heads/foreign",
+                remote.as_ref(),
+            )];
+            assert!(
+                pre_push_stdin(updates).is_err(),
+                "a raw NUL is a control byte too, not just newline"
+            );
+        }
+
+        #[test]
+        fn local_ref_with_unicode_is_accepted() {
+            let local = super::oid("1111111111111111111111111111111111111111");
+            let remote = super::oid("2222222222222222222222222222222222222222");
+            let updates = [(
+                "HEAD~\u{0301}\u{0301}\u{0301}",
+                local.as_ref(),
+                "refs/heads/foreign",
+                remote.as_ref(),
+            )];
+            assert!(
+                pre_push_stdin(updates).is_ok(),
+                "non-ASCII Unicode, even heavily combined, isn't a control byte and git allows it in ref-shaped text"
+            );
+        }
+
+        #[test]
+        fn invalid_remote_ref_is_rejected() {
+            let local = super::oid("1111111111111111111111111111111111111111");
+            let remote = super::oid("2222222222222222222222222222222222222222");
+            let updates = [(
+                "refs/heads/master",
+                local.as_ref(),
+                "refs/heads/../escape",
+                remote.as_ref(),
+            )];
+            assert!(
+                pre_push_stdin(updates).is_err(),
+                "unlike local-ref, remote-ref is always a real destination ref and must validate"
+            );
+        }
+    }
+
+    mod cwd_for {
+        use std::path::Path;
+
+        use crate::cwd_for;
+
+        #[test]
+        fn ordinary_hooks_use_the_worktree_when_present() {
+            let git_dir = Path::new("/repo/.git");
+            let worktree = Path::new("/repo");
+            assert_eq!(cwd_for("pre-commit", git_dir, Some(worktree)), worktree);
+        }
+
+        #[test]
+        fn ordinary_hooks_use_git_dir_when_bare() {
+            let git_dir = Path::new("/repo.git");
+            assert_eq!(cwd_for("pre-commit", git_dir, None), git_dir);
+        }
+
+        #[test]
+        fn push_triggered_hooks_always_use_git_dir() {
+            let git_dir = Path::new("/repo/.git");
+            let worktree = Path::new("/repo");
+            for name in [
+                "pre-receive",
+                "update",
+                "post-receive",
+                "post-update",
+                "push-to-checkout",
+            ] {
+                assert_eq!(
+                    cwd_for(name, git_dir, Some(worktree)),
+                    git_dir,
+                    "{name} must always run in $GIT_DIR per githooks(5), even with a worktree present"
+                );
+            }
         }
     }
 }
