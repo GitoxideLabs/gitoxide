@@ -648,6 +648,8 @@ impl BuiltInDiff {
 /// Options for [`run()`].
 #[derive(Clone, Debug, Default)]
 pub struct Options {
+    /// Draw interactively on the normal screen instead of the alternate screen.
+    pub no_alt_screen: bool,
     /// Exit after the final frame, optionally replaying read-only keyboard input first.
     pub quit_on_finish: Option<String>,
     /// Revisions whose reachable commits should initially be hidden.
@@ -708,15 +710,24 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
     );
     let commit_pane_background = detect_commit_pane_background();
     let quit_on_finish = options.quit_on_finish.is_some();
-    let mut terminal = if quit_on_finish {
+    let inline = quit_on_finish || options.no_alt_screen;
+    let terminal_result = if inline {
         let (_, height) = terminal::size().context("could not determine terminal size")?;
         ratatui::try_init_with_options(TerminalOptions {
             viewport: Viewport::Inline(height),
         })
     } else {
         ratatui::try_init()
-    }
-    .context("could not initialize terminal")?;
+    };
+    let mut terminal = terminal_result
+        .inspect_err(|_| {
+            if inline {
+                let _ = terminal::disable_raw_mode();
+            } else {
+                ratatui::restore();
+            }
+        })
+        .context("could not initialize terminal")?;
     let enhanced_keyboard = !quit_on_finish && terminal::supports_keyboard_enhancement().unwrap_or(false);
     let keyboard_setup = if quit_on_finish {
         Ok(())
@@ -726,6 +737,15 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
     let result = keyboard_setup
         .context("could not enable enhanced keyboard events")
         .and_then(|()| {
+            if !quit_on_finish {
+                let hook = std::panic::take_hook();
+                std::panic::set_hook(Box::new(move |info| {
+                    let mut backend = CrosstermBackend::new(std::io::stdout());
+                    let _ = disable_input(&mut backend, enhanced_keyboard);
+                    let _ = execute!(backend, cursor::Show);
+                    hook(info);
+                }));
+            }
             event_loop(
                 &mut terminal,
                 repository,
@@ -736,27 +756,33 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
             )
         });
     let keyboard_restore = if quit_on_finish {
+        Ok(())
+    } else {
+        disable_input(terminal.backend_mut(), enhanced_keyboard)
+    };
+    let cursor_restore = if inline {
         let area = terminal.get_frame().area();
         terminal
             .set_cursor_position(Position::new(area.x, area.bottom().saturating_sub(1)))
             .and_then(|()| terminal.show_cursor())
     } else {
-        disable_input(terminal.backend_mut(), enhanced_keyboard)
+        Ok(())
     };
     drop(terminal);
-    let restore = if quit_on_finish {
+    let restore = if inline {
         terminal::disable_raw_mode()
     } else {
         ratatui::try_restore()
     }
     .context("could not restore terminal");
+    if inline {
+        eprintln!();
+    }
     let lane_time = result?;
     keyboard_restore.context("could not restore keyboard events")?;
+    cursor_restore.context("could not restore terminal cursor")?;
     restore?;
     if let Some(lane_time) = lane_time {
-        if quit_on_finish {
-            eprintln!();
-        }
         eprintln!("lane computation: {:.3}s", lane_time.as_secs_f64());
     }
     Ok(())
@@ -805,7 +831,9 @@ fn event_loop(
     enhanced_keyboard: bool,
     commit_pane_background: Option<(u8, u8, u8)>,
 ) -> Result<Option<Duration>> {
-    let Options { quit_on_finish, hide } = options;
+    let Options {
+        quit_on_finish, hide, ..
+    } = options;
     let mut quit_inputs: VecDeque<_> = quit_on_finish
         .as_deref()
         .unwrap_or_default()
