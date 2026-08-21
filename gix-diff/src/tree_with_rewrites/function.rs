@@ -72,7 +72,7 @@ struct Delegate<'a, 'old, VisitFn, E, Objects> {
 impl<VisitFn, E, Objects> Delegate<'_, '_, VisitFn, E, Objects>
 where
     Objects: gix_object::FindObjectOrHeader,
-    VisitFn: for<'delegate> FnMut(ChangeRef<'_>) -> Result<Action, E>,
+    VisitFn: FnMut(ChangeRef<'_>) -> Result<Action, E>,
     E: Into<Box<dyn std::error::Error + Sync + Send + 'static>>,
 {
     /// Call `visit` on an attached version of `change`.
@@ -182,7 +182,7 @@ where
 impl<VisitFn, E, Objects> crate::tree::Visit for Delegate<'_, '_, VisitFn, E, Objects>
 where
     Objects: gix_object::FindObjectOrHeader,
-    VisitFn: for<'delegate> FnMut(ChangeRef<'_>) -> Result<Action, E>,
+    VisitFn: FnMut(ChangeRef<'_>) -> Result<Action, E>,
     E: Into<Box<dyn std::error::Error + Sync + Send + 'static>>,
 {
     fn pop_front_tracked_path_and_set_current(&mut self) {

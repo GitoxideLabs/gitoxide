@@ -364,7 +364,7 @@ mod prepare {
         );
         assert_eq!(
             format!("{cmd:?}"),
-            format!(r#""ls" "--foo=a b""#),
+            r#""ls" "--foo=a b""#,
             "splitting can also handle quotes"
         );
     }
