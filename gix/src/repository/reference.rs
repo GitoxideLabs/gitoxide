@@ -179,7 +179,7 @@ impl crate::Repository {
     /// # let repo = doctest::open_repo(doctest::basic_repo_dir()?)?;
     /// let head = repo.head()?;
     ///
-    /// assert_eq!(head.referent_name().expect("born").as_bstr(), "refs/heads/main");
+    /// assert_eq!(head.referent_name().expect("born"), "refs/heads/main");
     /// assert!(!head.is_detached());
     /// assert!(!head.is_unborn());
     /// # Ok(()) }
@@ -316,7 +316,7 @@ impl crate::Repository {
     /// # let repo = doctest::open_repo(doctest::basic_repo_dir()?)?;
     /// let mut reference = repo.find_reference("main")?;
     ///
-    /// assert_eq!(reference.name().as_bstr(), "refs/heads/main");
+    /// assert_eq!(reference, "refs/heads/main");
     /// assert_eq!(reference.peel_to_commit()?.message()?.title, "c2\n");
     /// # Ok(()) }
     /// ```
@@ -351,7 +351,6 @@ impl crate::Repository {
     /// let branches = repo
     ///     .references()?
     ///     .local_branches()?
-    ///     .map(|reference| reference.map(|reference| reference.name().as_bstr().to_string()))
     ///     .collect::<Result<Vec<_>, _>>()?;
     ///
     /// assert_eq!(branches, vec!["refs/heads/main".to_owned()]);

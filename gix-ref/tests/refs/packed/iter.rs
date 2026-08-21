@@ -1,4 +1,3 @@
-use gix_object::bstr::ByteSlice;
 use gix_ref::packed;
 
 use crate::file::{store_at, store_with_packed_refs};
@@ -30,52 +29,39 @@ fn iter_prefix() -> crate::Result {
     assert_eq!(
         packed
             .iter_prefixed("refs/heads/".into())?
-            .map(|r| r.map(|r| r.name.as_bstr()))
             .collect::<Result<Vec<_>, _>>()?,
-        vec![
-            "refs/heads/A".as_bytes().as_bstr(),
-            "refs/heads/d1".into(),
-            "refs/heads/dt1".into(),
-            "refs/heads/main".into()
-        ]
+        vec!["refs/heads/A", "refs/heads/d1", "refs/heads/dt1", "refs/heads/main"]
     );
 
     assert_eq!(
         packed
             .iter_prefixed("refs/heads/d".into())?
-            .map(|r| r.map(|r| r.name.as_bstr()))
             .collect::<Result<Vec<_>, _>>()?,
-        vec!["refs/heads/d1".as_bytes().as_bstr(), "refs/heads/dt1".into(),],
+        vec!["refs/heads/d1", "refs/heads/dt1"],
         "partial prefixes are fine, they don't have to resemble or be a directory"
     );
 
     assert_eq!(
         packed
             .iter_prefixed("refs/remotes/".into())?
-            .map(|r| r.map(|r| r.name.as_bstr()))
             .collect::<Result<Vec<_>, _>>()?,
-        vec![
-            "refs/remotes/origin/main".as_bytes().as_bstr(),
-            "refs/remotes/origin/multi-link-target3".into(),
-        ]
+        vec!["refs/remotes/origin/main", "refs/remotes/origin/multi-link-target3",]
     );
 
     let last_ref_in_file = "refs/tags/t1";
     assert_eq!(
         packed
             .iter_prefixed(last_ref_in_file.into())?
-            .map(|r| r.map(|r| r.name.as_bstr()))
             .collect::<Result<Vec<_>, _>>()?,
-        vec![last_ref_in_file.as_bytes().as_bstr()],
+        vec![last_ref_in_file],
         "prefixes which are a ref also work, this one is the last of the file"
     );
     let first_ref_in_file = "refs/d1";
     assert_eq!(
         packed
             .iter_prefixed(first_ref_in_file.into())?
-            .map(|r| r.map(|r| r.name.as_bstr()))
             .collect::<Result<Vec<_>, _>>()?,
-        vec![first_ref_in_file.as_bytes().as_bstr()],
+        vec![first_ref_in_file],
         "prefixes which are a ref also work, and this one at the beginning of the file"
     );
     Ok(())

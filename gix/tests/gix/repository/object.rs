@@ -649,7 +649,7 @@ mod tag {
             message,
             gix_ref::transaction::PreviousValue::MustNotExist,
         )?;
-        assert_eq!(tag_ref.name().as_bstr(), "refs/tags/v1.0.0");
+        assert_eq!(tag_ref, "refs/tags/v1.0.0");
         assert_ne!(tag_ref.id(), current_head_id, "it points to the tag object");
         let tag = tag_ref.id().object()?;
         let tag = tag.try_to_tag_ref()?;
@@ -725,10 +725,7 @@ mod commit {
             gix_hash::Kind::Sha256 => expected_sha256,
             _ => unreachable!(),
         };
-        assert_eq!(
-            actual,
-            gix_hash::ObjectId::from_hex(expected_hash.as_bytes()).expect("valid sha1")
-        );
+        assert_eq!(actual, expected_hash);
     }
 
     #[test]
@@ -778,7 +775,7 @@ mod commit {
         );
 
         let head = repo.head()?.try_into_referent().expect("born");
-        assert_eq!(head.name().as_bstr(), "refs/heads/main", "'main' is the default name");
+        assert_eq!(head, "refs/heads/main", "'main' is the default name");
         assert_eq!(
             head.log_iter()
                 .rev()?
@@ -894,8 +891,7 @@ fn new_commit_as() -> crate::Result {
         _ => unreachable!(),
     };
     assert_eq!(
-        commit.id,
-        gix_hash::ObjectId::from_hex(expected_hex.as_bytes()).expect("valid object id"),
+        commit.id, expected_hex,
         "The commit-id is stable as the author/committer is controlled"
     );
 

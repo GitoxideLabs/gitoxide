@@ -824,13 +824,13 @@ mod blocking_and_async_io {
                         assert_eq!(update_refs.edits.len(), 2);
 
                         let edit = &update_refs.edits[0];
-                        assert_eq!(edit.name.as_bstr(), "refs/remotes/changes-on-top-of-origin/main");
+                        assert_eq!(edit.name, "refs/remotes/changes-on-top-of-origin/main");
                         assert!(
                             edit.change.new_value().expect("no deletion").try_id().is_some(),
                             "a simple peeled ref"
                         );
                         let edit = &update_refs.edits[1];
-                        assert_eq!(edit.name.as_bstr(), "refs/remotes/changes-on-top-of-origin/symbolic");
+                        assert_eq!(edit.name, "refs/remotes/changes-on-top-of-origin/symbolic");
                         match version.unwrap_or_default() {
                             gix::protocol::transport::Protocol::V2 => {
                                 assert!(
@@ -896,7 +896,7 @@ mod blocking_and_async_io {
                                 assert_eq!(id, mapping.remote.as_id().expect("no unborn"));
                             }
                             gix_ref::TargetRef::Symbolic(target) => {
-                                assert_eq!(target.as_bstr(), mapping.remote.as_target().expect("no direct ref"));
+                                assert_eq!(target, mapping.remote.as_target().expect("no direct ref"));
                             }
                         }
                         assert!(
@@ -914,7 +914,7 @@ mod blocking_and_async_io {
                                 );
                             }
                             gix_ref::TargetRef::Symbolic(target) => {
-                                assert_eq!(target.as_bstr(), mapping.remote.as_target().expect("no direct ref"));
+                                assert_eq!(target, mapping.remote.as_target().expect("no direct ref"));
                             }
                         }
                     }

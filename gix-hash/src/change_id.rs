@@ -87,11 +87,28 @@ impl std::fmt::Display for ChangeId {
     }
 }
 
+impl ChangeId {
+    fn eq_str(&self, other: &str) -> bool {
+        self.to_reverse_hex().eq_str(other)
+    }
+}
+
+impl_partial_eq_str!(ChangeId);
+
 impl ReverseHexDisplay<'_> {
     pub(crate) fn new(inner: &oid, hex_len: usize) -> ReverseHexDisplay<'_> {
         ReverseHexDisplay { inner, hex_len }
     }
+
+    fn eq_str(&self, other: &str) -> bool {
+        let mut buf = Kind::hex_buf();
+        let reverse_hex = encode_reverse_hex(self.inner, &mut buf);
+        reverse_hex[..self.hex_len.min(reverse_hex.len())] == *other
+    }
 }
+
+// Keep this directional as truncated displays aren't uniquely identified by their text.
+impl_partial_eq_str_one_way!(ReverseHexDisplay<'_>);
 
 impl std::fmt::Display for ReverseHexDisplay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

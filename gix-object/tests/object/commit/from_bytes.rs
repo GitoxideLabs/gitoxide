@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 
 use crate::{
     commit::{LONG_MESSAGE, MERGE_TAG, SIGNATURE},
-    fixture_name, fixture_oid, hex_to_id, linus_signature,
+    fixture_name, fixture_oid, linus_signature,
 };
 
 #[test]
@@ -104,7 +104,7 @@ committer Name <name@example.com> 1312735823 +0518
 message";
     let commit = CommitRef::from_bytes(input, gix_hash::Kind::Sha1)?;
     assert_eq!(commit.tree, b"7989DFB2EC2F41914611A22FB30BBC2B3849DF9A".as_bstr());
-    assert_eq!(commit.tree(), hex_to_id("7989dfb2ec2f41914611a22fb30bbc2b3849df9a"));
+    assert_eq!(commit.tree(), "7989dfb2ec2f41914611a22fb30bbc2b3849df9a");
     Ok(())
 }
 

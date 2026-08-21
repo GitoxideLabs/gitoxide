@@ -12,8 +12,8 @@ mod existing {
             assert_eq!(store.is_pristine("refs/heads/main".try_into()?), Some(false));
             let c1 = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
             let r = store.find("main")?;
+            assert_eq!(r, "refs/heads/main");
             assert_eq!(r.target.into_id(), c1);
-            assert_eq!(r.name.as_bstr(), "refs/heads/main");
             let r = store
                 .find("A")
                 .unwrap_or_else(|_| panic!("{fixture}: should find capitalized refs"));
@@ -113,7 +113,7 @@ mod loose {
         fn capitalized_branch() -> crate::Result {
             let store = store()?;
             assert_eq!(
-                store.find("A")?.name.as_bstr(),
+                store.find("A")?,
                 "refs/heads/A",
                 "capitalized loose refs can be found fine"
             );
@@ -126,7 +126,7 @@ mod loose {
             for (partial_name, expected_path) in &[("main", Some("refs/heads/main")), ("does-not-exist", None)] {
                 let reference = store.find_loose(*partial_name);
                 match expected_path {
-                    Some(expected_path) => assert_eq!(reference?.name.as_bstr(), expected_path),
+                    Some(expected_path) => assert_eq!(reference?, *expected_path),
                     None => match reference {
                         Ok(_) => panic!("Expected error"),
                         Err(gix_ref::file::find::existing::Error::NotFound { name }) => {
@@ -170,7 +170,7 @@ mod loose {
             ("refs/heads/main", "refs/heads/main", gix_ref::Kind::Object),
         ] {
             let reference = store.try_find_loose(*partial_name)?.expect("exists");
-            assert_eq!(reference.name.as_bstr(), expected_path);
+            assert_eq!(reference, *expected_path);
             assert_eq!(reference.target.to_ref().kind(), *expected_ref_kind);
         }
         Ok(())

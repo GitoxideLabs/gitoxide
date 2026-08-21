@@ -17,16 +17,13 @@ fn into_namespaced_prefix() {
 mod expand {
     #[test]
     fn components_end_with_trailing_slash_to_help_with_prefix_stripping() {
-        assert_eq!(
-            gix_ref::namespace::expand("foo").unwrap().as_bstr(),
-            "refs/namespaces/foo/"
-        );
+        assert_eq!(gix_ref::namespace::expand("foo").unwrap(), "refs/namespaces/foo/");
     }
 
     #[test]
     fn each_component_expands_to_the_namespace_prefix_individually() {
         assert_eq!(
-            gix_ref::namespace::expand("foo/bar").unwrap().as_bstr(),
+            gix_ref::namespace::expand("foo/bar").unwrap(),
             "refs/namespaces/foo/refs/namespaces/bar/"
         );
     }

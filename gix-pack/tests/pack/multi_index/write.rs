@@ -6,8 +6,6 @@ use std::{
 use gix_features::progress;
 use gix_testtools::fixture_path;
 
-use crate::hex_to_id;
-
 /// Writes a multi-index from the static SHA-1 pack indices, with pinned SHA-1 expectations.
 /// The SHA-256 counterpart lives in [`from_a_hash_parameterized_pack`] below.
 #[test]
@@ -18,7 +16,7 @@ fn from_paths() -> crate::Result {
 
     assert_eq!(
         written.outcome.multi_index_checksum,
-        hex_to_id("d34d327039a3554f8a644b29e07b903fa71ef269")
+        "d34d327039a3554f8a644b29e07b903fa71ef269"
     );
 
     assert_eq!(written.file.num_indices(), 3);

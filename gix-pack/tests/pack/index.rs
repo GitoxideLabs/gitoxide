@@ -6,8 +6,7 @@ use gix_object::{self as object};
 use gix_odb::pack;
 
 use crate::{
-    INDEX_V1, PACK_FOR_INDEX_V1, SMALL_PACK, SMALL_PACK_INDEX, fixture_path, hex_to_id, leaked_fixture_bytes,
-    pack_from_memory_at,
+    INDEX_V1, PACK_FOR_INDEX_V1, SMALL_PACK, SMALL_PACK_INDEX, fixture_path, leaked_fixture_bytes, pack_from_memory_at,
 };
 
 fn memory_backed_index(at: &str) -> gix_pack::index::File<&'static [u8]> {
@@ -624,8 +623,8 @@ fn iter() -> Result<(), Box<dyn std::error::Error>> {
             .map(|o| (o.actual_index_checksum, o.pack_traverse_statistics))?,
             (idx.index_checksum(), None)
         );
-        assert_eq!(idx.index_checksum(), hex_to_id(index_checksum));
-        assert_eq!(idx.pack_checksum(), hex_to_id(pack_checksum));
+        assert_eq!(idx.index_checksum(), *index_checksum);
+        assert_eq!(idx.pack_checksum(), *pack_checksum);
         assert_eq!(idx.iter().count(), *num_objects as usize);
     }
     Ok(())

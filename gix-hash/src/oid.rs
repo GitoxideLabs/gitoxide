@@ -55,6 +55,17 @@ impl std::fmt::Display for HexDisplay<'_> {
     }
 }
 
+impl HexDisplay<'_> {
+    pub(crate) fn eq_str(&self, other: &str) -> bool {
+        let mut hex = Kind::hex_buf();
+        let hex = self.inner.hex_to_buf(hex.as_mut());
+        hex[..self.hex_len.min(hex.len())] == *other
+    }
+}
+
+// Keep this directional as truncated displays aren't uniquely identified by their text.
+impl_partial_eq_str_one_way!(HexDisplay<'_>);
+
 impl std::fmt::Debug for oid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -197,6 +208,10 @@ impl oid {
         out.write_all(&hex[..hex_len])
     }
 
+    pub(crate) fn eq_str(&self, other: &str) -> bool {
+        self.to_hex().eq_str(other)
+    }
+
     /// Returns `true` if this hash consists of all null bytes.
     #[inline]
     #[doc(alias = "is_zero", alias = "git2")]
@@ -330,6 +345,20 @@ impl PartialEq<ObjectId> for &oid {
         *self == other.as_ref()
     }
 }
+
+impl PartialEq<String> for &oid {
+    fn eq(&self, other: &String) -> bool {
+        self.eq_str(other)
+    }
+}
+
+impl PartialEq<&oid> for String {
+    fn eq(&self, other: &&oid) -> bool {
+        other.eq_str(self)
+    }
+}
+
+impl_partial_eq_str!(oid);
 
 /// Manually created from a version that uses a slice, and we forcefully try to convert it into a borrowed array of the desired size
 /// Could be improved by fitting this into serde.

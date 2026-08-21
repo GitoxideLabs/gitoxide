@@ -11,12 +11,12 @@ mod method {
 
     use gix_features::progress;
 
-    use crate::{SMALL_PACK, data::file::pack_at, hex_to_id, pack_from_memory_at};
+    use crate::{SMALL_PACK, data::file::pack_at, pack_from_memory_at};
 
     #[test]
     fn checksum() {
         let p = pack_at(SMALL_PACK);
-        assert_eq!(p.checksum(), hex_to_id("0f3ea84cd1bba10c2a03d736a460635082833e59"));
+        assert_eq!(p.checksum(), "0f3ea84cd1bba10c2a03d736a460635082833e59");
     }
 
     #[test]

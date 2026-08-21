@@ -31,6 +31,52 @@
 #[cfg(all(not(feature = "sha1"), not(feature = "sha256")))]
 compile_error!("Please set either the `sha1` or the `sha256` feature flag");
 
+macro_rules! impl_partial_eq_str_one_way {
+    ($type:ty) => {
+        impl PartialEq<str> for $type {
+            fn eq(&self, other: &str) -> bool {
+                self.eq_str(other)
+            }
+        }
+
+        impl PartialEq<&str> for $type {
+            fn eq(&self, other: &&str) -> bool {
+                self.eq_str(other)
+            }
+        }
+
+        impl PartialEq<String> for $type {
+            fn eq(&self, other: &String) -> bool {
+                self.eq_str(other)
+            }
+        }
+    };
+}
+
+macro_rules! impl_partial_eq_str {
+    ($type:ty) => {
+        impl_partial_eq_str_one_way!($type);
+
+        impl PartialEq<$type> for str {
+            fn eq(&self, other: &$type) -> bool {
+                other.eq_str(self)
+            }
+        }
+
+        impl PartialEq<$type> for &str {
+            fn eq(&self, other: &$type) -> bool {
+                other.eq_str(self)
+            }
+        }
+
+        impl PartialEq<$type> for String {
+            fn eq(&self, other: &$type) -> bool {
+                other.eq_str(self)
+            }
+        }
+    };
+}
+
 #[path = "oid.rs"]
 mod borrowed;
 pub use borrowed::{Error, oid};

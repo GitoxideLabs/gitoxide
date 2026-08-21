@@ -353,8 +353,7 @@ mod v2 {
             assert_eq!(bytes_read, 1643, "should be able to read the whole pack");
             assert_eq!(&buf[..4], b"PACK");
             assert_eq!(
-                gix_hash::ObjectId::from_bytes_or_panic(&buf[buf.len() - gix_hash::Kind::Sha1.len_in_bytes()..])
-                    .to_string(),
+                gix_hash::ObjectId::from_bytes_or_panic(&buf[buf.len() - gix_hash::Kind::Sha1.len_in_bytes()..]),
                 "f34c9be7e0c3ef2c3ed7c62cc7791dbf6dc5ec9a"
             );
             Ok(())

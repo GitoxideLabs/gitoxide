@@ -68,6 +68,35 @@ impl std::fmt::Debug for Reference<'_> {
     }
 }
 
+mod impls {
+    use gix_ref::{
+        FullName, FullNameRef,
+        bstr::{BStr, BString},
+    };
+
+    use crate::Reference;
+
+    macro_rules! impl_partial_eq {
+        ($other:ty) => {
+            impl PartialEq<$other> for Reference<'_> {
+                fn eq(&self, other: &$other) -> bool {
+                    self.inner.eq(other)
+                }
+            }
+        };
+    }
+
+    impl_partial_eq!(str);
+    impl_partial_eq!(&str);
+    impl_partial_eq!(String);
+    impl_partial_eq!(BStr);
+    impl_partial_eq!(&BStr);
+    impl_partial_eq!(BString);
+    impl_partial_eq!(FullName);
+    impl_partial_eq!(FullNameRef);
+    impl_partial_eq!(&FullNameRef);
+}
+
 impl<'repo> Reference<'repo> {
     pub(crate) fn from_ref(reference: gix_ref::Reference, repo: &'repo crate::Repository) -> Self {
         Reference { inner: reference, repo }
@@ -266,7 +295,7 @@ impl<'repo> Reference<'repo> {
     /// let head = repo.find_reference("HEAD")?;
     /// let branch = head.follow().expect("symbolic")?;
     ///
-    /// assert_eq!(branch.name().as_bstr(), "refs/heads/main");
+    /// assert_eq!(branch, "refs/heads/main");
     /// # Ok(()) }
     /// ```
     pub fn follow(&self) -> Option<Result<Reference<'repo>, gix_ref::file::find::existing::Error>> {

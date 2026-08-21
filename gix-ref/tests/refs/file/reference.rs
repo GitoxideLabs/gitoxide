@@ -136,7 +136,7 @@ mod peel {
 
         let commit = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
         assert_eq!(r.peel_to_id(&store, &EmptyCommit)?, commit);
-        assert_eq!(r.name.as_bstr(), "refs/remotes/origin/multi-link-target3");
+        assert_eq!(r, "refs/remotes/origin/multi-link-target3");
 
         let mut r: Reference = store.find_loose("dt1")?.into();
         assert_eq!(
@@ -189,13 +189,13 @@ mod peel {
         let store = file::store()?;
         let mut r: Reference = store.find_loose("loop-a")?.into();
         assert_eq!(r.kind(), gix_ref::Kind::Symbolic, "there is something to peel");
-        assert_eq!(r.name.as_bstr(), "refs/loop-a");
+        assert_eq!(r, "refs/loop-a");
 
         assert!(matches!(
             r.peel_to_id(&store, &gix_object::find::Never).unwrap_err(),
             gix_ref::peel::to_id::Error::FollowToObject(gix_ref::peel::to_object::Error::Cycle { .. })
         ));
-        assert_eq!(r.name.as_bstr(), "refs/loop-a", "the ref is not changed on error");
+        assert_eq!(r, "refs/loop-a", "the ref is not changed on error");
 
         let mut r: Reference = store.find_loose("loop-a")?.into();
         let err = r
@@ -334,7 +334,10 @@ mod parse {
             assert_eq!(reference.kind(), gix_ref::Kind::Object);
             let target_id = reference.target.to_ref().try_id().expect("non-symbolic").to_owned();
             assert_eq!(target_id.kind(), gix_hash::Kind::Sha256);
-            assert_eq!(target_id, gix_hash::ObjectId::from_hex(input).unwrap());
+            assert_eq!(
+                target_id,
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            );
         }
     }
 }

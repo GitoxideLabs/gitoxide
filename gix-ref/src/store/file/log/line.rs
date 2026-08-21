@@ -162,11 +162,6 @@ pub mod decode {
     mod test_decode {
         use super::*;
 
-        /// Convert a hexadecimal hash into its corresponding `ObjectId` or _panic_.
-        fn hex_to_oid(hex: &str) -> gix_hash::ObjectId {
-            gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("40 bytes hex")
-        }
-
         fn with_newline(mut v: Vec<u8>) -> Vec<u8> {
             v.push(b'\n');
             v
@@ -229,11 +224,8 @@ pub mod decode {
                     message: b"pull --ff-only: Fast-forward".as_bstr(),
                 };
                 assert_eq!(res, actual);
-                assert_eq!(
-                    actual.previous_oid(),
-                    hex_to_oid("a5828ae6b52137b913b978e16cd2334482eb4c1f")
-                );
-                assert_eq!(actual.new_oid(), hex_to_oid("89b43f80a514aee58b662ad606e6352e03eaeee4"));
+                assert_eq!(actual.previous_oid(), "a5828ae6b52137b913b978e16cd2334482eb4c1f");
+                assert_eq!(actual.new_oid(), "89b43f80a514aee58b662ad606e6352e03eaeee4");
             }
         }
 

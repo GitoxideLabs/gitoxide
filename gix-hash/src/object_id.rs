@@ -343,6 +343,14 @@ impl std::fmt::Display for ObjectId {
     }
 }
 
+impl ObjectId {
+    fn eq_str(&self, other: &str) -> bool {
+        self.as_ref().eq_str(other)
+    }
+}
+
+impl_partial_eq_str!(ObjectId);
+
 impl PartialEq<&oid> for ObjectId {
     fn eq(&self, other: &&oid) -> bool {
         self.as_ref() == *other

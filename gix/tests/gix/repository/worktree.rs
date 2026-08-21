@@ -409,7 +409,7 @@ fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
         );
         assert_eq!(main_repo.head_id().unwrap(), expected_main.peeled);
         assert_eq!(
-            main_repo.head_name().unwrap().expect("no detached head").as_bstr(),
+            main_repo.head_name().unwrap().expect("no detached head"),
             expected_main.branch.unwrap()
         );
         let worktree = main_repo.worktree().expect("not bare");
