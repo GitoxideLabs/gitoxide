@@ -1585,6 +1585,7 @@ pub(crate) fn perform_plan_with_progress(
     let mut conflict = None;
     let mut marked = false;
     for (index, step) in plan.steps.iter().enumerate() {
+        let mut resolved_head = None;
         let parent = match step.parent {
             PlanParent::Existing(id) => {
                 repo.find_commit(id).context("could not find a fork target")?;
@@ -1602,11 +1603,13 @@ pub(crate) fn perform_plan_with_progress(
                 .context("could not decode a picked commit")?
                 .into_owned()
                 .context("could not own a picked commit")?,
-            PlanCommit::Resolved(_) => {
-                let mut commit = repo
+            PlanCommit::Resolved(planned) => {
+                let head = repo
                     .head()?
                     .peel_to_commit()
-                    .context("could not resolve the conflicted HEAD commit")?
+                    .context("could not resolve the conflicted HEAD commit")?;
+                resolved_head = Some((*planned, head.id));
+                let mut commit = head
                     .decode()
                     .context("could not decode the conflicted HEAD commit")?
                     .into_owned()
@@ -1777,6 +1780,14 @@ pub(crate) fn perform_plan_with_progress(
             && old_id != new_id
         {
             note_rewrites.push((old_id, new_id));
+        }
+        if let Some((planned, actual)) = resolved_head
+            && actual != planned
+        {
+            rewritten.insert(actual, Some(new_id));
+            if actual != new_id {
+                note_rewrites.push((actual, new_id));
+            }
         }
         for old_id in step.squash.iter().take(applied_squash) {
             rewritten.insert(*old_id, Some(new_id));

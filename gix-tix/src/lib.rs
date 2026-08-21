@@ -2087,30 +2087,30 @@ fn event_loop(
             })();
             match result {
                 Ok(edit::rebase::PlanPerform::Complete(outcome)) => {
-                    let notice = outcome
-                        .selected
-                        .map(|selected| {
-                            edit::time_travel::checkout_without_replay_reporting(
-                                &repository_path,
-                                repository_is_bare,
-                                selected,
-                                &revisions,
-                                false,
-                            )
-                        })
-                        .transpose()
-                        .map(|result| result.unwrap_or((None, Vec::new())));
+                    let checkout = if outcome.selected.is_some() {
+                        edit::time_travel::checkout_plan_reporting(
+                            &repository_path,
+                            repository_is_bare,
+                            &outcome,
+                            &revisions,
+                            false,
+                        )
+                    } else {
+                        Ok((None, outcome.ref_changes.clone()))
+                    };
                     app.clear_rebase_conflict();
                     app.clear_rebase_continuation();
                     app.set_worktree_conflicted(false);
                     let mut changes = std::mem::take(&mut pending_todo_ref_changes);
-                    changes.extend(outcome.ref_changes.iter().cloned());
-                    let message = match notice {
-                        Ok((notice, mut checkout_changes)) => {
-                            changes.append(&mut checkout_changes);
+                    let message = match checkout {
+                        Ok((notice, mut outcome_changes)) => {
+                            changes.append(&mut outcome_changes);
                             notice.unwrap_or_else(|| "rebased history".into())
                         }
-                        Err(err) => format!("rebase applied, checkout failed: {err:#}"),
+                        Err(err) => {
+                            changes.extend(outcome.ref_changes.iter().cloned());
+                            format!("rebase applied, checkout failed: {err:#}")
+                        }
                     };
                     leave_recorded_success(
                         &mut app,
@@ -8694,7 +8694,7 @@ mod tests {
         let graph = HistoryGraph::for_commits(&repository, &plan.scope)?;
         let outcome = edit::rebase::perform_plan(&repository, &graph, plan)?.complete()?;
         let resolved = outcome.map(head).context("the conflicted commit is retained")?;
-        edit::time_travel::checkout_without_replay(fixture.path(), false, resolved, &[], false)?;
+        edit::time_travel::checkout_plan(fixture.path(), false, &outcome, &[], false)?;
 
         let repository = test_repository::open(fixture.path())?;
         assert_eq!(
@@ -8729,6 +8729,10 @@ mod tests {
                 .iter()
                 .all(|entry| entry.stage() == gix::index::entry::Stage::Unconflicted),
             "the final index has no conflict stages"
+        );
+        assert!(
+            history::all_pins(&repository)?.iter().all(history::Pin::is_head),
+            "continuing a resolved plan creates no ordinary pin for its superseded conflict checkout"
         );
         assert!(
             !git(&["ls-files", "--error-unmatch", "unrelated"])?.status.success(),
