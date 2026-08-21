@@ -408,8 +408,8 @@ without trading responsiveness for metadata that is not visible.
 | `j`/Down, `k`/Up | Move one selectable row or changed path. Shift follows the first parent or chosen child. |
 | Mouse/trackpad vertical scroll | Pan history by the coalesced scroll distance without moving its cursor; Shift moves the cursor instead. Mouse input continues to move paths when a changes block is focused. |
 | `h`/`l` | Pan history or the focused changes block horizontally. Shift chooses a remembered topological child. Shift-horizontal mouse input does the same. |
-| `Ctrl-u`/`Ctrl-d` | Pan half a page; Shift moves the cursor half a page. |
-| `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Pan a page; Shift moves the cursor a page. Both forms scroll an overflowing commit message when applicable. |
+| `Ctrl-u`/`Ctrl-d` | Move the cursor half a page; Shift pans the viewport half a page. |
+| `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move the cursor a page; Shift pans the viewport a page. Both forms scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
 | `?` | Toggle the information key group. |
 | `t` | Toggle the rounded ref-tree overview. |

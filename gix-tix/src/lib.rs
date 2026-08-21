@@ -6166,7 +6166,7 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
         if let Some((cursor_action, distance, down)) = paging {
             let shifted =
                 key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('U' | 'D' | 'B' | 'F'));
-            if shifted || app.changes_focus.is_some() || app.commit_paging_active() {
+            if !shifted || app.changes_focus.is_some() || app.commit_paging_active() {
                 return Some(cursor_action);
             }
             return Some(if down {
@@ -7986,7 +7986,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_applies_topology_to_directions_and_cursor_movement_to_pages() {
+    fn shift_applies_topology_to_directions_and_viewport_movement_to_pages() {
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         let shifted = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
         let mut app = App::new(8);
@@ -8029,24 +8029,24 @@ mod tests {
         let control_shift =
             |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL | KeyModifiers::SHIFT);
         for (key, expected) in [
-            (key(KeyCode::PageUp), Action::PanUpBy(8)),
-            (key(KeyCode::PageDown), Action::PanDownBy(8)),
-            (control('u'), Action::PanUpBy(4)),
-            (control('d'), Action::PanDownBy(4)),
-            (control('b'), Action::PanUpBy(8)),
-            (control('f'), Action::PanDownBy(8)),
-            (shifted(KeyCode::PageUp), Action::PageUp),
-            (shifted(KeyCode::PageDown), Action::PageDown),
-            (control_shift('u'), Action::HalfPageUp),
-            (control_shift('d'), Action::HalfPageDown),
-            (control_shift('b'), Action::PageUp),
-            (control_shift('f'), Action::PageDown),
+            (key(KeyCode::PageUp), Action::PageUp),
+            (key(KeyCode::PageDown), Action::PageDown),
+            (control('u'), Action::HalfPageUp),
+            (control('d'), Action::HalfPageDown),
+            (control('b'), Action::PageUp),
+            (control('f'), Action::PageDown),
+            (shifted(KeyCode::PageUp), Action::PanUpBy(8)),
+            (shifted(KeyCode::PageDown), Action::PanDownBy(8)),
+            (control_shift('u'), Action::PanUpBy(4)),
+            (control_shift('d'), Action::PanDownBy(4)),
+            (control_shift('b'), Action::PanUpBy(8)),
+            (control_shift('f'), Action::PanDownBy(8)),
         ] {
             assert_eq!(app_action(key, &app), Some(expected));
         }
         assert_eq!(
             app_action(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::CONTROL), &app),
-            Some(Action::HalfPageUp),
+            Some(Action::PanUpBy(4)),
             "uppercase Ctrl paging retains its Shift meaning instead of invoking redo"
         );
 
