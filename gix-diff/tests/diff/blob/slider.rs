@@ -1,16 +1,18 @@
+use std::{collections::BTreeMap, hash::Hash, path::Path};
+
+use gix_diff::blob::{self, Algorithm, InternedInput, diff_with_slider_heuristics};
 use gix_object::bstr::ByteSlice;
 use pretty_assertions::StrComparison;
 
 #[test]
 fn baseline() -> gix_testtools::Result {
-    use gix_diff::blob::{self, Algorithm, InternedInput, diff_with_slider_heuristics};
-
     let worktree_path = crate::scripted_fixture_read_only("make_diff_for_sliders_repo.sh")?;
     let asset_dir = worktree_path.join("assets");
 
     let dir = std::fs::read_dir(&worktree_path)?;
+    let should_print_extended_report = std::env::var_os("GIX_DIFF_SLIDER_REPORT").is_some();
 
-    let mut diffs = Vec::new();
+    let mut cases = Vec::new();
 
     for entry in dir {
         let entry = entry?;
@@ -28,44 +30,130 @@ fn baseline() -> gix_testtools::Result {
             old_data.to_str().expect("BUG: we don't have non-ascii here"),
             new_data.to_str().expect("BUG: we don't have non-ascii here"),
         );
-        let diff = diff_with_slider_heuristics(
-            match algorithm {
-                Algorithm::Myers => Algorithm::Myers,
-                Algorithm::Histogram => Algorithm::Histogram,
-                Algorithm::MyersMinimal => Algorithm::MyersMinimal,
-            },
-            &input,
-        );
 
-        let actual = blob::UnifiedDiff::new(
-            &diff,
-            &input,
-            blob::unified_diff::ConsumeBinaryHunk::new(String::new(), "\n"),
-            blob::unified_diff::ContextSize::symmetrical(3),
-        )
-        .consume()?;
+        let gix_no_postprocess = {
+            let diff = blob::Diff::compute(algorithm, &input);
+            render_unidiff(&diff, &input)?
+        };
+
+        let gix_postprocess_no_heuristic = {
+            let mut diff = blob::Diff::compute(algorithm, &input);
+            diff.postprocess_no_heuristic(&input);
+            render_unidiff(&diff, &input)?
+        };
+
+        let gix_postprocess_slider_heuristics = {
+            let diff = diff_with_slider_heuristics(algorithm, &input);
+            render_unidiff(&diff, &input)?
+        };
 
         let baseline_path = worktree_path.join(&file_name);
         let baseline = std::fs::read(baseline_path)?;
         let baseline = crate::blob::skip_header_and_fold_to_unidiff(&baseline);
+        let git_no_indent_heuristic = if should_print_extended_report {
+            read_no_indent_baseline(&worktree_path, &file_name)?
+        } else {
+            None
+        };
 
-        let actual_matches_baseline = actual == baseline;
-        diffs.push((actual, baseline, actual_matches_baseline, file_name));
+        cases.push(Case {
+            file_name,
+            algorithm,
+            git_postprocess_indent_heuristic: baseline,
+            git_no_indent_heuristic,
+            gix_no_postprocess,
+            gix_postprocess_no_heuristic,
+            gix_postprocess_slider_heuristics,
+        });
     }
 
-    if diffs.is_empty() {
-        eprintln!("Slider baseline isn't setup - look at ./gix-diff/tests/README.md for instructions");
+    if cases.is_empty() {
+        eprintln!("Slider baseline isn't set up – see ./gix-diff/tests/README.md for instructions");
     }
 
-    assert_diffs(&diffs);
+    if should_print_extended_report {
+        print_extended_report(&cases);
+    } else {
+        assert_diffs(&cases);
+    }
+
     Ok(())
 }
 
-fn assert_diffs(diffs: &[(String, String, bool, String)]) {
-    let total_diffs = diffs.len();
-    let matching_diffs = diffs
+struct Case {
+    file_name: String,
+    algorithm: Algorithm,
+    git_postprocess_indent_heuristic: String,
+    git_no_indent_heuristic: Option<String>,
+    gix_no_postprocess: String,
+    gix_postprocess_no_heuristic: String,
+    gix_postprocess_slider_heuristics: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Classification {
+    Exact,
+    NoPostprocessMatchesGitDefault,
+    PostprocessNoHeuristicMatchesGitDefault,
+    PostprocessNoHeuristicMatchesGitNoIndent,
+    LikelySliderOnlyMismatch,
+    OtherMismatch,
+}
+
+impl Case {
+    fn classify(&self) -> Classification {
+        if self.gix_postprocess_slider_heuristics == self.git_postprocess_indent_heuristic {
+            Classification::Exact
+        } else if self.gix_no_postprocess == self.git_postprocess_indent_heuristic {
+            Classification::NoPostprocessMatchesGitDefault
+        } else if self.gix_postprocess_no_heuristic == self.git_postprocess_indent_heuristic {
+            Classification::PostprocessNoHeuristicMatchesGitDefault
+        } else if self
+            .git_no_indent_heuristic
+            .as_ref()
+            .is_some_and(|git_no_indent_heuristic| &self.gix_postprocess_no_heuristic == git_no_indent_heuristic)
+        {
+            Classification::PostprocessNoHeuristicMatchesGitNoIndent
+        } else if has_same_changed_line_sequence(
+            &self.gix_postprocess_slider_heuristics,
+            &self.git_postprocess_indent_heuristic,
+        ) {
+            Classification::LikelySliderOnlyMismatch
+        } else {
+            Classification::OtherMismatch
+        }
+    }
+}
+
+fn render_unidiff<T: AsRef<[u8]> + Hash + Eq>(diff: &blob::Diff, input: &InternedInput<T>) -> std::io::Result<String> {
+    blob::UnifiedDiff::new(
+        diff,
+        input,
+        blob::unified_diff::ConsumeBinaryHunk::new(String::new(), "\n"),
+        blob::unified_diff::ContextSize::symmetrical(3),
+    )
+    .consume()
+}
+
+fn read_no_indent_baseline(worktree_path: &Path, primary_file_name: &str) -> std::io::Result<Option<String>> {
+    let Some(stem) = primary_file_name.strip_suffix(".baseline") else {
+        return Ok(None);
+    };
+
+    let path = worktree_path.join(format!("{stem}.no-indent.baseline"));
+    let baseline = match std::fs::read(path) {
+        Ok(baseline) => baseline,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    Ok(Some(super::skip_header_and_fold_to_unidiff(&baseline)))
+}
+
+fn assert_diffs(cases: &[Case]) {
+    let total_diffs = cases.len();
+    let matching_diffs = cases
         .iter()
-        .filter(|(_, _, actual_matches_baseline, _)| *actual_matches_baseline)
+        .filter(|case| case.gix_postprocess_slider_heuristics == case.git_postprocess_indent_heuristic)
         .count();
 
     assert_eq!(
@@ -76,18 +164,251 @@ fn assert_diffs(diffs: &[(String, String, bool, String)]) {
         total_diffs,
         ((matching_diffs as f32) / (total_diffs as f32) * 100.0),
         {
-            let first_non_matching_diff = diffs
+            let first_non_matching_diff = cases
                 .iter()
-                .find(|(_, _, actual_matches_baseline, _)| !actual_matches_baseline)
+                .find(|case| case.gix_postprocess_slider_heuristics != case.git_postprocess_indent_heuristic)
                 .expect("at least one non-matching diff to be there");
 
             format!(
                 "affected baseline: `{}`\n\n{}",
-                first_non_matching_diff.3,
-                StrComparison::new(&first_non_matching_diff.0, &first_non_matching_diff.1)
+                first_non_matching_diff.file_name,
+                StrComparison::new(
+                    &first_non_matching_diff.gix_postprocess_slider_heuristics,
+                    &first_non_matching_diff.git_postprocess_indent_heuristic
+                )
             )
         }
     );
+}
+
+// This function intentionally only is capable to detect a subset of diffs that differ by slider
+// placement only. It can only detect sliders that have added/deleted lines in the exact same
+// order. I plan on adding more accurate classification in the future, though.
+fn has_same_changed_line_sequence(lhs: &str, rhs: &str) -> bool {
+    fn changed_lines(diff: &str) -> Vec<&str> {
+        diff.lines()
+            .filter(|line| line.starts_with('+') || line.starts_with('-'))
+            .collect()
+    }
+
+    changed_lines(lhs) == changed_lines(rhs)
+}
+
+fn slider_detail(gix: &str, git: &str) -> String {
+    let gix_hunks = parse_hunks(gix);
+    let git_hunks = parse_hunks(git);
+
+    if gix_hunks.is_empty() || git_hunks.is_empty() {
+        return format!(
+            "diagnostic-error/unparsed-or-empty-hunks/gix-{}/git-{}",
+            gix_hunks.len(),
+            git_hunks.len()
+        );
+    }
+
+    if gix_hunks.len() != git_hunks.len() {
+        return format!(
+            "multi-hunk/different-hunk-count/gix-{}/git-{}",
+            gix_hunks.len(),
+            git_hunks.len()
+        );
+    }
+
+    // At this point, we know that `gix_hunks.len() == git_hunks.len()`.
+    if gix_hunks.len() > 1 {
+        let directions: Vec<_> = gix_hunks
+            .iter()
+            .zip(&git_hunks)
+            .map(|(gix_hunk, git_hunk)| movement_direction(gix_hunk, git_hunk))
+            .collect();
+        let same_direction = directions
+            .first()
+            .is_some_and(|first| directions.iter().all(|direction| direction == first));
+        let direction = if same_direction {
+            "same-direction"
+        } else {
+            "mixed-direction"
+        };
+
+        return format!("multi-hunk/same-count/{direction}");
+    }
+
+    let gix_hunk = &gix_hunks[0];
+    let git_hunk = &git_hunks[0];
+
+    let gix_is_empty = gix_hunk.removed == 0 && gix_hunk.added == 0;
+    let git_is_empty = git_hunk.removed == 0 && git_hunk.added == 0;
+
+    match (gix_is_empty, git_is_empty) {
+        (true, true) => return "diagnostic-error/empty-hunks/both".to_owned(),
+        (true, false) => return "diagnostic-error/empty-hunks/gix".to_owned(),
+        (false, true) => return "diagnostic-error/empty-hunks/git".to_owned(),
+        (false, false) => {}
+    }
+
+    let kind = match (gix_hunk.removed > 0, gix_hunk.added > 0) {
+        (false, true) => "pure-insertion",
+        (true, false) => "pure-deletion",
+        (true, true) => "modification",
+        (false, false) => unreachable!("BUG: we verified that both `added` and `removed` are non-zero"),
+    };
+    let direction = movement_direction(gix_hunk, git_hunk);
+    let distance = movement_distance_bucket(gix_hunk, git_hunk);
+
+    format!("single-hunk/{kind}/{direction}/{distance}")
+}
+
+struct ParsedHunk {
+    before_start: u32,
+    after_start: u32,
+    removed: usize,
+    added: usize,
+}
+
+fn parse_hunks(diff: &str) -> Vec<ParsedHunk> {
+    let mut hunks = Vec::<ParsedHunk>::new();
+
+    for line in diff.lines() {
+        if line.starts_with("@@ ") {
+            if let Some((before_start, after_start)) = parse_hunk_header(line) {
+                hunks.push(ParsedHunk {
+                    before_start,
+                    after_start,
+                    removed: 0,
+                    added: 0,
+                });
+            }
+        } else if let Some(hunk) = hunks.last_mut() {
+            if line.starts_with('-') {
+                hunk.removed += 1;
+            } else if line.starts_with('+') {
+                hunk.added += 1;
+            }
+        }
+    }
+
+    hunks
+}
+
+fn parse_hunk_header(line: &str) -> Option<(u32, u32)> {
+    // Supported forms include both `@@ -10,3 +10,4 @@` and `@@ -10 +10 @@`.
+    let line = line.strip_prefix("@@ ")?;
+    let (header, _section) = line.split_once(" @@")?;
+
+    let mut parts = header.split_ascii_whitespace();
+    let before = parts.next()?.strip_prefix('-')?;
+    let after = parts.next()?.strip_prefix('+')?;
+
+    Some((parse_range_start(before)?, parse_range_start(after)?))
+}
+
+fn parse_range_start(range: &str) -> Option<u32> {
+    let start = range.split_once(',').map_or(range, |(start, _len)| start);
+
+    start.parse().ok()
+}
+
+fn movement_direction(gix_hunk: &ParsedHunk, git_hunk: &ParsedHunk) -> &'static str {
+    match gix_hunk.before_start.cmp(&git_hunk.before_start) {
+        std::cmp::Ordering::Less => "gix-before-start-earlier",
+        std::cmp::Ordering::Greater => "gix-before-start-later",
+        std::cmp::Ordering::Equal => match gix_hunk.after_start.cmp(&git_hunk.after_start) {
+            std::cmp::Ordering::Less => "same-before-start/gix-after-start-earlier",
+            std::cmp::Ordering::Greater => "same-before-start/gix-after-start-later",
+            std::cmp::Ordering::Equal => "same-before-start",
+        },
+    }
+}
+
+fn movement_distance_bucket(gix_hunk: &ParsedHunk, git_hunk: &ParsedHunk) -> &'static str {
+    let before_delta = gix_hunk.before_start.abs_diff(git_hunk.before_start);
+    let after_delta = gix_hunk.after_start.abs_diff(git_hunk.after_start);
+
+    match before_delta.max(after_delta) {
+        0 => "0",
+        1 => "1",
+        2..=5 => "2-5",
+        6..=20 => "6-20",
+        _ => ">20",
+    }
+}
+
+fn print_extended_report(cases: &[Case]) {
+    let mut counts = BTreeMap::<Classification, usize>::new();
+    let mut likely_slider_only_counts = BTreeMap::<String, usize>::new();
+
+    for case in cases {
+        let classification = case.classify();
+        *counts.entry(classification).or_default() += 1;
+
+        if classification == Classification::LikelySliderOnlyMismatch {
+            *likely_slider_only_counts
+                .entry(slider_detail(
+                    &case.gix_postprocess_slider_heuristics,
+                    &case.git_postprocess_indent_heuristic,
+                ))
+                .or_default() += 1;
+        }
+    }
+
+    eprintln!("slider report");
+    eprintln!();
+
+    if cases.is_empty() {
+        eprintln!("no cases to report");
+
+        return;
+    }
+
+    eprintln!("total cases: {}", cases.len());
+    eprintln!(
+        "git no-indent baselines: {}",
+        cases
+            .iter()
+            .filter(|case| case.git_no_indent_heuristic.is_some())
+            .count()
+    );
+    eprintln!();
+
+    for (classification, count) in counts {
+        let percentage = count as f32 / cases.len() as f32 * 100.0;
+
+        eprintln!("{classification:?}: {count} [{percentage:.2}%]");
+    }
+
+    eprintln!();
+    eprintln!("likely slider-only details");
+    eprintln!();
+
+    let likely_slider_only_total: usize = likely_slider_only_counts.values().sum();
+
+    if likely_slider_only_total == 0 {
+        eprintln!("no likely slider-only mismatches");
+    } else {
+        let mut details: Vec<_> = likely_slider_only_counts.into_iter().collect();
+        details.sort_by(|(lhs_detail, lhs_count), (rhs_detail, rhs_count)| {
+            rhs_count.cmp(lhs_count).then_with(|| lhs_detail.cmp(rhs_detail))
+        });
+
+        for (detail, count) in details {
+            let slider_only_percentage = count as f32 / likely_slider_only_total as f32 * 100.0;
+            let total_percentage = count as f32 / cases.len() as f32 * 100.0;
+
+            eprintln!("{detail}: {count} [{slider_only_percentage:.2}% slider-only, {total_percentage:.2}% total]");
+        }
+    }
+
+    eprintln!();
+    eprintln!("first non-matching cases");
+    eprintln!();
+
+    for case in cases
+        .iter()
+        .filter(|case| case.gix_postprocess_slider_heuristics != case.git_postprocess_indent_heuristic)
+        .take(20)
+    {
+        eprintln!("{} {:?} {:?}", case.file_name, case.algorithm, case.classify());
+    }
 }
 
 mod baseline {
@@ -102,17 +423,18 @@ mod baseline {
         pub new_data: Vec<u8>,
     }
 
-    /// Returns `None` if the file isn't a baseline entry.
+    /// Returns `None` if the file isn't a primary baseline entry.
     pub fn parse_dir_entry(asset_dir: &Path, file_name: &OsStr) -> std::io::Result<Option<DirEntry>> {
         let file_name = file_name.to_str().expect("ascii filename").to_owned();
 
-        if !file_name.ends_with(".baseline") {
+        let Some(stem) = file_name.strip_suffix(".baseline") else {
             return Ok(None);
-        }
+        };
 
-        let parts: Vec<_> = file_name.split('.').collect();
-        let [name, algorithm, ..] = parts[..] else {
-            unreachable!("BUG: Need file named '<name>.<algorithm>'")
+        let parts: Vec<_> = stem.split('.').collect();
+        let [name, algorithm] = parts[..] else {
+            // Additional baselines like `<name>.<algorithm>.no-indent.baseline` are consumed separately.
+            return Ok(None);
         };
         let algorithm = match algorithm {
             "myers" => Algorithm::Myers,
