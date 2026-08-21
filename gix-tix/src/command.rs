@@ -20,6 +20,9 @@ mod travel;
 #[derive(Debug, clap::Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct Platform {
+    /// Draw on the normal screen so panic output remains visible.
+    #[arg(long)]
+    no_alt_screen: bool,
     /// Exit after the final frame, optionally replaying read-only INPUTS first.
     #[arg(
         long,
@@ -175,13 +178,22 @@ impl Platform {
     /// Run this command against `repository`.
     pub fn run(self, repository: gix::ThreadSafeRepository) -> Result<()> {
         let Platform {
+            no_alt_screen,
             quit_on_finish,
             hide,
             command,
             revisions,
         } = self;
         let Some(command) = command else {
-            return crate::run(repository, revisions, crate::Options { quit_on_finish, hide });
+            return crate::run(
+                repository,
+                revisions,
+                crate::Options {
+                    no_alt_screen,
+                    quit_on_finish,
+                    hide,
+                },
+            );
         };
 
         let repository = repository.to_thread_local();
@@ -736,8 +748,18 @@ mod tests {
 
     #[test]
     fn parses_tui_options_and_top_level_commands() {
-        let cli = Cli::try_parse_from(["tix", "--quit-on-finish", "-x", "main", "--hide", "tag", "topic"])
-            .expect("TUI arguments parse");
+        let cli = Cli::try_parse_from([
+            "tix",
+            "--no-alt-screen",
+            "--quit-on-finish",
+            "-x",
+            "main",
+            "--hide",
+            "tag",
+            "topic",
+        ])
+        .expect("TUI arguments parse");
+        assert!(cli.platform.no_alt_screen);
         assert_eq!(cli.platform.quit_on_finish, Some(String::new()));
         assert_eq!(cli.platform.hide, ["main", "tag"], "hide options append");
         assert_eq!(
@@ -1549,6 +1571,7 @@ mod tests {
         let linked_target = linked.find_reference(retained_ref.as_ref())?.id().detach();
 
         Platform {
+            no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
             command: Some(Command::Admin(Admin::ClearUndo)),
@@ -1571,6 +1594,7 @@ mod tests {
         );
 
         Platform {
+            no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
             command: Some(Command::Admin(Admin::ClearUndo)),
