@@ -3225,7 +3225,7 @@ impl CompressedHistory {
             let mut row = rows[representative].as_ref().clone();
             row.parent_ids = std::mem::take(&mut parents[group]);
             compact_rows.push(Arc::new(row));
-            entries.push(if is_anchor(representative) {
+            entries.push(if is_anchor(representative) || members[group].len() == 1 {
                 HistoryEntry::Commit(representative)
             } else {
                 HistoryEntry::Segment {
@@ -5099,18 +5099,15 @@ mod tests {
                     count: 2,
                 },
                 HistoryEntry::Commit(3),
-                HistoryEntry::Segment {
-                    representative: 4,
-                    count: 1,
-                },
+                HistoryEntry::Commit(4),
                 HistoryEntry::Commit(5),
             ],
-            "linear commits between the retained endpoints and selection collapse into counted segments"
+            "linear runs collapse only when their summary saves vertical space"
         );
         assert_eq!(
             app.render_lanes(0..app.history_len()).iter().collect::<Vec<_>>(),
-            ["● ", "○ ", "● ", "○ ", "● "],
-            "segments reuse the canonical graph with a quieter ring marker"
+            ["● ", "○ ", "● ", "● ", "● "],
+            "only segments use the quieter ring marker"
         );
 
         app.update(Action::MoveUp);
@@ -5122,8 +5119,8 @@ mod tests {
             "navigation returns from a summary to its adjacent retained commit"
         );
 
-        app.select_commit(id(2));
-        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(2)));
+        app.select_commit(id(4));
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(4)));
         assert!(
             app.selected_history_index().is_some(),
             "a programmatic jump rebuilds compression around the destination"
@@ -5338,6 +5335,7 @@ mod tests {
     fn compressed_segments_are_selectable_and_expand_in_place() {
         let mut app = App::new(10);
         app.extend_commits(vec![
+            row_with_parents(7, &[6]),
             row_with_parents(6, &[5]),
             row_with_parents(5, &[4]),
             row_with_parents(4, &[3]),
@@ -5351,8 +5349,8 @@ mod tests {
             .iter()
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        app.set_view_tips(&[id(6)]);
-        app.select_commit(id(3));
+        app.set_view_tips(&[id(7)]);
+        app.select_commit(id(4));
         app.alignment = Alignment::None;
         app.update(Action::ToggleAlign);
 
@@ -5374,7 +5372,7 @@ mod tests {
         );
         assert_eq!(
             app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id),
-            Some(id(5)),
+            Some(id(6)),
             "expansion selects the newest commit represented by the summary"
         );
         assert!(
@@ -5403,7 +5401,7 @@ mod tests {
         );
         assert_eq!(
             app.update(Action::OpenDiff),
-            vec![Effect::OpenCommitDiff(TreeDiffTarget::Commit { id: id(2), parent: 0 })],
+            vec![Effect::OpenCommitDiff(TreeDiffTarget::Commit { id: id(3), parent: 0 })],
             "Enter resumes its normal commit behavior after expansion"
         );
     }
@@ -5535,6 +5533,7 @@ mod tests {
     fn compressed_expansions_reset_on_mode_exit_and_full_reload() {
         let commits = || {
             vec![
+                row_with_parents(6, &[5]),
                 row_with_parents(5, &[4]),
                 row_with_parents(4, &[3]),
                 row_with_parents(3, &[2]),
@@ -5549,7 +5548,7 @@ mod tests {
         let mut app = App::new(10);
         app.extend_commits(commits());
         complete(&mut app);
-        app.set_view_tips(&[id(5)]);
+        app.set_view_tips(&[id(6)]);
         app.alignment = Alignment::None;
         app.update(Action::ToggleAlign);
         app.update(Action::MoveDown);
@@ -5571,7 +5570,7 @@ mod tests {
         assert!(app.selected_is_segment(), "a summary is available to expand again");
         app.update(Action::OpenDiff);
         app.reload(false);
-        app.set_view_tips(&[id(5)]);
+        app.set_view_tips(&[id(6)]);
         app.extend_commits(commits());
         complete(&mut app);
         assert_eq!(app.alignment, Alignment::Compressed);
