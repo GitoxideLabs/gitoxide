@@ -7,6 +7,7 @@ mod app;
 mod change_id;
 pub mod command;
 mod edit;
+mod enrich;
 mod history;
 mod logging;
 mod ref_tree;
@@ -1138,6 +1139,7 @@ fn event_loop(
             schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
         }
         if take_due(&mut ref_refresh_deadline, Instant::now()) {
+            app.clear_enrichments();
             if std::mem::take(&mut ref_watch_set_changed) {
                 match start_ref_watcher(&repository_path, &common_dir) {
                     Ok(watcher) => {
@@ -1704,7 +1706,12 @@ fn event_loop(
         let key_pressed = is_key_press(&terminal_event);
         let (action, repeats_history, is_repeat, throttles_draw) = match terminal_event {
             TerminalEvent::Key(key) => {
-                let action = action_with_shortcut_groups(key, app.history_display_expanded, app.edit_expanded);
+                let action = action_with_shortcut_groups(
+                    key,
+                    app.history_display_expanded,
+                    app.edit_expanded,
+                    app.enrich_expanded,
+                );
                 let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
                 (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
             }
@@ -2598,6 +2605,40 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("unpin: {err:#}")),
                     }
                 }
+                Effect::ToggleTodo(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let result = open_repository(&repository_path, repository_is_bare, false)
+                        .context("could not open repository to update the enrichment")
+                        .and_then(|repo| enrich::toggle(&repo, id));
+                    match result {
+                        Ok(enrichment) => {
+                            let enabled = enrichment.todo;
+                            app.clear_enrichments();
+                            app.set_enrichment(id, enrichment);
+                            app.leave_success(if enabled {
+                                "marked commit todo"
+                            } else {
+                                "cleared commit todo"
+                            });
+                        }
+                        Err(err) => app.leave_error(format!("todo: {err:#}")),
+                    }
+                }
+                Effect::EditNote(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    match edit_note(terminal, &repository_path, repository_is_bare, id, enhanced_keyboard) {
+                        Ok(Some(enrichment)) => {
+                            let has_note = enrichment.note.is_some();
+                            app.clear_enrichments();
+                            app.set_enrichment(id, enrichment);
+                            app.leave_success(if has_note { "saved note" } else { "cleared note" });
+                        }
+                        Ok(None) => {}
+                        Err(err) => app.leave_error(format!("note: {err:#}")),
+                    }
+                }
                 Effect::VerifySignatures(ids) => {
                     verification_receiver = Some(start_signature_verification(
                         repository_path.clone(),
@@ -2967,6 +3008,11 @@ fn draw(
         .map(|row| row.id)
         .filter(|id| repository_fill_allowed && !app.notes_loaded(*id))
         .collect();
+    let enrichments_to_load: Vec<_> = app.rows[start..end]
+        .iter()
+        .map(|row| row.id)
+        .filter(|id| repository_fill_allowed && !app.enrichment_loaded(*id))
+        .collect();
     let changes_visible = app.changes_visible();
     let selected_id = app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id);
     app.selection_relation = selection_cache
@@ -3040,6 +3086,7 @@ fn draw(
         app.selection_relation = relation;
     }
     if !notes_to_load.is_empty()
+        || !enrichments_to_load.is_empty()
         || app.rows[start..end].iter().any(|row| !row.metadata_loaded)
         || message_to_load.is_some()
         || tree_changes_to_load.is_some()
@@ -3067,6 +3114,20 @@ fn draw(
                     })
                     .collect();
                 app.set_notes(id, loaded);
+            }
+        }
+        if !enrichments_to_load.is_empty() {
+            let mut notes = enrich::open(repository)?;
+            for id in enrichments_to_load {
+                let loaded = crate::change_id::for_commit(repository, id)
+                    .and_then(|change_id| enrich::load(&mut notes, change_id));
+                match loaded {
+                    Ok(enrichment) => app.set_enrichment(id, enrichment),
+                    Err(err) => {
+                        tracing::warn!(commit_id = %id, error = %err, "ignored malformed tix enrichment");
+                        app.set_enrichment(id, enrich::Enrichment::default());
+                    }
+                }
             }
         }
         for index in start..end {
@@ -3594,6 +3655,41 @@ fn show_commit_diff(
         run_external_diff(terminal, command, enhanced_keyboard)?;
     }
     Ok(false)
+}
+
+#[tracing::instrument(skip_all, fields(commit_id = %id))]
+fn edit_note(
+    terminal: &mut ratatui::DefaultTerminal,
+    repository_path: &Path,
+    bare: bool,
+    id: gix::ObjectId,
+    enhanced_keyboard: bool,
+) -> Result<Option<enrich::Enrichment>> {
+    let (editor, enrichment, document) = {
+        let repository =
+            open_repository(repository_path, bare, false).context("could not open repository before editing note")?;
+        let change_id = change_id::for_commit(&repository, id)?;
+        let enrichment = enrich::load(&mut enrich::open(&repository)?, change_id)?;
+        let document = enrichment.note.clone().unwrap_or_default();
+        let editor = repository.editor().context("no Git editor is available")?;
+        (editor, enrichment, document)
+    };
+    let edited = edit::edit_document(
+        terminal,
+        &editor,
+        &document,
+        &format!("tix-note-{}.md", std::process::id()),
+        enhanced_keyboard,
+    )?;
+    let cleaned = edit::reword::cleanup_message(edited.as_deref().unwrap_or(&document), None);
+    let desired_note = (!cleaned.is_empty()).then_some(cleaned.as_bstr());
+    if enrichment.note.as_ref().map(|note| note.as_bstr()) == desired_note {
+        return Ok(None);
+    }
+
+    let repository =
+        open_repository(repository_path, bare, false).context("could not reopen repository after editing note")?;
+    enrich::set_note(&repository, id, desired_note.map(AsRef::as_ref)).map(Some)
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -4635,7 +4731,7 @@ fn poll_timeout(
 }
 
 fn action(key: KeyEvent) -> Option<Action> {
-    action_with_shortcut_groups(key, false, false)
+    action_with_shortcut_groups(key, false, false, false)
 }
 
 fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_focused: bool) -> bool {
@@ -4678,7 +4774,12 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
     ) || (changes_focused && matches!(action, Some(Action::OpenDiff | Action::Cancel | Action::Quit)))
 }
 
-fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, edit_expanded: bool) -> Option<Action> {
+fn action_with_shortcut_groups(
+    key: KeyEvent,
+    history_display_expanded: bool,
+    edit_expanded: bool,
+    enrich_expanded: bool,
+) -> Option<Action> {
     if key.kind == KeyEventKind::Release {
         return None;
     }
@@ -4730,6 +4831,8 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('d') if edit_expanded => Some(Action::Forget),
         KeyCode::Char('i') if edit_expanded => Some(Action::Unpin),
         KeyCode::Char('v') if edit_expanded => Some(Action::Review),
+        KeyCode::Char('t') if enrich_expanded => Some(Action::ToggleTodo),
+        KeyCode::Char('o') if enrich_expanded => Some(Action::EditNote),
         KeyCode::Char('@') => Some(Action::TimeTravel),
         KeyCode::Char('2') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::TimeTravel),
         KeyCode::Char('m') => Some(Action::ToggleCommit),
@@ -4738,6 +4841,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('t') => Some(Action::ToggleRefTree),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('e') => Some(Action::ToggleEdit),
+        KeyCode::Char('n') => Some(Action::ToggleEnrich),
         KeyCode::Char('?') => Some(Action::ToggleInformation),
         KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleInformation),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
@@ -5722,7 +5826,37 @@ mod tests {
             action(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
             Some(Action::ToggleEdit)
         );
-        assert_eq!(action(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)), None);
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)),
+            Some(Action::ToggleEnrich)
+        );
+        assert_eq!(
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+                false,
+                false,
+                true
+            ),
+            Some(Action::ToggleTodo)
+        );
+        assert_eq!(
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
+                false,
+                false,
+                true
+            ),
+            Some(Action::EditNote)
+        );
+        assert_eq!(
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+                false,
+                false,
+                true
+            ),
+            Some(Action::ToggleEnrich)
+        );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)),
             Some(Action::ToggleCommit)
@@ -5792,13 +5926,23 @@ mod tests {
             ('h', Action::ToggleHidden),
         ] {
             assert_eq!(
-                action_with_shortcut_groups(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE), true, false),
+                action_with_shortcut_groups(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    true,
+                    false,
+                    false
+                ),
                 Some(expected),
                 "{key} is available after the view prefix"
             );
         }
         assert_eq!(
-            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE), true, false),
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+                true,
+                false,
+                false
+            ),
             Some(Action::ToggleHistoryDisplay),
             "v closes the view shortcut group"
         );
@@ -5817,28 +5961,53 @@ mod tests {
             ('i', Action::Unpin),
         ] {
             assert_eq!(
-                action_with_shortcut_groups(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE), false, true),
+                action_with_shortcut_groups(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    false,
+                    true,
+                    false
+                ),
                 Some(expected),
                 "{key} is available after the edit prefix"
             );
         }
         assert_eq!(
-            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE), false, true),
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+                false,
+                true,
+                false
+            ),
             Some(Action::ToggleRefTree),
             "the direct ref-tree key remains available while edit is expanded"
         );
         assert_eq!(
-            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE), false, true),
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE),
+                false,
+                true,
+                false
+            ),
             Some(Action::TimeTravel),
             "the direct time-travel key remains available while edit is expanded"
         );
         assert_eq!(
-            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL), false, true,),
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+                false,
+                true,
+                false
+            ),
             Some(Action::PageUp),
             "navigation keeps priority over the edit shortcut"
         );
         assert_eq!(
-            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE), false, true),
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+                false,
+                true,
+                false
+            ),
             Some(Action::ToggleEdit),
             "e closes the edit shortcut group"
         );
@@ -5856,7 +6025,12 @@ mod tests {
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)), None);
         assert_eq!(
-            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE), false, true),
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+                false,
+                true,
+                false
+            ),
             Some(Action::ToggleRefs),
             "the old edit shortcut retains its direct reference-toggle behavior"
         );
@@ -5883,12 +6057,12 @@ mod tests {
     fn tree_is_direct_while_trailers_remain_scoped_to_the_view_prefix() {
         let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE);
         assert_eq!(
-            action_with_shortcut_groups(key, true, false),
+            action_with_shortcut_groups(key, true, false, false),
             Some(Action::ToggleTrailers),
             "v t retains its trailer action"
         );
         assert_eq!(
-            action_with_shortcut_groups(key, false, false),
+            action_with_shortcut_groups(key, false, false, false),
             Some(Action::ToggleRefTree),
             "plain t toggles the ref-tree"
         );

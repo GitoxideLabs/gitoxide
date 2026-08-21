@@ -323,6 +323,9 @@ pub(crate) enum Action {
     ToggleHistoryDisplay,
     ToggleRefTree,
     ToggleEdit,
+    ToggleEnrich,
+    ToggleTodo,
+    EditNote,
     ToggleInformation,
     ToggleAlign,
     ToggleCommit,
@@ -389,6 +392,8 @@ pub(crate) enum Effect {
     },
     TimeTravel(ObjectId),
     Unpin(ObjectId),
+    ToggleTodo(ObjectId),
+    EditNote(ObjectId),
     VerifySignatures(Vec<ObjectId>),
     Quit,
 }
@@ -419,6 +424,7 @@ pub(crate) struct App {
     pending_hidden_rows: Option<HashSet<ObjectId>>,
     titles: Vec<u8>,
     notes: HashMap<ObjectId, Vec<BString>>,
+    enrichments: HashMap<ObjectId, crate::enrich::Enrichment>,
     graph: Option<Graph>,
     attributions: Vec<Attribution>,
     #[cfg(test)]
@@ -466,6 +472,7 @@ pub(crate) struct App {
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
     pub(crate) edit_expanded: bool,
+    pub(crate) enrich_expanded: bool,
     pub(crate) information_expanded: bool,
     forget_confirmation: Option<ObjectId>,
     pub estimated_lane_width: usize,
@@ -514,6 +521,7 @@ impl App {
             pending_hidden_rows: None,
             titles: Vec::new(),
             notes: HashMap::new(),
+            enrichments: HashMap::new(),
             graph: None,
             attributions: Vec::new(),
             #[cfg(test)]
@@ -561,6 +569,7 @@ impl App {
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
             edit_expanded: false,
+            enrich_expanded: false,
             information_expanded: false,
             forget_confirmation: None,
             estimated_lane_width: 0,
@@ -896,6 +905,28 @@ impl App {
         self.notes.get(&id).map(Vec::as_slice).unwrap_or_default()
     }
 
+    pub(crate) fn enrichment_loaded(&self, id: ObjectId) -> bool {
+        self.enrichments.contains_key(&id)
+    }
+
+    pub(crate) fn set_enrichment(&mut self, id: ObjectId, enrichment: crate::enrich::Enrichment) {
+        self.enrichments.insert(id, enrichment);
+    }
+
+    pub(crate) fn todo(&self, id: ObjectId) -> bool {
+        self.enrichments.get(&id).is_some_and(|enrichment| enrichment.todo)
+    }
+
+    pub(crate) fn note(&self, id: ObjectId) -> Option<&BStr> {
+        self.enrichments
+            .get(&id)
+            .and_then(|enrichment| enrichment.note.as_ref().map(|note| note.as_bstr()))
+    }
+
+    pub(crate) fn clear_enrichments(&mut self) {
+        self.enrichments.clear();
+    }
+
     pub(crate) fn render_lanes(&self, range: Range<usize>) -> RenderedLanes {
         #[cfg(test)]
         if !self.test_lanes.is_empty() {
@@ -952,6 +983,9 @@ impl App {
                 | Action::Unpin
         ) {
             self.edit_expanded = false;
+        }
+        if !matches!(&action, Action::ToggleEnrich | Action::ToggleTodo | Action::EditNote) {
+            self.enrich_expanded = false;
         }
         if !matches!(
             &action,
@@ -1068,6 +1102,7 @@ impl App {
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
             Action::ToggleHistoryDisplay => self.history_display_expanded = !self.history_display_expanded,
             Action::ToggleEdit => self.edit_expanded = !self.edit_expanded,
+            Action::ToggleEnrich => self.enrich_expanded = !self.enrich_expanded,
             Action::ToggleInformation => self.information_expanded = !self.information_expanded,
             Action::CycleRefs => {
                 self.ref_mode = match self.ref_mode {
@@ -1266,6 +1301,16 @@ impl App {
                 if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
                     return vec![Effect::Unpin(id)];
                 }
+            }
+            Action::ToggleTodo if self.can_reword() => {
+                return vec![Effect::ToggleTodo(
+                    self.rows[self.selected.expect("todo requires a selection")].id,
+                )];
+            }
+            Action::EditNote if self.can_reword() => {
+                return vec![Effect::EditNote(
+                    self.rows[self.selected.expect("note requires a selection")].id,
+                )];
             }
             Action::VerifySignatures if !self.signature_verification_running => {
                 let start = self.offset.min(self.rows.len());
@@ -1592,6 +1637,7 @@ impl App {
         self.pending_hidden_rows = None;
         self.titles = Vec::new();
         self.notes.clear();
+        self.enrichments.clear();
         self.graph = None;
         self.attributions = Vec::new();
         #[cfg(test)]
@@ -3795,6 +3841,41 @@ mod tests {
         );
         app.update(Action::ToggleEdit);
         assert!(!app.edit_expanded, "the prefix key toggles the group");
+    }
+
+    #[test]
+    fn enrich_group_updates_only_mutable_commits() {
+        let mut app = App::new(1);
+        app.extend_commits(vec![row(1)]);
+        complete(&mut app);
+
+        app.update(Action::ToggleEnrich);
+        assert!(app.enrich_expanded);
+        assert_eq!(
+            app.update(Action::ToggleTodo),
+            vec![Effect::ToggleTodo(id(1))],
+            "todo reuses reword eligibility"
+        );
+        assert_eq!(
+            app.update(Action::EditNote),
+            vec![Effect::EditNote(id(1))],
+            "note uses the same eligibility"
+        );
+        assert!(app.enrich_expanded, "the grouped actions keep enrich open");
+
+        app.update(Action::MoveDown);
+        assert!(!app.enrich_expanded, "navigation closes enrich");
+        app.update(Action::ToggleEnrich);
+        app.update(Action::ToggleEdit);
+        assert!(!app.enrich_expanded, "opening edit closes enrich");
+
+        app.hidden_rows.insert(id(1));
+        app.update(Action::ToggleEnrich);
+        assert!(
+            app.update(Action::ToggleTodo).is_empty(),
+            "hidden boundaries are immutable"
+        );
+        assert!(app.update(Action::EditNote).is_empty());
     }
 
     #[test]

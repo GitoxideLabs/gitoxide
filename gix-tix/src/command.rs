@@ -3,6 +3,7 @@ use std::{collections::HashSet, ffi::OsString, io::Write, sync::atomic::AtomicBo
 use anyhow::{Context, Result};
 use clap::Parser;
 use gix::prelude::{ObjectIdExt, ReferenceExt};
+use ratatui::text::Line;
 
 mod rebase;
 mod reword;
@@ -257,10 +258,50 @@ fn write_history(
         }
     }
 
+    let mut todo_ids = HashSet::new();
+    let mut enrichment_note_ids = HashSet::new();
+    let mut enrichments = crate::enrich::open(repository)?;
+    for row in &app.rows {
+        let loaded = crate::change_id::for_commit(repository, row.id)
+            .and_then(|change_id| crate::enrich::load(&mut enrichments, change_id));
+        match loaded {
+            Ok(enrichment) => {
+                if enrichment.todo {
+                    todo_ids.insert(row.id);
+                }
+                if enrichment.note.is_some() {
+                    enrichment_note_ids.insert(row.id);
+                }
+            }
+            Err(err) => tracing::warn!(commit_id = %row.id, error = %err, "ignored malformed tix enrichment"),
+        }
+    }
+
     let mailmap = repository.open_mailmap();
     let lanes = app.render_lanes(0..app.rows.len());
+    let enrichment_gutter = app
+        .rows
+        .iter()
+        .map(|row| {
+            Line::raw(crate::enrich::marker(
+                todo_ids.contains(&row.id),
+                enrichment_note_ids.contains(&row.id),
+            ))
+            .width()
+        })
+        .max()
+        .unwrap_or_default();
     for (index, row) in app.rows.iter().enumerate() {
         let metadata = crate::ui::plain_history_metadata(&app, row, &decorations, &mailmap, note_ids.contains(&row.id));
+        if enrichment_gutter != 0 {
+            let marker = crate::enrich::marker(todo_ids.contains(&row.id), enrichment_note_ids.contains(&row.id));
+            write!(
+                out,
+                "{marker}{}",
+                " ".repeat(enrichment_gutter.saturating_sub(Line::raw(marker).width()))
+            )
+            .context("could not write enrichment marker")?;
+        }
         write!(out, "{}{}", lanes.lane(index), metadata).context("could not write history row")?;
         if let Some(behind) = app.hidden_branch_behind(row.id) {
             write!(out, " ⇣{behind}").context("could not write hidden-branch status")?;
@@ -713,6 +754,8 @@ mod tests {
         .expect_err("disabling auto-hide requires an explicit hidden revision");
         assert!(format!("{err:#}").contains("at least one -h/--hide"));
         create_pins(&repository, &[OsString::from("topic")])?;
+        let head = repository.head_id()?.detach();
+        assert!(crate::enrich::toggle(&repository, head)?.todo);
 
         let mut output = Vec::new();
         write_history(&repository, &[], &[OsString::from("v1")], &mut output)?;
@@ -720,6 +763,10 @@ mod tests {
 
         assert_eq!(output.lines().count(), 5, "the complete projected history is printed");
         assert!(output.contains('●'), "history graph lanes are rendered");
+        assert!(
+            output.lines().any(|line| line.starts_with("🚧 ")),
+            "todos lead their rows"
+        );
         assert!(output.contains("📌"), "applicable pins are decorated and traversed");
         assert!(
             output.contains("topic"),
