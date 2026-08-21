@@ -1,0 +1,87 @@
+---
+source: gix-tix/src/edit/review.rs
+expression: "gix_testtools::repository::snapshot(fixture.path())?.to_string()"
+---
+HEAD refs/heads/main -> C4
+
+[config]
+[core]
+	bare = false
+[user]
+	name = reviewer
+	email = reviewer@example.com
+[gitoxide "commit"]
+	authorDate = 2001-01-01T00:00:00 +0000
+	committerDate = 2001-01-01T00:00:00 +0000
+
+[refs]
+refs/heads/main = C4
+refs/heads/review-successor = C3
+
+[commits]
+C0
+  tree T2
+  author reviewer <reviewer@example.com> 978307200 +0000
+  committer reviewer <reviewer@example.com> 978307200 +0000
+
+  base
+
+C1
+  tree T1
+  parent C0
+  author reviewer <reviewer@example.com> 978307200 +0000
+  committer reviewer <reviewer@example.com> 978307200 +0000
+
+  B
+
+C2
+  tree T0
+  parent C1
+  author reviewer <reviewer@example.com> 978307200 +0000
+  committer reviewer <reviewer@example.com> 978307200 +0000
+  change-id oxzuvntpklkyxykvvmmuzqomsnzrrwwvtuoxwttx
+
+  review
+
+C3
+  tree T0
+  parent C2
+  author reviewer <reviewer@example.com> 978307200 +0000
+  committer reviewer <reviewer@example.com> 978307200 +0000
+  change-id tlynrtysuoqktszrqppwrnsxpvokwvoqoqvkvqsv
+
+  review successor
+
+C4
+  tree T3
+  parent C3
+  author reviewer <reviewer@example.com> 978307200 +0000
+  committer reviewer <reviewer@example.com> 978307200 +0000
+  change-id xlpouomvnxrqllnkynsusvqwkkwnlrttmrvxquso
+
+  A
+
+[index]
+tree = T3
+100644 B0 stage=0 "file"
+100644 B1 stage=0 "reviewed"
+100644 B2 stage=0 "successor"
+
+[worktree]
+100644 file "file" = "B\n"
+100644 file "reviewed" = "new review change\n"
+100644 file "successor" = "A\n"
+
+[objects]
+T3 = 1104ca61473daa5765f3a6eb0a5fae3e5012a067
+C2 = 1a13dc5cbbc857de093c9a007e6b104a1a9ffbdb
+B0 = 223b7836fb19fdf64ba2d3cd6173c6a283141f78
+C1 = 2cb49e443aa675eab8add679938ca6cd303ae353
+T1 = 2e457f998ff6a6163f89e091bc4d6b92c8ed2a28
+T2 = 6d5f482d15035cdd7733b1b551d1fead28d22592
+B1 = 8ab2a145f1f16e50d78eaced3311ac16027db494
+T0 = 93664bfc7cc096fcc0d1ac962596031e10f26906
+C0 = c38a9f7427b84ed8ba5e187ec385489d82d71695
+C3 = e028a8e769407c249d118ddc499f0c064685ba16
+B2 = f70f10e4db19068f79bc43844b49f3eece45c4e8
+C4 = fb6e9845e1d808bd1257db0bb3462a1747d1d2d9

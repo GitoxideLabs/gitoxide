@@ -402,6 +402,10 @@ fn apply_environment_overrides(
                     (env(key), key.name)
                 },
                 {
+                    let key = &Core::NOTES_REF;
+                    (env(key), key.name)
+                },
+                {
                     let key = &Core::EDITOR;
                     (env(key), key.name)
                 },
