@@ -4,8 +4,13 @@
 //! below `$GIT_DIR/hooks` (or a configured `core.hooksPath`), reading that override from
 //! `gix-config`, and preparing the hook for execution with [`gix-command`].
 //!
+//! Receive-side hooks get env-var helpers ([`push_option_env()`], [`quarantine_env()`],
+//! [`push_cert_env()`]), but not yet stdin/argv formatting for `pre-receive`/`update`/
+//! `post-receive`, or `reference-transaction` state handling.
+//!
 //! Missing, by design, until validated further:
-//! - receive-side / `reference-transaction` hooks and quarantine-aware execution
+//! - `pre-receive`/`post-receive` stdin formatting and `update`'s positional ref arguments
+//! - `reference-transaction` state handling
 //! - Windows executable-extension resolution (`.exe`, `.bat`, `.cmd`, …)
 #![deny(missing_docs, rust_2018_idioms)]
 #![forbid(unsafe_code)]
@@ -131,9 +136,177 @@ pub fn is_gating(name: &str) -> bool {
     !ADVISORY_HOOKS.contains(&name)
 }
 
+/// Add the push options git passes to `pre-receive` and `post-receive` when invoked via
+/// `git push --push-option=<option>`: `GIT_PUSH_OPTION_COUNT` and `GIT_PUSH_OPTION_<n>` for each
+/// option, in the order given.
+///
+/// Per `githooks(5)`: "If it is negotiated to not use the push options phase, the environment
+/// variables will not be set" - so omit this call entirely rather than passing an empty slice
+/// when push options were never negotiated for the push.
+pub fn push_option_env(prepared: gix_command::Prepare, options: &[impl AsRef<str>]) -> gix_command::Prepare {
+    let mut prepared = prepared.env("GIT_PUSH_OPTION_COUNT", options.len().to_string());
+    for (index, option) in options.iter().enumerate() {
+        prepared = prepared.env(format!("GIT_PUSH_OPTION_{index}"), option.as_ref());
+    }
+    prepared
+}
+
+/// Add the quarantine environment git sets for `pre-receive` and `update`: new objects are
+/// written to `quarantine_object_dir` rather than the real object store, so a rejecting hook
+/// leaves no trace. `real_object_dir` is added as an alternate so the hook can still read
+/// pre-existing objects.
+///
+/// Mirrors `tmp_objdir_create()`/`tmp_objdir_env()` in git's own `tmp-objdir.c`, which sets
+/// `GIT_QUARANTINE_PATH` and `GIT_OBJECT_DIRECTORY` to the quarantine directory and appends
+/// the real one to `GIT_ALTERNATE_OBJECT_DIRECTORIES`. Both paths are used as given - the
+/// caller is responsible for making them absolute, matching every other path this crate takes.
+pub fn quarantine_env(
+    prepared: gix_command::Prepare,
+    quarantine_object_dir: &Path,
+    real_object_dir: &Path,
+) -> gix_command::Prepare {
+    prepared
+        .env("GIT_QUARANTINE_PATH", quarantine_object_dir)
+        .env("GIT_OBJECT_DIRECTORY", quarantine_object_dir)
+        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", real_object_dir)
+}
+
+/// The fields of a signed push's certificate, as git exposes them via `GIT_PUSH_CERT*`
+/// environment variables to hooks handling the push.
+#[derive(Debug, Clone, Copy)]
+pub struct PushCert<'a> {
+    /// The object name of the blob holding the push certificate (`GIT_PUSH_CERT`).
+    pub blob: &'a str,
+    /// The signer's name and email as recorded in the certificate (`GIT_PUSH_CERT_SIGNER`).
+    pub signer: &'a str,
+    /// The GPG key id used to sign the certificate (`GIT_PUSH_CERT_KEY`).
+    pub key: &'a str,
+    /// The GPG verification result for the signature (`GIT_PUSH_CERT_STATUS`).
+    pub status: &'a str,
+    /// The nonce string included in the certificate (`GIT_PUSH_CERT_NONCE`).
+    pub nonce: &'a str,
+    /// Whether the received nonce matched what was expected (`GIT_PUSH_CERT_NONCE_STATUS`).
+    pub nonce_status: &'a str,
+    /// The time difference in seconds used for nonce replay detection
+    /// (`GIT_PUSH_CERT_NONCE_SLOP`), set only when relevant.
+    pub nonce_slop: Option<&'a str>,
+}
+
+/// Add the `GIT_PUSH_CERT*` environment variables git sets for `pre-receive`, `update`, and
+/// `post-receive` when the push was signed (`git push --signed`).
+pub fn push_cert_env(prepared: gix_command::Prepare, cert: &PushCert<'_>) -> gix_command::Prepare {
+    let prepared = prepared
+        .env("GIT_PUSH_CERT", cert.blob)
+        .env("GIT_PUSH_CERT_SIGNER", cert.signer)
+        .env("GIT_PUSH_CERT_KEY", cert.key)
+        .env("GIT_PUSH_CERT_STATUS", cert.status)
+        .env("GIT_PUSH_CERT_NONCE", cert.nonce)
+        .env("GIT_PUSH_CERT_NONCE_STATUS", cert.nonce_status);
+    match cert.nonce_slop {
+        Some(slop) => prepared.env("GIT_PUSH_CERT_NONCE_SLOP", slop),
+        None => prepared,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Collect a `Prepare`'s env vars as `(key, value)` string pairs, for asserting on.
+    fn env_of(prepared: gix_command::Prepare) -> Vec<(String, String)> {
+        let cmd = std::process::Command::from(prepared);
+        cmd.get_envs()
+            .map(|(k, v)| (k.to_str().unwrap().to_owned(), v.unwrap().to_str().unwrap().to_owned()))
+            .collect()
+    }
+
+    mod push_option_env {
+        use crate::{command, push_option_env};
+
+        fn prepared() -> gix_command::Prepare {
+            command("git".as_ref(), "/repo/.git".as_ref(), "/repo".as_ref())
+        }
+
+        #[test]
+        fn no_options_sets_count_zero() {
+            let env = super::env_of(push_option_env(prepared(), &[] as &[&str]));
+            assert!(env.contains(&("GIT_PUSH_OPTION_COUNT".into(), "0".into())));
+        }
+
+        #[test]
+        fn options_are_indexed_in_order() {
+            let env = super::env_of(push_option_env(prepared(), &["ci.skip", "reviewer=jane"]));
+            assert!(env.contains(&("GIT_PUSH_OPTION_COUNT".into(), "2".into())));
+            assert!(env.contains(&("GIT_PUSH_OPTION_0".into(), "ci.skip".into())));
+            assert!(env.contains(&("GIT_PUSH_OPTION_1".into(), "reviewer=jane".into())));
+        }
+    }
+
+    mod quarantine_env {
+        use std::path::Path;
+
+        use crate::{command, quarantine_env};
+
+        fn prepared() -> gix_command::Prepare {
+            command("git".as_ref(), "/repo/.git".as_ref(), "/repo".as_ref())
+        }
+
+        #[test]
+        fn sets_the_three_object_directory_variables() {
+            let env = super::env_of(quarantine_env(
+                prepared(),
+                Path::new("/repo/.git/objects/incoming-123"),
+                Path::new("/repo/.git/objects"),
+            ));
+            assert!(env.contains(&("GIT_QUARANTINE_PATH".into(), "/repo/.git/objects/incoming-123".into())));
+            assert!(env.contains(&("GIT_OBJECT_DIRECTORY".into(), "/repo/.git/objects/incoming-123".into())));
+            assert!(env.contains(&("GIT_ALTERNATE_OBJECT_DIRECTORIES".into(), "/repo/.git/objects".into())));
+        }
+    }
+
+    mod push_cert_env {
+        use crate::{PushCert, command, push_cert_env};
+
+        fn prepared() -> gix_command::Prepare {
+            command("git".as_ref(), "/repo/.git".as_ref(), "/repo".as_ref())
+        }
+
+        #[test]
+        fn sets_all_required_fields() {
+            let cert = PushCert {
+                blob: "abc123",
+                signer: "Jane Doe <jane@example.com>",
+                key: "0xDEADBEEF",
+                status: "G",
+                nonce: "some-nonce",
+                nonce_status: "OK",
+                nonce_slop: None,
+            };
+            let env = super::env_of(push_cert_env(prepared(), &cert));
+            assert!(env.contains(&("GIT_PUSH_CERT".into(), "abc123".into())));
+            assert!(env.contains(&("GIT_PUSH_CERT_SIGNER".into(), "Jane Doe <jane@example.com>".into())));
+            assert!(env.contains(&("GIT_PUSH_CERT_KEY".into(), "0xDEADBEEF".into())));
+            assert!(env.contains(&("GIT_PUSH_CERT_STATUS".into(), "G".into())));
+            assert!(env.contains(&("GIT_PUSH_CERT_NONCE".into(), "some-nonce".into())));
+            assert!(env.contains(&("GIT_PUSH_CERT_NONCE_STATUS".into(), "OK".into())));
+            assert!(!env.iter().any(|(k, _)| k == "GIT_PUSH_CERT_NONCE_SLOP"));
+        }
+
+        #[test]
+        fn nonce_slop_is_set_only_when_present() {
+            let cert = PushCert {
+                blob: "abc123",
+                signer: "Jane Doe <jane@example.com>",
+                key: "0xDEADBEEF",
+                status: "G",
+                nonce: "some-nonce",
+                nonce_status: "SLOP",
+                nonce_slop: Some("5"),
+            };
+            let env = super::env_of(push_cert_env(prepared(), &cert));
+            assert!(env.contains(&("GIT_PUSH_CERT_NONCE_SLOP".into(), "5".into())));
+        }
+    }
 
     fn write_hook(dir: &Path, name: &str, executable: bool) -> PathBuf {
         let path = dir.join(name);
