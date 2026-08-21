@@ -15,8 +15,10 @@
 //! git upstream: its own fallback is hardcoded to `STRIP_EXTENSION`, defined as `".exe"` for
 //! both the MinGW and MSVC Windows builds.
 //!
-//! Missing, by design, until validated further:
-//! - `reference-transaction` state handling
+//! `reference-transaction` gets its own state handling ([`TransactionState`],
+//! [`reference_transaction_args()`], [`reference_transaction_stdin()`]) rather than reusing the
+//! receive-side helpers, since its stdin values may be `ref:`-prefixed symbolic targets instead
+//! of always being object ids.
 #![deny(missing_docs, rust_2018_idioms)]
 #![forbid(unsafe_code)]
 
@@ -136,8 +138,8 @@ pub fn run(prepared: gix_command::Prepare) -> std::io::Result<Outcome> {
 /// [`is_gating()`].
 ///
 /// `reference-transaction` is deliberately absent: it only gates during its `prepared` state,
-/// while `committed` and `aborted` calls are always advisory - a single name can't capture that,
-/// so callers driving that hook must check its state argument themselves.
+/// while `committed` and `aborted` calls are always advisory - a single name can't capture
+/// that. Use [`TransactionState::is_gating()`] for that hook instead.
 ///
 /// `proc-receive` is also absent, but for a different reason: it gates unconditionally, just
 /// not the whole push. Per `githooks(5)`, "the exit status of the `proc-receive` hook only
@@ -273,6 +275,95 @@ pub fn receive_stdin<'a>(
         gix_validate::reference::name(ref_name.into())?;
         writeln!(buf, "{} {} {}", old_oid.to_hex(), new_oid.to_hex(), ref_name)
             .expect("writing to a Vec<u8> never fails");
+    }
+    Ok(buf)
+}
+
+/// The three states git calls the `reference-transaction` hook with, per `githooks(5)`.
+///
+/// Verified against git's own source at tag `v2.47.0`, the same tag [`windows_find()`]'s docs
+/// and `tests/fixtures/git-hook-names.txt` are pinned to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionState {
+    /// All updates are queued to the transaction and references are locked on disk.
+    ///
+    /// A non-zero exit here aborts the transaction, and git does *not* then call the hook
+    /// again with [`Aborted`](Self::Aborted) - that state is only used for transactions that
+    /// were aborted for some other reason.
+    Prepared,
+    /// The transaction was committed; every reference now has its new value.
+    Committed,
+    /// The transaction was aborted; no changes were made and the locks were released.
+    Aborted,
+}
+
+impl TransactionState {
+    /// The literal string git passes as the hook's single positional argument for this state.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Prepared => "prepared",
+            Self::Committed => "committed",
+            Self::Aborted => "aborted",
+        }
+    }
+
+    /// Whether a non-zero exit in this state aborts the transaction - true only for
+    /// [`Prepared`](Self::Prepared); git ignores the exit status in the other two states.
+    pub fn is_gating(self) -> bool {
+        matches!(self, Self::Prepared)
+    }
+}
+
+/// Add the single positional state argument git passes to the `reference-transaction` hook.
+pub fn reference_transaction_args(prepared: gix_command::Prepare, state: TransactionState) -> gix_command::Prepare {
+    prepared.arg(state.as_str())
+}
+
+/// One side (old or new) of a `reference-transaction` update: either an object id, or a
+/// symbolic reference's target, per `githooks(5)`: "the value fields may use a `ref:` prefix
+/// instead of object names" for symbolic reference updates.
+#[derive(Debug, Clone, Copy)]
+pub enum TransactionValue<'a> {
+    /// An object id.
+    Oid(&'a gix_hash::oid),
+    /// A symbolic reference's target name, without the `ref:` prefix - added when formatting.
+    SymbolicTarget(&'a str),
+}
+
+/// Format the `reference-transaction` stdin payload: one line per update, as
+/// `<old-value> SP <new-value> SP <ref-name> LF`, per `githooks(5)` - the same shape as
+/// [`receive_stdin()`], except each value may be an object id or a `ref:`-prefixed symbolic
+/// target instead of always being an object id.
+///
+/// Rejects any ref name that fails [`gix_validate::reference::name()`], for the same reason
+/// [`receive_stdin()`] does. A [`TransactionValue::SymbolicTarget`] is itself a reference name,
+/// so it's validated the same way as `ref_name` - not just the object-id case.
+pub fn reference_transaction_stdin<'a>(
+    updates: impl IntoIterator<Item = (TransactionValue<'a>, TransactionValue<'a>, &'a str)>,
+) -> Result<Vec<u8>, gix_validate::reference::name::Error> {
+    use std::io::Write;
+
+    fn validate_and_write(
+        buf: &mut Vec<u8>,
+        value: TransactionValue<'_>,
+    ) -> Result<(), gix_validate::reference::name::Error> {
+        match value {
+            TransactionValue::Oid(oid) => write!(buf, "{}", oid.to_hex()).expect("writing to a Vec<u8> never fails"),
+            TransactionValue::SymbolicTarget(target) => {
+                gix_validate::reference::name(target.into())?;
+                write!(buf, "ref: {target}").expect("writing to a Vec<u8> never fails");
+            }
+        }
+        Ok(())
+    }
+
+    let mut buf = Vec::new();
+    for (old, new, ref_name) in updates {
+        gix_validate::reference::name(ref_name.into())?;
+        validate_and_write(&mut buf, old)?;
+        buf.push(b' ');
+        validate_and_write(&mut buf, new)?;
+        writeln!(buf, " {ref_name}").expect("writing to a Vec<u8> never fails");
     }
     Ok(buf)
 }
@@ -717,5 +808,101 @@ mod tests {
 
         let outcome = run(command(&hook, &dir.path().join(".git"), dir.path())).unwrap();
         assert_eq!(outcome, Outcome::Rejected { code: Some(3) });
+    }
+
+    mod transaction_state {
+        use crate::TransactionState;
+
+        #[test]
+        fn as_str_matches_what_git_passes_on_argv() {
+            assert_eq!(TransactionState::Prepared.as_str(), "prepared");
+            assert_eq!(TransactionState::Committed.as_str(), "committed");
+            assert_eq!(TransactionState::Aborted.as_str(), "aborted");
+        }
+
+        #[test]
+        fn only_prepared_is_gating() {
+            assert!(TransactionState::Prepared.is_gating());
+            assert!(!TransactionState::Committed.is_gating());
+            assert!(!TransactionState::Aborted.is_gating());
+        }
+    }
+
+    mod reference_transaction_args {
+        use crate::{TransactionState, command, reference_transaction_args};
+
+        #[test]
+        fn adds_the_state_as_the_only_argument() {
+            let prepared = reference_transaction_args(
+                command(
+                    "reference-transaction".as_ref(),
+                    "/repo/.git".as_ref(),
+                    "/repo/.git".as_ref(),
+                ),
+                TransactionState::Prepared,
+            );
+            let cmd = std::process::Command::from(prepared);
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+            assert_eq!(args, ["prepared"]);
+        }
+    }
+
+    mod reference_transaction_stdin {
+        use crate::{TransactionValue, reference_transaction_stdin};
+
+        #[test]
+        fn oid_update_matches_receive_stdin_format() {
+            let old = super::oid("0000000000000000000000000000000000000000");
+            let new = super::oid("1111111111111111111111111111111111111111");
+            let updates = [(
+                TransactionValue::Oid(old.as_ref()),
+                TransactionValue::Oid(new.as_ref()),
+                "refs/heads/main",
+            )];
+            assert_eq!(
+                reference_transaction_stdin(updates).unwrap(),
+                b"0000000000000000000000000000000000000000 1111111111111111111111111111111111111111 refs/heads/main\n"
+                    .as_slice()
+            );
+        }
+
+        #[test]
+        fn symbolic_update_uses_ref_prefix() {
+            let updates = [(
+                TransactionValue::SymbolicTarget("refs/heads/old-default"),
+                TransactionValue::SymbolicTarget("refs/heads/main"),
+                "HEAD",
+            )];
+            assert_eq!(
+                reference_transaction_stdin(updates).unwrap(),
+                b"ref: refs/heads/old-default ref: refs/heads/main HEAD\n".as_slice()
+            );
+        }
+
+        #[test]
+        fn invalid_ref_name_is_rejected() {
+            let old = super::oid("0000000000000000000000000000000000000000");
+            let new = super::oid("1111111111111111111111111111111111111111");
+            let result = reference_transaction_stdin([(
+                TransactionValue::Oid(old.as_ref()),
+                TransactionValue::Oid(new.as_ref()),
+                "refs/heads/../escape",
+            )]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn invalid_symbolic_target_is_rejected() {
+            let old = super::oid("0000000000000000000000000000000000000000");
+            let updates = [(
+                TransactionValue::Oid(old.as_ref()),
+                TransactionValue::SymbolicTarget("refs/heads/../escape"),
+                "HEAD",
+            )];
+            assert!(
+                reference_transaction_stdin(updates).is_err(),
+                "a symbolic target is itself a ref name and must be validated the same way"
+            );
+        }
     }
 }
