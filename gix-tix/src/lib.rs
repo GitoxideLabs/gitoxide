@@ -86,6 +86,12 @@ struct ConflictHead {
     parents: Vec<gix::ObjectId>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WorktreeStatusHead {
+    reference: Option<gix::refs::FullName>,
+    target: Option<gix::ObjectId>,
+}
+
 enum ExternalConflictResolution {
     Current,
     Changed,
@@ -227,10 +233,18 @@ fn notification_is_actionable(event: &notify::Event) -> bool {
 }
 
 fn reference_event_is_relevant(event: &notify::Event, git_dir: &Path, worktrees_dir: &Path) -> bool {
+    let common_dir = worktrees_dir.parent();
     notification_is_actionable(event)
         && (event.need_rescan()
             || event.paths.is_empty()
             || event.paths.iter().any(|path| {
+                let is_index = [Some(git_dir), common_dir]
+                    .into_iter()
+                    .flatten()
+                    .any(|git_dir| path == &git_dir.join("index") || path == &git_dir.join("index.lock"));
+                if is_index {
+                    return false;
+                }
                 if let Ok(relative) = path.strip_prefix(git_dir)
                     && (relative.components().count() <= 1 || relative.starts_with("refs"))
                 {
@@ -246,6 +260,17 @@ fn reference_event_is_relevant(event: &notify::Event, git_dir: &Path, worktrees_
                     Some(name) => matches!(name.as_os_str().as_encoded_bytes(), b"HEAD" | b"gitdir"),
                 }
             }))
+}
+
+fn reference_event_changes_status_configuration(event: &notify::Event, git_dir: &Path, worktrees_dir: &Path) -> bool {
+    event.need_rescan()
+        || event.paths.is_empty()
+        || event.paths.iter().any(|path| {
+            [Some(git_dir), worktrees_dir.parent()]
+                .into_iter()
+                .flatten()
+                .any(|dir| path == &dir.join("config") || path == &dir.join("config.worktree"))
+        })
 }
 
 fn reference_watch_set_may_change(event: &notify::Event, worktrees_dir: &Path) -> bool {
@@ -916,6 +941,7 @@ fn event_loop(
         }
     };
     let mut ref_watch_set_changed = false;
+    let mut ref_status_config_changed = false;
     let (cancelled, receiver) = start_history(
         repository,
         &revisions,
@@ -943,6 +969,7 @@ fn event_loop(
     let mut commit_message = None;
     let mut tree_changes = TreeChangesCache::default();
     let mut worktree_changes = None;
+    let mut cached_status_head = None;
     let mut worktree_watcher: Option<WorktreeWatcher> = None;
     let mut worktree_refresh_deadline: Option<Instant> = None;
     let mut worktree_watch_set_changed = false;
@@ -989,6 +1016,7 @@ fn event_loop(
         &mut commit_message,
         &mut tree_changes,
         &mut worktree_changes,
+        &mut cached_status_head,
         &mut history_graph,
         &mut selection_relation,
         &mut line_diff_pool,
@@ -1029,6 +1057,7 @@ fn event_loop(
             worktree_watch_set_changed = false;
             filesystem_responses.cancel_pending_worktree("worktree-unavailable");
             worktree_changes = None;
+            cached_status_head = None;
             line_diff_pool = None;
             sync_line_diff_pool(
                 &mut line_diff_pool,
@@ -1047,6 +1076,7 @@ fn event_loop(
                 }
             };
             ref_watch_set_changed = false;
+            ref_status_config_changed = false;
             app.leave_attention("worktree removed; using the common repository without worktree changes");
             if history_graph.is_some() {
                 refresh_pending = true;
@@ -1129,6 +1159,11 @@ fn event_loop(
                         if watcher.event_is_relevant(&event) {
                             actionable += 1;
                             ref_watch_set_changed |= watcher.watch_set_may_change(&event);
+                            ref_status_config_changed |= reference_event_changes_status_configuration(
+                                &event,
+                                &watcher.git_dir,
+                                &watcher.worktrees_dir,
+                            );
                             filesystem_responses.observe_references(&event, &repository_path, &common_dir);
                             ref_refresh_deadline = Some(Instant::now() + REF_EVENT_IDLE);
                         }
@@ -1153,6 +1188,7 @@ fn event_loop(
             ref_watcher = None;
             ref_refresh_deadline = None;
             ref_watch_set_changed = false;
+            ref_status_config_changed = false;
             schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
         }
         if take_due(&mut ref_refresh_deadline, Instant::now()) {
@@ -1172,7 +1208,29 @@ fn event_loop(
             }
             let response_ids = filesystem_responses.references_due();
             refresh_pending = true;
-            let invalidated = invalidate_worktree_changes(&mut worktree_changes);
+            let status_config_changed = std::mem::take(&mut ref_status_config_changed);
+            if status_config_changed {
+                fill_repository.retain = false;
+                fill_repository.retained = None;
+            }
+            let head_changed = status_config_changed
+                || worktree_changes
+                    .as_ref()
+                    .is_some_and(|(marker, _)| *marker != usize::MAX)
+                    && match cached_status_head.as_ref() {
+                        Some(previous) => open_repository(&repository_path, repository_is_bare, false)
+                            .context("could not reopen repository to compare HEAD after a reference change")
+                            .and_then(|repository| worktree_status_head(&repository))
+                            .map_or_else(
+                                |err| {
+                                    tracing::warn!(error = %err, "could not compare HEAD after a reference change");
+                                    true
+                                },
+                                |current| current != *previous,
+                            ),
+                        None => true,
+                    };
+            let invalidated = head_changed && invalidate_worktree_changes(&mut worktree_changes);
             filesystem_responses.phase(&response_ids, "reference-worktree-cache-invalidation");
             if invalidated {
                 filesystem_responses.queue_frame(&response_ids, "reference-worktree-cache-invalidation");
@@ -1466,6 +1524,7 @@ fn event_loop(
                 &mut commit_message,
                 &mut tree_changes,
                 &mut worktree_changes,
+                &mut cached_status_head,
                 &mut history_graph,
                 &mut selection_relation,
                 &mut line_diff_pool,
@@ -1542,6 +1601,7 @@ fn event_loop(
                 &mut commit_message,
                 &mut tree_changes,
                 &mut worktree_changes,
+                &mut cached_status_head,
                 &mut history_graph,
                 &mut selection_relation,
                 &mut line_diff_pool,
@@ -3768,6 +3828,16 @@ fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<Worktree
     })
 }
 
+fn worktree_status_head(repository: &gix::Repository) -> Result<WorktreeStatusHead> {
+    let mut head = repository.head().context("could not read HEAD")?;
+    let reference = head.referent_name().map(ToOwned::to_owned);
+    let target = head
+        .try_peel_to_id()
+        .context("could not peel HEAD")?
+        .map(gix::Id::detach);
+    Ok(WorktreeStatusHead { reference, target })
+}
+
 fn worktree_watch_directories(repository: &gix::Repository) -> Result<HashSet<PathBuf>> {
     let root = repository
         .workdir()
@@ -4129,6 +4199,7 @@ fn draw(
     commit_message: &mut Option<(gix::ObjectId, BString)>,
     tree_changes: &mut TreeChangesCache,
     worktree_changes: &mut Option<(usize, Changes)>,
+    status_head: &mut Option<WorktreeStatusHead>,
     history_graph: &mut Option<HistoryGraph>,
     selection_cache: &mut Option<SelectionRelationCache>,
     line_diff_pool: &mut Option<LineDiffPool>,
@@ -4245,6 +4316,7 @@ fn draw(
     if app.changes_mode.is_none() {
         tree_changes.clear();
         *worktree_changes = None;
+        *status_head = None;
     }
     if let Some(id) = relation_to_load
         && let Some(graph) = history_graph
@@ -4360,6 +4432,13 @@ fn draw(
                     app.set_worktree_conflicted(loaded.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
                     restore_change_selection(&mut app.worktree_changes, &loaded, worktree_selection);
                     *worktree_changes = Some((0, loaded));
+                    *status_head = match worktree_status_head(repository) {
+                        Ok(head) => Some(head),
+                        Err(err) => {
+                            tracing::warn!(error = %err, "could not remember HEAD for worktree status");
+                            None
+                        }
+                    };
                 }
                 Err(err) => {
                     tracing::warn!(error = %err, "could not load worktree changes");
@@ -6766,6 +6845,64 @@ mod tests {
     }
 
     #[test]
+    fn worktree_status_head_changes_only_with_head() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let baseline = worktree_status_head(&repository)?;
+        let main = repository.rev_parse_single("main")?.detach();
+        let topic = repository.rev_parse_single("topic")?.detach();
+        drop(repository);
+
+        let update_ref = |name: &str, target: gix::ObjectId| -> gix_testtools::Result {
+            let status = Command::new("git")
+                .current_dir(fixture.path())
+                .args(["update-ref", name, &target.to_string()])
+                .status()?;
+            assert!(status.success(), "git updates {name}");
+            Ok(())
+        };
+        update_ref("refs/heads/unrelated", topic)?;
+        assert_eq!(
+            worktree_status_head(&test_repository::open(fixture.path())?)?,
+            baseline,
+            "an unrelated ref does not affect worktree status"
+        );
+
+        update_ref("refs/heads/alias", main)?;
+        let status = Command::new("git")
+            .current_dir(fixture.path())
+            .args(["symbolic-ref", "HEAD", "refs/heads/alias"])
+            .status()?;
+        assert!(status.success(), "git reattaches HEAD to the alias");
+        let alias = worktree_status_head(&test_repository::open(fixture.path())?)?;
+        assert_ne!(alias, baseline, "the symbolic referent is part of the status baseline");
+        assert_eq!(
+            alias.target, baseline.target,
+            "the alias initially names the same commit"
+        );
+
+        update_ref("refs/heads/alias", topic)?;
+        let moved = worktree_status_head(&test_repository::open(fixture.path())?)?;
+        assert_ne!(
+            moved.target, alias.target,
+            "moving the checked-out ref changes the baseline"
+        );
+
+        let status = Command::new("git")
+            .current_dir(fixture.path())
+            .args(["symbolic-ref", "HEAD", "refs/heads/unborn"])
+            .status()?;
+        assert!(status.success(), "git makes HEAD unborn");
+        let unborn = worktree_status_head(&test_repository::open(fixture.path())?)?;
+        assert_eq!(
+            unborn.reference.as_ref().map(gix::refs::FullName::as_bstr),
+            Some("refs/heads/unborn".into())
+        );
+        assert_eq!(unborn.target, None, "an unborn HEAD has no peeled target");
+        Ok(())
+    }
+
+    #[test]
     fn caches_recent_tree_changes_by_commit_and_parent() {
         let id = |value| {
             let mut bytes = [0; 20];
@@ -8460,11 +8597,44 @@ mod tests {
             &worktrees
         ));
         let current_linked = worktrees.join("current");
-        assert!(reference_event_is_relevant(
+        assert!(!reference_event_is_relevant(
             &modified(&current_linked.join("index")),
             &current_linked,
             &worktrees
         ));
+        assert!(!reference_event_is_relevant(
+            &modified(&git_dir.join("index")),
+            &current_linked,
+            &worktrees
+        ));
+        assert!(!reference_event_is_relevant(
+            &modified(&git_dir.join("index")),
+            &git_dir,
+            &worktrees
+        ));
+        assert!(reference_event_is_relevant(
+            &modified(&git_dir.join("refs/heads/other")),
+            &git_dir,
+            &worktrees
+        ));
+        assert!(reference_event_changes_status_configuration(
+            &modified(&git_dir.join("config")),
+            &git_dir,
+            &worktrees
+        ));
+        assert!(reference_event_changes_status_configuration(
+            &modified(&current_linked.join("config.worktree")),
+            &current_linked,
+            &worktrees
+        ));
+        assert!(
+            !reference_event_changes_status_configuration(
+                &modified(&git_dir.join("refs/heads/other")),
+                &git_dir,
+                &worktrees
+            ),
+            "unrelated refs don't invalidate worktree status through configuration"
+        );
         assert!(reference_event_is_relevant(
             &modified(&current_linked.join("refs/worktree/tix/pins/abcd")),
             &current_linked,
