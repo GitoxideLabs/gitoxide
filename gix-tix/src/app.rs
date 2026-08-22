@@ -392,6 +392,7 @@ pub(crate) enum Action {
     RebaseUpdate,
     Squash,
     CopyInsert,
+    PasteInsert { source: ObjectId, target: ObjectId },
     MoveInsert,
     StackInsert,
     Review,
@@ -444,6 +445,10 @@ pub(crate) enum Effect {
         base: ObjectId,
         target: ObjectId,
         copy: bool,
+    },
+    PasteInsert {
+        source: ObjectId,
+        target: ObjectId,
     },
     StartReview {
         tip: ObjectId,
@@ -1943,6 +1948,9 @@ impl App {
                     copy: true,
                 }];
             }
+            Action::PasteInsert { source, target } => {
+                return vec![Effect::PasteInsert { source, target }];
+            }
             Action::MoveInsert if self.can_move_insert() => {
                 let source = self.worktree_head.expect("move-insert availability requires HEAD");
                 return vec![Effect::Insert {
@@ -2862,6 +2870,21 @@ impl App {
 
     pub(crate) fn can_copy_insert(&self) -> bool {
         self.can_insert(true)
+    }
+
+    pub(crate) fn paste_insert_target(&self) -> Option<ObjectId> {
+        if self.state != State::Complete
+            || self.deferred_history_state.unwrap_or(self.state) != State::Complete
+            || self.changes_focus.is_some()
+            || self.has_conflict_marker()
+        {
+            return None;
+        }
+        self.selected
+            .filter(|index| !self.is_row_hidden(*index))
+            .and_then(|index| self.rows.get(index))
+            .filter(|row| !self.known_merge_descendants.contains(&row.id))
+            .map(|row| row.id)
     }
 
     pub(crate) fn can_move_insert(&self) -> bool {
@@ -5040,6 +5063,17 @@ mod tests {
         complete(&mut merge_target);
         merge_target.selected = merge_target.rows.iter().position(|row| row.id == id(3));
         assert!(merge_target.can_move_insert(), "an unchanged merge target is allowed");
+    }
+
+    #[test]
+    fn paste_insert_uses_only_an_editable_history_selection() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+
+        assert_eq!(app.paste_insert_target(), Some(id(2)));
+        app.hidden_rows.insert(id(2));
+        assert_eq!(app.paste_insert_target(), None, "a hidden boundary is not editable");
     }
 
     #[test]

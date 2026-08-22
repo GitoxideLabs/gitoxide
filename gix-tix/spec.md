@@ -1146,6 +1146,12 @@ space first; changes blocks adapt within the remaining history width.
   retained in its original logical position while its branch follows the
   necessary rewrite. Git notes are copied to the new occurrence. Copy-insert
   uses the history-todo conflict and continuation rules.
+- Bracketed paste in the history view trims surrounding whitespace and accepts
+  one uniquely resolvable hexadecimal object-ID prefix. If that object is a
+  commit, its change is copy-inserted above the commit at the cursor using the
+  same progress, conflict, checkout, and undo behavior as `a y`. Other text,
+  ambiguous or missing IDs, non-commit objects, and unavailable targets produce
+  an attention message without changing the repository.
 - Move-insert requires a non-root, single-parent `HEAD`. It removes `HEAD` from
   its old position, reconnects its former children to its parent, inserts its
   rewritten change above the selected target, and reparents every former direct
