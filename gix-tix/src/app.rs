@@ -2252,7 +2252,9 @@ impl App {
         let visible = self.reachable_from(view_tips);
         let hidden = self.reachable_from(hidden_tips);
         let visible: HashSet<_> = visible.difference(&hidden).copied().collect();
-        let boundary: HashSet<_> = if hidden_tips.is_empty() {
+        let boundary: HashSet<_> = if view_tips.is_empty() {
+            hidden_tips.iter().copied().collect()
+        } else if hidden_tips.is_empty() {
             HashSet::new()
         } else {
             visible
@@ -2794,7 +2796,10 @@ impl App {
             && !self.selected_is_segment()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && match self.selected.and_then(|index| self.rows.get(index)) {
-                Some(row) => !self.hidden_rows.contains(&row.id) && !self.known_merge_descendants.contains(&row.id),
+                Some(row) => {
+                    (self.worktree_head_unborn || !self.hidden_rows.contains(&row.id))
+                        && !self.known_merge_descendants.contains(&row.id)
+                }
                 None => self.worktree_head_unborn,
             }
     }
@@ -2802,7 +2807,8 @@ impl App {
     pub(crate) fn set_new_commit_availability(&mut self, changes: Option<&Changes>) {
         let selected_is_head =
             self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) == self.worktree_head;
-        let selected_is_head = selected_is_head || (self.selected.is_none() && self.worktree_head_unborn);
+        let selected_is_head = selected_is_head
+            || self.worktree_head_unborn && self.selected.is_none_or(|index| self.is_row_hidden(index));
         match changes {
             Some(changes) if changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged) => {
                 self.new_commit_available = false;
@@ -4101,6 +4107,25 @@ mod tests {
     }
 
     #[test]
+    fn refresh_keeps_hidden_tips_as_the_unborn_view() {
+        let mut app = App::new(10);
+        app.extend_hidden_commits(vec![row(1)]);
+        complete(&mut app);
+
+        let rows = app
+            .start_refresh(vec![row_with_parents(2, &[1])].into(), &[], &[id(2)], false)
+            .expect("a hidden-only refresh computes lanes");
+        assert_eq!(
+            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(2)],
+            "only the current hidden tip remains in the view"
+        );
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert!(app.is_row_hidden(0), "the fallback remains a hidden boundary");
+    }
+
+    #[test]
     fn refresh_keeps_an_advanced_tip_on_its_existing_side() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(3, &[1]), row_with_parents(2, &[1]), row(1)]);
@@ -4574,8 +4599,20 @@ mod tests {
 
         let mut unborn_with_history = App::new(10);
         unborn_with_history.set_worktree_head_unborn(true);
-        unborn_with_history.extend_commits(vec![row(1)]);
+        unborn_with_history.extend_hidden_commits(vec![row(1)]);
         complete(&mut unborn_with_history);
+        unborn_with_history.set_new_commit_availability(Some(&Changes {
+            has_tracked_changes: true,
+            ..Changes::default()
+        }));
+        assert_eq!(
+            unborn_with_history.update(Action::NewCommit),
+            vec![Effect::NewCommit {
+                parent: Some(id(1)),
+                empty: false,
+            }],
+            "the hidden tip can parent the unborn branch's first commit"
+        );
         assert!(
             !unborn_with_history.can_fork_commit(),
             "a fork requires an existing worktree HEAD even when another ref is selected"
