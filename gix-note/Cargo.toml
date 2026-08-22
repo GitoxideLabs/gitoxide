@@ -14,6 +14,9 @@ include = ["/src/**/*", "/LICENSE-*"]
 [lib]
 doctest = false
 
+[package.metadata.docs.rs]
+features = ["sha1"]
+
 [features]
 ## Enable support for the SHA-1 hash by forwarding it to dependencies.
 sha1 = ["gix-hash/sha1", "gix-object/sha1", "gix-hashtable/sha1" ]
