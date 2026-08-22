@@ -17,7 +17,7 @@
 #![deny(missing_docs)]
 
 mod ext;
-pub use ext::{ErrorExt, OptionExt, ResultExt};
+pub use ext::{BoxedResultExt, ErrorExt, OptionExt, ResultExt};
 
 mod impls;
 #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
