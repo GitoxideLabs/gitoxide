@@ -179,6 +179,57 @@ where
     }
 }
 
+/// Extension methods for results containing an already boxed error.
+///
+/// This complements [`ResultExt`], whose blanket implementation cannot accept boxed trait objects.
+///
+/// Without it, a boxed error has to be converted explicitly:
+///
+/// ```
+/// use std::error::Error;
+/// use gix_error::{ResultExt, message};
+///
+/// type BoxedError = Box<dyn Error + Send + Sync + 'static>;
+///
+/// fn before(result: Result<(), BoxedError>) -> Result<(), gix_error::Exn<gix_error::Message>> {
+///     result
+///         .map_err(gix_error::Error::from_boxed)
+///         .or_raise(|| message("operation failed"))
+/// }
+/// ```
+///
+/// With `BoxedResultExt`, the boxed error can be turned into erased `Exn` directly.
+///
+/// ```
+/// use std::error::Error;
+/// use gix_error::{BoxedResultExt, ResultExt, message};
+///
+/// type BoxedError = Box<dyn Error + Send + Sync + 'static>;
+///
+/// fn after(result: Result<(), BoxedError>) -> Result<(), gix_error::Exn<gix_error::Message>> {
+///     result.or_erased().or_raise(|| message("operation failed"))
+/// }
+/// ```
+pub trait BoxedResultExt {
+    /// The `Ok` type.
+    type Success;
+
+    /// Type-erase the boxed error inside the [`Result`].
+    fn or_erased(self) -> Result<Self::Success, Exn>;
+}
+
+impl<T> BoxedResultExt for Result<T, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    type Success = T;
+
+    #[track_caller]
+    fn or_erased(self) -> Result<Self::Success, Exn> {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => Err(Exn::new(crate::Untyped::from_boxed(e))),
+        }
+    }
+}
+
 impl<T, E> ResultExt for Result<T, Exn<E>>
 where
     E: std::error::Error + Send + Sync + 'static,

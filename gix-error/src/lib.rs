@@ -314,7 +314,7 @@
 mod exn;
 
 pub use bstr;
-pub use exn::{ErrorExt, Exn, Frame, OptionExt, ResultExt, Something, Untyped};
+pub use exn::{BoxedResultExt, ErrorExt, Exn, Frame, OptionExt, ResultExt, Something, Untyped};
 
 /// An error type that wraps an inner type-erased boxed `std::error::Error` or an `Exn` frame.
 ///
