@@ -2022,7 +2022,7 @@ dependencies = [
 
 [[package]]
 name = "gix-imara-diff"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "arbitrary",
  "bstr",
@@ -2031,7 +2031,7 @@ dependencies = [
  "gix-hash",
  "gix-imara-diff",
  "gix-object",
- "hashbrown 0.17.1",
+ "hashbrown 0.16.1",
 ]
 
 [[package]]

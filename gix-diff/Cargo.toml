@@ -65,7 +65,7 @@ gix-fs = { version = "^0.22.1", path = "../gix-fs", optional = true }
 gix-tempfile = { version = "^24.0.0", path = "../gix-tempfile", optional = true }
 gix-trace = { version = "^0.1.21", path = "../gix-trace", optional = true }
 gix-traverse = { version = "^0.61.0", path = "../gix-traverse", optional = true }
-imara-diff = { package = "gix-imara-diff", version = "^0.2.4", optional = true, path = "../gix-imara-diff" }
+imara-diff = { package = "gix-imara-diff", version = "^0.2.5", optional = true, path = "../gix-imara-diff" }
 
 thiserror = "2.0.18"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
