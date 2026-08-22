@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-worktree-stream"
-version = "0.35.0"
+version = "0.36.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "generate a byte-stream from a git-tree"
@@ -21,16 +21,16 @@ sha1 = ["gix-hash/sha1"]
 sha256 = ["gix-hash/sha256"]
 
 [dependencies]
-gix-features = { version = "^0.49.0", path = "../gix-features", features = ["progress", "io-pipe", "parallel"] }
-gix-hash = { version = "^0.26.0", path = "../gix-hash" }
-gix-object = { version = "^0.63.0", path = "../gix-object" }
-gix-attributes = { version = "^0.34.0", path = "../gix-attributes", features = ["parallel"] }
-gix-filter = { version = "^0.33.0", path = "../gix-filter" }
-gix-traverse = { version = "^0.60.0", path = "../gix-traverse" }
-gix-fs = { version = "^0.22.0", path = "../gix-fs" }
-gix-path = { version = "^0.12.4", path = "../gix-path" }
+gix-features = { version = "^0.49.1", path = "../gix-features", features = ["progress", "io-pipe", "parallel"] }
+gix-hash = { version = "^0.26.1", path = "../gix-hash" }
+gix-object = { version = "^0.64.0", path = "../gix-object" }
+gix-attributes = { version = "^0.35.0", path = "../gix-attributes", features = ["parallel"] }
+gix-filter = { version = "^0.34.0", path = "../gix-filter" }
+gix-traverse = { version = "^0.61.0", path = "../gix-traverse" }
+gix-fs = { version = "^0.22.1", path = "../gix-fs" }
+gix-path = { version = "^0.12.5", path = "../gix-path" }
 
-gix-error = { version = "^0.2.5", path = "../gix-error" }
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 parking_lot = "0.12.4"
 
 [dev-dependencies]

@@ -4,7 +4,7 @@ lints.workspace = true
 name = "gitoxide-core"
 description = "The library implementing all capabilities of the gitoxide CLI"
 repository = "https://github.com/GitoxideLabs/gitoxide"
-version = "0.60.0"
+version = "0.61.0"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
@@ -49,13 +49,13 @@ serde = ["gix/serde", "dep:serde_json", "dep:serde", "bytesize/serde"]
 
 [dependencies]
 # deselect everything else (like "performance") as this should be controllable by the parent application.
-gix = { version = "^0.86.0", path = "../gix", default-features = false, features = ["merge", "blob-diff", "blame", "revision", "mailmap", "excludes", "attributes", "worktree-mutation", "credentials", "interrupt", "status", "dirwalk", "command"] }
-gix-pack-for-configuration-only = { package = "gix-pack", version = "^0.73.0", path = "../gix-pack", default-features = false, features = ["pack-cache-lru-dynamic", "pack-cache-lru-static", "generate", "streaming-input"] }
-gix-transport-configuration-only = { package = "gix-transport", version = "^0.58.1", path = "../gix-transport", default-features = false }
-gix-archive-for-configuration-only = { package = "gix-archive", version = "^0.35.0", path = "../gix-archive", optional = true, features = ["tar", "tar_gz"] }
-gix-status = { version = "^0.33.0", path = "../gix-status" }
-gix-fsck = { version = "^0.24.0", path = "../gix-fsck" }
-gix-error-for-configuration-only = { package = "gix-error", version = "^0.2.5", path = "../gix-error", features = ["anyhow"] }
+gix = { version = "^0.87.0", path = "../gix", default-features = false, features = ["merge", "blob-diff", "blame", "revision", "mailmap", "excludes", "attributes", "worktree-mutation", "credentials", "interrupt", "status", "dirwalk", "command"] }
+gix-pack-for-configuration-only = { package = "gix-pack", version = "^0.74.0", path = "../gix-pack", default-features = false, features = ["pack-cache-lru-dynamic", "pack-cache-lru-static", "generate", "streaming-input"] }
+gix-transport-configuration-only = { package = "gix-transport", version = "^0.59.0", path = "../gix-transport", default-features = false }
+gix-archive-for-configuration-only = { package = "gix-archive", version = "^0.36.0", path = "../gix-archive", optional = true, features = ["tar", "tar_gz"] }
+gix-status = { version = "^0.34.0", path = "../gix-status" }
+gix-fsck = { version = "^0.25.0", path = "../gix-fsck" }
+gix-error-for-configuration-only = { package = "gix-error", version = "^0.3.0", path = "../gix-error", features = ["anyhow"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 anyhow = "1.0.102"
 thiserror = "2.0.18"
@@ -73,7 +73,7 @@ blocking = { version = "1.6.2", optional = true }
 
 # for 'organize' functionality
 dua-core = { version = "2.41.1", optional = true }
-gix-url = { version = "^0.37.1", path = "../gix-url", optional = true }
+gix-url = { version = "^0.38.0", path = "../gix-url", optional = true }
 
 # for 'hours'
 fs-err = { version = "3.3.0", optional = true }

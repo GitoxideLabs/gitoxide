@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-note"
-version = "0.0.0"
+version = "0.1.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dealing with git notes"
@@ -14,6 +14,9 @@ include = ["/src/**/*", "/LICENSE-*"]
 [lib]
 doctest = false
 
+[package.metadata.docs.rs]
+features = ["sha1"]
+
 [features]
 ## Enable support for the SHA-1 hash by forwarding it to dependencies.
 sha1 = ["gix-hash/sha1", "gix-object/sha1", "gix-hashtable/sha1" ]
@@ -21,10 +24,10 @@ sha1 = ["gix-hash/sha1", "gix-object/sha1", "gix-hashtable/sha1" ]
 sha256 = ["gix-hash/sha256", "gix-object/sha256",  "gix-hashtable/sha256" ]
 
 [dependencies]
-gix-error = { version = "^0.2.5", path = "../gix-error" }
-gix-hash = { version = "^0.26.0", path = "../gix-hash" }
+gix-error = { version = "^0.3.0", path = "../gix-error" }
+gix-hash = { version = "^0.26.1", path = "../gix-hash" }
 gix-hashtable = { version = "^0.16.0", path = "../gix-hashtable" }
-gix-object = { version = "^0.63.0", path = "../gix-object" }
+gix-object = { version = "^0.64.0", path = "../gix-object" }
 
 [dev-dependencies]
 gix-note = { path = ".", features = ["sha1", "sha256"] }

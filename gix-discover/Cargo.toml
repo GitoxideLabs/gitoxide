@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-discover"
-version = "0.54.0"
+version = "0.55.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "Discover git repositories and check if a directory is a git repository"
@@ -22,9 +22,9 @@ sha256 = ["gix-ref/sha256"]
 
 [dependencies]
 gix-sec = { version = "^0.14.2", path = "../gix-sec" }
-gix-path = { version = "^0.12.4", path = "../gix-path" }
-gix-ref = { version = "^0.66.0", path = "../gix-ref" }
-gix-fs = { version = "^0.22.0", path = "../gix-fs" }
+gix-path = { version = "^0.12.5", path = "../gix-path" }
+gix-ref = { version = "^0.67.0", path = "../gix-ref" }
+gix-fs = { version = "^0.22.1", path = "../gix-fs" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std", "unicode"] }
 thiserror = "2.0.18"

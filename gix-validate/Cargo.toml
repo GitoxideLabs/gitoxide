@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-validate"
-version = "0.11.3"
+version = "0.11.4"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "Validation functions for various kinds of names in git"

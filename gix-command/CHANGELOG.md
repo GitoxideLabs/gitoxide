@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0 (2026-08-22)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 4 commits contributed to the release over the course of 19 calendar days.
+ - 19 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Thanks Clippy
+
+<csr-read-only-do-not-edit/>
+
+[Clippy](https://github.com/rust-lang/rust-clippy) helped 1 time to make code idiomatic. 
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2930 from GitoxideLabs/gix-notes ([`7424676`](https://github.com/GitoxideLabs/gitoxide/commit/7424676f86cd3f5a67c53f8db6baf0803e937d4a))
+    - Thanks clippy ([`5c8d935`](https://github.com/GitoxideLabs/gitoxide/commit/5c8d9351dcab6c59c456787db7a40d38b5b5c5c0))
+    - Merge pull request #2867 from GitoxideLabs/fix-url-authority-parsing ([`cc3ee80`](https://github.com/GitoxideLabs/gitoxide/commit/cc3ee8060ad7a32ee8d2eb9139854be7f7561b70))
+</details>
+
 ## 0.9.2 (2026-08-03)
 
 ### Bug Fixes
@@ -21,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 3 commits contributed to the release.
+ - 4 commits contributed to the release.
  - 69 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -33,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-path v0.12.4, gix-command v0.9.2, gix-config-value v0.19.1, gix-url v0.37.1, gix-credentials v0.39.1, gix-transport v0.58.1 ([`ab4fcb0`](https://github.com/GitoxideLabs/gitoxide/commit/ab4fcb0364ec4d01115595198f383b1ad9c29808))
     - Merge pull request #2820 from GitoxideLabs/agent/fix-windows-shell-posix-mode ([`5a88ee7`](https://github.com/GitoxideLabs/gitoxide/commit/5a88ee740f6e81db550d75b9b94875d0cb71ed37))
     - Use onfigured shell arguments in gix-command ([`85f10fc`](https://github.com/GitoxideLabs/gitoxide/commit/85f10fcc96740eeb293b237d1300bf8aab428434))
     - Merge pull request #2618 from GitoxideLabs/report ([`f7d4f33`](https://github.com/GitoxideLabs/gitoxide/commit/f7d4f33b58503996ae90497b69ce4c3a757982ac))
@@ -52,11 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    Derive the value from the shell program itself, using the basename of
    the path passed to `Command::new` for the shell:
    
-     - With the default shell on Unix (`/bin/sh`), `$0` is `sh`.
-     - With the default shell on Windows (`sh.exe` from Git for Windows),
-       `$0` is `sh.exe`, matching the launched binary's actual name.
-     - With a customized `shell_program`, `$0` reflects the chosen shell
-       (e.g. `bash`, `zsh`), so its diagnostics correctly identify it.
+   - With the default shell on Unix (`/bin/sh`), `$0` is `sh`.
+   - With the default shell on Windows (`sh.exe` from Git for Windows),
+   `$0` is `sh.exe`, matching the launched binary's actual name.
+   - With a customized `shell_program`, `$0` reflects the chosen shell
+   (e.g. `bash`, `zsh`), so its diagnostics correctly identify it.
    
    If the shell path has no extractable basename — `Path::file_name()`
    returns `None` for degenerate input like an empty string or `/` — fall

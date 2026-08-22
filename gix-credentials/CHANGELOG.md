@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.40.0 (2026-08-22)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 2 commits contributed to the release over the course of 19 calendar days.
+ - 19 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2867 from GitoxideLabs/fix-url-authority-parsing ([`cc3ee80`](https://github.com/GitoxideLabs/gitoxide/commit/cc3ee8060ad7a32ee8d2eb9139854be7f7561b70))
+</details>
+
 ## 0.39.1 (2026-08-03)
 
 ### Bug Fixes
@@ -24,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 6 commits contributed to the release over the course of 11 calendar days.
+ - 7 commits contributed to the release over the course of 11 calendar days.
  - 11 days passed between releases.
  - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 1 unique issue was worked on: [#2844](https://github.com/GitoxideLabs/gitoxide/issues/2844)
@@ -38,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  * **[#2844](https://github.com/GitoxideLabs/gitoxide/issues/2844)**
     - Quote Git paths in credential helper shell commands ([`e0655e2`](https://github.com/GitoxideLabs/gitoxide/commit/e0655e29a49bbb1e028269c043b506988427da0e))
  * **Uncategorized**
+    - Release gix-path v0.12.4, gix-command v0.9.2, gix-config-value v0.19.1, gix-url v0.37.1, gix-credentials v0.39.1, gix-transport v0.58.1 ([`ab4fcb0`](https://github.com/GitoxideLabs/gitoxide/commit/ab4fcb0364ec4d01115595198f383b1ad9c29808))
     - Verify credential helpers use decoded HTTP paths. ([`0334384`](https://github.com/GitoxideLabs/gitoxide/commit/033438491ef9c361ae50a4b82637e1cae9ef44a2))
     - Merge pull request #2845 from GitoxideLabs/unqoted-sh-path ([`6c4619f`](https://github.com/GitoxideLabs/gitoxide/commit/6c4619f0cca713696c0bf8fd4585b9ca87c42a7c))
     - Merge pull request #2820 from GitoxideLabs/agent/fix-windows-shell-posix-mode ([`5a88ee7`](https://github.com/GitoxideLabs/gitoxide/commit/5a88ee740f6e81db550d75b9b94875d0cb71ed37))
@@ -56,16 +79,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    without artificial input lifetimes or conversions to `'static`.
    
    - Return owned `BString`, `PathBuf`, `OsString`, and `FullName` values
-     from configuration-derived lookups.
+   from configuration-derived lookups.
    - Simplify fallible optional access from `Option<Result<T, E>>` to
-     `Result<Option<T>, E>`, allowing errors to propagate naturally with
-     `?`.
+   `Result<Option<T>, E>`, allowing errors to propagate naturally with
+   `?`.
    - Accept common string and byte-string inputs through `AsBStr` in
-     configuration setters, converters, remote lookup, and remote saving.
+   configuration setters, converters, remote lookup, and remote saving.
    - Remove widespread `Cow` construction, `into_owned()`, and redundant
-     cloning from configuration consumers.
+   cloning from configuration consumers.
    - Preserve configuration-key context when converting owned values and
-     enriching validation errors.
+   enriching validation errors.
    
    Adapt config-tree conversions for the new owned values and optional-result
    shape, including booleans, integers, paths, URLs, refspecs, timeouts,

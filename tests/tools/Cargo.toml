@@ -60,18 +60,18 @@ sha256 = [
 xz = ["dep:xz2"]
 
 [dependencies]
-gix-hash = { version = "^0.26.0", path = "../../gix-hash" }
+gix-hash = { version = "^0.26.1", path = "../../gix-hash" }
 gix-lock = { version = "^24.0.0", path = "../../gix-lock" }
-gix-path = { version = "^0.12.4", path = "../../gix-path" }
-gix-config = { version = "^0.59.0", path = "../../gix-config", optional = true, default-features = false }
-gix-discover = { version = "^0.54.0", path = "../../gix-discover", optional = true }
-gix-index = { version = "^0.54.0", path = "../../gix-index", optional = true, default-features = false }
-gix-object = { version = "^0.63.0", path = "../../gix-object", optional = true, default-features = false }
-gix-odb = { version = "^0.83.0", path = "../../gix-odb", optional = true, default-features = false }
-gix-ref = { version = "^0.66.0", path = "../../gix-ref", optional = true, default-features = false }
+gix-path = { version = "^0.12.5", path = "../../gix-path" }
+gix-config = { version = "^0.60.0", path = "../../gix-config", optional = true, default-features = false }
+gix-discover = { version = "^0.55.0", path = "../../gix-discover", optional = true }
+gix-index = { version = "^0.55.0", path = "../../gix-index", optional = true, default-features = false }
+gix-object = { version = "^0.64.0", path = "../../gix-object", optional = true, default-features = false }
+gix-odb = { version = "^0.84.0", path = "../../gix-odb", optional = true, default-features = false }
+gix-ref = { version = "^0.67.0", path = "../../gix-ref", optional = true, default-features = false }
 gix-shallow = { version = "^0.13.0", path = "../../gix-shallow", optional = true }
-gix-worktree = { version = "^0.55.0", path = "../../gix-worktree", optional = true, features = ["parallel"] }
-gix-fs = { version = "^0.22.0", path = "../../gix-fs", optional = true }
+gix-worktree = { version = "^0.56.0", path = "../../gix-worktree", optional = true, features = ["parallel"] }
+gix-fs = { version = "^0.22.1", path = "../../gix-fs", optional = true }
 gix-tempfile = { version = "^24.0.0", path = "../../gix-tempfile", default-features = false, features = ["signals"] }
 
 fastrand = "2.0.0"

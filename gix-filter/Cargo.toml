@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-filter"
-version = "0.33.0"
+version = "0.34.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project implementing git filters"
@@ -40,15 +40,15 @@ parallel = ["gix-attributes/parallel"]
 test-helper = []
 
 [dependencies]
-gix-hash = { version = "^0.26.0", path = "../gix-hash" }
+gix-hash = { version = "^0.26.1", path = "../gix-hash" }
 gix-trace = { version = "^0.1.21", path = "../gix-trace" }
-gix-object = { version = "^0.63.0", path = "../gix-object" }
-gix-command = { version = "^0.9.2", path = "../gix-command" }
-gix-quote = { version = "^0.7.2", path = "../gix-quote" }
-gix-utils = { version = "^0.3.5", path = "../gix-utils" }
-gix-path = { version = "^0.12.4", path = "../gix-path" }
+gix-object = { version = "^0.64.0", path = "../gix-object" }
+gix-command = { version = "^0.10.0", path = "../gix-command" }
+gix-quote = { version = "^0.8.0", path = "../gix-quote" }
+gix-utils = { version = "^0.3.6", path = "../gix-utils" }
+gix-path = { version = "^0.12.5", path = "../gix-path" }
 gix-packetline = { version = "^0.22.0", path = "../gix-packetline", features = ["blocking-io"] }
-gix-attributes = { version = "^0.34.0", path = "../gix-attributes" }
+gix-attributes = { version = "^0.35.0", path = "../gix-attributes" }
 
 encoding_rs = "0.8.32"
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
