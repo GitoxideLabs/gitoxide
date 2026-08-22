@@ -18,7 +18,7 @@ pub fn perform(
     kind: Kind,
     selected_path: Option<(&PathChange, Option<ObjectId>)>,
 ) -> Result<Option<ObjectId>> {
-    Ok(perform_inner(repo, graph, kind, selected_path, false, false)?.and_then(|outcome| outcome.selected))
+    Ok(perform_inner(repo, graph, kind, selected_path, false, false, |_| {})?.and_then(|outcome| outcome.selected))
 }
 
 pub(crate) fn perform_with_changes(
@@ -27,8 +27,9 @@ pub(crate) fn perform_with_changes(
     kind: Kind,
     selected_path: Option<(&PathChange, Option<ObjectId>)>,
     resolve_pending: bool,
+    report: impl FnMut(rebase::Progress),
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, kind, selected_path, false, resolve_pending)
+    perform_inner(repo, graph, kind, selected_path, false, resolve_pending, report)
 }
 
 pub(crate) fn perform_reporting(
@@ -36,20 +37,20 @@ pub(crate) fn perform_reporting(
     graph: &crate::history::HistoryGraph,
     kind: Kind,
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, kind, None, false, false)
+    perform_inner(repo, graph, kind, None, false, false, |_| {})
 }
 
 #[tracing::instrument(skip_all)]
 #[cfg(test)]
 pub fn amend_index(repo: gix::Repository, graph: &crate::history::HistoryGraph) -> Result<Option<ObjectId>> {
-    Ok(perform_inner(repo, graph, Kind::Amend, None, true, true)?.and_then(|outcome| outcome.selected))
+    Ok(perform_inner(repo, graph, Kind::Amend, None, true, true, |_| {})?.and_then(|outcome| outcome.selected))
 }
 
 pub(crate) fn amend_index_reporting(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, Kind::Amend, None, true, true)
+    perform_inner(repo, graph, Kind::Amend, None, true, true, |_| {})
 }
 
 fn perform_inner(
@@ -59,6 +60,7 @@ fn perform_inner(
     selected_path: Option<(&PathChange, Option<ObjectId>)>,
     index_only: bool,
     resolve_pending: bool,
+    mut report: impl FnMut(rebase::Progress),
 ) -> Result<Option<rebase::Outcome>> {
     let head = repo
         .head_id()
@@ -145,8 +147,14 @@ fn perform_inner(
             {
                 paths.push(source.clone());
             }
-            rebase::perform_resetting_index_paths_allowing_pending_checkout(
-                &repo, graph, edit, signature, tree_mode, paths,
+            rebase::perform_resetting_index_paths_allowing_pending_checkout_with_progress(
+                &repo,
+                graph,
+                edit,
+                signature,
+                tree_mode,
+                paths,
+                &mut report,
             )?
         }
         Some((path, _)) if kind == Kind::Amend => {
@@ -156,12 +164,25 @@ fn perform_inner(
             {
                 paths.push(source.clone());
             }
-            rebase::perform_resetting_index_paths(&repo, graph, edit, signature, tree_mode, paths)?
+            rebase::perform_resetting_index_paths_with_progress(
+                &repo,
+                graph,
+                edit,
+                signature,
+                tree_mode,
+                paths,
+                &mut report,
+            )?
         }
-        _ if kind == Kind::Amend && resolve_pending => {
-            rebase::perform_allowing_pending_checkout(&repo, graph, edit, signature, tree_mode)?
-        }
-        _ => rebase::perform(&repo, graph, edit, signature, tree_mode)?,
+        _ if kind == Kind::Amend && resolve_pending => rebase::perform_allowing_pending_checkout_with_progress(
+            &repo,
+            graph,
+            edit,
+            signature,
+            tree_mode,
+            &mut report,
+        )?,
+        _ => rebase::perform_with_progress(&repo, graph, edit, signature, tree_mode, &mut report)?,
     };
     Ok(Some(performed.complete()?))
 }

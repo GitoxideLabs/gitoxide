@@ -812,11 +812,35 @@ pub(crate) fn perform(
         None,
         false,
         None,
-        |_| {},
+        |_, _| {},
     )
     .map(|(perform, _)| perform)
 }
 
+pub(crate) fn perform_with_progress(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    edit: Edit,
+    signature: Signature,
+    tree_mode: Tree,
+    mut report: impl FnMut(Progress),
+) -> Result<Perform> {
+    perform_inner(
+        repo,
+        graph,
+        edit,
+        signature,
+        tree_mode,
+        Vec::new(),
+        None,
+        false,
+        None,
+        |_, progress| report(progress),
+    )
+    .map(|(perform, _)| perform)
+}
+
+#[cfg(test)]
 pub(crate) fn perform_with_enrichment(
     repo: &gix::Repository,
     graph: &HistoryGraph,
@@ -835,16 +859,40 @@ pub(crate) fn perform_with_enrichment(
         None,
         false,
         Some(headers),
-        |_| {},
+        |_, _| {},
     )
 }
 
-pub(super) fn perform_allowing_pending_checkout(
+pub(crate) fn perform_with_enrichment_and_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     edit: Edit,
     signature: Signature,
     tree_mode: Tree,
+    headers: &crate::enrich::Headers,
+    mut report: impl FnMut(Progress),
+) -> Result<(Perform, Option<crate::enrich::Enrichment>)> {
+    perform_inner(
+        repo,
+        graph,
+        edit,
+        signature,
+        tree_mode,
+        Vec::new(),
+        None,
+        false,
+        Some(headers),
+        |_, progress| report(progress),
+    )
+}
+
+pub(super) fn perform_allowing_pending_checkout_with_progress(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    edit: Edit,
+    signature: Signature,
+    tree_mode: Tree,
+    mut report: impl FnMut(Progress),
 ) -> Result<Perform> {
     perform_inner(
         repo,
@@ -856,7 +904,7 @@ pub(super) fn perform_allowing_pending_checkout(
         None,
         true,
         None,
-        |_| {},
+        |_, progress| report(progress),
     )
     .map(|(perform, _)| perform)
 }
@@ -867,7 +915,7 @@ pub(crate) fn perform_reporting_rebased(
     edit: Edit,
     signature: Signature,
     tree_mode: Tree,
-    report: impl FnMut(ObjectId),
+    mut report: impl FnMut(ObjectId),
 ) -> Result<Perform> {
     perform_inner(
         repo,
@@ -879,18 +927,23 @@ pub(crate) fn perform_reporting_rebased(
         None,
         false,
         None,
-        report,
+        |id, _| {
+            if let Some(id) = id {
+                report(id);
+            }
+        },
     )
     .map(|(perform, _)| perform)
 }
 
-pub(super) fn perform_resetting_index_paths(
+pub(super) fn perform_resetting_index_paths_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     edit: Edit,
     signature: Signature,
     tree_mode: Tree,
     paths: Vec<BString>,
+    mut report: impl FnMut(Progress),
 ) -> Result<Perform> {
     perform_inner(
         repo,
@@ -902,18 +955,19 @@ pub(super) fn perform_resetting_index_paths(
         Some(paths),
         false,
         None,
-        |_| {},
+        |_, progress| report(progress),
     )
     .map(|(perform, _)| perform)
 }
 
-pub(super) fn perform_resetting_index_paths_allowing_pending_checkout(
+pub(super) fn perform_resetting_index_paths_allowing_pending_checkout_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     edit: Edit,
     signature: Signature,
     tree_mode: Tree,
     paths: Vec<BString>,
+    mut report: impl FnMut(Progress),
 ) -> Result<Perform> {
     perform_inner(
         repo,
@@ -925,18 +979,19 @@ pub(super) fn perform_resetting_index_paths_allowing_pending_checkout(
         Some(paths),
         true,
         None,
-        |_| {},
+        |_, progress| report(progress),
     )
     .map(|(perform, _)| perform)
 }
 
-pub(super) fn perform_deleting_refs(
+pub(super) fn perform_deleting_refs_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     edit: Edit,
     signature: Signature,
     tree_mode: Tree,
     deletions: Vec<(gix::refs::FullName, Target)>,
+    mut report: impl FnMut(Progress),
 ) -> Result<Perform> {
     perform_inner(
         repo,
@@ -948,7 +1003,7 @@ pub(super) fn perform_deleting_refs(
         None,
         false,
         None,
-        |_| {},
+        |_, progress| report(progress),
     )
     .map(|(perform, _)| perform)
 }
@@ -967,7 +1022,7 @@ fn perform_inner(
     reset_index_paths: Option<Vec<BString>>,
     allow_pending_checkout: bool,
     enrichment_headers: Option<&crate::enrich::Headers>,
-    mut report: impl FnMut(ObjectId),
+    mut report: impl FnMut(Option<ObjectId>, Progress),
 ) -> Result<(Perform, Option<crate::enrich::Enrichment>)> {
     let mut repo = repo.clone();
     let repeat_checkout = match &edit {
@@ -1002,6 +1057,13 @@ fn perform_inner(
             .context("the edited commit is not in the loaded history")?,
         None => Vec::new(),
     };
+    let mut progress = Progress {
+        total: affected.len()
+            + usize::from(split_upper.is_some())
+            + usize::from((inserted || forked) && affected.is_empty()),
+        ..Progress::default()
+    };
+    report(None, progress);
     let checkout = if repo.workdir().is_some() {
         repo.head()?.id().map(gix::Id::detach)
     } else {
@@ -1054,7 +1116,7 @@ fn perform_inner(
     if inserted || forked {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
-        let id = write_commit(
+        let (id, signing_time) = write_commit_timed(
             &repo,
             commit,
             None,
@@ -1062,6 +1124,12 @@ fn perform_inner(
             CommitState::Unmarked(signature),
             signing.clone(),
         )?;
+        if let Some(elapsed) = signing_time {
+            progress.signed += 1;
+            progress.signing_time += elapsed;
+        }
+        progress.processed += 1;
+        report(None, progress);
         selected = Some(id);
         if inserted {
             if let Some(root) = root {
@@ -1079,6 +1147,8 @@ fn perform_inner(
             .copied();
         rewritten.insert(root, parent);
         selected = parent;
+        progress.processed += 1;
+        report(None, progress);
     }
 
     let mut pending = affected;
@@ -1111,6 +1181,8 @@ fn perform_inner(
             .filter_map(|parent| rewritten.get(parent).copied().unwrap_or(Some(*parent)))
             .collect();
         if Some(old_id) != root && old_parents == new_parents && !is_pending(&commit) {
+            progress.processed += 1;
+            report(None, progress);
             continue;
         }
         let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
@@ -1145,6 +1217,7 @@ fn perform_inner(
             commit_tree_mode = Tree::CherryPick;
             finalized_empty.insert(old_id);
         }
+        let cherry_pick_started = eager.then(Instant::now);
         let rewritten_tree = rewritten_tree(
             &repo,
             &commit,
@@ -1168,6 +1241,10 @@ fn perform_inner(
                 ours
             }
         };
+        if let Some(started) = cherry_pick_started.filter(|_| new_conflict.is_none()) {
+            progress.cherry_picked += 1;
+            progress.cherry_pick_time += started.elapsed();
+        }
         commit.parents = new_parents.into_iter().collect();
         let pending = commit_tree_mode == Tree::LeaveAsIsAndMark
             || (commit_tree_mode == Tree::LeaveAsIsAndMarkDescendants && Some(old_id) != root)
@@ -1188,8 +1265,14 @@ fn perform_inner(
         } else {
             CommitState::Unmarked(signature)
         };
-        let new_id = write_commit(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
-        report(old_id);
+        let (new_id, signing_time) =
+            write_commit_timed(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
+        if let Some(elapsed) = signing_time {
+            progress.signed += 1;
+            progress.signing_time += elapsed;
+        }
+        progress.processed += 1;
+        report(Some(old_id), progress);
         if new_id != old_id {
             note_rewrites.push((old_id, new_id));
         }
@@ -1200,7 +1283,7 @@ fn perform_inner(
         if Some(old_id) == root {
             if let Some(mut upper) = split_upper.take() {
                 upper.parents = [new_id].into_iter().collect();
-                let upper_id = write_commit(
+                let (upper_id, signing_time) = write_commit_timed(
                     &repo,
                     upper,
                     None,
@@ -1208,6 +1291,12 @@ fn perform_inner(
                     CommitState::Unmarked(Signature::RedoIfNeeded),
                     signing.clone(),
                 )?;
+                if let Some(elapsed) = signing_time {
+                    progress.signed += 1;
+                    progress.signing_time += elapsed;
+                }
+                progress.processed += 1;
+                report(None, progress);
                 rewritten.insert(old_id, Some(upper_id));
                 selected = Some(upper_id);
             } else {
@@ -1273,7 +1362,8 @@ fn perform_inner(
 }
 
 #[tracing::instrument(skip_all, fields(%review, %tip))]
-pub(super) fn finish_review(
+#[expect(clippy::too_many_arguments, reason = "review preparation plus progress reporting")]
+pub(super) fn finish_review_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     review: ObjectId,
@@ -1281,6 +1371,7 @@ pub(super) fn finish_review(
     review_ref: gix::refs::FullName,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     checkout: Option<(ObjectId, Option<gix::refs::FullName>)>,
+    mut report: impl FnMut(Progress),
 ) -> Result<Perform> {
     let mut repo = repo.clone();
     let signing = repo
@@ -1303,6 +1394,11 @@ pub(super) fn finish_review(
         .into_iter()
         .filter(|id| *id != tip && !review_set.contains(id))
         .collect();
+    let mut progress = Progress {
+        total: review_ids.len() + natural_ids.len(),
+        ..Progress::default()
+    };
+    report(progress);
     let checkout_path: HashSet<_> = if repo.workdir().is_some() {
         checkout
             .as_ref()
@@ -1357,7 +1453,7 @@ pub(super) fn finish_review(
                     && name.as_slice() != super::review::RETURN_TO
             });
         }
-        let new = write_commit(
+        let (new, signing_time) = write_commit_timed(
             &repo,
             commit,
             Some(*old),
@@ -1365,6 +1461,12 @@ pub(super) fn finish_review(
             CommitState::Unmarked(Signature::RedoIfNeeded),
             signing.clone(),
         )?;
+        if let Some(elapsed) = signing_time {
+            progress.signed += 1;
+            progress.signing_time += elapsed;
+        }
+        progress.processed += 1;
+        report(progress);
         if new != *old {
             note_rewrites.push((*old, new));
         }
@@ -1423,6 +1525,7 @@ pub(super) fn finish_review(
         if finalize_empty {
             mode = Tree::CherryPick;
         }
+        let cherry_pick_started = eager.then(Instant::now);
         let mut new_conflict = None;
         commit.tree = match rewritten_tree(&repo, &commit, &original_parents, &new_parents, mode)? {
             TreeRewrite::Complete(tree) => tree,
@@ -1435,9 +1538,13 @@ pub(super) fn finish_review(
                 ours
             }
         };
+        if let Some(started) = cherry_pick_started.filter(|_| new_conflict.is_none()) {
+            progress.cherry_picked += 1;
+            progress.cherry_pick_time += started.elapsed();
+        }
         commit.parents = new_parents.into_iter().collect();
         let pending = !(eager || finalize_empty) || conflict.is_some() || new_conflict.is_some();
-        let new = write_commit(
+        let (new, signing_time) = write_commit_timed(
             &repo,
             commit,
             Some(old),
@@ -1451,6 +1558,12 @@ pub(super) fn finish_review(
             },
             signing.clone(),
         )?;
+        if let Some(elapsed) = signing_time {
+            progress.signed += 1;
+            progress.signing_time += elapsed;
+        }
+        progress.processed += 1;
+        report(progress);
         if new != old {
             note_rewrites.push((old, new));
         }
@@ -2689,17 +2802,6 @@ pub(crate) fn is_pending(commit: &gix::objs::Commit) -> bool {
             .any(|(name, value)| is_signature(name) && value.is_empty())
 }
 
-fn write_commit(
-    repo: &gix::Repository,
-    commit: gix::objs::Commit,
-    predecessor: Option<ObjectId>,
-    committer: &gix::actor::Signature,
-    state: CommitState,
-    signing: Option<gix::objs::signature::sign::Options>,
-) -> Result<ObjectId> {
-    Ok(write_commit_timed(repo, commit, predecessor, committer, state, signing)?.0)
-}
-
 fn write_commit_timed(
     repo: &gix::Repository,
     mut commit: gix::objs::Commit,
@@ -3144,14 +3246,20 @@ mod tests {
         let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
         commit.message = "rewritten middle".into();
 
-        let outcome = perform(
+        let mut progress = Vec::new();
+        let outcome = perform_with_progress(
             &repo,
             &graph,
             Edit::Replace { target: middle, commit },
             Signature::RedoIfNeeded,
             Tree::LeaveAsIs,
+            |update| progress.push(update),
         )?
         .complete()?;
+        let progress = progress.last().context("stack-edit progress is reported")?;
+        assert_eq!(progress.total, 2, "the edited commit and its descendant are counted");
+        assert_eq!(progress.processed, 2, "the completed edit reports every commit");
+        assert_eq!(progress.cherry_picked, 1, "only the checked-out descendant is replayed");
         let new_middle = outcome.selected.expect("replacement selects the rewritten commit");
         let new_tip = repo.head_id()?.detach();
         assert_ne!(new_tip, old_tip, "the descendant is rewritten");

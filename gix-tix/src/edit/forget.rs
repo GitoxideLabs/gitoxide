@@ -39,7 +39,7 @@ impl Conflict {
 #[cfg(test)]
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 pub(crate) fn perform(repo: gix::Repository, graph: &crate::history::HistoryGraph, id: ObjectId) -> Result<Outcome> {
-    perform_conflict(repo, graph, id)?.complete()
+    perform_conflict(repo, graph, id, |_| {})?.complete()
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -47,6 +47,7 @@ pub(crate) fn perform_conflict(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     id: ObjectId,
+    report: impl FnMut(rebase::Progress),
 ) -> Result<Perform> {
     let commit = repo
         .find_commit(id)
@@ -69,21 +70,23 @@ pub(crate) fn perform_conflict(
         None
     };
     let result = if deletions.is_empty() {
-        rebase::perform(
+        rebase::perform_with_progress(
             &repo,
             graph,
             rebase::Edit::Remove { target: id },
             rebase::Signature::RedoIfNeeded,
             rebase::Tree::LeaveAsIsAndMark,
+            report,
         )
     } else {
-        rebase::perform_deleting_refs(
+        rebase::perform_deleting_refs_with_progress(
             &repo,
             graph,
             rebase::Edit::Remove { target: id },
             rebase::Signature::RedoIfNeeded,
             rebase::Tree::LeaveAsIsAndMark,
             deletions,
+            report,
         )
     }?;
     Ok(match result {

@@ -2666,23 +2666,27 @@ fn event_loop(
                         _ => None,
                     }
                     .transpose();
+                    let resolving_conflict = pending_conflict_resolution.is_some();
                     let result = history_graph
                         .as_ref()
                         .context("editing HEAD requires a completed history graph")
                         .and_then(|graph| {
                             path.and_then(|path| {
-                                let repository = open_repository(&repository_path, repository_is_bare, false)
-                                    .context("could not open repository for HEAD edit")?;
-                                if kind == edit::head::Kind::Amend && pending_conflict_resolution.is_some() {
-                                    stage_resolved_conflict_paths(&repository)?;
-                                }
-                                edit::head::perform_with_changes(
-                                    repository,
-                                    graph,
-                                    kind,
-                                    path.as_ref().map(|(path, parent)| (path, *parent)),
-                                    pending_conflict_resolution.is_some(),
-                                )
+                                run_with_todo_progress(terminal, |report| {
+                                    let repository = open_repository(&repository_path, repository_is_bare, false)
+                                        .context("could not open repository for HEAD edit")?;
+                                    if kind == edit::head::Kind::Amend && resolving_conflict {
+                                        stage_resolved_conflict_paths(&repository)?;
+                                    }
+                                    edit::head::perform_with_changes(
+                                        repository,
+                                        graph,
+                                        kind,
+                                        path.as_ref().map(|(path, parent)| (path, *parent)),
+                                        resolving_conflict,
+                                        report,
+                                    )
+                                })
                             })
                         });
                     match result {
@@ -2764,7 +2768,7 @@ fn event_loop(
                                 clear_undo_history(&repository_path, repository_is_bare)
                                     .context("could not clear undo history before cancelling review")?;
                             }
-                            forget_commit(&repository_path, repository_is_bare, graph, id)
+                            forget_commit(terminal, &repository_path, repository_is_bare, graph, id)
                         });
                     match result {
                         Ok(edit::forget::Perform::Complete(outcome)) => {
@@ -3141,10 +3145,12 @@ fn event_loop(
                         .as_ref()
                         .context("finishing review requires a completed history graph")
                         .and_then(|graph| {
-                            let mut repo = open_repository(&repository_path, repository_is_bare, false)
-                                .context("could not open repository to finish review")?;
-                            repo.object_cache_size(None);
-                            edit::review::finish(repo, graph, id, return_to)
+                            run_with_todo_progress(terminal, |report| {
+                                let mut repo = open_repository(&repository_path, repository_is_bare, false)
+                                    .context("could not open repository to finish review")?;
+                                repo.object_cache_size(None);
+                                edit::review::finish_with_progress(repo, graph, id, return_to, report)
+                            })
                         });
                     match result {
                         Ok(edit::review::Finish::Complete(finished)) => {
@@ -4882,11 +4888,14 @@ fn reword_commit(
         return Ok(None);
     };
 
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
-    repository.object_cache_size(None);
-    let (graph, id) = edit::reword::relocate_after_editor(&repository, revisions, hidden_revisions, change_id)?;
-    edit::reword::apply_conflict_reporting(repository, &graph, id, &edited).map(Some)
+    run_with_todo_progress(terminal, move |report| {
+        let mut repository = open_repository(repository_path, bare, false)
+            .context("could not reopen repository after editing commit")?;
+        repository.object_cache_size(None);
+        let (graph, id) = edit::reword::relocate_after_editor(&repository, revisions, hidden_revisions, change_id)?;
+        edit::reword::apply_conflict_reporting(repository, &graph, id, &edited, report)
+    })
+    .map(Some)
 }
 
 pub(crate) fn load_rebase_todo_commits(
@@ -5299,15 +5308,20 @@ fn create_commit(
     else {
         return Ok(None);
     };
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
-    repository.object_cache_size(None);
     let outcome = match mode {
-        CreateMode::Insert | CreateMode::InsertEmpty => {
-            edit::create::apply_conflict_reporting(repository, graph, prepared, &edited)
+        CreateMode::Insert | CreateMode::InsertEmpty => run_with_todo_progress(terminal, move |report| {
+            let mut repository = open_repository(repository_path, bare, false)
+                .context("could not reopen repository after editing commit")?;
+            repository.object_cache_size(None);
+            edit::create::apply_conflict_reporting(repository, graph, prepared, &edited, report)
+        }),
+        CreateMode::Fork => {
+            let mut repository = open_repository(repository_path, bare, false)
+                .context("could not reopen repository after editing commit")?;
+            repository.object_cache_size(None);
+            edit::create::apply_fork_reporting(repository, graph, prepared, &edited)
+                .map(edit::rebase::Perform::Complete)
         }
-        CreateMode::Fork => edit::create::apply_fork_reporting(repository, graph, prepared, &edited)
-            .map(edit::rebase::Perform::Complete),
     }?;
     Ok(Some(outcome))
 }
@@ -5334,23 +5348,29 @@ fn split_commit(
     else {
         return Ok(None);
     };
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not reopen repository after editing split")?;
-    repository.object_cache_size(None);
-    edit::split::apply_reporting(repository, graph, prepared, &edited).map(Some)
+    run_with_todo_progress(terminal, move |report| {
+        let mut repository =
+            open_repository(repository_path, bare, false).context("could not reopen repository after editing split")?;
+        repository.object_cache_size(None);
+        edit::split::apply_reporting(repository, graph, prepared, &edited, report)
+    })
+    .map(Some)
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn forget_commit(
+    terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
     id: gix::ObjectId,
 ) -> Result<edit::forget::Perform> {
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not open repository before forgetting commit")?;
-    repository.object_cache_size(None);
-    edit::forget::perform_conflict(repository, graph, id)
+    run_with_todo_progress(terminal, move |report| {
+        let mut repository = open_repository(repository_path, bare, false)
+            .context("could not open repository before forgetting commit")?;
+        repository.object_cache_size(None);
+        edit::forget::perform_conflict(repository, graph, id, report)
+    })
 }
 
 fn run_external_diff(

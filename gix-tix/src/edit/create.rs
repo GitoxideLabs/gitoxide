@@ -291,7 +291,7 @@ pub(crate) fn apply_reporting(
     prepared: Prepared,
     edited: &[u8],
 ) -> Result<rebase::Outcome> {
-    apply_conflict_reporting(repo, graph, prepared, edited)?.complete()
+    apply_conflict_reporting(repo, graph, prepared, edited, |_| {})?.complete()
 }
 
 pub(crate) fn apply_conflict_reporting(
@@ -299,9 +299,10 @@ pub(crate) fn apply_conflict_reporting(
     graph: &crate::history::HistoryGraph,
     prepared: Prepared,
     edited: &[u8],
+    report: impl FnMut(rebase::Progress),
 ) -> Result<rebase::Perform> {
     let edit = commit_from_edit(&prepared, edited)?;
-    apply_commit_conflict(repo, graph, prepared, edit)
+    apply_commit_conflict(repo, graph, prepared, edit, report)
 }
 
 pub(crate) fn apply_message_reporting(
@@ -322,7 +323,7 @@ fn apply_commit(
     prepared: Prepared,
     edit: (gix::objs::Commit, crate::enrich::Headers),
 ) -> Result<rebase::Outcome> {
-    apply_commit_conflict(repo, graph, prepared, edit)?.complete()
+    apply_commit_conflict(repo, graph, prepared, edit, |_| {})?.complete()
 }
 
 fn apply_commit_conflict(
@@ -330,9 +331,10 @@ fn apply_commit_conflict(
     graph: &crate::history::HistoryGraph,
     mut prepared: Prepared,
     (commit, enrichment): (gix::objs::Commit, crate::enrich::Headers),
+    report: impl FnMut(rebase::Progress),
 ) -> Result<rebase::Perform> {
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
-    let (performed, _) = rebase::perform_with_enrichment(
+    let (performed, _) = rebase::perform_with_enrichment_and_progress(
         &repo,
         graph,
         rebase::Edit::Insert {
@@ -343,6 +345,7 @@ fn apply_commit_conflict(
         rebase::Signature::RedoIfNeeded,
         rebase::Tree::LeaveAsIsAndMark,
         &enrichment,
+        report,
     )?;
     Ok(performed)
 }

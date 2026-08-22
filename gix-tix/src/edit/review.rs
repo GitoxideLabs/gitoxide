@@ -211,11 +211,22 @@ pub(crate) fn start(
 }
 
 #[tracing::instrument(skip_all, fields(%review))]
+#[cfg(test)]
 pub(crate) fn finish(
     repo: gix::Repository,
     graph: &history::HistoryGraph,
     review: ObjectId,
     fallback: Option<ObjectId>,
+) -> Result<Finish> {
+    finish_with_progress(repo, graph, review, fallback, |_| {})
+}
+
+pub(crate) fn finish_with_progress(
+    repo: gix::Repository,
+    graph: &history::HistoryGraph,
+    review: ObjectId,
+    fallback: Option<ObjectId>,
+    report: impl FnMut(super::rebase::Progress),
 ) -> Result<Finish> {
     let workdir = repo
         .workdir()
@@ -281,7 +292,16 @@ pub(crate) fn finish(
             anyhow::bail!("{label} has a pending rebase");
         }
     }
-    match super::rebase::finish_review(&repo, graph, review, tip, review_ref, delete_refs, checkout)? {
+    match super::rebase::finish_review_with_progress(
+        &repo,
+        graph,
+        review,
+        tip,
+        review_ref,
+        delete_refs,
+        checkout,
+        report,
+    )? {
         super::rebase::Perform::Complete(outcome) => {
             let finished = outcome
                 .map(review)

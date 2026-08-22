@@ -144,7 +144,7 @@ pub(crate) fn apply(
     old_id: gix::ObjectId,
     edited: &[u8],
 ) -> Result<Outcome> {
-    apply_conflict_reporting(repo, graph, old_id, edited)?.complete()
+    apply_conflict_reporting(repo, graph, old_id, edited, |_| {})?.complete()
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %old_id))]
@@ -153,6 +153,7 @@ pub(crate) fn apply_conflict_reporting(
     graph: &crate::history::HistoryGraph,
     old_id: gix::ObjectId,
     edited: &[u8],
+    mut report: impl FnMut(rebase::Progress),
 ) -> Result<Perform> {
     let edit = parse(edited)?;
     if edit.message.is_empty() {
@@ -173,7 +174,7 @@ pub(crate) fn apply_conflict_reporting(
         commit.committer = actor(edit.committer, edit.committer_time, "committer")?;
         commit.message = edit.message;
         let (performed, enrichment) =
-            apply_commit_conflict_with_enrichment(&repo, graph, old_id, commit, &edit.enrichment)?;
+            apply_commit_conflict_with_enrichment(&repo, graph, old_id, commit, &edit.enrichment, &mut report)?;
         let outcome = match performed {
             rebase::Perform::Complete(outcome) => outcome,
             rebase::Perform::Conflict(conflict) => return Ok(Perform::Conflict(conflict)),
@@ -282,14 +283,16 @@ fn apply_commit_conflict_with_enrichment(
     old_id: gix::ObjectId,
     commit: gix::objs::Commit,
     headers: &crate::enrich::Headers,
+    report: impl FnMut(rebase::Progress),
 ) -> Result<(rebase::Perform, Option<crate::enrich::Enrichment>)> {
-    rebase::perform_with_enrichment(
+    rebase::perform_with_enrichment_and_progress(
         repo,
         graph,
         rebase::Edit::Replace { target: old_id, commit },
         rebase::Signature::RedoIfNeeded,
         rebase::Tree::LeaveAsIsAndMark,
         headers,
+        report,
     )
 }
 
