@@ -624,7 +624,7 @@ fn split(repository: gix::Repository, graph: &crate::history::HistoryGraph, args
     let mut repository = crate::open_repository(&repository_path, bare, false)
         .context("could not reopen repository after editing split")?;
     repository.object_cache_size(None);
-    let outcome = crate::edit::split::apply_reporting(repository, graph, prepared, &edited)?;
+    let outcome = crate::edit::split::apply_reporting(repository, graph, prepared, &edited, |_| {})?;
     let output_repository =
         crate::open_repository(&repository_path, bare, false).context("could not reopen repository after splitting")?;
     let selected = outcome.selected.context("splitting did not produce a selection")?;

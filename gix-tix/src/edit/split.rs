@@ -74,7 +74,7 @@ pub(crate) fn apply(
     prepared: Prepared,
     edited: &[u8],
 ) -> Result<ObjectId> {
-    apply_reporting(repo, graph, prepared, edited)?
+    apply_reporting(repo, graph, prepared, edited, |_| {})?
         .selected
         .context("splitting HEAD did not produce a selection")
 }
@@ -84,6 +84,7 @@ pub(crate) fn apply_reporting(
     graph: &crate::history::HistoryGraph,
     mut prepared: Prepared,
     edited: &[u8],
+    report: impl FnMut(rebase::Progress),
 ) -> Result<rebase::Outcome> {
     let repository_path = repo.git_dir().to_owned();
     let bare = repo.is_bare();
@@ -91,7 +92,7 @@ pub(crate) fn apply_reporting(
         .set_object_memory(std::mem::take(&mut prepared.create.objects));
     let (mut upper, enrichment) = create::commit_from_edit(&prepared.create, edited)?;
     upper.tree = prepared.tree;
-    let mut outcome = rebase::perform(
+    let mut outcome = rebase::perform_with_progress(
         &repo,
         graph,
         rebase::Edit::Split {
@@ -101,6 +102,7 @@ pub(crate) fn apply_reporting(
         },
         rebase::Signature::InvalidateExisting,
         rebase::Tree::LeaveAsIsAndMark,
+        report,
     )?
     .complete()?;
     let id = outcome.selected.context("splitting HEAD did not produce a selection")?;
