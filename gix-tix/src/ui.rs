@@ -435,11 +435,12 @@ pub(crate) fn draw_with_worktree(
                     && !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
             }),
     );
+    let popup_rows = usize::from(app.actions_expanded) + 1;
     let mut prefix_popup_allowed = active_prefix_popup_anchor(app, decorations)
-        .is_some_and(|anchor| prefix_popup_can_render(frame.area(), footer, anchor));
+        .is_some_and(|anchor| prefix_popup_can_render(frame.area(), footer, anchor, popup_rows));
     if prefix_popup_allowed {
-        let popup_y = footer.y - 1;
-        let shifted_y = |area: Rect| area.y.saturating_sub(1).max(full_body.y);
+        let popup_y = footer.y - popup_rows as u16;
+        let shifted_y = |area: Rect| area.y.saturating_sub(popup_rows as u16).max(full_body.y);
         prefix_popup_allowed = changes_panes.iter().all(|pane| popup_y > shifted_y(pane.outer))
             && commit_pane.as_ref().is_none_or(|(outer, _)| popup_y > outer.y)
             && notice_area.is_none_or(|area| popup_y.saturating_sub(shifted_y(area)) >= area.height);
@@ -1075,13 +1076,14 @@ pub(crate) fn draw_with_worktree(
     };
     let mut footer_spans = vec![Span::raw(status)];
     let mut time_travel = None;
-    let mut commit_prefix_spans = Vec::new();
-    let mut commit_popup = None;
     let mut actions_prefix_spans = Vec::new();
     let mut actions_popup = None;
     if !selected_segment && (app.changes_focus != Some(ChangePane::Worktree) || app.can_amend()) {
         time_travel = time_travel_label(app, decorations);
-        if app.commit_expanded {
+        actions_prefix_spans.push(Span::raw(" · "));
+        actions_prefix_spans.push(Span::styled("a", Style::default().add_modifier(Modifier::UNDERLINED)));
+        actions_prefix_spans.push(Span::raw("ctions"));
+        if app.actions_expanded {
             let mut options = Vec::new();
             if app.changes_focus.is_none() && app.reword_shortcut_visible() {
                 options.push(("reword", 'o'));
@@ -1090,13 +1092,13 @@ pub(crate) fn draw_with_worktree(
                 options.push(("new", 'w'));
             }
             if app.changes_focus.is_none() && app.can_create_empty_commit() {
-                options.push(("new-empty", 'm'));
+                options.push(("new-empty", 'n'));
             }
             if app.can_amend() {
                 options.push(("amend", 'e'));
             }
             if app.can_spill() {
-                options.push(("spill", 's'));
+                options.push(("spill", 'l'));
             }
             if app.can_split() {
                 options.push(("split", 'p'));
@@ -1125,44 +1127,31 @@ pub(crate) fn draw_with_worktree(
                     items.extend(shortcut(label, key, true));
                 }
             }
-            commit_popup = Some(items);
-        }
-        commit_prefix_spans.push(Span::raw(" · "));
-        commit_prefix_spans.push(Span::styled("c", Style::default().add_modifier(Modifier::UNDERLINED)));
-        commit_prefix_spans.push(Span::raw("ommit"));
-        if app.commit_expanded {
-            emphasize_prefix(&mut commit_prefix_spans[1..]);
-        }
-    }
-    if !selected_segment && app.changes_focus.is_none() {
-        actions_prefix_spans.push(Span::raw(" · "));
-        actions_prefix_spans.push(Span::styled("a", Style::default().add_modifier(Modifier::UNDERLINED)));
-        actions_prefix_spans.push(Span::raw("ctions"));
-        if app.actions_expanded {
+            let commit_items = items;
             let mut options = Vec::new();
-            if app.can_stash() {
+            if app.changes_focus.is_none() && app.can_stash() {
                 options.push(("z stash", 'z'));
-            } else if app.can_unstash() {
+            } else if app.changes_focus.is_none() && app.can_unstash() {
                 options.push(("z unstash", 'z'));
             }
-            if app.can_rebase() {
+            if app.changes_focus.is_none() && app.can_rebase() {
                 options.push(("rebase", 'b'));
             }
-            if app.can_rebase_update() {
+            if app.changes_focus.is_none() && app.can_rebase_update() {
                 options.push(("rebase-update", 'u'));
             }
-            if app.can_finish_review() {
+            if app.changes_focus.is_none() && app.can_finish_review() {
                 options.push(("finish-review", 'r'));
-            } else if app.can_review() {
+            } else if app.changes_focus.is_none() && app.can_review() {
                 options.push(("review", 'r'));
             }
-            if app.can_squash() {
+            if app.changes_focus.is_none() && app.can_squash() {
                 options.push(("squash", 's'));
             }
-            if app.can_copy_insert() {
+            if app.changes_focus.is_none() && app.can_copy_insert() {
                 options.push(("copy-insert", 'y'));
             }
-            if app.can_move_insert() {
+            if app.changes_focus.is_none() && app.can_move_insert() {
                 options.push(("move-insert", 'm'));
             }
             let mut items = Vec::new();
@@ -1172,20 +1161,20 @@ pub(crate) fn draw_with_worktree(
                 }
                 items.extend(shortcut(label, key, true));
             }
-            if app.can_stack_insert() {
+            if app.changes_focus.is_none() && app.can_stack_insert() {
                 if !items.is_empty() {
                     items.push(Span::raw(" · "));
                 }
                 items.push(Span::raw("stack-inser"));
                 items.push(Span::styled("t", Style::default().add_modifier(Modifier::UNDERLINED)));
             }
-            if app.can_fork_commit() {
+            if app.changes_focus.is_none() && app.can_fork_commit() {
                 if !items.is_empty() {
                     items.push(Span::raw(" · "));
                 }
                 items.extend(shortcut("fork", 'f', true));
             }
-            if app.can_attach() {
+            if app.changes_focus.is_none() && app.can_attach() {
                 if !items.is_empty() {
                     items.push(Span::raw(" · "));
                 }
@@ -1194,7 +1183,7 @@ pub(crate) fn draw_with_worktree(
             if items.is_empty() {
                 items.push(Span::raw("no actions"));
             }
-            actions_popup = Some(items);
+            actions_popup = Some(vec![commit_items, items]);
             emphasize_prefix(&mut actions_prefix_spans[1..]);
         }
     }
@@ -1258,16 +1247,11 @@ pub(crate) fn draw_with_worktree(
     if selected_segment {
         ordered.push(Span::raw(" · <enter> expand"));
     }
-    let mut prefix_popup = None;
+    let mut prefix_popup: Option<(usize, Vec<Vec<Span<'static>>>)> = None;
     let view_anchor = spans_width(&ordered).saturating_add(view_prefix_spans[0].width());
     ordered.append(&mut view_prefix_spans);
     if let Some(items) = view_popup {
-        prefix_popup = Some((view_anchor, items));
-    }
-    let commit_anchor = spans_width(&ordered).saturating_add(commit_prefix_spans.first().map_or(0, Span::width));
-    ordered.append(&mut commit_prefix_spans);
-    if let Some(items) = commit_popup {
-        prefix_popup = Some((commit_anchor, items));
+        prefix_popup = Some((view_anchor, vec![items]));
     }
     let actions_anchor = spans_width(&ordered).saturating_add(actions_prefix_spans.first().map_or(0, Span::width));
     ordered.append(&mut actions_prefix_spans);
@@ -1295,7 +1279,7 @@ pub(crate) fn draw_with_worktree(
                 items.push(Span::raw("no actions"));
             }
             emphasize_prefix(&mut ordered[enrich_prefix_start..]);
-            prefix_popup = Some((enrich_anchor, items));
+            prefix_popup = Some((enrich_anchor, vec![items]));
         }
     }
     if let Some(label) = time_travel {
@@ -1366,7 +1350,7 @@ pub(crate) fn draw_with_worktree(
             }));
         }
         emphasize_prefix(&mut ordered[information_prefix_start..]);
-        prefix_popup = Some((information_anchor, items));
+        prefix_popup = Some((information_anchor, vec![items]));
     }
     ordered.append(&mut footer_spans);
     footer_spans = ordered;
@@ -1379,8 +1363,10 @@ pub(crate) fn draw_with_worktree(
     }
     if app.unseen_filesystem_redraw {
         footer_spans = notification_discs(footer_spans);
-        if let Some((_, items)) = prefix_popup.as_mut() {
-            *items = notification_discs(std::mem::take(items));
+        if let Some((_, rows)) = prefix_popup.as_mut() {
+            for items in rows {
+                *items = notification_discs(std::mem::take(items));
+            }
         }
     }
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
@@ -1468,16 +1454,8 @@ fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<us
     width += "view".len();
     let mut active = app.history_display_expanded.then_some(view);
 
-    let commit_visible = !selected_segment && (app.changes_focus != Some(ChangePane::Worktree) || app.can_amend());
-    if commit_visible {
-        width += 3;
-        let commit = width;
-        width += "commit".len();
-        if app.commit_expanded {
-            active = Some(commit);
-        }
-    }
-    if !selected_segment && app.changes_focus.is_none() {
+    let actions_visible = !selected_segment && (app.changes_focus != Some(ChangePane::Worktree) || app.can_amend());
+    if actions_visible {
         width += 3;
         let actions = width;
         width += "actions".len();
@@ -1493,7 +1471,7 @@ fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<us
             active = Some(enrich);
         }
     }
-    if commit_visible && let Some(label) = time_travel_label(app, decorations) {
+    if actions_visible && let Some(label) = time_travel_label(app, decorations) {
         width += 3 + label.len();
     }
     if app.can_cycle_duplicate() {
@@ -2244,26 +2222,37 @@ fn render_prefix_popup(
     frame: &mut Frame<'_>,
     footer: Rect,
     anchor: usize,
-    mut items: Vec<Span<'static>>,
+    mut rows: Vec<Vec<Span<'static>>>,
 ) -> Option<Rect> {
-    if !prefix_popup_can_render(frame.area(), footer, anchor) {
+    let height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
+    if !prefix_popup_can_render(frame.area(), footer, anchor, rows.len()) {
         return None;
     }
-    items.insert(0, Span::raw(" "));
-    items.push(Span::raw(" "));
-    let width = u16::try_from(spans_width(&items)).unwrap_or(u16::MAX).min(footer.width);
+    let mut width = 0;
+    for items in &mut rows {
+        items.insert(0, Span::raw(" "));
+        items.push(Span::raw(" "));
+        width = width.max(spans_width(items));
+    }
+    let width = u16::try_from(width).unwrap_or(u16::MAX).min(footer.width);
     let anchor = footer.x.saturating_add(u16::try_from(anchor).unwrap_or(u16::MAX));
-    let area = Rect::new(anchor.min(footer.right().saturating_sub(width)), footer.y - 1, width, 1);
+    let area = Rect::new(
+        anchor.min(footer.right().saturating_sub(width)),
+        footer.y - height,
+        width,
+        height,
+    );
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(Line::from(items)).style(Style::default().add_modifier(Modifier::REVERSED)),
+        Paragraph::new(rows.into_iter().map(Line::from).collect::<Vec<_>>())
+            .style(Style::default().add_modifier(Modifier::REVERSED)),
         area,
     );
     Some(area)
 }
 
-fn prefix_popup_can_render(frame: Rect, footer: Rect, anchor: usize) -> bool {
-    footer.width > 0 && footer.y > frame.y && anchor < usize::from(footer.width)
+fn prefix_popup_can_render(frame: Rect, footer: Rect, anchor: usize, rows: usize) -> bool {
+    footer.width > 0 && usize::from(footer.y.saturating_sub(frame.y)) >= rows && anchor < usize::from(footer.width)
 }
 
 fn notification_discs(spans: Vec<Span<'_>>) -> Vec<Span<'_>> {
@@ -2873,7 +2862,7 @@ mod tests {
                 frame,
                 Rect::new(0, 1, 20, 1),
                 12,
-                vec![Span::raw("abcdefghijklmnopqrstuvwxyz")],
+                vec![vec![Span::raw("abcdefghijklmnopqrstuvwxyz")]],
             );
         })?;
 
@@ -3290,8 +3279,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let computing = rendered_line(&terminal, 1);
         assert!(
-            computing.contains("1 commits · view · commit · actions · enrich · copy")
-                && computing.contains("computing"),
+            computing.contains("1 commits · view · actions · enrich · copy") && computing.contains("computing"),
             "expired deferral reveals computation progress"
         );
         assert_ne!(computing, completed, "visible progress changes the footer");
@@ -3747,7 +3735,7 @@ mod tests {
         terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None, None))?;
 
         assert!(
-            rendered_line(&terminal, 2).contains(" · commit · actions ·"),
+            rendered_line(&terminal, 2).contains(" · actions ·"),
             "the commit and actions prefixes remain available beside the view group"
         );
 
@@ -3932,7 +3920,7 @@ mod tests {
             "todo commit metadata uses the author date and excludes separately represented refs"
         );
 
-        let footer_text = "#0 · view · commit · actions · enrich · copy · refs · ? · quit";
+        let footer_text = "#0 · view · actions · enrich · copy · refs · ? · quit";
         let selected_line = "      > @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..selected_line.chars().count() as u16 {
@@ -3958,7 +3946,6 @@ mod tests {
             .set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         for (label, key) in [
             ("view", 'v'),
-            ("commit", 'c'),
             ("actions", 'a'),
             ("enrich", 'n'),
             ("copy", 'y'),
@@ -4209,8 +4196,7 @@ mod tests {
                 }],
             ),
         ]);
-        let mut terminal = Terminal::new(TestBackend::new(140, 3))?;
-        app.commit_expanded = true;
+        let mut terminal = Terminal::new(TestBackend::new(140, 4))?;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let row = rendered_row(&terminal);
         assert!(row.contains("📌"), "a pinned commit has an obvious pin marker: {row:?}");
@@ -4246,18 +4232,20 @@ mod tests {
             row.contains("📌") && row.contains("🎁"),
             "hiding refs retains resource markers: {row:?}"
         );
+        app.actions_expanded = true;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(
             rendered_line(&terminal, 1).contains(" reword · new · new-empty · d forget · unpin "),
             "the commit actions float above their prefix"
         );
         assert!(
-            rendered_line(&terminal, 2).contains("commit · actions · enrich · @ return · copy"),
-            "time travel stays outside the active commit prefix"
+            rendered_line(&terminal, 3).contains("actions · enrich · @ return · copy"),
+            "time travel stays outside the active actions prefix"
         );
 
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
-        assert!(rendered_line(&terminal, 2).contains(" · @ travel · copy"));
+        assert!(rendered_line(&terminal, 3).contains(" · @ travel · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
 
         app.ref_mode = RefMode::Default;
@@ -4275,7 +4263,7 @@ mod tests {
             "the remembered branch has its dedicated marker: {row:?}"
         );
         assert!(!row.contains("📌"), "the HEAD pin is not an ordinary pin: {row:?}");
-        assert!(rendered_line(&terminal, 2).contains(" · @ travel · copy"));
+        assert!(rendered_line(&terminal, 3).contains(" · @ travel · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
 
         decorations.remove(&head);
@@ -4293,7 +4281,7 @@ mod tests {
             ],
         );
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
-        let footer = rendered_line(&terminal, 2);
+        let footer = rendered_line(&terminal, 3);
         assert!(
             !footer.contains("@ travel") && !footer.contains("@ return"),
             "time travel is hidden at HEAD: {footer}"
@@ -4307,7 +4295,7 @@ mod tests {
         app.changes_mode = None;
         app.configure_hidden_filter(true);
         app.history_display_expanded = true;
-        let mut terminal = Terminal::new(TestBackend::new(240, 2))?;
+        let mut terminal = Terminal::new(TestBackend::new(240, 3))?;
 
         terminal.draw(|frame| {
             super::draw_with_worktree(
@@ -4321,11 +4309,11 @@ mod tests {
             );
         })?;
 
-        let footer = rendered_line(&terminal, 1);
-        let compact = "0 commits · view · commit · actions · enrich · copy · refs · ? · Esc cancel · quit";
+        let footer = rendered_line(&terminal, 2);
+        let compact = "0 commits · view · actions · enrich · copy · refs · ? · Esc cancel · quit";
         assert_eq!(footer.trim_end(), compact, "the footer keeps every prefix compact");
         let view = "author date · ids · emails · names · mailmap · trailers · refs · show hidden";
-        let popup = rendered_line(&terminal, 0);
+        let popup = rendered_line(&terminal, 1);
         let view_x = footer[..footer.find("view").expect("the view prefix is visible")]
             .chars()
             .count() as u16;
@@ -4335,46 +4323,40 @@ mod tests {
             - 1;
         assert_eq!(popup_x, view_x, "the popout is connected to its footer prefix");
         assert!(
-            terminal.backend().buffer()[(view_x, 1)]
+            terminal.backend().buffer()[(view_x, 2)]
                 .modifier
                 .contains(Modifier::UNDERLINED),
             "the prefix key is underlined in its verb"
         );
-        assert_reversed_group(&terminal, 1, "view");
-        assert_reversed_group(&terminal, 0, &format!(" {view} "));
+        assert_reversed_group(&terminal, 2, "view");
+        assert_reversed_group(&terminal, 1, &format!(" {view} "));
 
         app.history_display_expanded = false;
-        app.commit_expanded = true;
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert_eq!(rendered_line(&terminal, 1).trim_end(), compact);
-        assert!(rendered_line(&terminal, 0).contains(" no actions "));
-        assert_reversed_group(&terminal, 1, "commit");
-        assert_reversed_group(&terminal, 0, " no actions ");
-
-        app.commit_expanded = false;
         app.actions_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert_eq!(rendered_line(&terminal, 1).trim_end(), compact);
+        assert_eq!(rendered_line(&terminal, 2).trim_end(), compact);
         assert!(rendered_line(&terminal, 0).contains(" no actions "));
-        assert_reversed_group(&terminal, 1, "actions");
+        assert!(rendered_line(&terminal, 1).contains(" no actions "));
+        assert_reversed_group(&terminal, 2, "actions");
         assert_reversed_group(&terminal, 0, " no actions ");
+        assert_reversed_group(&terminal, 1, " no actions ");
 
         app.actions_expanded = false;
         app.enrich_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert_eq!(rendered_line(&terminal, 1).trim_end(), compact);
-        assert!(rendered_line(&terminal, 0).contains(" no actions "));
-        assert_reversed_group(&terminal, 1, "enrich");
-        assert_reversed_group(&terminal, 0, " no actions ");
+        assert_eq!(rendered_line(&terminal, 2).trim_end(), compact);
+        assert!(rendered_line(&terminal, 1).contains(" no actions "));
+        assert_reversed_group(&terminal, 2, "enrich");
+        assert_reversed_group(&terminal, 1, " no actions ");
 
         app.enrich_expanded = false;
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert_eq!(rendered_line(&terminal, 1).trim_end(), compact);
+        assert_eq!(rendered_line(&terminal, 2).trim_end(), compact);
         let information = "[ title · ref-tree · message · changes · ↑↓/jk move · h/l pan · Shift+directions topo · wheel/page pan · Shift+wheel/page move · <enter> diff";
-        assert!(rendered_line(&terminal, 0).contains(information));
-        assert_reversed_group(&terminal, 1, "?");
-        assert_reversed_group(&terminal, 0, &format!(" {information} "));
+        assert!(rendered_line(&terminal, 1).contains(information));
+        assert_reversed_group(&terminal, 2, "?");
+        assert_reversed_group(&terminal, 1, &format!(" {information} "));
         Ok(())
     }
 
@@ -4460,7 +4442,7 @@ mod tests {
         app.set_worktree_head(Some(id), false);
         complete(&mut app);
         app.changes_focus = Some(ChangePane::Tree);
-        app.commit_expanded = true;
+        app.actions_expanded = true;
         let changes = Changes {
             paths: vec![crate::app::PathChange {
                 kind: ChangeKind::Added,
@@ -4489,7 +4471,7 @@ mod tests {
                 Some(&changes),
             );
         })?;
-        let popup = rendered_line(&terminal, 6);
+        let popup = rendered_line(&terminal, 5);
         assert!(
             popup.contains(" spill "),
             "tree focus keeps the scoped edit visible: {popup}"
@@ -4509,7 +4491,7 @@ mod tests {
         };
         app.set_head_edit_availability(true, false, false, true, false, false, false);
         assert!(app.can_amend(), "the focused worktree path is amendable");
-        assert!(app.commit_expanded, "the commit prefix remains expanded");
+        assert!(app.actions_expanded, "the actions prefix remains expanded");
         terminal.draw(|frame| {
             super::draw_with_worktree(
                 frame,
@@ -4522,8 +4504,8 @@ mod tests {
             );
         })?;
         assert!(app.can_amend(), "drawing retains scoped amend availability");
-        assert!(app.commit_expanded, "drawing retains the expanded commit prefix");
-        let popup = rendered_line(&terminal, 6);
+        assert!(app.actions_expanded, "drawing retains the expanded actions prefix");
+        let popup = rendered_line(&terminal, 5);
         assert!(
             popup.contains(" amend "),
             "worktree focus keeps the scoped edit visible: {popup}"
@@ -4531,7 +4513,6 @@ mod tests {
         assert!(!popup.contains("spill"), "worktree paths cannot be spilled");
 
         app.changes_focus = None;
-        app.update(Action::ToggleActions);
         terminal.draw(|frame| {
             super::draw_with_worktree(
                 frame,
@@ -4574,7 +4555,6 @@ mod tests {
             .expect("HEAD has decorations")
             .retain(|decoration| decoration.kind != DecorationKind::Stash);
         app.changes_focus = Some(ChangePane::Worktree);
-        app.update(Action::ToggleCommitGroup);
 
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
         terminal.draw(|frame| {
@@ -4589,7 +4569,7 @@ mod tests {
             );
         })?;
         assert!(
-            !rendered_line(&terminal, 6).contains("amend"),
+            !rendered_line(&terminal, 5).contains("amend"),
             "a review cannot amend an unstaged selected path"
         );
         worktree.paths[0].group = ChangeGroup::Staged;
@@ -4605,7 +4585,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 6).contains(" amend "),
+            rendered_line(&terminal, 5).contains(" amend "),
             "a review may amend its selected staged path"
         );
         Ok(())
@@ -6917,20 +6897,15 @@ mod tests {
             rendered_line(&narrow, 1).ends_with(" ⇣2 "),
             "the terminal edge pushes the marker over clipped title text"
         );
-        app.commit_expanded = true;
+        app.actions_expanded = true;
         let mut commit = Terminal::new(TestBackend::new(120, 3))?;
         commit.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(rendered_line(&commit, 1).contains(" pin "));
-        assert!(!rendered_line(&commit, 1).contains("rebase"));
-        app.commit_expanded = false;
-        app.actions_expanded = true;
-        let mut actions = Terminal::new(TestBackend::new(120, 3))?;
-        actions.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(rendered_line(&commit, 0).contains(" pin "));
         assert!(
-            rendered_line(&actions, 1).contains(" rebase · rebase-update ")
-                && rendered_line(&actions, 2).contains("commit · actions"),
+            rendered_line(&commit, 1).contains(" rebase · rebase-update ")
+                && rendered_line(&commit, 2).contains("actions"),
             "the selected hidden base offers rebasing from actions: {:?}",
-            rendered_line(&actions, 1)
+            rendered_line(&commit, 1)
         );
         Ok(())
     }
