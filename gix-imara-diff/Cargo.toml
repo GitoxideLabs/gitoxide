@@ -27,7 +27,7 @@ unified_diff = []
 arbitrary = { version = "1.4.2", features = ["derive"] }
 gix-imara-diff = { path = ".", features = ["unified_diff" ] }
 gix-hash = { version = "^0.26.0", path = "../gix-hash", features = ["sha1"] }
-gix-object = { version = "^0.63.0", path = "../gix-object", features = ["sha1"] }
+gix-object = { version = "^0.64.0", path = "../gix-object", features = ["sha1"] }
 cov-mark = "2.1.0"
 expect-test = "1.4.0"
 

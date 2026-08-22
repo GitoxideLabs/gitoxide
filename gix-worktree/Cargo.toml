@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-worktree"
-version = "0.55.0"
+version = "0.56.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project for shared worktree related types and utilities."
@@ -28,16 +28,16 @@ serde = ["dep:serde", "bstr/serde", "gix-index/serde", "gix-hash/serde", "gix-ob
 parallel = ["gix-features/parallel", "gix-attributes?/parallel"]
 
 [dependencies]
-gix-index = { version = "^0.54.0", path = "../gix-index" }
-gix-fs = { version = "^0.22.0", path = "../gix-fs" }
-gix-hash = { version = "^0.26.0", path = "../gix-hash" }
-gix-object = { version = "^0.63.0", path = "../gix-object" }
-gix-glob = { version = "^0.27.0", path = "../gix-glob" }
-gix-path = { version = "^0.12.4", path = "../gix-path" }
-gix-attributes = { version = "^0.34.0", path = "../gix-attributes", optional = true }
-gix-validate = { version = "^0.11.3", path = "../gix-validate", optional = true }
-gix-ignore = { version = "^0.22.0", path = "../gix-ignore" }
-gix-features = { version = "^0.49.0", path = "../gix-features", optional = true }
+gix-index = { version = "^0.55.0", path = "../gix-index" }
+gix-fs = { version = "^0.22.1", path = "../gix-fs" }
+gix-hash = { version = "^0.26.1", path = "../gix-hash" }
+gix-object = { version = "^0.64.0", path = "../gix-object" }
+gix-glob = { version = "^0.27.1", path = "../gix-glob" }
+gix-path = { version = "^0.12.5", path = "../gix-path" }
+gix-attributes = { version = "^0.35.0", path = "../gix-attributes", optional = true }
+gix-validate = { version = "^0.11.4", path = "../gix-validate", optional = true }
+gix-ignore = { version = "^0.22.1", path = "../gix-ignore" }
+gix-features = { version = "^0.49.1", path = "../gix-features", optional = true }
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 bstr = { version = "1.12.0", default-features = false }
