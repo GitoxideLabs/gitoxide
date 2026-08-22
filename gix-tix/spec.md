@@ -62,7 +62,7 @@ without trading responsiveness for metadata that is not visible.
 - `tix new [--index | --worktree | --worktree-untracked] [--allow-empty] [--todo]
   [--author "Name <email>"] [-m MESSAGE ... | -f FILE]` creates a child of `HEAD`, or a root commit for
   unborn `HEAD`, with the same signing, editor, enrichment, lazy-rebase, and
-  worktree-safety rules as `c w`. By default a changed index wins and tracked
+  worktree-safety rules as `a w`. By default a changed index wins and tracked
   worktree changes are used only when the index is unchanged. `--index` uses
   only the index delta; `--worktree` applies only unstaged tracked-worktree
   changes to the `HEAD` tree and omits staged-only changes. `--worktree-untracked`
@@ -465,8 +465,9 @@ The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. The `?` group similarly remains open
 for signature verification, alignment, message, and changes actions. The
 footer keeps every prefix compact. Opening one reverses its label and shows its available
-items in a reversed, single-row popout immediately above and connected to that
-label; the `?` popout also contains its pane-switching and navigation hints through
+items in a reversed popout immediately above and connected to that label. The
+actions popout has commit operations on its first row and general actions on its
+second; other groups use one row. The `?` popout also contains its pane-switching and navigation hints through
 `<enter> diff`. The popout has horizontal padding, shifts left or clips at the
 terminal edge without wrapping, and is omitted when its label, the row above the
 footer, or space needed to preserve a protected message is not visible. It does
@@ -475,7 +476,7 @@ but message and changes panes, their status lines, and transient notices shift
 upward to reserve its line and are never occluded. Closing behavior and shortcut
 availability are unchanged, and direct status actions and quit remain in the
 footer. The history status starts with the history position, then the
-`v`, `c`, and `a` prefixes when they are addressable. Remaining history-level
+`v` and `a` prefixes when they are addressable. Remaining history-level
 actions end at the information prefix while it is closed. An available direct
 time-travel action follows the shortcut groups, and duplicate cycling follows it when
 the selected commit has duplicates, and copy follows these actions; the reference toggle immediately precedes
@@ -535,7 +536,7 @@ The Enter key is written as `<enter>` throughout.
   style. It has no `📌`, is never selected as a return destination, and does not
   offer `unpin`; its branch keeps normal tracking-relation behavior.
 - The edit menu offers `pin` on an unpinned row and `unpin` on a pinned row,
-  both on `c i`. Pin creates or reuses a direct current-worktree pin for the
+  both on `a i`. Pin creates or reuses a direct current-worktree pin for the
   selected commit. Unpin atomically removes every non-HEAD pin for that commit;
   both operations retain that row's selection.
 - `tix pin <REVSPEC>...` resolves every argument before writing and deduplicates
@@ -611,7 +612,7 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Tree and worktree changes
 
-- Changes start enabled as `Tree + Worktree`. `c` cycles `Tree + Worktree` →
+- Changes start enabled as `Tree + Worktree`. `? e` cycles `Tree + Worktree` →
   `Tree` → hidden. Bare repositories omit the worktree mode.
 - Each block has a top border carrying its compact summary. Tree summaries show
   the selected short hash; worktree summaries distinguish staged and unstaged
@@ -716,12 +717,12 @@ space first; changes blocks adapt within the remaining history width.
 
 ### New commits
 
-- `c w` creates a child of the selected commit from tracked changes, or a root
+- `a w` creates a child of the selected commit from tracked changes, or a root
   commit for an unborn `HEAD`. A changed index wins; otherwise, tracked worktree
   changes are used. Untracked files never enter an implicit new commit and remain
   untracked. It is available only with a live worktree, after history completion,
   and when the selected parent has no known merge descendant.
-- `c m` creates an explicit empty commit which reuses the selected parent's tree,
+- `a n` creates an explicit empty commit which reuses the selected parent's tree,
   or the empty tree for an unborn history. Existing index and worktree state is
   preserved exactly. Both forms reject unresolved index conflicts.
 - A current worktree-changes cache controls which actions are advertised without
@@ -752,7 +753,7 @@ space first; changes blocks adapt within the remaining history width.
 
 - `a f` creates an independent child of any selected commit, including a hidden
   boundary or merge commit. It requires completed history and a live,
-  conflict-free worktree, but unlike `c w` it is not restricted by descendants
+  conflict-free worktree, but unlike `a w` it is not restricted by descendants
   because it rewrites none of them. It is unavailable for unborn history.
 - Fork preparation reuses the new-commit editor, candidate-tree, identity,
   enrichment, and signing rules. Empty-delta children are allowed so historical
@@ -766,8 +767,8 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Amend, spill, and split
 
-- `c e` amends the current worktree's `@` commit with the changed index, or
-  worktree changes when the index already matches `HEAD`. `c s` spills that
+- `a e` amends the current worktree's `@` commit with the changed index, or
+  worktree changes when the index already matches `HEAD`. `a l` spills that
   commit's tree delta into the worktree by replacing its tree with its first
   parent's tree, or the empty tree for a root commit. Clean operations are
   unavailable and report a no-op through `tix amend|spill`.
@@ -784,17 +785,17 @@ space first; changes blocks adapt within the remaining history width.
   IDs use the same seven-character display as other command results. Ref
   creations, deletions, unchanged refs, and unreferenced replayed commits add no
   mapping line.
-- With a path selected in the focused tree-changes block, the main `c` prefix
-  offers `spill` and `c s` spills only that path against the displayed parent.
+- With a path selected in the focused tree-changes block, the main `a` prefix
+  offers `spill` and `a l` spills only that path against the displayed parent.
   The CLI intentionally supports only whole-commit spilling.
-- With a path selected in the focused worktree-changes block, the main `c`
-  prefix offers `amend` and `c e` amends only that path. A staged row uses its
+- With a path selected in the focused worktree-changes block, the main `a`
+  prefix offers `amend` and `a e` amends only that path. A staged row uses its
   index version; an unstaged row uses its filtered worktree version. If both
   rows exist for one path, the selected row determines the version. Review
   commits accept only staged rows, and unresolved indexes cannot be amended.
   Unrelated staged entries retain their index state. The CLI intentionally
   supports only whole-commit amending.
-- `c p` is offered at `@` only when both staged and unstaged changes exist. It
+- `a p` is offered at `@` only when both staged and unstaged changes exist. It
   amends the unstaged changes into the source commit, then creates a new upper
   commit from the staged delta using the standard Markdown editor buffer. Both
   deltas are three-way applied in memory before the editor opens, so overlapping
@@ -1119,11 +1120,11 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Commit and action shortcuts
 
-- `c` toggles the commit shortcut group. `c o` rewords, `c w` creates a rebased
-  child, `c m` creates an empty child, `c e` amends `@`, `c s` spills `@`, `c p`
-  splits staged from unstaged changes, and `c d d` confirms forgetting a top
-  commit when each action is available.
-- `a` toggles the actions shortcut group. `a b` rebases an eligible hidden base,
+- `a` toggles a two-line shortcut group with commit operations above general
+  actions. `a o` rewords, `a w` creates a rebased child, `a n` creates an empty
+  child, `a e` amends `@`, `a l` spills `@`, `a p` splits staged from unstaged
+  changes, and `a d d` confirms forgetting a top commit when each action is
+  available. `a b` rebases an eligible hidden base,
   `a u` rebases it onto the newer hidden branch tip when available, `a r` starts
   or finishes a review, `a s` squashes the selected commit, `a z` stashes or
   restores changes at `@`, `a y` copy-inserts
@@ -1159,15 +1160,15 @@ space first; changes blocks adapt within the remaining history width.
   `<enter>` moves the complete inclusive base-through-`HEAD` stack as a unit above the selected
   target, and Escape cancels. The stack follows the same eligibility, rewrite,
   no-op, metadata, checkout, and conflict rules as move-insert.
-- `@` invokes time travel directly, outside both groups. Invoking it leaves an
-  already expanded commit group open.
-- Commit and action shortcuts keep their respective group open. Navigation or
+- `@` invokes time travel directly, outside the group. Invoking it leaves an
+  already expanded actions group open.
+- Commit and action shortcuts keep the actions group open. Navigation or
   another recognized command closes it, matching the `v` display shortcut group.
   Plain `r` does not mutate the repository, and plain `t` has no action.
-- The footer underlines `c` in `commit` and `a` in `actions`; an expanded group
-  contains only the operations available for the current selection. An empty
-  group says `no actions`.
-- The top-level `v`, `c`, `a`, `n`, and `?` keys are reserved for their groups.
+- The footer underlines `a` in `actions`; its expanded commit and action lines
+  contain only the operations available for the current selection. An empty
+  line says `no actions`.
+- The top-level `v`, `a`, `n`, and `?` keys are reserved for their groups.
   Pressing one while another group is open switches directly to that group;
   `? e` cycles the changes panes.
 - While the `v` group is open, `d`, `i`, `s`, `e`, `m`, `t`, `r`, and `h` control

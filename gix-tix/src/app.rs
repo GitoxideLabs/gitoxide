@@ -367,7 +367,6 @@ pub(crate) enum Action {
     ToggleHidden,
     ToggleHistoryDisplay,
     ToggleRefTree,
-    ToggleCommitGroup,
     ToggleActions,
     ToggleEnrich,
     ToggleTodo,
@@ -573,7 +572,6 @@ pub(crate) struct App {
     undo_position: Option<UndoPosition>,
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
-    pub(crate) commit_expanded: bool,
     pub(crate) actions_expanded: bool,
     pub(crate) enrich_expanded: bool,
     pub(crate) information_expanded: bool,
@@ -683,7 +681,6 @@ impl App {
             undo_position: None,
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
-            commit_expanded: false,
             actions_expanded: false,
             enrich_expanded: false,
             information_expanded: false,
@@ -1414,7 +1411,6 @@ impl App {
                 self.selected = None;
                 self.compressed_segment = Some(id);
                 self.pending_initial_selection = None;
-                self.commit_expanded = false;
                 self.actions_expanded = false;
                 self.enrich_expanded = false;
                 if changed {
@@ -1524,7 +1520,7 @@ impl App {
         }
         if !matches!(
             &action,
-            Action::ToggleCommitGroup
+            Action::ToggleActions
                 | Action::Reword
                 | Action::NewCommit
                 | Action::NewEmptyCommit
@@ -1534,12 +1530,6 @@ impl App {
                 | Action::Forget
                 | Action::TimeTravel
                 | Action::TogglePin
-        ) {
-            self.commit_expanded = false;
-        }
-        if !matches!(
-            &action,
-            Action::ToggleActions
                 | Action::Rebase
                 | Action::RebaseUpdate
                 | Action::Squash
@@ -1691,7 +1681,6 @@ impl App {
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
             Action::ToggleHistoryDisplay => self.history_display_expanded = !self.history_display_expanded,
-            Action::ToggleCommitGroup if !self.selected_is_segment() => self.commit_expanded = !self.commit_expanded,
             Action::ToggleActions if !self.selected_is_segment() => self.actions_expanded = !self.actions_expanded,
             Action::ToggleEnrich if !self.selected_is_segment() => self.enrich_expanded = !self.enrich_expanded,
             Action::ToggleInformation => self.information_expanded = !self.information_expanded,
@@ -5859,10 +5848,10 @@ mod tests {
         assert!(app.selected_is_segment(), "navigation stops on the upper summary");
         assert_eq!(app.selected_history_index(), Some(1));
         app.set_worktree_head_unborn(true);
-        for action in [Action::ToggleCommitGroup, Action::ToggleActions, Action::ToggleEnrich] {
+        for action in [Action::ToggleActions, Action::ToggleEnrich] {
             app.update(action);
         }
-        assert!(!app.commit_expanded && !app.actions_expanded && !app.enrich_expanded);
+        assert!(!app.actions_expanded && !app.enrich_expanded);
         assert!(
             app.update(Action::NewEmptyCommit).is_empty(),
             "a synthetic selection is not mistaken for an unborn HEAD"
@@ -6408,38 +6397,15 @@ mod tests {
     }
 
     #[test]
-    fn commit_and_actions_groups_stay_open_only_for_their_actions() {
+    fn actions_group_stays_open_only_for_its_actions() {
         let mut app = App::new(1);
 
-        app.update(Action::ToggleCommitGroup);
-        assert!(app.commit_expanded);
+        app.update(Action::ToggleActions);
+        assert!(app.actions_expanded);
         app.update(Action::Reword);
         app.update(Action::NewCommit);
         app.update(Action::Forget);
         app.update(Action::TimeTravel);
-        assert!(app.commit_expanded, "grouped commit commands keep the group open");
-
-        app.update(Action::Rebase);
-        assert!(!app.commit_expanded, "rebase now belongs to the actions group");
-
-        app.update(Action::ToggleCommitGroup);
-        app.update(Action::MoveDown);
-        assert!(!app.commit_expanded, "navigation collapses the group");
-
-        app.update(Action::ToggleCommitGroup);
-        app.update(Action::ToggleHistoryDisplay);
-        assert!(!app.commit_expanded, "opening the view group closes the commit group");
-        assert!(app.history_display_expanded);
-
-        app.update(Action::ToggleCommitGroup);
-        assert!(app.commit_expanded);
-        assert!(
-            !app.history_display_expanded,
-            "opening the commit group closes the view group"
-        );
-        app.update(Action::ToggleActions);
-        assert!(!app.commit_expanded, "opening actions closes commit");
-        assert!(app.actions_expanded);
         app.update(Action::Rebase);
         app.update(Action::RebaseUpdate);
         app.update(Action::Review);
@@ -6450,7 +6416,19 @@ mod tests {
         app.update(Action::Stash);
         app.update(Action::ForkCommit);
         app.update(Action::Attach);
-        assert!(app.actions_expanded, "grouped actions keep the group open");
+        assert!(app.actions_expanded, "all grouped actions keep the group open");
+
+        app.update(Action::MoveDown);
+        assert!(!app.actions_expanded, "navigation collapses the group");
+
+        app.update(Action::ToggleActions);
+        app.update(Action::ToggleHistoryDisplay);
+        assert!(!app.actions_expanded, "opening the view group closes actions");
+        assert!(app.history_display_expanded);
+
+        app.update(Action::ToggleActions);
+        assert!(app.actions_expanded);
+        assert!(!app.history_display_expanded, "opening actions closes the view group");
         app.update(Action::ToggleActions);
         assert!(!app.actions_expanded, "the prefix key toggles the group");
     }
@@ -6488,8 +6466,8 @@ mod tests {
         app.update(Action::MoveDown);
         assert!(!app.enrich_expanded, "navigation closes enrich");
         app.update(Action::ToggleEnrich);
-        app.update(Action::ToggleCommitGroup);
-        assert!(!app.enrich_expanded, "opening commit closes enrich");
+        app.update(Action::ToggleActions);
+        assert!(!app.enrich_expanded, "opening actions closes enrich");
 
         app.hidden_rows.insert(id(1));
         app.update(Action::ToggleEnrich);
@@ -6535,8 +6513,8 @@ mod tests {
         assert!(!app.information_expanded, "opening view closes information");
         app.update(Action::ToggleInformation);
         assert!(!app.history_display_expanded, "opening information closes view");
-        app.update(Action::ToggleCommitGroup);
-        assert!(!app.information_expanded, "opening commit closes information");
+        app.update(Action::ToggleActions);
+        assert!(!app.information_expanded, "opening actions closes information");
     }
 
     #[test]
