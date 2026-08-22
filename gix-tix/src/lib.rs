@@ -37,9 +37,9 @@ use crossterm::{
     clipboard::CopyToClipboard,
     cursor,
     event::{
-        self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event as TerminalEvent,
-        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
+        EnableMouseCapture, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+        KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     style::ResetColor,
@@ -846,7 +846,7 @@ fn validate_hidden_revisions(
 }
 
 fn enable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
-    execute!(backend, EnableFocusChange, EnableMouseCapture)?;
+    execute!(backend, EnableFocusChange, EnableMouseCapture, EnableBracketedPaste)?;
     if enhanced_keyboard {
         execute!(backend, PushKeyboardEnhancementFlags(keyboard_enhancement_flags()))?;
     }
@@ -863,7 +863,7 @@ fn disable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keybo
     if enhanced_keyboard {
         execute!(backend, PopKeyboardEnhancementFlags)?;
     }
-    execute!(backend, DisableMouseCapture, DisableFocusChange)
+    execute!(backend, DisableBracketedPaste, DisableMouseCapture, DisableFocusChange)
 }
 
 fn is_key_press(event: &TerminalEvent) -> bool {
@@ -1763,6 +1763,12 @@ fn event_loop(
                     urgent = true;
                     continue;
                 }
+                TerminalEvent::Paste(_) => {
+                    ref_tree.leave_attention("commit paste is available only in history");
+                    dirty = true;
+                    urgent = true;
+                    continue;
+                }
                 _ => {}
             }
         }
@@ -1801,6 +1807,27 @@ fn event_loop(
                 let repeats_history = app.changes_focus.is_none() && repeats_viewport(&action);
                 (Some(action), repeats_history, true, true)
             }
+            TerminalEvent::Paste(pasted) => {
+                let action = (|| {
+                    anyhow::ensure!(!repository_is_bare, "copy-insert requires a worktree");
+                    let target = app
+                        .paste_insert_target()
+                        .context("copy-insert paste requires an editable history selection")?;
+                    let repository = open_repository(&repository_path, repository_is_bare, false)
+                        .context("could not open repository for pasted commit")?;
+                    let source = resolve_pasted_commit(&repository, &pasted)?;
+                    Ok::<_, anyhow::Error>(Action::PasteInsert { source, target })
+                })();
+                match action {
+                    Ok(action) => (Some(action), false, false, false),
+                    Err(err) => {
+                        app.leave_attention(format!("paste: {err:#}"));
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
+                }
+            }
             TerminalEvent::FocusLost => {
                 focused = false;
                 app.changes_suppressed = false;
@@ -1822,7 +1849,6 @@ fn event_loop(
                 urgent = true;
                 continue;
             }
-            _ => continue,
         };
         if !focused {
             continue;
@@ -3011,21 +3037,37 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("squash: {err:#}")),
                     }
                 }
-                Effect::Insert {
-                    source,
-                    base,
-                    target,
-                    copy,
-                } => {
+                effect @ (Effect::Insert { .. } | Effect::PasteInsert { .. }) => {
+                    let (source, base, target, copy, pasted) = match effect {
+                        Effect::Insert {
+                            source,
+                            base,
+                            target,
+                            copy,
+                        } => (source, base, target, copy, false),
+                        Effect::PasteInsert { source, target } => (source, source, target, true, true),
+                        _ => unreachable!("the match arm accepts only insertion effects"),
+                    };
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let result = (|| {
-                        let graph = history_graph
-                            .as_ref()
-                            .context("inserting commits requires a completed history graph")?;
                         let mut repository = open_repository(&repository_path, repository_is_bare, false)
                             .context("could not open repository to insert commits")?;
                         repository.object_cache_size(None);
+                        let loaded_graph;
+                        let graph = if pasted {
+                            let graph_revisions = [
+                                OsString::from("HEAD"),
+                                OsString::from(source.to_string()),
+                                OsString::from(target.to_string()),
+                            ];
+                            loaded_graph = edit::loaded_view_graph_with(&repository, &graph_revisions)?;
+                            &loaded_graph
+                        } else {
+                            history_graph
+                                .as_ref()
+                                .context("inserting commits requires a completed history graph")?
+                        };
                         let plan = if copy {
                             edit::rebase::copy_insert_plan(&repository, graph, source, target)?
                         } else if base == source {
@@ -6107,6 +6149,26 @@ fn action(key: KeyEvent) -> Option<Action> {
     action_with_shortcut_groups(key, false, false, false, false)
 }
 
+fn resolve_pasted_commit(repository: &gix::Repository, pasted: &str) -> Result<gix::ObjectId> {
+    let hash = pasted.trim();
+    anyhow::ensure!(
+        !hash.is_empty() && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "expected exactly one hexadecimal commit ID"
+    );
+    let object = repository
+        .rev_parse(hash.as_bytes().as_bstr())
+        .context("could not resolve pasted commit ID")?
+        .single()
+        .context("pasted commit ID is ambiguous")?
+        .object()
+        .context("could not read pasted object")?;
+    anyhow::ensure!(
+        object.kind == gix::object::Kind::Commit,
+        "pasted object is not a commit"
+    );
+    Ok(object.id)
+}
+
 fn diagnostic_key(character: char) -> KeyEvent {
     let code = match character {
         '\t' => KeyCode::Tab,
@@ -6410,6 +6472,32 @@ fn mouse_scroll_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pasted_commit_ids_are_hex_only_and_must_name_commit_objects() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let commit = repository.rev_parse_single("topic")?.detach();
+        let abbreviated = commit.to_hex_with_len(8).to_string();
+
+        assert_eq!(
+            resolve_pasted_commit(&repository, &format!("\n{abbreviated}\n"))?,
+            commit
+        );
+        assert_eq!(resolve_pasted_commit(&repository, &commit.to_string())?, commit);
+        for invalid in ["topic", "dead beef", ""] {
+            assert!(
+                resolve_pasted_commit(&repository, invalid).is_err(),
+                "{invalid:?} is not exactly one hexadecimal object ID"
+            );
+        }
+        let blob = repository.write_blob(b"not a commit")?.detach();
+        assert!(
+            resolve_pasted_commit(&repository, &blob.to_string()).is_err(),
+            "an existing non-commit object is rejected"
+        );
+        Ok(())
+    }
 
     #[test]
     fn shades_terminal_background_by_one_sixteenth() {
