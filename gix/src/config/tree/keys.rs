@@ -5,6 +5,7 @@ use std::{
 };
 
 use gix_config::KeyRef;
+use gix_error::ErrorExt;
 
 use crate::{
     bstr::{BStr, ByteSlice},
@@ -107,7 +108,7 @@ impl<T: Validate> Any<T> {
         let value = value.as_bstr();
         gix_refspec::parse(value.as_bstr(), op)
             .map(|spec| spec.to_owned())
-            .map_err(|err| config::refspec::Error::from_value(self, value.into()).with_source(err))
+            .map_err(|err| config::refspec::Error::from_value(self, value.into()).with_source(err.into_error()))
     }
 
     /// Try to interpret `value` as UTF-8 encoded string.
@@ -141,7 +142,14 @@ impl<T: Validate> Key for Any<T> {
     }
 
     fn validate(&self, value: &BStr) -> Result<(), config::tree::key::validate::Error> {
-        Ok(self.validate.validate(value)?)
+        self.validate.validate(value).map_err(|err| {
+            gix_error::Error::from_boxed(err)
+                .and_raise(gix_error::ValidationError::new_with_input(
+                    format!("Invalid value for configuration key '{}'", self.logical_name()),
+                    value,
+                ))
+                .into()
+        })
     }
 
     fn section(&self) -> &dyn Section {
@@ -258,7 +266,8 @@ mod duration {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<std::time::Duration>, config::duration::Error> {
-            let Some(value) = value.map_err(|err| config::duration::Error::from(self).with_source(err))? else {
+            let Some(value) = value.map_err(|err| config::duration::Error::from(self).with_source(err.into_error()))?
+            else {
                 return Ok(None);
             };
             Ok(Some(match value {
@@ -290,7 +299,9 @@ mod lock_timeout {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<gix_lock::acquire::Fail>, config::lock_timeout::Error> {
-            let Some(value) = value.map_err(|err| config::lock_timeout::Error::from(self).with_source(err))? else {
+            let Some(value) =
+                value.map_err(|err| config::lock_timeout::Error::from(self).with_source(err.into_error()))?
+            else {
                 return Ok(None);
             };
             Ok(Some(match value {
@@ -322,7 +333,9 @@ mod compression {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<gix_zlib::Compression>, config::key::GenericError> {
-            let Some(value) = value.map_err(|err| config::key::GenericError::from(self).with_source(err))? else {
+            let Some(value) =
+                value.map_err(|err| config::key::GenericError::from(self).with_source(err.into_error()))?
+            else {
                 return Ok(None);
             };
             match value {
@@ -378,7 +391,7 @@ mod url {
         pub fn try_into_url(&'static self, value: impl gix_utils::AsBStr) -> Result<gix_url::Url, config::url::Error> {
             let value = value.as_bstr();
             gix_url::parse(value.as_bstr())
-                .map_err(|err| config::url::Error::from_value(self, value.into()).with_source(err))
+                .map_err(|err| config::url::Error::from_value(self, value.into()).with_source(err.into_error()))
         }
     }
 }
@@ -425,7 +438,8 @@ mod workers {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<usize>, crate::config::unsigned_integer::Error> {
-            let value = value.map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err))?;
+            let value = value
+                .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
             value
                 .map(|value| {
                     value
@@ -440,7 +454,8 @@ mod workers {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<u64>, crate::config::unsigned_integer::Error> {
-            let value = value.map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err))?;
+            let value = value
+                .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
             value
                 .map(|value| {
                     value
@@ -455,7 +470,8 @@ mod workers {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<u32>, crate::config::unsigned_integer::Error> {
-            let value = value.map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err))?;
+            let value = value
+                .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
             value
                 .map(|value| {
                     value
@@ -523,7 +539,7 @@ mod boolean {
             &'static self,
             value: Result<Option<bool>, gix_config::value::Error>,
         ) -> Result<Option<bool>, config::boolean::Error> {
-            value.map_err(|err| config::boolean::Error::from(self).with_source(err))
+            value.map_err(|err| config::boolean::Error::from(self).with_source(err.into_error()))
         }
     }
 }
@@ -687,7 +703,7 @@ pub mod validate {
     pub struct PushRefSpec;
     impl Validate for PushRefSpec {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            gix_refspec::parse(value, gix_refspec::parse::Operation::Push)?;
+            gix_refspec::parse(value, gix_refspec::parse::Operation::Push).map_err(gix_error::Exn::into_error)?;
             Ok(())
         }
     }
@@ -697,7 +713,7 @@ pub mod validate {
     pub struct FetchRefSpec;
     impl Validate for FetchRefSpec {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            gix_refspec::parse(value, gix_refspec::parse::Operation::Fetch)?;
+            gix_refspec::parse(value, gix_refspec::parse::Operation::Fetch).map_err(gix_error::Exn::into_error)?;
             Ok(())
         }
     }

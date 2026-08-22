@@ -210,6 +210,7 @@ pub mod tools {
         fn assure_is_repo(dir: &OsStr) -> anyhow::Result<()> {
             let git_dir = PathBuf::from(dir).join(".git");
             let p = gix::path::realpath(&git_dir)
+                .map_err(gix::path::realpath::Error::into_error)
                 .with_context(|| format!("Could not canonicalize git repository at '{}'", git_dir.display()))?;
             if p.extension().unwrap_or_default() == "git"
                 || p.file_name().unwrap_or_default() == ".git"

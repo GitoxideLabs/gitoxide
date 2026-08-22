@@ -56,10 +56,10 @@ fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
             &mut |_, _, _, _| true,
         )
         .unwrap_err();
-        assert_eq!(
-            format!("{err:?}"),
-            r#"Callback(Custom { kind: Other, error: "custom error" })"#,
-            "custom errors made visible and not squelched"
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("The callback indicated failure") && rendered.contains("custom error"),
+            "custom errors made visible and not squelched: {rendered}"
         );
     }
     Ok(())

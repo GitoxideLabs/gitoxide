@@ -25,9 +25,9 @@ gix-sec = { version = "^0.14.2", path = "../gix-sec" }
 gix-path = { version = "^0.12.5", path = "../gix-path" }
 gix-ref = { version = "^0.67.0", path = "../gix-ref" }
 gix-fs = { version = "^0.22.1", path = "../gix-fs" }
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std", "unicode"] }
-thiserror = "2.0.18"
 
 [target.'cfg(windows)'.dependencies]
 dunce = "1.0.3"

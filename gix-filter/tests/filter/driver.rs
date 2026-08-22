@@ -126,9 +126,10 @@ pub(crate) mod apply {
             Ok(_) => panic!("expecting an error as invalid context was passed"),
             Err(err) => err,
         };
-        assert!(
-            matches!(err, gix_filter::driver::apply::Error::ProcessInvoke { .. }),
-            "{err:?}: cannot invoke if failure is requested"
+        assert_eq!(
+            err.to_string(),
+            "Failed to invoke 'smudge' command",
+            "cannot invoke if failure is requested"
         );
 
         let mut filtered = state
@@ -157,8 +158,18 @@ pub(crate) mod apply {
                 .invoke("next-smudge-aborts", &mut None.into_iter(), &mut &b""[..])?
                 .is_success()
         );
-        assert!(
-            matches!(state.apply(&driver, &mut std::io::empty(), Operation::Smudge, context_from_path("any")), Err(driver::apply::Error::ProcessStatus {status: driver::process::Status::Named(name), ..}) if name == "abort")
+        let err = state
+            .apply(
+                &driver,
+                &mut std::io::empty(),
+                Operation::Smudge,
+                context_from_path("any"),
+            )
+            .err()
+            .expect("the process reports its requested abort status");
+        assert_eq!(
+            err.to_string(),
+            "The invoked command 'smudge' in process indicated an error: Named(\"abort\")"
         );
         assert!(
             state
@@ -189,8 +200,18 @@ pub(crate) mod apply {
                 )?
                 .is_success()
         );
-        assert!(
-            matches!(state.apply(&driver, &mut std::io::empty(), Operation::Smudge, context_from_path("any")), Err(driver::apply::Error::ProcessStatus {status: driver::process::Status::Named(name), ..}) if name == "send-term-signal")
+        let err = state
+            .apply(
+                &driver,
+                &mut std::io::empty(),
+                Operation::Smudge,
+                context_from_path("any"),
+            )
+            .err()
+            .expect("the process reports its requested failure status");
+        assert_eq!(
+            err.to_string(),
+            "The invoked command 'smudge' in process indicated an error: Named(\"send-term-signal\")"
         );
         let mut filtered = state
             .apply(&driver, &mut &b"hi\n"[..], Operation::Smudge, context_from_path("any"))?

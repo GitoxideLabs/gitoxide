@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use gix_error::{CorruptionError, ErrorExt, ResultExt, ValidationError, message};
+use gix_error::{BoxedResultExt, CorruptionError, ErrorExt, ResultExt, ValidationError, message};
 use gix_hash::{ObjectId, Prefix, oid};
 use gix_hashtable::{HashMap, HashSet};
 use gix_object::{
@@ -240,7 +240,7 @@ fn write(
             .or_raise_erased(|| message("Could not add a note tree entry"))?;
     }
     editor
-        .write(|tree| objects.write(tree).map_err(gix_error::Error::from_boxed))
+        .write(|tree| objects.write(tree).or_erased())
         .or_raise_erased(|| message("Could not write the notes tree"))
 }
 

@@ -17,6 +17,27 @@ fn big_file_threshold() -> crate::Result {
     Ok(())
 }
 
+#[cfg(feature = "index")]
+#[test]
+fn invalid_stat_boolean_is_validation_error() -> crate::Result {
+    for key in [
+        "core.trustCTime",
+        "gitoxide.core.useNsec",
+        "gitoxide.core.useStdev",
+        "core.checkStat",
+    ] {
+        let mut repo = repo("with-hasconfig");
+        repo.config_snapshot_mut().set_raw_value(key, "invalid")?;
+        assert!(
+            repo.stat_options()
+                .expect_err("invalid value must fail")
+                .is_validation(),
+            "invalid {key} is classified as a validation error"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(feature = "blocking-network-client")]
 mod ssh_options {
     use std::ffi::OsStr;

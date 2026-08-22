@@ -1,6 +1,7 @@
 //! Compression state and a [`std::io::Write`] adapter for producing zlib streams.
 
 use crate::{Compression, Status};
+use gix_error::{CorruptionError, ErrorExt, message};
 use zlib_rs::DeflateError;
 
 const BUF_SIZE: usize = 4096 * 8;
@@ -65,7 +66,11 @@ impl Compress {
             FlushCompress::Full => zlib_rs::DeflateFlush::FullFlush,
             FlushCompress::Finish => zlib_rs::DeflateFlush::Finish,
         };
-        let status = self.0.compress(input, output, flush)?;
+        let status = self.0.compress(input, output, flush).map_err(|err| match err {
+            DeflateError::StreamError => message("stream error").raise_erased(),
+            DeflateError::DataError => CorruptionError::new("The input is not a valid deflate stream.").raise_erased(),
+            DeflateError::MemError => message("Not enough memory").raise_erased(),
+        })?;
         match status {
             zlib_rs::Status::Ok => Ok(Status::Ok),
             zlib_rs::Status::BufError => Ok(Status::BufError),
@@ -75,26 +80,7 @@ impl Compress {
 }
 
 /// The error produced by [`Compress::compress()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum CompressError {
-    #[error("stream error")]
-    StreamError,
-    #[error("The input is not a valid deflate stream.")]
-    DataError,
-    #[error("Not enough memory")]
-    InsufficientMemory,
-}
-
-impl From<zlib_rs::DeflateError> for CompressError {
-    fn from(value: zlib_rs::DeflateError) -> Self {
-        match value {
-            DeflateError::StreamError => CompressError::StreamError,
-            DeflateError::DataError => CompressError::DataError,
-            DeflateError::MemError => CompressError::InsufficientMemory,
-        }
-    }
-}
+pub type CompressError = gix_error::Exn;
 
 /// Values which indicate the form of flushing to be used when compressing
 /// in-memory data.
@@ -185,7 +171,7 @@ mod impls {
                 let status = self
                     .compressor
                     .compress(buf, &mut self.buf, flush)
-                    .map_err(io::Error::other)?;
+                    .map_err(|err| io::Error::other(err.into_error()))?;
 
                 let written = self.compressor.total_out() - last_total_out;
                 if written > 0 {

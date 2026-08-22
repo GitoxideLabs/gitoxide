@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use gix_error::ErrorExt;
+
 use super::{Error, Tree, traverse};
 use crate::exact_vec;
 
@@ -80,10 +82,10 @@ impl<T> Tree<T> {
         };
         let item = &mut items.last_mut().expect("last seen won't lie");
         if offset <= item.offset {
-            return Err(Error::InvariantIncreasingPackOffset {
-                last_pack_offset: item.offset,
-                pack_offset: offset,
-            });
+            return Err(Error::new(format!(
+                "Pack offsets must only increment. The previous pack offset was {}, the current one is {offset}",
+                item.offset
+            )));
         }
         item.next_offset = offset;
         Ok(())
@@ -106,9 +108,10 @@ impl<T> Tree<T> {
                 } else if let Ok(i) = self.root_items.binary_search_by_key(&parent_offset, |i| i.offset) {
                     self.root_items[i].children.push(child_index as u32);
                 } else {
-                    return Err(traverse::Error::OutOfPackRefDelta {
-                        base_pack_offset: parent_offset,
-                    });
+                    return Err(gix_error::message!(
+                        "The base at {parent_offset} was referred to by a ref-delta, but it was never added to the tree as if the pack was still thin."
+                    )
+                    .raise_erased());
                 }
             }
         }
@@ -214,16 +217,16 @@ mod tests {
         use gix_testtools::fixture_path;
 
         #[test]
-        fn v1() -> Result<(), Box<dyn std::error::Error>> {
+        fn v1() -> gix_testtools::Result {
             tree(INDEX_V1, PACK_FOR_INDEX_V1)
         }
 
         #[test]
-        fn v2() -> Result<(), Box<dyn std::error::Error>> {
+        fn v2() -> gix_testtools::Result {
             tree(SMALL_PACK_INDEX, SMALL_PACK)
         }
 
-        fn tree(index_path: &str, pack_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        fn tree(index_path: &str, pack_path: &str) -> gix_testtools::Result {
             let idx = pack::index::File::at(fixture_path(index_path), gix_hash::Kind::Sha1)?;
             crate::cache::delta::Tree::from_offsets_in_pack(
                 &fixture_path(pack_path),

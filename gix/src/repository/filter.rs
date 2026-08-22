@@ -1,24 +1,11 @@
-use crate::{Id, Repository, filter, worktree::IndexPersistedOrInMemory};
+use gix_error::ResultExt;
+
+use crate::{Repository, filter, worktree::IndexPersistedOrInMemory};
 
 ///
 pub mod pipeline {
     /// The error returned by [Repository::filter_pipeline()](super::Repository::filter_pipeline()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not obtain head commit of bare repository")]
-        HeadCommit(#[from] crate::reference::head_commit::Error),
-        #[error(transparent)]
-        DecodeCommit(#[from] gix_object::decode::Error),
-        #[error("Could not create index from tree at HEAD^{{tree}}")]
-        TreeTraverse(#[from] crate::repository::index_from_tree::Error),
-        #[error(transparent)]
-        BareAttributes(#[from] crate::config::attribute_stack::Error),
-        #[error(transparent)]
-        WorktreeIndex(#[from] crate::worktree::open_index::Error),
-        #[error(transparent)]
-        Init(#[from] crate::filter::pipeline::options::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 impl Repository {
@@ -41,22 +28,30 @@ impl Repository {
         tree_if_bare: Option<gix_hash::ObjectId>,
     ) -> Result<(filter::Pipeline<'_>, IndexPersistedOrInMemory), pipeline::Error> {
         let (cache, index) = if self.is_bare() {
-            let index = self.index_from_tree(&tree_if_bare.map_or_else(
-                || {
-                    self.head_commit()
-                        .map_err(pipeline::Error::from)
-                        .and_then(|c| c.tree_id().map(Id::detach).map_err(Into::into))
+            let tree = tree_if_bare.map_or_else(
+                || -> Result<_, gix_error::Error> {
+                    let commit = self
+                        .head_commit()
+                        .or_raise(|| gix_error::message("Could not obtain head commit of bare repository"))?;
+                    Ok(commit.tree_id().or_erased()?.detach())
                 },
                 Ok,
-            )?)?;
-            let cache = self.attributes_only(&index, gix_worktree::stack::state::attributes::Source::IdMapping)?;
+            )?;
+            let index = self
+                .index_from_tree(&tree)
+                .or_raise(|| gix_error::message("Could not create index from tree at HEAD^{tree}"))?;
+            let cache = self
+                .attributes_only(&index, gix_worktree::stack::state::attributes::Source::IdMapping)
+                .or_erased()?;
             (cache, IndexPersistedOrInMemory::InMemory(index))
         } else {
             let index = self.index_or_empty()?;
-            let cache = self.attributes_only(
-                &index,
-                gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
-            )?;
+            let cache = self
+                .attributes_only(
+                    &index,
+                    gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+                )
+                .or_erased()?;
             (cache, IndexPersistedOrInMemory::Persisted(index))
         };
         Ok((filter::Pipeline::new(self, cache.detach())?, index))

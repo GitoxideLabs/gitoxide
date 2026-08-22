@@ -1,18 +1,11 @@
 ///
 pub mod apply {
     /// Returned when failing to apply deltas.
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Corrupt delta data: {message}")]
-        Corrupt { message: &'static str },
-        #[error("Encountered unsupported command code: 0")]
-        UnsupportedCommandCode,
-        #[error("Delta copy from base: byte slices must match")]
-        DeltaCopyBaseSliceMismatch,
-        #[error("Delta copy data: byte slices must match")]
-        DeltaCopyDataSliceMismatch,
-    }
+    pub type Error = gix_error::CorruptionError;
+}
+
+fn corrupt(message: &'static str) -> apply::Error {
+    apply::Error::new(format!("Corrupt delta data: {message}"))
 }
 
 /// Given the decompressed pack delta `d`, decode a size in bytes (either the base object size or the result object size)
@@ -23,9 +16,7 @@ pub(crate) fn decode_header_size(d: &[u8]) -> Result<(u64, usize), apply::Error>
     let mut consumed = 0;
     for cmd in d.iter() {
         if shift >= u64::BITS {
-            return Err(apply::Error::Corrupt {
-                message: "delta header size uses more bits than fit into u64",
-            });
+            return Err(corrupt("delta header size uses more bits than fit into u64"));
         }
         consumed += 1;
         size |= (u64::from(*cmd) & 0x7f) << shift;
@@ -34,16 +25,14 @@ pub(crate) fn decode_header_size(d: &[u8]) -> Result<(u64, usize), apply::Error>
             return Ok((size, consumed));
         }
     }
-    Err(apply::Error::Corrupt {
-        message: "delta header size is truncated",
-    })
+    Err(corrupt("delta header size is truncated"))
 }
 
 pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(), apply::Error> {
     fn next_byte(data: &[u8], i: &mut usize) -> Result<u8, apply::Error> {
-        let byte = *data.get(*i).ok_or(apply::Error::Corrupt {
-            message: "delta copy instruction is truncated",
-        })?;
+        let byte = *data
+            .get(*i)
+            .ok_or_else(|| corrupt("delta copy instruction is truncated"))?;
         *i += 1;
         Ok(byte)
     }
@@ -79,33 +68,29 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                     size = 0x10000; // 65536
                 }
                 let ofs = ofs as usize;
-                let end = ofs.checked_add(size as usize).ok_or(apply::Error::Corrupt {
-                    message: "delta copy range overflows",
-                })?;
+                let end = ofs
+                    .checked_add(size as usize)
+                    .ok_or_else(|| corrupt("delta copy range overflows"))?;
                 std::io::Write::write(
                     &mut target,
-                    base.get(ofs..end).ok_or(apply::Error::Corrupt {
-                        message: "delta copy range exceeds base object size",
-                    })?,
+                    base.get(ofs..end)
+                        .ok_or_else(|| corrupt("delta copy range exceeds base object size"))?,
                 )
-                .map_err(|_e| apply::Error::DeltaCopyBaseSliceMismatch)?;
+                .map_err(|_| apply::Error::new("Delta copy from base: byte slices must match"))?;
             }
             0 => {
-                return Err(apply::Error::Corrupt {
-                    message: "delta command 0 is reserved and invalid",
-                });
+                return Err(corrupt("delta command 0 is reserved and invalid"));
             }
             size => {
-                let end = i.checked_add(*size as usize).ok_or(apply::Error::Corrupt {
-                    message: "delta insert range overflows",
-                })?;
+                let end = i
+                    .checked_add(*size as usize)
+                    .ok_or_else(|| corrupt("delta insert range overflows"))?;
                 std::io::Write::write(
                     &mut target,
-                    data.get(i..end).ok_or(apply::Error::Corrupt {
-                        message: "delta insert data is truncated",
-                    })?,
+                    data.get(i..end)
+                        .ok_or_else(|| corrupt("delta insert data is truncated"))?,
                 )
-                .map_err(|_e| apply::Error::DeltaCopyDataSliceMismatch)?;
+                .map_err(|_| apply::Error::new("Delta copy data: byte slices must match"))?;
                 i = end;
             }
         }
@@ -116,9 +101,7 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
         "delta instructions were not consumed completely, should be impossible"
     );
     if !target.is_empty() {
-        return Err(apply::Error::Corrupt {
-            message: "delta instructions produced fewer bytes than promised",
-        });
+        return Err(corrupt("delta instructions produced fewer bytes than promised"));
     }
 
     Ok(())

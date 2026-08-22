@@ -27,6 +27,7 @@
 use std::{borrow::Cow, path::PathBuf};
 
 use bstr::{BStr, BString};
+use gix_error::ErrorExt;
 use gix_utils::AsBStr;
 
 const HTTP_PATH_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
@@ -307,7 +308,9 @@ impl Url {
     ) -> Result<Self, parse::Error> {
         if let Scheme::Helper(name) = &scheme {
             if !parse::is_valid_remote_helper_name(name.as_bytes()) {
-                return Err(parse::Error::InvalidRemoteHelperName { name: name.clone() });
+                return Err(
+                    gix_error::ValidationError::new_with_input("Invalid remote-helper name", name.as_bytes()).raise(),
+                );
             }
         }
         let is_http = matches!(scheme, Scheme::Http | Scheme::Https);

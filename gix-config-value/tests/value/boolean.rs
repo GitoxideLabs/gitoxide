@@ -22,9 +22,9 @@ fn from_str_false() -> crate::Result {
 
 #[test]
 fn from_str_true() -> crate::Result {
-    assert_eq!(Boolean::try_from("yes").map(Into::into), Ok(true));
-    assert_eq!(Boolean::try_from("on"), Ok(Boolean(true)));
-    assert_eq!(Boolean::try_from("true"), Ok(Boolean(true)));
+    assert!(Boolean::try_from("yes")?.0);
+    assert!(Boolean::try_from("on")?.0);
+    assert!(Boolean::try_from("true")?.0);
     assert!(Boolean::try_from("1")?.0);
     assert!(Boolean::try_from("+10")?.0);
     assert!(Boolean::try_from("-1")?.0);
@@ -35,8 +35,10 @@ fn from_str_true() -> crate::Result {
 fn ignores_case() {
     // Random subset
     for word in &["no", "yes", "on", "off", "true", "false"] {
-        let first: bool = Boolean::try_from(*word).unwrap().into();
-        let second: bool = Boolean::try_from(word.to_uppercase().as_str()).unwrap().into();
+        let first: bool = Boolean::try_from(*word).expect("valid boolean").into();
+        let second: bool = Boolean::try_from(word.to_uppercase().as_str())
+            .expect("valid boolean")
+            .into();
         assert_eq!(first, second);
     }
 }

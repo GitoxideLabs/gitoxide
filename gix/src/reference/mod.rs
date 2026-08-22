@@ -1,6 +1,8 @@
 //!
 #![allow(clippy::empty_docs)]
 
+use gix_error::ResultExt;
+
 use gix_ref::file::ReferenceExt;
 
 use crate::{Blob, Commit, Id, Object, Reference, Tag, Tree};
@@ -83,7 +85,7 @@ impl<'repo> Reference<'repo> {
     /// the chain of symbolic refs and annotated tags.
     #[deprecated = "Use `peel_to_id()` instead"]
     pub fn peel_to_id_in_place(&mut self) -> Result<Id<'repo>, peel::Error> {
-        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects)?;
+        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects).or_erased()?;
         Ok(Id::from_id(oid, self.repo))
     }
 
@@ -112,7 +114,7 @@ impl<'repo> Reference<'repo> {
     /// # Ok(()) }
     /// ```
     pub fn peel_to_id(&mut self) -> Result<Id<'repo>, peel::Error> {
-        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects)?;
+        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects).or_erased()?;
         Ok(Id::from_id(oid, self.repo))
     }
 
@@ -128,7 +130,8 @@ impl<'repo> Reference<'repo> {
     ) -> Result<Id<'repo>, peel::Error> {
         let oid = self
             .inner
-            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)?;
+            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)
+            .or_erased()?;
         Ok(Id::from_id(oid, self.repo))
     }
 
@@ -143,7 +146,8 @@ impl<'repo> Reference<'repo> {
     pub fn peel_to_id_packed(&mut self, packed: Option<&gix_ref::packed::Buffer>) -> Result<Id<'repo>, peel::Error> {
         let oid = self
             .inner
-            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)?;
+            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)
+            .or_erased()?;
         Ok(Id::from_id(oid, self.repo))
     }
 
@@ -162,11 +166,7 @@ impl<'repo> Reference<'repo> {
     /// instead.
     #[doc(alias = "peel", alias = "git2")]
     pub fn peel_to_kind(&mut self, kind: gix_object::Kind) -> Result<Object<'repo>, peel::to_kind::Error> {
-        let packed = self.repo.refs.cached_packed_buffer().map_err(|err| {
-            peel::to_kind::Error::FollowToObject(gix_ref::peel::to_object::Error::Follow(
-                file::find::existing::Error::Find(file::find::Error::PackedOpen(err)),
-            ))
-        })?;
+        let packed = self.repo.refs.cached_packed_buffer().or_erased()?;
         self.peel_to_kind_packed(kind, packed.as_ref().map(|p| &***p))
     }
 
@@ -221,9 +221,10 @@ impl<'repo> Reference<'repo> {
     ) -> Result<Object<'repo>, peel::to_kind::Error> {
         let target = self
             .inner
-            .follow_to_object_packed(&self.repo.refs, packed)?
+            .follow_to_object_packed(&self.repo.refs, packed)
+            .or_erased()?
             .attach(self.repo);
-        Ok(target.object()?.peel_to_kind(kind)?)
+        target.object()?.peel_to_kind(kind)
     }
 
     /// Follow all symbolic references we point to up to the first object, which is typically (but not always) a tag,
@@ -232,11 +233,7 @@ impl<'repo> Reference<'repo> {
     /// a symbolic target ref was looked up from packed-refs.
     #[doc(alias = "resolve", alias = "git2")]
     pub fn follow_to_object(&mut self) -> Result<Id<'repo>, follow::to_object::Error> {
-        let packed = self.repo.refs.cached_packed_buffer().map_err(|err| {
-            follow::to_object::Error::FollowToObject(gix_ref::peel::to_object::Error::Follow(
-                file::find::existing::Error::Find(file::find::Error::PackedOpen(err)),
-            ))
-        })?;
+        let packed = self.repo.refs.cached_packed_buffer().or_erased()?;
         self.follow_to_object_packed(packed.as_ref().map(|p| &***p))
     }
 
@@ -249,7 +246,8 @@ impl<'repo> Reference<'repo> {
     ) -> Result<Id<'repo>, follow::to_object::Error> {
         Ok(self
             .inner
-            .follow_to_object_packed(&self.repo.refs, packed)?
+            .follow_to_object_packed(&self.repo.refs, packed)
+            .or_erased()?
             .attach(self.repo))
     }
 
@@ -281,4 +279,3 @@ impl<'repo> Reference<'repo> {
 
 mod edits;
 pub use edits::{delete, set_target_id};
-use gix_ref::file;

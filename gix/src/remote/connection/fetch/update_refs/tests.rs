@@ -292,6 +292,14 @@ mod update {
     #[test]
     fn unborn_remote_branches_can_update_local_unborn_branches() -> Result {
         let repo = named_repo("unborn");
+        let peel_err = repo
+            .find_reference("refs/heads/existing-unborn-symbolic")?
+            .peel_to_id()
+            .expect_err("the local symbolic reference points to a missing branch");
+        assert!(
+            peel_err.downcast_any_ref::<gix_ref::peel::to_id::Error>().is_some(),
+            "chain mode retains the typed peel error used by update recovery"
+        );
         let (mappings, specs) = mapping_from_spec("HEAD:refs/heads/existing-unborn-symbolic", &repo);
         assert_eq!(mappings.len(), 1);
         let out = fetch::refs::update(

@@ -1,6 +1,7 @@
 use std::{borrow::Cow, fmt::Display, str::FromStr};
 
 use bstr::{BStr, BString};
+use gix_error::{ErrorExt, ResultExt, ValidationError};
 
 use crate::{Error, Integer};
 
@@ -47,8 +48,8 @@ impl serde::Serialize for Integer {
     }
 }
 
-fn int_err(input: impl Into<BString>) -> Error {
-    Error::new(
+fn int_err(input: impl Into<BString>) -> ValidationError {
+    ValidationError::new_with_input(
         "Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G",
         input,
     )
@@ -58,18 +59,18 @@ impl TryFrom<&BStr> for Integer {
     type Error = Error;
 
     fn try_from(s: &BStr) -> Result<Self, Self::Error> {
-        let s = std::str::from_utf8(s).map_err(|err| int_err(s).with_err(err))?;
+        let s = std::str::from_utf8(s).or_raise(|| int_err(s))?;
         if let Ok(value) = s.parse() {
             return Ok(Self { value, suffix: None });
         }
 
         if s.len() <= 1 {
-            return Err(int_err(s));
+            return Err(int_err(s).raise());
         }
 
         let last_idx = s.len() - 1;
         if !s.is_char_boundary(last_idx) {
-            return Err(int_err(s));
+            return Err(int_err(s).raise());
         }
 
         let (number, suffix) = s.split_at(s.len() - 1);
@@ -79,7 +80,7 @@ impl TryFrom<&BStr> for Integer {
                 suffix: Some(suffix),
             })
         } else {
-            Err(int_err(s))
+            Err(int_err(s).raise())
         }
     }
 }

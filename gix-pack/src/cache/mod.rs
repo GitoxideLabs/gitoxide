@@ -66,7 +66,7 @@ pub mod object;
 /// # fn build_index_less(
 /// #     pack_path: &std::path::Path,
 /// #     offsets: Vec<gix_pack::data::Offset>,
-/// # ) -> Result<(), Box<dyn std::error::Error>> {
+/// # ) -> Result<(), gix_pack::cache::delta::from_offsets::Error> {
 /// // Build the delta tree straight from the pack — no `.idx` required:
 /// let tree = Tree::from_offsets_in_pack(
 ///     pack_path,

@@ -144,10 +144,6 @@ impl Options {
     }
 
     /// Open a repository at `path` with the options set so far.
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
     pub fn open(self, path: impl Into<PathBuf>) -> Result<ThreadSafeRepository, Error> {
         ThreadSafeRepository::open_opts(path, self)
     }

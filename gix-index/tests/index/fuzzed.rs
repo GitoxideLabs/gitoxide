@@ -10,6 +10,11 @@ fn decode_fuzzed(data: &[u8]) -> Result<(gix_index::State, Option<gix_hash::Obje
     )
 }
 
+fn is_corruption_with(err: &gix_index::decode::Error, prefix: &str) -> bool {
+    err.downcast_any_ref::<gix_error::CorruptionError>()
+        .is_some_and(|err| err.message.starts_with(prefix))
+}
+
 #[test]
 fn index_file_artifacts_run_fuzzer() {
     for path in artifact_paths("index_file") {
@@ -44,7 +49,7 @@ fn malformed_tree_extension_is_ignored_instead_of_panicking() {
         Ok((state, _checksum)) => {
             assert!(state.tree().is_none(), "malformed optional extension must be ignored");
         }
-        Err(gix_index::decode::Error::UnexpectedTrailerLength { .. }) => {}
+        Err(err) if is_corruption_with(&err, "Index trailer should have been") => {}
         Err(err) => panic!("unexpected decode failure: {err:?}"),
     }
 }
@@ -86,7 +91,7 @@ fn impossible_untracked_cache_directory_counts_are_rejected_before_reserving() {
                 "malformed optional extension must be ignored"
             );
         }
-        Err(gix_index::decode::Error::UnexpectedTrailerLength { .. }) => {}
+        Err(err) if is_corruption_with(&err, "Index trailer should have been") => {}
         Err(err) => panic!("unexpected decode failure: {err:?}"),
     }
 }
@@ -98,7 +103,7 @@ fn malformed_entry_padding_is_rejected_instead_of_panicking() {
     ))
     .expect_err("fuzzed input must stay rejected");
 
-    assert!(matches!(err, gix_index::decode::Error::Entry { .. }), "{err:?}");
+    assert!(is_corruption_with(&err, "Could not parse entry at index"), "{err:?}");
 }
 
 #[test]
@@ -112,7 +117,7 @@ fn malformed_untracked_cache_bitmap_is_rejected_instead_of_panicking() {
                 "malformed optional extension must be ignored"
             );
         }
-        Err(gix_index::decode::Error::UnexpectedTrailerLength { .. }) => {}
+        Err(err) if is_corruption_with(&err, "Index trailer should have been") => {}
         Err(err) => panic!("unexpected decode failure: {err:?}"),
     }
 }
@@ -124,7 +129,7 @@ fn malformed_entry_padding_with_untracked_cache_is_rejected_instead_of_panicking
     ))
     .expect_err("fuzzed input must stay rejected");
 
-    assert!(matches!(err, gix_index::decode::Error::Entry { .. }), "{err:?}");
+    assert!(is_corruption_with(&err, "Could not parse entry at index"), "{err:?}");
 }
 
 #[test]
@@ -141,7 +146,10 @@ fn alloc_limit_constructor_rejects_oversized_allocations() {
     )
     .expect_err("fixture should exceed tiny allocation limit");
 
-    assert!(matches!(err, gix_index::decode::Error::OutOfMemory), "{err:?}");
+    assert_eq!(
+        err.to_string(),
+        "Index data would require more memory than can be reserved"
+    );
 }
 
 fn artifact_paths(target: &str) -> Vec<PathBuf> {

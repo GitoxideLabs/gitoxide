@@ -1,4 +1,5 @@
 use gix_date::SecondsSinceUnixEpoch;
+use gix_error::{CorruptionError, ErrorExt, ResultExt};
 use smallvec::SmallVec;
 
 use super::LazyCommit;
@@ -68,7 +69,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
                 let mut parents = SmallVec::default();
                 let mut timestamp = None;
                 for token in iter {
-                    match token? {
+                    match token.or_raise(|| CorruptionError::new("A commit could not be decoded during traversal"))? {
                         Token::Tree { .. } => {}
                         Token::Parent { id } => parents.push(id),
                         Token::Author { .. } => {}
@@ -94,15 +95,18 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
                 let mut parents = SmallVec::default();
                 let commit = cache.commit_at(*pos);
                 for pos in commit.iter_parents() {
-                    let pos = pos?;
+                    let pos = pos.or_raise(|| {
+                        CorruptionError::new("Could not find commit position in graph when traversing parents")
+                    })?;
                     parents.push(cache.commit_at(pos).id().to_owned());
                 }
+                let actual = commit.committer_timestamp();
                 Commit {
                     parents,
-                    commit_time: commit.committer_timestamp().try_into().map_err(|_| {
-                        to_owned::Error::CommitGraphTime {
-                            actual: commit.committer_timestamp(),
-                        }
+                    commit_time: SecondsSinceUnixEpoch::try_from(actual).or_raise(|| {
+                        CorruptionError::new(format!(
+                            "Commit-graph time could not be presented as signed integer: {actual}"
+                        ))
                     })?,
                     generation: Some(commit.generation()),
                     data,
@@ -134,14 +138,19 @@ impl Iterator for Parents<'_, '_> {
                         Ok(gix_object::commit::ref_iter::Token::Tree { .. }) => continue,
                         Ok(gix_object::commit::ref_iter::Token::Parent { id }) => return Some(Ok(id)),
                         Ok(_unused_token) => break,
-                        Err(err) => return Some(Err(err.into())),
+                        Err(err) => {
+                            return Some(Err(err.and_raise(CorruptionError::new(
+                                "An error occurred when parsing commit parents",
+                            ))));
+                        }
                     }
                 }
                 None
             }
-            Either::Right((cache, it)) => it
-                .next()
-                .map(|r| r.map(|pos| cache.id_at(pos).to_owned()).map_err(Into::into)),
+            Either::Right((cache, it)) => it.next().map(|r| {
+                r.map(|pos| cache.id_at(pos).to_owned())
+                    .or_raise(|| CorruptionError::new("An error occurred when parsing parents from the commit graph"))
+            }),
         }
     }
 }
@@ -149,27 +158,11 @@ impl Iterator for Parents<'_, '_> {
 ///
 pub mod iter_parents {
     /// The error returned by the [`Parents`][super::Parents] iterator.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("An error occurred when parsing commit parents")]
-        DecodeCommit(#[from] gix_object::decode::Error),
-        #[error("An error occurred when parsing parents from the commit graph")]
-        DecodeCommitGraph(#[from] gix_error::Message),
-    }
+    pub type Error = gix_error::Exn<gix_error::CorruptionError>;
 }
 
 ///
 pub mod to_owned {
     /// The error returned by [`to_owned()`][crate::graph::LazyCommit::to_owned()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("A commit could not be decoded during traversal")]
-        Decode(#[from] gix_object::decode::Error),
-        #[error("Could not find commit position in graph when traversing parents")]
-        CommitGraphParent(#[from] gix_error::Message),
-        #[error("Commit-graph time could not be presented as signed integer: {actual}")]
-        CommitGraphTime { actual: u64 },
-    }
+    pub type Error = gix_error::Exn<gix_error::CorruptionError>;
 }

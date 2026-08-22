@@ -7,6 +7,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{CorruptionError, ErrorExt, OptionExt, ResultExt, ValidationError, message};
 
 use super::SignedData;
 
@@ -161,30 +162,13 @@ impl Outcome {
 }
 
 /// The error returned when verifying an object signature.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("The signature format is unsupported")]
-    UnsupportedFormat,
-    #[error("The configured program format {program_format:?} does not match signature format {signature_format:?}")]
-    FormatMismatch {
-        program_format: Format,
-        signature_format: Format,
-    },
-    #[error("Could not create or write the temporary signature file")]
-    TemporaryFile(#[source] std::io::Error),
-    #[error("Could not execute signature verifier {program:?}")]
-    Spawn { program: OsString, source: std::io::Error },
-    #[error("Could not communicate with signature verifier {program:?}")]
-    Communicate { program: OsString, source: std::io::Error },
-    #[error("Signature time could not be formatted for SSH verification")]
-    CommitTime(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
+pub type Error = gix_error::Exn;
 
 impl SignedData<'_> {
     /// Verify `signature` over these exact object bytes with fully resolved `options`.
     pub fn verify(&self, signature: &BStr, options: Options) -> Result<Outcome, Error> {
-        let format = Format::from_signature(signature).ok_or(Error::UnsupportedFormat)?;
+        let format = Format::from_signature(signature)
+            .ok_or_raise_erased(|| CorruptionError::new("The signature format is unsupported"))?;
         match options {
             Options::OpenPgp {
                 program,
@@ -230,18 +214,21 @@ impl SignedData<'_> {
                 verify_time,
                 minimum_trust,
             ),
-            Options::OpenPgp { .. } => Err(Error::FormatMismatch {
-                program_format: Format::OpenPgp,
-                signature_format: format,
-            }),
-            Options::X509 { .. } => Err(Error::FormatMismatch {
-                program_format: Format::X509,
-                signature_format: format,
-            }),
-            Options::Ssh { .. } => Err(Error::FormatMismatch {
-                program_format: Format::Ssh,
-                signature_format: format,
-            }),
+            Options::OpenPgp { .. } => Err(ValidationError::new(format!(
+                "The configured program format {:?} does not match signature format {format:?}",
+                Format::OpenPgp
+            ))
+            .raise_erased()),
+            Options::X509 { .. } => Err(ValidationError::new(format!(
+                "The configured program format {:?} does not match signature format {format:?}",
+                Format::X509
+            ))
+            .raise_erased()),
+            Options::Ssh { .. } => Err(ValidationError::new(format!(
+                "The configured program format {:?} does not match signature format {format:?}",
+                Format::Ssh
+            ))
+            .raise_erased()),
         }
     }
 
@@ -302,7 +289,7 @@ impl SignedData<'_> {
     ) -> Result<Outcome, Error> {
         let verify_time = verify_time
             .format(gix_date::time::CustomFormat::new("%Y%m%d%H%M%S"))
-            .map_err(|err| Error::CommitTime(Box::new(err)))?;
+            .or_raise_erased(|| message("Signature time could not be formatted for SSH verification"))?;
         let verify_time = format!("-Overify-time={verify_time}");
         let mut signature_file = signature_file(signature)?;
         let signature_path = signature_path(&mut signature_file)?;
@@ -391,27 +378,24 @@ impl SignedData<'_> {
     }
 
     fn run(&self, command: gix_command::Prepare, program: &OsStr) -> Result<std::process::Output, Error> {
-        let mut child = command.spawn().map_err(|source| Error::Spawn {
-            program: program.to_owned(),
-            source,
-        })?;
+        let mut child = command
+            .spawn()
+            .or_raise_erased(|| message!("Could not execute signature verifier {program:?}"))?;
         let mut stdin = child.stdin.take().expect("configured as piped");
         let [before, after] = self.segments();
         if let Err(source) = stdin.write_all(before).and_then(|_| stdin.write_all(after)) {
             // A verifier may reject the invocation and exit without consuming all input. Its status and output are
             // still authoritative, whereas other write failures indicate an actual communication problem.
             if source.kind() != std::io::ErrorKind::BrokenPipe {
-                return Err(Error::Communicate {
-                    program: program.to_owned(),
-                    source,
-                });
+                return Err(source
+                    .and_raise(message!("Could not communicate with signature verifier {program:?}"))
+                    .erased());
             }
         }
         drop(stdin);
-        child.wait_with_output().map_err(|source| Error::Communicate {
-            program: program.to_owned(),
-            source,
-        })
+        child
+            .wait_with_output()
+            .or_raise_erased(|| message!("Could not communicate with signature verifier {program:?}"))
     }
 
     fn run_prepared(
@@ -455,23 +439,18 @@ fn run_prepared(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|source| Error::Spawn {
-        program: program.to_owned(),
-        source,
-    })?;
+    let mut child = command
+        .spawn()
+        .or_raise_erased(|| message!("Could not execute signature verifier {program:?}"))?;
     child
         .stdin
         .take()
         .expect("configured as piped")
         .write_all(input)
-        .map_err(|source| Error::Communicate {
-            program: program.to_owned(),
-            source,
-        })?;
-    child.wait_with_output().map_err(|source| Error::Communicate {
-        program: program.to_owned(),
-        source,
-    })
+        .or_raise_erased(|| message!("Could not communicate with signature verifier {program:?}"))?;
+    child
+        .wait_with_output()
+        .or_raise_erased(|| message!("Could not communicate with signature verifier {program:?}"))
 }
 
 fn signature_file(signature: &BStr) -> Result<gix_tempfile::Handle<gix_tempfile::handle::Writable>, Error> {
@@ -486,35 +465,29 @@ fn temporary_file<'a>(
         gix_tempfile::ContainingDirectory::Exists,
         gix_tempfile::AutoRemove::Tempfile,
     )
-    .map_err(Error::TemporaryFile)?;
+    .or_raise_erased(|| message("Could not create or write the temporary signature file"))?;
     file.with_mut(|file| {
         for data in data {
             file.write_all(data)?;
         }
-        Ok(())
+        Ok::<_, std::io::Error>(())
     })
-    .map_err(Error::TemporaryFile)?
-    .map_err(Error::TemporaryFile)?;
+    .or_raise_erased(|| message("Could not create or write the temporary signature file"))?
+    .or_raise_erased(|| message("Could not create or write the temporary signature file"))?;
     Ok(file)
 }
 
 fn signature_path(file: &mut gix_tempfile::Handle<gix_tempfile::handle::Writable>) -> Result<PathBuf, Error> {
     file.with_mut(|file| file.path().to_owned())
-        .map_err(Error::TemporaryFile)
+        .or_raise_erased(|| message("Could not create or write the temporary signature file"))
 }
 
 fn run_without_input(command: gix_command::Prepare, program: &OsStr) -> Result<std::process::Output, Error> {
     command
         .spawn()
-        .map_err(|source| Error::Spawn {
-            program: program.to_owned(),
-            source,
-        })?
+        .or_raise_erased(|| message!("Could not execute signature verifier {program:?}"))?
         .wait_with_output()
-        .map_err(|source| Error::Communicate {
-            program: program.to_owned(),
-            source,
-        })
+        .or_raise_erased(|| message!("Could not communicate with signature verifier {program:?}"))
 }
 
 fn parse_gpg_output(format: Format, output: BString, raw_output: BString) -> Outcome {
@@ -733,19 +706,51 @@ mod tests {
             environment: Vec::new(),
             minimum_trust: TrustLevel::Undefined,
         };
-        assert!(matches!(
-            signed.verify(BStr::new(b"not a signature"), options.clone()),
-            Err(Error::UnsupportedFormat)
-        ));
+        let unsupported = signed
+            .verify(BStr::new(b"not a signature"), options.clone())
+            .expect_err("the unsupported signature is rejected");
         assert!(
-            matches!(
-                signed.verify(BStr::new(b"-----BEGIN SSH SIGNATURE-----\n"), options),
-                Err(Error::FormatMismatch {
-                    program_format: Format::X509,
-                    signature_format: Format::Ssh,
-                })
-            ),
+            unsupported.downcast_any_ref::<CorruptionError>().is_some(),
+            "an unrecognized object signature is corrupt"
+        );
+        let mismatch = signed
+            .verify(BStr::new(b"-----BEGIN SSH SIGNATURE-----\n"), options)
+            .expect_err("the mismatched signature is rejected");
+        assert!(
+            mismatch.downcast_any_ref::<ValidationError>().is_some(),
+            "a configured verifier which cannot handle the signature is invalid"
+        );
+        let mismatch = mismatch.to_string();
+        assert!(
+            mismatch.contains("X509") && mismatch.contains("Ssh"),
             "the mismatch identifies both the configured program and detected signature formats"
         );
+    }
+
+    #[test]
+    fn commit_time_keeps_the_formatting_error() {
+        let signed = SignedData::new(b"payloadsignature", 7..16);
+        let err = signed
+            .verify(
+                BStr::new(b"-----BEGIN SSH SIGNATURE-----\n"),
+                Options::Ssh {
+                    program: "must-not-run".into(),
+                    program_arguments: Vec::new(),
+                    environment: Vec::new(),
+                    allowed_signers: "unused".into(),
+                    revocation_file: None,
+                    verify_time: gix_date::Time {
+                        seconds: i64::MAX,
+                        offset: 0,
+                    },
+                    minimum_trust: TrustLevel::Undefined,
+                },
+            )
+            .expect_err("the timestamp is outside jiff's supported range");
+        assert_eq!(
+            err.to_string(),
+            "Signature time could not be formatted for SSH verification"
+        );
+        assert!(err.iter().count() > 1, "the concrete formatting error is retained");
     }
 }

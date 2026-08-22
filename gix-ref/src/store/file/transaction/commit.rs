@@ -182,21 +182,56 @@ mod error {
     use crate::store_impl::{file, packed};
 
     /// The error returned by various [`Transaction`][super::Transaction] methods.
-    #[derive(Debug, thiserror::Error)]
+    // TODO(review): `DeleteReference` stores its io error in a field named `err`, which `thiserror`
+    //                did NOT treat as a source — `source()` returning `None` for it is preserved
+    //                behavior, not an omission.
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The packed-ref transaction could not be committed")]
-        PackedTransactionCommit(#[source] packed::transaction::commit::Error),
-        #[error("Edit preprocessing failed with error")]
+        PackedTransactionCommit(packed::transaction::commit::Error),
         PreprocessingFailed { source: std::io::Error },
-        #[error("The change for reference {full_name:?} could not be committed")]
         LockCommit { source: std::io::Error, full_name: BString },
-        #[error("The reference {full_name} could not be deleted")]
         DeleteReference { full_name: BString, err: std::io::Error },
-        #[error("The reflog of reference {full_name:?} could not be deleted")]
         DeleteReflog { full_name: BString, source: std::io::Error },
-        #[error("The reflog could not be created or updated")]
-        CreateOrUpdateRefLog(#[from] file::log::create_or_update::Error),
+        CreateOrUpdateRefLog(file::log::create_or_update::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::PackedTransactionCommit(_) => f.write_str("The packed-ref transaction could not be committed"),
+                Error::PreprocessingFailed { .. } => f.write_str("Edit preprocessing failed with error"),
+                Error::LockCommit { full_name, .. } => {
+                    write!(f, "The change for reference {full_name:?} could not be committed")
+                }
+                Error::DeleteReference { full_name, .. } => {
+                    write!(f, "The reference {full_name} could not be deleted")
+                }
+                Error::DeleteReflog { full_name, .. } => {
+                    write!(f, "The reflog of reference {full_name:?} could not be deleted")
+                }
+                Error::CreateOrUpdateRefLog(_) => f.write_str("The reflog could not be created or updated"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::PackedTransactionCommit(err) => Some(err),
+                Error::PreprocessingFailed { source } => Some(source),
+                Error::LockCommit { source, .. } => Some(source),
+                Error::DeleteReference { .. } => None,
+                Error::DeleteReflog { source, .. } => Some(source),
+                Error::CreateOrUpdateRefLog(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<file::log::create_or_update::Error> for Error {
+        fn from(err: file::log::create_or_update::Error) -> Self {
+            Error::CreateOrUpdateRefLog(err)
+        }
     }
 }
 pub use error::Error;

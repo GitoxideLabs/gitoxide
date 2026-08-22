@@ -22,7 +22,7 @@ pub fn git_tag<'a>(i: &mut &'a [u8], hash_kind: gix_hash::Kind) -> ParseResult<T
 
     let (message, signature) = message(i)?;
     if !i.is_empty() {
-        return Err(crate::decode::Error);
+        return Err(crate::decode::empty_error());
     }
 
     Ok(TagRef {
@@ -49,9 +49,7 @@ pub(crate) fn target<'a>(i: &mut &'a [u8], hash_kind: gix_hash::Kind) -> ParseRe
 /// Typical inputs are `type commit\n`, `type tree\n`, `type blob\n`, and
 /// `type tag\n`. On success, `i` is advanced past the entire header line.
 pub(crate) fn kind(i: &mut &[u8]) -> ParseResult<Kind> {
-    parse::header_field(i, b"type", |value| {
-        Kind::from_bytes(value).map_err(|_| crate::decode::Error)
-    })
+    parse::header_field(i, b"type", Kind::from_bytes)
 }
 
 /// Parse the `tag <name>\n` header and return the tag name.
@@ -61,7 +59,9 @@ pub(crate) fn kind(i: &mut &[u8]) -> ParseResult<Kind> {
 /// `i` is advanced past the entire header line.
 pub(crate) fn name<'a>(i: &mut &'a [u8]) -> ParseResult<&'a BStr> {
     parse::header_field(i, b"tag", |value| {
-        (!value.is_empty()).then(|| value.as_bstr()).ok_or(crate::decode::Error)
+        (!value.is_empty())
+            .then(|| value.as_bstr())
+            .ok_or_else(crate::decode::empty_error)
     })
 }
 
@@ -77,7 +77,7 @@ pub(crate) fn tagger_raw<'a>(i: &mut &'a [u8]) -> ParseResult<Option<&'a BStr>> 
     }
     parse::header_field(i, b"tagger", |raw| {
         let mut sig = raw;
-        gix_actor::SignatureRef::from_bytes_consuming(&mut sig).map_err(|_| crate::decode::Error)?;
+        gix_actor::SignatureRef::from_bytes_consuming(&mut sig)?;
         Ok(raw.as_bstr())
     })
     .map(Some)
@@ -95,7 +95,7 @@ pub(crate) fn tagger<'a>(i: &mut &'a [u8]) -> ParseResult<Option<gix_actor::Sign
     }
     parse::header_field(i, b"tagger", |i| {
         let mut sig = i;
-        let signature = gix_actor::SignatureRef::from_bytes_consuming(&mut sig).map_err(|_| crate::decode::Error)?;
+        let signature = gix_actor::SignatureRef::from_bytes_consuming(&mut sig)?;
         Ok(signature)
     })
     .map(Some)
@@ -120,7 +120,7 @@ pub fn message<'a>(i: &mut &'a [u8]) -> ParseResult<(&'a BStr, Option<&'a BStr>)
     }
 
     let Some(rest) = i.strip_prefix(parse::NL) else {
-        return Err(crate::decode::Error);
+        return Err(crate::decode::empty_error());
     };
 
     *i = &[];

@@ -11,17 +11,34 @@ use std::{
 
 use bstr::ByteSlice;
 use curl::easy::{Auth, Easy2};
+use gix_error::{ResultExt, message};
 use gix_features::io::pipe;
 use parking_lot::Mutex;
 
 use crate::client::blocking_io::http::{
     self,
     curl::Error,
-    curl::curl_is_spurious,
+    curl::curl_is_retryable,
     options::{FollowRedirects, HttpVersion, ProxyAuthMethod, SslVersion},
     redirect::{self, Action as RedirectAction},
     traits::PostBodyDataKind,
 };
+
+fn classify_curl(err: curl::Error) -> gix_error::Error {
+    if curl_is_retryable(&err) {
+        gix_error::Error::from_error(gix_error::RetryableError::new(err))
+    } else {
+        gix_error::Error::from_error(err)
+    }
+}
+
+macro_rules! curl {
+    ($expr:expr) => {
+        $expr
+            .map_err(classify_curl)
+            .or_raise(|| message("Curl operation failed"))?
+    };
+}
 
 enum StreamOrBuffer {
     Stream(pipe::Reader),
@@ -322,8 +339,8 @@ pub fn new() -> Worker {
     let handle = std::thread::spawn(move || -> Result<(), Error> {
         let mut handle = Easy2::new(Handler::default());
         // We don't wait for the possibility for pipelining to become clear, and curl tries to reuse connections by default anyway.
-        handle.pipewait(false)?;
-        handle.tcp_keepalive(true)?;
+        curl!(handle.pipewait(false));
+        curl!(handle.tcp_keepalive(true));
 
         let mut follow = None;
 
@@ -355,25 +372,25 @@ pub fn new() -> Worker {
         {
             let redirected_base_url = redirected_base_url_shared.lock().clone();
             let effective_url = redirect::swap_tails(redirected_base_url.as_deref(), &base_url, url.clone());
-            handle.url(&effective_url)?;
+            curl!(handle.url(&effective_url));
 
-            handle.post(upload_body_kind.is_some())?;
+            curl!(handle.post(upload_body_kind.is_some()));
             let has_extra_headers = !extra_headers.is_empty();
             for header in extra_headers {
-                headers.append(&header)?;
+                curl!(headers.append(&header));
             }
             // needed to avoid sending Expect: 100-continue, which adds another response and only CURL wants that
-            headers.append("Expect:")?;
-            handle.verbose(verbose)?;
+            curl!(headers.append("Expect:"));
+            curl!(handle.verbose(verbose));
 
             if let Some(ca_info) = ssl_ca_info {
-                handle.cainfo(ca_info)?;
+                curl!(handle.cainfo(ca_info));
             }
 
             if let Some(ref mut curl_options) = backend.as_ref().and_then(|backend| backend.lock().ok()) {
                 if let Some(opts) = curl_options.downcast_mut::<super::Options>() {
                     if let Some(enabled) = opts.schannel_check_revoke {
-                        handle.ssl_options(curl::easy::SslOpt::new().no_revoke(!enabled))?;
+                        curl!(handle.ssl_options(curl::easy::SslOpt::new().no_revoke(!enabled)));
                     }
                 }
             }
@@ -381,14 +398,14 @@ pub fn new() -> Worker {
             if let Some(ssl_version) = ssl_version {
                 let (min, max) = ssl_version.min_max();
                 if min == max {
-                    handle.ssl_version(to_curl_ssl_version(min))?;
+                    curl!(handle.ssl_version(to_curl_ssl_version(min)));
                 } else {
-                    handle.ssl_min_max_version(to_curl_ssl_version(min), to_curl_ssl_version(max))?;
+                    curl!(handle.ssl_min_max_version(to_curl_ssl_version(min), to_curl_ssl_version(max)));
                 }
             }
 
-            handle.ssl_verify_peer(ssl_verify)?;
-            handle.ssl_verify_host(ssl_verify)?;
+            curl!(handle.ssl_verify_peer(ssl_verify));
+            curl!(handle.ssl_verify_host(ssl_verify));
 
             if let Some(http_version) = http_version {
                 let version = match http_version {
@@ -404,7 +421,7 @@ pub fn new() -> Worker {
 
             let mut proxy_auth_action = None;
             if let Some(proxy) = proxy {
-                handle.proxy(&proxy)?;
+                curl!(handle.proxy(&proxy));
                 let proxy_type = if proxy.starts_with("socks5h") {
                     curl::easy::ProxyType::Socks5Hostname
                 } else if proxy.starts_with("socks5") {
@@ -416,25 +433,26 @@ pub fn new() -> Worker {
                 } else {
                     curl::easy::ProxyType::Http
                 };
-                handle.proxy_type(proxy_type)?;
+                curl!(handle.proxy_type(proxy_type));
 
                 if let Some((obtain_creds_action, authenticate)) = proxy_authenticate {
-                    let creds = authenticate.lock().expect("no panics in other threads")(obtain_creds_action)?
+                    let creds = authenticate.lock().expect("no panics in other threads")(obtain_creds_action)
+                        .or_raise(|| message("Could not obtain proxy credentials"))?
                         .expect("action to fetch credentials");
-                    handle.proxy_username(&creds.identity.username)?;
-                    handle.proxy_password(&creds.identity.password)?;
+                    curl!(handle.proxy_username(&creds.identity.username));
+                    curl!(handle.proxy_password(&creds.identity.password));
                     proxy_auth_action = Some((creds.next, authenticate));
                 }
             }
             if let Some(no_proxy) = no_proxy {
-                handle.noproxy(&no_proxy)?;
+                curl!(handle.noproxy(&no_proxy));
             }
             if let Some(user_agent) = user_agent {
-                handle.useragent(&user_agent)?;
+                curl!(handle.useragent(&user_agent));
             }
-            handle.transfer_encoding(false)?;
+            curl!(handle.transfer_encoding(false));
             if let Some(timeout) = connect_timeout {
-                handle.connect_timeout(timeout)?;
+                curl!(handle.connect_timeout(timeout));
             }
             {
                 let mut auth = Auth::new();
@@ -451,13 +469,13 @@ pub fn new() -> Worker {
                     ProxyAuthMethod::Negotiate => auth.digest_ie(true),
                     ProxyAuthMethod::Ntlm => auth.ntlm(true),
                 };
-                handle.proxy_auth(&auth)?;
+                curl!(handle.proxy_auth(&auth));
             }
-            handle.tcp_keepalive(true)?;
+            curl!(handle.tcp_keepalive(true));
 
             if low_speed_time_seconds > 0 && low_speed_limit_bytes_per_second > 0 {
-                handle.low_speed_limit(low_speed_limit_bytes_per_second)?;
-                handle.low_speed_time(Duration::from_secs(low_speed_time_seconds))?;
+                curl!(handle.low_speed_limit(low_speed_limit_bytes_per_second));
+                curl!(handle.low_speed_time(Duration::from_secs(low_speed_time_seconds)));
             }
             let (receive_data, receive_headers, send_body, mut receive_body) = {
                 let handler = handle.get_mut();
@@ -482,7 +500,7 @@ pub fn new() -> Worker {
                     redirect_action,
                 );
             }
-            handle.follow_location(redirect_action == RedirectAction::Follow)?;
+            curl!(handle.follow_location(redirect_action == RedirectAction::Follow));
 
             if *follow == FollowRedirects::Initial {
                 *follow = FollowRedirects::None;
@@ -503,13 +521,15 @@ pub fn new() -> Worker {
                 Some(PostBodyDataKind::Unbounded) | None => StreamOrBuffer::Stream(receive_body),
                 Some(PostBodyDataKind::BoundedAndFitsIntoMemory) => {
                     let mut buf = Vec::<u8>::with_capacity(512);
-                    receive_body.read_to_end(&mut buf)?;
-                    handle.post_field_size(buf.len() as u64)?;
+                    receive_body
+                        .read_to_end(&mut buf)
+                        .or_raise(|| message("Could not finish reading all data to post to the remote"))?;
+                    curl!(handle.post_field_size(buf.len() as u64));
                     drop(receive_body);
                     StreamOrBuffer::Buffer(std::io::Cursor::new(buf))
                 }
             });
-            handle.http_headers(headers)?;
+            curl!(handle.http_headers(headers));
 
             if let Err(err) = handle.perform() {
                 let handler = handle.get_mut();
@@ -519,7 +539,7 @@ pub fn new() -> Worker {
                     authenticate.lock().expect("no panics in other threads")(action.erase()).ok();
                 }
                 let err = Err(io::Error::new(
-                    if curl_is_spurious(&err) {
+                    if curl_is_retryable(&err) {
                         std::io::ErrorKind::ConnectionReset
                     } else {
                         std::io::ErrorKind::Other
@@ -543,9 +563,7 @@ pub fn new() -> Worker {
                     (None, None) => {}
                 }
             } else {
-                let actual_url = handle
-                    .effective_url()?
-                    .expect("effective url is present and valid UTF-8");
+                let actual_url = curl!(handle.effective_url()).expect("effective url is present and valid UTF-8");
                 if actual_url != effective_url {
                     let new_base_url = redirect::base_url(actual_url, &base_url, url)?;
                     *redirected_base_url_shared.lock() = Some(new_base_url);
@@ -557,7 +575,8 @@ pub fn new() -> Worker {
                         action.store()
                     } else {
                         action.erase()
-                    })?;
+                    })
+                    .or_raise(|| message("Could not update proxy credentials"))?;
                 }
                 handler.reset();
                 handler.receive_body.take();
@@ -586,22 +605,6 @@ fn to_curl_ssl_version(vers: SslVersion) -> curl::easy::SslVersion {
 
 fn is_redirect_status(status: usize) -> bool {
     (300..=308).contains(&status)
-}
-
-impl From<Error> for http::Error {
-    fn from(err: Error) -> Self {
-        http::Error::Detail {
-            description: err.to_string(),
-        }
-    }
-}
-
-impl From<curl::Error> for http::Error {
-    fn from(err: curl::Error) -> Self {
-        http::Error::Detail {
-            description: err.to_string(),
-        }
-    }
 }
 
 #[cfg(test)]

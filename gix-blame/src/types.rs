@@ -1,3 +1,4 @@
+use gix_error::ValidationError;
 use gix_hash::ObjectId;
 use gix_object::bstr::BString;
 use smallvec::SmallVec;
@@ -7,7 +8,6 @@ use std::{
     ops::{AddAssign, Range, SubAssign},
 };
 
-use crate::Error;
 use crate::file::function::tokens_for_diffing;
 
 /// A type to represent one or more line ranges to blame in a file.
@@ -54,7 +54,7 @@ impl BlameRanges {
     ///
     /// Note that the input range is 1-based inclusive, as used by git, and
     /// the output is a zero-based `BlameRanges` instance.
-    pub fn from_one_based_inclusive_range(range: RangeInclusive<u32>) -> Result<Self, Error> {
+    pub fn from_one_based_inclusive_range(range: RangeInclusive<u32>) -> Result<Self, ValidationError> {
         let zero_based_range = Self::inclusive_to_zero_based_exclusive(range)?;
         Ok(Self::PartialFile(vec![zero_based_range]))
     }
@@ -65,7 +65,7 @@ impl BlameRanges {
     /// the output is a zero-based `BlameRanges` instance.
     ///
     /// If the input vector is empty, the result will be `WholeFile`.
-    pub fn from_one_based_inclusive_ranges(ranges: Vec<RangeInclusive<u32>>) -> Result<Self, Error> {
+    pub fn from_one_based_inclusive_ranges(ranges: Vec<RangeInclusive<u32>>) -> Result<Self, ValidationError> {
         if ranges.is_empty() {
             return Ok(Self::WholeFile);
         }
@@ -82,9 +82,11 @@ impl BlameRanges {
     }
 
     /// Convert a 1-based inclusive range to a 0-based exclusive range.
-    fn inclusive_to_zero_based_exclusive(range: RangeInclusive<u32>) -> Result<Range<u32>, Error> {
+    fn inclusive_to_zero_based_exclusive(range: RangeInclusive<u32>) -> Result<Range<u32>, ValidationError> {
         if range.start() == &0 {
-            return Err(Error::InvalidOneBasedLineRange);
+            return Err(ValidationError::new(
+                "Invalid line range was given, line range is expected to be a 1-based inclusive range in the format '<start>,<end>'",
+            ));
         }
         let start = range.start() - 1;
         let end = *range.end();
@@ -96,7 +98,7 @@ impl BlameRanges {
     /// Add a single range to blame.
     ///
     /// The new range will be merged with any overlapping existing ranges.
-    pub fn add_one_based_inclusive_range(&mut self, new_range: RangeInclusive<u32>) -> Result<(), Error> {
+    pub fn add_one_based_inclusive_range(&mut self, new_range: RangeInclusive<u32>) -> Result<(), ValidationError> {
         let zero_based_range = Self::inclusive_to_zero_based_exclusive(new_range)?;
         self.merge_zero_based_exclusive_range(zero_based_range);
 

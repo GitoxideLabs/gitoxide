@@ -1,4 +1,5 @@
-use bstr::{BString, ByteSlice};
+use bstr::ByteSlice;
+use gix_error::{ErrorExt, ResultExt, ValidationError, message};
 use gix_transport::client::Capabilities;
 
 use crate::{
@@ -10,16 +11,7 @@ use crate::{
 };
 
 /// The error returned by [`crate::Handshake::prepare_lsrefs_or_extract_refmap()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("The object format {format:?} as used by the remote is unsupported")]
-    UnknownObjectFormat { format: BString },
-    #[error(transparent)]
-    MappingValidation(#[from] gix_refspec::match_group::validate::Error),
-    #[error(transparent)]
-    ListRefs(#[from] crate::ls_refs::Error),
-}
+pub type Error = gix_error::Exn;
 
 /// For use in [`RefMap::from_refs()`].
 #[derive(Debug, Clone)]
@@ -63,7 +55,8 @@ impl RefMap {
                     object,
                 }
             }))
-            .validated()?;
+            .validated()
+            .or_raise_erased(|| message("Failed to validate mappings between remote and local references"))?;
 
         let mappings = res.mappings;
         let mappings = mappings
@@ -105,14 +98,17 @@ impl RefMap {
 /// In builds whose `gix-hash` lacks the `sha1` feature, it's treated as unknown object format error.
 fn extract_object_hash(capabilities: &Capabilities) -> Result<gix_hash::Kind, Error> {
     let object_format = match capabilities.capability("object-format").and_then(|c| c.value()) {
-        Some(object_format) => object_format.to_str().map_err(|_| Error::UnknownObjectFormat {
-            format: object_format.into(),
+        Some(object_format) => object_format.to_str().or_raise_erased(|| {
+            ValidationError::new_with_input("The object format used by the remote isn't valid UTF-8", object_format)
         })?,
         None => "sha1",
     };
-    object_format
-        .parse::<gix_hash::Kind>()
-        .map_err(|_| Error::UnknownObjectFormat {
-            format: object_format.into(),
-        })
+    match object_format.parse::<gix_hash::Kind>() {
+        Ok(kind) => Ok(kind),
+        Err(err) => Err(ValidationError::new_with_input(
+            format!("The object format used by the remote is unsupported: {err}"),
+            object_format,
+        )
+        .raise_erased()),
+    }
 }

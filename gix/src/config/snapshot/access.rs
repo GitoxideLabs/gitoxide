@@ -25,8 +25,8 @@ impl Snapshot<'_> {
     }
 
     /// Like [`boolean()`][Self::boolean()], but it will report an error if the value couldn't be interpreted as boolean.
-    pub fn try_boolean(&self, key: impl gix_config::AsKey) -> Result<Option<bool>, gix_config::value::Error> {
-        self.repo.config.resolved.boolean(key)
+    pub fn try_boolean(&self, key: impl gix_config::AsKey) -> Result<Option<bool>, gix_error::Error> {
+        self.repo.config.resolved.boolean(key).map_err(Into::into)
     }
 
     /// Return the resolved integer at `key`, or `None` if there is no such value or if the value can't be interpreted as
@@ -40,8 +40,8 @@ impl Snapshot<'_> {
     }
 
     /// Like [`integer()`][Self::integer()], but it will report an error if the value couldn't be interpreted as boolean.
-    pub fn try_integer(&self, key: impl gix_config::AsKey) -> Result<Option<i64>, gix_config::value::Error> {
-        self.repo.config.resolved.integer(key)
+    pub fn try_integer(&self, key: impl gix_config::AsKey) -> Result<Option<i64>, gix_error::Error> {
+        self.repo.config.resolved.integer(key).map_err(Into::into)
     }
 
     /// Return the string at `key`, or `None` if there is no such value.
@@ -60,11 +60,8 @@ impl Snapshot<'_> {
     /// The path can be prefixed with `:(optional)` which means it won't be returned if the interpolated
     /// path couldn't be accessed. Note also that this is different from Git, which ignores it only if
     /// it doesn't exist.
-    pub fn trusted_path(
-        &self,
-        key: impl gix_config::AsKey,
-    ) -> Result<Option<std::path::PathBuf>, gix_config::path::interpolate::Error> {
-        self.repo.config.trusted_file_path(key)
+    pub fn trusted_path(&self, key: impl gix_config::AsKey) -> Result<Option<std::path::PathBuf>, gix_error::Error> {
+        self.repo.config.trusted_file_path(key).map_err(Into::into)
     }
 
     /// Return the trusted string at `key` for launching using [command::prepare()](gix_command::prepare()),
@@ -121,7 +118,9 @@ impl<'repo> SnapshotMut<'repo> {
         new_value: impl gix_utils::AsBStr,
     ) -> Result<Option<BString>, crate::config::set_value::Error> {
         if let Some(crate::config::tree::SubSectionRequirement::Parameter(_)) = key.subsection_requirement() {
-            return Err(crate::config::set_value::Error::SubSectionRequired);
+            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(
+                "The key needs a subsection parameter to be valid.",
+            )));
         }
         let value = new_value.as_bstr();
         key.validate(value)?;
@@ -129,8 +128,12 @@ impl<'repo> SnapshotMut<'repo> {
         let current = match section.parent() {
             Some(parent) => self
                 .config
-                .set_raw_value_by(parent.name(), section.name(), key.name(), value)?,
-            None => self.config.set_raw_value_by(section.name(), None, key.name(), value)?,
+                .set_raw_value_by(parent.name(), section.name(), key.name(), value)
+                .map_err(gix_error::Exn::into_error)?,
+            None => self
+                .config
+                .set_raw_value_by(section.name(), None, key.name(), value)
+                .map_err(gix_error::Exn::into_error)?,
         };
         Ok(current)
     }
@@ -144,7 +147,9 @@ impl<'repo> SnapshotMut<'repo> {
         new_value: impl gix_utils::AsBStr,
     ) -> Result<Option<BString>, crate::config::set_value::Error> {
         if let Some(crate::config::tree::SubSectionRequirement::Never) = key.subsection_requirement() {
-            return Err(crate::config::set_value::Error::SubSectionForbidden);
+            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(
+                "The key must not be used with a subsection",
+            )));
         }
         let value = new_value.as_bstr();
         key.validate(value)?;
@@ -156,7 +161,8 @@ impl<'repo> SnapshotMut<'repo> {
             .expect("statically known keys can always be parsed");
         let current = self
             .config
-            .set_raw_value_by(key.section_name, key.subsection_name, key.value_name, value)?;
+            .set_raw_value_by(key.section_name, key.subsection_name, key.value_name, value)
+            .map_err(gix_error::Exn::into_error)?;
         Ok(current)
     }
 

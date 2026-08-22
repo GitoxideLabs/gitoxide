@@ -124,10 +124,6 @@ impl<'repo> Tree<'repo> {
     /// Note that if a clone with `--filter=blob=none` was created, rename tracking may fail as it might
     /// try to access blobs to compute a similarity metric. Thus, it's more compatible to turn rewrite tracking off
     /// using [`Options::track_rewrites()`](crate::diff::Options::track_rewrites()).
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
     #[doc(alias = "diff_tree_to_tree", alias = "git2")]
     pub fn changes<'a>(&'a self) -> Result<Platform<'a, 'repo>, crate::diff::options::init::Error> {
         Ok(Platform {
@@ -171,14 +167,7 @@ pub struct Stats {
 ///
 pub mod stats {
     /// The error returned by [`stats()`](super::Platform::stats()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        CreateResourceCache(#[from] crate::repository::diff_resource_cache::Error),
-        #[error(transparent)]
-        ForEachChange(#[from] crate::object::tree::diff::for_each::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 /// Convenience

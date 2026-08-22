@@ -150,7 +150,8 @@ impl crate::Repository {
                 .string_filter("ssh.variant", &mut trusted)
                 .and_then(|variant| Ssh::VARIANT.try_into_variant(variant).transpose())
                 .transpose()
-                .with_leniency(self.options.lenient_config)?,
+                .with_leniency(self.options.lenient_config)
+                .map_err(gix_error::Error::from)?,
         };
         Ok(opts)
     }
@@ -170,7 +171,8 @@ impl crate::Repository {
             stderr: {
                 gitoxide::Core::EXTERNAL_COMMAND_STDERR
                     .enrich_error(self.config.resolved.boolean(gitoxide::Core::EXTERNAL_COMMAND_STDERR))
-                    .with_leniency(self.config.lenient_config)?
+                    .with_leniency(self.config.lenient_config)
+                    .map_err(gix_error::Error::from)?
                     .unwrap_or(true)
                     .into()
             },
@@ -180,13 +182,15 @@ impl crate::Repository {
                 &self.config.resolved,
                 self.config.lenient_config,
                 self.filter_config_section(),
-            )?
+            )
+            .map_err(gix_error::Error::from)?
             .map(|enabled| !enabled),
             ref_namespace: self.refs.namespace.as_ref().map(|ns| ns.as_bstr().to_owned()),
-            literal_pathspecs: pathspec_boolean(&gitoxide::Pathspec::LITERAL)?,
-            glob_pathspecs: pathspec_boolean(&gitoxide::Pathspec::GLOB)?
-                .or(pathspec_boolean(&gitoxide::Pathspec::NOGLOB)?),
-            icase_pathspecs: pathspec_boolean(&gitoxide::Pathspec::ICASE)?,
+            literal_pathspecs: pathspec_boolean(&gitoxide::Pathspec::LITERAL).map_err(gix_error::Error::from)?,
+            glob_pathspecs: pathspec_boolean(&gitoxide::Pathspec::GLOB)
+                .map_err(gix_error::Error::from)?
+                .or(pathspec_boolean(&gitoxide::Pathspec::NOGLOB).map_err(gix_error::Error::from)?),
+            icase_pathspecs: pathspec_boolean(&gitoxide::Pathspec::ICASE).map_err(gix_error::Error::from)?,
         })
     }
 

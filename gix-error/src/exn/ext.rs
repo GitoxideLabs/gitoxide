@@ -179,6 +179,29 @@ where
     }
 }
 
+/// Extension methods for results containing an already boxed error.
+///
+/// This complements [`ResultExt`], whose blanket implementation cannot accept boxed trait objects.
+pub trait BoxedResultExt {
+    /// The `Ok` type.
+    type Success;
+
+    /// Type-erase the boxed error inside the [`Result`].
+    fn or_erased(self) -> Result<Self::Success, Exn>;
+}
+
+impl<T> BoxedResultExt for Result<T, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    type Success = T;
+
+    #[track_caller]
+    fn or_erased(self) -> Result<Self::Success, Exn> {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => Err(Exn::new(crate::Untyped::from_boxed(e))),
+        }
+    }
+}
+
 impl<T, E> ResultExt for Result<T, Exn<E>>
 where
     E: std::error::Error + Send + Sync + 'static,

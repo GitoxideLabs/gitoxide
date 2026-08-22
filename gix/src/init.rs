@@ -1,17 +1,15 @@
 #![allow(clippy::result_large_err)]
 use std::path::Path;
 
+use gix_error::ErrorExt;
 use gix_ref::{
     Category, FullName, Target,
     store::WriteReflog,
     transaction::{PreviousValue, RefEdit},
 };
 
-use crate::{
-    ThreadSafeRepository,
-    bstr::{BString, ByteSlice},
-    config::tree::Init,
-};
+use crate::{ThreadSafeRepository, bstr::ByteSlice, config::tree::Init};
+use gix_error::ResultExt;
 
 /// The name of the branch to use if non is configured via git configuration.
 ///
@@ -21,23 +19,7 @@ use crate::{
 pub const DEFAULT_BRANCH_NAME: &str = "main";
 
 /// The error returned by [`crate::init()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Could not obtain the current directory")]
-    CurrentDir(#[from] std::io::Error),
-    #[error(transparent)]
-    Init(#[from] crate::create::Error),
-    #[error(transparent)]
-    Open(#[from] crate::open::Error),
-    #[error("Invalid default branch name: {name:?}")]
-    InvalidBranchName {
-        name: BString,
-        source: gix_validate::reference::name::Error,
-    },
-    #[error("Could not edit HEAD reference with new default name")]
-    EditHeadForDefaultBranch(#[from] crate::reference::edit::Error),
-}
+pub type Error = gix_error::Error;
 
 impl ThreadSafeRepository {
     /// Create a repository with work-tree within `directory`, creating intermediate directories as needed.
@@ -75,7 +57,9 @@ impl ThreadSafeRepository {
         let (git_dir, worktree_dir) = path.into_repository_and_work_tree_directories();
         open_options.git_dir_trust = Some(gix_sec::Trust::Full);
         // The repo will use `core.precomposeUnicode` to adjust the value as needed.
-        open_options.current_dir = gix_fs::current_dir(false)?.into();
+        open_options.current_dir = gix_fs::current_dir(false)
+            .or_raise(|| gix_error::message("Could not obtain the current directory"))?
+            .into();
         let repo = ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, open_options)?;
 
         let branch_name = repo
@@ -87,13 +71,17 @@ impl ThreadSafeRepository {
             let configured_branch_name = branch_name;
             let sym_ref: FullName = Category::LocalBranch
                 .to_full_name(configured_branch_name.as_bstr())
-                .map_err(|err| Error::InvalidBranchName {
-                    name: configured_branch_name.clone(),
-                    source: err,
+                .map_err(|err| {
+                    gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
+                        "Invalid default branch name",
+                        configured_branch_name.clone(),
+                    )))
                 })?;
-            gix_validate::reference::branch_name(sym_ref.as_bstr()).map_err(|err| Error::InvalidBranchName {
-                name: configured_branch_name,
-                source: err,
+            gix_validate::reference::branch_name(sym_ref.as_bstr()).map_err(|err| {
+                gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
+                    "Invalid default branch name",
+                    configured_branch_name,
+                )))
             })?;
             let mut repo = repo.to_thread_local();
             let prev_write_reflog = repo.refs.write_reflog;
@@ -106,7 +94,8 @@ impl ThreadSafeRepository {
                 },
                 name: "HEAD".try_into().expect("valid"),
                 deref: false,
-            })?;
+            })
+            .or_raise(|| gix_error::message("Could not edit HEAD reference with new default name"))?;
             repo.refs.write_reflog = prev_write_reflog;
         }
 

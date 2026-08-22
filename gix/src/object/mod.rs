@@ -1,5 +1,7 @@
 //!
 #![allow(clippy::empty_docs)]
+use gix_error::ResultExt;
+
 use gix_hash::ObjectId;
 pub use gix_object::Kind;
 
@@ -9,6 +11,7 @@ mod errors;
 pub(crate) mod cache {
     pub use gix_pack::cache::object::MemoryCappedHashmap;
 }
+pub(crate) use errors::existing_error;
 pub use errors::{conversion, find, write};
 ///
 pub mod blob;
@@ -22,14 +25,8 @@ pub mod tree;
 
 ///
 pub mod try_into {
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    #[error("Object named {id} was supposed to be of kind {expected}, but was kind {actual}.")]
-    pub struct Error {
-        pub actual: gix_object::Kind,
-        pub expected: gix_object::Kind,
-        pub id: gix_hash::ObjectId,
-    }
+    /// The error returned when converting an object to an unexpected kind.
+    pub type Error = gix_error::ValidationError;
 }
 
 impl ObjectDetached {
@@ -107,37 +104,49 @@ impl<'repo> Object<'repo> {
 
     /// Transform this object into a commit, or return it as part of the `Err` if it is no commit.
     pub fn try_into_commit(self) -> Result<Commit<'repo>, try_into::Error> {
-        self.try_into().map_err(|this: Self| try_into::Error {
-            id: this.id,
-            actual: this.kind,
-            expected: gix_object::Kind::Commit,
+        self.try_into().map_err(|this: Self| {
+            gix_error::ValidationError::new(format!(
+                "Object named {} was supposed to be of kind {}, but was kind {}.",
+                this.id,
+                gix_object::Kind::Commit,
+                this.kind
+            ))
         })
     }
 
     /// Transform this object into a tag, or return it as part of the `Err` if it is no commit.
     pub fn try_into_tag(self) -> Result<Tag<'repo>, try_into::Error> {
-        self.try_into().map_err(|this: Self| try_into::Error {
-            id: this.id,
-            actual: this.kind,
-            expected: gix_object::Kind::Commit,
+        self.try_into().map_err(|this: Self| {
+            gix_error::ValidationError::new(format!(
+                "Object named {} was supposed to be of kind {}, but was kind {}.",
+                this.id,
+                gix_object::Kind::Tag,
+                this.kind
+            ))
         })
     }
 
     /// Transform this object into a tree, or return it as part of the `Err` if it is no tree.
     pub fn try_into_tree(self) -> Result<Tree<'repo>, try_into::Error> {
-        self.try_into().map_err(|this: Self| try_into::Error {
-            id: this.id,
-            actual: this.kind,
-            expected: gix_object::Kind::Tree,
+        self.try_into().map_err(|this: Self| {
+            gix_error::ValidationError::new(format!(
+                "Object named {} was supposed to be of kind {}, but was kind {}.",
+                this.id,
+                gix_object::Kind::Tree,
+                this.kind
+            ))
         })
     }
 
     /// Transform this object into a blob, or return it as part of the `Err` if it is no blob.
     pub fn try_into_blob(self) -> Result<Blob<'repo>, try_into::Error> {
-        self.try_into().map_err(|this: Self| try_into::Error {
-            id: this.id,
-            actual: this.kind,
-            expected: gix_object::Kind::Blob,
+        self.try_into().map_err(|this: Self| {
+            gix_error::ValidationError::new(format!(
+                "Object named {} was supposed to be of kind {}, but was kind {}.",
+                this.id,
+                gix_object::Kind::Blob,
+                this.kind
+            ))
         })
     }
 }
@@ -173,11 +182,15 @@ impl<'repo> Object<'repo> {
     /// Obtain a fully parsed commit whose fields reference our data buffer.
     pub fn try_to_commit_ref(&self) -> Result<gix_object::CommitRef<'_>, conversion::Error> {
         gix_object::Data::new(&self.data, self.kind, self.id.kind())
-            .decode()?
+            .decode()
+            .or_erased()?
             .into_commit()
-            .ok_or(conversion::Error::UnexpectedType {
-                expected: gix_object::Kind::Commit,
-                actual: self.kind,
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                    "Expected object type {}, but got {}",
+                    gix_object::Kind::Commit,
+                    self.kind
+                )))
             })
     }
 
@@ -230,11 +243,15 @@ impl<'repo> Object<'repo> {
     /// Obtain a fully parsed tag object whose fields reference our data buffer.
     pub fn try_to_tag_ref(&self) -> Result<gix_object::TagRef<'_>, conversion::Error> {
         gix_object::Data::new(&self.data, self.kind, self.id.kind())
-            .decode()?
+            .decode()
+            .or_erased()?
             .into_tag()
-            .ok_or(conversion::Error::UnexpectedType {
-                expected: gix_object::Kind::Tag,
-                actual: self.kind,
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                    "Expected object type {}, but got {}",
+                    gix_object::Kind::Tag,
+                    self.kind
+                )))
             })
     }
 

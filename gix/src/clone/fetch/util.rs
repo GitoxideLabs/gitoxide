@@ -1,5 +1,6 @@
 use std::io::Write;
 
+use gix_error::ResultExt;
 use gix_ref::{
     Category, FullNameRef, PartialName,
     transaction::{LogChange, RefLog},
@@ -15,19 +16,17 @@ enum WriteMode {
     Overwrite,
     Append,
 }
-
-#[expect(
-    clippy::result_large_err,
-    reason = "will be removed once `gix-error` is used consistently"
-)]
 pub fn append_remote_to_local_config_file(
     remote: &mut crate::Remote<'_>,
     remote_name: BString,
 ) -> Result<gix_config::File, Error> {
     let mut config = gix_config::File::new(local_config_meta(remote.repo));
-    remote.save_as_to(remote_name, &mut config)?;
+    remote
+        .save_as_to(remote_name, &mut config)
+        .or_raise(|| gix_error::message("Failed to store configured remote in memory"))?;
 
-    write_to_local_config(&config, WriteMode::Append)?;
+    write_to_local_config(&config, WriteMode::Append)
+        .or_raise(|| gix_error::message("Failed to write repository configuration to disk"))?;
     Ok(config)
 }
 
@@ -55,29 +54,39 @@ pub(super) fn reinitialize_with_object_hash(
     let git_dir = repo.git_dir();
     let config_path = git_dir.join("config");
 
-    let mut config = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)?;
+    let mut config = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)
+        .or_raise(|| gix_error::message("Failed to load repo-local git configuration before writing"))?;
     // Mirror what `crate::create` writes at init time: only SHA-256 repositories get
     // `repositoryformatversion = 1` along with the `objectformat` extension.
     let is_sha256 = object_hash == gix_hash::Kind::Sha256;
     config
         .section_mut("core", None)
         .expect("freshly initialized repository has a core section")
-        .set("repositoryformatversion", if is_sha256 { "1" } else { "0" })?;
+        .set("repositoryformatversion", if is_sha256 { "1" } else { "0" })
+        .or_erased()?;
     if is_sha256 {
         config
             .section_mut_or_create_new("extensions", None)
             .expect("valid section name")
-            .set("objectformat", object_hash.to_string())?;
+            .set("objectformat", object_hash.to_string())
+            .or_erased()?;
     } else {
         // In a freshly initialized repository, this section exists solely to carry `objectformat`.
         config.remove_section("extensions", None);
     }
-    let mut lock =
-        gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)?;
-    config.write_to_filter(&mut lock, |section| section.meta().source == gix_config::Source::Local)?;
-    lock.commit()?;
+    let mut lock = gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)
+        .or_raise(|| gix_error::message("Failed to acquire lock to write repository configuration to disk"))?;
+    config
+        .write_to_filter(&mut lock, |section| section.meta().source == gix_config::Source::Local)
+        .or_raise(|| gix_error::message("Failed to write repository configuration to disk"))?;
+    lock.commit()
+        .or_raise(|| gix_error::message("Failed to commit lock after writing repository configuration to disk"))?;
 
-    Ok(crate::ThreadSafeRepository::open_opts(git_dir, repo.options.clone())?.to_thread_local())
+    Ok(crate::ThreadSafeRepository::open_opts(git_dir, repo.options.clone())
+        .or_raise(|| {
+            gix_error::message("Failed to reopen the local repository after adopting the remote's object format")
+        })?
+        .to_thread_local())
 }
 
 fn local_config_meta(repo: &Repository) -> gix_config::file::Metadata {
@@ -137,9 +146,7 @@ pub fn update_head(
     let revision_head_id = revision
         .map(|revision| -> Result<gix_hash::ObjectId, Error> {
             let mapping = find_revision(ref_map, revision)?;
-            let id = mapping.remote.peeled_id().ok_or_else(|| Error::RevisionMissing {
-                wanted: revision.to_ref().source().expect("validated revision").to_owned(),
-            })?;
+            let id = mapping.remote.peeled_id().ok_or_else(|| revision_missing(revision))?;
             Ok(repo.find_object(id)?.peel_to_commit()?.id)
         })
         .transpose()?;
@@ -181,9 +188,10 @@ pub fn update_head(
     };
     match head_ref {
         Some(referent) => {
-            let referent: gix_ref::FullName = referent.try_into().map_err(|err| Error::InvalidHeadRef {
-                head_ref_name: referent.to_owned(),
-                source: err,
+            let referent: gix_ref::FullName = gix_ref::FullName::try_from(referent).or_raise(|| {
+                gix_error::ValidationError::new(format!(
+                    "The remote HEAD points to a reference named {referent:?} which is invalid."
+                ))
             })?;
             repo.refs
                 .transaction()
@@ -217,13 +225,9 @@ pub fn update_head(
                     gix_lock::acquire::Fail::Immediately,
                     gix_lock::acquire::Fail::Immediately,
                 )
-                .map_err(crate::reference::edit::Error::from)?
-                .commit(
-                    repo.committer()
-                        .transpose()
-                        .map_err(|err| Error::HeadUpdate(crate::reference::edit::Error::ParseCommitterTime(err)))?,
-                )
-                .map_err(crate::reference::edit::Error::from)?;
+                .or_raise(|| gix_error::message("Failed to update HEAD with values from remote"))?
+                .commit(repo.committer().transpose().map_err(gix_error::Error::from)?)
+                .or_raise(|| gix_error::message("Failed to update HEAD with values from remote"))?;
 
             if let Some(head_peeled_id) = head_peeled_id {
                 let mut log = reflog_message();
@@ -262,7 +266,7 @@ pub fn update_head(
 
 /// Find the mapping produced by the exact refspec used to request `revision`.
 ///
-/// Returns [`Error::RevisionMissing`] if the remote did not map that refspec.
+/// Returns an error if the remote did not map that refspec.
 pub(super) fn find_revision<'a>(
     ref_map: &'a crate::remote::fetch::RefMap,
     revision: &gix_refspec::RefSpec,
@@ -276,9 +280,14 @@ pub(super) fn find_revision<'a>(
                 .get(&ref_map.refspecs, &ref_map.extra_refspecs)
                 .is_some_and(|spec| spec == revision)
         })
-        .ok_or_else(|| Error::RevisionMissing {
-            wanted: revision.to_ref().source().expect("validated revision").to_owned(),
-        })
+        .ok_or_else(|| revision_missing(revision))
+}
+
+fn revision_missing(revision: &gix_refspec::RefSpec) -> Error {
+    gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
+        "The remote didn't have the requested revision {:?}",
+        revision.to_ref().source().expect("validated revision")
+    )))
 }
 
 /// Resolve `ref_name` to its object ID and full name among the mapped remote references.
@@ -311,12 +320,12 @@ pub(super) fn find_custom_refname<'a>(
         return Ok((item.target, item.full_ref_name));
     }
     if !requested_name.starts_with(b"refs/") {
-        let branch_name = Category::LocalBranch.to_full_name(requested_name)?;
+        let branch_name = Category::LocalBranch.to_full_name(requested_name).or_erased()?;
         if let Some(item) = find_item(branch_name.as_bstr()) {
             return Ok((item.target, item.full_ref_name));
         }
 
-        let tag_name = Category::Tag.to_full_name(requested_name)?;
+        let tag_name = Category::Tag.to_full_name(requested_name).or_erased()?;
         if let Some(item) = find_item(tag_name.as_bstr()) {
             return Ok((item.target, item.full_ref_name));
         }
@@ -324,26 +333,39 @@ pub(super) fn find_custom_refname<'a>(
 
     let res = group.match_lhs(filtered_items.iter().copied());
     match res.mappings.len() {
-        0 => Err(Error::RefNameMissing {
-            wanted: ref_name.clone(),
-        }),
+        0 => Err(gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
+            "The remote didn't have any ref that matched '{requested_name}'"
+        )))),
         1 => {
             let item = filtered_items[res.mappings[0]
                 .item_index
                 .expect("we map by name only and have no object-id in refspec")];
             Ok((item.target, item.full_ref_name))
         }
-        _ => Err(Error::RefNameAmbiguous {
-            wanted: ref_name.clone(),
-            candidates: res
+        _ => {
+            let candidates = res
                 .mappings
                 .into_iter()
                 .filter_map(|m| match m.lhs {
                     gix_refspec::match_group::SourceRef::FullName(name) => Some(name.into_owned()),
                     gix_refspec::match_group::SourceRef::ObjectId(_) => None,
                 })
-                .collect(),
-        }),
+                .collect::<Vec<_>>();
+            Err(gix_error::Error::from_error(
+                gix_error::ValidationError::new_with_input(
+                    format!(
+                        "The remote has {} refs for '{requested_name}', try to use a specific name: {}",
+                        candidates.len(),
+                        candidates
+                            .iter()
+                            .filter_map(|name| name.to_str().ok())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    ref_name.as_ref().as_bstr().to_owned(),
+                ),
+            ))
+        }
     }
 }
 
@@ -381,9 +403,9 @@ fn setup_branch_config(
         let mut section = config
             .new_section("branch", short_name)
             .expect("section header name is always valid per naming rules, our input branch name is valid");
-        section.push("remote", remote_name)?;
-        section.push("merge", branch.as_bstr())?;
-        write_to_local_config(&config, WriteMode::Overwrite)?;
+        section.push("remote", remote_name).or_erased()?;
+        section.push("merge", branch.as_bstr()).or_erased()?;
+        write_to_local_config(&config, WriteMode::Overwrite).or_erased()?;
         config.commit().expect("configuration we set is valid");
     }
     Ok(())

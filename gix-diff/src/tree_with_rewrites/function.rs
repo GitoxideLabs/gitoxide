@@ -1,4 +1,5 @@
 use bstr::BStr;
+use gix_error::ResultExt;
 use gix_object::TreeRefIter;
 
 use super::{Action, ChangeRef, Error, Options};
@@ -33,6 +34,13 @@ pub fn diff<E>(
 where
     E: Into<Box<dyn std::error::Error + Sync + Send + 'static>>,
 {
+    fn callback_error(err: impl Into<Box<dyn std::error::Error + Send + Sync + 'static>>) -> Error {
+        use gix_error::ErrorExt;
+        gix_error::Error::from_boxed(err.into())
+            .and_raise(gix_error::message("The user-provided callback failed"))
+            .into()
+    }
+
     let mut delegate = Delegate {
         src_tree: lhs,
         recorder: crate::tree::Recorder::default().track_location(options.location),
@@ -46,16 +54,14 @@ where
         Ok(()) => {
             let outcome = delegate.process_tracked_changes(resource_cache)?;
             match delegate.err {
-                Some(err) => Err(Error::ForEach(err.into())),
+                Some(err) => Err(callback_error(err)),
                 None => Ok(outcome),
             }
         }
         Err(crate::tree::Error::Cancelled) => delegate
             .err
-            .map_or(Err(Error::Diff(crate::tree::Error::Cancelled)), |err| {
-                Err(Error::ForEach(err.into()))
-            }),
-        Err(err) => Err(err.into()),
+            .map_or(Err(Error::Cancelled), |err| Err(callback_error(err))),
+        Err(err) => Err(err),
     }
 }
 
@@ -137,44 +143,47 @@ where
             None => return Ok(None),
         };
 
-        let outcome = tracked.emit(
-            |dest, source| match source {
-                Some(source) => {
-                    let (oid, mode) = dest.change.oid_and_entry_mode();
-                    let change = ChangeRef::Rewrite {
-                        source_location: source.location,
-                        source_entry_mode: source.entry_mode,
-                        source_id: source.id,
-                        source_relation: source.change.relation(),
-                        entry_mode: mode,
-                        id: oid.to_owned(),
-                        relation: dest.change.relation(),
-                        diff: source.diff,
-                        location: dest.location,
-                        copy: match source.kind {
-                            tracker::visit::SourceKind::Rename => false,
-                            tracker::visit::SourceKind::Copy => true,
-                        },
-                    };
-                    match (self.visit)(change) {
-                        Ok(std::ops::ControlFlow::Break(())) => std::ops::ControlFlow::Break(()),
-                        Ok(std::ops::ControlFlow::Continue(())) => std::ops::ControlFlow::Continue(()),
-                        Err(err) => {
-                            self.err = Some(err);
-                            std::ops::ControlFlow::Break(())
+        let outcome = tracked
+            .emit(
+                |dest, source| match source {
+                    Some(source) => {
+                        let (oid, mode) = dest.change.oid_and_entry_mode();
+                        let change = ChangeRef::Rewrite {
+                            source_location: source.location,
+                            source_entry_mode: source.entry_mode,
+                            source_id: source.id,
+                            source_relation: source.change.relation(),
+                            entry_mode: mode,
+                            id: oid.to_owned(),
+                            relation: dest.change.relation(),
+                            diff: source.diff,
+                            location: dest.location,
+                            copy: match source.kind {
+                                tracker::visit::SourceKind::Rename => false,
+                                tracker::visit::SourceKind::Copy => true,
+                            },
+                        };
+                        match (self.visit)(change) {
+                            Ok(std::ops::ControlFlow::Break(())) => std::ops::ControlFlow::Break(()),
+                            Ok(std::ops::ControlFlow::Continue(())) => std::ops::ControlFlow::Continue(()),
+                            Err(err) => {
+                                self.err = Some(err);
+                                std::ops::ControlFlow::Break(())
+                            }
                         }
                     }
-                }
-                None => Self::emit_change(dest.change, dest.location, &mut self.visit, &mut self.err),
-            },
-            diff_cache,
-            self.objects,
-            |push| {
-                let mut delegate = tree_to_changes::Delegate::new(push, self.location);
-                let state = gix_traverse::tree::breadthfirst::State::default();
-                gix_traverse::tree::breadthfirst(self.src_tree, state, self.objects, &mut delegate)
-            },
-        )?;
+                    None => Self::emit_change(dest.change, dest.location, &mut self.visit, &mut self.err),
+                },
+                diff_cache,
+                self.objects,
+                |push| {
+                    let mut delegate = tree_to_changes::Delegate::new(push, self.location);
+                    let state = gix_traverse::tree::breadthfirst::State::default();
+                    gix_traverse::tree::breadthfirst(self.src_tree, state, self.objects, &mut delegate)
+                        .map_err(gix_error::Exn::into_error)
+                },
+            )
+            .or_raise(|| gix_error::message("Failure during rename tracking"))?;
         Ok(Some(outcome))
     }
 }

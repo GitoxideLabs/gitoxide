@@ -106,20 +106,27 @@ fn deletes_a_batch_and_all_of_its_local_config_without_inspecting_commits() -> c
 #[test]
 fn validation_failure_leaves_the_entire_batch_unchanged() -> crate::Result {
     let (mut repo, _tmp) = crate::repo_rw("make_references_repo.sh")?;
+    let work_dir = repo
+        .workdir()
+        .expect("the reference fixture is a non-bare repository")
+        .to_owned();
     let deletable = refname("refs/heads/d1");
     let checked_out = refname("refs/heads/main");
 
     let err = repo
         .delete_local_branches([deletable.clone(), checked_out.clone()])
         .expect_err("the checked-out branch prevents the whole batch");
-    assert!(matches!(err, gix::repository::branch::delete::Error::CheckedOut { name, .. } if name == checked_out));
+    assert_eq!(
+        err.to_string(),
+        format!("The local branch {checked_out:?} is checked out in [{work_dir:?}]")
+    );
     assert!(repo.try_find_reference(deletable.as_ref())?.is_some());
 
     let tag = refname("refs/tags/t1");
     let err = repo
         .delete_local_branches([tag.clone()])
         .expect_err("non-local references are rejected");
-    assert!(matches!(err, gix::repository::branch::delete::Error::NotLocal { name } if name == tag));
+    assert_eq!(err.to_string(), format!("{tag:?} is not a local branch"));
     assert!(repo.try_find_reference(tag.as_ref())?.is_some());
     Ok(())
 }
@@ -215,10 +222,17 @@ fn linked_worktree_branches_are_protected_and_common_config_is_updated() -> crat
     std::fs::write(linked_repo.git_dir().join("HEAD"), b"ref: refs/heads/linked\n")?;
 
     let mut main = gix::open_opts(&main_path, crate::restricted())?;
+    let linked_work_dir = main
+        .worktree_proxy_by_id("linked")
+        .expect("the linked worktree is registered")
+        .base()?;
     let err = main
         .delete_local_branches([checked_out.clone()])
         .expect_err("a linked worktree checkout is protected");
-    assert!(matches!(err, gix::repository::branch::delete::Error::CheckedOut { name, .. } if name == checked_out));
+    assert_eq!(
+        err.to_string(),
+        format!("The local branch {checked_out:?} is checked out in [{linked_work_dir:?}]")
+    );
 
     let mut config = std::fs::OpenOptions::new()
         .append(true)

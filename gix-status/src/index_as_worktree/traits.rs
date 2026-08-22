@@ -30,11 +30,9 @@ pub trait CompareBlobs {
 pub trait SubmoduleStatus {
     /// The status result, describing in which way the submodule changed.
     type Output;
-    /// A custom error that may occur while computing the submodule status.
-    type Error: std::error::Error + Send + Sync + 'static;
 
     /// Compute the status of the submodule at `entry` and `rela_path`, or return `None` if no change was detected.
-    fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>, Self::Error>;
+    fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>, gix_error::Exn>;
 }
 
 /// Lazy borrowed access to worktree or blob data, with streaming support for worktree files.
@@ -143,15 +141,15 @@ impl CompareBlobs for HashEq {
         match stream.as_bytes() {
             Some(buffer) => {
                 let file_hash = gix_object::compute_hash(entry.id.kind(), gix_object::Kind::Blob, buffer)
-                    .map_err(gix_hash::io::Error::from)?;
+                    .map_err(gix_hash::io::from_hasher)?;
                 Ok((entry.id != file_hash).then_some(file_hash))
             }
             None => {
                 let file_hash = match stream.size() {
                     None => {
-                        stream.read_to_end(buf).map_err(gix_hash::io::Error::from)?;
+                        stream.read_to_end(buf).map_err(gix_hash::io::from_std_io)?;
                         gix_object::compute_hash(entry.id.kind(), gix_object::Kind::Blob, buf)
-                            .map_err(gix_hash::io::Error::from)?
+                            .map_err(gix_hash::io::from_hasher)?
                     }
                     Some(len) => gix_object::compute_stream_hash(
                         entry.id.kind(),

@@ -1,3 +1,5 @@
+use gix_error::ResultExt;
+
 use std::path::PathBuf;
 
 use super::Iter;
@@ -42,19 +44,7 @@ pub struct Outcome {
 }
 
 /// The error returned by [Repository::dirwalk_iter()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Failed to spawn producer thread")]
-    #[cfg(feature = "parallel")]
-    SpawnThread(#[from] std::io::Error),
-    #[error(transparent)]
-    #[cfg(not(feature = "parallel"))]
-    Dirwalk(#[from] dirwalk::Error),
-    #[error(transparent)]
-    #[cfg(not(feature = "parallel"))]
-    DetachPathSpec(#[from] std::io::Error),
-}
+pub type Error = gix_error::Error;
 
 /// Lifecycle
 impl Iter {
@@ -80,17 +70,13 @@ impl Iter {
                         Ok(Outcome {
                             index,
                             excludes: out.excludes.detach(),
-                            pathspec: out.pathspec.detach().map_err(|err| {
-                                dirwalk::Error::Walk(gix_dir::walk::Error::ReadDir {
-                                    path: repo.git_dir().to_owned(),
-                                    source: err,
-                                })
-                            })?,
+                            pathspec: out.pathspec.detach().or_erased()?,
                             traversal_root: out.traversal_root,
                             dirwalk: out.dirwalk,
                         })
                     }
-                })?;
+                })
+                .or_erased()?;
 
             Ok(Iter {
                 rx_and_join: Some((rx, handle)),
@@ -105,7 +91,7 @@ impl Iter {
             let out = Outcome {
                 index,
                 excludes: out.excludes.detach(),
-                pathspec: out.pathspec.detach()?,
+                pathspec: out.pathspec.detach().or_erased()?,
                 traversal_root: out.traversal_root,
                 dirwalk: out.dirwalk,
             };

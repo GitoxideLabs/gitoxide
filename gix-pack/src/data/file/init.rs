@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use gix_error::{CorruptionError, ErrorExt, ResultExt, message};
+
 use crate::data;
 
 /// Instantiation
@@ -17,10 +19,8 @@ impl data::File<crate::MMap> {
     }
 
     fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> Result<Self, data::header::decode::Error> {
-        let data = crate::mmap::read_only(path).map_err(|e| data::header::decode::Error::Io {
-            source: e,
-            path: path.to_owned(),
-        })?;
+        let data = crate::mmap::read_only(path)
+            .or_raise_erased(|| message!("Could not open pack data file at '{}'", path.display()))?;
         Self::from_data(data, path.to_owned(), object_hash)
     }
 }
@@ -39,9 +39,10 @@ where
         let pack_len = data.len();
         let id = gix_features::hash::crc32(path.as_os_str().to_string_lossy().as_bytes());
         if pack_len < N32_SIZE * 3 + hash_len {
-            return Err(data::header::decode::Error::Corrupt(format!(
+            return Err(CorruptionError::new(format!(
                 "Pack data of size {pack_len} is too small for even an empty pack with shortest hash"
-            )));
+            ))
+            .raise_erased());
         }
         let (kind, num_objects) =
             data::header::decode(&data[..12].try_into().expect("enough data after previous check"))?;

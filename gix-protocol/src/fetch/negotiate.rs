@@ -8,6 +8,7 @@
 use std::borrow::Cow;
 
 use gix_date::SecondsSinceUnixEpoch;
+use gix_error::{ResultExt, message};
 use gix_negotiate::Flags;
 use gix_ref::file::ReferenceExt;
 
@@ -16,24 +17,7 @@ use crate::fetch::{RefMap, Shallow, Tags, refmap};
 type Queue = gix_revwalk::PriorityQueue<SecondsSinceUnixEpoch, gix_hash::ObjectId>;
 
 /// The error returned during [`one_round()`] or [`mark_complete_and_common_ref()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("We were unable to figure out what objects the server should send after {rounds} round(s)")]
-    NegotiationFailed { rounds: usize },
-    #[error(transparent)]
-    LookupCommitInGraph(#[from] gix_revwalk::graph::get_or_insert_default::Error),
-    #[error(transparent)]
-    OpenPackedRefsBuffer(#[from] gix_ref::packed::buffer::open::Error),
-    #[error(transparent)]
-    IO(#[from] std::io::Error),
-    #[error(transparent)]
-    InitRefIter(#[from] gix_ref::file::iter::loose_then_packed::Error),
-    #[error(transparent)]
-    PeelToId(#[from] gix_ref::peel::to_id::Error),
-    #[error(transparent)]
-    AlternateRefsAndObjects(Box<dyn std::error::Error + Send + Sync + 'static>),
-}
+pub type Error = gix_error::Exn<gix_error::Message>;
 
 /// Determines what should be done after [preparing the commit-graph for negotiation](mark_complete_and_common_ref).
 #[must_use]
@@ -178,7 +162,8 @@ where
 
         if let Some(commit) = want_id
             .and_then(|id| graph.get_or_insert_commit(id.into(), |_| {}).transpose())
-            .transpose()?
+            .transpose()
+            .or_raise(|| message("Could not look up commit in graph"))?
         {
             remote_ref_target_known[mapping_idx] = true;
             cutoff_date = cutoff_date.unwrap_or_default().max(commit.commit_time).into();
@@ -204,7 +189,10 @@ where
     // (`git` is conditional here based on `deepen`, but it doesn't make sense and it's hard to extract from history when that happened).
     let mut queue = Queue::new();
     mark_all_refs_in_repo(refs, objects, graph, &mut queue, Flags::COMPLETE)?;
-    for (alt_refs, alt_objs) in alternates().map_err(|err| Error::AlternateRefsAndObjects(err.into()))? {
+    for (alt_refs, alt_objs) in alternates()
+        .map_err(|err| std::io::Error::other(err.into()))
+        .or_raise(|| message("Could not obtain alternate refs and objects"))?
+    {
         mark_all_refs_in_repo(&alt_refs, &alt_objs, graph, &mut queue, Flags::COMPLETE)?;
     }
     // Keep track of the tips, which happen to be on our queue right, before we traverse the graph with cutoff.
@@ -232,7 +220,9 @@ where
                 .filter(|(c, _)| c.data.flags.contains(Flags::COMPLETE))
                 .map(|(_, id)| id)
             {
-                negotiator.known_common(common_id.into(), graph)?;
+                negotiator
+                    .known_common(common_id.into(), graph)
+                    .or_raise(|| message("Could not mark common commit"))?;
             }
         }
         Ok(())
@@ -242,7 +232,9 @@ where
     // reason we cached the set of tips.
     gix_trace::detail!("mark tips", num_tips = tips.len()).into_scope(|| -> Result<_, Error> {
         for tip in tips.iter_unordered() {
-            negotiator.add_tip(*tip, graph)?;
+            negotiator
+                .add_tip(*tip, graph)
+                .or_raise(|| message("Could not add negotiation tip"))?;
         }
         Ok(())
     })?;
@@ -353,7 +345,8 @@ fn mark_recent_complete_commits(
                 .get_or_insert_commit(parent_id, |md| {
                     was_complete = md.flags.contains(Flags::COMPLETE);
                     md.flags |= Flags::COMPLETE;
-                })?
+                })
+                .or_raise(|| message("Could not look up commit in graph"))?
                 .filter(|_| !was_complete)
             {
                 queue.insert(parent.commit_time, parent_id);
@@ -371,15 +364,26 @@ fn mark_all_refs_in_repo(
     mark: Flags,
 ) -> Result<(), Error> {
     let _span = gix_trace::detail!("mark_all_refs");
-    for local_ref in store.iter()?.all()? {
-        let mut local_ref = local_ref?;
-        let id = local_ref.peel_to_id_packed(store, objects, store.cached_packed_buffer()?.as_ref().map(|b| &***b))?;
+    for local_ref in store
+        .iter()
+        .or_raise(|| message("Could not open packed refs"))?
+        .all()
+        .or_raise(|| message("Could not initialize ref iterator"))?
+    {
+        let mut local_ref = local_ref.or_raise(|| message("Could not read reference"))?;
+        let packed = store
+            .cached_packed_buffer()
+            .or_raise(|| message("Could not open packed refs"))?;
+        let id = local_ref
+            .peel_to_id_packed(store, objects, packed.as_ref().map(|b| &***b))
+            .or_raise(|| message("Could not peel reference to ID"))?;
         let mut is_complete = false;
         if let Some(commit) = graph
             .get_or_insert_commit(id, |md| {
                 is_complete = md.flags.contains(Flags::COMPLETE);
                 md.flags |= mark;
-            })?
+            })
+            .or_raise(|| message("Could not look up commit in graph"))?
             .filter(|_| !is_complete)
         {
             queue.insert(commit.commit_time, id);
@@ -457,7 +461,9 @@ pub fn one_round(
             match ack {
                 Acknowledgement::Common(id) => {
                     seen_ack = true;
-                    negotiator.in_common_with_remote(*id, graph)?;
+                    negotiator
+                        .in_common_with_remote(*id, graph)
+                        .or_raise(|| message("Could not mark remote-common commit"))?;
                     if let Some(common) = &mut state.common_commits {
                         common.push(*id);
                     }
@@ -481,7 +487,7 @@ pub fn one_round(
 
     let mut haves_added = 0;
     for have_id in (0..state.haves_to_send).map_while(|_| negotiator.next_have(graph)) {
-        arguments.have(have_id?);
+        arguments.have(have_id.or_raise(|| message("Could not obtain next negotiation commit"))?);
         haves_added += 1;
     }
     // Note that we are differing from the git implementation, which does an extra-round of with no new haves sent at all.

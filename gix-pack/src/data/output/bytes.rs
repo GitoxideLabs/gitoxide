@@ -1,19 +1,11 @@
 use std::io::Write;
 
+use gix_error::{ResultExt, message};
+
 use crate::{data::output, exact_vec};
 
 /// The error returned by `next()` in the [`FromEntriesIter`] iterator.
-#[expect(missing_docs)]
-#[derive(Debug, thiserror::Error)]
-pub enum Error<E>
-where
-    E: std::error::Error + 'static,
-{
-    #[error(transparent)]
-    Io(#[from] gix_hash::io::Error),
-    #[error(transparent)]
-    Input(E),
-}
+pub type Error = gix_error::Exn;
 
 /// An implementation of [`Iterator`] to write [encoded entries][output::Entry] to an inner implementation each time
 /// `next()` is called.
@@ -39,11 +31,10 @@ pub struct FromEntriesIter<I, W> {
     is_done: bool,
 }
 
-impl<I, W, E> FromEntriesIter<I, W>
+impl<I, W> FromEntriesIter<I, W>
 where
-    I: Iterator<Item = Result<Vec<output::Entry>, E>>,
+    I: Iterator<Item = Result<Vec<output::Entry>, gix_error::Exn>>,
     W: std::io::Write,
-    E: std::error::Error + 'static,
 {
     /// Create a new instance reading [entries][output::Entry] from an `input` iterator and write pack data bytes to
     /// `output` writer, resembling a pack of `version` with exactly `num_entries` amount of objects contained in it.
@@ -91,18 +82,18 @@ where
         self.trailer
     }
 
-    fn next_inner(&mut self) -> Result<u64, Error<E>> {
+    fn next_inner(&mut self) -> Result<u64, Error> {
         let previous_written = self.written;
         if let Some((version, num_entries)) = self.header_info.take() {
             let header_bytes = crate::data::header::encode(version, num_entries);
             self.output
                 .write_all(&header_bytes[..])
-                .map_err(gix_hash::io::Error::from)?;
+                .map_err(gix_hash::io::from_std_io)?;
             self.written += header_bytes.len() as u64;
         }
         match self.input.next() {
             Some(entries) => {
-                for entry in entries.map_err(Error::Input)? {
+                for entry in entries.or_raise_erased(|| message("Pack entry input iterator failed"))? {
                     if entry.is_invalid() {
                         self.pack_offsets_and_validity.push((0, false));
                         continue;
@@ -117,9 +108,9 @@ where
                     });
                     self.written += header
                         .write_to(entry.decompressed_size as u64, &mut self.output)
-                        .map_err(gix_hash::io::Error::from)? as u64;
+                        .map_err(gix_hash::io::from_std_io)? as u64;
                     self.written += std::io::copy(&mut &*entry.compressed_data, &mut self.output)
-                        .map_err(gix_hash::io::Error::from)?;
+                        .map_err(gix_hash::io::from_std_io)?;
                 }
             }
             None => {
@@ -128,13 +119,13 @@ where
                     .hash
                     .clone()
                     .try_finalize()
-                    .map_err(gix_hash::io::Error::from)?;
+                    .map_err(gix_hash::io::from_hasher)?;
                 self.output
                     .inner
                     .write_all(digest.as_slice())
-                    .map_err(gix_hash::io::Error::from)?;
+                    .map_err(gix_hash::io::from_std_io)?;
                 self.written += digest.as_slice().len() as u64;
-                self.output.inner.flush().map_err(gix_hash::io::Error::from)?;
+                self.output.inner.flush().map_err(gix_hash::io::from_std_io)?;
                 self.is_done = true;
                 self.trailer = Some(digest);
             }
@@ -143,14 +134,13 @@ where
     }
 }
 
-impl<I, W, E> Iterator for FromEntriesIter<I, W>
+impl<I, W> Iterator for FromEntriesIter<I, W>
 where
-    I: Iterator<Item = Result<Vec<output::Entry>, E>>,
+    I: Iterator<Item = Result<Vec<output::Entry>, gix_error::Exn>>,
     W: std::io::Write,
-    E: std::error::Error + 'static,
 {
     /// The amount of bytes written to `out` if `Ok` or the error `E` received from the input.
-    type Item = Result<u64, Error<E>>;
+    type Item = Result<u64, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_done {

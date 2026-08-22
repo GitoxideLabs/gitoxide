@@ -12,6 +12,7 @@ use std::convert::Infallible;
 
 use bstr::{BString, ByteSlice};
 use gix_diff::{tree::recorder::Location, tree_with_rewrites::Change};
+use gix_error::ResultExt;
 use gix_object::FindExt;
 
 use crate::tree::{
@@ -106,7 +107,9 @@ pub(super) fn collect(
 ) -> Result<SideState, Error> {
     let mut changes = Vec::new();
     if base_tree != side_tree {
-        let side_tree = objects.find_tree_iter(side_tree, side_buf)?;
+        let side_tree = objects
+            .find_tree_iter(side_tree, side_buf)
+            .or_raise_erased(|| gix_error::message("Tree merge failed"))?;
         gix_diff::tree_with_rewrites(
             gix_object::TreeRefIter::from_bytes(base_buf, base_tree.kind()),
             side_tree,
@@ -121,7 +124,8 @@ pub(super) fn collect(
                 location: Some(Location::Path),
                 rewrites,
             },
-        )?;
+        )
+        .or_raise_erased(|| gix_error::message("Tree merge failed"))?;
     }
     Ok(SideState::from_changes(changes))
 }

@@ -1,18 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use gix_error::{ErrorExt, OptionExt, ValidationError};
 
 use crate::Bundle;
 
 /// Returned by [`Bundle::at()`]
-#[derive(thiserror::Error, Debug)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("An 'idx' extension is expected of an index file: '{0}'")]
-    InvalidPath(PathBuf),
-    #[error(transparent)]
-    Pack(#[from] crate::data::header::decode::Error),
-    #[error(transparent)]
-    Index(#[from] crate::index::init::Error),
-}
+pub type Error = gix_error::Exn;
 
 /// Initialization
 impl Bundle {
@@ -30,7 +23,12 @@ impl Bundle {
         let ext = path
             .extension()
             .and_then(std::ffi::OsStr::to_str)
-            .ok_or_else(|| Error::InvalidPath(path.to_owned()))?;
+            .ok_or_raise_erased(|| {
+                ValidationError::new(format!(
+                    "An 'idx' extension is expected of an index file: '{}'",
+                    path.display()
+                ))
+            })?;
         Ok(match ext {
             "idx" => Self {
                 index: crate::index::File::at(path, object_hash)?,
@@ -40,7 +38,13 @@ impl Bundle {
                 pack: crate::data::File::at(path, object_hash)?,
                 index: crate::index::File::at(path.with_extension("idx"), object_hash)?,
             },
-            _ => return Err(Error::InvalidPath(path.to_owned())),
+            _ => {
+                return Err(ValidationError::new(format!(
+                    "An 'idx' extension is expected of an index file: '{}'",
+                    path.display()
+                ))
+                .raise_erased());
+            }
         })
     }
 }

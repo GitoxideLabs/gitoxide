@@ -20,7 +20,7 @@ mod method {
     }
 
     #[test]
-    fn verify_checksum() -> Result<(), Box<dyn std::error::Error>> {
+    fn verify_checksum() -> crate::Result {
         let p = pack_at(SMALL_PACK);
         assert_eq!(
             p.verify_checksum(&mut progress::Discard, &AtomicBool::new(false))?,
@@ -30,7 +30,7 @@ mod method {
     }
 
     #[test]
-    fn verify_checksum_from_memory() -> Result<(), Box<dyn std::error::Error>> {
+    fn verify_checksum_from_memory() -> crate::Result {
         let p = pack_from_memory_at(SMALL_PACK);
         assert_eq!(
             p.verify_checksum(&mut progress::Discard, &AtomicBool::new(false))?,
@@ -63,22 +63,20 @@ mod method {
         let pack = pack_at(SMALL_PACK).with_alloc_limit_bytes(Some(0));
         let entry = pack.entry(entry_offset).expect("valid object type");
         assert!(
-            matches!(
-                pack.decode_entry(
-                    entry,
-                    &mut buf,
-                    &mut inflate,
-                    &|_, _| None,
-                    &mut gix_odb::pack::cache::Never
-                ),
-                Err(gix_odb::pack::data::decode::Error::OutOfMemory)
-            ),
+            pack.decode_entry(
+                entry,
+                &mut buf,
+                &mut inflate,
+                &|_, _| None,
+                &mut gix_odb::pack::cache::Never
+            )
+            .is_err_and(|err| err.to_string() == "Entry too large to fit in memory"),
             "pack-controlled allocations larger than the configured limit are rejected"
         );
     }
 
     #[test]
-    fn iter() -> Result<(), Box<dyn std::error::Error>> {
+    fn iter() -> crate::Result {
         let pack = pack_at(SMALL_PACK);
         let it = pack.streaming_iter()?;
         assert_eq!(it.count(), pack.num_objects() as usize);

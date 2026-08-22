@@ -99,14 +99,12 @@ fn dot_slash_from_environment_causes_error() -> crate::Result {
             .set("GIT_CONFIG_VALUE_0", "./include.path");
 
         let res = gix_config::File::from_env(env.to_init_options());
-        assert!(
-            matches!(
-                res,
-                Err(gix_config::file::init::from_env::Error::Includes(
-                    gix_config::file::includes::Error::MissingConfigPath
-                ))
-            ),
-            "this is a failure of resolving the include path, after trying to include it"
+        assert_eq!(
+            res.expect_err("resolving the relative include path must fail")
+                .downcast_any_ref::<gix_error::NotFoundError>()
+                .expect("the missing configuration path is retained")
+                .message,
+            "Include paths from environment variables must not be relative as no config file path exists as root"
         );
     }
 
@@ -118,14 +116,12 @@ fn dot_slash_from_environment_causes_error() -> crate::Result {
             .set("GIT_CONFIG_VALUE_0", &absolute_path);
 
         let res = gix_config::File::from_env(env.to_init_options());
-        assert!(
-            matches!(
-                res,
-                Err(gix_config::file::init::from_env::Error::Includes(
-                    gix_config::file::includes::Error::MissingConfigPath
-                ))
-            ),
-            "here the pattern path tries to be resolved and fails as target config isn't set"
+        assert_eq!(
+            res.expect_err("resolving the relative pattern must fail")
+                .downcast_any_ref::<gix_error::NotFoundError>()
+                .expect("the missing configuration path is retained")
+                .message,
+            "Include paths from environment variables must not be relative as no config file path exists as root"
         );
     }
 

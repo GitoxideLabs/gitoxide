@@ -16,26 +16,8 @@ use _impl::{Action, DelegateBlocking, RefsAction};
 mod ref_map;
 
 mod error {
-    use std::io;
-
-    use gix_protocol::{fetch::response, handshake, ls_refs};
-    use gix_transport::client;
-
     /// The error used in [`fetch()`][crate::fetch()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Handshake(#[from] handshake::Error),
-        #[error("Could not access repository or failed to read streaming pack file")]
-        Io(#[from] io::Error),
-        #[error(transparent)]
-        Transport(#[from] client::Error),
-        #[error(transparent)]
-        LsRefs(#[from] ls_refs::Error),
-        #[error(transparent)]
-        Response(#[from] response::Error),
-    }
+    pub type Error = gix_error::Exn;
 }
 pub use error::Error;
 
@@ -46,7 +28,6 @@ type Cursor = std::io::Cursor<Vec<u8>>;
 #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
 type Cursor = futures_lite::io::Cursor<Vec<u8>>;
 
-#[expect(clippy::result_large_err)]
 fn helper_unused(_action: gix_credentials::helper::Action) -> gix_credentials::protocol::Result {
     panic!("Call to credentials helper is unexpected")
 }

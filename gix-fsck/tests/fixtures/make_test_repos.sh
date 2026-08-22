@@ -30,5 +30,7 @@ git init base
 # Blobless clone
 git clone --no-local --no-hardlinks --filter=blob:none ./base blobless
 
-# Treeless (and blobless) clone
-git clone --no-local --no-hardlinks --filter=tree:0 ./base treeless
+# Treeless (and blobless) clone. Materialize only the tip worktree so the two
+# ancestor root trees remain predictably absent instead of depending on clone behavior.
+git clone --no-local --no-hardlinks --no-checkout --filter=tree:0 ./base treeless
+git -C treeless checkout HEAD -- .

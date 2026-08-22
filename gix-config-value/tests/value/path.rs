@@ -1,7 +1,14 @@
 mod interpolate {
     use std::path::{Path, PathBuf};
 
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    use bstr::BString;
     use gix_config_value::path;
+    #[cfg(any(target_os = "windows", target_os = "android"))]
+    use gix_error::Message;
+    use gix_error::NotFoundError;
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    use gix_error::ValidationError;
 
     #[test]
     fn backslash_is_not_special_and_they_are_not_escaping_anything() -> crate::Result {
@@ -14,10 +21,8 @@ mod interpolate {
 
     #[test]
     fn empty_path_is_error() {
-        assert!(matches!(
-            interpolate_without_context(""),
-            Err(path::interpolate::Error::Missing { what: "path" })
-        ));
+        let err = interpolate_without_context("").expect_err("empty paths are invalid");
+        assert!(err.downcast_any_ref::<NotFoundError>().is_some());
     }
 
     #[test]
@@ -32,7 +37,7 @@ mod interpolate {
                             git_install_dir: Path::new(git_install_dir).into(),
                             ..Default::default()
                         })
-                        .unwrap(),
+                        .expect("valid interpolation"),
                     expected,
                     "prefix interpolation keeps separators as they are"
                 );
@@ -50,7 +55,7 @@ mod interpolate {
                     git_install_dir: Path::new(git_install_dir).into(),
                     ..Default::default()
                 })
-                .unwrap(),
+                .expect("valid interpolation"),
             Path::new(path)
         );
     }
@@ -64,16 +69,14 @@ mod interpolate {
     #[test]
     fn tilde_slash_substitutes_current_user() -> crate::Result {
         let path = "~/user/bar";
-        let home = std::env::current_dir()?;
+        let home = std::env::current_dir().expect("current directory is available");
         let expected = home.join("user").join("bar");
         assert_eq!(
-            gix_config_value::Path::from(path)
-                .interpolate(path::interpolate::Context {
-                    home_dir: Some(&home),
-                    home_for_user: Some(home_for_user),
-                    ..Default::default()
-                })
-                .unwrap(),
+            gix_config_value::Path::from(path).interpolate(path::interpolate::Context {
+                home_dir: Some(&home),
+                home_for_user: Some(home_for_user),
+                ..Default::default()
+            })?,
             expected
         );
         Ok(())
@@ -82,16 +85,14 @@ mod interpolate {
     #[cfg(any(target_os = "windows", target_os = "android"))]
     #[test]
     fn tilde_with_given_user_is_unsupported_on_windows_and_android() {
-        assert!(matches!(
-            interpolate_without_context("~baz/foo/bar"),
-            Err(gix_config_value::path::interpolate::Error::UserInterpolationUnsupported)
-        ));
+        let err = interpolate_without_context("~baz/foo/bar").expect_err("unsupported on this platform");
+        assert!(err.downcast_any_ref::<Message>().is_some());
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
     #[test]
     fn tilde_with_given_user() -> crate::Result {
-        let home = std::env::current_dir()?;
+        let home = std::env::current_dir().expect("current directory is available");
 
         for path_suffix in &["foo/bar", r"foo\bar", ""] {
             let path = format!("~user{}{}", std::path::MAIN_SEPARATOR, path_suffix);
@@ -100,6 +101,19 @@ mod interpolate {
             assert_eq!(interpolate_without_context(path)?, expected);
         }
         Ok(())
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    #[test]
+    fn malformed_usernames_are_validation_errors_with_the_utf8_cause() {
+        let err = gix_config_value::Path::from(BString::from(vec![b'~', 0xff, b'/', b'x']))
+            .interpolate(path::interpolate::Context {
+                home_for_user: Some(home_for_user),
+                ..Default::default()
+            })
+            .expect_err("the username is not UTF-8");
+        assert!(err.downcast_any_ref::<ValidationError>().is_some());
+        assert!(err.downcast_any_ref::<std::str::Utf8Error>().is_some());
     }
 
     fn interpolate_without_context(
@@ -112,7 +126,10 @@ mod interpolate {
     }
 
     fn home_for_user(name: &str) -> Option<PathBuf> {
-        std::env::current_dir().unwrap().join(name).into()
+        std::env::current_dir()
+            .expect("current directory is available")
+            .join(name)
+            .into()
     }
 }
 
