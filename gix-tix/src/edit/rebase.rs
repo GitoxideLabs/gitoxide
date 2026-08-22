@@ -382,7 +382,6 @@ impl PersistedConflict {
 
 struct Prepared {
     repo: gix::Repository,
-    root: Option<ObjectId>,
     reset_indices: HashSet<ObjectId>,
     reset_index_paths: Option<Vec<BString>>,
     skip_worktree_transitions: bool,
@@ -1322,7 +1321,6 @@ fn perform_inner(
     }
     let mut prepared = Prepared {
         repo,
-        root,
         reset_indices,
         reset_index_paths,
         skip_worktree_transitions,
@@ -1577,7 +1575,6 @@ pub(super) fn finish_review_with_progress(
     });
     let mut prepared = Prepared {
         repo,
-        root: Some(review),
         reset_indices: HashSet::new(),
         reset_index_paths: None,
         skip_worktree_transitions: false,
@@ -2007,7 +2004,6 @@ pub(crate) fn perform_plan_with_progress(
     });
     let mut prepared = Prepared {
         repo,
-        root: Some(plan.base),
         reset_indices: marked.then_some(plan.base).into_iter().collect(),
         reset_index_paths: None,
         skip_worktree_transitions: false,
@@ -2204,7 +2200,9 @@ impl Prepared {
                 transition.new,
             )?;
         }
-        let current_ref = self.repo.head()?.referent_name().map(ToOwned::to_owned);
+        let head = self.repo.head()?;
+        let unborn = head.is_unborn();
+        let current_ref = head.referent_name().map(ToOwned::to_owned);
         let mut deferred_ref_deletions = Vec::new();
         if let (Some(expected_refs), Some(current_ref)) = (&mut self.expected_refs, current_ref) {
             if expected_refs
@@ -2225,7 +2223,7 @@ impl Prepared {
         let updated_refs = update_refs(
             &self.repo,
             &self.rewritten,
-            self.root.is_none(),
+            unborn,
             self.selected,
             &self.committer,
             self.expected_refs.take(),
@@ -2969,7 +2967,7 @@ fn update_refs(
             edits.push(ref_edit(name.clone(), old, new));
             rollback.push(ref_edit(name, new, old));
         }
-    } else {
+    } else if !unborn {
         for reference in repo.references()?.all()? {
             let reference = match reference {
                 Ok(reference) => reference,

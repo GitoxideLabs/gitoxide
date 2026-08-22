@@ -634,6 +634,7 @@ impl HistoryGraph {
         authors: &SharedAuthors,
     ) -> Result<Refresh> {
         let refs = snapshot(repo, revisions, hidden_revisions, include_worktrees)?;
+        let hidden_only = refs.view_tips.is_empty() && !refs.hidden_tips.is_empty();
         let shallow: HashSet<_> = repo
             .shallow_commits()
             .context("could not read shallow commits")?
@@ -799,6 +800,9 @@ impl HistoryGraph {
             if stop {
                 continue;
             }
+            if hidden_only {
+                continue;
+            }
             for parent in parent_indices {
                 self.schedule_cached(
                     repo,
@@ -818,7 +822,11 @@ impl HistoryGraph {
             }
         }
         self.tracking = tracking;
-        self.set_current_view(&refs.view_tips);
+        self.set_current_view(if hidden_only {
+            &refs.hidden_tips
+        } else {
+            &refs.view_tips
+        });
         let decorations = decorations(repo, &refs.pins, &refs.worktrees)?;
         Ok(Refresh {
             refs,
@@ -1012,15 +1020,14 @@ pub(crate) fn load(
 ) -> Result<()> {
     let refs = snapshot(repo, revisions, hidden_revisions, include_worktrees)?;
     let tips = refs.view_tips;
-    if tips.is_empty() {
-        emit(Event::Decorations(decorations(repo, &refs.pins, &refs.worktrees)?));
-        emit(Event::VisibleComplete);
-        emit(Event::Complete(HistoryGraph::default()));
-        return Ok(());
-    }
     let hidden_tips = refs.hidden_tips;
 
     if !emit(Event::Decorations(decorations(repo, &refs.pins, &refs.worktrees)?)) {
+        return Ok(());
+    }
+    if tips.is_empty() && hidden_tips.is_empty() {
+        emit(Event::VisibleComplete);
+        emit(Event::Complete(HistoryGraph::default()));
         return Ok(());
     }
     let shallow: HashSet<_> = repo
@@ -1033,6 +1040,33 @@ pub(crate) fn load(
         .commit_graph_if_enabled()
         .context("could not open commit-graph for history traversal")?;
     let mut graph = HistoryGraph::default();
+    if tips.is_empty() {
+        let mut rows = Vec::with_capacity(hidden_tips.len());
+        let mut attributions = Vec::new();
+        let mut authors = gix::features::threading::lock(authors);
+        let mut buf = Vec::new();
+        for &id in &hidden_tips {
+            if cancelled.load(Ordering::Relaxed) {
+                emit(Event::Cancelled);
+                return Ok(());
+            }
+            let index = graph.ensure_commit(repo, commit_graph.as_ref(), &shallow, id, &mut buf)?;
+            if graph.commits[index.as_usize()].state & NODE_STORED != 0 {
+                continue;
+            }
+            rows.push(decode_commit(repo, id, &mut authors, &mut attributions)?);
+            graph.commits[index.as_usize()].state |= NODE_STORED;
+            graph.stored_order.push(index);
+        }
+        drop(authors);
+        if !rows.is_empty() && !emit(Event::HiddenCommits(LoadedCommits { rows, attributions })) {
+            return Ok(());
+        }
+        emit(Event::VisibleComplete);
+        graph.set_current_view(&hidden_tips);
+        emit(Event::Complete(graph));
+        return Ok(());
+    }
     let hidden = hidden_frontier(&mut graph, repo, commit_graph.as_ref(), &tips, &hidden_tips, &shallow)?;
     let local_refs = local_refs_by_target(repo)?;
     let mut tracking = HashMap::new();
@@ -1202,31 +1236,7 @@ pub(crate) fn load(
                 emit(Event::Cancelled);
                 return Ok(());
             }
-            let object = repo.find_commit(id).context("could not read connected hidden commit")?;
-            let parent_ids = object.parent_ids().map(gix::Id::detach).collect();
-            let Metadata {
-                committer_time,
-                author_time,
-                author,
-                attributions: row_attributions,
-                title,
-                has_agent_marker,
-                is_review,
-                signature,
-            } = decode_metadata(object.iter(), &mut authors, &mut attributions)?;
-            rows.push(Commit {
-                id,
-                parent_ids,
-                committer_time,
-                author_time,
-                author,
-                attributions: row_attributions,
-                title,
-                metadata_loaded: true,
-                has_agent_marker,
-                is_review,
-                signature,
-            });
+            rows.push(decode_commit(repo, id, &mut authors, &mut attributions)?);
             let index = graph.ensure_commit(repo, commit_graph.as_ref(), &shallow, id, &mut buf)?;
             if graph.commits[index.as_usize()].state & NODE_STORED == 0 {
                 graph.commits[index.as_usize()].state |= NODE_STORED;
@@ -1552,6 +1562,9 @@ pub(crate) fn referenced_refs(
     repo: &gix::Repository,
     revisions: &[OsString],
 ) -> Result<HashMap<BString, gix::refs::Target>> {
+    if revisions.is_empty() && repo.head()?.is_unborn() {
+        return Ok(HashMap::new());
+    }
     let implicit_head = OsString::from("HEAD");
     let revisions = if revisions.is_empty() {
         std::slice::from_ref(&implicit_head)
@@ -1608,6 +1621,39 @@ pub(crate) fn load_metadata(
     let mut authors = gix::features::threading::lock(authors);
     let metadata = decode_metadata(object.iter(), &mut authors, &mut attributions)?;
     Ok((metadata, attributions))
+}
+
+fn decode_commit(
+    repo: &gix::Repository,
+    id: ObjectId,
+    authors: &mut Authors,
+    attributions: &mut Vec<Attribution>,
+) -> Result<Commit<BString>> {
+    let object = repo.find_commit(id).context("could not read commit")?;
+    let parent_ids = object.parent_ids().map(gix::Id::detach).collect();
+    let Metadata {
+        committer_time,
+        author_time,
+        author,
+        attributions: row_attributions,
+        title,
+        has_agent_marker,
+        is_review,
+        signature,
+    } = decode_metadata(object.iter(), authors, attributions)?;
+    Ok(Commit {
+        id,
+        parent_ids,
+        committer_time,
+        author_time,
+        author,
+        attributions: row_attributions,
+        title,
+        metadata_loaded: true,
+        has_agent_marker,
+        is_review,
+        signature,
+    })
 }
 
 fn decode_metadata<'a>(
@@ -2672,6 +2718,110 @@ mod tests {
         assert!(
             !metadata.title.is_empty(),
             "deferred metadata can be loaded for the view"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unborn_views_show_only_the_hidden_tips() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let main = repo.rev_parse_single("main")?.detach();
+        let topic = repo.rev_parse_single("topic")?.detach();
+        drop(repo);
+        assert!(
+            Command::new("git")
+                .current_dir(fixture.path())
+                .args(["symbolic-ref", "HEAD", "refs/heads/unborn"])
+                .status()?
+                .success(),
+            "the fixture enters an unborn branch"
+        );
+
+        for (hidden, expected) in [
+            (&["main"][..], HashSet::from([main])),
+            (&["main", "topic"][..], HashSet::from([main, topic])),
+        ] {
+            let events = loaded(fixture.path(), &[], hidden)?;
+            let visible: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Commits(commits) => Some(commits.rows.iter().map(|row| row.id)),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            let boundaries: HashSet<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::HiddenCommits(commits) => Some(commits.rows.iter().map(|row| row.id)),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            let graph = events
+                .iter()
+                .find_map(|event| match event {
+                    Event::Complete(graph) => Some(graph),
+                    _ => None,
+                })
+                .expect("the hidden-only history completes");
+
+            assert!(visible.is_empty(), "hidden ancestry is not exposed as visible history");
+            assert_eq!(boundaries, expected, "each hidden tip is emitted as a boundary");
+            assert_eq!(
+                graph.stored_commit_ids().collect::<HashSet<_>>(),
+                expected,
+                "only hidden tips are retained as rows"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hidden_only_refresh_stops_after_the_new_tip() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let path = fixture.path();
+        assert!(
+            Command::new("git")
+                .current_dir(path)
+                .args(["symbolic-ref", "HEAD", "refs/heads/unborn"])
+                .status()?
+                .success()
+        );
+        let mut graph = loaded(path, &[], &["main"])?
+            .into_iter()
+            .find_map(|event| match event {
+                Event::Complete(graph) => Some(graph),
+                _ => None,
+            })
+            .expect("the hidden-only history completes");
+
+        for args in [
+            &["symbolic-ref", "HEAD", "refs/heads/main"][..],
+            &[
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "--allow-empty",
+                "-q",
+                "-m",
+                "new",
+            ][..],
+            &["symbolic-ref", "HEAD", "refs/heads/unborn"][..],
+        ] {
+            assert!(Command::new("git").current_dir(path).args(args).status()?.success());
+        }
+        let repo = crate::test_repository::open(path)?;
+        let new_tip = repo.rev_parse_single("main")?.detach();
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        let refresh = graph.refresh(&repo, &[], &["main".into()], false, &HashSet::new(), &authors)?;
+
+        assert_eq!(
+            refresh.commits.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [new_tip],
+            "refresh emits the advanced hidden tip without walking its ancestry"
         );
         Ok(())
     }

@@ -720,6 +720,37 @@ mod tests {
     }
 
     #[test]
+    fn creates_the_unborn_branch_above_an_existing_base() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = open(fixture.path())?;
+        let base = repository.rev_parse_single("main")?.detach();
+        let graph = crate::history::HistoryGraph::for_commits(&repository, &[base])?;
+        drop(repository);
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["symbolic-ref", "HEAD", "refs/heads/unborn"])
+                .status()?
+                .success()
+        );
+
+        let prepared = prepare_empty(open(fixture.path())?, Some(base))?;
+        let edited = prepared.document.replacen(b"what\n\nwhy", b"first\n\nreason", 1);
+        let new_id = apply(open(fixture.path())?, &graph, prepared, &edited)?;
+        let repository = open(fixture.path())?;
+
+        assert_eq!(repository.head_id()?.detach(), new_id);
+        assert_eq!(repository.find_reference("refs/heads/main")?.id().detach(), base);
+        assert_eq!(
+            repository.find_commit(new_id)?.parent_ids().next().map(gix::Id::detach),
+            Some(base),
+            "the first commit is based on the selected hidden tip"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn explicit_empty_commit_preserves_index_and_worktree_changes() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
         let parent = open(fixture.path())?.head_id()?.detach();
