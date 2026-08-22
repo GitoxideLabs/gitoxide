@@ -59,13 +59,15 @@ const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const TODO_PROGRESS_DELAY: Duration = Duration::from_millis(300);
 const HISTORY_STATUS_DELAY: Duration = Duration::from_millis(500);
 const REPEAT_IDLE: Duration = Duration::from_millis(75);
-const WORKTREE_EVENT_IDLE: Duration = Duration::from_millis(75);
 const REF_EVENT_IDLE: Duration = Duration::from_millis(100);
 const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
 const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const LINE_DIFF_POOL_IDLE: Duration = Duration::from_secs(10);
 const THEME_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
+const WORKTREE_STATUS_CURRENT: usize = 0;
+const WORKTREE_STATUS_PARTIAL: usize = usize::MAX - 1;
+const WORKTREE_STATUS_FULL: usize = usize::MAX;
 
 struct FillRepository {
     path: PathBuf,
@@ -92,6 +94,12 @@ struct WorktreeStatusHead {
     target: Option<gix::ObjectId>,
 }
 
+#[derive(Default)]
+struct WorktreeStatusParts {
+    staged: bool,
+    scopes: HashSet<BString>,
+}
+
 enum ExternalConflictResolution {
     Current,
     Changed,
@@ -107,13 +115,100 @@ enum ConflictReconcileStatus {
 }
 
 struct WorktreeWatcher {
-    _watcher: RecommendedWatcher,
+    watcher: RecommendedWatcher,
     events: mpsc::Receiver<notify::Result<notify::Event>>,
     directories: HashSet<PathBuf>,
+    index_projection: Vec<IndexWatchEntry>,
     workdir: PathBuf,
     dot_git: PathBuf,
     git_dir: PathBuf,
     index: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct IndexWatchEntry {
+    path: BString,
+    mode: u32,
+    flags: u32,
+}
+
+#[derive(Default)]
+struct WorktreeWatchRefresh {
+    full: bool,
+    index: bool,
+    scopes: HashSet<PathBuf>,
+}
+
+impl WorktreeWatchRefresh {
+    fn add_scope(&mut self, scope: &Path, workdir: &Path) {
+        if scope == workdir {
+            self.full = true;
+            self.scopes.clear();
+        } else if !self.full && scope.starts_with(workdir) {
+            self.scopes.insert(scope.to_owned());
+        }
+    }
+
+    fn observe(&mut self, event: &notify::Event, workdir: &Path, index: &Path, directories: &HashSet<PathBuf>) {
+        if self.full {
+            return;
+        }
+        if event.need_rescan() || event.paths.is_empty() || matches!(event.kind, notify::EventKind::Any) {
+            self.full = true;
+            self.scopes.clear();
+            return;
+        }
+        for path in &event.paths {
+            if path == index {
+                self.index = true;
+            } else if path.file_name().is_some_and(|name| name == ".gitignore") {
+                if let Some(parent) = path.parent() {
+                    self.add_scope(parent, workdir);
+                } else {
+                    self.full = true;
+                    self.scopes.clear();
+                    return;
+                }
+            }
+        }
+        let is_directory = |path: &Path| {
+            directories.contains(path)
+                || std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
+        };
+        match event.kind {
+            notify::EventKind::Create(notify::event::CreateKind::Folder)
+            | notify::EventKind::Remove(notify::event::RemoveKind::Folder) => {
+                for path in &event.paths {
+                    self.add_scope(path, workdir);
+                }
+            }
+            notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+                if event.paths.iter().any(|path| is_directory(path)) =>
+            {
+                for path in &event.paths {
+                    if let Some(parent) = path.parent() {
+                        self.add_scope(parent, workdir);
+                    }
+                }
+            }
+            notify::EventKind::Create(notify::event::CreateKind::Any | notify::event::CreateKind::Other)
+            | notify::EventKind::Remove(notify::event::RemoveKind::Any | notify::event::RemoveKind::Other)
+            | notify::EventKind::Modify(notify::event::ModifyKind::Any) => {
+                for path in event.paths.iter().filter(|path| is_directory(path)) {
+                    self.add_scope(path, workdir);
+                }
+            }
+            notify::EventKind::Other => {
+                self.full = true;
+                self.scopes.clear();
+            }
+            _ => {}
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.full && !self.index && self.scopes.is_empty()
+    }
 }
 
 struct RefWatcher {
@@ -126,10 +221,6 @@ struct RefWatcher {
 impl WorktreeWatcher {
     fn event_is_relevant(&self, event: &notify::Event) -> bool {
         worktree_event_is_relevant(event, &self.workdir, &self.dot_git, &self.git_dir, &self.index)
-    }
-
-    fn watch_set_may_change(&self, event: &notify::Event) -> bool {
-        worktree_watch_set_may_change(event, &self.index, &self.directories)
     }
 }
 
@@ -187,34 +278,51 @@ fn worktree_event_is_relevant(
 ) -> bool {
     event.need_rescan()
         || (!matches!(event.kind, notify::EventKind::Access(_))
-            && event.paths.iter().any(|path| {
-                path == index || (path.starts_with(workdir) && !path.starts_with(dot_git) && !path.starts_with(git_dir))
-            }))
+            && (event.paths.is_empty()
+                || event.paths.iter().any(|path| {
+                    path == index
+                        || (path.starts_with(workdir) && !path.starts_with(dot_git) && !path.starts_with(git_dir))
+                })))
 }
 
-fn worktree_watch_set_may_change(event: &notify::Event, index: &Path, directories: &HashSet<PathBuf>) -> bool {
-    if event.need_rescan()
-        || event
-            .paths
-            .iter()
-            .any(|path| path == index || path.file_name().is_some_and(|name| name == ".gitignore"))
-    {
-        return true;
+fn worktree_status_event_scopes(
+    event: &notify::Event,
+    workdir: &Path,
+    dot_git: &Path,
+    git_dir: &Path,
+    index: &Path,
+) -> Option<Vec<BString>> {
+    if event.need_rescan() || event.paths.is_empty() || event.paths.iter().any(|path| path == index) {
+        return None;
     }
-    match event.kind {
-        notify::EventKind::Create(notify::event::CreateKind::Folder)
-        | notify::EventKind::Remove(notify::event::RemoveKind::Folder)
-        | notify::EventKind::Modify(notify::event::ModifyKind::Name(_)) => true,
-        notify::EventKind::Create(notify::event::CreateKind::Any | notify::event::CreateKind::Other)
-        | notify::EventKind::Any => event
-            .paths
-            .iter()
-            .any(|path| path.is_dir() || directories.contains(path)),
-        notify::EventKind::Remove(notify::event::RemoveKind::Any | notify::event::RemoveKind::Other) => {
-            event.paths.iter().any(|path| directories.contains(path))
+    let mut out = Vec::new();
+    for path in &event.paths {
+        if !path.starts_with(workdir) || path.starts_with(dot_git) || path.starts_with(git_dir) {
+            continue;
         }
-        _ => false,
+        if path
+            .file_name()
+            .is_some_and(|name| name == ".gitattributes" || name == ".gitmodules")
+        {
+            return None;
+        }
+        let scope = if path.file_name().is_some_and(|name| name == ".gitignore") {
+            path.parent()?
+        } else {
+            path
+        };
+        let relative = scope.strip_prefix(workdir).ok()?;
+        if relative.as_os_str().is_empty()
+            || !relative
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_)))
+        {
+            return None;
+        }
+        let relative = gix::path::try_into_bstr(relative).ok()?;
+        out.push(gix::path::to_unix_separators_on_windows(relative).into_owned());
     }
+    (!out.is_empty()).then_some(out)
 }
 
 fn notification_is_actionable(event: &notify::Event) -> bool {
@@ -969,9 +1077,12 @@ fn event_loop(
     let mut tree_changes = TreeChangesCache::default();
     let mut worktree_changes = None;
     let mut cached_status_head = None;
+    let mut worktree_status_parts = WorktreeStatusParts::default();
     let mut worktree_watcher: Option<WorktreeWatcher> = None;
     let mut worktree_refresh_deadline: Option<Instant> = None;
-    let mut worktree_watch_set_changed = false;
+    let mut worktree_watch_refresh = WorktreeWatchRefresh::default();
+    let mut queued_worktree_status_full = false;
+    let mut queued_worktree_status_scopes = HashSet::new();
     let mut selection_relation = None;
     let mut history_graph = None;
     let line_diff_parallelism = std::thread::available_parallelism().map_or(1, Into::into);
@@ -1016,6 +1127,7 @@ fn event_loop(
         &mut tree_changes,
         &mut worktree_changes,
         &mut cached_status_head,
+        &mut worktree_status_parts,
         &mut history_graph,
         &mut selection_relation,
         &mut line_diff_pool,
@@ -1053,10 +1165,13 @@ fn event_loop(
             app.set_worktree_branch(None);
             worktree_watcher = None;
             worktree_refresh_deadline = None;
-            worktree_watch_set_changed = false;
+            worktree_watch_refresh = WorktreeWatchRefresh::default();
+            queued_worktree_status_full = false;
+            queued_worktree_status_scopes.clear();
             filesystem_responses.cancel_pending_worktree("worktree-unavailable");
             worktree_changes = None;
             cached_status_head = None;
+            worktree_status_parts = WorktreeStatusParts::default();
             line_diff_pool = None;
             sync_line_diff_pool(
                 &mut line_diff_pool,
@@ -1085,6 +1200,7 @@ fn event_loop(
         }
         let mut conflict_refresh_due = false;
         let mut worktree_watch_error = None;
+        let mut worktree_events_drained = true;
         if let Some(watcher) = worktree_watcher.as_mut() {
             let mut received = 0;
             let mut relevant = 0;
@@ -1096,9 +1212,29 @@ fn event_loop(
                         rescans += usize::from(event.need_rescan());
                         if watcher.event_is_relevant(&event) {
                             relevant += 1;
-                            worktree_watch_set_changed |= watcher.watch_set_may_change(&event);
+                            worktree_watch_refresh.observe(
+                                &event,
+                                &watcher.workdir,
+                                &watcher.index,
+                                &watcher.directories,
+                            );
                             filesystem_responses.observe_worktree(&event, &watcher.workdir, &watcher.index);
-                            schedule_once(&mut worktree_refresh_deadline, Instant::now(), WORKTREE_EVENT_IDLE);
+                            if !queued_worktree_status_full {
+                                match worktree_status_event_scopes(
+                                    &event,
+                                    &watcher.workdir,
+                                    &watcher.dot_git,
+                                    &watcher.git_dir,
+                                    &watcher.index,
+                                ) {
+                                    Some(scopes) => queued_worktree_status_scopes.extend(scopes),
+                                    None => {
+                                        queued_worktree_status_full = true;
+                                        queued_worktree_status_scopes.clear();
+                                    }
+                                }
+                            }
+                            schedule_once(&mut worktree_refresh_deadline, Instant::now(), Duration::ZERO);
                         }
                     }
                     Ok(Err(err)) => {
@@ -1114,6 +1250,7 @@ fn event_loop(
                 }
                 tracing::debug!(received, relevant, rescans, "processed worktree event batch");
             }
+            worktree_events_drained = received < EVENT_BATCH_SIZE;
         }
         if let Some(err) = worktree_watch_error {
             tracing::warn!(error = %err, "worktree watcher failed");
@@ -1121,14 +1258,25 @@ fn event_loop(
             app.worktree_changes.error = Some(format!("worktree watch: {err}"));
             worktree_watcher = None;
             worktree_refresh_deadline = None;
-            worktree_watch_set_changed = false;
+            worktree_watch_refresh = WorktreeWatchRefresh::default();
+            queued_worktree_status_full = false;
+            queued_worktree_status_scopes.clear();
             schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
             dirty = true;
             urgent = true;
         }
-        if take_due(&mut worktree_refresh_deadline, Instant::now()) {
+        if worktree_events_drained && take_due(&mut worktree_refresh_deadline, Instant::now()) {
             conflict_refresh_due = true;
-            if std::mem::take(&mut worktree_watch_set_changed) {
+            let watch_refresh = std::mem::take(&mut worktree_watch_refresh);
+            let watch_result = worktree_watcher
+                .as_mut()
+                .filter(|_| !watch_refresh.is_empty())
+                .map(|watcher| reconcile_worktree_watcher(watcher, &repository_path, repository_is_bare, watch_refresh))
+                .transpose();
+            if let Err(err) = watch_result {
+                tracing::warn!(error = %err, "worktree watcher update failed");
+                queued_worktree_status_full = true;
+                queued_worktree_status_scopes.clear();
                 match start_worktree_watcher(&repository_path, repository_is_bare) {
                     Ok(watcher) => worktree_watcher = Some(watcher),
                     Err(err) => {
@@ -1139,7 +1287,18 @@ fn event_loop(
                     }
                 }
             }
-            let invalidated = invalidate_worktree_changes(&mut worktree_changes);
+            let invalidated = if std::mem::take(&mut queued_worktree_status_full) {
+                queued_worktree_status_scopes.clear();
+                worktree_status_parts = WorktreeStatusParts::default();
+                invalidate_worktree_changes(&mut worktree_changes)
+            } else {
+                invalidate_worktree_status_parts(
+                    &mut worktree_changes,
+                    &mut worktree_status_parts,
+                    false,
+                    queued_worktree_status_scopes.drain(),
+                )
+            };
             filesystem_responses.worktree_due(invalidated);
             tracing::debug!(invalidated, "worktree event deadline elapsed");
             dirty = true;
@@ -1215,7 +1374,7 @@ fn event_loop(
             let head_changed = status_config_changed
                 || worktree_changes
                     .as_ref()
-                    .is_some_and(|(marker, _)| *marker != usize::MAX)
+                    .is_some_and(|(marker, _)| *marker != WORKTREE_STATUS_FULL)
                     && match cached_status_head.as_ref() {
                         Some(previous) => open_repository(&repository_path, repository_is_bare, false)
                             .context("could not reopen repository to compare HEAD after a reference change")
@@ -1229,7 +1388,18 @@ fn event_loop(
                             ),
                         None => true,
                     };
-            let invalidated = head_changed && invalidate_worktree_changes(&mut worktree_changes);
+            let invalidated = if status_config_changed {
+                worktree_status_parts = WorktreeStatusParts::default();
+                invalidate_worktree_changes(&mut worktree_changes)
+            } else {
+                head_changed
+                    && invalidate_worktree_status_parts(
+                        &mut worktree_changes,
+                        &mut worktree_status_parts,
+                        true,
+                        std::iter::empty(),
+                    )
+            };
             filesystem_responses.phase(&response_ids, "reference-worktree-cache-invalidation");
             if invalidated {
                 filesystem_responses.queue_frame(&response_ids, "reference-worktree-cache-invalidation");
@@ -1524,6 +1694,7 @@ fn event_loop(
                 &mut tree_changes,
                 &mut worktree_changes,
                 &mut cached_status_head,
+                &mut worktree_status_parts,
                 &mut history_graph,
                 &mut selection_relation,
                 &mut line_diff_pool,
@@ -1601,6 +1772,7 @@ fn event_loop(
                 &mut tree_changes,
                 &mut worktree_changes,
                 &mut cached_status_head,
+                &mut worktree_status_parts,
                 &mut history_graph,
                 &mut selection_relation,
                 &mut line_diff_pool,
@@ -2277,7 +2449,10 @@ fn event_loop(
         let effects = app.update(action);
         if refreshes_worktree {
             invalidate_worktree_changes(&mut worktree_changes);
-            worktree_watch_set_changed = false;
+            worktree_watch_refresh = WorktreeWatchRefresh::default();
+            queued_worktree_status_full = false;
+            queued_worktree_status_scopes.clear();
+            worktree_refresh_deadline = None;
             match start_worktree_watcher(&repository_path, repository_is_bare) {
                 Ok(watcher) => worktree_watcher = Some(watcher),
                 Err(err) => {
@@ -2298,7 +2473,10 @@ fn event_loop(
             );
             if app.changes_mode == Some(ChangesMode::Both) {
                 invalidate_worktree_changes(&mut worktree_changes);
-                worktree_watch_set_changed = false;
+                worktree_watch_refresh = WorktreeWatchRefresh::default();
+                queued_worktree_status_full = false;
+                queued_worktree_status_scopes.clear();
+                worktree_refresh_deadline = None;
                 match start_worktree_watcher(&repository_path, repository_is_bare) {
                     Ok(watcher) => {
                         worktree_watcher = Some(watcher);
@@ -2320,7 +2498,9 @@ fn event_loop(
             } else if previous_changes_mode == Some(ChangesMode::Both) {
                 worktree_watcher = None;
                 worktree_refresh_deadline = None;
-                worktree_watch_set_changed = false;
+                worktree_watch_refresh = WorktreeWatchRefresh::default();
+                queued_worktree_status_full = false;
+                queued_worktree_status_scopes.clear();
                 filesystem_responses.cancel_pending_worktree("watcher-disabled");
             }
         }
@@ -3350,7 +3530,7 @@ fn event_loop(
                                     let tree = tree_changes.as_ref().map(|(_, changes)| changes);
                                     let worktree = worktree_changes
                                         .as_ref()
-                                        .filter(|(marker, _)| *marker != usize::MAX)
+                                        .filter(|(marker, _)| *marker == WORKTREE_STATUS_CURRENT)
                                         .map(|(_, changes)| changes);
                                     terminal
                                         .draw(|frame| {
@@ -3780,11 +3960,15 @@ fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<Worktree
         .workdir()
         .context("cannot watch a bare repository")?
         .to_owned();
-    let index = repository.index_path();
+    let index_path = repository.index_path();
     let git_dir = repository.git_dir().to_owned();
     let dot_git = workdir.join(gix::discover::DOT_GIT_DIR);
     let dirwalk_started = Instant::now();
-    let directories = worktree_watch_directories(&repository)?;
+    let index = repository
+        .index_or_empty()
+        .context("could not open index for worktree watcher")?;
+    let mut directories = worktree_watch_directories_with_index(&repository, &index)?;
+    let index_projection = index_watch_projection(&index);
     let dirwalk_ms = dirwalk_started.elapsed().as_millis();
     let registration_started = Instant::now();
     let (sender, events) = mpsc::channel();
@@ -3792,7 +3976,8 @@ fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<Worktree
         let _ = sender.send(event);
     })
     .context("could not initialize worktree watcher")?;
-    let index_parent = index.parent().context("index path has no parent")?;
+    let index_parent = index_path.parent().context("index path has no parent")?;
+    directories.insert(index_parent.to_owned());
     {
         let mut paths = watcher.paths_mut();
         for directory in &directories {
@@ -3800,16 +3985,11 @@ fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<Worktree
                 .add(directory, RecursiveMode::NonRecursive)
                 .with_context(|| format!("could not watch worktree directory at {}", directory.display()))?;
         }
-        if !directories.contains(index_parent) {
-            paths
-                .add(index_parent, RecursiveMode::NonRecursive)
-                .with_context(|| format!("could not watch index at {}", index_parent.display()))?;
-        }
         paths.commit().context("could not apply worktree watches")?;
     }
     tracing::info!(
         workdir = %workdir.display(),
-        index = %index.display(),
+        index = %index_path.display(),
         directories = directories.len(),
         dirwalk_ms,
         registration_ms = registration_started.elapsed().as_millis(),
@@ -3817,13 +3997,14 @@ fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<Worktree
         "watching worktree changes"
     );
     Ok(WorktreeWatcher {
-        _watcher: watcher,
+        watcher,
         events,
         directories,
+        index_projection,
         workdir,
         dot_git,
         git_dir,
-        index,
+        index: index_path,
     })
 }
 
@@ -3837,14 +4018,38 @@ fn worktree_status_head(repository: &gix::Repository) -> Result<WorktreeStatusHe
     Ok(WorktreeStatusHead { reference, target })
 }
 
+fn remember_worktree_status_head(
+    cached: &mut Option<WorktreeStatusHead>,
+    refreshes_staged: bool,
+    scanned: Result<WorktreeStatusHead>,
+) {
+    if refreshes_staged {
+        *cached = match scanned {
+            Ok(head) => Some(head),
+            Err(err) => {
+                tracing::warn!(error = %err, "could not remember HEAD for worktree status");
+                None
+            }
+        };
+    }
+}
+
+#[cfg(test)]
 fn worktree_watch_directories(repository: &gix::Repository) -> Result<HashSet<PathBuf>> {
+    let index = repository
+        .index_or_empty()
+        .context("could not open index for worktree watcher")?;
+    worktree_watch_directories_with_index(repository, &index)
+}
+
+fn worktree_watch_directories_with_index(
+    repository: &gix::Repository,
+    index: &gix::index::State,
+) -> Result<HashSet<PathBuf>> {
     let root = repository
         .workdir()
         .context("cannot walk a bare repository")?
         .to_owned();
-    let index = repository
-        .index_or_empty()
-        .context("could not open index for worktree watcher")?;
     let options = repository
         .dirwalk_options()
         .context("could not configure worktree directory walk")?;
@@ -3853,20 +4058,219 @@ fn worktree_watch_directories(repository: &gix::Repository) -> Result<HashSet<Pa
         paths: HashSet::from([root]),
     };
     repository
-        .dirwalk(&index, None::<&str>, &AtomicBool::default(), options, &mut directories)
+        .dirwalk(index, None::<&str>, &AtomicBool::default(), options, &mut directories)
         .context("could not enumerate worktree directories")?;
     Ok(directories.paths)
 }
 
+fn index_watch_projection(index: &gix::index::State) -> Vec<IndexWatchEntry> {
+    let mut out: Vec<_> = index
+        .entries()
+        .iter()
+        .map(|entry| IndexWatchEntry {
+            path: entry.path(index).to_owned(),
+            mode: entry.mode.bits(),
+            flags: entry.flags.bits(),
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+fn changed_index_watch_scopes(
+    before: &[IndexWatchEntry],
+    after: &[IndexWatchEntry],
+    workdir: &Path,
+) -> HashSet<PathBuf> {
+    fn add_scope(entry: &IndexWatchEntry, workdir: &Path, out: &mut HashSet<PathBuf>) {
+        let path = entry.path.as_bstr();
+        let scope = path
+            .find_byte(b'/')
+            .map(|pos| &path[..pos])
+            .or_else(|| (entry.mode == gix::index::entry::Mode::DIR.bits()).then_some(path.as_ref()));
+        if let Some(scope) = scope {
+            out.insert(workdir.join(gix::path::from_bstr(scope)));
+        }
+    }
+
+    let mut out = HashSet::new();
+    let (mut left, mut right) = (0, 0);
+    while left < before.len() || right < after.len() {
+        match (before.get(left), after.get(right)) {
+            (Some(a), Some(b)) => match a.cmp(b) {
+                std::cmp::Ordering::Less => {
+                    add_scope(a, workdir, &mut out);
+                    left += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    add_scope(b, workdir, &mut out);
+                    right += 1;
+                }
+                std::cmp::Ordering::Equal => {
+                    left += 1;
+                    right += 1;
+                }
+            },
+            (Some(a), None) => {
+                add_scope(a, workdir, &mut out);
+                left += 1;
+            }
+            (None, Some(b)) => {
+                add_scope(b, workdir, &mut out);
+                right += 1;
+            }
+            (None, None) => break,
+        }
+    }
+    out
+}
+
+fn minimize_worktree_scopes(scopes: HashSet<PathBuf>) -> Vec<PathBuf> {
+    let mut scopes: Vec<_> = scopes.into_iter().collect();
+    scopes.sort_by(|a, b| {
+        a.components()
+            .count()
+            .cmp(&b.components().count())
+            .then_with(|| a.cmp(b))
+    });
+    let mut out: Vec<PathBuf> = Vec::new();
+    for scope in scopes {
+        if !out.iter().any(|parent| scope.starts_with(parent)) {
+            out.push(scope);
+        }
+    }
+    out
+}
+
+fn reconcile_worktree_watcher(
+    watcher: &mut WorktreeWatcher,
+    repository_path: &Path,
+    bare: bool,
+    mut refresh: WorktreeWatchRefresh,
+) -> Result<(usize, usize)> {
+    let repository = open_repository(repository_path, bare, false)
+        .context("could not reopen repository to update worktree watches")?;
+    let index = repository
+        .index_or_empty()
+        .context("could not open index to update worktree watches")?;
+    let next_projection = index_watch_projection(&index);
+    let update_projection = refresh.index || refresh.full;
+    if refresh.index {
+        refresh.scopes.extend(changed_index_watch_scopes(
+            &watcher.index_projection,
+            &next_projection,
+            &watcher.workdir,
+        ));
+    }
+    if !refresh.full && refresh.scopes.is_empty() {
+        if update_projection {
+            watcher.index_projection = next_projection;
+        }
+        return Ok((0, 0));
+    }
+
+    let all_desired = worktree_watch_directories_with_index(&repository, &index)?;
+    let scopes = minimize_worktree_scopes(refresh.scopes);
+    let mut desired = if refresh.full {
+        all_desired
+    } else {
+        watcher
+            .directories
+            .iter()
+            .filter(|path| !scopes.iter().any(|scope| path.starts_with(scope)))
+            .cloned()
+            .chain(
+                all_desired
+                    .into_iter()
+                    .filter(|path| scopes.iter().any(|scope| path.starts_with(scope))),
+            )
+            .collect()
+    };
+    desired.insert(watcher.index.parent().context("index path has no parent")?.to_owned());
+    let changed = update_worktree_watch_paths(watcher, desired)?;
+    if update_projection {
+        watcher.index_projection = next_projection;
+    }
+    Ok(changed)
+}
+
+fn update_worktree_watch_paths(watcher: &mut WorktreeWatcher, desired: HashSet<PathBuf>) -> Result<(usize, usize)> {
+    let mut remove: Vec<_> = watcher.directories.difference(&desired).cloned().collect();
+    let mut add: Vec<_> = desired.difference(&watcher.directories).cloned().collect();
+    if remove.is_empty() && add.is_empty() {
+        return Ok((0, 0));
+    }
+    remove.sort_by(|a, b| {
+        b.components()
+            .count()
+            .cmp(&a.components().count())
+            .then_with(|| a.cmp(b))
+    });
+    add.sort_by(|a, b| {
+        a.components()
+            .count()
+            .cmp(&b.components().count())
+            .then_with(|| a.cmp(b))
+    });
+    let removed = remove.len();
+    let added = add.len();
+    let mut first_error = None;
+    let mut paths = watcher.watcher.paths_mut();
+    for path in remove {
+        if let Err(err) = paths.remove(&path)
+            && !matches!(&err.kind, notify::ErrorKind::WatchNotFound)
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
+    }
+    for path in add {
+        if let Err(err) = paths.add(&path, RecursiveMode::NonRecursive)
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
+    }
+    if let Err(err) = paths.commit()
+        && first_error.is_none()
+    {
+        first_error = Some(err);
+    }
+    if let Some(err) = first_error {
+        return Err(err).context("could not update worktree watches");
+    }
+    tracing::debug!(removed, added, "updated worktree watches");
+    watcher.directories = desired;
+    Ok((removed, added))
+}
+
 fn invalidate_worktree_changes(changes: &mut Option<(usize, Changes)>) -> bool {
     if let Some((marker, _)) = changes {
-        if *marker == usize::MAX {
+        if *marker == WORKTREE_STATUS_FULL {
             return false;
         }
-        *marker = usize::MAX;
+        *marker = WORKTREE_STATUS_FULL;
         return true;
     }
     false
+}
+
+fn invalidate_worktree_status_parts(
+    changes: &mut Option<(usize, Changes)>,
+    parts: &mut WorktreeStatusParts,
+    staged: bool,
+    scopes: impl IntoIterator<Item = BString>,
+) -> bool {
+    let Some((marker, _)) = changes else {
+        return false;
+    };
+    if *marker == WORKTREE_STATUS_FULL {
+        return false;
+    }
+    parts.staged |= staged;
+    parts.scopes.extend(scopes);
+    *marker = WORKTREE_STATUS_PARTIAL;
+    true
 }
 
 fn leave_recorded_success(
@@ -4199,6 +4603,7 @@ fn draw(
     tree_changes: &mut TreeChangesCache,
     worktree_changes: &mut Option<(usize, Changes)>,
     status_head: &mut Option<WorktreeStatusHead>,
+    status_parts: &mut WorktreeStatusParts,
     history_graph: &mut Option<HistoryGraph>,
     selection_cache: &mut Option<SelectionRelationCache>,
     line_diff_pool: &mut Option<LineDiffPool>,
@@ -4297,7 +4702,7 @@ fn draw(
         && app.changes_mode == Some(ChangesMode::Both)
         && worktree_changes
             .as_ref()
-            .is_none_or(|(marker, _)| *marker == usize::MAX);
+            .is_none_or(|(marker, _)| *marker != WORKTREE_STATUS_CURRENT);
     let worktree_selection = worktree_changes_to_load
         .then(|| {
             remembered_change_selection(
@@ -4316,6 +4721,7 @@ fn draw(
         tree_changes.clear();
         *worktree_changes = None;
         *status_head = None;
+        *status_parts = WorktreeStatusParts::default();
     }
     if let Some(id) = relation_to_load
         && let Some(graph) = history_graph
@@ -4410,16 +4816,30 @@ fn draw(
         if worktree_changes_to_load {
             let started = Instant::now();
             repository.object_cache_size(OBJECT_CACHE_SIZE);
-            let loaded = load_worktree_changes(
-                repository,
-                line_diff_pool
-                    .as_mut()
-                    .context("line diff pool is missing while the changes pane is visible")?,
-            );
+            let line_diff_pool = line_diff_pool
+                .as_mut()
+                .context("line diff pool is missing while the changes pane is visible")?;
+            let partial = worktree_changes
+                .as_ref()
+                .is_some_and(|(marker, _)| *marker == WORKTREE_STATUS_PARTIAL);
+            let refreshes_staged = !partial || status_parts.staged;
+            let status_head_before = worktree_status_head(repository);
+            let loaded = if partial {
+                let mut updated = worktree_changes
+                    .as_ref()
+                    .map(|(_, changes)| changes.clone())
+                    .expect("partial status requires cached changes");
+                update_worktree_changes(repository, &mut updated, status_parts, line_diff_pool)
+                    .map(|full| (updated, refreshes_staged || full))
+            } else {
+                load_worktree_changes(repository, line_diff_pool).map(|loaded| (loaded, true))
+            };
             repository.object_cache_size(None);
+            *status_parts = WorktreeStatusParts::default();
             match loaded {
-                Ok(loaded) => {
+                Ok((loaded, refreshes_staged)) => {
                     tracing::debug!(
+                        partial,
                         path_count = loaded.paths.len(),
                         elapsed_ms = started.elapsed().as_millis(),
                         "loaded worktree changes"
@@ -4434,22 +4854,16 @@ fn draw(
                     }
                     app.set_worktree_conflicted(loaded.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
                     restore_change_selection(&mut app.worktree_changes, &loaded, worktree_selection);
-                    *worktree_changes = Some((0, loaded));
-                    *status_head = match worktree_status_head(repository) {
-                        Ok(head) => Some(head),
-                        Err(err) => {
-                            tracing::warn!(error = %err, "could not remember HEAD for worktree status");
-                            None
-                        }
-                    };
+                    *worktree_changes = Some((WORKTREE_STATUS_CURRENT, loaded));
+                    remember_worktree_status_head(status_head, refreshes_staged, status_head_before);
                 }
                 Err(err) => {
                     tracing::warn!(error = %err, "could not load worktree changes");
                     app.worktree_changes.error = Some(format!("status: {err:#}"));
                     if let Some((marker, _)) = worktree_changes.as_mut() {
-                        *marker = 0;
+                        *marker = WORKTREE_STATUS_CURRENT;
                     } else {
-                        *worktree_changes = Some((0, Changes::default()));
+                        *worktree_changes = Some((WORKTREE_STATUS_CURRENT, Changes::default()));
                     }
                 }
             }
@@ -4460,7 +4874,7 @@ fn draw(
     let tree_changes = tree_changes.as_ref().map(|(_, changes)| changes);
     let worktree_changes = worktree_changes
         .as_ref()
-        .filter(|(marker, _)| *marker != usize::MAX)
+        .filter(|(marker, _)| *marker == WORKTREE_STATUS_CURRENT)
         .map(|(_, changes)| changes);
     terminal
         .autoresize()
@@ -6180,8 +6594,77 @@ fn load_worktree_changes_without_lines(repository: &gix::Repository) -> Result<C
     })
 }
 
-fn load_worktree_changes(repository: &gix::Repository, line_diff_pool: &mut LineDiffPool) -> Result<Changes> {
-    let mut out = load_worktree_changes_without_lines(repository)?;
+fn load_unstaged_changes_without_lines(repository: &gix::Repository, patterns: Vec<BString>) -> Result<Changes> {
+    let mut status = repository
+        .status(gix::progress::Discard)
+        .context("could not initialize incremental worktree status")?
+        .untracked_files(gix::status::UntrackedFiles::Files)
+        .into_index_worktree_iter(patterns)
+        .context("could not start incremental worktree status")?;
+    let mut unstaged = Vec::new();
+    let mut has_tracked_changes = false;
+    for item in status.by_ref() {
+        if let Some((path, diff, tracked)) = unstaged_change(
+            item.context("could not obtain incremental worktree status")?,
+            repository.object_hash(),
+        )? {
+            has_tracked_changes |= tracked;
+            unstaged.push((path, diff));
+        }
+    }
+    drop(status);
+    unstaged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
+    let (paths, diffs) = unstaged.into_iter().unzip();
+    Ok(Changes {
+        paths,
+        diffs,
+        has_tracked_changes,
+        ..Changes::default()
+    })
+}
+
+fn load_staged_changes_without_lines(repository: &gix::Repository) -> Result<Changes> {
+    let head_tree = repository
+        .head_tree_id_or_empty()
+        .context("could not resolve HEAD tree for staged status")?;
+    let index = repository
+        .index_or_empty()
+        .context("could not open index for staged status")?;
+    let mut pathspec = repository
+        .pathspec(
+            false,
+            None::<&str>,
+            false,
+            &index,
+            gix::worktree::stack::state::attributes::Source::IdMapping,
+        )
+        .context("could not initialize staged status pathspec")?;
+    let mut raw = Vec::new();
+    repository
+        .tree_index_status(
+            &head_tree,
+            &index,
+            Some(&mut pathspec),
+            gix::status::tree_index::TrackRenames::AsConfigured,
+            |change, _, _| {
+                raw.push(change.into_owned());
+                Ok::<_, std::convert::Infallible>(std::ops::ControlFlow::Continue(()))
+            },
+        )
+        .context("could not obtain staged status")?;
+    let mut staged = raw.into_iter().map(staged_change).collect::<Result<Vec<_>>>()?;
+    let has_tracked_changes = !staged.is_empty();
+    staged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
+    let (paths, diffs) = staged.into_iter().unzip();
+    Ok(Changes {
+        paths,
+        diffs,
+        has_tracked_changes,
+        ..Changes::default()
+    })
+}
+
+fn add_worktree_line_counts(mut out: Changes, line_diff_pool: &mut LineDiffPool) -> Result<Changes> {
     let diffs = std::mem::take(&mut out.diffs);
     for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(diffs)?) {
         path.lines = lines;
@@ -6192,6 +6675,113 @@ fn load_worktree_changes(repository: &gix::Repository, line_diff_pool: &mut Line
         out.diffs.push(change);
     }
     Ok(out)
+}
+
+fn load_worktree_changes(repository: &gix::Repository, line_diff_pool: &mut LineDiffPool) -> Result<Changes> {
+    add_worktree_line_counts(load_worktree_changes_without_lines(repository)?, line_diff_pool)
+}
+
+fn literal_status_patterns(repository: &gix::Repository, scopes: &HashSet<BString>) -> Result<Option<Vec<BString>>> {
+    let defaults = repository
+        .pathspec_defaults()
+        .context("could not load pathspec defaults for incremental status")?;
+    if defaults.literal || defaults.signature.contains(gix::pathspec::MagicSignature::ICASE) {
+        return Ok(None);
+    }
+    Ok(Some(
+        scopes
+            .iter()
+            .map(|scope| {
+                gix::pathspec::Pattern::from_literal(scope.as_slice(), gix::pathspec::MagicSignature::TOP).to_bstring()
+            })
+            .collect(),
+    ))
+}
+
+fn path_is_in_status_scope(path: &BString, scope: &BString, ignore_case: bool) -> bool {
+    let Some(prefix) = path.get(..scope.len()) else {
+        return false;
+    };
+    let prefix_matches = if ignore_case {
+        prefix.eq_ignore_ascii_case(scope.as_slice())
+    } else {
+        prefix == scope.as_slice()
+    };
+    prefix_matches && (path.len() == scope.len() || path.get(scope.len()) == Some(&b'/'))
+}
+
+fn replace_cached_changes(
+    repository: &gix::Repository,
+    cached: &mut Changes,
+    replacement: Changes,
+    mut replace: impl FnMut(&PathChange) -> bool,
+) -> Result<()> {
+    let mut pairs: Vec<_> = std::mem::take(&mut cached.paths)
+        .into_iter()
+        .zip(std::mem::take(&mut cached.diffs))
+        .filter(|(change, _)| !replace(change))
+        .collect();
+    pairs.extend(replacement.paths.into_iter().zip(replacement.diffs));
+    pairs.sort_by(|(a, _), (b, _)| {
+        let rank = |group| match group {
+            ChangeGroup::Staged => 0,
+            ChangeGroup::Unstaged => 1,
+            ChangeGroup::Tree => 2,
+        };
+        rank(a.group).cmp(&rank(b.group)).then_with(|| a.path.cmp(&b.path))
+    });
+    (cached.paths, cached.diffs) = pairs.into_iter().unzip();
+    (cached.lines_added, cached.lines_removed) = cached
+        .paths
+        .iter()
+        .filter_map(|change| change.lines)
+        .fold((0, 0), |(added, removed), (a, r)| {
+            (added + u64::from(a), removed + u64::from(r))
+        });
+    let index = repository
+        .index_or_empty()
+        .context("could not open index after incremental status")?;
+    cached.has_tracked_changes = cached.paths.iter().any(|change| {
+        change.group == ChangeGroup::Staged
+            || change.group == ChangeGroup::Unstaged
+                && (index.entry_by_path(change.path.as_bstr()).is_some()
+                    || change
+                        .source
+                        .as_ref()
+                        .is_some_and(|source| index.entry_by_path(source.as_bstr()).is_some()))
+    });
+    Ok(())
+}
+
+fn update_worktree_changes(
+    repository: &gix::Repository,
+    cached: &mut Changes,
+    parts: &WorktreeStatusParts,
+    line_diff_pool: &mut LineDiffPool,
+) -> Result<bool> {
+    if parts.staged {
+        let staged = add_worktree_line_counts(load_staged_changes_without_lines(repository)?, line_diff_pool)?;
+        replace_cached_changes(repository, cached, staged, |change| change.group == ChangeGroup::Staged)?;
+    }
+    if !parts.scopes.is_empty() {
+        let Some(patterns) = literal_status_patterns(repository, &parts.scopes)? else {
+            *cached = load_worktree_changes(repository, line_diff_pool)?;
+            return Ok(true);
+        };
+        let unstaged = add_worktree_line_counts(
+            load_unstaged_changes_without_lines(repository, patterns)?,
+            line_diff_pool,
+        )?;
+        let ignore_case = repository.filesystem_options()?.ignore_case;
+        replace_cached_changes(repository, cached, unstaged, |change| {
+            change.group == ChangeGroup::Unstaged
+                && parts
+                    .scopes
+                    .iter()
+                    .any(|scope| path_is_in_status_scope(&change.path, scope, ignore_case))
+        })?;
+    }
+    Ok(false)
 }
 
 fn actor_bytes(author: &app::Author) -> Vec<u8> {
@@ -6890,6 +7480,15 @@ mod tests {
             alias.target, baseline.target,
             "the alias initially names the same commit"
         );
+        let mut cached = Some(baseline.clone());
+        remember_worktree_status_head(&mut cached, false, Ok(alias.clone()));
+        assert_eq!(
+            cached,
+            Some(baseline.clone()),
+            "an unstaged-only refresh preserves the HEAD baseline"
+        );
+        remember_worktree_status_head(&mut cached, true, Ok(alias.clone()));
+        assert_eq!(cached, Some(alias.clone()), "a staged refresh advances the baseline");
 
         update_ref("refs/heads/alias", topic)?;
         let moved = worktree_status_head(&test_repository::open(fixture.path())?)?;
@@ -7774,6 +8373,87 @@ mod tests {
     }
 
     #[test]
+    fn incremental_worktree_status_matches_a_full_refresh() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let path = fixture.path();
+        let repository = test_repository::open(path)?;
+        let mut pool = LineDiffPool::new(path, false, 2);
+        let mut cached = load_worktree_changes(&repository, &mut pool)?;
+
+        std::fs::write(path.join("main"), "changed in worktree\n")?;
+        std::fs::write(path.join("literal[*]"), "untracked\n")?;
+        let parts = WorktreeStatusParts {
+            staged: false,
+            scopes: HashSet::from([BString::from("main"), BString::from("literal[*]")]),
+        };
+        update_worktree_changes(&repository, &mut cached, &parts, &mut pool)?;
+        assert_eq!(
+            cached,
+            load_worktree_changes(&repository, &mut pool)?,
+            "path-limited changes equal a fresh status"
+        );
+
+        let status = Command::new("git").current_dir(path).args(["add", "main"]).status()?;
+        assert!(status.success(), "git stages the tracked change");
+        std::fs::write(path.join("main"), "changed in index\nand worktree\n")?;
+        let parts = WorktreeStatusParts {
+            staged: true,
+            scopes: HashSet::from([BString::from("main")]),
+        };
+        update_worktree_changes(&repository, &mut cached, &parts, &mut pool)?;
+        assert_eq!(
+            cached,
+            load_worktree_changes(&repository, &mut pool)?,
+            "combined staged and worktree replacement equals a fresh status"
+        );
+
+        std::fs::create_dir_all(path.join("nested"))?;
+        std::fs::write(path.join("nested/untracked"), "untracked\n")?;
+        let parts = WorktreeStatusParts {
+            staged: false,
+            scopes: HashSet::from([BString::from("nested")]),
+        };
+        update_worktree_changes(&repository, &mut cached, &parts, &mut pool)?;
+        assert_eq!(
+            cached,
+            load_worktree_changes(&repository, &mut pool)?,
+            "directory scopes include their descendants"
+        );
+
+        std::fs::write(path.join("nested/.gitignore"), "untracked\n")?;
+        update_worktree_changes(&repository, &mut cached, &parts, &mut pool)?;
+        assert_eq!(
+            cached,
+            load_worktree_changes(&repository, &mut pool)?,
+            "a scoped ignore change removes newly ignored cache rows"
+        );
+
+        let topic = repository.rev_parse_single("topic")?.detach();
+        drop(repository);
+        let status = Command::new("git")
+            .current_dir(path)
+            .args(["update-ref", "refs/heads/main", &topic.to_string()])
+            .status()?;
+        assert!(status.success(), "git moves the checked-out branch");
+        let repository = test_repository::open(path)?;
+        update_worktree_changes(
+            &repository,
+            &mut cached,
+            &WorktreeStatusParts {
+                staged: true,
+                scopes: HashSet::new(),
+            },
+            &mut pool,
+        )?;
+        assert_eq!(
+            cached,
+            load_worktree_changes(&repository, &mut pool)?,
+            "a staged-only replacement follows the new HEAD tree"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn streams_diff_bytes_and_accepts_early_pager_exit() -> gix_testtools::Result {
         let diff = BuiltInDiff::new(
             "M file".into(),
@@ -8598,6 +9278,11 @@ mod tests {
         let rescan = notify::Event::new(notify::EventKind::Other).set_flag(Flag::Rescan);
         assert!(worktree_event_is_relevant(&rescan, workdir, &dot_git, &git_dir, &index));
         assert!(notification_is_actionable(&rescan));
+        let empty = notify::Event::new(notify::EventKind::Modify(ModifyKind::Any));
+        assert!(
+            worktree_event_is_relevant(&empty, workdir, &dot_git, &git_dir, &index),
+            "an event without paths conservatively refreshes all status"
+        );
 
         let worktrees = git_dir.join("worktrees");
         let linked = worktrees.join("linked");
@@ -8680,28 +9365,116 @@ mod tests {
         ));
 
         let directories = HashSet::from([workdir.join("src")]);
-        assert!(!worktree_watch_set_may_change(
-            &modified(&workdir.join("src/lib.rs")),
+        let mut watch_refresh = WorktreeWatchRefresh::default();
+        watch_refresh.observe(&modified(&workdir.join("src/lib.rs")), workdir, &index, &directories);
+        assert!(watch_refresh.is_empty(), "ordinary file changes don't touch watches");
+        let file_rename = notify::Event::new(notify::EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+            .add_path(workdir.join("src/old"))
+            .add_path(workdir.join("src/new"));
+        watch_refresh.observe(&file_rename, workdir, &index, &directories);
+        assert!(watch_refresh.is_empty(), "ordinary file renames don't touch watches");
+        watch_refresh.observe(&modified(&index), workdir, &index, &directories);
+        assert!(watch_refresh.index, "index changes request a projection comparison");
+
+        let mut watch_refresh = WorktreeWatchRefresh::default();
+        watch_refresh.observe(
+            &modified(&workdir.join("src/.gitignore")),
+            workdir,
             &index,
-            &directories
-        ));
-        assert!(worktree_watch_set_may_change(&modified(&index), &index, &directories));
-        assert!(worktree_watch_set_may_change(
-            &modified(&workdir.join(".gitignore")),
-            &index,
-            &directories
-        ));
+            &directories,
+        );
+        assert_eq!(watch_refresh.scopes, directories, "nested ignores rescan their parent");
+        watch_refresh.observe(&modified(&workdir.join(".gitignore")), workdir, &index, &directories);
+        assert!(watch_refresh.full, "a root ignore change affects the whole worktree");
+
         let create_directory =
             notify::Event::new(notify::EventKind::Create(CreateKind::Folder)).add_path(workdir.join("new"));
-        assert!(worktree_watch_set_may_change(&create_directory, &index, &directories));
         let remove_directory =
             notify::Event::new(notify::EventKind::Remove(RemoveKind::Folder)).add_path(workdir.join("src"));
-        assert!(worktree_watch_set_may_change(&remove_directory, &index, &directories));
-        assert!(worktree_watch_set_may_change(&rescan, &index, &directories));
+        let mut watch_refresh = WorktreeWatchRefresh::default();
+        watch_refresh.observe(&create_directory, workdir, &index, &directories);
+        watch_refresh.observe(&remove_directory, workdir, &index, &directories);
+        assert_eq!(
+            watch_refresh.scopes,
+            HashSet::from([workdir.join("new"), workdir.join("src")]),
+            "directory topology is reconciled by scope"
+        );
+        watch_refresh.observe(&rescan, workdir, &index, &directories);
+        assert!(watch_refresh.full, "rescans compare the complete desired watch set");
 
-        let mut changes = Some((0, Changes::default()));
+        assert_eq!(
+            worktree_status_event_scopes(
+                &modified(&workdir.join("src/lib.rs")),
+                workdir,
+                &dot_git,
+                &git_dir,
+                &index
+            ),
+            Some(vec!["src/lib.rs".into()]),
+            "file events become literal repository-relative scopes"
+        );
+        assert_eq!(
+            worktree_status_event_scopes(
+                &modified(&workdir.join("src/.gitignore")),
+                workdir,
+                &dot_git,
+                &git_dir,
+                &index
+            ),
+            Some(vec!["src".into()]),
+            "ignore changes refresh their subtree"
+        );
+        assert!(
+            worktree_status_event_scopes(
+                &modified(&workdir.join("src/.gitattributes")),
+                workdir,
+                &dot_git,
+                &git_dir,
+                &index
+            )
+            .is_none(),
+            "attribute changes require full status, including staged line counts"
+        );
+        assert!(
+            worktree_status_event_scopes(
+                &modified(&workdir.join(".gitmodules")),
+                workdir,
+                &dot_git,
+                &git_dir,
+                &index
+            )
+            .is_none(),
+            "submodule configuration changes require full status"
+        );
+        assert!(
+            worktree_status_event_scopes(&modified(&index), workdir, &dot_git, &git_dir, &index).is_none(),
+            "index events require full status"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let raw = OsString::from_vec(vec![b'n', 0xff]);
+            assert_eq!(
+                worktree_status_event_scopes(&modified(&workdir.join(raw)), workdir, &dot_git, &git_dir, &index),
+                Some(vec![BString::from(vec![b'n', 0xff])]),
+                "event paths remain byte-preserving"
+            );
+        }
+
+        let mut changes = Some((WORKTREE_STATUS_CURRENT, Changes::default()));
+        let mut parts = WorktreeStatusParts::default();
+        assert!(invalidate_worktree_status_parts(
+            &mut changes,
+            &mut parts,
+            false,
+            [BString::from("src/lib.rs")]
+        ));
+        assert_eq!(
+            changes.as_ref().map(|(marker, _)| *marker),
+            Some(WORKTREE_STATUS_PARTIAL)
+        );
         assert!(invalidate_worktree_changes(&mut changes));
-        assert_eq!(changes.as_ref().map(|(marker, _)| *marker), Some(usize::MAX));
+        assert_eq!(changes.as_ref().map(|(marker, _)| *marker), Some(WORKTREE_STATUS_FULL));
         assert!(!invalidate_worktree_changes(&mut changes));
     }
 
@@ -8737,6 +9510,126 @@ mod tests {
         assert!(
             !directories.contains(&root.join("visible/ignored")),
             "nested ignore rules are honored"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_watches_apply_only_directory_set_differences() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let root = fixture.path();
+        let mut watcher = start_worktree_watcher(root, false)?;
+        let initial_projection = watcher.index_projection.clone();
+        std::fs::create_dir_all(root.join("new/nested"))?;
+        std::fs::create_dir_all(root.join("staged"))?;
+        std::fs::write(root.join("staged/tracked"), "new\n")?;
+        let status = Command::new("git")
+            .current_dir(root)
+            .args(["add", "staged/tracked"])
+            .status()?;
+        assert!(status.success(), "git adds a path outside the refresh scope");
+
+        let refresh = WorktreeWatchRefresh {
+            scopes: HashSet::from([root.join("new")]),
+            ..WorktreeWatchRefresh::default()
+        };
+        assert_eq!(
+            reconcile_worktree_watcher(&mut watcher, root, false, refresh)?,
+            (0, 2),
+            "the new subtree adds exactly its two directories"
+        );
+        assert!(watcher.directories.contains(&root.join("new/nested")));
+        assert_eq!(
+            watcher.index_projection, initial_projection,
+            "a scoped worktree refresh doesn't consume a pending index change"
+        );
+
+        assert_eq!(
+            reconcile_worktree_watcher(
+                &mut watcher,
+                root,
+                false,
+                WorktreeWatchRefresh {
+                    index: true,
+                    ..WorktreeWatchRefresh::default()
+                }
+            )?,
+            (0, 1),
+            "the later index refresh still adds its directory watch"
+        );
+        assert!(watcher.directories.contains(&root.join("staged")));
+
+        let refresh = WorktreeWatchRefresh {
+            scopes: HashSet::from([root.join("new")]),
+            ..WorktreeWatchRefresh::default()
+        };
+        assert_eq!(
+            reconcile_worktree_watcher(&mut watcher, root, false, refresh)?,
+            (0, 0),
+            "an unchanged desired set never mutates the watcher"
+        );
+
+        std::fs::write(root.join(".gitignore"), "new/\n")?;
+        assert_eq!(
+            reconcile_worktree_watcher(
+                &mut watcher,
+                root,
+                false,
+                WorktreeWatchRefresh {
+                    full: true,
+                    ..WorktreeWatchRefresh::default()
+                }
+            )?,
+            (2, 0),
+            "new ignore rules remove only the newly ignored subtree"
+        );
+        assert!(!watcher.directories.contains(&root.join("new")));
+        assert!(
+            watcher
+                .directories
+                .contains(watcher.index.parent().expect("index path has a parent")),
+            "the index directory always remains watched"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn index_watch_projection_ignores_content_but_tracks_topology() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let root = fixture.path();
+        let repository = test_repository::open(root)?;
+        let index = repository.index_or_empty()?;
+        let before = index_watch_projection(&index);
+        drop(index);
+        drop(repository);
+
+        std::fs::write(root.join("main"), "new contents\n")?;
+        let status = Command::new("git").current_dir(root).args(["add", "main"]).status()?;
+        assert!(status.success(), "git stages new contents for an existing path");
+        let repository = test_repository::open(root)?;
+        let index = repository.index_or_empty()?;
+        let after_content = index_watch_projection(&index);
+        drop(index);
+        drop(repository);
+        assert_eq!(
+            before, after_content,
+            "object and stat changes do not affect directory watches"
+        );
+
+        std::fs::create_dir_all(root.join("new"))?;
+        std::fs::write(root.join("new/tracked"), "new\n")?;
+        let status = Command::new("git")
+            .current_dir(root)
+            .args(["add", "new/tracked"])
+            .status()?;
+        assert!(status.success(), "git adds a path in a new directory");
+        let repository = test_repository::open(root)?;
+        let index = repository.index_or_empty()?;
+        let after_path = index_watch_projection(&index);
+        assert_eq!(
+            changed_index_watch_scopes(&after_content, &after_path, root),
+            HashSet::from([root.join("new")]),
+            "index topology changes identify the affected top-level directory"
         );
         Ok(())
     }
@@ -8781,16 +9674,15 @@ mod tests {
     fn event_deadlines_coalesce_without_extending_and_can_be_retried() {
         let now = Instant::now();
         let mut deadline = None;
-        assert!(schedule_once(&mut deadline, now, WORKTREE_EVENT_IDLE));
+        assert!(schedule_once(&mut deadline, now, Duration::ZERO));
         let first = deadline;
         assert!(!schedule_once(
             &mut deadline,
             now + Duration::from_millis(50),
-            WORKTREE_EVENT_IDLE
+            Duration::ZERO
         ));
-        assert_eq!(deadline, first, "later events do not extend the debounce window");
-        assert!(!take_due(&mut deadline, now + Duration::from_millis(74)));
-        assert!(take_due(&mut deadline, now + WORKTREE_EVENT_IDLE));
+        assert_eq!(deadline, first, "queued worktree events share an immediate deadline");
+        assert!(take_due(&mut deadline, now));
         assert_eq!(deadline, None);
 
         assert!(schedule_once(&mut deadline, now, WATCH_RETRY_INTERVAL));
