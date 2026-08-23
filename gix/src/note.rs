@@ -170,11 +170,24 @@ impl<'repo> Platform<'repo> {
             .try_into()
             .or_raise(|| message("The notes reference name is invalid"))?;
         let notes_ref = expand_notes_ref(notes_ref.as_ref())?;
+        self.add_to_ref(notes_ref.as_ref(), object, data)
+    }
+
+    /// Replace a note for `object` with `data` in the fully qualified `notes_ref`,
+    /// or add it if absent, returning the previous note id.
+    ///
+    /// Unlike [`Self::replace()`], this does not apply `refs/notes/` shorthand expansion.
+    pub fn add_to_ref(
+        &mut self,
+        notes_ref: &gix_ref::FullNameRef,
+        object: impl Into<gix_hash::ObjectId>,
+        data: impl AsRef<[u8]>,
+    ) -> Result<Option<Id<'repo>>, crate::Error> {
         let EditRoot {
             root_tree_id,
             parent_commit_id,
             update_ref,
-        } = self.lookup_edit_root(notes_ref.as_ref())?;
+        } = self.lookup_edit_root(notes_ref)?;
         let annotated_object_id = object.into();
         let note_blob_id = self
             .repo
