@@ -21,9 +21,9 @@ sha1 = ["gix-hash/sha1"]
 sha256 = ["gix-hash/sha256"]
 
 [dependencies]
-gix-hash = { version = "^0.26.1", path = "../gix-hash" }
+gix-hash = { version = "^0.26.2", path = "../gix-hash" }
 gix-hashtable = { version = "^0.16.0", path = "../gix-hashtable" }
-gix-object = { version = "^0.64.0", path = "../gix-object" }
+gix-object = { version = "^0.64.1", path = "../gix-object" }
 
 [dev-dependencies]
 gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }

@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-hash"
-version = "0.26.1"
+version = "0.26.2"
 description = "Borrowed and owned git hash digests used to identify git objects"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 repository = "https://github.com/GitoxideLabs/gitoxide"

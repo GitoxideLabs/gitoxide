@@ -5,7 +5,136 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.64.1 (2026-08-23)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 2 commits contributed to the release.
+ - 1 day passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Use fundamental-type comparisons throughout tests ([`47536a5`](https://github.com/GitoxideLabs/gitoxide/commit/47536a5c2b22da3a9f4892c8af5e460c2d5bda0a))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.64.0 (2026-08-22)
+
+### New Features
+
+ - <csr-id-ca7563e17a53344ae07f3cfc1742023fb72fdd7d/> add explicit commit signing to gix-object
+   <!-- agent -->
+   Add plumbing for signing commits through external OpenPGP, X.509, and SSH
+   programs under the shared signature feature. Accept fully resolved signer
+   options so callers control the program, key, environment, and arguments
+   without introducing repository configuration into the object crate.
+   
+   Replace an existing signature using the hash-appropriate commit header,
+   normalize signer output, and report process and malformed-output failures
+   with context. Cover every supported format, SHA-256 headers, replacement,
+   literal SSH keys, and verify generated signatures through the sibling
+   plumbing verifier as well as the external reference programs.
+ - <csr-id-5b90699525c939ccab570f884e4dd567a7161d16/> add commit signature verification to gix-object via `commit::SignedData::verify()`
+   <!-- agent -->
+   Add feature-gated plumbing for verifying OpenPGP, X.509, and SSH commit
+   signatures with fully resolved programs, arguments, environments, trust
+   thresholds, and SSH policy inputs. Keep repository configuration out of
+   the object crate while exposing Git-compatible status, identity, key, and
+   fingerprint results.
+   
+   Stream signed commit data directly to OpenPGP and SSH verifiers without
+   reconstructing it. Use a temporary payload only where gpgsm requires a
+   file, and cover Git status parsing plus unsupported and mismatched formats.
+ - <csr-id-a30f44225ce0190e4a537bfe61127a0cd9f2763b/> recognize SHA-256 commit signature headers
+   <!-- agent -->
+   Teach commit parsing and signature extraction about the gpgsig-sha256
+   header used by Git when signing SHA-256 commits. Treat it like gpgsig
+   when locating the embedded signature while preserving the actual header
+   name when reconstructing the signed payload.
+   
+   Cover both full commit parsing and token iteration so callers observe
+   the signature consistently through either API.
+ - <csr-id-c6cf668e9c25f8a73cbb0318a5dd56fa5952f825/> add `tree::name_order()` for git-style tree-entry comparison
+ - <csr-id-e5370e63b8fcadef7e1e1e2cb28f781999444c70/> support Assisted-by commit trailers, count them as attributions.
+   <!-- agent -->
+   
+   Expose Assisted-by predicates and iterators alongside Co-authored-by, and
+   include agent assistance in the general attribution stream without treating
+   assistants as authors.
+ - <csr-id-f2e90e985650cc6148c2fcb0453acac3aae1889d/> expose commit message blocks via `Commit::body()::message_blocks()`
+   This allows parsing messages that have been concatenated, and each message
+   has its own trailers.
+
+### New Features (BREAKING)
+
+ - <csr-id-26d231b4bc6f32a53b62e9d115445092cd90a1d2/> support signing and verifying annotated tags
+   Breaking as it renames `Tag::pgp_signature` to `signature`.
+   
+   <!-- agent -->
+   Extend `gix-object` signature support from commits to annotated tags.
+   
+   **Signature infrastructure**
+   
+   - Move object-independent signing and verification machinery into the shared
+     `gix_object::signature` module.
+   - Keep signature discovery available without the `signature` feature.
+   - Continue using the existing signing and verification options and
+     shared verification outcome for all object types.
+   
+   **Annotated tags**
+   
+   - Add `Tag::sign()` and `TagRef::sign()`.
+   - Add signature accessors that report both the armor and detected format.
+   - Add raw extraction of a tag signature and its exact signed bytes.
+   - Recognize OpenPGP signature/message, X.509, and SSH armor markers.
+   - Match Git by selecting the last recognized marker at a line boundary.
+   - Support native SHA-1 and SHA-256 tags without compatibility headers or
+     multiple signatures.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 16 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 7 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2930 from GitoxideLabs/gix-notes ([`7424676`](https://github.com/GitoxideLabs/gitoxide/commit/7424676f86cd3f5a67c53f8db6baf0803e937d4a))
+    - Improve `Tree::bisect_entry()` to be more succinct ([`579544e`](https://github.com/GitoxideLabs/gitoxide/commit/579544e14e0dde22733c58624c7454c50aa1df75))
+    - Merge pull request #2905 from GitoxideLabs/various-improvements ([`f3bbfad`](https://github.com/GitoxideLabs/gitoxide/commit/f3bbfadd4b4f1d72c85c62eb3d7ae337c922f945))
+    - Support signing and verifying annotated tags ([`26d231b`](https://github.com/GitoxideLabs/gitoxide/commit/26d231b4bc6f32a53b62e9d115445092cd90a1d2))
+    - Add explicit commit signing to gix-object ([`ca7563e`](https://github.com/GitoxideLabs/gitoxide/commit/ca7563e17a53344ae07f3cfc1742023fb72fdd7d))
+    - Add commit signature verification to gix-object via `commit::SignedData::verify()` ([`5b90699`](https://github.com/GitoxideLabs/gitoxide/commit/5b90699525c939ccab570f884e4dd567a7161d16))
+    - Recognize SHA-256 commit signature headers ([`a30f442`](https://github.com/GitoxideLabs/gitoxide/commit/a30f44225ce0190e4a537bfe61127a0cd9f2763b))
+    - Adapt to changes in `gix-testtools` ([`0cbe539`](https://github.com/GitoxideLabs/gitoxide/commit/0cbe53971687fb3b1959925aa9d8dc89deb5b474))
+    - Add `tree::name_order()` for git-style tree-entry comparison ([`c6cf668`](https://github.com/GitoxideLabs/gitoxide/commit/c6cf668e9c25f8a73cbb0318a5dd56fa5952f825))
+    - Merge pull request #2901 from cruessler/switch-to-gix-odb-at-opts ([`2a4d996`](https://github.com/GitoxideLabs/gitoxide/commit/2a4d996ca53bd38a5e9889da0b180580315d905f))
+    - Introduce `Store::at()` where possible ([`17fea2a`](https://github.com/GitoxideLabs/gitoxide/commit/17fea2ab8a1c23f2e8bc50b78b90feb1e361f66a))
+    - Merge pull request #2834 from GitoxideLabs/tix-improvements ([`2fadbc7`](https://github.com/GitoxideLabs/gitoxide/commit/2fadbc79986d84520ffb7f4ef85dabd0a7469d16))
+    - Support Assisted-by commit trailers, count them as attributions. ([`e5370e6`](https://github.com/GitoxideLabs/gitoxide/commit/e5370e63b8fcadef7e1e1e2cb28f781999444c70))
+    - Expose commit message blocks via `Commit::body()::message_blocks()` ([`f2e90e9`](https://github.com/GitoxideLabs/gitoxide/commit/f2e90e985650cc6148c2fcb0453acac3aae1889d))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
+## 0.63.0 (2026-07-23)
 
 ### New Features
 
@@ -17,7 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 10 commits contributed to the release.
+ - 12 commits contributed to the release.
  - 31 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -35,6 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-actor v0.41.2, gix-features v0.49.0, gix-hash v0.26.0, gix-hashtable v0.16.0, gix-object v0.63.0, gix-glob v0.27.0, gix-attributes v0.34.0, gix-packetline v0.22.0, gix-filter v0.33.0, gix-fs v0.22.0, gix-chunk v0.7.3, gix-commitgraph v0.38.0, gix-revwalk v0.34.0, gix-traverse v0.60.0, gix-worktree-stream v0.35.0, gix-archive v0.35.0, gix-bitmap v0.3.3, gix-tempfile v24.0.0, gix-lock v24.0.0, gix-index v0.54.0, gix-pathspec v0.19.0, gix-ignore v0.22.0, gix-worktree v0.55.0, gix-imara-diff v0.2.4, gix-diff v0.66.0, gix-blame v0.16.0, gix-ref v0.66.0, gix-config v0.59.0, gix-discover v0.54.0, gix-dir v0.28.0, gix-mailmap v0.33.2, gix-revision v0.48.0, gix-merge v0.19.0, gix-negotiate v0.34.0, gix-zlib v0.1.0, gix-pack v0.73.0, gix-odb v0.83.0, gix-refspec v0.44.0, gix-shallow v0.13.0, gix-transport v0.58.0, gix-protocol v0.64.0, gix-status v0.33.0, gix-submodule v0.33.0, gix-worktree-state v0.33.0, gix v0.86.0, gix-fsck v0.24.0, gitoxide-core v0.60.0, gix-tix v0.1.0, gitoxide v0.56.0, safety bump 40 crates ([`842bc44`](https://github.com/GitoxideLabs/gitoxide/commit/842bc447e3aeacf5d9d36f7f8a01068eda4b7999))
+    - Update changelogs prior to release ([`cb6ec7d`](https://github.com/GitoxideLabs/gitoxide/commit/cb6ec7dce283943d811b1600b577f586d7a13e1f))
     - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
     - Merge pull request #2722 from GitoxideLabs/reasons ([`c16b5a1`](https://github.com/GitoxideLabs/gitoxide/commit/c16b5a1892704b7c72a253bdd74a6848dd61032a))
     - Replace lint allowances with expectations ([`43ff87a`](https://github.com/GitoxideLabs/gitoxide/commit/43ff87a73897b70313e3a58e7de82231be5b59ad))

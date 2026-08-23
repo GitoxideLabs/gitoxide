@@ -29,7 +29,7 @@ gix-fs = { version = "^0.22.1", path = "../gix-fs" }
 gix-path = { version = "^0.12.5", path = "../gix-path" }
 gix-pathspec = { version = "^0.20.0", path = "../gix-pathspec" }
 gix-worktree = { version = "^0.56.0", path = "../gix-worktree", default-features = false }
-gix-object = { version = "^0.64.0", path = "../gix-object" }
+gix-object = { version = "^0.64.1", path = "../gix-object" }
 gix-ignore = { version = "^0.22.1", path = "../gix-ignore" }
 gix-utils = { version = "^0.3.6", path = "../gix-utils", features = ["bstr"] }
 

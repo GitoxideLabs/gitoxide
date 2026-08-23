@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-packetline"
-version = "0.22.0"
+version = "0.22.1"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project implementing the pkt-line serialization format"

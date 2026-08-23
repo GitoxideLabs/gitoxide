@@ -18,14 +18,14 @@ sha1 = ["gix-hash/sha1"]
 sha256 = ["gix-hash/sha256"]
 
 [dependencies]
-gix-error = { version = "^0.3.0", path = "../gix-error" }
+gix-error = { version = "^0.3.1", path = "../gix-error" }
 gix-commitgraph = { version = "^0.39.0", path = "../gix-commitgraph" }
 gix-revwalk = { version = "^0.35.0", path = "../gix-revwalk" }
 gix-trace = { version = "^0.1.21", path = "../gix-trace" }
 gix-date = { version = "^0.16.0", path = "../gix-date" }
 gix-diff = { version = "^0.67.0", path = "../gix-diff", default-features = false, features = ["blob"] }
-gix-object = { version = "^0.64.0", path = "../gix-object" }
-gix-hash = { version = "^0.26.1", path = "../gix-hash" }
+gix-object = { version = "^0.64.1", path = "../gix-object" }
+gix-hash = { version = "^0.26.2", path = "../gix-hash" }
 gix-worktree = { version = "^0.56.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
 gix-traverse = { version = "^0.61.0", path = "../gix-traverse" }
 
