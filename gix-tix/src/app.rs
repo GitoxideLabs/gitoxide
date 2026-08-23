@@ -581,7 +581,6 @@ pub(crate) struct App {
     pub(crate) enrich_expanded: bool,
     pub(crate) information_expanded: bool,
     topo_children: HashMap<ObjectId, ObjectId>,
-    forget_confirmation: Option<ObjectId>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -690,7 +689,6 @@ impl App {
             enrich_expanded: false,
             information_expanded: false,
             topo_children: HashMap::new(),
-            forget_confirmation: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -806,8 +804,6 @@ impl App {
             Some("squash target · j/k select ancestor · <enter> squash · Esc cancel")
         } else if self.stack_insert_base.is_some() {
             Some("stack-insert target · j/k select insertion point · <enter> insert · Esc cancel")
-        } else if self.forget_confirmation_visible() {
-            Some("forget commit · d again confirm · any other action cancel")
         } else {
             None
         };
@@ -1525,9 +1521,6 @@ impl App {
         if !matches!(&action, Action::Undo | Action::Redo) {
             self.undo_position = None;
         }
-        if !matches!(&action, Action::Forget) {
-            self.forget_confirmation = None;
-        }
         if !matches!(
             &action,
             Action::ToggleHistoryDisplay
@@ -1918,11 +1911,7 @@ impl App {
             }
             Action::Forget if self.can_forget() => {
                 let id = self.rows[self.selected.expect("forget requires a selection")].id;
-                if self.forget_confirmation == Some(id) {
-                    self.forget_confirmation = None;
-                    return vec![Effect::Forget(id)];
-                }
-                self.forget_confirmation = Some(id);
+                return vec![Effect::Forget(id)];
             }
             Action::Rebase if self.can_rebase() => {
                 let base = self.rows[self.selected.expect("rebase requires a selection")].id;
@@ -2255,7 +2244,6 @@ impl App {
         hidden_tips: &[ObjectId],
         select_top: bool,
     ) -> Option<Vec<SharedCommitRow>> {
-        self.forget_confirmation = None;
         self.set_view_tips(view_tips);
         if self.stack_insert_base.is_some() {
             self.clear_reachability_selection();
@@ -3133,12 +3121,6 @@ impl App {
         self.finish_review_available = finish_review;
         self.spill_available = spill;
         self.split_available = split;
-    }
-
-    pub(crate) fn forget_confirmation_visible(&self) -> bool {
-        self.selected
-            .and_then(|index| self.rows.get(index))
-            .is_some_and(|row| self.forget_confirmation == Some(row.id))
     }
 
     pub(crate) fn select_commit(&mut self, id: ObjectId) {
@@ -4548,31 +4530,12 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_a_non_merge_tip_requires_a_second_d_and_navigation_cancels_it() {
+    fn forgetting_a_non_merge_tip_is_immediate() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         assert!(!app.can_forget(), "loading history cannot forget commits");
         complete(&mut app);
         assert!(app.can_forget());
-        assert!(
-            app.update(Action::Forget).is_empty(),
-            "the first d only arms confirmation"
-        );
-        assert!(app.forget_confirmation_visible());
-        assert_eq!(
-            app.notice().map(|notice| (notice.kind, notice.text)),
-            Some((
-                NoticeKind::Attention,
-                "forget commit · d again confirm · any other action cancel".into()
-            )),
-            "the armed confirmation owns a persistent attention notice"
-        );
-        app.update(Action::MoveDown);
-        assert!(!app.forget_confirmation_visible(), "navigation cancels confirmation");
-        assert!(app.notice().is_none(), "cancelling the confirmation removes its notice");
-        assert!(app.can_forget(), "a commit with linear descendants can be forgotten");
-        app.update(Action::MoveUp);
-        assert!(app.update(Action::Forget).is_empty());
         assert_eq!(app.update(Action::Forget), vec![Effect::Forget(id(2))]);
 
         let mut merge = App::new(10);

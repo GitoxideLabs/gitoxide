@@ -1160,7 +1160,7 @@ space first; changes blocks adapt within the remaining history width.
 - `a` toggles a two-line shortcut group with commit operations above general
   actions. `a o` rewords, `a w` creates a rebased child, `a n` creates an empty
   child, `a e` amends `@`, `a l` spills `@`, `a p` splits staged from unstaged
-  changes, and `a d d` confirms forgetting a top commit when each action is
+  changes, and `a d` forgets a top commit when each action is
   available. `a b` rebases an eligible hidden base,
   `a u` rebases it onto the newer hidden branch tip when available, `a r` starts
   or finishes a review, `a s` squashes the selected commit, `a z` stashes or
