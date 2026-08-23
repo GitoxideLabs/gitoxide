@@ -16,20 +16,20 @@ pub fn perform(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     kind: Kind,
-    selected_path: Option<(&PathChange, Option<ObjectId>)>,
+    selected_paths: Option<(&[PathChange], Option<ObjectId>)>,
 ) -> Result<Option<ObjectId>> {
-    Ok(perform_inner(repo, graph, kind, selected_path, false, false, |_| {})?.and_then(|outcome| outcome.selected))
+    Ok(perform_inner(repo, graph, kind, selected_paths, false, false, |_| {})?.and_then(|outcome| outcome.selected))
 }
 
 pub(crate) fn perform_with_changes(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     kind: Kind,
-    selected_path: Option<(&PathChange, Option<ObjectId>)>,
+    selected_paths: Option<(&[PathChange], Option<ObjectId>)>,
     resolve_pending: bool,
     report: impl FnMut(rebase::Progress),
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, kind, selected_path, false, resolve_pending, report)
+    perform_inner(repo, graph, kind, selected_paths, false, resolve_pending, report)
 }
 
 pub(crate) fn perform_reporting(
@@ -57,7 +57,7 @@ fn perform_inner(
     mut repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     kind: Kind,
-    selected_path: Option<(&PathChange, Option<ObjectId>)>,
+    selected_paths: Option<(&[PathChange], Option<ObjectId>)>,
     index_only: bool,
     resolve_pending: bool,
     mut report: impl FnMut(rebase::Progress),
@@ -84,10 +84,15 @@ fn perform_inner(
         Some(parent) => repo.find_commit(parent)?.tree_id()?.detach(),
         None => repo.empty_tree().id,
     };
+    let selected_amend_path = match (kind, selected_paths) {
+        (Kind::Amend, Some(([path], _))) => Some(path),
+        (Kind::Amend, Some(_)) => anyhow::bail!("amending requires exactly one selected path"),
+        _ => None,
+    };
     let tree = match kind {
-        Kind::Spill => match selected_path {
-            Some((path, selected_parent)) => {
-                spill_path_tree(&repo, old_tree, selected_parent.unwrap_or(parent_tree), path)?
+        Kind::Spill => match selected_paths {
+            Some((paths, selected_parent)) => {
+                spill_paths_tree(&repo, old_tree, selected_parent.unwrap_or(parent_tree), paths)?
             }
             None => parent_tree,
         },
@@ -100,7 +105,7 @@ fn perform_inner(
             {
                 anyhow::bail!("cannot amend with unresolved index conflicts");
             }
-            if let Some((path, _)) = selected_path {
+            if let Some(path) = selected_amend_path {
                 if review && path.group != crate::ChangeGroup::Staged {
                     anyhow::bail!("review commits can amend only staged paths");
                 }
@@ -139,8 +144,8 @@ fn perform_inner(
     } else {
         rebase::Tree::LeaveAsIsAndMark
     };
-    let performed = match selected_path {
-        Some((path, _)) if kind == Kind::Amend && resolve_pending => {
+    let performed = match selected_amend_path {
+        Some(path) if resolve_pending => {
             let mut paths = vec![path.path.clone()];
             if path.kind == ChangeKind::Renamed
                 && let Some(source) = &path.source
@@ -157,7 +162,7 @@ fn perform_inner(
                 &mut report,
             )?
         }
-        Some((path, _)) if kind == Kind::Amend => {
+        Some(path) => {
             let mut paths = vec![path.path.clone()];
             if path.kind == ChangeKind::Renamed
                 && let Some(source) = &path.source
@@ -242,11 +247,11 @@ fn apply_path_from_tree(
     Ok(editor.write()?.detach())
 }
 
-fn spill_path_tree(
+fn spill_paths_tree(
     repo: &gix::Repository,
     commit_tree: ObjectId,
     parent_tree: ObjectId,
-    change: &PathChange,
+    changes: &[PathChange],
 ) -> Result<ObjectId> {
     let parent = repo.find_tree(parent_tree).context("could not load the parent tree")?;
     let mut editor = repo
@@ -254,26 +259,28 @@ fn spill_path_tree(
         .context("could not load the commit tree")?
         .edit()
         .context("could not edit the commit tree")?;
-    match change.kind {
-        ChangeKind::Added => {
-            editor.remove(&change.path).context("could not spill the added path")?;
-        }
-        ChangeKind::Deleted | ChangeKind::Modified | ChangeKind::TypeChanged => {
-            restore_path(&parent, &mut editor, &change.path)?;
-        }
-        ChangeKind::Renamed | ChangeKind::Copied => {
-            editor
-                .remove(&change.path)
-                .context("could not spill the rewritten destination")?;
-            if change.kind == ChangeKind::Renamed {
-                restore_path(
-                    &parent,
-                    &mut editor,
-                    change.source.as_ref().context("a rename has no source path")?,
-                )?;
+    for change in changes {
+        match change.kind {
+            ChangeKind::Added => {
+                editor.remove(&change.path).context("could not spill the added path")?;
             }
+            ChangeKind::Deleted | ChangeKind::Modified | ChangeKind::TypeChanged => {
+                restore_path(&parent, &mut editor, &change.path)?;
+            }
+            ChangeKind::Renamed | ChangeKind::Copied => {
+                editor
+                    .remove(&change.path)
+                    .context("could not spill the rewritten destination")?;
+                if change.kind == ChangeKind::Renamed {
+                    restore_path(
+                        &parent,
+                        &mut editor,
+                        change.source.as_ref().context("a rename has no source path")?,
+                    )?;
+                }
+            }
+            ChangeKind::Unmerged => anyhow::bail!("cannot spill an unmerged path"),
         }
-        ChangeKind::Unmerged => anyhow::bail!("cannot spill an unmerged path"),
     }
     Ok(editor
         .write()
@@ -522,8 +529,8 @@ mod tests {
                 path: "tracked".into(),
                 lines: None,
             };
-            let new =
-                perform(repo, &graph, Kind::Amend, Some((&selected, None)))?.expect("the selected path changes HEAD");
+            let new = perform(repo, &graph, Kind::Amend, Some((std::slice::from_ref(&selected), None)))?
+                .expect("the selected path changes HEAD");
             assert_eq!(git(fixture.path(), &["show", &format!("{new}:tracked")])?, expected);
             assert_eq!(
                 git(fixture.path(), &["diff", "--cached", "--name-only"])?,
@@ -556,8 +563,8 @@ mod tests {
             lines: None,
         };
         std::fs::write(fixture.path().join(".git/index.lock"), "locked")?;
-        let err =
-            perform(repo, &graph, Kind::Amend, Some((&selected, None))).expect_err("an index lock prevents the amend");
+        let err = perform(repo, &graph, Kind::Amend, Some((std::slice::from_ref(&selected), None)))
+            .expect_err("an index lock prevents the amend");
         assert!(format!("{err:#}").contains("selected index paths"));
         let repo = open(fixture.path())?;
         assert_eq!(repo.head_id()?, old, "the rewritten ref is rolled back");
@@ -615,8 +622,8 @@ mod tests {
                 path: path.into(),
                 lines: None,
             };
-            let new =
-                perform(repo, &graph, Kind::Amend, Some((&selected, None)))?.expect("the selected path changes HEAD");
+            let new = perform(repo, &graph, Kind::Amend, Some((std::slice::from_ref(&selected), None)))?
+                .expect("the selected path changes HEAD");
             let repo = open(fixture.path())?;
             let tree = repo.find_commit(new)?.tree()?;
             assert_eq!(
@@ -710,8 +717,8 @@ mod tests {
             path: "tip".into(),
             lines: None,
         };
-        let new =
-            perform(repo, &graph, Kind::Spill, Some((&selected, None)))?.expect("the selected path can be spilled");
+        let new = perform(repo, &graph, Kind::Spill, Some((std::slice::from_ref(&selected), None)))?
+            .expect("the selected path can be spilled");
         let repo = open(fixture.path())?;
         let tree = repo.find_commit(new)?.tree()?;
         assert!(

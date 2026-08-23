@@ -2998,7 +2998,8 @@ fn event_loop(
                                         repository,
                                         graph,
                                         kind,
-                                        path.as_ref().map(|(path, parent)| (path, *parent)),
+                                        path.as_ref()
+                                            .map(|(path, parent)| (std::slice::from_ref(path), *parent)),
                                         resolving_conflict,
                                         report,
                                     )

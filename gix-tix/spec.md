@@ -825,7 +825,8 @@ space first; changes blocks adapt within the remaining history width.
   mapping line.
 - With a path selected in the focused tree-changes block, the main `a` prefix
   offers `spill` and `a l` spills only that path against the displayed parent.
-  The CLI intentionally supports only whole-commit spilling.
+  `tix spill PATH...` atomically spills the named paths against the first
+  parent; omitting paths keeps the whole-commit behavior.
 - With a path selected in the focused worktree-changes block, the main `a`
   prefix offers `amend` and `a e` amends only that path. A staged row uses its
   index version; an unstaged row uses its filtered worktree version. If both

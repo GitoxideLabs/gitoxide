@@ -56,8 +56,8 @@ enum Command {
     Enrich(enrich::Command),
     /// Add staged changes, or worktree changes when nothing is staged, to HEAD.
     Amend(Amend),
-    /// Move the changes introduced by HEAD into the worktree.
-    Spill,
+    /// Move changes introduced by HEAD into the worktree.
+    Spill(Spill),
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
     Split(Split),
     /// Save index and worktree changes in a gix stash associated with the HEAD commit.
@@ -120,6 +120,13 @@ struct Amend {
     /// Amend only staged index changes, without falling back to worktree changes.
     #[arg(long)]
     index: bool,
+}
+
+#[derive(Debug, clap::Args)]
+struct Spill {
+    /// Paths to spill, or every path if omitted.
+    #[arg(value_name = "PATH")]
+    paths: Vec<OsString>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -223,9 +230,16 @@ impl Platform {
                     None => println!("nothing to amend"),
                 }
             }
-            Command::Spill => {
+            Command::Spill(args) => {
+                let selected_paths = resolve_spill_paths(&repository, &args.paths)?;
                 let graph = crate::edit::loaded_view_graph(&repository)?;
-                edit_head(repository, &graph, crate::edit::head::Kind::Spill, "spill")?;
+                edit_head(
+                    repository,
+                    &graph,
+                    crate::edit::head::Kind::Spill,
+                    "spill",
+                    selected_paths.as_deref(),
+                )?;
             }
             Command::Split(args) => {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
@@ -590,9 +604,17 @@ fn edit_head(
     graph: &crate::history::HistoryGraph,
     kind: crate::edit::head::Kind,
     verb: &str,
+    selected_paths: Option<&[crate::PathChange]>,
 ) -> Result<()> {
     let output_repository = repository.clone();
-    match crate::edit::head::perform_reporting(repository, graph, kind)? {
+    match crate::edit::head::perform_with_changes(
+        repository,
+        graph,
+        kind,
+        selected_paths.map(|paths| (paths, None)),
+        false,
+        |_| {},
+    )? {
         Some(outcome) => {
             let selected = outcome.selected.context("editing HEAD did not produce a selection")?;
             println!("{}", crate::change_id::display(&output_repository, selected, 7)?);
@@ -602,6 +624,54 @@ fn edit_head(
         None => println!("nothing to {verb}"),
     }
     Ok(())
+}
+
+fn resolve_spill_paths(repository: &gix::Repository, paths: &[OsString]) -> Result<Option<Vec<crate::PathChange>>> {
+    if paths.is_empty() {
+        return Ok(None);
+    }
+
+    let head = repository
+        .head_id()
+        .context("spilling paths requires a born HEAD")?
+        .detach();
+    let commit = repository.find_commit(head).context("could not load HEAD commit")?;
+    let new_tree = commit.tree().context("could not load HEAD tree")?;
+    let old_tree = match commit.parent_ids().next() {
+        Some(parent) => Some(
+            repository
+                .find_commit(parent)
+                .context("could not load HEAD's first parent")?
+                .tree()
+                .context("could not load HEAD's first-parent tree")?,
+        ),
+        None => None,
+    };
+    let changes = crate::load_tree_changes_without_lines(repository, old_tree.as_ref(), &new_tree, None)?;
+    let mut seen = HashSet::new();
+    let mut selected = Vec::with_capacity(paths.len());
+    for path in paths {
+        let display = path.to_string_lossy();
+        let path = gix::path::os_str_into_bstr(path)
+            .with_context(|| format!("path {display:?} could not be converted to a Git path"))?;
+        let path = repository
+            .normalize_path(path)
+            .with_context(|| format!("could not normalize path {display:?}"))?
+            .into_owned();
+        if path.is_empty() {
+            anyhow::bail!("path {display:?} does not name a file");
+        }
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let change = changes
+            .paths
+            .iter()
+            .find(|change| change.path == path)
+            .with_context(|| format!("path {display:?} is not changed by HEAD"))?;
+        selected.push(change.clone());
+    }
+    Ok(Some(selected))
 }
 
 fn split(repository: gix::Repository, graph: &crate::history::HistoryGraph, args: Split) -> Result<()> {
@@ -895,13 +965,22 @@ mod tests {
             .platform
             .command;
         assert!(matches!(amend, Some(Command::Amend(Amend { index: false }))));
-        assert!(matches!(
-            Cli::try_parse_from(["tix", "spill"])
-                .expect("spill parses")
-                .platform
-                .command,
-            Some(Command::Spill)
-        ));
+        let spill = Cli::try_parse_from(["tix", "spill"])
+            .expect("whole-commit spill parses")
+            .platform
+            .command;
+        let Some(Command::Spill(spill)) = spill else {
+            panic!("spill was expected")
+        };
+        assert!(spill.paths.is_empty(), "omitting paths spills the whole commit");
+        let spill = Cli::try_parse_from(["tix", "spill", "first", "second"])
+            .expect("path spill parses")
+            .platform
+            .command;
+        let Some(Command::Spill(spill)) = spill else {
+            panic!("spill was expected")
+        };
+        assert_eq!(spill.paths, ["first", "second"]);
         assert!(matches!(
             Cli::try_parse_from(["tix", "split"])
                 .expect("split parses")
@@ -1519,6 +1598,91 @@ mod tests {
         let cli = Cli::try_parse_from(["tix", "--", "amend"]).expect("-- makes amend a revision");
         assert!(cli.platform.command.is_none());
         assert_eq!(cli.platform.revisions, ["amend"]);
+    }
+
+    #[test]
+    fn spills_multiple_cli_paths_atomically() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        std::fs::write(fixture.path().join("second"), "second\n")?;
+        std::fs::write(fixture.path().join("other"), "other\n")?;
+        assert!(
+            ProcessCommand::new("git")
+                .current_dir(fixture.path())
+                .args(["add", "second", "other"])
+                .status()?
+                .success(),
+            "git stages the additional tip paths"
+        );
+        assert!(
+            ProcessCommand::new("git")
+                .current_dir(fixture.path())
+                .args(["commit", "-q", "--amend", "--no-edit"])
+                .status()?
+                .success(),
+            "git adds all three paths to HEAD"
+        );
+
+        let repository = crate::test_repository::open(fixture.path())?;
+        let old_head = repository.head_id()?.detach();
+        let err = Platform {
+            no_alt_screen: false,
+            quit_on_finish: None,
+            hide: Vec::new(),
+            command: Some(Command::Spill(Spill {
+                paths: vec![OsString::from("tip"), OsString::from("missing")],
+            })),
+            revisions: Vec::new(),
+        }
+        .run(repository.into_sync())
+        .expect_err("an unchanged path rejects the complete spill");
+        assert!(err.to_string().contains("missing"), "the error identifies the path");
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert_eq!(repository.head_id()?, old_head, "validation leaves HEAD untouched");
+
+        Platform {
+            no_alt_screen: false,
+            quit_on_finish: None,
+            hide: Vec::new(),
+            command: Some(Command::Spill(Spill {
+                paths: vec![OsString::from("tip"), OsString::from("second"), OsString::from("tip")],
+            })),
+            revisions: Vec::new(),
+        }
+        .run(repository.into_sync())?;
+
+        let repository = crate::test_repository::open(fixture.path())?;
+        let tree = repository.head_commit()?.tree()?;
+        assert!(
+            tree.lookup_entry(["other"])?.is_some(),
+            "the unselected path remains in HEAD"
+        );
+        assert!(
+            tree.lookup_entry(["tip"])?.is_none(),
+            "the first selected path is spilled"
+        );
+        assert!(
+            tree.lookup_entry(["second"])?.is_none(),
+            "the second selected path is spilled"
+        );
+        let status = ProcessCommand::new("git")
+            .current_dir(fixture.path())
+            .args(["status", "--short"])
+            .output()?;
+        assert!(status.status.success(), "git reads the resulting status");
+        assert_eq!(
+            status.stdout, b"?? second\n?? tip\n",
+            "spilled content remains in the worktree"
+        );
+        assert_eq!(
+            crate::edit::undo::position(&repository)?,
+            crate::edit::undo::Position {
+                title: "spill".into(),
+                undo: 1,
+                redo: 0,
+            },
+            "all paths form one undoable operation"
+        );
+        Ok(())
     }
 
     #[test]
