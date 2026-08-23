@@ -133,7 +133,7 @@ jobs:
         continue-on-error: true
       - name: Check for unrecognized *-sys dependencies
         run: |
-          ! grep -qP '(?<!\b(linux-raw|aws-lc))-sys\b' tree.txt
+          ! grep -qP '(?<!\b(linux-raw|aws-lc|inotify|dirs))-sys\b' tree.txt
       - name: Wrap cc1 (and cc1plus if present) to record calls
         run: |
           set -o noclobber  # Catch any collisions with existing entries in /usr/local.
