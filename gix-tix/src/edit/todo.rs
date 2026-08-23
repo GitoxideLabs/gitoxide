@@ -1412,10 +1412,10 @@ mod tests {
         let change_id = crate::change_id::for_commit(&repo, middle)?;
         let reference: gix::refs::FullName = crate::enrich::REF_NAME.try_into()?;
         repo.notes()?
-            .add_to_ref(reference.as_ref(), ObjectId::from(change_id), b"[commit")?;
+            .replace_at_ref(reference.as_ref(), ObjectId::from(change_id), b"[commit")?;
         let tree_id = crate::enrich::tree_id(&repo, middle)?;
         let reference: gix::refs::FullName = crate::enrich::TREE_REF_NAME.try_into()?;
-        repo.notes()?.add_to_ref(reference.as_ref(), tree_id, b"[tree")?;
+        repo.notes()?.replace_at_ref(reference.as_ref(), tree_id, b"[tree")?;
 
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         let document = String::from_utf8(prepared.document)?;

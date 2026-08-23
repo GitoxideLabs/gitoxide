@@ -193,7 +193,7 @@ mod tests {
             .default_ref()
             .expect("the test repository has a default notes ref")
             .to_owned();
-        notes.add_to_ref(notes_ref.as_ref(), old, b"source Git note")?;
+        notes.replace_at_ref(notes_ref.as_ref(), old, b"source Git note")?;
         let upper = apply(open(fixture.path())?, &graph, prepared, &edited)?;
         let repository = open(fixture.path())?;
         assert_eq!(

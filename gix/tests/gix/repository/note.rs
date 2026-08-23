@@ -339,7 +339,7 @@ fn add_to_an_exact_fully_qualified_reference() -> crate::Result {
     let mut notes = repo.notes()?;
 
     assert_eq!(
-        notes.add_to_ref(reference.as_ref(), target, b"[commit]\n\ttodo = true\n")?,
+        notes.replace_at_ref(reference.as_ref(), target, b"[commit]\n\ttodo = true\n")?,
         None
     );
     let mut exact = repo.notes()?.with_refs([reference.as_bstr()])?;

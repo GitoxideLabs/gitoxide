@@ -192,7 +192,7 @@ fn edit_git_note(repository: &gix::Repository, args: &Target) -> Result<()> {
             let data: Option<&[u8]> = saved.then_some(cleaned.as_ref());
             match data {
                 Some(data) => notes
-                    .add_to_ref(reference.as_ref(), target, data)
+                    .replace_at_ref(reference.as_ref(), target, data)
                     .context("could not save Git note")?,
                 None => notes
                     .remove(reference.as_ref().as_partial_name().to_owned(), target)

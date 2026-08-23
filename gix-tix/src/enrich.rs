@@ -182,7 +182,7 @@ pub(crate) fn apply_headers(
     };
     let reference: FullName = REF_NAME.try_into().expect("the tix enrich reference is valid");
     open(repo)?
-        .add_to_ref(reference.as_ref(), object, data)
+        .replace_at_ref(reference.as_ref(), object, data)
         .context("could not write the tix enrichment")?;
     Ok(Some(desired))
 }
@@ -253,7 +253,7 @@ fn update(
     edit(&mut config)?;
     let reference: FullName = REF_NAME.try_into().expect("the tix enrich reference is valid");
     notes
-        .add_to_ref(reference.as_ref(), ObjectId::from(change_id), config.to_bstring())
+        .replace_at_ref(reference.as_ref(), ObjectId::from(change_id), config.to_bstring())
         .context("could not write the tix enrichment")?;
     load(&mut notes, change_id)
 }
@@ -270,7 +270,7 @@ fn update_tree(
         .try_into()
         .expect("the tix tree enrich reference is valid");
     notes
-        .add_to_ref(reference.as_ref(), tree_id, config.to_bstring())
+        .replace_at_ref(reference.as_ref(), tree_id, config.to_bstring())
         .context("could not write the tix tree enrichment")?;
     load_tree(&mut notes, tree_id)
 }
@@ -291,7 +291,7 @@ mod tests {
         let id = repo.head_id()?.detach();
         let change_id = crate::change_id::for_commit(&repo, id)?;
         let reference: FullName = REF_NAME.try_into()?;
-        repo.notes()?.add_to_ref(
+        repo.notes()?.replace_at_ref(
             reference.as_ref(),
             ObjectId::from(change_id),
             b"[commit]\n\ttodo = true\n\towner = me\n",
@@ -345,7 +345,7 @@ mod tests {
         let original = repo.head_id()?.detach();
         let tree = tree_id(&repo, original)?;
         let reference: FullName = TREE_REF_NAME.try_into()?;
-        repo.notes()?.add_to_ref(
+        repo.notes()?.replace_at_ref(
             reference.as_ref(),
             tree,
             b"[tree]\n\tchecks-pass = false\n\towner = me\n",
@@ -457,7 +457,7 @@ mod tests {
         let change_id = crate::change_id::for_commit(&repo, id)?;
         let reference: FullName = REF_NAME.try_into()?;
         repo.notes()?
-            .add_to_ref(reference.as_ref(), ObjectId::from(change_id), b"[commit")?;
+            .replace_at_ref(reference.as_ref(), ObjectId::from(change_id), b"[commit")?;
 
         assert!(
             load(&mut open(&repo)?, change_id).is_err(),
@@ -469,7 +469,7 @@ mod tests {
         );
         let tree = tree_id(&repo, id)?;
         let reference: FullName = TREE_REF_NAME.try_into()?;
-        repo.notes()?.add_to_ref(reference.as_ref(), tree, b"[tree")?;
+        repo.notes()?.replace_at_ref(reference.as_ref(), tree, b"[tree")?;
         assert!(
             toggle_checks_pass(&repo, id).is_err(),
             "tree mutation does not replace malformed enrichments"

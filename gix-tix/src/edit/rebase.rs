@@ -3219,7 +3219,7 @@ mod tests {
             .default_ref()
             .expect("the test repository has a default notes ref")
             .to_owned();
-        notes.add_to_ref(reference.as_ref(), id, data)?;
+        notes.replace_at_ref(reference.as_ref(), id, data)?;
         Ok(())
     }
 

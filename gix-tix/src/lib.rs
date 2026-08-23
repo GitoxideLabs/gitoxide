@@ -5425,7 +5425,7 @@ fn set_git_note_reporting(
     match data {
         Some(data) => {
             notes
-                .add_to_ref(reference, id, data)
+                .replace_at_ref(reference, id, data)
                 .context("could not save Git note")?;
         }
         None => {
