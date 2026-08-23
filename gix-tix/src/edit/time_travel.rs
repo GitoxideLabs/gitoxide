@@ -1489,6 +1489,7 @@ mod tests {
         history::HistoryGraph,
     )> {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        crate::test_repository::disable_autocrlf(fixture.path())?;
         git(
             fixture.path(),
             &["config", "gitoxide.commit.committerDate", "2001-01-01T00:00:00 +0000"],
@@ -2063,6 +2064,7 @@ mod tests {
     #[test]
     fn returning_to_a_commit_restores_its_manual_stash() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        crate::test_repository::disable_autocrlf(fixture.path())?;
         let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
         let head = repository.head_id()?.detach();
@@ -2361,9 +2363,10 @@ mod tests {
                 .contains_str("<<<<<<<"),
             "the checked-out merge tree contains conflict markers"
         );
+        crate::test_repository::clear_autocrlf(fixture.path())?;
         insta::assert_snapshot!(
             "accepted-pending-rebase-conflict",
-            gix_testtools::repository::snapshot(fixture.path())?
+            gix_testtools::repository::snapshot_portable(fixture.path())?
                 .to_string()
                 .replace("\n  \n", "\n\n")
         );

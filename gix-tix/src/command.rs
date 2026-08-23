@@ -1979,8 +1979,13 @@ mod tests {
         }
 
         let fixture = gix_testtools::scripted_fixture_writable("split_commit.sh")?;
-        let repository =
-            crate::test_repository::open_with(fixture.path(), ["core.editor=sed -i.bak -e 's/^what$/split/'"])?;
+        let repository = crate::test_repository::open_with(
+            fixture.path(),
+            [format!(
+                "core.editor={}",
+                crate::test_repository::replacing_editor("what", "split")
+            )],
+        )?;
         let graph = crate::edit::loaded_view_graph(&repository)?;
         let original = repository.head_id()?.detach();
         crate::enrich::set_note(&repository, original, Some(b"source marker"))?;

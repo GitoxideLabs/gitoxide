@@ -222,6 +222,7 @@ mod tests {
     fn unchanged_selected_trees_require_allow_empty() -> gix_testtools::Result {
         for worktree in [false, true] {
             let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+            crate::test_repository::disable_autocrlf(fixture.path())?;
             if worktree {
                 git(fixture.path(), &["checkout", "--", "tracked"])?;
             } else {
@@ -263,6 +264,7 @@ mod tests {
     #[test]
     fn unchanged_worktree_untracked_requires_allow_empty() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        crate::test_repository::disable_autocrlf(fixture.path())?;
         git(fixture.path(), &["clean", "-fdq"])?;
         git(fixture.path(), &["checkout", "--", "tracked"])?;
         let parent = git(fixture.path(), &["rev-parse", "HEAD^{tree}"])?;

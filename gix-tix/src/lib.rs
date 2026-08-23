@@ -8671,16 +8671,17 @@ mod tests {
     #[test]
     fn incremental_worktree_status_matches_a_full_refresh() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        test_repository::disable_autocrlf(fixture.path())?;
         let path = fixture.path();
         let repository = test_repository::open(path)?;
         let mut pool = LineDiffPool::new(path, false, 2);
         let mut cached = load_worktree_changes(&repository, &mut pool)?;
 
         std::fs::write(path.join("main"), "changed in worktree\n")?;
-        std::fs::write(path.join("literal[*]"), "untracked\n")?;
+        std::fs::write(path.join("literal[brackets]"), "untracked\n")?;
         let parts = WorktreeStatusParts {
             staged: false,
-            scopes: HashSet::from([BString::from("main"), BString::from("literal[*]")]),
+            scopes: HashSet::from([BString::from("main"), BString::from("literal[brackets]")]),
         };
         update_worktree_changes(&repository, &mut cached, &parts, &mut pool)?;
         assert_eq!(

@@ -186,6 +186,7 @@ mod tests {
     #[test]
     fn forgets_a_tip_atomically_and_preserves_untracked_files() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("forget_commit.sh")?;
+        crate::test_repository::disable_autocrlf(fixture.path())?;
         let repository = open(fixture.path())?;
         let top = repository.head_id()?.detach();
         let parent = repository

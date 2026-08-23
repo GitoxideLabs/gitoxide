@@ -26,6 +26,50 @@ where
     )
 }
 
+pub(crate) fn replacing_editor(old: &str, new: &str) -> String {
+    #[cfg(windows)]
+    {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/replace-editor.ps1");
+        format!("pwsh -NoProfile -File \"{}\" \"{old}\" \"{new}\"", script.display())
+    }
+    #[cfg(not(windows))]
+    {
+        format!("sed -i.bak -e 's/^{old}$/{new}/'")
+    }
+}
+
+/// Keep Git from converting fixture contents while a test compares exact worktree and index bytes.
+pub(crate) fn disable_autocrlf(path: impl AsRef<Path>) -> std::io::Result<()> {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path.as_ref())
+        .args(["config", "--local", "core.autocrlf", "false"])
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(
+            "could not disable core.autocrlf for the test repository",
+        ))
+    }
+}
+
+/// Remove the test-local line-ending override before assertions which snapshot repository configuration.
+pub(crate) fn clear_autocrlf(path: impl AsRef<Path>) -> std::io::Result<()> {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path.as_ref())
+        .args(["config", "--local", "--unset", "core.autocrlf"])
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(
+            "could not remove the core.autocrlf test override",
+        ))
+    }
+}
+
 #[test]
 fn defaults_are_deterministic_and_case_specific_overrides_win() -> gix_testtools::Result {
     let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;

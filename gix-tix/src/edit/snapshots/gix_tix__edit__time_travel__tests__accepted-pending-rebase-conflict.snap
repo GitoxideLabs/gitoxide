@@ -1,19 +1,19 @@
 ---
 source: gix-tix/src/edit/time_travel.rs
-expression: "gix_testtools::repository::snapshot(fixture.path())?\n.to_string().replace(\"\\n  \\n\", \"\\n\\n\")"
+expression: "gix_testtools::repository::snapshot_portable(fixture.path())?\n.to_string().replace(\"\\n  \\n\", \"\\n\\n\")"
 ---
 HEAD detached C1
 
 [config]
 [core]
-	bare = false
+    bare = false
 [user]
-	name = author
-	email = author@example.com
+    name = author
+    email = author@example.com
 [commit]
-	gpgSign = false
+    gpgSign = false
 [gitoxide "commit"]
-	committerDate = 2001-01-01T00:00:00 +0000
+    committerDate = 2001-01-01T00:00:00 +0000
 
 [refs]
 refs/heads/main = C2
@@ -54,14 +54,4 @@ tree = conflicted
 100644 B2 stage=3 "file"
 
 [worktree]
-100644 file "file" = "<<<<<<< rebased parent\nbase\n=======\ntip\n>>>>>>> commit\n"
-
-[objects]
-C2 = 26d78d03083cfe539c4a94c28bd30d9a548a8394
-C1 = 69348f5557de103f6771f9a121ff67f5272ceab5
-T1 = 6d5f482d15035cdd7733b1b551d1fead28d22592
-T0 = 6f2762b571ef9a93001cc607058818aa5d0d055c
-B2 = b218ebde2fc5b78f14aa04eeb42a74b17e2e367d
-C0 = c0b811a58f27425263a4276fe881de38736a9446
-B1 = df967b96a579e45a18b8251732d16804b2e56a55
-B0 = ea1a2ae6cdab2b53dee8943ca555c4312a0b798a
+- file "file" = "<<<<<<< rebased parent\nbase\n=======\ntip\n>>>>>>> commit\n"

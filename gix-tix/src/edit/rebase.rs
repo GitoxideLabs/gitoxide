@@ -3299,7 +3299,7 @@ mod tests {
         }
         insta::assert_snapshot!(
             "reworded-middle-stack",
-            gix_testtools::repository::snapshot(fixture.path())?.to_string()
+            gix_testtools::repository::snapshot_portable(fixture.path())?.to_string()
         );
         Ok(())
     }

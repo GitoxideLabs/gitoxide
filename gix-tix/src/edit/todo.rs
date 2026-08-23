@@ -1853,7 +1853,12 @@ mod tests {
 
     #[test]
     fn reference_lines_move_create_delete_and_detach_head() -> gix_testtools::Result {
-        let (fixture, repo) = repo()?;
+        let (fixture, _) = repo()?;
+        crate::test_repository::disable_autocrlf(fixture.path())?;
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            ["core.abbrev=7", "user.name=todo author", "user.email=todo@example.com"],
+        )?;
         let (base, middle, tip, commits) = commits(&repo)?;
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         let generated = String::from_utf8(prepared.document.clone())?;

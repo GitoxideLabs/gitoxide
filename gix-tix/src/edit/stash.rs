@@ -382,6 +382,7 @@ mod tests {
     fn manual_stashes_preserve_git_stashes_and_restore_index_and_worktree_state() -> gix_testtools::Result {
         let fixture = gix_testtools::tempfile::tempdir()?;
         git(fixture.path(), &["init", "-q", "-b", "main"])?;
+        crate::test_repository::disable_autocrlf(fixture.path())?;
         git(fixture.path(), &["config", "user.name", "user"])?;
         git(fixture.path(), &["config", "user.email", "user@example.com"])?;
         std::fs::write(fixture.path().join("tracked"), "base\n")?;

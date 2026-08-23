@@ -125,18 +125,20 @@ pub(crate) fn edit_document_without_terminal(
         gix::tempfile::ContainingDirectory::Exists,
         gix::tempfile::AutoRemove::Tempfile,
     )
-    .context("could not create commit message file")?
-    .take()
-    .context("commit message file disappeared")?;
+    .context("could not create commit message file")?;
     tempfile
         .write_all(document)
         .context("could not write commit message file")?;
     tempfile.flush().context("could not flush commit message file")?;
+    let path = tempfile
+        .with_mut(|tempfile| tempfile.path().to_owned())
+        .context("commit message file disappeared")?;
+    let _tempfile = tempfile.close().context("could not close commit message file")?;
 
     if editor != ":" {
         let status = Command::from(
             gix::command::prepare(editor)
-                .arg(tempfile.path())
+                .arg(&path)
                 .command_may_be_shell_script_allow_manual_argument_splitting(),
         )
         .status()
@@ -145,7 +147,7 @@ pub(crate) fn edit_document_without_terminal(
             anyhow::bail!("Git editor {} exited with {status}", editor.to_string_lossy());
         }
     }
-    let edited = std::fs::read(tempfile.path()).context("could not read edited commit message")?;
+    let edited = std::fs::read(path).context("could not read edited commit message")?;
     Ok((edited != document).then_some(edited))
 }
 

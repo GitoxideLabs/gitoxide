@@ -398,6 +398,7 @@ struct WorktreeTransition {
 }
 
 fn worktree_transitions(repo: &gix::Repository, changes: &[RefChange]) -> Result<Vec<WorktreeTransition>> {
+    let current_git_dir = gix::path::realpath(repo.git_dir()).context("could not resolve the current Git directory")?;
     let mut repos = vec![
         repo.main_repo()
             .context("could not open the main worktree repository")?,
@@ -422,7 +423,9 @@ fn worktree_transitions(repo: &gix::Repository, changes: &[RefChange]) -> Result
             .find_reference("HEAD")
             .context("could not read a worktree HEAD reference")?;
         let raw_head = state_from_target_ref(raw_head.target());
-        let current = worktree_repo == *repo;
+        let current = gix::path::realpath(worktree_repo.git_dir())
+            .context("could not resolve an affected worktree Git directory")?
+            == current_git_dir;
         let projected_head = projected_ref_state(&worktree_repo, b"HEAD".as_bstr(), &raw_head, changes, current)?;
         ensure!(
             projected_head != State::Missing,
@@ -1148,6 +1151,7 @@ mod tests {
     #[test]
     fn attached_branch_checkout_follows_undo_and_redo() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("forget_commit.sh")?;
+        crate::test_repository::disable_autocrlf(fixture.path())?;
         let repo = crate::test_repository::open(fixture.path())?;
         let top = repo.head_id()?.detach();
         let parent = repo
@@ -1204,6 +1208,7 @@ mod tests {
     #[test]
     fn linked_worktree_head_checkout_follows_undo_and_redo() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("forget_commit.sh")?;
+        crate::test_repository::disable_autocrlf(fixture.path())?;
         let linked = fixture.path().join("linked");
         let status = std::process::Command::new("git")
             .arg("-C")

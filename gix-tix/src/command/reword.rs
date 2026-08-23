@@ -320,7 +320,10 @@ mod tests {
     fn attached_head_needs_no_pin() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         run(
-            open(fixture.path(), "sed -i.bak -e 's/^tip$/rewritten tip/'")?,
+            open(
+                fixture.path(),
+                &crate::test_repository::replacing_editor("tip", "rewritten tip"),
+            )?,
             args("HEAD"),
         )?;
 
@@ -362,7 +365,10 @@ mod tests {
             .to_string();
         drop(repository);
         run(
-            open(path, "sed -i.bak -e 's/^middle$/rewritten middle/'")?,
+            open(
+                path,
+                &crate::test_repository::replacing_editor("middle", "rewritten middle"),
+            )?,
             args(&change_id),
         )?;
 
@@ -412,7 +418,13 @@ mod tests {
         git(path, &["update-ref", "refs/worktree/tix/pins/side", side])?;
         let main = git(path, &["rev-parse", "main"])?;
 
-        run(open(path, "sed -i.bak -e 's/^side$/rewritten side/'")?, args("side"))?;
+        run(
+            open(
+                path,
+                &crate::test_repository::replacing_editor("side", "rewritten side"),
+            )?,
+            args("side"),
+        )?;
 
         assert_eq!(
             git(path, &["rev-parse", "main"])?,

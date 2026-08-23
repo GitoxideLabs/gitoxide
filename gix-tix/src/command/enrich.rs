@@ -281,7 +281,13 @@ mod tests {
     #[test]
     fn editors_preserve_other_enrichments() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = crate::test_repository::open_with(fixture.path(), ["core.editor=sed -i.bak -e 's/old/new/'"])?;
+        let repository = crate::test_repository::open_with(
+            fixture.path(),
+            [format!(
+                "core.editor={}",
+                crate::test_repository::replacing_editor("old", "new")
+            )],
+        )?;
         let topic = repository.rev_parse_single("topic")?.detach();
         crate::enrich::ensure_todo(&repository, topic, true)?;
         crate::enrich::set_note(&repository, topic, Some(b"old\n"))?;

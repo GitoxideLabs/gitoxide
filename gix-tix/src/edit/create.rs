@@ -775,6 +775,7 @@ mod tests {
     #[test]
     fn implicit_new_commit_ignores_untracked_files() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        crate::test_repository::disable_autocrlf(fixture.path())?;
         assert!(
             Command::new("git")
                 .arg("-C")

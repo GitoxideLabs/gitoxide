@@ -619,6 +619,7 @@ mod tests {
     fn a_changed_review_and_its_successors_are_spliced_before_target_successors() -> gix_testtools::Result {
         let fixture = gix_testtools::tempfile::tempdir()?;
         run(fixture.path(), &["init", "-q", "-b", "main"])?;
+        crate::test_repository::disable_autocrlf(fixture.path())?;
         run(fixture.path(), &["config", "user.name", "reviewer"])?;
         run(fixture.path(), &["config", "user.email", "reviewer@example.com"])?;
         run(
@@ -752,9 +753,10 @@ mod tests {
             !super::super::rebase::is_pending(&repo.find_commit(successor)?.decode()?.into_owned()?),
             "the checked-out review return path is fully replayed"
         );
+        crate::test_repository::clear_autocrlf(fixture.path())?;
         insta::assert_snapshot!(
             "changed-review-with-successors",
-            gix_testtools::repository::snapshot(fixture.path())?.to_string()
+            gix_testtools::repository::snapshot_portable(fixture.path())?.to_string()
         );
         Ok(())
     }
