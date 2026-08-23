@@ -425,6 +425,8 @@ without trading responsiveness for metadata that is not visible.
 | `v h` | Show or hide configured hidden ancestry. |
 | `r` | Hide reference labels or restore the mode visible when they were hidden. |
 | `m`/`]` | Toggle the commit-message view. |
+| `p` | Open the command menu from history or a focused changes block. |
+| `Shift-P` | Cycle the comparison parent while Tree has focus. |
 | `? e` | Cycle the tree/worktree changes display. |
 | `Shift-R` | Explicitly refresh the revision view and visible worktree status. |
 | `y` | Copy the selected commit ID, or the selected raw path when a changes block is focused. |
@@ -466,17 +468,20 @@ navigation or another recognized command. The `?` group similarly remains open
 for signature verification, alignment, message, and changes actions. The
 footer keeps every prefix compact. Opening one reverses its label and shows its available
 items in a reversed popout immediately above and connected to that label. The
-actions popout has commit operations on its first row and general actions on its
-second; other groups use one row. The `?` popout also contains its pane-switching and navigation hints through
-`<enter> diff`. The popout has horizontal padding, shifts left or clips at the
-terminal edge without wrapping, and is omitted when its label, the row above the
-footer, or space needed to preserve a protected message is not visible. It does
-not reserve a history row and may cover history,
-but message and changes panes, their status lines, and transient notices shift
-upward to reserve its line and are never occluded. Closing behavior and shortcut
-availability are unchanged, and direct status actions and quit remain in the
-footer. The history status starts with the history position, then the
-`v` and `a` prefixes when they are addressable. Remaining history-level
+actions popout has commit operations in its first logical section and general
+actions in its second. The `?` popout likewise has information actions first,
+then the command-menu shortcut, pane switching, and keyboard navigation through
+`<enter> diff`; other groups use one logical section. The popout has horizontal
+padding and shifts left at the terminal edge. Complete items that would cross
+the edge spill into additional rows while preserving the declared row order; an
+individual item wider than the terminal is clipped. The whole popout is omitted
+when its label, the required rows above the footer, or space needed to preserve
+a protected message is not visible. It does not reserve history rows and may
+cover history, but message and changes panes, their status lines, and transient
+notices shift upward to reserve all of its rows and are never occluded. Closing
+behavior and shortcut availability are unchanged, and direct status actions and quit remain in the
+footer. The history status starts with the history position, then the `p`
+command entry and the `v` and `a` prefixes when they are addressable. Remaining history-level
 actions end at the information prefix while it is closed. An available direct
 time-travel action follows the shortcut groups, and duplicate cycling follows it when
 the selected commit has duplicates, and copy follows these actions; the reference toggle immediately precedes
@@ -484,6 +489,34 @@ the `?` group; quit is always last.
 All status lines embed and underline a shortcut character in its action label when
 possible; keys that cannot be expressed naturally in the label remain explicit.
 The Enter key is written as `<enter>` throughout.
+
+### Command menu
+
+- Bare `p` opens a centered command menu from the main history UI, including
+  while a changes block has focus. The ref-tree retains `p` for Pin, and `a p`
+  remains Split.
+- The menu contains the currently available executable entries from the Actions,
+  View, Enrich, and Information groups. Each entry retains its exact contextual
+  identity, so Stash and Unstash, Review and Finish Review, and Pin and Unpin are
+  distinct commands rather than interchangeable labels for one action.
+- A single-line input filters entries by a case-insensitive ordered-subsequence
+  match against the command label or displayed prefix-group name. Up and Down move the selection,
+  `<enter>` executes it, Escape closes the menu, and pasted text edits the query
+  instead of invoking history paste behavior.
+- A displayed prefix key followed by an ASCII space scopes the menu to that
+  group: `v ` selects View, `a ` Actions, `n ` Enrich, and `? ` Information.
+  With no suffix every available entry in the group matches; further text
+  fuzzy-filters command labels within that group. The literal query remains in
+  the input, and an invalid or unavailable scope has no matches.
+- The unfiltered catalog interleaves View, Actions, Enrich, and Information
+  entries while preserving each prefix group's own order, so the first screen
+  represents every available group instead of being filled by one prefix.
+- At most nine matching entries are visible and numbered `1` through `9`;
+  pressing a displayed number executes that entry. The first opening has no
+  default selection, so `<enter>` alone does nothing. On later openings, the
+  last exact command submitted through this menu is preselected when it is still
+  available; an available contextual opposite is not substituted. Typing a query
+  replaces that recalled selection with the first matching entry.
 
 ### Time-travel
 
@@ -634,7 +667,7 @@ space first; changes blocks adapt within the remaining history width.
 - `Tab` cycles focus in visual order through visible changes blocks and history.
   Inactive blocks, including paths and borders, are dimmed. Only the focused
   block shows its distinct status line.
-- `p` cycles the comparison parent while Tree has focus. Merge commits are
+- `Shift-P` cycles the comparison parent while Tree has focus. Merge commits are
   compared to one parent at a time; root commits compare against an empty tree.
 - Repeated history keys, including printable `j`/`k` reported through enhanced
   keyboard input, and vertical mouse bursts temporarily hide changes

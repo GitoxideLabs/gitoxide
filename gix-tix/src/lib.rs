@@ -5,10 +5,12 @@
 mod app;
 mod change_id;
 pub mod command;
+mod command_menu;
 mod edit;
 mod enrich;
 mod history;
 mod logging;
+mod menu;
 mod ref_tree;
 #[cfg(test)]
 mod test_repository;
@@ -33,6 +35,7 @@ use app::{
     Action, App, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesMode, ComparedParent, Effect, PathChange,
     SelectionRelation, SharedCommitRow, State,
 };
+use command_menu::{Command as MenuCommand, CommandId};
 use crossterm::{
     clipboard::CopyToClipboard,
     cursor,
@@ -50,6 +53,7 @@ use gix::{
     prelude::TreeDiffChangeExt,
 };
 use history::{Authors, Decorations, Event, HistoryGraph, SelectionRef, SharedAuthors};
+use menu::{Item as MenuItem, Menu};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend, layout::Position, text::Line};
 
@@ -1115,11 +1119,14 @@ fn event_loop(
     }
     let mut decorations = Decorations::new();
     let mut ref_tree = ref_tree::Tree::default();
+    let mut command_picker = Menu::default();
+    let mut command_picker_key = None;
     let mut filesystem_responses = logging::FilesystemResponses::default();
     let mut focused = true;
     draw(
         terminal,
         &mut app,
+        &mut command_picker,
         &decorations,
         &mailmap,
         &authors,
@@ -1559,6 +1566,7 @@ fn event_loop(
                             lane_receiver = Some(start_lane_worker(rows));
                         }
                         if enter {
+                            command_picker.close();
                             ref_tree.toggle();
                             app.history_display_expanded = false;
                         }
@@ -1687,6 +1695,7 @@ fn event_loop(
             draw(
                 terminal,
                 &mut app,
+                &mut command_picker,
                 &decorations,
                 &mailmap,
                 &authors,
@@ -1765,6 +1774,7 @@ fn event_loop(
             draw(
                 terminal,
                 &mut app,
+                &mut command_picker,
                 &decorations,
                 &mailmap,
                 &authors,
@@ -1826,6 +1836,9 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
+        if swallow_command_menu_key_event(&terminal_event, &mut command_picker_key) {
+            continue;
+        }
         if ref_tree.is_active() {
             if matches!(
                 &terminal_event,
@@ -2004,82 +2017,119 @@ fn event_loop(
                 _ => {}
             }
         }
-        let key_pressed = is_key_press(&terminal_event);
-        let (mut action, repeats_history, is_repeat, throttles_draw) = match terminal_event {
-            TerminalEvent::Key(key) => {
-                let action = if diagnostic_input {
-                    diagnostic_action(key, &app)
-                } else {
-                    app_action(key, &app)
-                };
-                let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
-                (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
+        if focused
+            && !diagnostic_input
+            && opens_command_menu(&terminal_event, app.actions_expanded, command_picker.is_open())
+        {
+            let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
+            command_picker.open(&command_picker_items(&commands));
+            app.close_shortcut_groups();
+            dirty = true;
+            urgent = true;
+            continue;
+        }
+        let command_action = if focused && command_picker.is_open() && !diagnostic_input {
+            let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
+            let input = command_menu_input(&terminal_event, &mut command_picker, &commands);
+            if !command_picker.is_open()
+                && let TerminalEvent::Key(key) = &terminal_event
+            {
+                command_picker_key = Some(key.code);
             }
-            TerminalEvent::Mouse(mouse) => {
-                let kind = mouse.kind;
-                let modifiers = mouse.modifiers;
-                let mut distance = 1;
-                if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
-                    while distance < EVENT_BATCH_SIZE && event::poll(Duration::ZERO)? {
-                        let next = event::read()?;
-                        match next {
-                            TerminalEvent::Mouse(next) if next.kind == kind && next.modifiers == modifiers => {
-                                distance += 1;
-                            }
-                            next => {
-                                pending_terminal_event = Some(next);
-                                break;
+            match input {
+                CommandMenuInput::Pass => None,
+                CommandMenuInput::Handled => {
+                    dirty = true;
+                    urgent = true;
+                    continue;
+                }
+                CommandMenuInput::Submit(action) => Some(action),
+            }
+        } else {
+            None
+        };
+        let key_pressed = is_key_press(&terminal_event);
+        let (mut action, repeats_history, is_repeat, throttles_draw) = if let Some(action) = command_action {
+            (Some(action), false, false, false)
+        } else {
+            match terminal_event {
+                TerminalEvent::Key(key) => {
+                    let action = if diagnostic_input {
+                        diagnostic_action(key, &app)
+                    } else {
+                        app_action(key, &app)
+                    };
+                    let repeats_history =
+                        retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
+                    (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
+                }
+                TerminalEvent::Mouse(mouse) => {
+                    let kind = mouse.kind;
+                    let modifiers = mouse.modifiers;
+                    let mut distance = 1;
+                    if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+                        while distance < EVENT_BATCH_SIZE && event::poll(Duration::ZERO)? {
+                            let next = event::read()?;
+                            match next {
+                                TerminalEvent::Mouse(next) if next.kind == kind && next.modifiers == modifiers => {
+                                    distance += 1;
+                                }
+                                next => {
+                                    pending_terminal_event = Some(next);
+                                    break;
+                                }
                             }
                         }
                     }
-                }
-                let Some(action) = mouse_scroll_action(kind, modifiers, distance, app.changes_focus.is_some()) else {
-                    continue;
-                };
-                let repeats_history = app.changes_focus.is_none() && repeats_viewport(&action);
-                (Some(action), repeats_history, true, true)
-            }
-            TerminalEvent::Paste(pasted) => {
-                let action = (|| {
-                    anyhow::ensure!(!repository_is_bare, "copy-insert requires a worktree");
-                    let target = app
-                        .paste_insert_target()
-                        .context("copy-insert paste requires an editable history selection")?;
-                    let repository = open_repository(&repository_path, repository_is_bare, false)
-                        .context("could not open repository for pasted commit")?;
-                    let source = resolve_pasted_commit(&repository, &pasted)?;
-                    Ok::<_, anyhow::Error>(Action::PasteInsert { source, target })
-                })();
-                match action {
-                    Ok(action) => (Some(action), false, false, false),
-                    Err(err) => {
-                        app.leave_attention(format!("paste: {err:#}"));
-                        dirty = true;
-                        urgent = true;
+                    let Some(action) = mouse_scroll_action(kind, modifiers, distance, app.changes_focus.is_some())
+                    else {
                         continue;
+                    };
+                    let repeats_history = app.changes_focus.is_none() && repeats_viewport(&action);
+                    (Some(action), repeats_history, true, true)
+                }
+                TerminalEvent::Paste(pasted) => {
+                    let action = (|| {
+                        anyhow::ensure!(!repository_is_bare, "copy-insert requires a worktree");
+                        let target = app
+                            .paste_insert_target()
+                            .context("copy-insert paste requires an editable history selection")?;
+                        let repository = open_repository(&repository_path, repository_is_bare, false)
+                            .context("could not open repository for pasted commit")?;
+                        let source = resolve_pasted_commit(&repository, &pasted)?;
+                        Ok::<_, anyhow::Error>(Action::PasteInsert { source, target })
+                    })();
+                    match action {
+                        Ok(action) => (Some(action), false, false, false),
+                        Err(err) => {
+                            app.leave_attention(format!("paste: {err:#}"));
+                            dirty = true;
+                            urgent = true;
+                            continue;
+                        }
                     }
                 }
-            }
-            TerminalEvent::FocusLost => {
-                focused = false;
-                app.changes_suppressed = false;
-                repeat_deadline = None;
-                dirty = true;
-                urgent = true;
-                continue;
-            }
-            TerminalEvent::FocusGained => {
-                focused = true;
-                if app.unseen_filesystem_redraw {
+                TerminalEvent::FocusLost => {
+                    focused = false;
+                    app.changes_suppressed = false;
+                    repeat_deadline = None;
                     dirty = true;
                     urgent = true;
+                    continue;
                 }
-                continue;
-            }
-            TerminalEvent::Resize(_, _) => {
-                dirty = true;
-                urgent = true;
-                continue;
+                TerminalEvent::FocusGained => {
+                    focused = true;
+                    if app.unseen_filesystem_redraw {
+                        dirty = true;
+                        urgent = true;
+                    }
+                    continue;
+                }
+                TerminalEvent::Resize(_, _) => {
+                    dirty = true;
+                    urgent = true;
+                    continue;
+                }
             }
         };
         if !focused {
@@ -4596,6 +4646,7 @@ fn load_visible_history_metadata(
 fn draw(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
+    command_picker: &mut Menu<CommandId>,
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
     authors: &SharedAuthors,
@@ -4876,7 +4927,7 @@ fn draw(
     terminal
         .autoresize()
         .context("could not resize the terminal before drawing")?;
-    {
+    let cursor = {
         let mut frame = terminal.get_frame();
         ui::draw_with_worktree(
             &mut frame,
@@ -4887,13 +4938,21 @@ fn draw(
             tree_changes,
             worktree_changes,
         );
-    }
+        if command_picker.is_open() {
+            let commands = command_menu::commands(app, decorations, app.has_verifiable_signatures());
+            let items = command_picker_items(&commands);
+            command_picker.sync(&items);
+            ui::draw_command_menu(&mut frame, command_picker, &commands)
+        } else {
+            None
+        }
+    };
     if matches!(app.state, State::Complete | State::Cancelled) {
         let response_ids = filesystem_responses.active_reference_ids().to_vec();
         filesystem_responses.finish_after_frame(&response_ids, "completed");
     }
     terminal
-        .apply_buffer_with_cursor(None)
+        .apply_buffer_with_cursor(cursor)
         .context("could not draw terminal frame")?;
     filesystem_responses.frame_presented();
     Ok(())
@@ -6818,6 +6877,129 @@ fn action(key: KeyEvent) -> Option<Action> {
     action_with_shortcut_groups(key, false, false, false, false)
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum CommandMenuInput {
+    Pass,
+    Handled,
+    Submit(Action),
+}
+
+fn command_picker_items(commands: &[MenuCommand]) -> Vec<MenuItem<'_, CommandId>> {
+    commands
+        .iter()
+        .map(|command| {
+            MenuItem::with_search_prefix(command.label, command.group.label(), command.group.prefix(), command.id)
+        })
+        .collect()
+}
+
+fn opens_command_menu(event: &TerminalEvent, actions_expanded: bool, command_menu_open: bool) -> bool {
+    !actions_expanded
+        && !command_menu_open
+        && matches!(
+            event,
+            TerminalEvent::Key(KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            })
+        )
+}
+
+fn swallow_command_menu_key_event(event: &TerminalEvent, suppressed: &mut Option<KeyCode>) -> bool {
+    let Some(expected) = suppressed.take() else {
+        return false;
+    };
+    match event {
+        TerminalEvent::Key(key) if key.code == expected && key.kind == KeyEventKind::Repeat => {
+            *suppressed = Some(expected);
+            true
+        }
+        TerminalEvent::Key(key) if key.code == expected && key.kind == KeyEventKind::Release => true,
+        _ => false,
+    }
+}
+
+fn command_menu_input(event: &TerminalEvent, menu: &mut Menu<CommandId>, commands: &[MenuCommand]) -> CommandMenuInput {
+    let items = command_picker_items(commands);
+    match event {
+        TerminalEvent::FocusGained | TerminalEvent::FocusLost | TerminalEvent::Resize(_, _) => CommandMenuInput::Pass,
+        TerminalEvent::Mouse(_) => CommandMenuInput::Handled,
+        TerminalEvent::Paste(text) => {
+            menu.paste(text, &items);
+            CommandMenuInput::Handled
+        }
+        TerminalEvent::Key(key) if key.kind == KeyEventKind::Release => CommandMenuInput::Handled,
+        TerminalEvent::Key(key) if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) => {
+            CommandMenuInput::Pass
+        }
+        TerminalEvent::Key(key) => {
+            let selected = match key.code {
+                KeyCode::Esc => {
+                    menu.close();
+                    return CommandMenuInput::Handled;
+                }
+                KeyCode::Enter => menu.submit_selected(&items),
+                KeyCode::Up => {
+                    menu.up(&items);
+                    None
+                }
+                KeyCode::Down => {
+                    menu.down(&items);
+                    None
+                }
+                KeyCode::Left => {
+                    menu.left();
+                    None
+                }
+                KeyCode::Right => {
+                    menu.right();
+                    None
+                }
+                KeyCode::Home => {
+                    menu.home();
+                    None
+                }
+                KeyCode::End => {
+                    menu.end();
+                    None
+                }
+                KeyCode::Backspace => {
+                    menu.backspace(&items);
+                    None
+                }
+                KeyCode::Delete => {
+                    menu.delete(&items);
+                    None
+                }
+                KeyCode::Char('p') if key.kind == KeyEventKind::Repeat && menu.query().is_empty() => None,
+                KeyCode::Char(digit)
+                    if digit.is_ascii_digit()
+                        && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    menu.submit_digit(digit, &items)
+                }
+                KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                    menu.insert(character, &items);
+                    None
+                }
+                _ => None,
+            };
+            selected.map_or(CommandMenuInput::Handled, |id| {
+                CommandMenuInput::Submit(
+                    commands
+                        .iter()
+                        .find(|command| command.id == id)
+                        .expect("a submitted command came from the current catalog")
+                        .action
+                        .clone(),
+                )
+            })
+        }
+    }
+}
+
 fn resolve_pasted_commit(repository: &gix::Repository, pasted: &str) -> Result<gix::ObjectId> {
     let hash = pasted.trim();
     anyhow::ensure!(
@@ -7024,11 +7206,12 @@ fn action_with_shortcut_groups(
         KeyCode::Char('n') if actions_expanded => Some(Action::NewEmptyCommit),
         KeyCode::Char('e') if actions_expanded => Some(Action::Amend),
         KeyCode::Char('l') if actions_expanded => Some(Action::Spill),
-        KeyCode::Char('p') if actions_expanded => Some(Action::Split),
+        KeyCode::Char('p') if actions_expanded && !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Split),
         KeyCode::Char('d') if actions_expanded => Some(Action::Forget),
         KeyCode::Char('i') if actions_expanded => Some(Action::TogglePin),
         KeyCode::Char('n') => Some(Action::ToggleEnrich),
-        KeyCode::Char('p') => Some(Action::CycleChangesParent),
+        KeyCode::Char('P') => Some(Action::CycleChangesParent),
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
@@ -7166,6 +7349,143 @@ mod tests {
             "an existing non-commit object is rejected"
         );
         Ok(())
+    }
+
+    #[test]
+    fn command_menu_intercepts_text_paste_and_recalls_exact_submissions() {
+        let app = App::new(1);
+        let commands = command_menu::commands(&app, &Decorations::default(), false);
+        let items = command_picker_items(&commands);
+        let mut menu = Menu::default();
+        menu.open(&items);
+
+        assert_eq!(
+            command_menu_input(
+                &TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+                &mut menu,
+                &commands,
+            ),
+            CommandMenuInput::Handled,
+            "the first opening has no default command"
+        );
+        assert_eq!(
+            command_menu_input(&TerminalEvent::Paste("r\nf\tt".into()), &mut menu, &commands),
+            CommandMenuInput::Handled,
+            "paste edits the query instead of reaching commit paste"
+        );
+        assert_eq!(menu.query(), "rft");
+        assert_eq!(
+            command_menu_input(
+                &TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+                &mut menu,
+                &commands,
+            ),
+            CommandMenuInput::Submit(Action::ToggleRefTree)
+        );
+
+        menu.open(&items);
+        assert_eq!(
+            command_menu_input(
+                &TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+                &mut menu,
+                &commands,
+            ),
+            CommandMenuInput::Submit(Action::ToggleRefTree),
+            "reopening recalls the exact submitted command"
+        );
+        menu.open(&items);
+        assert_eq!(
+            command_menu_input(
+                &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
+                &mut menu,
+                &commands,
+            ),
+            CommandMenuInput::Submit(Action::ToggleAlign),
+            "digits execute their visible row"
+        );
+    }
+
+    #[test]
+    fn command_menu_opener_does_not_steal_prefixed_or_shifted_p() {
+        assert!(opens_command_menu(
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            false,
+            false,
+        ));
+        assert!(!opens_command_menu(
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            true,
+            false,
+        ));
+        assert!(!opens_command_menu(
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            false,
+            true,
+        ));
+        assert!(!opens_command_menu(
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT)),
+            false,
+            false,
+        ));
+        assert!(!opens_command_menu(
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE)),
+            false,
+            false,
+        ));
+        assert!(!opens_command_menu(
+            &TerminalEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Char('p'),
+                KeyModifiers::NONE,
+                KeyEventKind::Repeat,
+            )),
+            false,
+            false,
+        ));
+
+        let app = App::new(1);
+        let commands = command_menu::commands(&app, &Decorations::default(), false);
+        let items = command_picker_items(&commands);
+        let mut menu = Menu::default();
+        menu.open(&items);
+        assert_eq!(
+            command_menu_input(
+                &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+                &mut menu,
+                &commands,
+            ),
+            CommandMenuInput::Handled
+        );
+        assert_eq!(menu.query(), "p", "an open command menu receives p as query text");
+    }
+
+    #[test]
+    fn command_menu_closing_key_repeats_do_not_reach_the_main_view() {
+        let mut suppressed = Some(KeyCode::Enter);
+        assert!(swallow_command_menu_key_event(
+            &TerminalEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+                KeyEventKind::Repeat,
+            )),
+            &mut suppressed,
+        ));
+        assert_eq!(suppressed, Some(KeyCode::Enter));
+        assert!(swallow_command_menu_key_event(
+            &TerminalEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            )),
+            &mut suppressed,
+        ));
+        assert_eq!(suppressed, None);
+
+        let mut suppressed = Some(KeyCode::Esc);
+        assert!(!swallow_command_menu_key_event(
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
+            &mut suppressed,
+        ));
+        assert_eq!(suppressed, None, "another key ends suppression and remains actionable");
     }
 
     #[test]
@@ -8832,8 +9152,13 @@ mod tests {
             Some(Action::Review),
             "the actions shortcut takes priority over the direct reference toggle"
         );
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)), None);
         assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            action(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE)),
+            Some(Action::CycleChangesParent)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT)),
             Some(Action::CycleChangesParent)
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)), None);

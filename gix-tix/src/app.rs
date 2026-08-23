@@ -331,7 +331,7 @@ pub(crate) enum CopyKind {
     Author,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Action {
     Cancelled,
     Undo,
@@ -773,6 +773,13 @@ impl App {
         self.leave_notice(NoticeKind::Error, message);
     }
 
+    pub(crate) fn close_shortcut_groups(&mut self) {
+        self.history_display_expanded = false;
+        self.actions_expanded = false;
+        self.enrich_expanded = false;
+        self.information_expanded = false;
+    }
+
     fn leave_notice(&mut self, kind: NoticeKind, message: impl Into<String>) {
         self.notice = Some(Notice {
             kind,
@@ -1194,6 +1201,18 @@ impl App {
                 Some(HistoryEntry::Segment { .. }) | None => None,
             })
             .collect()
+    }
+
+    pub(crate) fn has_verifiable_signatures(&self) -> bool {
+        self.visible_history_indices(self.offset..self.offset.saturating_add(self.viewport_rows))
+            .into_iter()
+            .any(|index| {
+                !self.hidden_rows.contains(&self.rows[index].id)
+                    && matches!(
+                        self.rows[index].signature,
+                        SignatureState::Unverified | SignatureState::Verifying
+                    )
+            })
     }
 
     fn active_compressed_history(&self) -> Option<&CompressedHistory> {

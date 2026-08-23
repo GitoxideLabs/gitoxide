@@ -1,7 +1,7 @@
 use gix::bstr::{BStr, BString, ByteSlice};
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Margin, Rect},
+    layout::{Alignment, Constraint, Layout, Margin, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap},
@@ -14,7 +14,9 @@ use crate::{
         ChangesLayout, ChangesMode, CommitRow, CopyKind, DateMode, HistoryEntry, IdMode, NameMode, Notice, NoticeKind,
         RefMode, SelectionRelation, SignatureState, State,
     },
+    command_menu::{self, Command, CommandGroup, CommandId},
     history::{DecorationKind, Decorations},
+    menu::{MAX_VISIBLE_ROWS, Menu},
 };
 
 const COMPARED_PARENT_COLOR: Color = Color::Cyan;
@@ -82,6 +84,91 @@ pub(crate) fn render_notice(frame: &mut Frame<'_>, area: Rect, notice: &Notice) 
         ),
         area,
     );
+}
+
+pub(crate) fn draw_command_menu(
+    frame: &mut Frame<'_>,
+    menu: &mut Menu<CommandId>,
+    commands: &[Command],
+) -> Option<Position> {
+    if !menu.is_open() {
+        return None;
+    }
+    let frame_area = frame.area();
+    let width = frame_area.width.saturating_sub(2).min(72);
+    if width < 4 {
+        menu.set_visible_rows(0);
+        return None;
+    }
+    menu.set_visible_rows(usize::from(frame_area.height.saturating_sub(5)).min(MAX_VISIBLE_ROWS));
+    let height = frame_area
+        .height
+        .saturating_sub(2)
+        .min(u16::try_from(menu.visible_indices().len().max(1) + 3).unwrap_or(u16::MAX));
+    if height < 3 {
+        return None;
+    }
+    let area = Rect::new(
+        frame_area.x + (frame_area.width - width) / 2,
+        frame_area.y + (frame_area.height - height) / 2,
+        width,
+        height,
+    );
+    let block = Block::new().borders(Borders::ALL).title(" Command ");
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let [query_area, results_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+    let [prompt_area, input_area] = Layout::horizontal([Constraint::Length(2), Constraint::Min(0)]).areas(query_area);
+    frame.render_widget(
+        Paragraph::new("> ").style(Style::default().add_modifier(Modifier::BOLD)),
+        prompt_area,
+    );
+
+    let before_cursor: String = menu.query().chars().take(menu.cursor()).collect();
+    let cursor_width = Line::raw(before_cursor).width();
+    let input_width = usize::from(input_area.width);
+    let scroll = cursor_width.saturating_sub(input_width.saturating_sub(1));
+    frame.render_widget(
+        Paragraph::new(menu.query()).scroll((0, u16::try_from(scroll).unwrap_or(u16::MAX))),
+        input_area,
+    );
+
+    let selected = menu.selected_visible_row();
+    let mut lines = Vec::new();
+    for (row, index) in menu.visible_indices().iter().copied().enumerate() {
+        let command = &commands[index];
+        let group = command.group.label();
+        let mut shortcut = command.shortcut.chars();
+        let shortcut = format!(
+            "{} {}",
+            shortcut.next().expect("a command shortcut has a prefix"),
+            shortcut.next().expect("a command shortcut has a key")
+        );
+        let style = if selected == Some(row) {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::styled(
+            format!("{}  {group:<11} {}  [{shortcut}]", row + 1, command.label),
+            style,
+        ));
+    }
+    if lines.is_empty() {
+        lines.push(Line::styled(
+            "no matching commands",
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    }
+    frame.render_widget(Paragraph::new(lines), results_area);
+
+    (input_area.width > 0).then(|| {
+        Position::new(
+            input_area.x + u16::try_from(cursor_width.saturating_sub(scroll)).unwrap_or(u16::MAX),
+            input_area.y,
+        )
+    })
 }
 
 pub(crate) fn draw_todo_progress(frame: &mut Frame<'_>, progress: crate::edit::rebase::Progress) {
@@ -435,9 +522,46 @@ pub(crate) fn draw_with_worktree(
                     && !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
             }),
     );
-    let popup_rows = usize::from(app.actions_expanded) + 1;
-    let mut prefix_popup_allowed = active_prefix_popup_anchor(app, decorations)
-        .is_some_and(|anchor| prefix_popup_can_render(frame.area(), footer, anchor, popup_rows));
+    if app.changes_visible() {
+        app.set_changes_layout(
+            changes_layout,
+            changes_panes
+                .iter()
+                .any(|pane| pane.pane == ChangePane::Tree && pane.outer.height > 0)
+                && tree_changes.is_some_and(Changes::is_visible),
+            changes_panes
+                .iter()
+                .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0)
+                && worktree_changes.is_some_and(Changes::is_visible),
+        );
+    }
+    app.viewport_rows = history_changes_panes
+        .iter()
+        .map(|pane| pane.outer.y.saturating_sub(body.y))
+        .chain(history_notice_area.map(|area| area.y.saturating_sub(body.y)))
+        .min()
+        .unwrap_or(body.height)
+        .max(1) as usize;
+    app.center_initial_selection();
+    app.prepare_history_viewport();
+    let commands =
+        if app.history_display_expanded || app.actions_expanded || app.enrich_expanded || app.information_expanded {
+            command_menu::commands(app, decorations, app.has_verifiable_signatures())
+        } else {
+            Vec::new()
+        };
+    let focus_feedback = app.focus_feedback.take();
+    let mut prefix_popup = active_prefix_popup(
+        app,
+        decorations,
+        &commands,
+        focus_feedback,
+        footer.width.saturating_sub(2) as usize,
+    );
+    let popup_rows = prefix_popup.as_ref().map_or(0, |(_, rows)| rows.len());
+    let mut prefix_popup_allowed = prefix_popup
+        .as_ref()
+        .is_some_and(|(anchor, _)| prefix_popup_can_render(frame.area(), footer, *anchor, popup_rows));
     if prefix_popup_allowed {
         let popup_y = footer.y - popup_rows as u16;
         let shifted_y = |area: Rect| area.y.saturating_sub(popup_rows as u16).max(full_body.y);
@@ -478,43 +602,11 @@ pub(crate) fn draw_with_worktree(
         && changes_panes
             .iter()
             .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0);
-    if app.changes_visible() {
-        app.set_changes_layout(
-            changes_layout,
-            changes_panes
-                .iter()
-                .any(|pane| pane.pane == ChangePane::Tree && pane.outer.height > 0)
-                && tree_changes.is_some_and(Changes::is_visible),
-            changes_panes
-                .iter()
-                .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0)
-                && worktree_changes.is_some_and(Changes::is_visible),
-        );
-    }
-    app.viewport_rows = history_changes_panes
-        .iter()
-        .map(|pane| pane.outer.y.saturating_sub(body.y))
-        .chain(history_notice_area.map(|area| area.y.saturating_sub(body.y)))
-        .min()
-        .unwrap_or(body.height)
-        .max(1) as usize;
-    app.center_initial_selection();
-    app.prepare_history_viewport();
     let start = app.offset.min(app.history_len());
     let render_end = start.saturating_add(body.height as usize).min(app.history_len());
     let visible_entries: Vec<_> = (start..render_end)
         .filter_map(|index| app.history_entry(index))
         .collect();
-    let has_verifiable_signatures = visible_entries.iter().any(|entry| {
-        let HistoryEntry::Commit(index) = entry else {
-            return false;
-        };
-        !app.is_row_hidden(*index)
-            && matches!(
-                app.rows[*index].signature,
-                SignatureState::Unverified | SignatureState::Verifying
-            )
-    });
     let lanes = app.render_lanes(start..render_end);
     let enrichment_gutter = Line::raw(crate::enrich::marker(true, true, true)).width() as u16;
     let has_duplicate_change_id = app.has_duplicate_change_ids();
@@ -1001,7 +1093,7 @@ pub(crate) fn draw_with_worktree(
                     ),
                     Span::raw(" · "),
                 ]);
-                spans.extend(shortcut("next parent", 'p', true));
+                spans.extend(shortcut("P next parent", 'P', true));
                 spans.push(Span::raw(" · "));
             }
             if let Some(error) = &app.changes(pane).error {
@@ -1077,209 +1169,38 @@ pub(crate) fn draw_with_worktree(
     let mut footer_spans = vec![Span::raw(status)];
     let mut time_travel = None;
     let mut actions_prefix_spans = Vec::new();
-    let mut actions_popup = None;
     if !selected_segment && (app.changes_focus != Some(ChangePane::Worktree) || app.can_amend()) {
         time_travel = time_travel_label(app, decorations);
         actions_prefix_spans.push(Span::raw(" · "));
         actions_prefix_spans.push(Span::styled("a", Style::default().add_modifier(Modifier::UNDERLINED)));
         actions_prefix_spans.push(Span::raw("ctions"));
         if app.actions_expanded {
-            let mut options = Vec::new();
-            if app.changes_focus.is_none() && app.reword_shortcut_visible() {
-                options.push(("reword", 'o'));
-            }
-            if app.changes_focus.is_none() && app.can_create_commit() {
-                options.push(("new", 'w'));
-            }
-            if app.changes_focus.is_none() && app.can_create_empty_commit() {
-                options.push(("new-empty", 'n'));
-            }
-            if app.can_amend() {
-                options.push(("amend", 'e'));
-            }
-            if app.can_spill() {
-                options.push(("spill", 'l'));
-            }
-            if app.can_split() {
-                options.push(("split", 'p'));
-            }
-            if app.changes_focus.is_none() && app.can_forget() {
-                options.push(("d forget", 'd'));
-            }
-            if app.changes_focus.is_none()
-                && let Some(selected) = app.selected.and_then(|index| app.rows.get(index))
-            {
-                let pinned = decorations.get(&selected.id).is_some_and(|decorations| {
-                    decorations
-                        .iter()
-                        .any(|decoration| decoration.kind == DecorationKind::Pin)
-                });
-                options.push((if pinned { "unpin" } else { "pin" }, 'i'));
-            }
-            let mut items = Vec::new();
-            if options.is_empty() {
-                items.push(Span::raw("no actions"));
-            } else {
-                for (index, (label, key)) in options.into_iter().enumerate() {
-                    if index > 0 {
-                        items.push(Span::raw(" · "));
-                    }
-                    items.extend(shortcut(label, key, true));
-                }
-            }
-            let commit_items = items;
-            let mut options = Vec::new();
-            if app.changes_focus.is_none() && app.can_stash() {
-                options.push(("z stash", 'z'));
-            } else if app.changes_focus.is_none() && app.can_unstash() {
-                options.push(("z unstash", 'z'));
-            }
-            if app.changes_focus.is_none() && app.can_rebase() {
-                options.push(("rebase", 'b'));
-            }
-            if app.changes_focus.is_none() && app.can_rebase_update() {
-                options.push(("rebase-update", 'u'));
-            }
-            if app.changes_focus.is_none() && app.can_finish_review() {
-                options.push(("finish-review", 'r'));
-            } else if app.changes_focus.is_none() && app.can_review() {
-                options.push(("review", 'r'));
-            }
-            if app.changes_focus.is_none() && app.can_squash() {
-                options.push(("squash", 's'));
-            }
-            if app.changes_focus.is_none() && app.can_copy_insert() {
-                options.push(("copy-insert", 'y'));
-            }
-            if app.changes_focus.is_none() && app.can_move_insert() {
-                options.push(("move-insert", 'm'));
-            }
-            let mut items = Vec::new();
-            for (label, key) in options {
-                if !items.is_empty() {
-                    items.push(Span::raw(" · "));
-                }
-                items.extend(shortcut(label, key, true));
-            }
-            if app.changes_focus.is_none() && app.can_stack_insert() {
-                if !items.is_empty() {
-                    items.push(Span::raw(" · "));
-                }
-                items.push(Span::raw("stack-inser"));
-                items.push(Span::styled("t", Style::default().add_modifier(Modifier::UNDERLINED)));
-            }
-            if app.changes_focus.is_none() && app.can_fork_commit() {
-                if !items.is_empty() {
-                    items.push(Span::raw(" · "));
-                }
-                items.extend(shortcut("fork", 'f', true));
-            }
-            if app.changes_focus.is_none() && app.can_attach() {
-                if !items.is_empty() {
-                    items.push(Span::raw(" · "));
-                }
-                items.extend(shortcut("attach", 'h', true));
-            }
-            if items.is_empty() {
-                items.push(Span::raw("no actions"));
-            }
-            actions_popup = Some(vec![commit_items, items]);
             emphasize_prefix(&mut actions_prefix_spans[1..]);
         }
     }
-    let focus_feedback = app.focus_feedback.take();
     if app.changes_focus.is_some() {
         footer_spans.push(Span::raw(" · q/Esc history"));
     }
     let mut view_prefix_spans = Vec::new();
-    let mut view_popup = None;
     view_prefix_spans.push(Span::raw(" · "));
     view_prefix_spans.push(Span::styled("v", Style::default().add_modifier(Modifier::UNDERLINED)));
     view_prefix_spans.push(Span::raw("iew"));
     if app.history_display_expanded {
-        let mut items = Vec::new();
-        let (date_label, date_visible) = match app.date_mode {
-            DateMode::Author => ("author date", true),
-            DateMode::Committer => ("committer date", true),
-            DateMode::None => ("date", false),
-        };
-        items.extend(shortcut(date_label, 'd', date_visible));
-        items.push(Span::raw(" · "));
-        let (id_label, ids_visible) = match (app.id_mode, app.effective_id_mode()) {
-            (IdMode::Off, IdMode::Change) => ("auto change ids", true),
-            (IdMode::Commit, _) => ("commit ids", true),
-            (IdMode::Change, _) => ("change ids", true),
-            (IdMode::Off, _) => ("ids", false),
-        };
-        items.extend(shortcut(id_label, 'i', ids_visible));
-        items.push(Span::raw(" · "));
-        items.extend(shortcut("emails", 's', app.show_emails));
-        let (name_label, names_visible) = match app.name_mode {
-            NameMode::All => ("names", true),
-            NameMode::Author => ("name", true),
-            NameMode::None => ("name", false),
-        };
-        items.push(Span::raw(" · "));
-        items.extend(shortcut(name_label, 'e', names_visible));
-        for (label, key, enabled) in [("mailmap", 'm', app.use_mailmap), ("trailers", 't', app.show_trailers)] {
-            items.push(Span::raw(" · "));
-            items.extend(shortcut(label, key, enabled));
-        }
-        let ref_label = match app.ref_mode {
-            RefMode::All => "all refs",
-            RefMode::Default => "refs",
-            RefMode::None => "no refs",
-        };
-        items.push(Span::raw(" · "));
-        items.extend(shortcut(ref_label, 'r', app.ref_mode != RefMode::None));
-        if app.has_hidden_filter {
-            items.push(Span::raw(" · "));
-            items.extend(shortcut(
-                if app.show_hidden { "hide hidden" } else { "show hidden" },
-                'h',
-                app.show_hidden,
-            ));
-        }
-        view_popup = Some(items);
         emphasize_prefix(&mut view_prefix_spans[1..]);
     }
-    let mut ordered = vec![Span::raw(history_position(app))];
+    let mut ordered = vec![Span::raw(history_position(app)), Span::raw(" · ")];
+    ordered.extend(shortcut("p command", 'p', true));
     if selected_segment {
         ordered.push(Span::raw(" · <enter> expand"));
     }
-    let mut prefix_popup: Option<(usize, Vec<Vec<Span<'static>>>)> = None;
-    let view_anchor = spans_width(&ordered).saturating_add(view_prefix_spans[0].width());
     ordered.append(&mut view_prefix_spans);
-    if let Some(items) = view_popup {
-        prefix_popup = Some((view_anchor, vec![items]));
-    }
-    let actions_anchor = spans_width(&ordered).saturating_add(actions_prefix_spans.first().map_or(0, Span::width));
     ordered.append(&mut actions_prefix_spans);
-    if let Some(items) = actions_popup {
-        prefix_popup = Some((actions_anchor, items));
-    }
     if !selected_segment {
         ordered.push(Span::raw(" · "));
-        let enrich_anchor = spans_width(&ordered);
         let enrich_prefix_start = ordered.len();
         ordered.extend(shortcut("enrich", 'n', true));
         if app.enrich_expanded {
-            let mut items = Vec::new();
-            if let Some(row) = app.selected.and_then(|index| app.rows.get(index)) {
-                if app.can_reword() {
-                    items.extend(shortcut("todo", 't', app.todo(row.id)));
-                    items.push(Span::raw(" · "));
-                    items.extend(shortcut("note", 'o', app.note(row.id).is_some()));
-                    items.push(Span::raw(" · "));
-                }
-                items.extend(shortcut("checks-pass", 'e', app.checks_pass(row.id)));
-                items.push(Span::raw(" · "));
-                items.extend(shortcut("git note", 'g', !app.notes(row.id).is_empty()));
-            } else {
-                items.push(Span::raw("no actions"));
-            }
             emphasize_prefix(&mut ordered[enrich_prefix_start..]);
-            prefix_popup = Some((enrich_anchor, vec![items]));
         }
     }
     if let Some(label) = time_travel {
@@ -1297,60 +1218,10 @@ pub(crate) fn draw_with_worktree(
     ordered.push(Span::raw(" · "));
     ordered.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
     ordered.push(Span::raw(" · "));
-    let information_anchor = spans_width(&ordered);
     let information_prefix_start = ordered.len();
     ordered.push(Span::styled("?", Style::default().add_modifier(Modifier::UNDERLINED)));
     if app.information_expanded {
-        let mut items = Vec::new();
-        if app.signature_failures > 0 {
-            items.extend([
-                Span::raw(format!("s {} ", app.signature_failures)),
-                Span::styled("●", color(Color::LightRed)),
-                Span::raw(" · "),
-            ]);
-        } else if has_verifiable_signatures {
-            items.extend([
-                Span::raw("s "),
-                Span::styled("●", color(Color::Rgb(255, 165, 0))),
-                Span::raw(" -> "),
-                Span::styled("●", color(Color::Green)),
-                Span::raw(" · "),
-            ]);
-        }
-        let (alignment, enabled) = match app.alignment {
-            HistoryAlignment::Title => ("[ title", true),
-            HistoryAlignment::Columns => ("[ columns", true),
-            HistoryAlignment::None => ("[ align", false),
-            HistoryAlignment::Compressed => ("[ compressed", true),
-        };
-        items.push(toggle(alignment, enabled));
-        items.push(Span::raw(" · "));
-        items.extend(shortcut("ref-tree", 't', false));
-        if !selected_segment {
-            items.push(Span::raw(" · "));
-            items.extend(shortcut("message", 'm', app.show_commit));
-            items.push(Span::raw(" · "));
-            items.extend(shortcut("changes", 'e', app.changes_mode.is_some()));
-            if app.tree_changes_visible || app.worktree_changes_visible {
-                items.push(Span::raw(" · "));
-                items.push(match focus_feedback {
-                    Some(destination) => Span::raw(format!("<tab> → {destination}")),
-                    None => Span::raw("<tab> switch"),
-                });
-            }
-        }
-        items.push(Span::raw(
-            " · ↑↓/jk move · h/l pan · Shift+directions topo · wheel/page pan · Shift+wheel/page move",
-        ));
-        if app.changes_focus.is_none() {
-            items.push(Span::raw(if selected_segment {
-                " · <enter> expand"
-            } else {
-                " · <enter> diff"
-            }));
-        }
         emphasize_prefix(&mut ordered[information_prefix_start..]);
-        prefix_popup = Some((information_anchor, vec![items]));
     }
     ordered.append(&mut footer_spans);
     footer_spans = ordered;
@@ -1445,6 +1316,7 @@ fn time_travel_label(app: &App, decorations: &Decorations) -> Option<&'static st
 
 fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<usize> {
     let mut width = history_position(app).chars().count();
+    width += 3 + "p command".len();
     let selected_segment = app.selected_is_segment();
     if selected_segment {
         width += " · <enter> expand".chars().count();
@@ -2182,17 +2054,6 @@ fn markdown_title_spans(title: &BStr) -> Vec<Span<'static>> {
     out
 }
 
-fn toggle(label: &'static str, enabled: bool) -> Span<'static> {
-    Span::styled(
-        label,
-        if enabled {
-            Style::default()
-        } else {
-            Style::default().add_modifier(Modifier::DIM)
-        },
-    )
-}
-
 fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
     let key_start = label.find(key).expect("shortcut key is present in its label");
     let key_end = key_start + key.len_utf8();
@@ -2206,6 +2067,130 @@ fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>>
         Span::styled(&label[key_start..key_end], style.add_modifier(Modifier::UNDERLINED)),
         Span::styled(&label[key_end..], style),
     ]
+}
+
+fn command_items(commands: &[Command], group: CommandGroup, row: usize) -> Vec<Vec<Span<'static>>> {
+    let mut items = Vec::new();
+    for command in commands
+        .iter()
+        .filter(|command| command.group == group && command.row == row)
+    {
+        let item = if command.id == CommandId::StackInsert {
+            vec![
+                Span::raw("stack-inser"),
+                Span::styled("t", Style::default().add_modifier(Modifier::UNDERLINED)),
+            ]
+        } else {
+            shortcut(command.label, command.key(), command.active)
+        };
+        items.push(item);
+    }
+    if items.is_empty() {
+        items.push(vec![Span::raw("no actions")]);
+    }
+    items
+}
+
+fn active_prefix_popup(
+    app: &App,
+    decorations: &Decorations,
+    commands: &[Command],
+    focus_feedback: Option<&'static str>,
+    content_width: usize,
+) -> Option<(usize, Vec<Vec<Span<'static>>>)> {
+    let selected_segment = app.selected_is_segment();
+    let mut logical_rows = app
+        .history_display_expanded
+        .then(|| vec![command_items(commands, CommandGroup::View, 0)]);
+    if !selected_segment && (app.changes_focus != Some(ChangePane::Worktree) || app.can_amend()) && app.actions_expanded
+    {
+        logical_rows = Some(vec![
+            command_items(commands, CommandGroup::Actions, 0),
+            command_items(commands, CommandGroup::Actions, 1),
+        ]);
+    }
+    if !selected_segment && app.enrich_expanded {
+        logical_rows = Some(vec![command_items(commands, CommandGroup::Enrich, 0)]);
+    }
+    if app.information_expanded {
+        let information = commands
+            .iter()
+            .filter(|command| command.group == CommandGroup::Information)
+            .map(|command| {
+                if command.id == CommandId::VerifySignatures {
+                    if app.signature_failures > 0 {
+                        vec![
+                            Span::raw(format!("s {} ", app.signature_failures)),
+                            Span::styled("●", color(Color::LightRed)),
+                        ]
+                    } else {
+                        vec![
+                            Span::raw("s "),
+                            Span::styled("●", color(Color::Rgb(255, 165, 0))),
+                            Span::raw(" -> "),
+                            Span::styled("●", color(Color::Green)),
+                        ]
+                    }
+                } else {
+                    shortcut(command.label, command.key(), command.active)
+                }
+            })
+            .collect();
+        let mut navigation = vec![shortcut("p command", 'p', true)];
+        if !selected_segment && (app.tree_changes_visible || app.worktree_changes_visible) {
+            navigation.push(vec![match focus_feedback {
+                Some(destination) => Span::raw(format!("<tab> → {destination}")),
+                None => Span::raw("<tab> switch"),
+            }]);
+        }
+        navigation.extend([
+            vec![Span::raw("↑↓/jk move")],
+            vec![Span::raw("h/l pan")],
+            vec![Span::raw("Shift+directions topo")],
+            vec![Span::raw("PgUp/PgDn move")],
+            vec![Span::raw("Shift+PgUp/PgDn pan")],
+        ]);
+        if app.changes_focus.is_none() {
+            navigation.push(vec![Span::raw(if selected_segment {
+                "<enter> expand"
+            } else {
+                "<enter> diff"
+            })]);
+        }
+        logical_rows = Some(vec![information, navigation]);
+    }
+    Some((
+        active_prefix_popup_anchor(app, decorations)?,
+        wrap_prefix_popup_rows(logical_rows?, content_width),
+    ))
+}
+
+fn wrap_prefix_popup_rows(logical_rows: Vec<Vec<Vec<Span<'static>>>>, content_width: usize) -> Vec<Vec<Span<'static>>> {
+    let mut rows = Vec::new();
+    for items in logical_rows {
+        let mut row = Vec::new();
+        let mut row_width = 0usize;
+        for mut item in items {
+            let item_width = spans_width(&item);
+            if !row.is_empty() && row_width.saturating_add(3).saturating_add(item_width) > content_width {
+                rows.push(row);
+                row = Vec::new();
+                row_width = 0;
+            }
+            if !row.is_empty() {
+                row.push(Span::raw(" · "));
+                row_width += 3;
+            }
+            row_width = row_width.saturating_add(item_width);
+            row.append(&mut item);
+        }
+        if row.is_empty() {
+            rows.push(Vec::new());
+        } else {
+            rows.push(row);
+        }
+    }
+    rows
 }
 
 fn emphasize_prefix(spans: &mut [Span<'_>]) {
@@ -2878,6 +2863,141 @@ mod tests {
     }
 
     #[test]
+    fn prefix_popout_wraps_whole_items_and_preserves_logical_rows() -> Result<(), Box<dyn std::error::Error>> {
+        let rows = wrap_prefix_popup_rows(
+            vec![
+                vec![
+                    shortcut("one", 'o', true),
+                    shortcut("two", 't', false),
+                    shortcut("three", 't', true),
+                ],
+                vec![shortcut("four", 'f', true)],
+            ],
+            9,
+        );
+        assert_eq!(
+            rows.iter()
+                .cloned()
+                .map(Line::from)
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>(),
+            ["one · two", "three", "four"],
+            "items wrap without orphaning separators and logical rows still start new display rows"
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(11, 4))?;
+        let mut popup = None;
+        terminal.draw(|frame| {
+            popup = render_prefix_popup(frame, Rect::new(0, 3, 11, 1), 0, rows);
+        })?;
+
+        assert_eq!(popup, Some(Rect::new(0, 0, 11, 3)));
+        assert_eq!(rendered_line(&terminal, 0), " one · two ");
+        assert_eq!(rendered_line(&terminal, 1).trim_end(), " three");
+        assert_eq!(rendered_line(&terminal, 2).trim_end(), " four");
+        let styled_shortcut = terminal.backend().buffer()[(7, 0)].modifier;
+        assert!(styled_shortcut.contains(Modifier::UNDERLINED));
+        assert!(styled_shortcut.contains(Modifier::DIM));
+        assert!(styled_shortcut.contains(Modifier::REVERSED));
+        Ok(())
+    }
+
+    #[test]
+    fn wrapped_prefix_popout_reserves_all_rows_or_stays_hidden() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.changes_mode = None;
+        app.configure_hidden_filter(true);
+        app.history_display_expanded = true;
+        app.leave_success("notice");
+        let mut terminal = Terminal::new(TestBackend::new(35, 5))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        assert!(rendered_line(&terminal, 0).contains("notice"));
+        assert!(rendered_line(&terminal, 1).contains("author date"));
+        assert!(rendered_line(&terminal, 2).contains("names"));
+        assert!(rendered_line(&terminal, 3).contains("show hidden"));
+
+        let mut short_app = App::new(1);
+        short_app.changes_mode = None;
+        short_app.configure_hidden_filter(true);
+        short_app.history_display_expanded = true;
+        let mut short = Terminal::new(TestBackend::new(35, 3))?;
+        short.draw(|frame| draw(frame, &mut short_app, &Decorations::new()))?;
+
+        assert!(
+            !(0..2).any(|row| {
+                let line = rendered_line(&short, row);
+                line.contains("author date") || line.contains("names") || line.contains("show hidden")
+            }),
+            "a popup that does not fit is not partially rendered"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn command_menu_renders_filtered_numbered_results_and_a_cursor() -> Result<(), Box<dyn std::error::Error>> {
+        let app = App::new(1);
+        let commands = command_menu::commands(&app, &Decorations::new(), false);
+        let items = commands
+            .iter()
+            .map(|command| {
+                crate::menu::Item::with_search_prefix(
+                    command.label,
+                    command.group.label(),
+                    command.group.prefix(),
+                    command.id,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut menu = Menu::default();
+        menu.open(&items);
+        for character in "rft".chars() {
+            menu.insert(character, &items);
+        }
+        let mut cursor = None;
+        let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
+        terminal.draw(|frame| cursor = draw_command_menu(frame, &mut menu, &commands))?;
+
+        let rendered = (0..12)
+            .map(|row| rendered_line(&terminal, row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Command"), "the popup has a title");
+        assert!(rendered.contains("> rft"), "the popup shows the query");
+        assert!(
+            rendered.contains("1  Information ref-tree  [? t]"),
+            "matching commands are numbered and retain their shortcut"
+        );
+        let result_y = (0..12)
+            .find(|row| rendered_line(&terminal, *row).contains("ref-tree"))
+            .expect("the selected result is visible");
+        assert!(
+            (0..60).any(|x| terminal.backend().buffer()[(x, result_y)]
+                .modifier
+                .contains(Modifier::REVERSED)),
+            "the selected command is highlighted"
+        );
+        assert!(cursor.is_some(), "the query exposes a terminal cursor");
+
+        menu.open(&items);
+        let mut short = Terminal::new(TestBackend::new(60, 7))?;
+        short.draw(|frame| assert!(draw_command_menu(frame, &mut menu, &commands).is_some()))?;
+        assert_eq!(menu.visible_indices().len(), 2, "only rendered rows are selectable");
+        assert_eq!(menu.submit_digit('3', &items), None, "a clipped row cannot execute");
+
+        menu.open(&items);
+        let mut tiny = Terminal::new(TestBackend::new(3, 12))?;
+        tiny.draw(|frame| assert_eq!(draw_command_menu(frame, &mut menu, &commands), None))?;
+        assert_eq!(
+            menu.submit_selected(&items),
+            None,
+            "an invisible selection cannot execute"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn undo_progress_uses_the_message_line_without_shifting_the_body() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(4);
         app.update(Action::ToggleInformation);
@@ -3279,7 +3399,8 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let computing = rendered_line(&terminal, 1);
         assert!(
-            computing.contains("1 commits · view · actions · enrich · copy") && computing.contains("computing"),
+            computing.contains("1 commits · p command · view · actions · enrich · copy")
+                && computing.contains("computing"),
             "expired deferral reveals computation progress"
         );
         assert_ne!(computing, completed, "visible progress changes the footer");
@@ -3303,10 +3424,10 @@ mod tests {
         app.arm_rebase_continuation();
         app.set_worktree_conflicted(true);
         app.leave_attention("materialized conflict");
-        let mut terminal = Terminal::new(TestBackend::new(120, 3))?;
+        let mut terminal = Terminal::new(TestBackend::new(120, 4))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        let notice = rendered_line(&terminal, 1);
+        let notice = rendered_line(&terminal, 2);
         assert!(
             notice
                 .trim_start()
@@ -3317,9 +3438,9 @@ mod tests {
             notice.contains("materialized conflict"),
             "operation context is retained beside the persistent prompt"
         );
-        assert_eq!(terminal.backend().buffer()[(2, 1)].bg, Color::Yellow);
+        assert_eq!(terminal.backend().buffer()[(2, 2)].bg, Color::Yellow);
         assert!(
-            rendered_line(&terminal, 2).contains("view"),
+            rendered_line(&terminal, 3).contains("view"),
             "the ordinary footer remains visible"
         );
 
@@ -3338,32 +3459,33 @@ mod tests {
         assert!(rendered_line(&terminal, 0).trim_start().starts_with("REBASE PAUSED"));
         assert!(
             rendered_line(&terminal, 1).contains("[ title"),
-            "the popup keeps its footer-adjacent row"
+            "the popup keeps its action row"
         );
+        assert!(rendered_line(&terminal, 2).contains("p command"));
         app.information_expanded = false;
 
         app.update(Action::MoveDown);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).trim_start().starts_with("REBASE PAUSED"),
+            rendered_line(&terminal, 2).trim_start().starts_with("REBASE PAUSED"),
             "navigation cannot dismiss the continuation"
         );
         app.leave_error("continue failed");
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert_eq!(terminal.backend().buffer()[(2, 1)].bg, Color::LightRed);
+        assert_eq!(terminal.backend().buffer()[(2, 2)].bg, Color::LightRed);
         app.update(Action::MoveDown);
         app.set_worktree_conflicted(false);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert_eq!(terminal.backend().buffer()[(2, 1)].bg, Color::Yellow);
+        assert_eq!(terminal.backend().buffer()[(2, 2)].bg, Color::Yellow);
         assert!(
-            rendered_line(&terminal, 1)
+            rendered_line(&terminal, 2)
                 .trim_start()
                 .starts_with("REBASE PAUSED · <enter> continue · Esc stop")
         );
 
         app.clear_rebase_continuation();
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(!(0..3).any(|y| rendered_line(&terminal, y).contains("REBASE PAUSED")));
+        assert!(!(0..4).any(|y| rendered_line(&terminal, y).contains("REBASE PAUSED")));
         Ok(())
     }
 
@@ -3920,7 +4042,7 @@ mod tests {
             "todo commit metadata uses the author date and excludes separately represented refs"
         );
 
-        let footer_text = "#0 · view · actions · enrich · copy · refs · ? · quit";
+        let footer_text = "#0 · p command · view · actions · enrich · copy · refs · ? · quit";
         let selected_line = "      > @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..selected_line.chars().count() as u16 {
@@ -3945,6 +4067,7 @@ mod tests {
         expected[(selected_line.chars().count() as u16 + 2, 0)]
             .set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         for (label, key) in [
+            ("p command", 'p'),
             ("view", 'v'),
             ("actions", 'a'),
             ("enrich", 'n'),
@@ -4310,7 +4433,7 @@ mod tests {
         })?;
 
         let footer = rendered_line(&terminal, 2);
-        let compact = "0 commits · view · actions · enrich · copy · refs · ? · Esc cancel · quit";
+        let compact = "0 commits · p command · view · actions · enrich · copy · refs · ? · Esc cancel · quit";
         assert_eq!(footer.trim_end(), compact, "the footer keeps every prefix compact");
         let view = "author date · ids · emails · names · mailmap · trailers · refs · show hidden";
         let popup = rendered_line(&terminal, 1);
@@ -4353,10 +4476,21 @@ mod tests {
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(rendered_line(&terminal, 2).trim_end(), compact);
-        let information = "[ title · ref-tree · message · changes · ↑↓/jk move · h/l pan · Shift+directions topo · wheel/page pan · Shift+wheel/page move · <enter> diff";
-        assert!(rendered_line(&terminal, 1).contains(information));
+        let information = "[ title · ref-tree · message · changes";
+        let navigation = "p command · ↑↓/jk move · h/l pan · Shift+directions topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff";
+        assert!(rendered_line(&terminal, 0).contains(information));
+        assert!(rendered_line(&terminal, 1).contains(navigation));
         assert_reversed_group(&terminal, 2, "?");
-        assert_reversed_group(&terminal, 1, &format!(" {information} "));
+        for (row, text) in [(0, information), (1, navigation)] {
+            let line = rendered_line(&terminal, row);
+            let x = line.find(text).expect("the popup row is visible") as u16;
+            assert!(
+                terminal.backend().buffer()[(x, row)]
+                    .modifier
+                    .contains(Modifier::REVERSED),
+                "the popup row is reversed"
+            );
+        }
         Ok(())
     }
 
@@ -5294,16 +5428,17 @@ mod tests {
             signature: SignatureState::Unverified,
         }]);
         complete(&mut app);
-        let mut terminal = Terminal::new(TestBackend::new(160, 2))?;
+        let mut terminal = Terminal::new(TestBackend::new(160, 3))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(rendered_line(&terminal, 1).contains("copy · refs · ? ·"));
-        assert!(!rendered_line(&terminal, 1).contains("s ● -> ●"));
+        assert!(rendered_line(&terminal, 2).contains("copy · refs · ? ·"));
+        assert!(!rendered_line(&terminal, 2).contains("s ● -> ●"));
 
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(rendered_line(&terminal, 0).contains(" s ● -> ● · [ title"));
-        assert!(rendered_line(&terminal, 1).contains("copy · refs · ?"));
+        assert!(rendered_line(&terminal, 1).contains("p command"));
+        assert!(rendered_line(&terminal, 2).contains("copy · refs · ?"));
 
         app.finish_signature_verification(vec![(id, false)]);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -5346,7 +5481,7 @@ mod tests {
             is_review: false,
             signature: SignatureState::Unsigned,
         }]);
-        let mut terminal = Terminal::new(TestBackend::new(120, 7))?;
+        let mut terminal = Terminal::new(TestBackend::new(120, 8))?;
 
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -5507,10 +5642,11 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 4).contains("PgUp/C-b up page · PgDn/C-f down page"),
+            rendered_line(&terminal, 3).contains("PgUp/C-b up page · PgDn/C-f down page"),
             "the popup moves the commit-message status up"
         );
-        assert!(rendered_line(&terminal, 5).contains("[ title"));
+        assert!(rendered_line(&terminal, 4).contains("[ title"));
+        assert!(rendered_line(&terminal, 5).contains("p command"));
         app.information_expanded = false;
 
         app.update(Action::PageDown);
@@ -5597,9 +5733,10 @@ mod tests {
             );
         })?;
 
-        assert!(rendered_line(&terminal, 3).contains("diff: failed deliberately"));
-        assert_eq!(terminal.backend().buffer()[(2, 3)].bg, PANE_STATUS_BACKGROUND);
-        assert!(rendered_line(&terminal, 4).contains("[ title"));
+        assert!(rendered_line(&terminal, 2).contains("diff: failed deliberately"));
+        assert_eq!(terminal.backend().buffer()[(2, 2)].bg, PANE_STATUS_BACKGROUND);
+        assert!(rendered_line(&terminal, 3).contains("[ title"));
+        assert!(rendered_line(&terminal, 4).contains("p command"));
         Ok(())
     }
 
@@ -5821,10 +5958,14 @@ mod tests {
             );
         })?;
         assert!(
+            rendered_line(&footer_terminal, 13).contains(" [ title · ref-tree · message · changes "),
+            "the expanded information prefix floats its actions above the navigation"
+        );
+        assert!(
             rendered_line(&footer_terminal, 14).contains(
-                " [ title · ref-tree · message · changes · <tab> switch · ↑↓/jk move · h/l pan · Shift+directions topo · wheel/page pan · Shift+wheel/page move · <enter> diff "
+                " p command · <tab> switch · ↑↓/jk move · h/l pan · Shift+directions topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff "
             ),
-            "the expanded information prefix floats its actions above the footer"
+            "the expanded information prefix keeps keyboard help next to the footer"
         );
         assert!(rendered_line(&footer_terminal, 15).contains("? · quit"));
         app.information_expanded = false;
@@ -6096,7 +6237,7 @@ mod tests {
         );
         assert!(
             rendered_line(&terminal, 14).contains(
-                "vs parent 1/2 0202020 · next parent · ↑↓/jk move · h/l pan · <enter> diff · copy · cycle tree"
+                "vs parent 1/2 0202020 · P next parent · ↑↓/jk move · h/l pan · <enter> diff · copy · cycle tree"
             ),
             "merge diffs keep parent controls alongside navigation"
         );
@@ -7357,8 +7498,14 @@ mod tests {
     }
 
     fn popup_is_dim(terminal: &Terminal<TestBackend>, label: &str) -> bool {
-        let y = terminal.backend().buffer().area.height - 2;
-        let popup = rendered_line(terminal, y);
+        let height = terminal.backend().buffer().area.height;
+        let (y, popup) = (0..height.saturating_sub(1))
+            .rev()
+            .find_map(|y| {
+                let line = rendered_line(terminal, y);
+                line.contains(label).then_some((y, line))
+            })
+            .expect("toggle is visible in a popup");
         let x = popup[..popup.rfind(label).expect("toggle is visible")].chars().count() as u16;
         terminal.backend().buffer()[(x, y)].modifier.contains(Modifier::DIM)
     }

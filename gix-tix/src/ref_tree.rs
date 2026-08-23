@@ -316,7 +316,7 @@ impl Tree {
             self.leave();
             return Input::Handled;
         }
-        if key.code == KeyCode::Enter {
+        if key.code == KeyCode::Enter || key.code == KeyCode::Char('p') && key.modifiers.is_empty() {
             return self
                 .selected_pin_target()
                 .map_or(Input::Handled, |(id, kinds)| Input::PinReferences { id, kinds });
@@ -503,7 +503,7 @@ impl Tree {
                 |id| format!("Space counts:{}", self.node_label(id)),
             );
             format!(
-                "ref-tree · {counts} · g top · G root · T tags:{tags} · Shift+directions topo · mouse pan · Shift+mouse cursor · pages cursor · Shift+pages pan · <enter> pin · e edit · t/Esc history"
+                "ref-tree · {counts} · g top · G root · T tags:{tags} · Shift+directions topo · mouse pan · Shift+mouse cursor · pages cursor · Shift+pages pan · p/<enter> pin · e edit · t/Esc history"
             )
         };
         frame.render_widget(
@@ -2071,11 +2071,6 @@ mod tests {
             "only current detached state is marked"
         );
         assert!(!unicode.contains("pin:"), "ordinary pin names remain hidden");
-        assert_eq!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
-            Input::Handled,
-            "the ref-tree has no pin action"
-        );
     }
 
     #[test]
@@ -2367,6 +2362,14 @@ mod tests {
                 kinds: vec![DecorationKind::Local, DecorationKind::Remote, DecorationKind::Tag],
             },
             "Enter retains every displayed reference namespace"
+        );
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            Input::PinReferences {
+                id: id(6),
+                kinds: vec![DecorationKind::Local, DecorationKind::Remote, DecorationKind::Tag],
+            },
+            "p retains every displayed reference namespace"
         );
 
         tree.selected = tree
