@@ -622,7 +622,8 @@ The Enter key is written as `<enter>` throughout.
 
 Overlay views paint over history without changing metadata alignment. Selection
 is bounded above the top-most changes block: moving down at that boundary scrolls
-history so the selected row stays visible. The commit view reserves right-side
+history so the selected row stays visible. Shrinking a changes block does not
+pull history back into the freed rows. The commit view reserves right-side
 space first; changes blocks adapt within the remaining history width.
 
 ### Commit message

@@ -3231,7 +3231,6 @@ impl App {
         } else if selected >= self.offset.saturating_add(height) {
             self.offset = selected + 1 - height;
         }
-        self.offset = self.offset.min(self.history_len().saturating_sub(height));
     }
 
     pub(crate) fn prepare_history_viewport(&mut self) {

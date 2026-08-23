@@ -5821,6 +5821,22 @@ mod tests {
             (Some(8), 4),
             "moving down advances the commit and scrolls history at the pane boundary"
         );
+
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes(1)),
+            );
+        })?;
+        assert_eq!(
+            (app.selected, app.offset),
+            (Some(8), 4),
+            "a shorter changes pane does not pull history back into the freed space"
+        );
         Ok(())
     }
 
