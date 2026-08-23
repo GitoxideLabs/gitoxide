@@ -43,6 +43,10 @@
   an agent-created or materially agent-rewritten commit.
 - Preserve the author of an existing commit when the agent is not responsible for its contents.
 - Keep this provenance in commit metadata so reviewers can distinguish agent-authored changes without relying on commit-message trailers.
+- If follow-up work semantically belongs to an existing local commit, amend it
+  into that commit instead of adding a corrective commit at the tip. Use
+  `tix travel <commit>` when suitable to edit it while retaining its descendants,
+  then return through the saved branch after the descendants are rebased.
 
 ## Repository lifetime
 
