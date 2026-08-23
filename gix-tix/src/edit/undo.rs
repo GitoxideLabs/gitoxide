@@ -422,7 +422,7 @@ fn worktree_transitions(repo: &gix::Repository, changes: &[RefChange]) -> Result
             .find_reference("HEAD")
             .context("could not read a worktree HEAD reference")?;
         let raw_head = state_from_target_ref(raw_head.target());
-        let current = worktree_repo.git_dir() == repo.git_dir();
+        let current = worktree_repo == *repo;
         let projected_head = projected_ref_state(&worktree_repo, b"HEAD".as_bstr(), &raw_head, changes, current)?;
         ensure!(
             projected_head != State::Missing,
@@ -1198,6 +1198,81 @@ mod tests {
         assert_eq!(redone.head, top_state.head);
         assert_eq!(redone.index_tree, top_state.index_tree);
         assert_eq!(redone.worktree, top_state.worktree);
+        Ok(())
+    }
+
+    #[test]
+    fn linked_worktree_head_checkout_follows_undo_and_redo() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("forget_commit.sh")?;
+        let linked = fixture.path().join("linked");
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["worktree", "add", "-q", "-b", "linked"])
+            .arg(&linked)
+            .arg("HEAD")
+            .status()?;
+        assert!(status.success(), "git creates the linked worktree");
+
+        let repo = crate::test_repository::open(&linked)?;
+        let top = repo.head_id()?.detach();
+        let parent = repo
+            .find_commit(top)?
+            .parent_ids()
+            .next()
+            .expect("the fixture tip has a parent")
+            .detach();
+        let branch = repo
+            .head()?
+            .referent_name()
+            .expect("the linked worktree HEAD is attached")
+            .to_owned();
+        let top_state = gix_testtools::repository::snapshot(&linked)?;
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&linked)
+            .args(["checkout", "-q", "--detach"])
+            .arg(parent.to_string())
+            .status()?;
+        assert!(status.success(), "git detaches the linked worktree at the parent");
+        let detached_state = gix_testtools::repository::snapshot(&linked)?;
+        record(
+            &repo,
+            "detach linked worktree",
+            &[RefChange {
+                name: name("HEAD")?,
+                before: State::Symbolic(branch),
+                after: State::Object(parent),
+            }],
+        )?;
+
+        plan_undo(&repo)?
+            .expect("the linked checkout can be undone")
+            .apply_with_worktrees(&repo)?;
+        let undone = gix_testtools::repository::snapshot(&linked)?;
+        assert_eq!(undone.head, top_state.head, "undo restores the attached HEAD");
+        assert_eq!(
+            undone.index_tree, top_state.index_tree,
+            "the linked index follows the undo destination"
+        );
+        assert_eq!(
+            undone.worktree, top_state.worktree,
+            "the linked worktree follows the undo destination"
+        );
+
+        plan_redo(&repo)?
+            .expect("the linked checkout can be redone")
+            .apply_with_worktrees(&repo)?;
+        let redone = gix_testtools::repository::snapshot(&linked)?;
+        assert_eq!(redone.head, detached_state.head, "redo restores the detached HEAD");
+        assert_eq!(
+            redone.index_tree, detached_state.index_tree,
+            "the linked index follows the redo destination"
+        );
+        assert_eq!(
+            redone.worktree, detached_state.worktree,
+            "the linked worktree follows the redo destination"
+        );
         Ok(())
     }
 }
