@@ -7,68 +7,22 @@
 //!
 //! Note that the discovery phase is as fast as the object database can traverse objects, so nothing to test here
 //! and we use in-memory speeds for this.
-use std::{
-    io,
-    sync::{Arc, atomic::AtomicBool},
-};
+use std::{io, sync::atomic::AtomicBool};
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group};
 use gix_features::{parallel::InOrderIter, progress};
 use gix_object::Write as _;
-use gix_pack::data::output::{self, bytes::FromEntriesIter, count, entry};
+use gix_pack::{
+    data::output::{self, bytes::FromEntriesIter, count, entry},
+    testing::Memory,
+};
 
 /// Object counts to exercise. Kept modest so the benchmark stays runnable while still showing how
 /// the phases scale; raise locally to probe larger, more degenerate repositories.
 const OBJECT_COUNTS: &[usize] = &[1_000, 10_000, 50_000];
 
-/// Adapt in-memory objects to `gix_pack::Find`. `gix_odb::memory::Proxy` is still used to populate
-/// the storage, but `count` and `write` need pack-location APIs as well as cheap clones for write
-/// workers.
-#[derive(Clone)]
-struct MemoryOdb {
-    objects: Arc<gix_odb::memory::Storage>,
-}
-
-impl gix_pack::Find for MemoryOdb {
-    fn contains(&self, id: &gix_hash::oid) -> bool {
-        self.objects.contains_key(id)
-    }
-
-    fn try_find_cached<'a>(
-        &self,
-        id: &gix_hash::oid,
-        buffer: &'a mut Vec<u8>,
-        _pack_cache: &mut dyn gix_pack::cache::DecodeEntry,
-    ) -> Result<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>, gix_object::find::Error> {
-        Ok(self.objects.get(id).map(|(kind, data)| {
-            buffer.clear();
-            buffer.extend_from_slice(data);
-            (
-                gix_object::Data {
-                    kind: *kind,
-                    object_hash: id.kind(),
-                    data: buffer,
-                },
-                None,
-            )
-        }))
-    }
-
-    fn location_by_oid(&self, _id: &gix_hash::oid, _buf: &mut Vec<u8>) -> Option<gix_pack::data::entry::Location> {
-        None
-    }
-
-    fn pack_offsets_and_oid(&self, _pack_id: u32) -> Option<Vec<(gix_pack::data::Offset, gix_hash::ObjectId)>> {
-        None
-    }
-
-    fn entry_by_location(&self, _location: &gix_pack::data::entry::Location) -> Option<gix_pack::find::Entry> {
-        None
-    }
-}
-
 /// Create a fresh in-memory object database populated with `count` unique blobs.
-fn memory_odb(count: usize) -> (MemoryOdb, Vec<gix_hash::ObjectId>) {
+fn memory_odb(count: usize) -> (Memory, Vec<gix_hash::ObjectId>) {
     let mut odb = gix_odb::memory::Proxy::new(gix_odb::sink(gix_hash::Kind::Sha1), gix_hash::Kind::Sha1);
     let mut ids = Vec::with_capacity(count);
     for i in 0..count {
@@ -78,19 +32,14 @@ fn memory_odb(count: usize) -> (MemoryOdb, Vec<gix_hash::ObjectId>) {
             .expect("can write an in-memory object");
         ids.push(id);
     }
-    let objects = odb
+    let mut objects = odb
         .take_object_memory()
         .expect("in-memory object storage is still enabled");
-    (
-        MemoryOdb {
-            objects: Arc::new(objects),
-        },
-        ids,
-    )
+    (Memory::new(objects.drain()), ids)
 }
 
 /// Phase 1: collect the counts for `ids` without object expansion - exactly the objects given.
-fn count_objects_unthreaded(odb: &MemoryOdb, ids: &[gix_hash::ObjectId]) -> Vec<output::Count> {
+fn count_objects_unthreaded(odb: &Memory, ids: &[gix_hash::ObjectId]) -> Vec<output::Count> {
     let mut input = ids.iter().copied().map(Ok);
     let (counts, _outcome) = count::objects_unthreaded(
         odb,
@@ -120,7 +69,7 @@ impl io::Write for CountingSink {
 }
 
 /// Phase 2: resolve, sort and encode `counts` into a pack stream, returning the pack size in bytes.
-fn write_pack(odb: &MemoryOdb, counts: Vec<output::Count>) -> u64 {
+fn write_pack(odb: &Memory, counts: Vec<output::Count>) -> u64 {
     let num_objects = counts.len() as u32;
     let entries = InOrderIter::from(entry::iter_from_counts(
         counts,
