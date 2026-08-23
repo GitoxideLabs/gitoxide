@@ -1887,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "gix-error"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "bstr",
@@ -1983,8 +1983,9 @@ dependencies = [
 
 [[package]]
 name = "gix-hash"
-version = "0.26.1"
+version = "0.26.2"
 dependencies = [
+ "bstr",
  "document-features",
  "faster-hex",
  "gix-features",
@@ -2168,7 +2169,7 @@ dependencies = [
 
 [[package]]
 name = "gix-object"
-version = "0.64.0"
+version = "0.64.1"
 dependencies = [
  "bstr",
  "criterion",
@@ -2227,7 +2228,7 @@ dependencies = [
 
 [[package]]
 name = "gix-pack"
-version = "0.74.0"
+version = "0.74.1"
 dependencies = [
  "bstr",
  "clru",
@@ -2259,7 +2260,7 @@ dependencies = [
 
 [[package]]
 name = "gix-packetline"
-version = "0.22.0"
+version = "0.22.1"
 dependencies = [
  "async-std",
  "bisync",
@@ -2367,7 +2368,7 @@ version = "0.0.0"
 
 [[package]]
 name = "gix-ref"
-version = "0.67.0"
+version = "0.67.1"
 dependencies = [
  "document-features",
  "gix-actor",

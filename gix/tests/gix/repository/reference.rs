@@ -33,11 +33,7 @@ mod set_namespace {
         )?;
 
         assert_eq!(
-            repo.references()?
-                .all()?
-                .filter_map(Result::ok)
-                .map(|r| r.name().as_bstr().to_owned())
-                .collect::<Vec<_>>(),
+            repo.references()?.all()?.filter_map(Result::ok).collect::<Vec<_>>(),
             vec!["refs/heads/new-branch", "refs/tags/new-tag"],
             "namespaced references appear like normal ones"
         );
@@ -46,25 +42,24 @@ mod set_namespace {
             repo.references()?
                 .prefixed("refs/tags/")?
                 .filter_map(Result::ok)
-                .map(|r| r.name().as_bstr().to_owned())
                 .collect::<Vec<_>>(),
             vec!["refs/tags/new-tag"],
             "namespaced references appear like normal ones"
         );
         let fully_qualified_tag_name = "refs/tags/new-tag";
         assert_eq!(
-            repo.find_reference(fully_qualified_tag_name)?.name().as_bstr(),
+            repo.find_reference(fully_qualified_tag_name)?,
             fully_qualified_tag_name,
             "fully qualified (yet namespaced) names work"
         );
         assert_eq!(
-            repo.find_reference("new-tag")?.name().as_bstr(),
+            repo.find_reference("new-tag")?,
             fully_qualified_tag_name,
             "namespaces are transparent"
         );
 
         let previous_ns = repo.clear_namespace().expect("namespace set");
-        assert_eq!(previous_ns.as_bstr(), "refs/namespaces/foo/");
+        assert_eq!(previous_ns, "refs/namespaces/foo/");
         assert!(repo.clear_namespace().is_none(), "it doesn't invent namespaces");
 
         assert_eq!(
@@ -103,11 +98,7 @@ mod iter_references {
     fn all() -> crate::Result {
         let repo = repo()?;
         assert_eq!(
-            repo.references()?
-                .all()?
-                .filter_map(Result::ok)
-                .map(|r| r.name().as_bstr().to_owned())
-                .collect::<Vec<_>>(),
+            repo.references()?.all()?.filter_map(Result::ok).collect::<Vec<_>>(),
             vec![
                 "refs/d1",
                 "refs/heads/d1",
@@ -207,7 +198,7 @@ mod iter_references {
             .filter_map(Result::ok)
             .max_by_key(|tag| tag.name().shorten().to_owned())
             .ok_or(std::io::Error::other("latest tag not found"))?;
-        assert_eq!(actual.name().as_bstr(), "refs/tags/t1");
+        assert_eq!(actual, "refs/tags/t1");
         Ok(())
     }
 }
@@ -231,7 +222,7 @@ mod head {
             }
             _ => panic!("unexpected head kind"),
         }
-        assert_eq!(head.referent_name().expect("born").as_bstr(), "refs/heads/main");
+        assert_eq!(head.referent_name().expect("born"), "refs/heads/main");
         assert!(!head.is_detached());
         Ok(())
     }

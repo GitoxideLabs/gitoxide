@@ -99,18 +99,14 @@ mod refedit_ext {
         use std::cell::Cell;
 
         use gix_ref::{
-            FullNameRef, PartialNameRef, Target,
+            PartialNameRef, Target,
             transaction::{Change, LogChange, PreviousValue, RefEdit, RefEditsExt, RefLog},
         };
 
         use crate::{hex_to_id, transaction::refedit_ext::MockStore};
 
         fn find<'a>(edits: &'a [RefEdit], name: &str) -> &'a RefEdit {
-            let name: &FullNameRef = name.try_into().unwrap();
-            edits
-                .iter()
-                .find(|e| e.name.as_bstr() == name.as_bstr())
-                .expect("always available")
+            edits.iter().find(|e| e.name == name).expect("always available")
         }
 
         #[test]

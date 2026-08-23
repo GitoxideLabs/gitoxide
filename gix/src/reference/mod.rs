@@ -1,9 +1,13 @@
 //!
 #![allow(clippy::empty_docs)]
 
+use crate::ext::ObjectIdExt;
+use gix_ref::file;
 use gix_ref::file::ReferenceExt;
 
 use crate::{Blob, Commit, Id, Object, Reference, Tag, Tree};
+
+pub use gix_ref::{Category, Kind};
 
 pub mod iter;
 ///
@@ -12,11 +16,10 @@ pub mod remote;
 mod errors;
 pub use errors::{edit, find, follow, head_commit, head_id, head_tree, head_tree_id, peel};
 
-use crate::ext::ObjectIdExt;
-
 pub mod log;
 
-pub use gix_ref::{Category, Kind};
+mod edits;
+pub use edits::{delete, set_target_id};
 
 /// Access
 impl<'repo> Reference<'repo> {
@@ -59,12 +62,6 @@ impl<'repo> Reference<'repo> {
     /// Turn this instances into a stand-alone reference.
     pub fn detach(self) -> gix_ref::Reference {
         self.inner
-    }
-}
-
-impl std::fmt::Debug for Reference<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.inner, f)
     }
 }
 
@@ -266,7 +263,7 @@ impl<'repo> Reference<'repo> {
     /// let head = repo.find_reference("HEAD")?;
     /// let branch = head.follow().expect("symbolic")?;
     ///
-    /// assert_eq!(branch.name().as_bstr(), "refs/heads/main");
+    /// assert_eq!(branch, "refs/heads/main");
     /// # Ok(()) }
     /// ```
     pub fn follow(&self) -> Option<Result<Reference<'repo>, gix_ref::file::find::existing::Error>> {
@@ -279,6 +276,37 @@ impl<'repo> Reference<'repo> {
     }
 }
 
-mod edits;
-pub use edits::{delete, set_target_id};
-use gix_ref::file;
+mod impls {
+    use gix_ref::{
+        FullName, FullNameRef,
+        bstr::{BStr, BString},
+    };
+
+    use crate::Reference;
+
+    macro_rules! impl_partial_eq {
+        ($other:ty) => {
+            impl PartialEq<$other> for Reference<'_> {
+                fn eq(&self, other: &$other) -> bool {
+                    self.inner.eq(other)
+                }
+            }
+        };
+    }
+
+    impl_partial_eq!(str);
+    impl_partial_eq!(&str);
+    impl_partial_eq!(String);
+    impl_partial_eq!(BStr);
+    impl_partial_eq!(&BStr);
+    impl_partial_eq!(BString);
+    impl_partial_eq!(FullName);
+    impl_partial_eq!(FullNameRef);
+    impl_partial_eq!(&FullNameRef);
+
+    impl std::fmt::Debug for Reference<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            std::fmt::Debug::fmt(&self.inner, f)
+        }
+    }
+}

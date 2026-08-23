@@ -1,5 +1,44 @@
 use gix::remote::Direction;
 
+#[test]
+fn compares_with_name_representations() -> crate::Result {
+    use gix::{
+        bstr::{BString, ByteSlice},
+        refs::{FullName, FullNameRef, Target},
+    };
+
+    let repo = crate::basic_repo()?;
+    let reference = repo.find_reference("main")?;
+    let text = "refs/heads/main";
+    let string = text.to_owned();
+    let bytes = text.as_bytes().as_bstr();
+    let byte_string: BString = text.into();
+    let name: FullName = text.try_into()?;
+    let name_ref: &FullNameRef = name.as_ref();
+
+    assert_eq!(reference, text, "an attached reference matches str");
+    // Note that the following doesn't compile as this breaks symmetry
+    // (as always when a lesser type is compared to one that has more data)
+    // assert_eq!(text, reference, "an attached reference matches str");
+    assert_eq!(reference, string, "an attached reference matches String");
+    assert_eq!(reference, bytes, "an attached reference matches BStr");
+    assert_eq!(reference, byte_string, "an attached reference matches BString");
+    assert_eq!(reference, name, "an attached reference matches FullName");
+    assert_eq!(reference, name_ref, "an attached reference matches FullNameRef");
+
+    let mut other_target = reference.clone();
+    other_target.inner.target = Target::Symbolic(FullName::try_from("refs/heads/other")?);
+    assert_eq!(
+        other_target, text,
+        "reference-name equality is independent of the target"
+    );
+    assert_ne!(
+        other_target, "refs/heads/other",
+        "a target name does not compare as the reference name"
+    );
+    Ok(())
+}
+
 mod log {
 
     #[test]
@@ -37,8 +76,8 @@ fn remote_name() -> crate::Result {
     ] {
         let r = repo.find_reference(ref_name)?;
         assert_eq!(
-            r.remote_name(Direction::Fetch).map(|name| name.as_bstr().to_owned()),
-            Some(expected_remote.into())
+            r.remote_name(Direction::Fetch).expect("remote name can be inferred"),
+            expected_remote
         );
     }
     Ok(())
@@ -58,7 +97,7 @@ mod find {
         let repo = repo()?;
         let mut packed_tag_ref = repo.try_find_reference("dt1")?.expect("tag to exist");
         let expected: &FullNameRef = "refs/tags/dt1".try_into()?;
-        assert_eq!(packed_tag_ref.name(), expected);
+        assert_eq!(packed_tag_ref, expected);
 
         assert_eq!(
             packed_tag_ref.inner.target,
@@ -78,11 +117,11 @@ mod find {
         let mut symbolic_ref = repo.find_reference("multi-link-target1")?;
 
         let expected: &FullNameRef = "refs/heads/multi-link-target1".try_into()?;
-        assert_eq!(symbolic_ref.name(), expected);
+        assert_eq!(symbolic_ref, expected);
         assert_eq!(symbolic_ref.peel_to_id()?, the_commit);
 
         let expected: &FullNameRef = "refs/remotes/origin/multi-link-target3".try_into()?;
-        assert_eq!(symbolic_ref.name(), expected, "it follows symbolic refs, too");
+        assert_eq!(symbolic_ref, expected, "it follows symbolic refs, too");
         assert_eq!(symbolic_ref.into_fully_peeled_id()?, the_commit, "idempotency");
 
         let mut tag_ref = repo.find_reference("dt3")?;

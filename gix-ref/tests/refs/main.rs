@@ -63,6 +63,7 @@ fn translate_sha1_to_fixture_sha256(hex: &str) -> String {
 
 pub use gix_testtools::Result;
 
+mod equality;
 mod file;
 mod fullname;
 mod partialname {
@@ -71,7 +72,7 @@ mod partialname {
     #[test]
     fn join() -> crate::Result {
         let pn = PartialName::try_from("no-trailing-slash")?;
-        assert_eq!(pn.join("name".into())?.as_ref().as_bstr(), "no-trailing-slash/name");
+        assert_eq!(pn.join("name".into())?, "no-trailing-slash/name");
 
         let err = PartialName::try_from("trailing-slash/").unwrap_err();
         assert!(

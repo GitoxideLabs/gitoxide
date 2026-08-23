@@ -17,16 +17,14 @@ fn push_defaults_to_fetch() -> crate::Result {
             .remote(gix::remote::Direction::Push)
             .expect("configured")?
             .name()
-            .expect("set")
-            .as_bstr(),
+            .expect("set"),
         "origin"
     );
     assert_eq!(
         head.into_remote(gix::remote::Direction::Push)
             .expect("same with branch")?
             .name()
-            .expect("set")
-            .as_bstr(),
+            .expect("set"),
         "origin"
     );
     Ok(())
@@ -39,20 +37,9 @@ fn separate_push_and_fetch() -> crate::Result {
         let head = repo.head()?;
         let branch = head.clone().try_into_referent().expect("history");
 
+        assert_eq!(branch.remote_name(gix::remote::Direction::Push).expect("set"), "myself");
         assert_eq!(
-            branch
-                .remote_name(gix::remote::Direction::Push)
-                .expect("set")
-                .as_symbol()
-                .unwrap(),
-            "myself"
-        );
-        assert_eq!(
-            branch
-                .remote_name(gix::remote::Direction::Fetch)
-                .expect("set")
-                .as_symbol()
-                .unwrap(),
+            branch.remote_name(gix::remote::Direction::Fetch).expect("set"),
             "new-origin"
         );
 
@@ -96,19 +83,10 @@ fn dot_remote_behind_symbol() -> crate::Result {
     let branch = head.clone().try_into_referent().expect("history");
 
     assert_eq!(
-        branch
-            .remote_name(gix::remote::Direction::Push)
-            .expect("derived push")
-            .as_url(),
-        Some(".".into())
+        branch.remote_name(gix::remote::Direction::Push).expect("derived push"),
+        "."
     );
-    assert_eq!(
-        branch
-            .remote_name(gix::remote::Direction::Fetch)
-            .expect("fetch")
-            .as_url(),
-        Some(".".into())
-    );
+    assert_eq!(branch.remote_name(gix::remote::Direction::Fetch).expect("fetch"), ".");
 
     {
         let remote = branch
@@ -129,20 +107,12 @@ fn url_as_remote_name() -> crate::Result {
     let branch = repo.head_ref()?.expect("history");
 
     assert_eq!(
-        branch
-            .remote_name(gix::remote::Direction::Push)
-            .expect("set")
-            .as_url()
-            .unwrap(),
+        branch.remote_name(gix::remote::Direction::Push).expect("set"),
         "https://example.com/push-path.git",
         "remote names can also be urls"
     );
     assert_eq!(
-        branch
-            .remote_name(gix::remote::Direction::Fetch)
-            .expect("set")
-            .as_url()
-            .unwrap(),
+        branch.remote_name(gix::remote::Direction::Fetch).expect("set"),
         "https://example.com/fetch-path.git"
     );
     {

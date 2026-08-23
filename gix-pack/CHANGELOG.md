@@ -5,7 +5,243 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.74.1 (2026-08-23)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 2 commits contributed to the release.
+ - 1 day passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Use fundamental-type comparisons throughout tests ([`47536a5`](https://github.com/GitoxideLabs/gitoxide/commit/47536a5c2b22da3a9f4892c8af5e460c2d5bda0a))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.74.0 (2026-08-22)
+
+### New Features
+
+ - <csr-id-40a4ca7d1802361850a6a4a6aef91c8c2c5d730f/> expose index-less parallel pack traversal (cache Tree, Context, Options)
+   Re-export `cache::delta::{Tree, traverse::{Context, Options}}` at `cache` so
+   external callers can build a delta `Tree` directly from a pack header scan and
+   resolve all of its objects in parallel via `Tree::traverse` -- without a
+   pre-built `.idx`. This is the index-less companion to the already-public,
+   idx-verified `index::File::traverse_with_index`.
+   
+   Minimal surface by design: the `delta` module stays `pub(crate)`, so only the
+   three already-documented items a caller names become public -- `pub mod delta`
+   would instead expose the module's internal error types and constructors and fail
+   `#![deny(missing_docs)]`. `Tree::from_offsets_in_pack` (already public) builds the
+   tree straight from the pack; `with_capacity`/`add_root`/`add_child` remain for
+   callers who assemble it by ascending pack offset themselves.
+   
+   Additive and non-breaking; `cargo doc` is clean under `-D warnings`, and a
+   doc-test anchors the index-less path (`Tree::from_offsets_in_pack`). Shape
+   approved in #2922.
+
+### Bug Fixes
+
+ - <csr-id-916f5d8c32deb0a03bb6a01c8d8e9c4b6c69d186/> validate delta base sizes during entry decoding
+   <!-- agent -->
+   Reject delta instruction streams whose declared base size differs from the
+   resolved base object. The regression demonstrates that a REF_DELTA could
+   previously reconstruct successfully despite lying about its base size.
+   
+   Git reference: patch_delta() compares the decoded source size with src_size
+   before applying instructions, observed at cf5497b14c5a.
+ - <csr-id-d7bbb8e053c3ce9c24fe0a4bf1aaaca7b7a58270/> resolve delta trees lazily in a lock-free pool
+   <!-- agent -->
+   --- Summary of findings
+   
+   The lazy, stealable resolver fixes the pathological phpstan pack without
+   regressing the Linux best case. At 16 threads, phpstan falls from the
+   98.38-second baseline resolver time to 22.70 seconds, while the Linux
+   best-case resolver improves slightly from 11.81 to 11.33 seconds. Charged
+   peak memory on phpstan falls from 13.14 GB to 2.16 GB, and the Linux best
+   case falls from 1.96 GB to 1.76 GB.
+   
+   Across the measured packs, gix resolver speedup at 16 threads ranges from
+   10.80x to 12.48x over its new serial path. On phpstan, gix is 1.07x faster
+   than Git at one thread and 2.31x faster at 16 threads. On the identical
+   10.9M-object Linux payload, gix's SHA-256 resolver is 2.72x to 2.99x faster
+   than its SHA-1 resolver, confirming that the slow SHA-1 implementation
+   dominates much of the remaining absolute cost.
+   
+   The Git SHA-256 comparison was initially unfair: the local Git build used
+   the portable SHA256_BLK backend while RustCrypto selected ARMv8 SHA-2
+   instructions. Rebuilding Git with OpenSSL reduced its eight-thread wall
+   time from 144.15 to 40.45 seconds and user CPU time from 471.94 to
+   99.81 seconds. All final Git SHA-256 comparisons use that faster backend.
+   
+   --- Pathological phpstan pack
+   
+   The pack contains 100.7k objects but expands to 174.6 GB because one root
+   ends in a deep, expensive delta tree. The previous resolver takes
+   98.53 seconds wall clock and has a 13.14 GB peak memory footprint.
+   
+   The new resolver takes 283.41, 71.94, 36.42, and 22.83 seconds wall clock
+   at 1, 4, 8, and 16 threads. Its resolver speedups are 3.94x, 7.81x, and
+   12.48x relative to one thread, remaining nearly linear through eight
+   threads. Peak memory footprint is 0.68, 0.75, 1.17, and 2.16 GB
+   respectively. Thus the fastest run is 4.31x faster than the old wall time
+   while using 84% less charged peak memory.
+   
+   Git was measured at 1, 2, 4, 8, and 16 threads while keeping its aggregate
+   delta-base cache allowance at least as large as the default eight-thread
+   allowance of 8 times 96 MiB. Git takes 304.51, 168.06, 98.80, 65.41, and
+   52.79 seconds, for 5.77x one-to-sixteen-thread scaling. At equal thread
+   counts, gix is 1.07x, 1.37x, 1.80x, and 2.31x faster at 1, 4, 8, and
+   16 threads.
+   
+   At the nearest wall-time operating points, gix at four threads takes
+   71.94 seconds with a 0.75 GB peak footprint, while Git at eight threads
+   takes 65.41 seconds with a 1.90 GB peak footprint. gix therefore uses
+   61% less charged working memory near Git-matching throughput.
+   
+   --- Linux best-case pack
+   
+   The 7.6M-object fixture expands to 95.6 GB and guards the already-friendly
+   case. The old implementation takes 13.68 seconds wall clock and
+   11.81 seconds in the resolver. The new implementation takes 137.48,
+   36.75, 19.81, and 13.16 seconds wall clock at 1, 4, 8, and 16 threads;
+   resolver scaling reaches 11.97x at 16 threads.
+   
+   The 16-thread result is slightly faster than the old implementation, with
+   11.33 seconds in the resolver, and lowers peak footprint from 1.96 to
+   1.76 GB. Peak footprint remains effectively constant from one through
+   16 threads. Git takes 156.65, 60.48, 45.48, and 42.97 seconds at the same
+   thread counts, so gix's advantage grows from 1.14x to 3.27x.
+   
+   --- SHA-1 and SHA-256 sibling packs
+   
+   The sibling packs contain 10.9M objects, expand to 146.7 GB, and preserve
+   the same compressed payload and delta topology. This isolates hashing from
+   work distribution.
+   
+   For SHA-1, gix takes 212.57, 56.58, 30.60, and 20.74 seconds wall clock at
+   1, 4, 8, and 16 threads. Resolver scaling reaches 11.36x at 16 threads.
+   The default eight-thread Git run takes 125.11 seconds, while gix takes
+   30.60 seconds at eight threads and 20.74 seconds at 16.
+   
+   For SHA-256, gix takes 72.47, 21.83, 12.58, and 8.67 seconds wall clock.
+   Resolver scaling reaches 10.80x at 16 threads. Against OpenSSL-backed Git,
+   gix is 1.21x, 2.02x, 3.22x, and 5.61x faster at equal thread counts.
+   Git improves from 87.85 seconds at one thread to 40.45 seconds at eight,
+   then regresses to 48.68 seconds at 16 with 204.81 seconds of system CPU.
+   
+   --- Hasher and scheduler interpretation
+   
+   On identical pack data, gix SHA-256 resolver time is 70.31 seconds at one
+   thread versus 210.35 seconds for SHA-1, and 6.51 seconds at 16 threads
+   versus 18.51 seconds for SHA-1. SHA-256 is therefore 2.99x faster
+   serially and 2.84x faster at 16 threads, with a 2.72x to 2.99x advantage
+   throughout the measured range.
+   
+   The similar 10.80x to 12.48x gix scaling across pathological, best-case,
+   SHA-1, and SHA-256 packs argues against lock contention being the main
+   high-thread limitation. The remaining flattening is consistent with
+   finite parallel work, scheduling overhead, memory bandwidth, and hashing
+   cost.
+   
+   --- Memory interpretation
+   
+   The resolver no longer materializes the unresolved internal-node frontier.
+   It resolves a child only when a worker starts it, shares immutable bases
+   between sibling tasks, and recycles the final base reference. A linear
+   chain therefore needs roughly two object buffers per active worker instead
+   of retaining every intermediate base.
+   
+   macOS max RSS includes clean file-backed pages. gix maps the pack, so its
+   reported RSS can include most of a multi-gigabyte pack even when those
+   pages are reclaimable; Git reads through bounded pread buffers. Peak memory
+   footprint better represents charged working memory here. On phpstan, gix
+   max RSS grows from 7.20 to 8.90 GB across 1 to 16 threads, but charged
+   footprint grows from only 0.68 to 2.16 GB. On the Linux best case,
+   footprint stays at 1.76 GB across the same range.
+   
+   --- Implementation
+   
+   Use lock-free local deques and a shared root injector so idle workers can
+   steal branches from the last expensive root without every worker hoarding
+   roots. Enable this resolver through the gix parallel feature.
+   
+   Regression tests prove that internal siblings are not all materialized
+   before descent and that two workers can concurrently resolve children from
+   one remaining root. The scheduler follows the proven Git index-pack
+   principles of bounded live delta bases and keeping independent delta work
+   available, informed by builtin/index-pack.c at cf5497b14c.
+ - <csr-id-64b9efefb9a538a0c40f3413d6c758a17bbc2daf/> resolve in-pack ref deltas while indexing
+   Valid packs may encode a base inside the same pack with REF_DELTA and may
+   place the delta before that base. The streaming lookup previously treated an
+   object-database miss as fatal, while index construction rejected every remaining
+   ref delta.
+   
+   Keep lookup misses in the stream and park ref-delta children by base object ID
+   until traversal resolves the matching object. This preserves external thin-pack
+   injection and reuses the existing delta tree for forward and chained references.
+   
+   Git reference: a23bace963d508bd96983cc637131392d3face18, builtin/index-pack.c and t/t5300-pack-object.sh.
+
+### Refactor (BREAKING)
+
+ - <csr-id-c055803f6412e15ed9470b6427508fd89f235212/> remove `object_hash` from `Options`
+   This forces callers to explicitly choose a hash, eliminating the risk
+   that `Sha1` is implicitly chosen for them in SHA-1/SHA-256 builds
+   through `Default::default()` without them being aware of it or noticing.
+   This comes at the cost of callers having to always pass the hash, but
+   that seems like a reasonable trade-off.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 19 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 3 unique issues were worked on: [#1025](https://github.com/GitoxideLabs/gitoxide/issues/1025), [#2424](https://github.com/GitoxideLabs/gitoxide/issues/2424), [#2868](https://github.com/GitoxideLabs/gitoxide/issues/2868)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#1025](https://github.com/GitoxideLabs/gitoxide/issues/1025)**
+    - Resolve in-pack ref deltas while indexing ([`64b9efe`](https://github.com/GitoxideLabs/gitoxide/commit/64b9efefb9a538a0c40f3413d6c758a17bbc2daf))
+ * **[#2424](https://github.com/GitoxideLabs/gitoxide/issues/2424)**
+    - Resolve delta trees lazily in a lock-free pool ([`d7bbb8e`](https://github.com/GitoxideLabs/gitoxide/commit/d7bbb8e053c3ce9c24fe0a4bf1aaaca7b7a58270))
+ * **[#2868](https://github.com/GitoxideLabs/gitoxide/issues/2868)**
+    - Validate delta base sizes during entry decoding ([`916f5d8`](https://github.com/GitoxideLabs/gitoxide/commit/916f5d8c32deb0a03bb6a01c8d8e9c4b6c69d186))
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2926 from cruessler/remove-object-hash-from-options ([`b2d919a`](https://github.com/GitoxideLabs/gitoxide/commit/b2d919a11655fdab5c47001ec1b21d7bbebe24c0))
+    - Remove `object_hash` from `Options` ([`c055803`](https://github.com/GitoxideLabs/gitoxide/commit/c055803f6412e15ed9470b6427508fd89f235212))
+    - Merge pull request #2905 from GitoxideLabs/various-improvements ([`f3bbfad`](https://github.com/GitoxideLabs/gitoxide/commit/f3bbfadd4b4f1d72c85c62eb3d7ae337c922f945))
+    - Adapt to changes in `gix-testtools` ([`0cbe539`](https://github.com/GitoxideLabs/gitoxide/commit/0cbe53971687fb3b1959925aa9d8dc89deb5b474))
+    - Merge pull request #2923 from rdicosmo/swh-expose-delta-tree-main ([`c4426f0`](https://github.com/GitoxideLabs/gitoxide/commit/c4426f034d5423c66cc5c15725587d9688deada3))
+    - Review ([`dcb8ccd`](https://github.com/GitoxideLabs/gitoxide/commit/dcb8ccd96dad396042c9db217085fdf15293a19f))
+    - Expose index-less parallel pack traversal (cache Tree, Context, Options) ([`40a4ca7`](https://github.com/GitoxideLabs/gitoxide/commit/40a4ca7d1802361850a6a4a6aef91c8c2c5d730f))
+    - Merge pull request #2916 from cruessler/require-object-hash-in-store-at ([`dd8c759`](https://github.com/GitoxideLabs/gitoxide/commit/dd8c759e0343c2b5c9776c948d109e9d1ea5943b))
+    - Adapt to changes in `gix-odb` ([`1dc741f`](https://github.com/GitoxideLabs/gitoxide/commit/1dc741fedb08f167e652c31bfa6c4016d3b0a192))
+    - Merge pull request #2869 from GitoxideLabs/validate-delta-base-size ([`9c12c2d`](https://github.com/GitoxideLabs/gitoxide/commit/9c12c2d45cbfdaee65bdbb26df2d41063d3b39f1))
+    - Merge pull request #2867 from GitoxideLabs/fix-url-authority-parsing ([`cc3ee80`](https://github.com/GitoxideLabs/gitoxide/commit/cc3ee8060ad7a32ee8d2eb9139854be7f7561b70))
+    - Release gix-path v0.12.4, gix-command v0.9.2, gix-config-value v0.19.1, gix-url v0.37.1, gix-credentials v0.39.1, gix-transport v0.58.1 ([`ab4fcb0`](https://github.com/GitoxideLabs/gitoxide/commit/ab4fcb0364ec4d01115595198f383b1ad9c29808))
+    - Merge pull request #2852 from GitoxideLabs/delta-tree-parallelism ([`4a6cf9d`](https://github.com/GitoxideLabs/gitoxide/commit/4a6cf9d53da4490590d7a92f03775246fa905cb9))
+    - Merge pull request #2825 from GitoxideLabs/azure-compatibility ([`9b787f6`](https://github.com/GitoxideLabs/gitoxide/commit/9b787f68dfdb2855c1570e4abe9387d9247a7051))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
+## 0.73.0 (2026-07-23)
 
 ### Bug Fixes
 
@@ -33,7 +269,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 25 commits contributed to the release.
+ - 27 commits contributed to the release.
  - 31 days passed between releases.
  - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 3 unique issues were worked on: [#2611](https://github.com/GitoxideLabs/gitoxide/issues/2611), [#2676](https://github.com/GitoxideLabs/gitoxide/issues/2676), [#2690](https://github.com/GitoxideLabs/gitoxide/issues/2690)
@@ -51,6 +287,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  * **[#2690](https://github.com/GitoxideLabs/gitoxide/issues/2690)**
     - Cap remaining gix-pack allocations ([`ace687c`](https://github.com/GitoxideLabs/gitoxide/commit/ace687ce6803fc761a75344d0aa7dea64c54f2cb))
  * **Uncategorized**
+    - Release gix-actor v0.41.2, gix-features v0.49.0, gix-hash v0.26.0, gix-hashtable v0.16.0, gix-object v0.63.0, gix-glob v0.27.0, gix-attributes v0.34.0, gix-packetline v0.22.0, gix-filter v0.33.0, gix-fs v0.22.0, gix-chunk v0.7.3, gix-commitgraph v0.38.0, gix-revwalk v0.34.0, gix-traverse v0.60.0, gix-worktree-stream v0.35.0, gix-archive v0.35.0, gix-bitmap v0.3.3, gix-tempfile v24.0.0, gix-lock v24.0.0, gix-index v0.54.0, gix-pathspec v0.19.0, gix-ignore v0.22.0, gix-worktree v0.55.0, gix-imara-diff v0.2.4, gix-diff v0.66.0, gix-blame v0.16.0, gix-ref v0.66.0, gix-config v0.59.0, gix-discover v0.54.0, gix-dir v0.28.0, gix-mailmap v0.33.2, gix-revision v0.48.0, gix-merge v0.19.0, gix-negotiate v0.34.0, gix-zlib v0.1.0, gix-pack v0.73.0, gix-odb v0.83.0, gix-refspec v0.44.0, gix-shallow v0.13.0, gix-transport v0.58.0, gix-protocol v0.64.0, gix-status v0.33.0, gix-submodule v0.33.0, gix-worktree-state v0.33.0, gix v0.86.0, gix-fsck v0.24.0, gitoxide-core v0.60.0, gix-tix v0.1.0, gitoxide v0.56.0, safety bump 40 crates ([`842bc44`](https://github.com/GitoxideLabs/gitoxide/commit/842bc447e3aeacf5d9d36f7f8a01068eda4b7999))
+    - Update changelogs prior to release ([`cb6ec7d`](https://github.com/GitoxideLabs/gitoxide/commit/cb6ec7dce283943d811b1600b577f586d7a13e1f))
     - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
     - Merge pull request #2722 from GitoxideLabs/reasons ([`c16b5a1`](https://github.com/GitoxideLabs/gitoxide/commit/c16b5a1892704b7c72a253bdd74a6848dd61032a))
     - Replace lint allowances with expectations ([`43ff87a`](https://github.com/GitoxideLabs/gitoxide/commit/43ff87a73897b70313e3a58e7de82231be5b59ad))

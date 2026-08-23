@@ -6,8 +6,8 @@ use crate::{
 
 /// Query configuration related to remotes.
 impl crate::Repository {
-    /// Returns a sorted list unique of symbolic names of remotes that
-    /// we deem [trustworthy][crate::open::Options::filter_config_section()].
+    /// Returns the unique symbolic names of remotes that we deem
+    /// [trustworthy][crate::open::Options::filter_config_section()], in ascending bytewise lexicographic order.
     ///
     /// # Examples
     ///

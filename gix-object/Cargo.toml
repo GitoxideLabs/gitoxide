@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-object"
-version = "0.64.0"
+version = "0.64.1"
 description = "Immutable and mutable git objects with decoding and encoding support"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 repository = "https://github.com/GitoxideLabs/gitoxide"
@@ -44,7 +44,7 @@ serde = [
 gix-features = { version = "^0.49.1", path = "../gix-features", features = [
     "progress",
 ] }
-gix-hash = { version = "^0.26.1", path = "../gix-hash" }
+gix-hash = { version = "^0.26.2", path = "../gix-hash" }
 gix-hashtable = { version = "^0.16.0", path = "../gix-hashtable" }
 gix-validate = { version = "^0.11.4", path = "../gix-validate" }
 gix-actor = { version = "^0.42.0", path = "../gix-actor" }
@@ -68,13 +68,14 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 gix-object = { path = ".", features = ["signature", "sha1", "sha256"] }
-criterion = "0.8.2"
-pretty_assertions = "1.0.0"
-insta = "1.46.3"
+gix-hash = { path = "../gix-hash", features = ["bstr"] }
 gix-testtools = { path = "../tests/tools", default-features = false }
 gix-odb = { path = "../gix-odb" }
 gix-path = { path = "../gix-path" }
 termtree = "1.0.0"
+criterion = "0.8.2"
+pretty_assertions = "1.0.0"
+insta = "1.46.3"
 
 [package.metadata.docs.rs]
 all-features = true

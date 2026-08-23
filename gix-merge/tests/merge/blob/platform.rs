@@ -221,7 +221,7 @@ theirs
                 })
                 .unwrap()
                 .unwrap(),
-            hex_to_id("424860eef4edb9f5a2dacbbd6dc8c2d2e7645035"),
+            "424860eef4edb9f5a2dacbbd6dc8c2d2e7645035",
             "there is no need to write a buffer here, it just returns one of our inputs"
         );
 

@@ -90,3 +90,54 @@ impl AsRef<BStr> for Name<'_> {
         self.as_bstr()
     }
 }
+
+mod impls {
+    use crate::{
+        bstr::{BStr, BString, ByteSlice},
+        remote::Name,
+    };
+
+    macro_rules! impl_partial_eq {
+        ($left_type:ty, $right_type:ty, $left:ident => $left_bytes:expr, $right:ident => $right_bytes:expr) => {
+            impl PartialEq<$right_type> for $left_type {
+                fn eq(&self, other: &$right_type) -> bool {
+                    let $left = self;
+                    let $right = other;
+                    $left_bytes == $right_bytes
+                }
+            }
+        };
+    }
+
+    macro_rules! impl_partial_eq_pair {
+        ($left_type:ty, $right_type:ty, $left:ident => $left_bytes:expr, $right:ident => $right_bytes:expr) => {
+            impl_partial_eq!($left_type, $right_type, $left => $left_bytes, $right => $right_bytes);
+            impl_partial_eq!($right_type, $left_type, $right => $right_bytes, $left => $left_bytes);
+        };
+    }
+
+    macro_rules! impl_partial_eq_bytes {
+        ($type:ty, $value:ident => $bytes:expr) => {
+            impl_partial_eq_pair!($type, str, $value => $bytes.as_bytes(), other => other.as_bytes());
+            impl_partial_eq_pair!($type, &str, $value => $bytes.as_bytes(), other => other.as_bytes());
+            impl_partial_eq_pair!($type, String, $value => $bytes.as_bytes(), other => other.as_bytes());
+            impl_partial_eq_pair!($type, BStr, $value => $bytes.as_bytes(), other => other.as_bytes());
+            impl_partial_eq_pair!($type, &BStr, $value => $bytes.as_bytes(), other => other.as_bytes());
+            impl_partial_eq_pair!($type, BString, $value => $bytes.as_bytes(), other => other.as_bytes());
+        };
+    }
+
+    impl_partial_eq_bytes!(Name<'_>, value => value.as_bstr());
+    impl_partial_eq_pair!(
+        &Name<'_>,
+        String,
+        name => name.as_bstr().as_bytes(),
+        text => text.as_bytes()
+    );
+    impl_partial_eq_pair!(
+        &Name<'_>,
+        BString,
+        name => name.as_bstr().as_bytes(),
+        text => text.as_bytes()
+    );
+}

@@ -120,7 +120,7 @@ fn signed_singleline() -> crate::Result {
         CommitRefIter::from_bytes(&fixture_name("commit", "signed-singleline.txt"), gix_hash::Kind::Sha1)
             .parent_ids()
             .collect::<Vec<_>>(),
-        vec![hex_to_id("09d8d3a12e161a7f6afb522dbe8900a9c09bce06")]
+        vec!["09d8d3a12e161a7f6afb522dbe8900a9c09bce06"]
     );
     Ok(())
 }
@@ -166,8 +166,8 @@ fn mergetag() -> crate::Result {
     assert_eq!(
         iter.parent_ids().collect::<Vec<_>>(),
         vec![
-            hex_to_id("44ebe016df3aad96e3be8f95ec52397728dd7701"),
-            hex_to_id("8d485da0ddee79d0e6713405694253d401e41b93")
+            "44ebe016df3aad96e3be8f95ec52397728dd7701",
+            "8d485da0ddee79d0e6713405694253d401e41b93"
         ]
     );
     assert_eq!(iter.message().ok(), Some(LONG_MESSAGE.into()));

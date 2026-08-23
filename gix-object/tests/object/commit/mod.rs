@@ -156,13 +156,13 @@ mod method {
     use gix_object::CommitRef;
     use pretty_assertions::assert_eq;
 
-    use crate::{fixture_name, hex_to_id, signature};
+    use crate::{fixture_name, signature};
 
     #[test]
     fn tree() -> crate::Result {
         let fixture = fixture_name("commit", "unsigned.txt");
         let commit = CommitRef::from_bytes(&fixture, gix_hash::Kind::Sha1)?;
-        assert_eq!(commit.tree(), hex_to_id("1b2dfb4ac5e42080b682fc676e9738c94ce6d54d"));
+        assert_eq!(commit.tree(), "1b2dfb4ac5e42080b682fc676e9738c94ce6d54d");
         assert_eq!(commit.tree, "1b2dfb4ac5e42080b682fc676e9738c94ce6d54d");
         Ok(())
     }

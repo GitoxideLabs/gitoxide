@@ -6,8 +6,7 @@ use gix_object::{self as object};
 use gix_odb::pack;
 
 use crate::{
-    INDEX_V1, PACK_FOR_INDEX_V1, SMALL_PACK, SMALL_PACK_INDEX, fixture_path, hex_to_id, leaked_fixture_bytes,
-    pack_from_memory_at,
+    INDEX_V1, PACK_FOR_INDEX_V1, SMALL_PACK, SMALL_PACK_INDEX, fixture_path, leaked_fixture_bytes, pack_from_memory_at,
 };
 
 fn memory_backed_index(at: &str) -> gix_pack::index::File<&'static [u8]> {
@@ -589,7 +588,7 @@ fn verify_integrity_respects_pack_alloc_limit_bytes() -> Result<(), Box<dyn std:
 
 #[test]
 fn iter() -> Result<(), Box<dyn std::error::Error>> {
-    for (path, kind, num_objects, index_checksum, pack_checksum) in &[
+    for (path, kind, num_objects, index_checksum, pack_checksum) in [
         (
             INDEX_V1,
             index::Version::V1,
@@ -613,8 +612,8 @@ fn iter() -> Result<(), Box<dyn std::error::Error>> {
         ),
     ] {
         let idx = index::File::at(fixture_path(path), gix_hash::Kind::Sha1)?;
-        assert_eq!(idx.version(), *kind);
-        assert_eq!(idx.num_objects(), *num_objects);
+        assert_eq!(idx.version(), kind);
+        assert_eq!(idx.num_objects(), num_objects);
         assert_eq!(
             idx.verify_integrity(
                 None::<gix_pack::index::verify::PackContext<'_, fn() -> cache::Never>>,
@@ -624,9 +623,9 @@ fn iter() -> Result<(), Box<dyn std::error::Error>> {
             .map(|o| (o.actual_index_checksum, o.pack_traverse_statistics))?,
             (idx.index_checksum(), None)
         );
-        assert_eq!(idx.index_checksum(), hex_to_id(index_checksum));
-        assert_eq!(idx.pack_checksum(), hex_to_id(pack_checksum));
-        assert_eq!(idx.iter().count(), *num_objects as usize);
+        assert_eq!(idx.index_checksum(), index_checksum);
+        assert_eq!(idx.pack_checksum(), pack_checksum);
+        assert_eq!(idx.iter().count(), num_objects as usize);
     }
     Ok(())
 }

@@ -24,10 +24,7 @@ mod sibling_branch {
         for op in ["upstream", "push"] {
             for branch in ["", "main"] {
                 let actual = parse_spec(format!("{branch}@{{{op}}}"), &repo)?;
-                assert_eq!(
-                    actual.first_reference().expect("set").name.as_bstr(),
-                    "refs/remotes/origin/main"
-                );
+                assert_eq!(actual.first_reference().expect("set"), "refs/remotes/origin/main");
                 assert_eq!(actual.second_reference(), None);
                 assert_eq!(
                     actual.single().expect("just one"),

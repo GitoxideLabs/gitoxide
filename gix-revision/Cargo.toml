@@ -31,9 +31,9 @@ merge_base = ["dep:gix-trace", "dep:bitflags"]
 serde = ["dep:serde", "gix-hash/serde", "gix-object/serde"]
 
 [dependencies]
-gix-error = { version = "^0.3.0", path = "../gix-error" }
-gix-hash = { version = "^0.26.1", path = "../gix-hash" }
-gix-object = { version = "^0.64.0", path = "../gix-object" }
+gix-error = { version = "^0.3.1", path = "../gix-error" }
+gix-hash = { version = "^0.26.2", path = "../gix-hash" }
+gix-object = { version = "^0.64.1", path = "../gix-object" }
 gix-date = { version = "^0.16.0", path = "../gix-date" }
 gix-hashtable = { version = "^0.16.0", path = "../gix-hashtable", optional = true }
 gix-revwalk = { version = "^0.35.0", path = "../gix-revwalk" }

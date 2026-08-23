@@ -328,10 +328,10 @@ progress-tree = ["prodash/progress-tree"]
 cache-efficiency-debug = ["gix-features/cache-efficiency-debug"]
 
 [dependencies]
-gix-error = { version = "^0.3.0", path = "../gix-error" }
+gix-error = { version = "^0.3.1", path = "../gix-error" }
 gix-utils = { version = "^0.3.6", path = "../gix-utils", features = ["bstr"] }
 gix-fs = { version = "^0.22.1", path = "../gix-fs" }
-gix-ref = { version = "^0.67.0", path = "../gix-ref" }
+gix-ref = { version = "^0.67.1", path = "../gix-ref" }
 gix-discover = { version = "^0.55.0", path = "../gix-discover" }
 gix-tempfile = { version = "^24.0.0", path = "../gix-tempfile", default-features = false }
 gix-lock = { version = "^24.0.0", path = "../gix-lock" }
@@ -345,11 +345,11 @@ gix-dir = { version = "^0.29.0", path = "../gix-dir", optional = true }
 gix-config = { version = "^0.60.0", path = "../gix-config" }
 gix-odb = { version = "^0.84.0", path = "../gix-odb" }
 gix-zlib = { version = "^0.1.0", path = "../gix-zlib" }
-gix-hash = { version = "^0.26.1", path = "../gix-hash" }
+gix-hash = { version = "^0.26.2", path = "../gix-hash" }
 gix-shallow = { version = "^0.13.0", path = "../gix-shallow" }
-gix-object = { version = "^0.64.0", path = "../gix-object" }
+gix-object = { version = "^0.64.1", path = "../gix-object" }
 gix-actor = { version = "^0.42.0", path = "../gix-actor" }
-gix-pack = { version = "^0.74.0", path = "../gix-pack", default-features = false, features = [
+gix-pack = { version = "^0.74.1", path = "../gix-pack", default-features = false, features = [
     "object-cache-dynamic",
 ] }
 gix-revision = { version = "^0.49.0", path = "../gix-revision", default-features = false }
@@ -423,7 +423,7 @@ document-features = { version = "0.2.0", optional = true }
 gix = { path = ".", default-features = false, features = [
     "merge", "tree-error", "sha1", "sha256"
 ] }
-gix-hash = { version = "^0.26.1", path = "../gix-hash" }
+gix-hash = { version = "^0.26.2", path = "../gix-hash" }
 pretty_assertions = "1.4.0"
 gix-testtools = { path = "../tests/tools", features = ["sha1", "sha256"] }
 is_ci = "1.1.1"

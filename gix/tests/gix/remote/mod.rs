@@ -69,6 +69,57 @@ pub(crate) mod fetch;
 mod ref_map;
 mod save;
 mod name {
+    use std::borrow::Cow;
+
+    use gix::bstr::{BStr, BString, ByteSlice};
+
+    macro_rules! assert_natural_equality {
+        ($value:ident, $matching:literal, $different:literal) => {{
+            let matching = $matching;
+            let matching_string = matching.to_owned();
+            let matching_bstr: &BStr = matching.as_bytes().as_bstr();
+            let matching_bstring: BString = matching.as_bytes().into();
+
+            assert_eq!($value, matching, "the name matches str");
+            assert_eq!(matching, $value, "str comparison is symmetric");
+            assert_eq!($value, matching_string, "the name matches String");
+            assert_eq!(matching_string, $value, "String comparison is symmetric");
+            assert_eq!($value, matching_bstr, "the name matches BStr");
+            assert_eq!(matching_bstr, $value, "BStr comparison is symmetric");
+            assert_eq!($value, matching_bstring, "the name matches BString");
+            assert_eq!(matching_bstring, $value, "BString comparison is symmetric");
+
+            let different = $different;
+            let different_string = different.to_owned();
+            let different_bstr: &BStr = different.as_bytes().as_bstr();
+            let different_bstring: BString = different.as_bytes().into();
+
+            assert_ne!($value, different, "the name differs from str");
+            assert_ne!(different, $value, "str inequality is symmetric");
+            assert_ne!($value, different_string, "the name differs from String");
+            assert_ne!(different_string, $value, "String inequality is symmetric");
+            assert_ne!($value, different_bstr, "the name differs from BStr");
+            assert_ne!(different_bstr, $value, "BStr inequality is symmetric");
+            assert_ne!($value, different_bstring, "the name differs from BString");
+            assert_ne!(different_bstring, $value, "BString inequality is symmetric");
+        }};
+    }
+
+    #[test]
+    fn compares_with_text_and_byte_strings() {
+        let symbol = gix::remote::Name::Symbol("origin".into());
+        assert_natural_equality!(symbol, "origin", "upstream");
+        let symbol_ref = &symbol;
+        assert_natural_equality!(symbol_ref, "origin", "upstream");
+
+        let url = gix::remote::Name::Url(Cow::Borrowed(b"https://example.com/repo.git".as_bstr()));
+        assert_natural_equality!(url, "https://example.com/repo.git", "https://example.com/other.git");
+
+        let raw_url = b"https://example.com/\xff".as_bstr();
+        let raw_url_name = gix::remote::Name::Url(Cow::Borrowed(raw_url));
+        assert_eq!(raw_url_name, raw_url, "URLs compare as exact bytes");
+        assert_eq!(raw_url, raw_url_name, "byte comparison is symmetric");
+    }
 
     #[test]
     fn origin_is_valid() {

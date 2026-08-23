@@ -31,6 +31,7 @@ cargo check -p gitoxide-core --features gix/sha1,async-client
 cargo check -p gix-pack --no-default-features --features sha1
 cargo check -p gix-pack --no-default-features --features sha1,generate
 cargo check -p gix-pack --no-default-features --features sha1,streaming-input
+cargo check -p gix-hash --no-default-features --features sha1,bstr
 cargo check -p gix-hash --all-features
 cargo check -p gix-object --all-features
 cargo check -p gix-attributes --features serde

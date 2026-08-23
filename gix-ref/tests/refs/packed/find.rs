@@ -23,7 +23,7 @@ fn capitalized_branch() -> crate::Result {
     let packed_refs = store.open_packed_buffer()?.expect("packed-refs exist");
 
     assert_eq!(
-        packed_refs.find("A")?.name.as_bstr(),
+        packed_refs.find("A")?,
         "refs/heads/A",
         "fully capitalized refs aren't just considered pseudorefs"
     );
@@ -102,7 +102,7 @@ fn partial_name_to_full_name_conversion_rules_are_applied() -> crate::Result {
     let packed = store.open_packed_buffer()?.expect("packed-refs exists");
 
     assert_eq!(
-        store.find_loose("origin")?.name.as_bstr(),
+        store.find_loose("origin")?,
         "refs/remotes/origin/HEAD",
         "a special that only applies to loose refs"
     );
@@ -110,37 +110,33 @@ fn partial_name_to_full_name_conversion_rules_are_applied() -> crate::Result {
         packed.try_find("origin")?.is_none(),
         "packed refs don't have this special case as they don't store HEADs or symrefs"
     );
-    assert_eq!(
-        store.find_loose("HEAD")?.name.as_bstr(),
-        "HEAD",
-        "HEAD can be found in loose stores"
-    );
+    assert_eq!(store.find_loose("HEAD")?, "HEAD", "HEAD can be found in loose stores");
     assert!(
         packed.try_find("HEAD")?.is_none(),
         "packed refs definitely don't contain HEAD"
     );
     assert_eq!(
-        packed.try_find("head-or-tag")?.expect("present").name.as_bstr(),
+        packed.try_find("head-or-tag")?.expect("present"),
         "refs/tags/head-or-tag",
         "it finds tags first"
     );
     assert_eq!(
-        packed.try_find("heads/head-or-tag")?.expect("present").name.as_bstr(),
+        packed.try_find("heads/head-or-tag")?.expect("present"),
         "refs/heads/head-or-tag",
         "it finds heads when disambiguated"
     );
     assert_eq!(
-        packed.try_find("main")?.expect("present").name.as_bstr(),
+        packed.try_find("main")?.expect("present"),
         "refs/heads/main",
         "it finds local heads before remote ones"
     );
     assert_eq!(
-        packed.try_find("origin/main")?.expect("present").name.as_bstr(),
+        packed.try_find("origin/main")?.expect("present"),
         "refs/remotes/origin/main",
         "it finds remote heads when disambiguated"
     );
     assert_eq!(
-        packed.try_find("remotes/origin/main")?.expect("present").name.as_bstr(),
+        packed.try_find("remotes/origin/main")?.expect("present"),
         "refs/remotes/origin/main",
         "more specification is possible, too"
     );

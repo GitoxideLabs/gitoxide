@@ -28,8 +28,8 @@ sha256 = ["gix-hash/sha256"]
 serde = ["dep:serde", "gix-hash/serde", "gix-object/serde"]
 
 [dependencies]
-gix-hash = { version = "^0.26.1", path = "../gix-hash" }
-gix-object = { version = "^0.64.0", path = "../gix-object" }
+gix-hash = { version = "^0.26.2", path = "../gix-hash" }
+gix-object = { version = "^0.64.1", path = "../gix-object" }
 gix-filter = { version = "^0.34.0", path = "../gix-filter" }
 gix-worktree = { version = "^0.56.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
 gix-command = { version = "^0.10.0", path = "../gix-command" }
