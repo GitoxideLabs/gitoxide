@@ -592,6 +592,145 @@ fn conflict_both_deleted_and_added_by_them_and_added_by_us() {
     );
 }
 
+fn index_with_stages(stages: &[(gix_index::entry::Stage, &str)]) -> gix_index::State {
+    let object_hash = gix_testtools::object_hash();
+    let mut state = gix_index::State::new(object_hash);
+    let id = object_hash.null();
+    for &(stage, path) in stages {
+        state.dangerously_push_entry(
+            Default::default(),
+            id,
+            Flags::from_stage(stage),
+            Mode::FILE,
+            BStr::new(path.as_bytes()),
+        );
+    }
+    state
+}
+
+fn assert_conflict_skip_count(stages: &[(gix_index::entry::Stage, &str)], summary: Conflict, extra: usize) {
+    let index = index_with_stages(stages);
+    let path = index.entry(0).path(&index);
+    let (got_summary, got_extra, _) = Conflict::try_from_entry(index.entries(), index.path_backing(), 0, path)
+        .expect("the first entry is a conflict stage");
+    assert_eq!(got_summary, summary, "{summary:?} classification");
+    assert_eq!(
+        got_extra, extra,
+        "{summary:?} extra skip count must be consecutive same-path stages after start, not stage-1"
+    );
+}
+
+/// Extra entries `try_from_entry` tells the status worker to skip after `start_index`.
+/// This must be consecutive same-path conflict stages, not `stage - 1`.
+#[test]
+fn conflict_try_from_entry_skip_count_is_consecutive_same_path_stages() {
+    use Conflict::*;
+    use gix_index::entry::Stage::{Base, Ours, Theirs, Unconflicted};
+
+    assert_conflict_skip_count(
+        &[(Theirs, "ua"), (Unconflicted, "next"), (Unconflicted, "next2")],
+        AddedByThem,
+        0,
+    );
+    assert_conflict_skip_count(&[(Ours, "au"), (Unconflicted, "next")], AddedByUs, 0);
+    assert_conflict_skip_count(&[(Ours, "aa"), (Theirs, "aa"), (Unconflicted, "next")], BothAdded, 1);
+    assert_conflict_skip_count(&[(Base, "du"), (Theirs, "du"), (Unconflicted, "next")], DeletedByUs, 1);
+    assert_conflict_skip_count(&[(Base, "bm"), (Ours, "bm"), (Theirs, "bm")], BothModified, 2);
+}
+
+fn pad_count_for_chunk_size_gt_one() -> usize {
+    // `optimize_chunk_size` uses `(n / (threads * 2)).clamp(1, 1000)`.
+    // Need `n >= threads * 6` so chunk_size >= 3 and the two paths after AddedByThem share its chunk.
+    let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    threads.saturating_mul(6).max(32)
+}
+
+#[test]
+fn conflict_added_by_them_does_not_skip_following_dirty_path_when_chunked() {
+    use Conflict::*;
+    let pad = pad_count_for_chunk_size_gt_one();
+    assert_eq!(
+        fixture_filtered_detailed(
+            "conflicts",
+            "both-deleted",
+            &[],
+            &[
+                (
+                    BStr::new(b"added-by-them"),
+                    0,
+                    EntryStatus::Conflict {
+                        summary: AddedByThem,
+                        entries: Box::new([
+                            None,
+                            None,
+                            Some(ConflictIndexEntry {
+                                id: hex_to_id("9daeafb9864cf43055ae93beb0afd6c7d144bfa4"),
+                                flags: Flags::STAGE_MASK,
+                                mode: Mode::FILE,
+                            }),
+                        ])
+                    }
+                ),
+                (BStr::new(b"added-by-them-dirty"), 1, status_removed()),
+                (
+                    BStr::new(b"added-by-us"),
+                    2,
+                    EntryStatus::Conflict {
+                        summary: AddedByUs,
+                        entries: Box::new([
+                            None,
+                            Some(ConflictIndexEntry {
+                                id: hex_to_id("9daeafb9864cf43055ae93beb0afd6c7d144bfa4"),
+                                flags: Flags::from_bits_retain(0x2000),
+                                mode: Mode::FILE,
+                            }),
+                            None,
+                        ])
+                    }
+                ),
+                (
+                    BStr::new(b"file"),
+                    3,
+                    EntryStatus::Conflict {
+                        summary: BothDeleted,
+                        entries: Box::new([
+                            Some(ConflictIndexEntry {
+                                id: hex_to_id("9daeafb9864cf43055ae93beb0afd6c7d144bfa4"),
+                                flags: Flags::from_bits_retain(0x1000),
+                                mode: Mode::FILE,
+                            }),
+                            None,
+                            None,
+                        ])
+                    }
+                ),
+            ],
+            |index| {
+                let proto = index.entry(0);
+                let (stat, id, mode) = (proto.stat, proto.id, proto.mode);
+                index.dangerously_push_entry(stat, id, Flags::empty(), mode, BStr::new(b"added-by-them-dirty"));
+                for i in 0..pad {
+                    let path = format!("z-pad-{i:03}");
+                    index.dangerously_push_entry(stat, id, Flags::SKIP_WORKTREE, mode, BStr::new(path.as_bytes()));
+                }
+                index.sort_entries();
+            },
+            false,
+            Default::default(),
+            false,
+            None,
+        ),
+        Outcome {
+            entries_to_process: 4 + pad,
+            entries_processed: 4 + pad,
+            entries_skipped_by_entry_flags: pad,
+            symlink_metadata_calls: 1,
+            ..Default::default()
+        },
+        "every conflict and dirty entry must be processed; only SKIP_WORKTREE padding entries are skipped",
+    );
+}
+
 #[test]
 fn conflict_both_added_and_deleted_by_them() {
     use Conflict::*;

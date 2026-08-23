@@ -685,11 +685,14 @@ impl Conflict {
         let mut seen: [Option<&gix_index::Entry>; 3] = Default::default();
 
         let mut num_consumed_entries = 0_usize;
-        for (stage, entry) in (start_index..(start_index + 3).min(entries.len())).filter_map(|idx| {
-            let entry = &entries[idx];
+        for entry in entries
+            .get(start_index..(start_index + 3).min(entries.len()))
+            .unwrap_or_default()
+        {
             let stage = entry.stage_raw();
-            (stage > 0 && entry.path_in(path_backing) == entry_path).then_some((stage, entry))
-        }) {
+            if stage == 0 || entry.path_in(path_backing) != entry_path {
+                break;
+            }
             // This could be `1 << (stage - 1)` but let's be specific.
             *mask.get_or_insert(0) |= match stage {
                 1 => 0b001,
@@ -697,9 +700,10 @@ impl Conflict {
                 3 => 0b100,
                 _ => 0,
             };
-            num_consumed_entries = stage as usize - 1;
-            seen[num_consumed_entries] = Some(entry);
+            seen[stage as usize - 1] = Some(entry);
+            num_consumed_entries += 1;
         }
+        num_consumed_entries = num_consumed_entries.saturating_sub(1);
 
         mask.map(|mask| {
             (
