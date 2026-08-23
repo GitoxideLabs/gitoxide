@@ -158,29 +158,7 @@ pub fn main() -> Result<()> {
 
     match cmd {
         #[cfg(feature = "tix")]
-        Subcommands::Tix {
-            help: _,
-            quit_on_finish,
-            screen,
-            hide,
-            revisions,
-        } => {
-            let screen = match screen.as_str() {
-                "auto" => gix_tix::Screen::Auto,
-                "always" => gix_tix::Screen::Always,
-                "half" => gix_tix::Screen::Half,
-                value => anyhow::bail!("invalid screen mode: {value}"),
-            };
-            gix_tix::run(
-                repository(Mode::Lenient)?.into_sync(),
-                revisions,
-                gix_tix::Options {
-                    quit_on_finish,
-                    hide,
-                    screen,
-                },
-            )
-        }
+        Subcommands::Tix(command) => command.run(repository(Mode::Lenient)?.into_sync()),
         Subcommands::Env => prepare_and_run(
             "env",
             trace,
@@ -1868,36 +1846,39 @@ mod tests {
         for name in ["tix", "tui", "interactive", "i"] {
             let args = Args::try_parse_from(["gix", name]).expect("the command or alias parses");
             assert!(
-                matches!(args.cmd, Subcommands::Tix { .. }),
+                matches!(args.cmd, Subcommands::Tix(_)),
                 "{name} routes to the tix command"
             );
         }
 
-        let args = Args::try_parse_from(["gix", "tix", "-h", "main", "--hide", "tag", "topic"])
-            .expect("hide options and a visible revision parse");
-        let Subcommands::Tix { hide, revisions, .. } = args.cmd else {
-            panic!("tix arguments route to tix")
-        };
-        assert_eq!(hide, ["main", "tag"], "short and long hide options append");
-        assert_eq!(revisions, ["topic"], "positional revisions remain visible tips");
-        let args = Args::try_parse_from(["gix", "tix", "--screen", "half"]).expect("the half-screen mode parses");
-        let Subcommands::Tix { screen, .. } = args.cmd else {
-            panic!("tix arguments route to tix")
-        };
-        assert_eq!(screen, "half", "the requested screen mode is retained");
+        for arguments in [
+            vec!["gix", "tix", "-x", "main", "--hide", "tag", "topic"],
+            vec!["gix", "tix", "amend"],
+            vec!["gix", "tix", "spill"],
+        ] {
+            assert!(
+                matches!(
+                    Args::try_parse_from(arguments).expect("shared tix arguments parse").cmd,
+                    Subcommands::Tix(_)
+                ),
+                "the complete tix command is delegated"
+            );
+        }
         assert_eq!(
-            Args::try_parse_from(["gix", "tix", "--screen", "other"])
-                .expect_err("unknown screen modes are rejected")
+            Args::try_parse_from(["gix", "tix", "--screen", "half"])
+                .expect_err("screen selection is no longer supported")
                 .kind(),
-            clap::error::ErrorKind::InvalidValue,
-            "screen mode validation happens at the command line"
+            clap::error::ErrorKind::UnknownArgument,
+            "alternate-screen operation has no command-line mode"
         );
-        assert_eq!(
-            Args::try_parse_from(["gix", "tix", "--help"])
-                .expect_err("help exits through clap")
-                .kind(),
-            clap::error::ErrorKind::DisplayHelp,
-            "long help remains available while -h belongs to hide"
-        );
+        for help in ["-h", "--help"] {
+            assert_eq!(
+                Args::try_parse_from(["gix", "tix", help])
+                    .expect_err("help exits through clap")
+                    .kind(),
+                clap::error::ErrorKind::DisplayHelp,
+                "embedded tix supports {help}"
+            );
+        }
     }
 }

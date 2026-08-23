@@ -71,6 +71,19 @@ Follow "purposeful conventional commits" style:
   - `feat(gix-odb)!: add a new object lookup API`
   - `fix(gix-ref)!: reject invalid reference names`
 
+### Provisional Commits
+
+- Before changing tracked worktree files for a task, start from a clean
+  worktree and create an empty provisional commit authored as
+  `🚧WIP🚧 <wip@invalid>`. Give it the purposeful subject the completed change
+  is expected to use so an interrupted session remains identifiable; do not use
+  a `WIP:` prefix.
+- When the task is complete, stage the intended changes and amend that
+  provisional commit. Replace the WIP author with the responsible agent's own
+  name and email, and update the subject and descriptive body to match what was
+  actually completed. The final commit must contain the complete task and leave
+  the worktree clean; never leave the provisional author in finished history.
+
 ### Code Style
 
 - Follow existing patterns in the codebase
