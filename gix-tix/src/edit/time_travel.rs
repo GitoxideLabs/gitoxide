@@ -1609,8 +1609,8 @@ mod tests {
         perform(&repository_path, false, tip, &graph, &[started.commit], &[], false)?.complete()?;
         let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(
-            repo.head_name()?.map(|name| name.as_bstr().to_owned()),
-            Some(b"refs/heads/main".into()),
+            repo.head_name()?.expect("HEAD is attached"),
+            "refs/heads/main",
             "leaving the review returns to the attached branch"
         );
         let snapshot = history::snapshot(&repo, &[], &[], false)?;
@@ -1621,7 +1621,7 @@ mod tests {
             "a fresh attached-HEAD snapshot retains the review-tree leaf"
         );
         assert!(repo.try_find_reference(stash_name.as_ref())?.is_some());
-        assert_eq!(repo.find_reference("refs/stash")?.id().detach(), existing_stash);
+        assert_eq!(repo.find_reference("refs/stash")?.id(), existing_stash);
         assert!(
             git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty(),
             "crossing out leaves the destination clean"
@@ -1640,7 +1640,7 @@ mod tests {
             "returning consumes the ordinary review-tree pin"
         );
         assert!(repo.try_find_reference(stash_name.as_ref())?.is_none());
-        assert_eq!(repo.find_reference("refs/stash")?.id().detach(), existing_stash);
+        assert_eq!(repo.find_reference("refs/stash")?.id(), existing_stash);
         Ok(())
     }
 
@@ -1736,10 +1736,7 @@ mod tests {
         let graph = loaded_graph(&repository, &[])?;
         assert!(graph.is_ancestor(root, main), "the selected root is known ancestry");
         assert!(history::all_pins(&repository)?.is_empty());
-        assert_eq!(
-            open_repository(&repository_path, false, false)?.head_id()?.detach(),
-            main
-        );
+        assert_eq!(open_repository(&repository_path, false, false)?.head_id()?, main);
         assert!(!contains(&repository, main, root));
         drop(repository);
 
@@ -1749,17 +1746,16 @@ mod tests {
         assert!(notice.contains("time-travelled"), "{notice}");
         let repository = crate::test_repository::open(fixture.path())?;
         assert!(repository.head()?.is_detached(), "travel detaches HEAD");
-        assert_eq!(repository.head_id()?.detach(), root);
+        assert_eq!(repository.head_id()?, root);
         let pins = history::all_pins(&repository)?;
         assert_eq!(pins.len(), 1, "the lost branch tip gets one pin");
         assert_eq!(
-            pins[0].name.as_bstr(),
-            b"refs/worktree/tix/pins/HEAD".as_bstr(),
+            pins[0].name, "refs/worktree/tix/pins/HEAD",
             "an attached departure uses the singleton HEAD pin"
         );
         assert_eq!(
-            pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
-            Some(b"refs/heads/main".as_bstr())
+            pins[0].target.try_name().expect("the pin is symbolic"),
+            "refs/heads/main"
         );
         assert_eq!(pins[0].id, main);
         assert!(
@@ -1805,8 +1801,8 @@ mod tests {
         );
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
-            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
-            Some(b"refs/heads/main".into()),
+            repository.head_name()?.expect("HEAD is attached"),
+            "refs/heads/main",
             "returning through a symbolic pin reattaches HEAD"
         );
         assert!(history::all_pins(&repository)?.is_empty(), "the used pin is removed");
@@ -1815,7 +1811,7 @@ mod tests {
             .expect("the return can be undone")
             .apply_with_worktrees(&repository)?;
         assert!(repository.head()?.is_detached(), "undo restores the detached HEAD");
-        assert_eq!(repository.head_id()?.detach(), middle);
+        assert_eq!(repository.head_id()?, middle);
         let pins = history::all_pins(&repository)?;
         assert_eq!(pins.len(), 2, "undo restores both return paths");
         assert!(
@@ -1826,8 +1822,8 @@ mod tests {
             .expect("the return can be redone")
             .apply_with_worktrees(&repository)?;
         assert_eq!(
-            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
-            Some(b"refs/heads/main".into()),
+            repository.head_name()?.expect("HEAD is attached"),
+            "refs/heads/main",
             "redo reattaches HEAD"
         );
         assert!(history::all_pins(&repository)?.is_empty(), "redo consumes the HEAD pin");
@@ -1850,7 +1846,7 @@ mod tests {
             repository.head()?.is_detached(),
             "a direct pin returns to detached HEAD"
         );
-        assert_eq!(repository.head_id()?.detach(), main);
+        assert_eq!(repository.head_id()?, main);
         assert!(history::all_pins(&repository)?.is_empty());
         Ok(())
     }
@@ -1873,12 +1869,12 @@ mod tests {
         assert!(notice.contains("attached main at"), "{notice}");
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
-            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
-            Some(b"refs/heads/main".into()),
+            repository.head_name()?.expect("HEAD is attached"),
+            "refs/heads/main",
             "HEAD attaches to the remembered branch"
         );
-        assert_eq!(repository.head_id()?.detach(), middle);
-        assert_eq!(repository.find_reference("refs/heads/main")?.id().detach(), middle);
+        assert_eq!(repository.head_id()?, middle);
+        assert_eq!(repository.find_reference("refs/heads/main")?.id(), middle);
         let pins = history::all_pins(&repository)?;
         assert!(
             pins.iter().any(|pin| pin.is_head() && pin.id == middle),
@@ -1946,13 +1942,9 @@ mod tests {
         );
         let repository = crate::test_repository::open(fixture.path())?;
         assert!(repository.head()?.is_detached(), "failed attach retains detached HEAD");
+        assert_eq!(repository.head_id()?, middle, "failed attach retains its departure");
         assert_eq!(
-            repository.head_id()?.detach(),
-            middle,
-            "failed attach retains its departure"
-        );
-        assert_eq!(
-            repository.find_reference("refs/heads/main")?.id().detach(),
+            repository.find_reference("refs/heads/main")?.id(),
             main,
             "the other worktree's branch is not moved"
         );
@@ -1996,12 +1988,12 @@ mod tests {
         attach(&git_dir, false, &[], false)?;
         let repository = open_repository(&git_dir, false, false)?;
         assert_eq!(
-            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
-            Some(branch.as_bstr().to_owned()),
+            repository.head_name()?.expect("HEAD is attached"),
+            branch,
             "attach reattaches the current linked worktree branch"
         );
         assert_eq!(
-            repository.find_reference(branch.as_ref())?.id().detach(),
+            repository.find_reference(branch.as_ref())?.id(),
             root,
             "attach moves the linked worktree branch"
         );
@@ -2022,10 +2014,7 @@ mod tests {
         perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
         move_head_to(&repository_path, false, topic, Some(&topic_ref), &[], false, Some)?;
         let repository = crate::test_repository::open(fixture.path())?;
-        assert_eq!(
-            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
-            Some(topic_ref.into())
-        );
+        assert_eq!(repository.head_name()?.expect("HEAD is attached"), topic_ref);
         assert!(
             history::all_pins(&repository)?.iter().all(|pin| !pin.is_head()),
             "an explicit attachment clears the remembered branch"
@@ -2063,7 +2052,7 @@ mod tests {
             repository.head()?.is_detached(),
             "the successful detached checkout is retained"
         );
-        assert_eq!(repository.head_id()?.detach(), main);
+        assert_eq!(repository.head_id()?, main);
         assert!(
             history::all_pins(&repository)?.iter().any(history::Pin::is_head),
             "the HEAD pin remains available for a later retry"
@@ -2228,7 +2217,7 @@ mod tests {
 
         perform(&repository_path, false, topic, &graph, &[], &[], false)?.complete()?;
         let repository = crate::test_repository::open(fixture.path())?;
-        assert_eq!(repository.head_id()?.detach(), topic);
+        assert_eq!(repository.head_id()?, topic);
         let pins = history::all_pins(&repository)?;
         assert_eq!(pins.len(), 1, "sideways travel retains the otherwise lost departure");
         assert_eq!(pins[0].id, main);
@@ -2290,7 +2279,7 @@ mod tests {
             .expect_err("Git rejects a conflicting checkout");
         assert!(format!("{err:#}").contains("git checkout failed"));
         let repository = crate::test_repository::open(fixture.path())?;
-        assert_eq!(repository.head_id()?.detach(), main, "failed checkout retains HEAD");
+        assert_eq!(repository.head_id()?, main, "failed checkout retains HEAD");
         assert_eq!(
             repository
                 .find_reference(history::HEAD_PIN_NAME.as_bstr())?
@@ -2332,13 +2321,13 @@ mod tests {
         let (_notice, conflict_id, _, _) = conflict.accept()?;
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
-            repository.head_id()?.detach(),
+            repository.head_id()?,
             conflict_id,
             "the conflicting commit is checked out"
         );
         let conflict_commit = repository.find_commit(conflict_id)?;
         assert_eq!(
-            conflict_commit.tree_id()?.detach(),
+            conflict_commit.tree_id()?,
             conflict_commit
                 .parent_ids()
                 .next()
@@ -2438,7 +2427,7 @@ mod tests {
             &repository.find_commit(selected)?.decode()?.into_owned()?
         ));
         assert_eq!(
-            repository.find_reference("refs/heads/unrelated")?.id().detach(),
+            repository.find_reference("refs/heads/unrelated")?.id(),
             unrelated,
             "time-travel leaves the unrelated incomplete history untouched"
         );
@@ -2598,7 +2587,7 @@ mod tests {
         let graph = super::super::loaded_graph(&repository)?;
         perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
         let repository = open()?;
-        assert_eq!(repository.find_reference("refs/heads/main")?.id().detach(), pending_tip);
+        assert_eq!(repository.find_reference("refs/heads/main")?.id(), pending_tip);
         assert!(!super::super::rebase::is_pending(
             &repository.find_commit(spilled_middle)?.decode()?.into_owned()?
         ));

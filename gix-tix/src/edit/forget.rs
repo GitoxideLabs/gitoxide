@@ -227,17 +227,13 @@ mod tests {
         );
         for name in ["refs/heads/main", "refs/patches/forget"] {
             assert_eq!(
-                repository.find_reference(name)?.id().detach(),
+                repository.find_reference(name)?.id(),
                 parent,
                 "{name} follows the forget"
             );
         }
         for name in ["refs/tags/keep", "refs/remotes/origin/keep"] {
-            assert_eq!(
-                repository.find_reference(name)?.id().detach(),
-                top,
-                "{name} remains immutable"
-            );
+            assert_eq!(repository.find_reference(name)?.id(), top, "{name} remains immutable");
         }
         Ok(())
     }
@@ -317,11 +313,7 @@ mod tests {
             .detach();
         let graph = super::super::loaded_graph(&repository)?;
         assert_eq!(perform(repository.clone(), &graph, top)?.selected, Some(parent));
-        assert_eq!(
-            repository.head_id()?.detach(),
-            parent,
-            "HEAD's branch moves without checkout"
-        );
+        assert_eq!(repository.head_id()?, parent, "HEAD's branch moves without checkout");
         Ok(())
     }
 

@@ -2518,7 +2518,7 @@ mod tests {
                 && worktree
                     .reference
                     .as_ref()
-                    .is_some_and(|name| name.as_bstr() == b"refs/heads/main")
+                    .is_some_and(|name| name == "refs/heads/main")
         }));
         assert!(worktrees.iter().any(|worktree| {
             worktree.id == topic
@@ -2529,7 +2529,7 @@ mod tests {
                 && worktree
                     .reference
                     .as_ref()
-                    .is_some_and(|name| name.as_bstr() == b"refs/heads/topic")
+                    .is_some_and(|name| name == "refs/heads/topic")
         }));
         assert!(worktrees.iter().any(|worktree| {
             worktree.id == root
@@ -2538,7 +2538,7 @@ mod tests {
                 && worktree
                     .reference
                     .as_ref()
-                    .is_some_and(|name| name.as_bstr() == b"refs/heads/remembered")
+                    .is_some_and(|name| name == "refs/heads/remembered")
                 && !worktree.is_current
                 && worktree.is_detached
         }));
@@ -2648,7 +2648,7 @@ mod tests {
             current
                 .reference
                 .as_ref()
-                .is_some_and(|name| name.as_bstr() == b"refs/heads/topic")
+                .is_some_and(|name| name == "refs/heads/topic")
         );
         let remembered_pins = applicable_pins(&remembered_repo)?;
         let remembered_decorations = decorations(&remembered_repo, &remembered_pins, &remembered_worktrees)?;
@@ -3160,7 +3160,7 @@ mod tests {
             .collect();
         assert_eq!(
             connected,
-            [repo.rev_parse_single("topic^")?.detach()],
+            [repo.rev_parse_single("topic^")?],
             "only the excluded parent directly connected to visible history is retained"
         );
         assert!(

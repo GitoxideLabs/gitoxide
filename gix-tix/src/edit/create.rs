@@ -550,17 +550,13 @@ mod tests {
         );
         for name in ["refs/heads/main", "refs/patches/create", "refs/patches/late"] {
             assert_eq!(
-                repository.find_reference(name)?.id().detach(),
+                repository.find_reference(name)?.id(),
                 new_id,
                 "{name} advances to the new commit"
             );
         }
         for name in ["refs/tags/keep", "refs/remotes/origin/keep"] {
-            assert_eq!(
-                repository.find_reference(name)?.id().detach(),
-                parent,
-                "{name} is not edited"
-            );
+            assert_eq!(repository.find_reference(name)?.id(), parent, "{name} is not edited");
         }
         Ok(())
     }
@@ -643,9 +639,9 @@ mod tests {
                 note: Some("fork enrichment".into()),
             }
         );
-        assert_eq!(repository.head_id()?.detach(), main, "forking does not move HEAD");
+        assert_eq!(repository.head_id()?, main, "forking does not move HEAD");
         assert_eq!(
-            repository.find_reference("refs/heads/main")?.id().detach(),
+            repository.find_reference("refs/heads/main")?.id(),
             main,
             "forking does not move the source branch"
         );
@@ -674,7 +670,7 @@ mod tests {
         super::super::time_travel::perform(&repository_path, false, fork, &graph, &[], &[], false)?.complete()?;
         let repository = open(fixture.path())?;
         assert!(repository.head()?.is_detached(), "automatic fork travel detaches HEAD");
-        assert_eq!(repository.head_id()?.detach(), fork);
+        assert_eq!(repository.head_id()?, fork);
         let pins = crate::history::all_pins(&repository)?;
         assert_eq!(pins.len(), 1, "the checkout consumes the temporary fork pin");
         assert!(pins[0].is_head(), "the singleton remembers the departed branch");
@@ -707,13 +703,13 @@ mod tests {
         let commit = repository.find_commit(new_id)?;
         assert!(commit.parent_ids().next().is_none(), "the root has no parent");
         assert_eq!(
-            commit.tree_id()?.detach(),
+            commit.tree_id()?,
             ObjectId::empty_tree(repository.object_hash()),
             "no index or worktree changes reuse the empty tree"
         );
         assert_eq!(
-            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
-            Some(b"refs/heads/main".into()),
+            repository.head_name()?.expect("HEAD is attached"),
+            "refs/heads/main",
             "the unborn branch is created and remains checked out"
         );
         Ok(())
@@ -740,8 +736,8 @@ mod tests {
         let new_id = apply(open(fixture.path())?, &graph, prepared, &edited)?;
         let repository = open(fixture.path())?;
 
-        assert_eq!(repository.head_id()?.detach(), new_id);
-        assert_eq!(repository.find_reference("refs/heads/main")?.id().detach(), base);
+        assert_eq!(repository.head_id()?, new_id);
+        assert_eq!(repository.find_reference("refs/heads/main")?.id(), base);
         assert_eq!(
             repository.find_commit(new_id)?.parent_ids().next().map(gix::Id::detach),
             Some(base),
@@ -763,8 +759,8 @@ mod tests {
         let repository = open(fixture.path())?;
         let commit = repository.find_commit(new_id)?;
         assert_eq!(
-            commit.tree_id()?.detach(),
-            repository.find_commit(parent)?.tree_id()?.detach(),
+            commit.tree_id()?,
+            repository.find_commit(parent)?.tree_id()?,
             "the explicit empty commit keeps the parent tree"
         );
         let after = gix_testtools::repository::snapshot(fixture.path())?;
@@ -847,7 +843,7 @@ mod tests {
             "the unrelated worktree does not change"
         );
         assert_eq!(
-            open(fixture.path())?.find_reference("refs/heads/main")?.id().detach(),
+            open(fixture.path())?.find_reference("refs/heads/main")?.id(),
             new_id,
             "the selected parent branch advances independently"
         );

@@ -377,7 +377,7 @@ mod tests {
         let graph = super::super::loaded_graph(&repo)?;
 
         let amended = perform(repo.clone(), &graph, Kind::Amend, None)?.expect("the worktree change amends HEAD");
-        assert_eq!(repo.head_id()?.detach(), amended, "HEAD follows the amended commit");
+        assert_eq!(repo.head_id()?, amended, "HEAD follows the amended commit");
         assert!(
             git(fixture.path(), &["diff", "--cached", "--name-only"])?.is_empty(),
             "the amended index is clean"
@@ -411,7 +411,7 @@ mod tests {
 
         assert!(amend_index(repo, &graph)?.is_none(), "an unchanged index is a no-op");
         let repo = open(fixture.path())?;
-        assert_eq!(repo.head_id()?.detach(), old, "HEAD remains unchanged");
+        assert_eq!(repo.head_id()?, old, "HEAD remains unchanged");
         assert!(
             git(fixture.path(), &["diff", "--cached", "--name-only"])?.is_empty(),
             "the index remains clean"
@@ -441,7 +441,7 @@ mod tests {
 
         let finalized = amend_index(repo, &graph)?.expect("a pending commit must be finalized");
         let repo = open(fixture.path())?;
-        assert_eq!(repo.head_id()?.detach(), finalized);
+        assert_eq!(repo.head_id()?, finalized);
         assert!(
             !super::super::rebase::is_pending(&repo.find_commit(finalized)?.decode()?.into_owned()?),
             "an all-ours resolution removes the pending marker"
@@ -469,7 +469,7 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.to_string().contains("time-travel to HEAD"), "{err:#}");
-        assert_eq!(open(fixture.path())?.head_id()?.detach(), pending);
+        assert_eq!(open(fixture.path())?.head_id()?, pending);
         Ok(())
     }
 
@@ -560,7 +560,7 @@ mod tests {
             perform(repo, &graph, Kind::Amend, Some((&selected, None))).expect_err("an index lock prevents the amend");
         assert!(format!("{err:#}").contains("selected index paths"));
         let repo = open(fixture.path())?;
-        assert_eq!(repo.head_id()?.detach(), old, "the rewritten ref is rolled back");
+        assert_eq!(repo.head_id()?, old, "the rewritten ref is rolled back");
         assert_eq!(
             std::fs::read(repo.index_path())?,
             index_before,
@@ -659,7 +659,7 @@ mod tests {
         let graph = super::super::loaded_graph(&repo)?;
         let new = perform(repo, &graph, Kind::Spill, None)?.expect("the tip introduces changes");
         let repo = open(fixture.path())?;
-        assert_eq!(repo.find_commit(new)?.tree_id()?.detach(), parent_tree);
+        assert_eq!(repo.find_commit(new)?.tree_id()?, parent_tree);
         assert_eq!(
             std::fs::read(fixture.path().join("tip"))?,
             b"tip\n",
@@ -686,7 +686,7 @@ mod tests {
         let graph = super::super::loaded_graph(&repo)?;
         let new = perform(repo, &graph, Kind::Spill, None)?.expect("the root has a non-empty tree");
         let repo = open(fixture.path())?;
-        assert_eq!(repo.find_commit(new)?.tree_id()?.detach(), repo.empty_tree().id);
+        assert_eq!(repo.find_commit(new)?.tree_id()?, repo.empty_tree().id);
         assert!(
             git(fixture.path(), &["diff", "--cached", "--name-only"])?.is_empty(),
             "the root spill resets the index to empty"

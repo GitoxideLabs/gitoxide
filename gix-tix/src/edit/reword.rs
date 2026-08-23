@@ -605,7 +605,7 @@ mod tests {
             outcome.commit.is_none(),
             "enrichment changes leave the commit object untouched"
         );
-        assert_eq!(repository.head_id()?.detach(), id);
+        assert_eq!(repository.head_id()?, id);
         let enrichment = outcome.enrichment.expect("the enrichment changed");
         assert!(enrichment.todo);
         assert_eq!(
@@ -669,7 +669,7 @@ mod tests {
         assert_eq!(outcome.target, amended, "the outcome reports the relocated target");
         let rewritten = outcome.commit.expect("the edited message rewrites the amended commit");
         let rewritten_commit = repository.find_commit(rewritten)?.decode()?.into_owned()?;
-        assert_eq!(repository.head_id()?.detach(), rewritten, "HEAD follows the reword");
+        assert_eq!(repository.head_id()?, rewritten, "HEAD follows the reword");
         assert_eq!(
             rewritten_commit.tree, amended_commit.tree,
             "the reword retains the concurrently amended tree"
@@ -680,7 +680,7 @@ mod tests {
         );
         assert_eq!(rewritten_commit.message, b"reworded tip\n".as_bstr());
         assert_eq!(
-            repository.find_reference("refs/heads/outside")?.id().detach(),
+            repository.find_reference("refs/heads/outside")?.id(),
             outside,
             "a duplicate identity outside the active view is neither selected nor rewritten"
         );
@@ -753,18 +753,14 @@ mod tests {
                 "the error lists candidate {candidate}: {message}"
             );
         }
+        assert_eq!(repository.head_id()?, head, "failed relocation leaves HEAD alone");
         assert_eq!(
-            repository.head_id()?.detach(),
-            head,
-            "failed relocation leaves HEAD alone"
-        );
-        assert_eq!(
-            repository.find_reference(pin)?.id().detach(),
+            repository.find_reference(pin)?.id(),
             duplicate,
             "failed relocation leaves pins alone"
         );
         assert_eq!(
-            repository.find_reference(prefix_pin)?.id().detach(),
+            repository.find_reference(prefix_pin)?.id(),
             prefix_collision,
             "failed relocation leaves prefix-collision pins alone"
         );
@@ -956,17 +952,13 @@ mod tests {
         );
         for name in ["refs/heads/main", "refs/patches/reword"] {
             assert_eq!(
-                repository.find_reference(name)?.id().detach(),
+                repository.find_reference(name)?.id(),
                 new_id,
                 "{name} follows the rewrite"
             );
         }
         for name in ["refs/tags/keep", "refs/remotes/origin/keep"] {
-            assert_eq!(
-                repository.find_reference(name)?.id().detach(),
-                old_id,
-                "{name} is not rewritten"
-            );
+            assert_eq!(repository.find_reference(name)?.id(), old_id, "{name} is not rewritten");
         }
         Ok(())
     }

@@ -410,7 +410,7 @@ mod tests {
         assert!(notice.contains("stashed changes"));
 
         let repo = crate::test_repository::open(fixture.path())?;
-        assert_eq!(repo.find_reference("refs/stash")?.id().detach(), ordinary);
+        assert_eq!(repo.find_reference("refs/stash")?.id(), ordinary);
         let name = reference(head)?;
         assert!(repo.try_find_reference(name.as_ref())?.is_some());
         assert!(
@@ -435,7 +435,7 @@ mod tests {
         );
         let repo = crate::test_repository::open(fixture.path())?;
         assert!(repo.try_find_reference(name.as_ref())?.is_none());
-        assert_eq!(repo.find_reference("refs/stash")?.id().detach(), ordinary);
+        assert_eq!(repo.find_reference("refs/stash")?.id(), ordinary);
         Ok(())
     }
 }

@@ -274,18 +274,10 @@ mod tests {
         );
         assert_eq!(git(fixture.path(), &["status", "--short"])?, b"");
         for name in ["refs/heads/main", "refs/patches/split"] {
-            assert_eq!(
-                repository.find_reference(name)?.id().detach(),
-                upper,
-                "{name} follows the split"
-            );
+            assert_eq!(repository.find_reference(name)?.id(), upper, "{name} follows the split");
         }
         for name in ["refs/tags/keep", "refs/remotes/origin/keep"] {
-            assert_eq!(
-                repository.find_reference(name)?.id().detach(),
-                old,
-                "{name} is not edited"
-            );
+            assert_eq!(repository.find_reference(name)?.id(), old, "{name} is not edited");
         }
         Ok(())
     }

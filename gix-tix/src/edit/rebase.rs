@@ -3263,7 +3263,7 @@ mod tests {
         assert_ne!(new_tip, old_tip, "the descendant is rewritten");
         assert!(
             outcome.ref_rewrites.iter().any(|rewrite| {
-                rewrite.name.as_bstr() == b"refs/heads/main" && rewrite.old == old_tip && rewrite.new == new_tip
+                rewrite.name == "refs/heads/main" && rewrite.old == old_tip && rewrite.new == new_tip
             }),
             "the successful branch transaction reports its old and final descendant IDs"
         );
@@ -3273,7 +3273,7 @@ mod tests {
             "the descendant follows the replacement"
         );
         assert_eq!(
-            repo.find_commit(new_tip)?.tree_id()?.detach(),
+            repo.find_commit(new_tip)?.tree_id()?,
             old_tip_tree,
             "a reword preserves descendant trees"
         );
@@ -3345,7 +3345,7 @@ mod tests {
 
         assert_eq!(outcome.map(middle), Some(middle), "the no-op target retains its ID");
         assert_eq!(outcome.map(tip), Some(tip), "its unaffected descendant retains its ID");
-        assert_eq!(repo.head_id()?.detach(), tip, "HEAD remains on the original commit");
+        assert_eq!(repo.head_id()?, tip, "HEAD remains on the original commit");
         assert_eq!(reported, [middle], "only the explicit target enters commit writing");
         Ok(())
     }
@@ -3418,7 +3418,7 @@ mod tests {
         let new_name = super::super::stash::reference(rewritten)?;
         assert!(repo.try_find_reference(old_name.as_ref())?.is_none());
         assert_eq!(
-            repo.find_reference(new_name.as_ref())?.id().detach(),
+            repo.find_reference(new_name.as_ref())?.id(),
             saved,
             "the saved state follows the rewritten commit without changing its target"
         );
@@ -3452,7 +3452,7 @@ mod tests {
             "the descendant is transplanted onto the removed commit's parent"
         );
         assert_ne!(
-            repo.find_commit(tip)?.tree_id()?.detach(),
+            repo.find_commit(tip)?.tree_id()?,
             old_tip_tree,
             "the removed commit's tree contribution is absent"
         );
@@ -3899,7 +3899,7 @@ mod tests {
             persisted
                 .ref_changes
                 .iter()
-                .any(|change| change.name.as_bstr() == b"refs/heads/main"),
+                .any(|change| change.name == "refs/heads/main"),
             "the same change set also contains the rewritten branch"
         );
         Ok(())
@@ -4140,17 +4140,17 @@ mod tests {
             repo.head()?.is_detached(),
             "moving @ below the branch tip detaches HEAD"
         );
-        assert_eq!(repo.head_id()?.detach(), new_tip, "HEAD follows the checkout marker");
+        assert_eq!(repo.head_id()?, new_tip, "HEAD follows the checkout marker");
         assert_eq!(
-            repo.find_reference("refs/heads/main")?.id().detach(),
+            repo.find_reference("refs/heads/main")?.id(),
             empty_id,
             "the branch remains at the resulting leaf"
         );
         let pins = crate::history::all_pins(&repo)?;
         assert_eq!(pins.len(), 1, "the detached view retains the branch through a pin");
         assert_eq!(
-            pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
-            Some(b"refs/heads/main".as_bstr()),
+            pins[0].target.try_name().expect("the pin is symbolic"),
+            "refs/heads/main",
             "the visibility pin follows the branch symbolically"
         );
         Ok(())
@@ -4241,7 +4241,7 @@ mod tests {
         );
         assert_eq!(descendant.parents.as_slice(), [rewritten_checkout]);
         assert_eq!(
-            repo.find_reference("refs/heads/main")?.id().detach(),
+            repo.find_reference("refs/heads/main")?.id(),
             rewritten_descendant,
             "the branch follows the finalized empty tip"
         );
@@ -4307,13 +4307,9 @@ mod tests {
             format!("middle\n\n# {} tip\n\ntip\n", tip.to_hex_with_len(7)).as_bytes(),
             "the source title permanently identifies the appended full message"
         );
+        assert_eq!(repo.head_id()?, combined, "the branch follows the combined tip");
         assert_eq!(
-            repo.head_id()?.detach(),
-            combined,
-            "the branch follows the combined tip"
-        );
-        assert_eq!(
-            repo.find_reference("refs/patches/middle")?.id().detach(),
+            repo.find_reference("refs/patches/middle")?.id(),
             combined,
             "a ref on the first source follows the combined commit"
         );
@@ -4427,7 +4423,7 @@ mod tests {
             "the intermediate commit remains above the combined result"
         );
         assert_eq!(
-            repo.head_id()?.detach(),
+            repo.head_id()?,
             rewritten_intermediate,
             "the attached branch remains at the final reordered tip"
         );
@@ -4440,7 +4436,7 @@ mod tests {
             Some(combined),
             "a sibling fork remains attached to the rewritten target"
         );
-        assert_eq!(repo.find_reference("refs/heads/side")?.id().detach(), rewritten_side);
+        assert_eq!(repo.find_reference("refs/heads/side")?.id(), rewritten_side);
         Ok(())
     }
 
@@ -4497,7 +4493,7 @@ mod tests {
             Some(moved_head),
             "the target's former child follows the moved stack"
         );
-        assert_eq!(repo.head_id()?.detach(), moved_head, "checkout follows rewritten HEAD");
+        assert_eq!(repo.head_id()?, moved_head, "checkout follows rewritten HEAD");
         for (name, expected) in [
             ("refs/patches/middle", moved_base),
             ("refs/patches/tip", moved_head),
@@ -4505,7 +4501,7 @@ mod tests {
             ("refs/heads/destination", rewritten_target_child),
         ] {
             assert_eq!(
-                repo.find_reference(name)?.id().detach(),
+                repo.find_reference(name)?.id(),
                 expected,
                 "{name} follows its corresponding rewrite"
             );
@@ -4581,16 +4577,9 @@ mod tests {
             "copy-insert detaches instead of moving the source branch"
         );
         assert_eq!(outcome.map(source), Some(source), "copying does not rewrite the source");
-        assert_eq!(
-            repo.head_id()?.detach(),
-            source,
-            "copying elsewhere leaves HEAD at the source"
-        );
-        assert_eq!(repo.find_reference("refs/heads/main")?.id().detach(), source);
-        assert_eq!(
-            repo.find_reference("refs/heads/destination")?.id().detach(),
-            rewritten_child
-        );
+        assert_eq!(repo.head_id()?, source, "copying elsewhere leaves HEAD at the source");
+        assert_eq!(repo.find_reference("refs/heads/main")?.id(), source);
+        assert_eq!(repo.find_reference("refs/heads/destination")?.id(), rewritten_child);
         assert_eq!(git_note(&repo, source)?.as_deref(), Some(b"source note".as_slice()));
         assert_eq!(git_note(&repo, copied)?.as_deref(), Some(b"source note".as_slice()));
         let repository_path = repo.git_dir().to_owned();
@@ -4601,13 +4590,13 @@ mod tests {
             repo.head()?.is_detached(),
             "the destination copy becomes the detached checkout"
         );
-        assert_eq!(repo.head_id()?.detach(), copied);
-        assert_eq!(repo.find_reference("refs/heads/main")?.id().detach(), source);
+        assert_eq!(repo.head_id()?, copied);
+        assert_eq!(repo.find_reference("refs/heads/main")?.id(), source);
         let pins = crate::history::all_pins(&repo)?;
         assert_eq!(pins.len(), 1, "the source branch stays visible through a HEAD pin");
         assert_eq!(
-            pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
-            Some(b"refs/heads/main".as_bstr())
+            pins[0].target.try_name().expect("the pin is symbolic"),
+            "refs/heads/main"
         );
         Ok(())
     }
@@ -4631,7 +4620,7 @@ mod tests {
             Some(target)
         );
         assert_eq!(
-            repo.find_reference("refs/heads/main")?.id().detach(),
+            repo.find_reference("refs/heads/main")?.id(),
             retained_source,
             "the source branch follows the ordinary source rewrite"
         );
@@ -4736,12 +4725,8 @@ mod tests {
                 "the target's {name} child follows moved HEAD"
             );
         }
-        assert_eq!(
-            repo.head_id()?.detach(),
-            moved,
-            "the attached branch follows HEAD itself"
-        );
-        assert_eq!(repo.find_reference("refs/heads/side")?.id().detach(), rewritten_side);
+        assert_eq!(repo.head_id()?, moved, "the attached branch follows HEAD itself");
+        assert_eq!(repo.find_reference("refs/heads/side")?.id(), rewritten_side);
         assert_eq!(git_note(&repo, moved)?.as_deref(), Some(b"source note".as_slice()));
         Ok(())
     }
@@ -4778,7 +4763,7 @@ mod tests {
         super::super::time_travel::checkout_plan(&repository_path, false, &outcome, &[], false)?;
         let repo = open(fixture.path())?;
         assert!(repo.head()?.is_detached(), "a detached checkout remains detached");
-        assert_eq!(repo.head_id()?.detach(), moved);
+        assert_eq!(repo.head_id()?, moved);
         drop(repo);
 
         git(fixture.path(), &["checkout", "-q", "main"])?;
@@ -4799,7 +4784,7 @@ mod tests {
             Some(target),
             "an unrelated target becomes HEAD's parent"
         );
-        assert_eq!(repo.head_id()?.detach(), moved);
+        assert_eq!(repo.head_id()?, moved);
         Ok(())
     }
 
@@ -5008,7 +4993,7 @@ mod tests {
         let primary = outcome.map(middle).context("the primary leaf is retained")?;
         for name in ["refs/heads/main", "refs/custom/tip"] {
             assert_eq!(
-                repo.find_reference(name)?.id().detach(),
+                repo.find_reference(name)?.id(),
                 primary,
                 "{name} follows the first continuation"
             );
@@ -5164,7 +5149,7 @@ mod tests {
             "the visible stack starts at the latest hidden branch tip"
         );
         assert_eq!(
-            repo.find_reference("refs/heads/hidden")?.id().detach(),
+            repo.find_reference("refs/heads/hidden")?.id(),
             onto,
             "the hidden branch itself remains untouched"
         );
@@ -5211,12 +5196,12 @@ mod tests {
             Err(err) => err,
         };
         assert_eq!(
-            repo.find_reference("refs/heads/main")?.id().detach(),
+            repo.find_reference("refs/heads/main")?.id(),
             base,
             "a concurrent branch update wins"
         );
         assert_eq!(
-            repo.find_reference("refs/notes/review")?.id().detach(),
+            repo.find_reference("refs/notes/review")?.id(),
             notes_before,
             "a failed branch transaction cannot partially advance the notes ref"
         );
@@ -5266,7 +5251,7 @@ mod tests {
         let mut deleting = capture_refs(&repo, &[middle, tip], &[tip])?;
         let linked_ref = deleting
             .iter_mut()
-            .find(|reference| reference.name.as_bstr() == b"refs/heads/linked")
+            .find(|reference| reference.name == "refs/heads/linked")
             .expect("the linked branch is captured");
         linked_ref.new = None;
         let err = match perform_plan(
@@ -5291,7 +5276,7 @@ mod tests {
         let mut moving = capture_refs(&repo, &[middle, tip], &[tip])?;
         let linked_ref = moving
             .iter_mut()
-            .find(|reference| reference.name.as_bstr() == b"refs/heads/linked")
+            .find(|reference| reference.name == "refs/heads/linked")
             .expect("the linked branch is captured");
         linked_ref.new = None;
         linked_ref.placement = Some(PlanParent::Step(0));
@@ -5308,7 +5293,7 @@ mod tests {
         )?
         .complete()?;
         assert_eq!(
-            repo.find_reference("refs/heads/linked")?.id().detach(),
+            repo.find_reference("refs/heads/linked")?.id(),
             outcome.map(middle).expect("the middle commit is retained"),
             "the linked branch moves to its explicit todo destination"
         );
@@ -5356,7 +5341,7 @@ mod tests {
         )?
         .complete()?;
         assert_eq!(
-            repo.find_reference("refs/patches/example")?.id().detach(),
+            repo.find_reference("refs/patches/example")?.id(),
             base,
             "the dropped commit's ref does not keep the old history alive"
         );
@@ -5394,9 +5379,9 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.to_string().contains("cannot drop stashed commit"));
-        assert_eq!(repo.head_id()?.detach(), tip, "HEAD remains at the original tip");
+        assert_eq!(repo.head_id()?, tip, "HEAD remains at the original tip");
         assert_eq!(
-            repo.find_reference(name.as_ref())?.id().detach(),
+            repo.find_reference(name.as_ref())?.id(),
             saved,
             "the stash association remains unchanged"
         );
@@ -5520,7 +5505,7 @@ mod tests {
         let combined = outcome.map(tip).context("the first member remains")?;
         assert_eq!(outcome.map(middle), Some(combined));
         assert_eq!(
-            repo.find_commit(combined)?.tree_id()?.detach(),
+            repo.find_commit(combined)?.tree_id()?,
             old_tip_tree,
             "reordered source deltas are composed into the combined tree"
         );

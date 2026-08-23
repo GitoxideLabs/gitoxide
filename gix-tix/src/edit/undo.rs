@@ -979,7 +979,7 @@ mod tests {
         let redo = plan_redo(&repo)?.expect("one operation can be redone");
         assert_eq!(redo.position.title, "create branch");
         redo.apply(&repo)?;
-        assert_eq!(repo.find_reference(branch.as_ref())?.id().detach(), head);
+        assert_eq!(repo.find_reference(branch.as_ref())?.id(), head);
         assert!(plan_redo(&repo)?.is_none(), "the tip has no redo operation");
         Ok(())
     }
@@ -1080,7 +1080,7 @@ mod tests {
         .expect("the deletion creates an entry");
         plan_undo(&repo)?.expect("the deletion can be undone").apply(&repo)?;
         assert_eq!(
-            repo.find_reference(branch.as_ref())?.id().detach(),
+            repo.find_reference(branch.as_ref())?.id(),
             head,
             "undo recreates the deleted reference"
         );

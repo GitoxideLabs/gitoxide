@@ -443,18 +443,14 @@ mod tests {
         let started = start(fixture.path(), false, &graph, tip, base)?;
 
         let repo = crate::test_repository::open(fixture.path())?;
-        assert_eq!(
-            repo.head_id()?.detach(),
-            started.commit,
-            "HEAD selects the review commit"
-        );
+        assert_eq!(repo.head_id()?, started.commit, "HEAD selects the review commit");
         assert_eq!(
             repo.find_commit(started.commit)?.tree_id()?,
             repo.find_commit(base)?.tree_id()?
         );
         let review_ref = repo.find_reference(started.reference.as_ref())?;
         assert_eq!(
-            review_ref.id().detach(),
+            review_ref.id(),
             tip,
             "the review resource remains anchored to the reviewed commit"
         );
@@ -464,13 +460,13 @@ mod tests {
         assert_eq!(pins.len(), 1, "review start preserves its departure with a pin");
         assert_eq!(pins[0].id, tip);
         assert_eq!(
-            pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
-            Some(BStr::new(b"refs/heads/main")),
+            pins[0].target.try_name().expect("the pin is symbolic"),
+            "refs/heads/main",
             "an attached departure uses a symbolic pin"
         );
         assert_eq!(
-            return_to(&commit)?.as_ref().map(gix::refs::FullName::as_bstr),
-            Some(pins[0].name.as_bstr()),
+            return_to(&commit)?.expect("the review records a return"),
+            pins[0].name,
             "the review commit records its departure pin"
         );
         assert_eq!(
@@ -500,8 +496,8 @@ mod tests {
         let amended_commit = repo.find_commit(amended)?.decode()?.into_owned()?;
         assert!(is_review(&amended_commit));
         assert_eq!(
-            return_to(&amended_commit)?.as_ref().map(gix::refs::FullName::as_bstr),
-            Some(pins[0].name.as_bstr()),
+            return_to(&amended_commit)?.expect("the review records a return"),
+            pins[0].name,
             "review amendments preserve the return action"
         );
         assert!(run(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty());
@@ -579,7 +575,7 @@ mod tests {
         super::super::time_travel::checkout_plan(fixture.path(), false, &finished.outcome, &[], false)?;
         let finished = finished.commit;
         let repo = crate::test_repository::open(fixture.path())?;
-        assert_eq!(repo.head_id()?.detach(), finished);
+        assert_eq!(repo.head_id()?, finished);
         assert_eq!(
             repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
             None,
@@ -666,8 +662,8 @@ mod tests {
         assert_eq!(pins.len(), 1, "review start preserves the checked-out descendant tip");
         assert_eq!(pins[0].id, old_successor);
         assert_eq!(
-            pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
-            Some(BStr::new(b"refs/heads/main")),
+            pins[0].target.try_name().expect("the pin is symbolic"),
+            "refs/heads/main",
             "an attached review departure remains attached through a symbolic pin"
         );
         drop(repo);
@@ -714,11 +710,11 @@ mod tests {
         let repo = open()?;
         let successor = repo.find_reference("refs/heads/main")?.id().detach();
         assert_eq!(
-            repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
-            Some(BStr::new(b"refs/heads/main")),
+            repo.head()?.referent_name().expect("HEAD is attached"),
+            "refs/heads/main",
             "finishing returns to the branch that contained the reviewed commit"
         );
-        assert_eq!(repo.head_id()?.detach(), successor);
+        assert_eq!(repo.head_id()?, successor);
         assert!(
             history::all_pins(&repo)?.is_empty(),
             "returning consumes the departure pin"
@@ -808,10 +804,10 @@ mod tests {
 
         let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(returned, tip);
-        assert_eq!(repo.head_id()?.detach(), tip);
+        assert_eq!(repo.head_id()?, tip);
         assert_eq!(
-            repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
-            Some(BStr::new(b"refs/heads/main")),
+            repo.head()?.referent_name().expect("HEAD is attached"),
+            "refs/heads/main",
             "cancelling reattaches the original branch"
         );
         assert!(history::all_pins(&repo)?.is_empty(), "the return consumes its pin");
@@ -839,7 +835,7 @@ mod tests {
         super::super::time_travel::checkout_review_return(fixture.path(), false, &return_to, &[], false)?;
         let repo = crate::test_repository::open(fixture.path())?;
         assert!(repo.head()?.is_detached(), "cancelling restores detached HEAD");
-        assert_eq!(repo.head_id()?.detach(), tip);
+        assert_eq!(repo.head_id()?, tip);
         assert!(history::all_pins(&repo)?.is_empty());
         Ok(())
     }

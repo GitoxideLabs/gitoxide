@@ -423,7 +423,7 @@ mod tests {
         let repository = crate::test_repository::open(path)?;
         assert_eq!(
             crate::history::all_pins(&repository)?[0].id,
-            repository.rev_parse_single("side")?.detach(),
+            repository.rev_parse_single("side")?,
             "the explicit unrelated pin follows the rewritten commit"
         );
         Ok(())

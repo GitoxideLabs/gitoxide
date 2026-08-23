@@ -1913,7 +1913,7 @@ mod tests {
 
         assert!(repo.head()?.referent_name().is_none(), "HEAD is detached");
         assert_eq!(
-            repo.find_reference("refs/heads/new-1")?.id().detach(),
+            repo.find_reference("refs/heads/new-1")?.id(),
             outcome.map(middle).context("the middle commit is retained")?,
             "the new branch line points at the following command below it"
         );
@@ -1959,18 +1959,18 @@ mod tests {
         super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
 
         assert_eq!(
-            repo.find_reference("refs/heads/outside")?.id().detach(),
+            repo.find_reference("refs/heads/outside")?.id(),
             outcome.map(middle).context("the middle commit is retained")?,
             "an unmarked out-of-scope ref moves like a generated ref"
         );
         assert_eq!(
-            repo.find_reference("refs/patches/attach")?.id().detach(),
+            repo.find_reference("refs/patches/attach")?.id(),
             selected,
             "the marked out-of-scope ref moves to the selected result"
         );
         assert_eq!(
-            repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
-            Some(b"refs/patches/attach".as_bstr()),
+            repo.head()?.referent_name().expect("HEAD is attached"),
+            "refs/patches/attach",
             "HEAD attaches to an editable ref outside refs/heads"
         );
         assert_eq!(
@@ -2016,11 +2016,7 @@ mod tests {
 
         super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
 
-        assert_eq!(
-            repo.head_id()?.detach(),
-            selected,
-            "HEAD reaches the rewritten successor"
-        );
+        assert_eq!(repo.head_id()?, selected, "HEAD reaches the rewritten successor");
         assert!(
             crate::history::all_pins(&repo)?.iter().all(|pin| pin.id != tip),
             "the superseded detached HEAD is not retained through a pin"

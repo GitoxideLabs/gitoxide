@@ -7617,7 +7617,7 @@ mod tests {
             .expect("the external amend was added to the undo queue")
             .apply(&repository)?;
         assert_eq!(
-            repository.head_id()?.detach(),
+            repository.head_id()?,
             accepted,
             "undo restores the materialized conflict commit"
         );
@@ -10165,11 +10165,7 @@ mod tests {
         edit::time_travel::checkout_plan(fixture.path(), false, &outcome, &[], false)?;
 
         let repository = test_repository::open(fixture.path())?;
-        assert_eq!(
-            repository.head_id()?.detach(),
-            resolved,
-            "HEAD selects the resolved commit"
-        );
+        assert_eq!(repository.head_id()?, resolved, "HEAD selects the resolved commit");
         for (path, expected) in [
             (conflict_path, b"resolved\n".as_slice()),
             ("already-staged", b"staged\n"),

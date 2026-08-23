@@ -1212,12 +1212,12 @@ mod tests {
         let copied = repository.head_id()?.detach();
         assert!(repository.head()?.is_detached(), "the new copy is checked out detached");
         assert_eq!(
-            repository.find_reference("refs/heads/main")?.id().detach(),
+            repository.find_reference("refs/heads/main")?.id(),
             source,
             "the source branch remains at the original occurrence"
         );
         assert_eq!(
-            repository.find_reference("refs/heads/excluded")?.id().detach(),
+            repository.find_reference("refs/heads/excluded")?.id(),
             excluded_before,
             "an unpinned branch outside the command view is not rewritten"
         );
@@ -1248,8 +1248,8 @@ mod tests {
         let pins = crate::history::all_pins(&repository)?;
         assert_eq!(pins.len(), 1, "the previous checkout receives one HEAD pin");
         assert_eq!(
-            pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
-            Some(gix::bstr::BStr::new(b"refs/heads/destination")),
+            pins[0].target.try_name().expect("the pin is symbolic"),
+            "refs/heads/destination",
             "the HEAD pin remembers the destination branch"
         );
 
@@ -1258,25 +1258,22 @@ mod tests {
             .apply(&repository)?;
         let repository = crate::test_repository::open(path)?;
         assert_eq!(
-            repository.head_id()?.detach(),
+            repository.head_id()?,
             destination_before,
             "undo restores the previous checkout"
         );
         assert_eq!(
-            repository.head()?.referent_name().map(ToOwned::to_owned),
-            Some("refs/heads/destination".try_into().expect("valid branch name")),
+            repository.head()?.referent_name().expect("HEAD is attached"),
+            "refs/heads/destination",
             "undo reattaches HEAD"
         );
         assert_eq!(
-            repository.find_reference("refs/heads/destination")?.id().detach(),
+            repository.find_reference("refs/heads/destination")?.id(),
             destination_before,
             "undo restores the target branch"
         );
-        assert_eq!(repository.find_reference("refs/heads/main")?.id().detach(), source);
-        assert_eq!(
-            repository.find_reference("refs/heads/excluded")?.id().detach(),
-            excluded_before
-        );
+        assert_eq!(repository.find_reference("refs/heads/main")?.id(), source);
+        assert_eq!(repository.find_reference("refs/heads/excluded")?.id(), excluded_before);
         assert!(
             crate::history::all_pins(&repository)?.is_empty(),
             "undo removes the checkout pin"
@@ -1398,7 +1395,7 @@ mod tests {
         .expect_err("copy-insert requires a checkout");
         assert!(format!("{err:#}").contains("requires a worktree"));
         assert_eq!(
-            crate::test_repository::open(fixture.path())?.head_id()?.detach(),
+            crate::test_repository::open(fixture.path())?.head_id()?,
             before,
             "the attached branch is unchanged"
         );
@@ -1579,7 +1576,7 @@ mod tests {
         assert!(linked.try_find_reference(crate::edit::undo::TIP_REF)?.is_none());
         assert!(linked.try_find_reference(crate::edit::undo::CURSOR_REF)?.is_none());
         assert_eq!(
-            linked.find_reference(retained_ref.as_ref())?.id().detach(),
+            linked.find_reference(retained_ref.as_ref())?.id(),
             linked_target,
             "clearing history does not apply or reverse a recorded operation"
         );

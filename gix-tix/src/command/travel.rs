@@ -326,7 +326,7 @@ mod tests {
         );
         run(repository, args(&change_id.to_reverse_hex().to_string()))?;
         assert_eq!(
-            crate::test_repository::open(path)?.head_id()?.detach(),
+            crate::test_repository::open(path)?.head_id()?,
             topic,
             "the visible change ID resolves to the already checked-out topic"
         );
@@ -344,21 +344,21 @@ mod tests {
         run(repository, args(&change_id))?;
 
         let repository = crate::test_repository::open(fixture.path())?;
-        assert_eq!(repository.head_id()?.detach(), middle);
+        assert_eq!(repository.head_id()?, middle);
         assert!(repository.head()?.is_detached());
         let pins = crate::history::all_pins(&repository)?;
         assert_eq!(pins.len(), 1, "leaving the attached tip creates one source pin");
         assert_eq!(
-            pins[0].target.try_name().expect("the source pin is symbolic").as_bstr(),
-            b"refs/heads/main".as_bstr(),
+            pins[0].target.try_name().expect("the source pin is symbolic"),
+            "refs/heads/main",
             "the source pin follows the departed branch"
         );
 
         run(repository, args("main"))?;
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
-            repository.head()?.referent_name().map(|name| name.as_bstr().to_owned()),
-            Some(b"refs/heads/main".as_bstr().to_owned()),
+            repository.head()?.referent_name().expect("HEAD is attached"),
+            "refs/heads/main",
             "travelling to the pinned destination reattaches HEAD"
         );
         assert!(crate::history::all_pins(&repository)?.is_empty());
@@ -391,7 +391,7 @@ mod tests {
         assert!(format!("{err:#}").contains("must be pinned"));
         let repository = crate::test_repository::open(path)?;
         assert_eq!(
-            repository.head_id()?.detach(),
+            repository.head_id()?,
             before_rejected,
             "the rejected command does not move HEAD"
         );
@@ -433,7 +433,7 @@ mod tests {
 
         run(crate::test_repository::open(path)?, relative_args(To::Tip))?;
         assert_eq!(
-            crate::test_repository::open(path)?.head_id()?.detach(),
+            crate::test_repository::open(path)?.head_id()?,
             tip,
             "tip travel at the attached tip is a no-op"
         );
@@ -449,19 +449,19 @@ mod tests {
 
         run(crate::test_repository::open(path)?, relative_args(To::Parent))?;
         assert_eq!(
-            crate::test_repository::open(path)?.head_id()?.detach(),
+            crate::test_repository::open(path)?.head_id()?,
             middle,
             "parent travels down by one commit"
         );
         run(crate::test_repository::open(path)?, relative_args(To::First))?;
         assert_eq!(
-            crate::test_repository::open(path)?.head_id()?.detach(),
+            crate::test_repository::open(path)?.head_id()?,
             root,
             "first reaches this component's oldest commit"
         );
         run(crate::test_repository::open(path)?, relative_args(To::First))?;
         assert_eq!(
-            crate::test_repository::open(path)?.head_id()?.detach(),
+            crate::test_repository::open(path)?.head_id()?,
             root,
             "first travel at the oldest commit is a no-op"
         );
@@ -478,16 +478,16 @@ mod tests {
 
         run(crate::test_repository::open(path)?, relative_args(To::Child))?;
         assert_eq!(
-            crate::test_repository::open(path)?.head_id()?.detach(),
+            crate::test_repository::open(path)?.head_id()?,
             middle,
             "child travels up by one commit"
         );
         run(crate::test_repository::open(path)?, relative_args(To::Tip))?;
         let repository = crate::test_repository::open(path)?;
-        assert_eq!(repository.head_id()?.detach(), tip, "tip reaches this component's leaf");
+        assert_eq!(repository.head_id()?, tip, "tip reaches this component's leaf");
         assert_eq!(
-            repository.head()?.referent_name().map(|name| name.as_bstr().to_owned()),
-            Some(b"refs/heads/main".as_bstr().to_owned()),
+            repository.head()?.referent_name().expect("HEAD is attached"),
+            "refs/heads/main",
             "travelling to the branch tip reattaches HEAD"
         );
         Ok(())
@@ -515,7 +515,7 @@ mod tests {
         run(crate::test_repository::open(path)?, relative_args(To::First))?;
 
         assert_eq!(
-            crate::test_repository::open(path)?.head_id()?.detach(),
+            crate::test_repository::open(path)?.head_id()?,
             first,
             "first selects the oldest commit displayed above the inferred base"
         );

@@ -586,7 +586,7 @@ mod tests {
         let materialized = crate::test_repository::open(fixture.path())?;
         let conflict_commit = materialized.head_commit()?;
         assert_eq!(
-            conflict_commit.tree_id()?.detach(),
+            conflict_commit.tree_id()?,
             conflict_commit
                 .parent_ids()
                 .next()
