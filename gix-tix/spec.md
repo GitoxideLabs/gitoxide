@@ -454,8 +454,13 @@ linear segment of at least two commits is represented by a selectable hollow
 node followed by its exact commit count, such as `○ [12]`; a singleton remains
 a full commit row. Pressing Enter on a summary expands that one segment in place;
 expansions accumulate until the display is the ordinary title-aligned history.
-Topological navigation treats each unexpanded segment summary as one node and
-does not expand it implicitly.
+Topological navigation peels one connected commit from a segment per step.
+Moving toward a summary exposes and selects its connected boundary commit.
+Starting on a summary instead exposes the boundary in the requested direction
+and keeps the remaining summary selected, so repeated steps progressively open
+it; when only one member remains, that ordinary commit inherits the selection.
+Filtered target selection still exposes ineligible boundary commits one at a
+time without selecting them.
 
 Modal review and rewrite-target pickers retain the
 compressed projection so its points of interest remain available as targets,

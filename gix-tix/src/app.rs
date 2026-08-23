@@ -1275,18 +1275,18 @@ impl App {
     }
 
     pub(crate) fn history_entry_selectable(&self, display: usize) -> bool {
-        let selectable = |index| {
-            self.reachable_rows.as_ref().is_none()
-                || (self.is_row_reachable(index) && self.reachable_row_selectable(index))
-        };
         match self.history_entry(display) {
-            Some(HistoryEntry::Commit(index)) => selectable(index),
+            Some(HistoryEntry::Commit(index)) => self.history_row_selectable(index),
             Some(HistoryEntry::Segment { .. }) => self
                 .active_compressed_history()
                 .and_then(|history| history.members.get(display))
-                .is_some_and(|members| members.iter().copied().any(selectable)),
+                .is_some_and(|members| members.iter().copied().any(|index| self.history_row_selectable(index))),
             None => false,
         }
+    }
+
+    fn history_row_selectable(&self, index: usize) -> bool {
+        self.reachable_rows.as_ref().is_none() || (self.is_row_reachable(index) && self.reachable_row_selectable(index))
     }
 
     fn topological_positions(&self) -> HashMap<ObjectId, usize> {
@@ -1377,6 +1377,9 @@ impl App {
         let Some(selected) = self.selected_history_index() else {
             return false;
         };
+        if matches!(self.history_entry(selected), Some(HistoryEntry::Segment { .. })) {
+            return self.peel_compressed_segment(selected, !down, false).is_some();
+        }
         let next = if down {
             self.topological_parent(selected, None)
         } else {
@@ -1384,8 +1387,60 @@ impl App {
             children.get(self.topological_child_index(selected, &children)).copied()
         };
         let Some(next) = next else { return false };
+        if matches!(self.history_entry(next), Some(HistoryEntry::Segment { .. })) {
+            let source = self.history_row(selected).map(|row| row.id);
+            let peeled = self.peel_compressed_segment(next, down, true);
+            if !down && let Some((source, peeled)) = source.zip(peeled) {
+                self.topo_children.insert(source, self.rows[peeled].id);
+            }
+            return peeled.is_some();
+        }
         self.select_history_index(next);
         true
+    }
+
+    fn peel_compressed_segment(&mut self, display: usize, newest: bool, select_peeled: bool) -> Option<usize> {
+        let members = self
+            .active_compressed_history()
+            .filter(|history| matches!(history.entries.get(display), Some(HistoryEntry::Segment { .. })))?
+            .members
+            .get(display)?
+            .clone();
+        let peeled = if newest { *members.first()? } else { *members.last()? };
+        let remaining = if newest {
+            *members.get(1)?
+        } else {
+            *members.get(members.len().checked_sub(2)?)?
+        };
+        let peeled_selectable = self.history_row_selectable(peeled);
+        let remaining_selectable = members
+            .iter()
+            .copied()
+            .filter(|index| *index != peeled)
+            .any(|index| self.history_row_selectable(index));
+        if !peeled_selectable && !remaining_selectable {
+            return None;
+        }
+
+        self.compressed_expanded.insert(self.rows[peeled].id);
+        self.compressed_segment = None;
+        if select_peeled {
+            self.rebuild_compressed_history();
+            if peeled_selectable {
+                self.select(peeled);
+            } else {
+                self.ensure_visible();
+            }
+        } else if members.len() == 2 || !remaining_selectable {
+            self.rebuild_compressed_history();
+            self.select(if remaining_selectable { remaining } else { peeled });
+        } else {
+            self.selected = None;
+            self.compressed_segment = Some(self.rows[remaining].id);
+            self.rebuild_compressed_history();
+            self.ensure_visible();
+        }
+        Some(peeled)
     }
 
     fn adjust_topological_child(&mut self, right: bool) {
@@ -1457,10 +1512,11 @@ impl App {
         else {
             return false;
         };
-        let Some(selected) = members.iter().copied().find(|index| {
-            self.reachable_rows.as_ref().is_none()
-                || (self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
-        }) else {
+        let Some(selected) = members
+            .iter()
+            .copied()
+            .find(|index| self.history_row_selectable(*index))
+        else {
             return false;
         };
         self.compressed_expanded
@@ -3948,6 +4004,23 @@ mod tests {
         app.finish_lane_computation(rows, graph, lane_time);
     }
 
+    fn compressed_linear_app() -> App {
+        let mut app = App::new(3);
+        app.extend_commits(vec![
+            row_with_parents(6, &[5]),
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.set_view_tips(&[id(6)]);
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+        app
+    }
+
     #[test]
     fn undo_and_redo_retain_their_position_until_another_action() {
         let mut app = App::new(2);
@@ -5629,44 +5702,121 @@ mod tests {
     }
 
     #[test]
-    fn topological_navigation_walks_compressed_segments_as_nodes() {
-        let mut app = App::new(3);
-        app.extend_commits(vec![
-            row_with_parents(6, &[5]),
-            row_with_parents(5, &[4]),
-            row_with_parents(4, &[3]),
-            row_with_parents(3, &[2]),
-            row_with_parents(2, &[1]),
-            row(1),
-        ]);
-        complete(&mut app);
-        app.set_view_tips(&[id(6)]);
-        app.alignment = Alignment::None;
-        app.update(Action::ToggleAlign);
+    fn topological_navigation_peels_and_selects_commits_towards_segments() {
+        let mut app = compressed_linear_app();
         let compressed_len = app.history_len();
         assert!(compressed_len < app.rows.len());
 
         app.update(Action::TopologicalDown);
-        assert!(
-            app.selected_is_segment(),
-            "the compressed quotient edge reaches its summary"
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(5)),
+            "moving rootward exposes and selects the segment's connected commit"
         );
         assert_eq!(
             app.history_len(),
-            compressed_len,
-            "topo movement does not expand a summary"
+            compressed_len + 1,
+            "one topological step exposes exactly one commit"
         );
         app.update(Action::TopologicalDown);
         assert_eq!(
-            app.rows[app.selected.expect("the compressed root is selected")].id,
-            id(1)
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(4)),
+            "repeating the movement peels the next connected commit"
         );
+        let selected = app.selected_history_index().expect("the peeled commit is displayed");
+        assert!(
+            (app.offset..app.offset + app.viewport_rows).contains(&selected),
+            "the peeled selection remains inside the viewport"
+        );
+
+        let mut app = compressed_linear_app();
+        app.update(Action::Last);
+        app.update(Action::TopologicalUp);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(2)),
+            "moving leafward exposes and selects the opposite segment boundary"
+        );
+    }
+
+    #[test]
+    fn topological_navigation_peels_while_retaining_a_segment_selection() {
+        let mut app = compressed_linear_app();
+        app.update(Action::MoveDown);
+        assert!(app.selected_is_segment(), "ordinary movement selects the summary");
+
+        for peeled in [2, 3] {
+            app.update(Action::TopologicalDown);
+            assert!(app.selected_is_segment(), "the remaining summary stays selected");
+            let canonical = app
+                .rows
+                .iter()
+                .position(|row| row.id == id(peeled))
+                .expect("the peeled commit exists");
+            assert!(
+                app.history_index(canonical).is_some(),
+                "the rootward boundary commit is exposed"
+            );
+        }
+        app.update(Action::TopologicalDown);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(5)),
+            "the remaining singleton replaces the vanished summary selection"
+        );
+
+        let mut app = compressed_linear_app();
+        app.update(Action::MoveDown);
         app.update(Action::TopologicalUp);
         assert!(
             app.selected_is_segment(),
-            "the quotient edge is traversable in both directions"
+            "the summary remains selected after a leafward peel"
         );
-        assert_eq!(app.history_len(), compressed_len);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            None,
+            "the exposed leafward commit is not selected"
+        );
+        let peeled = app
+            .rows
+            .iter()
+            .position(|row| row.id == id(5))
+            .expect("the peeled commit exists");
+        assert!(
+            app.history_index(peeled).is_some(),
+            "the leafward boundary commit is exposed"
+        );
+    }
+
+    #[test]
+    fn topological_peeling_does_not_select_ineligible_segment_members() {
+        let mut app = compressed_linear_app();
+        app.reachable_rows = Some(vec![true, false, false, true, false, true]);
+
+        for peeled in [5, 4] {
+            app.update(Action::TopologicalDown);
+            assert_eq!(
+                app.selected.map(|index| app.rows[index].id),
+                Some(id(6)),
+                "an ineligible boundary leaves the current eligible commit selected"
+            );
+            let canonical = app
+                .rows
+                .iter()
+                .position(|row| row.id == id(peeled))
+                .expect("the peeled commit exists");
+            assert!(
+                app.history_index(canonical).is_some(),
+                "the ineligible boundary is still exposed one commit at a time"
+            );
+        }
+        app.update(Action::TopologicalDown);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(3)),
+            "the first eligible peeled commit becomes selected"
+        );
     }
 
     #[test]
