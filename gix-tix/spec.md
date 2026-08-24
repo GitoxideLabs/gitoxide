@@ -417,6 +417,7 @@ without trading responsiveness for metadata that is not visible.
 | `v` | Toggle the history-display key group. Pressing `v` again closes it. |
 | `v d` | Cycle author dates, committer dates, and no dates. |
 | `v i` | Cycle commit IDs, change IDs, and no explicit IDs. |
+| `v c` | Prompt for a displayed entry number and select it within the current tree. |
 | `v s` | Toggle full actors/emails and titles. |
 | `v e` | Cycle all attribution, author only, and no names, skipping inert states. |
 | `v t` | Toggle attribution trailers. |
@@ -522,6 +523,9 @@ The Enter key is written as `<enter>` throughout.
   last exact command submitted through this menu is preselected when it is still
   available; an available contextual opposite is not substituted. Typing a query
   replaces that recalled selection with the first matching entry.
+- View Select, also available as `v c`, prompts for a `#N` history position.
+  `<enter>` moves the cursor to that number in the selected row's current rooted
+  tree, Escape cancels, and a number belonging only to another tree is rejected.
 
 ### Time-travel
 
@@ -1228,8 +1232,9 @@ space first; changes blocks adapt within the remaining history width.
 - The top-level `v`, `a`, `n`, and `?` keys are reserved for their groups.
   Pressing one while another group is open switches directly to that group;
   `? e` cycles the changes panes.
-- While the `v` group is open, `d`, `i`, `s`, `e`, `m`, `t`, `r`, and `h` control
-  dates, IDs, emails, names, mailmap, trailers, references, and hidden commits.
+- While the `v` group is open, `d`, `i`, `c`, `s`, `e`, `m`, `t`, `r`, and `h`
+  control dates, IDs, entry selection, emails, names, mailmap, trailers,
+  references, and hidden commits.
 - The `n` in `enrich` toggles its shortcut group. On any commit eligible for rewording,
   `n t` toggles `[commit] todo`, preserving a saved note, and `n o` opens
   `[commit] note` in Git's editor as Markdown. Saving or removing a note preserves

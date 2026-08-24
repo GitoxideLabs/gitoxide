@@ -2019,6 +2019,7 @@ fn event_loop(
         }
         if focused
             && !diagnostic_input
+            && !app.entry_selection_active()
             && opens_command_menu(&terminal_event, app.actions_expanded, command_picker.is_open())
         {
             let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
@@ -2087,6 +2088,9 @@ fn event_loop(
                     };
                     let repeats_history = app.changes_focus.is_none() && repeats_viewport(&action);
                     (Some(action), repeats_history, true, true)
+                }
+                TerminalEvent::Paste(pasted) if app.entry_selection_active() => {
+                    (Some(Action::SelectEntryInput(pasted)), false, false, false)
                 }
                 TerminalEvent::Paste(pasted) => {
                     let action = (|| {
@@ -7069,6 +7073,9 @@ fn diagnostic_action(key: KeyEvent, app: &App) -> Option<Action> {
 }
 
 fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
+    if app.entry_selection_active() {
+        return entry_selection_action(key);
+    }
     if key.kind != KeyEventKind::Release {
         let shifted =
             key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('H' | 'J' | 'K' | 'L'));
@@ -7131,6 +7138,25 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
     )
 }
 
+fn entry_selection_action(key: KeyEvent) -> Option<Action> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
+        KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => Some(Action::Quit),
+        KeyCode::Esc => Some(Action::Cancel),
+        KeyCode::Enter => Some(Action::SubmitEntrySelection),
+        KeyCode::Backspace => Some(Action::SelectEntryBackspace),
+        KeyCode::Char(digit)
+            if digit.is_ascii_digit() && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(Action::SelectEntryInput(digit.to_string()))
+        }
+        _ => None,
+    }
+}
+
 fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_focused: bool) -> bool {
     matches!(
         action,
@@ -7162,6 +7188,10 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::ToggleMailmap
                 | Action::CycleRefs
                 | Action::ToggleRefs
+                | Action::SelectEntry
+                | Action::SelectEntryInput(_)
+                | Action::SelectEntryBackspace
+                | Action::SubmitEntrySelection
                 | Action::ToggleHistoryDisplay
                 | Action::ToggleInformation
                 | Action::ToggleAlign
@@ -7248,6 +7278,7 @@ fn action_with_shortcut_groups(
         KeyCode::End | KeyCode::Char('G') => Some(Action::Last),
         KeyCode::Char('d') if history_display_expanded => Some(Action::ToggleDate),
         KeyCode::Char('i') if history_display_expanded => Some(Action::CycleIds),
+        KeyCode::Char('c') if history_display_expanded => Some(Action::SelectEntry),
         KeyCode::Char('s') if history_display_expanded => Some(Action::ToggleEmail),
         KeyCode::Char('e') if history_display_expanded => Some(Action::ToggleName),
         KeyCode::Char('t') if history_display_expanded => Some(Action::ToggleTrailers),
@@ -8979,6 +9010,7 @@ mod tests {
         for (key, expected) in [
             ('d', Action::ToggleDate),
             ('i', Action::CycleIds),
+            ('c', Action::SelectEntry),
             ('s', Action::ToggleEmail),
             ('e', Action::ToggleName),
             ('t', Action::ToggleTrailers),
@@ -9202,6 +9234,25 @@ mod tests {
             action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
             Some(Action::CycleDuplicate)
         );
+    }
+
+    #[test]
+    fn entry_selection_accepts_only_its_numeric_input_and_exit_keys() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            entry_selection_action(key(KeyCode::Char('4'))),
+            Some(Action::SelectEntryInput("4".into()))
+        );
+        assert_eq!(
+            entry_selection_action(key(KeyCode::Backspace)),
+            Some(Action::SelectEntryBackspace)
+        );
+        assert_eq!(
+            entry_selection_action(key(KeyCode::Enter)),
+            Some(Action::SubmitEntrySelection)
+        );
+        assert_eq!(entry_selection_action(key(KeyCode::Esc)), Some(Action::Cancel));
+        assert_eq!(entry_selection_action(key(KeyCode::Char('j'))), None);
     }
 
     #[test]
