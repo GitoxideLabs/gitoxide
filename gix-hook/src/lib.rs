@@ -74,6 +74,18 @@ fn is_executable_file(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
+#[cfg(windows)]
+fn is_executable_file(path: &Path) -> bool {
+    if std::fs::metadata(path).is_ok_and(|meta| meta.is_file()) {
+        match meta.extension().and_then(|ext| ext.to_str().lowercase()) {
+            Some(ext) => {
+                matches!("" | "exe")
+            },
+            None => true,
+        }
+    }
+}
+
 /// Whether `s` contains a byte in the same control-byte range `gix_validate::reference::name()`
 /// rejects (`\0..=\x1F` or `\x7F`), for fields this crate can't run full ref-name validation on
 /// but still shouldn't hand a hook process control bytes in.
