@@ -512,6 +512,59 @@ mod tests {
     }
 
     #[test]
+    fn review_amend_does_not_cross_its_boundary_when_checking_pending_ancestry() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let reviewed = repo.head_id()?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let mut pending = repo.find_commit(middle)?.decode()?.into_owned()?;
+        pending
+            .extra_headers
+            .push(("tix-rebase-parent".into(), base.to_string().into()));
+        let pending = repo.write_object(&pending)?.detach();
+        let mut review = repo.find_commit(middle)?.decode()?.into_owned()?;
+        review.parents = [pending].into_iter().collect();
+        review.message = "review".into();
+        review.extra_headers.clear();
+        review
+            .extra_headers
+            .push(("tix-rebase".into(), "onto refs/worktree/tix/review/1".into()));
+        let review = repo.write_object(&review)?.detach();
+        repo.reference(
+            "refs/worktree/tix/review/1",
+            reviewed,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "prepare active review",
+        )?;
+        drop(repo);
+        git(fixture.path(), &["checkout", "-q", "--detach", &review.to_string()])?;
+        std::fs::write(fixture.path().join("middle"), b"reviewed\n")?;
+        git(fixture.path(), &["add", "middle"])?;
+
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let amended = perform(repo, &graph, Kind::Amend, None)?.expect("staged review changes amend HEAD");
+        let repo = open(fixture.path())?;
+        let amended_commit = repo.find_commit(amended)?.decode()?.into_owned()?;
+        assert_eq!(
+            amended_commit.parents.first().copied(),
+            Some(pending),
+            "amending the review does not rewrite its pending base"
+        );
+        assert!(
+            super::super::review::is_review(&amended_commit),
+            "amending preserves the review identity"
+        );
+        assert!(
+            super::super::rebase::is_pending(&repo.find_commit(pending)?.decode()?.into_owned()?),
+            "the unrelated pending base remains lazy"
+        );
+        assert_eq!(git(fixture.path(), &["show", "HEAD:middle"])?, b"reviewed\n");
+        Ok(())
+    }
+
+    #[test]
     fn amending_one_worktree_path_preserves_unrelated_staging() -> gix_testtools::Result {
         for (group, expected) in [
             (crate::ChangeGroup::Staged, b"staged\n".as_slice()),

@@ -954,6 +954,8 @@ space first; changes blocks adapt within the remaining history width.
 - At a checked-out review commit, amend is offered only for staged changes and
   consumes only the index tree. It leaves worktree bytes and the review header
   intact, removes signatures, and marks only affected descendants for lazy replay.
+  Pending ancestry below the review boundary remains untouched and does not block
+  the amend.
 - `a r` finishes a selected review when status is completely clean and the current
   worktree HEAD is the review commit or one of its successors. The
   review commit is inserted after its reviewed tip with its exact tree, review

@@ -1090,7 +1090,10 @@ fn perform_inner(
             Some(checkout)
         };
         if let Some(id) = scan_from {
-            reject_pending_checkout_path(&repo, id)?;
+            let review_boundary = (root == Some(checkout)
+                && replacement.as_ref().is_some_and(super::review::is_review))
+            .then_some(checkout);
+            reject_pending_checkout_path(&repo, id, review_boundary)?;
         }
     }
     validate(&repo, graph, &affected, removed, repeat, tree_mode)?;
@@ -1415,6 +1418,7 @@ pub(super) fn finish_review_with_progress(
         reject_pending_checkout_path(
             &repo,
             checkout.as_ref().expect("a non-empty checkout path has a checkout").0,
+            None,
         )?;
     }
     for id in review_ids.iter().chain(&natural_ids) {
@@ -1674,7 +1678,7 @@ pub(crate) fn perform_plan_with_progress(
         && let Some(head) = repo.head()?.id().map(gix::Id::detach)
         && plan.scope.contains(&head)
     {
-        reject_pending_checkout_path(&repo, head)?;
+        reject_pending_checkout_path(&repo, head, None)?;
     }
     let mut eager = HashSet::new();
     let mut cursor = checkout_target;
@@ -2551,12 +2555,19 @@ fn validate(
     Ok(())
 }
 
-fn reject_pending_checkout_path(repo: &gix::Repository, mut id: ObjectId) -> Result<()> {
+fn reject_pending_checkout_path(
+    repo: &gix::Repository,
+    mut id: ObjectId,
+    review_boundary: Option<ObjectId>,
+) -> Result<()> {
     let mut seen = HashSet::new();
     while seen.insert(id) {
         let commit = repo.find_commit(id)?.decode()?.into_owned()?;
         if is_pending(&commit) {
             anyhow::bail!("the current checkout has a pending rebase; time-travel to HEAD before editing it");
+        }
+        if review_boundary == Some(id) {
+            break;
         }
         let Some(parent) = commit.parents.first().copied() else {
             break;
