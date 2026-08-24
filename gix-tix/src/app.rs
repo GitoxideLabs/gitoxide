@@ -363,6 +363,10 @@ pub(crate) enum Action {
     ToggleMailmap,
     CycleRefs,
     ToggleRefs,
+    SelectEntry,
+    SelectEntryInput(String),
+    SelectEntryBackspace,
+    SubmitEntrySelection,
     Refresh,
     ToggleHidden,
     ToggleHistoryDisplay,
@@ -575,6 +579,7 @@ pub(crate) struct App {
     pub copy_feedback: Option<CopyKind>,
     pub(crate) focus_feedback: Option<&'static str>,
     notice: Option<Notice>,
+    entry_selection: Option<String>,
     undo_position: Option<UndoPosition>,
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
@@ -683,6 +688,7 @@ impl App {
             copy_feedback: None,
             focus_feedback: None,
             notice: None,
+            entry_selection: None,
             undo_position: None,
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
@@ -787,24 +793,29 @@ impl App {
     }
 
     pub(crate) fn notice(&self) -> Option<Notice> {
-        let prompt = if self.rebase_continuation_pending() {
+        let prompt = if let Some(entry) = self.entry_selection.as_deref() {
+            Some(format!(
+                "select entry #{} · type number · <enter> jump · Esc cancel",
+                if entry.is_empty() { "_" } else { entry }
+            ))
+        } else if self.rebase_continuation_pending() {
             Some(if self.rebase_continuation_conflicted() {
-                "REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop"
+                "REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop".into()
             } else {
-                "REBASE PAUSED · <enter> continue · Esc stop"
+                "REBASE PAUSED · <enter> continue · Esc stop".into()
             })
         } else if self.pending_rebase_conflict.is_some() {
-            Some("rebase conflict · <enter> checkout for resolution · Esc cancel")
+            Some("rebase conflict · <enter> checkout for resolution · Esc cancel".into())
         } else if self.selected_is_segment() && self.reachable_rows.is_some() {
-            Some("compressed segment · <enter> expand · Esc cancel")
+            Some("compressed segment · <enter> expand · Esc cancel".into())
         } else if self.review_return_selection_active() {
-            Some("review return is missing · j/k select commit · <enter> finish detached · Esc cancel")
+            Some("review return is missing · j/k select commit · <enter> finish detached · Esc cancel".into())
         } else if self.review_selection_active() {
-            Some("review base · j/k select ancestor · <enter> start · Esc cancel")
+            Some("review base · j/k select ancestor · <enter> start · Esc cancel".into())
         } else if self.squash_selection_active() {
-            Some("squash target · j/k select ancestor · <enter> squash · Esc cancel")
+            Some("squash target · j/k select ancestor · <enter> squash · Esc cancel".into())
         } else if self.stack_insert_base.is_some() {
-            Some("stack-insert target · j/k select insertion point · <enter> insert · Esc cancel")
+            Some("stack-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
         } else {
             None
         };
@@ -815,7 +826,7 @@ impl App {
             }),
             (Some(prompt), _) => Some(Notice {
                 kind: NoticeKind::Attention,
-                text: prompt.into(),
+                text: prompt,
             }),
             (None, notice) => notice.cloned(),
         }
@@ -1568,6 +1579,26 @@ impl App {
             .copied()
     }
 
+    pub(crate) fn can_select_entry(&self) -> bool {
+        self.state == State::Complete
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.changes_focus.is_none()
+            && self.reachable_rows.is_none()
+            && self.selected.and_then(|index| self.visual_count(index)).is_some()
+    }
+
+    pub(crate) fn entry_selection_active(&self) -> bool {
+        self.entry_selection.is_some()
+    }
+
+    fn entry_number_target(&self, number: usize) -> Option<usize> {
+        let selected = self.selected?;
+        let base = selected.checked_add(self.visual_count(selected)?)?;
+        self.rows.get(base)?;
+        let target = base.checked_sub(number)?;
+        (self.visual_count(target) == Some(number)).then_some(target)
+    }
+
     pub(crate) fn attributions(&self, row: &CommitRow) -> &[Attribution] {
         debug_assert!(row.metadata_loaded, "visible rows have metadata");
         &self.attributions[row.attributions.clone()]
@@ -1764,6 +1795,45 @@ impl App {
                     RefMode::Default => RefMode::None,
                     RefMode::None => RefMode::All,
                 };
+            }
+            Action::SelectEntry if self.can_select_entry() => self.entry_selection = Some(String::new()),
+            Action::SelectEntryInput(input) if self.entry_selection.is_some() => {
+                let input = input.trim();
+                let digits = input.strip_prefix('#').unwrap_or(input);
+                if !digits.is_empty() {
+                    if digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                        self.entry_selection
+                            .as_mut()
+                            .expect("entry selection was checked above")
+                            .push_str(digits);
+                    } else {
+                        self.leave_attention("entry number must contain only digits");
+                    }
+                }
+            }
+            Action::SelectEntryBackspace if self.entry_selection.is_some() => {
+                self.entry_selection
+                    .as_mut()
+                    .expect("entry selection was checked above")
+                    .pop();
+            }
+            Action::SubmitEntrySelection if self.entry_selection.is_some() => {
+                let input = self
+                    .entry_selection
+                    .as_deref()
+                    .expect("entry selection was checked above");
+                if input.is_empty() {
+                    self.leave_attention("enter an entry number");
+                } else if let Ok(number) = input.parse::<usize>() {
+                    if let Some(target) = self.entry_number_target(number) {
+                        self.entry_selection = None;
+                        self.select(target);
+                    } else {
+                        self.leave_attention(format!("entry #{number} is not in the current tree"));
+                    }
+                } else {
+                    self.leave_attention("entry number is too large");
+                }
             }
             Action::ToggleRefs => match self.ref_mode {
                 RefMode::None => self.ref_mode = self.visible_ref_mode,
@@ -2121,6 +2191,7 @@ impl App {
                 }
             }
             Action::ForceQuit => return vec![Effect::Quit],
+            Action::Cancel if self.entry_selection.is_some() => self.entry_selection = None,
             Action::Cancel
                 if self.review_tip.is_some()
                     || self.review_return.is_some()
@@ -2544,6 +2615,7 @@ impl App {
         self.notes.clear();
         self.clear_enrichments();
         self.graph = None;
+        self.entry_selection = None;
         self.view_tips.clear();
         self.compressed_history = None;
         self.compressed_anchor = None;
@@ -5483,6 +5555,55 @@ mod tests {
         );
         app.update(Action::MoveUpBy(2));
         assert_eq!(app.selected, Some(1));
+    }
+
+    #[test]
+    fn entry_numbers_select_within_the_current_tree() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row(3),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.select_commit(id(1));
+        assert_eq!(app.visual_count(1), Some(1), "the other tree also contains #1");
+        assert_eq!(app.visual_count(3), Some(1), "the current tree contains #1");
+
+        app.update(Action::SelectEntry);
+        app.update(Action::SelectEntryInput("1".into()));
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some("select entry #1 · type number · <enter> jump · Esc cancel".into())
+        );
+        app.update(Action::SubmitEntrySelection);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(2)),
+            "#1 resolves against the selected root instead of another tree"
+        );
+        assert!(!app.entry_selection_active());
+
+        app.update(Action::SelectEntry);
+        app.update(Action::SelectEntryInput("2".into()));
+        app.update(Action::SubmitEntrySelection);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(2)),
+            "a number absent from the current tree keeps the cursor in place"
+        );
+        assert!(app.entry_selection_active(), "an invalid number remains editable");
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some(
+                "select entry #2 · type number · <enter> jump · Esc cancel · entry #2 is not in the current tree"
+                    .into()
+            )
+        );
+        app.update(Action::Cancel);
+        assert!(!app.entry_selection_active());
     }
 
     #[test]
