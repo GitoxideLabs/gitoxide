@@ -2038,7 +2038,7 @@ dependencies = [
 
 [[package]]
 name = "gix-hook"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "gix-command",
  "gix-config",

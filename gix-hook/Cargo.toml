@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-hook"
-version = "0.0.0"
+version = "0.0.1"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project for discovering and executing git hooks"
@@ -21,8 +21,8 @@ sha1 = ["gix-config/sha1", "gix-hash/sha1"]
 sha256 = ["gix-config/sha256", "gix-hash/sha256"]
 
 [dependencies]
-gix-command = { version = "^0.9.2", path = "../gix-command" }
-gix-config = { version = "^0.59.0", path = "../gix-config" }
+gix-command = { version = "^0.10.0", path = "../gix-command" }
+gix-config = { version = "^0.60.0", path = "../gix-config" }
 gix-hash = { version = "^0.26.0", path = "../gix-hash" }
 gix-validate = { version = "^0.11.3", path = "../gix-validate" }
 thiserror = "2.0.18"
