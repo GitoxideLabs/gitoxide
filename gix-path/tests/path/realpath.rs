@@ -6,17 +6,23 @@ use std::{
 use bstr::ByteVec;
 use gix_path::{realpath::Error, realpath_opts};
 
+fn assert_validation<T>(result: Result<T, Error>, expected_message: &str) {
+    let err = result.err().expect("input should be invalid");
+    let validation = err
+        .downcast_any_ref::<gix_error::ValidationError>()
+        .expect("error should be classified as validation");
+    assert_eq!(validation.message, expected_message);
+}
+
 #[test]
 fn fuzzed_timeout() -> crate::Result {
     let path = PathBuf::from(std::fs::read("tests/fixtures/fuzzed/54k-path-components.path")?.into_string()?);
     assert_eq!(path.components().count(), 54862);
     let start = std::time::Instant::now();
-    assert!(matches!(
-        gix_path::realpath_opts(&path, Path::new("/cwd"), gix_path::realpath::MAX_SYMLINKS).unwrap_err(),
-        gix_path::realpath::Error::ExcessiveComponentCount {
-            max_symlink_checks: 2048
-        }
-    ));
+    assert_validation(
+        gix_path::realpath_opts(&path, Path::new("/cwd"), gix_path::realpath::MAX_SYMLINKS),
+        "Cannot resolve symlinks in path with more than 2048 components (takes too long)",
+    );
     assert!(
         start.elapsed() < Duration::from_millis(if cfg!(windows) { 2000 } else { 1000 }),
         "took too long: {:.02} , we can't take too much time for this, and should keep the amount of work reasonable\
@@ -32,12 +38,9 @@ fn assorted() -> crate::Result {
     let cwd = cwd.path();
     let symlinks_disabled = 0;
 
-    assert!(
-        matches!(
-            realpath_opts("".as_ref(), cwd, symlinks_disabled),
-            Err(Error::EmptyPath)
-        ),
-        "Empty path is not allowed"
+    assert_validation(
+        realpath_opts("".as_ref(), cwd, symlinks_disabled),
+        "Empty is not a valid path",
     );
 
     assert_eq!(
@@ -95,12 +98,9 @@ fn link_cycle_is_detected() -> crate::Result {
     create_symlink(&link_path, link_destination)?;
     let max_symlinks = 8;
 
-    assert!(
-        matches!(
-            realpath_opts(&link_path.join(".git"), "".as_ref(), max_symlinks),
-            Err(Error::MaxSymlinksExceeded { max_symlinks: 8 })
-        ),
-        "link cycle is detected"
+    assert_validation(
+        realpath_opts(&link_path.join(".git"), "".as_ref(), max_symlinks),
+        "The maximum allowed number 8 of symlinks in path is exceeded",
     );
     Ok(())
 }
@@ -140,12 +140,9 @@ fn symlink_processing_is_disabled_if_the_value_is_zero() -> crate::Result {
     let cwd = canonicalized_tempdir()?;
     let link_name = "x_link";
     create_symlink(cwd.path().join(link_name), Path::new("link destination does not exist"))?;
-    assert!(
-        matches!(
-            realpath_opts(&Path::new(link_name).join(".git"), cwd.path(), 0),
-            Err(Error::MaxSymlinksExceeded { max_symlinks: 0 })
-        ),
-        "symlink processing is disabled if the value is zero"
+    assert_validation(
+        realpath_opts(&Path::new(link_name).join(".git"), cwd.path(), 0),
+        "The maximum allowed number 0 of symlinks in path is exceeded",
     );
     Ok(())
 }
@@ -162,7 +159,7 @@ fn create_symlink(from: impl AsRef<Path>, to: impl AsRef<Path>) -> std::io::Resu
     std::os::windows::fs::symlink_file(to, from)
 }
 
-fn canonicalized_tempdir() -> crate::Result<tempfile::TempDir> {
+fn canonicalized_tempdir() -> Result<tempfile::TempDir, Box<dyn std::error::Error + Send + Sync>> {
     let canonicalized_tempdir = gix_path::realpath(std::env::temp_dir())?;
     Ok(tempfile::tempdir_in(canonicalized_tempdir)?)
 }

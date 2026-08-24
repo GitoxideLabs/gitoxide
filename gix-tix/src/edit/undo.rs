@@ -394,7 +394,9 @@ struct WorktreeTransition {
 }
 
 fn worktree_transitions(repo: &gix::Repository, changes: &[RefChange]) -> Result<Vec<WorktreeTransition>> {
-    let current_git_dir = gix::path::realpath(repo.git_dir()).context("could not resolve the current Git directory")?;
+    let current_git_dir = gix::path::realpath(repo.git_dir())
+        .map_err(gix::Exn::into_error)
+        .context("could not resolve the current Git directory")?;
     let mut repos = vec![
         repo.main_repo()
             .context("could not open the main worktree repository")?,
@@ -420,6 +422,7 @@ fn worktree_transitions(repo: &gix::Repository, changes: &[RefChange]) -> Result
             .context("could not read a worktree HEAD reference")?;
         let raw_head = state_from_target_ref(raw_head.target());
         let current = gix::path::realpath(worktree_repo.git_dir())
+            .map_err(gix::Exn::into_error)
             .context("could not resolve an affected worktree Git directory")?
             == current_git_dir;
         let projected_head = projected_ref_state(&worktree_repo, b"HEAD".as_bstr(), &raw_head, changes, current)?;
