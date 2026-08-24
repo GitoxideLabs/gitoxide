@@ -2313,11 +2313,11 @@ name = "gix-path"
 version = "0.12.6"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-trace",
  "gix-validate",
  "serial_test",
  "tempfile",
- "thiserror 2.0.18",
  "windows 0.62.2",
  "winreg",
 ]
@@ -2572,6 +2572,7 @@ dependencies = [
  "fs_extra",
  "gix-config",
  "gix-discover",
+ "gix-error",
  "gix-hash",
  "gix-index",
  "gix-lock",
