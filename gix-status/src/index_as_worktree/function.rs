@@ -667,13 +667,16 @@ impl<'a, T> Iterator for OffsetIter<'a, T> {
 }
 
 impl Conflict {
-    /// Given `entries` and `path_backing`, both values obtained from an [index](gix_index::State), use `start_index` and enumerate
-    /// all conflict stages that still match `entry_path` to produce a conflict description.
-    /// Also return the amount of extra-entries that were part of the conflict declaration (not counting the entry at `start_index`)
+    /// Given `entries` and `path_backing` obtained from an [index](gix_index::State), inspect up to three consecutive
+    /// conflict-stage entries starting at `start_index` whose path equals `entry_path`.
     ///
-    /// If for some reason entry at `start_index` isn't in conflicting state, `None` is returned.
+    /// Returns `(conflict, num_extra_entries, entries_by_stage)`, where:
     ///
-    /// Return `(Self, num_consumed_entries, three_possibly_entries)`.
+    /// * `conflict` describes the conflict formed by the matching stages (this instance).
+    /// * `num_extra_entries` is the number of matching entries after the one at `start_index`.
+    /// * `entries_by_stage` contains base, ours, and theirs at indexes 0, 1, and 2 respectively; absent stages are `None`.
+    ///
+    /// Returns `None` if no matching conflict entry is found at `start_index`.
     pub fn try_from_entry<'entry>(
         entries: &'entry [gix_index::Entry],
         path_backing: &gix_index::PathStorageRef,
@@ -685,11 +688,14 @@ impl Conflict {
         let mut seen: [Option<&gix_index::Entry>; 3] = Default::default();
 
         let mut num_consumed_entries = 0_usize;
-        for (stage, entry) in (start_index..(start_index + 3).min(entries.len())).filter_map(|idx| {
-            let entry = &entries[idx];
+        for entry in entries
+            .get(start_index..(start_index + 3).min(entries.len()))
+            .unwrap_or_default()
+        {
             let stage = entry.stage_raw();
-            (stage > 0 && entry.path_in(path_backing) == entry_path).then_some((stage, entry))
-        }) {
+            if stage == 0 || entry.path_in(path_backing) != entry_path {
+                break;
+            }
             // This could be `1 << (stage - 1)` but let's be specific.
             *mask.get_or_insert(0) |= match stage {
                 1 => 0b001,
@@ -697,9 +703,11 @@ impl Conflict {
                 3 => 0b100,
                 _ => 0,
             };
-            num_consumed_entries = stage as usize - 1;
-            seen[num_consumed_entries] = Some(entry);
+            seen[stage as usize - 1] = Some(entry);
+            num_consumed_entries += 1;
         }
+        // It's always assumed we consume one entry, so deduct it.
+        num_consumed_entries = num_consumed_entries.saturating_sub(1);
 
         mask.map(|mask| {
             (
