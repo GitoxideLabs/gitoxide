@@ -1,6 +1,8 @@
 //! Regression tests specific to the blocking `reqwest` HTTP backend.
 
-pub use ::bisync::synchronous as bisync;
+pub mod bisync {
+    pub use gix_macros::{discard as only_async, keep as only_sync, sync as bisync};
+}
 
 use std::{
     error::Error,

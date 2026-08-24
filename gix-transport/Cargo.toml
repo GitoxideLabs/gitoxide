@@ -141,7 +141,7 @@ gix-pack = { path = "../gix-pack", default-features = false, features = [
 ] }
 gix-hash = { path = "../gix-hash", features = ["sha1"] }
 async-std = { version = "1.9.0", features = ["attributes"] }
-bisync = "0.3.0"
+gix-macros = { path = "../gix-macros" }
 blocking = "1.6.2"
 
 [package.metadata.docs.rs]

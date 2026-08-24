@@ -81,6 +81,7 @@ gix-shallow = { version = "^0.13.0", path = "../gix-shallow" }
 gix-date = { version = "^0.16.0", path = "../gix-date" }
 gix-utils = { version = "^0.3.6", path = "../gix-utils" }
 gix-ref = { version = "^0.67.1", path = "../gix-ref" }
+gix-macros = { version = "^0.1.5", path = "../gix-macros" }
 
 gix-trace = { version = "^0.1.21", path = "../gix-trace", optional = true }
 gix-negotiate = { version = "^0.35.0", path = "../gix-negotiate", optional = true }
@@ -104,7 +105,6 @@ bstr = { version = "1.12.0", default-features = false, features = [
 async-trait = { version = "0.1.51", optional = true }
 futures-io = { version = "0.3.32", optional = true }
 futures-lite = { version = "2.1.0", optional = true }
-bisync = "0.3.0"
 
 document-features = { version = "0.2.0", optional = true }
 

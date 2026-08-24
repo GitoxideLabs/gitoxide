@@ -1,4 +1,6 @@
-pub use ::bisync::asynchronous as bisync;
+pub mod bisync {
+    pub use gix_macros::{discard as only_sync, keep as bisync, keep as only_async};
+}
 
 use std::path::PathBuf;
 
