@@ -2232,7 +2232,10 @@ impl App {
         let mut rebase_bases = HashSet::new();
         for row in &self.rows {
             let state = if self.hidden_rows.contains(&row.id) {
-                states.get(&row.id).copied()
+                Some(states.get(&row.id).copied().unwrap_or(State {
+                    leaf: None,
+                    has_merge: false,
+                }))
             } else if !visible_parents.contains(&row.id) {
                 Some(State {
                     leaf: Some(row.id),
@@ -2315,8 +2318,11 @@ impl App {
         let visible = self.reachable_from(view_tips);
         let hidden = self.reachable_from(hidden_tips);
         let visible: HashSet<_> = visible.difference(&hidden).copied().collect();
-        let boundary: HashSet<_> = if view_tips.is_empty() {
-            hidden_tips.iter().copied().collect()
+        let boundary: HashSet<_> = if visible.is_empty() {
+            if view_tips.is_empty() { hidden_tips } else { view_tips }
+                .iter()
+                .copied()
+                .collect()
         } else if hidden_tips.is_empty() {
             HashSet::new()
         } else {
@@ -2860,7 +2866,9 @@ impl App {
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && match self.selected.and_then(|index| self.rows.get(index)) {
                 Some(row) => {
-                    (self.worktree_head_unborn || !self.hidden_rows.contains(&row.id))
+                    (self.worktree_head_unborn
+                        || !self.hidden_rows.contains(&row.id)
+                        || self.worktree_head == Some(row.id))
                         && !self.known_merge_descendants.contains(&row.id)
                 }
                 None => self.worktree_head_unborn,
@@ -2902,6 +2910,7 @@ impl App {
 
     pub(crate) fn can_rebase(&self) -> bool {
         self.state == State::Complete
+            && !self.worktree_head_unborn
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && self
@@ -4180,22 +4189,67 @@ mod tests {
     }
 
     #[test]
-    fn refresh_keeps_hidden_tips_as_the_unborn_view() {
+    fn refresh_keeps_the_current_tip_as_the_base_of_an_empty_view() {
         let mut app = App::new(10);
         app.extend_hidden_commits(vec![row(1)]);
+        app.set_worktree_head(Some(id(1)), false);
         complete(&mut app);
 
         let rows = app
-            .start_refresh(vec![row_with_parents(2, &[1])].into(), &[], &[id(2)], false)
+            .start_refresh(vec![row_with_parents(2, &[1])].into(), &[id(1)], &[id(2)], false)
             .expect("a hidden-only refresh computes lanes");
         assert_eq!(
             rows.iter().map(|row| row.id).collect::<Vec<_>>(),
-            [id(2)],
-            "only the current hidden tip remains in the view"
+            [id(1)],
+            "the current view tip remains as the base instead of jumping forward"
         );
         let (rows, graph, time) = compute_lanes(rows);
         app.finish_lane_computation(rows, graph, time);
         assert!(app.is_row_hidden(0), "the fallback remains a hidden boundary");
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(1)),
+            "the empty view selects its hidden base"
+        );
+        app.set_new_commit_availability(Some(&Changes {
+            has_tracked_changes: true,
+            ..Changes::default()
+        }));
+        assert_eq!(
+            app.update(Action::NewCommit),
+            vec![Effect::NewCommit {
+                parent: Some(id(1)),
+                empty: false,
+            }],
+            "the checked-out base accepts a first stack commit"
+        );
+        assert_eq!(
+            app.update(Action::NewEmptyCommit),
+            vec![Effect::NewCommit {
+                parent: Some(id(1)),
+                empty: true,
+            }],
+            "the checked-out base accepts a first empty commit"
+        );
+        assert_eq!(
+            app.update(Action::Rebase),
+            vec![Effect::Rebase {
+                base: id(1),
+                onto: id(1),
+                commits: Vec::new(),
+            }],
+            "a selected base supports rebasing an empty stack"
+        );
+        app.set_hidden_branch_updates(HashMap::from([(id(1), (1, id(2)))]));
+        assert_eq!(
+            app.update(Action::RebaseUpdate),
+            vec![Effect::Rebase {
+                base: id(1),
+                onto: id(2),
+                commits: Vec::new(),
+            }],
+            "an empty stack can update to a newer hidden tip"
+        );
     }
 
     #[test]
@@ -4671,6 +4725,7 @@ mod tests {
             !unborn_with_history.can_fork_commit(),
             "a fork requires an existing worktree HEAD even when another ref is selected"
         );
+        assert!(!unborn_with_history.can_rebase(), "rebase todos require a born HEAD");
     }
 
     #[test]

@@ -756,10 +756,12 @@ space first; changes blocks adapt within the remaining history width.
 
 ### New commits
 
-- If an unborn `HEAD` leaves the ordinary history empty, each configured hidden
-  branch tip is shown as a selectable boundary without exposing its ancestry.
-  Creating a commit there creates the unborn branch above that base and leaves
-  the hidden branch unchanged.
+- If excluding hidden history leaves no visible commit, each current view tip is
+  shown as a selectable boundary without exposing its ancestry. An unborn
+  `HEAD` instead falls back to the configured hidden branch tips. A born base
+  supports creating the first stack commit and editing an empty rebase todo;
+  rebase-update can advance it to a newer hidden tip without requiring a commit.
+  Creating on an unborn base creates the branch there without moving the hidden branch.
 - `a w` creates a child of the selected commit from tracked changes, or a root
   commit for an unborn `HEAD`. A changed index wins; otherwise, tracked worktree
   changes are used. Untracked files never enter an implicit new commit and remain
