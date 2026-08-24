@@ -130,18 +130,22 @@ pub(crate) fn start(
     }
     ensure_clean(&workdir)?;
 
+    let name = next_reference(&repo)?;
     let departure_pin = match restore.1 {
         Some(id) => {
             let target = restore.0.clone().map_or(Target::Object(id), Target::Symbolic);
-            Some((
-                super::time_travel::create_pin(&repo, target, id, "tix review departure")?,
-                true,
-            ))
+            let pin_name = return_pin_reference(name.as_bstr())?;
+            Some(super::time_travel::create_named_pin(
+                &repo,
+                pin_name,
+                target,
+                id,
+                "tix review departure",
+            )?)
         }
         None => None,
     };
 
-    let name = next_reference(&repo)?;
     let mut commit = gix::objs::Commit {
         tree: repo.find_commit(base)?.tree_id()?.detach(),
         parents: [base].into_iter().collect(),
@@ -162,7 +166,7 @@ pub(crate) fn start(
     commit
         .extra_headers
         .push((HEADER.into(), format!("onto {name}").into()));
-    let return_to = departure_pin.as_ref().map(|(pin, _)| pin.name.clone());
+    let return_to = departure_pin.as_ref().map(|pin| pin.name.clone());
     if let Some(return_to) = return_to {
         commit
             .extra_headers
@@ -252,7 +256,7 @@ pub(crate) fn finish_with_progress(
         .peel_to_id()
         .context("the review reference does not resolve")?
         .detach();
-    let delete_refs = resources(&repo, review_ref.clone())?;
+    let mut delete_refs = resources(&repo, review_ref.clone())?;
     let return_name = return_to(&commit)?.or(legacy_reattach);
     let has_return = return_name.is_some();
     let checkout = if let Some(id) = fallback {
@@ -262,6 +266,7 @@ pub(crate) fn finish_with_progress(
         Some((id, None))
     } else {
         return_name
+            .as_ref()
             .map(|name| {
                 let Some(mut reference) = repo.try_find_reference(name.as_ref())? else {
                     return Ok(None);
@@ -269,7 +274,7 @@ pub(crate) fn finish_with_progress(
                 let checkout_reference = if name.as_bstr().starts_with(history::PIN_PREFIX) {
                     reference.target().try_name().map(ToOwned::to_owned)
                 } else {
-                    Some(name)
+                    Some(name.clone())
                 };
                 let id = reference
                     .peel_to_id()
@@ -285,6 +290,13 @@ pub(crate) fn finish_with_progress(
     };
     if fallback.is_none() && has_return && checkout.is_none() {
         return Ok(Finish::SelectReturn { tip });
+    }
+    if let Some(name) = return_name
+        .as_ref()
+        .filter(|name| name.as_bstr().starts_with(history::REVIEW_PIN_PREFIX))
+        && let Some(reference) = repo.try_find_reference(name.as_ref())?
+    {
+        delete_refs.push((name.clone(), reference.target().into_owned()));
     }
     for (label, id) in [("reviewed commit", tip), ("review base", base)] {
         let endpoint = repo.find_commit(id)?.decode()?.into_owned()?;
@@ -340,11 +352,24 @@ fn next_reference(repo: &gix::Repository) -> Result<gix::refs::FullName> {
         let name: gix::refs::FullName = format!("{}{number}", String::from_utf8_lossy(history::REVIEW_PREFIX))
             .try_into()
             .context("generated an invalid review reference")?;
-        if repo.try_find_reference(name.as_ref())?.is_none() {
+        let return_pin = return_pin_reference(name.as_bstr())?;
+        if repo.try_find_reference(name.as_ref())?.is_none() && repo.try_find_reference(return_pin.as_ref())?.is_none()
+        {
             return Ok(name);
         }
     }
     unreachable!("u64 review numbers cannot be exhausted")
+}
+
+fn return_pin_reference(review: &BStr) -> Result<gix::refs::FullName> {
+    let number = history::review_number(review).context("review reference has no numeric identity")?;
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(history::REVIEW_PIN_PREFIX),
+        number.to_str_lossy()
+    )
+    .try_into()
+    .context("generated an invalid review return pin reference")
 }
 
 fn git<const N: usize>(workdir: &Path, args: [&str; N]) -> Result<()> {
@@ -356,8 +381,8 @@ fn git<const N: usize>(workdir: &Path, args: [&str; N]) -> Result<()> {
     }
 }
 
-fn remove_new_departure_pin(repository_path: &Path, bare: bool, pin: Option<&(history::Pin, bool)>) -> Result<()> {
-    let Some((pin, true)) = pin else { return Ok(()) };
+fn remove_new_departure_pin(repository_path: &Path, bare: bool, pin: Option<&history::Pin>) -> Result<()> {
+    let Some(pin) = pin else { return Ok(()) };
     let repo =
         open_repository(repository_path, bare, false).context("could not reopen repository to remove review pin")?;
     super::time_travel::delete_pin(&repo, pin).context("could not remove review departure pin")
@@ -839,6 +864,94 @@ mod tests {
         assert!(repo.head()?.is_detached(), "cancelling restores detached HEAD");
         assert_eq!(repo.head_id()?, tip);
         assert!(history::all_pins(&repo)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn review_return_pin_survives_squashing_the_reviewed_tip() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let open = || crate::test_repository::open(fixture.path());
+        let repo = open()?;
+        let tip = repo.rev_parse_single("refs/patches/tip")?.detach();
+        let middle = repo.rev_parse_single("refs/patches/middle")?.detach();
+        let base = repo
+            .find_commit(middle)?
+            .parent_ids()
+            .next()
+            .expect("middle has a parent")
+            .detach();
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+
+        let started = start(fixture.path(), false, &graph, tip, base)?;
+        let repo = open()?;
+        let review = repo.find_commit(started.commit)?.decode()?.into_owned()?;
+        let return_name = return_to(&review)?.expect("the review records its return pin");
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+        super::super::time_travel::perform(fixture.path(), false, middle, &graph, &[started.commit], &[], false)?
+            .complete()?;
+
+        let repo = open()?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let plan = super::super::rebase::squash_plan(&repo, &graph, tip, middle)?;
+        let outcome = super::super::rebase::perform_plan(&repo, &graph, plan)?.complete()?;
+        let combined = outcome.map(middle).expect("the squash retains its target");
+        drop(repo);
+        super::super::time_travel::checkout_plan(fixture.path(), false, &outcome, &[], false)?;
+        run(
+            fixture.path(),
+            &["checkout", "--quiet", "--detach", &started.commit.to_string()],
+        )?;
+        super::super::time_travel::checkout_without_replay(fixture.path(), false, combined, &[], false)?;
+
+        let repo = open()?;
+        let mut return_ref = repo.find_reference(return_name.as_ref())?;
+        assert_eq!(
+            return_ref.peel_to_id()?.detach(),
+            combined,
+            "checking out a rewritten destination preserves the review's return pin"
+        );
+        assert_eq!(
+            return_name.as_bstr(),
+            b"refs/worktree/tix/pins/review/1",
+            "review-owned pins have an explicit namespace"
+        );
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+
+        super::super::time_travel::perform(
+            fixture.path(),
+            false,
+            started.commit,
+            &graph,
+            &[started.commit],
+            &[],
+            false,
+        )?
+        .complete()?;
+        run(fixture.path(), &["add", "--all"])?;
+        let repo = open()?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let review = super::super::head::perform(repo, &graph, super::super::head::Kind::Amend, None)?
+            .expect("staged review changes amend the review commit");
+        let repo = open()?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let Finish::Complete(finished) = finish(repo, &graph, review, None)? else {
+            panic!("the owned return pin finishes the review without fallback selection")
+        };
+        super::super::time_travel::checkout_plan(fixture.path(), false, &finished.outcome, &[], false)?;
+
+        let repo = open()?;
+        assert_eq!(
+            repo.head()?.referent_name().expect("HEAD is attached"),
+            "refs/heads/main"
+        );
+        assert_eq!(repo.head_id()?, finished.commit);
+        assert!(
+            repo.try_find_reference(return_name.as_ref())?.is_none(),
+            "finishing consumes its review-owned return pin"
+        );
         Ok(())
     }
 }

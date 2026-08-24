@@ -48,6 +48,7 @@ pub(crate) type Decorations = HashMap<ObjectId, Vec<Decoration>>;
 
 pub(crate) const PIN_PREFIX: &[u8] = b"refs/worktree/tix/pins/";
 pub(crate) const HEAD_PIN_NAME: &[u8] = b"refs/worktree/tix/pins/HEAD";
+pub(crate) const REVIEW_PIN_PREFIX: &[u8] = b"refs/worktree/tix/pins/review/";
 pub(crate) const STASH_PREFIX: &[u8] = b"refs/tix/stash/";
 pub(crate) const REVIEW_PREFIX: &[u8] = b"refs/worktree/tix/review/";
 pub(crate) const REVIEW_STASH_PREFIX: &[u8] = b"refs/worktree/tix/review/stashes/";
@@ -62,6 +63,10 @@ pub(crate) struct Pin {
 impl Pin {
     pub(crate) fn is_head(&self) -> bool {
         self.name.as_bstr() == HEAD_PIN_NAME
+    }
+
+    pub(crate) fn is_review_return(&self) -> bool {
+        self.name.as_bstr().starts_with(REVIEW_PIN_PREFIX)
     }
 }
 
@@ -1482,6 +1487,12 @@ pub(crate) fn review_number(name: &BStr) -> Option<&BStr> {
         .then_some(suffix.as_bstr())
 }
 
+pub(crate) fn review_pin_number(name: &BStr) -> Option<&BStr> {
+    let suffix = name.strip_prefix(REVIEW_PIN_PREFIX)?;
+    (suffix.first().is_some_and(|digit| matches!(digit, b'1'..=b'9')) && suffix.iter().all(u8::is_ascii_digit))
+        .then_some(suffix.as_bstr())
+}
+
 fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) -> Result<Vec<Pin>> {
     let mut out = Vec::new();
     let references = repo.references().context("could not open references")?;
@@ -1498,7 +1509,8 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
         let valid_suffix = if prefix == REVIEW_PREFIX {
             review_number(reference.name().as_bstr()).is_some()
         } else {
-            suffix.len() >= 4 && suffix.iter().all(u8::is_ascii_alphanumeric)
+            review_pin_number(reference.name().as_bstr()).is_some()
+                || suffix.len() >= 4 && suffix.iter().all(u8::is_ascii_alphanumeric)
         };
         if !valid_suffix {
             tracing::warn!(name = %reference.name(), %label, "ignoring malformed tix reference");
@@ -1942,6 +1954,9 @@ pub(crate) fn decorations_excluding(
             continue;
         }
         if full_name.as_bstr() == HEAD_PIN_NAME {
+            continue;
+        }
+        if full_name.as_bstr().starts_with(REVIEW_PIN_PREFIX) {
             continue;
         }
         if full_name.as_bstr().starts_with(REVIEW_STASH_PREFIX) {
