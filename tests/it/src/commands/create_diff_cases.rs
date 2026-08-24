@@ -53,15 +53,17 @@ pub(super) mod function {
         let mut buf = Vec::new();
         let script_name = "make_diff_for_sliders_repo.sh";
 
-        let mut blocks: Vec<String> = vec![format!(
+        let mut blocks: Vec<String> = vec![
             r#"#!/usr/bin/env bash
 set -eu -o pipefail
 
-ROOT="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-mkdir -p {asset_dir}
+# Keep runtime assets fixed: slider::baseline reads assets/, while --asset-dir only locates source blobs.
+mkdir -p assets
 "#
-        )];
+            .to_owned(),
+        ];
 
         for (before, after) in sliders.iter().copied() {
             let revspec = repo.rev_parse(before)?;
@@ -89,8 +91,8 @@ mkdir -p {asset_dir}
 git -c diff.algorithm=myers diff --no-index --no-ext-diff --no-color --no-indent-heuristic "$ROOT/{asset_dir}/{old_blob_id}.blob" "$ROOT/{asset_dir}/{new_blob_id}.blob" > {old_blob_id}-{new_blob_id}.myers.no-indent.baseline || true
 git -c diff.algorithm=histogram diff --no-index --no-ext-diff --no-color --indent-heuristic "$ROOT/{asset_dir}/{old_blob_id}.blob" "$ROOT/{asset_dir}/{new_blob_id}.blob" > {old_blob_id}-{new_blob_id}.histogram.baseline || true
 git -c diff.algorithm=histogram diff --no-index --no-ext-diff --no-color --no-indent-heuristic "$ROOT/{asset_dir}/{old_blob_id}.blob" "$ROOT/{asset_dir}/{new_blob_id}.blob" > {old_blob_id}-{new_blob_id}.histogram.no-indent.baseline || true
-cp "$ROOT/{asset_dir}/{old_blob_id}.blob" {asset_dir}/
-cp "$ROOT/{asset_dir}/{new_blob_id}.blob" {asset_dir}/
+cp "$ROOT/{asset_dir}/{old_blob_id}.blob" assets/
+cp "$ROOT/{asset_dir}/{new_blob_id}.blob" assets/
 "#
             ));
         }

@@ -4,3 +4,7 @@
 # experimental for now; we may track them later once the format stabilizes.
 /make_diff_for_sliders_repo.tar
 /make_diff_for_sliders_repo_sha256.tar
+
+# these are simple file-creators, this is portable and fast.
+/make_diff_for_sliders_smoke_repo.tar
+/make_diff_for_sliders_smoke_repo_sha256.tar

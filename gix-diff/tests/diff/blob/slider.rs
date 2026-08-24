@@ -6,12 +6,39 @@ use pretty_assertions::StrComparison;
 
 #[test]
 fn baseline() -> gix_testtools::Result {
-    let worktree_path = crate::scripted_fixture_read_only("make_diff_for_sliders_repo.sh")?;
+    let smoke_cases = cases_from_fixture("make_diff_for_sliders_smoke_repo.sh", false)?;
+    assert!(
+        !smoke_cases.is_empty(),
+        "the built-in slider baseline must contain cases"
+    );
+    assert_diffs(&smoke_cases);
+    assert!(
+        smoke_cases.iter().all(|case| case.classify() == Classification::Exact),
+        "the built-in slider baseline must be classified as exact"
+    );
+
+    let should_assert_strictly = std::env::var_os("GIX_DIFF_SLIDER_STRICT").is_some();
+    let cases = cases_from_fixture("make_diff_for_sliders_repo.sh", !should_assert_strictly)?;
+
+    if cases.is_empty() {
+        eprintln!("Slider baseline isn't set up – see ./gix-diff/tests/README.md for instructions");
+    }
+
+    if should_assert_strictly {
+        assert!(!cases.is_empty(), "the external slider baseline must contain cases");
+        assert_diffs(&cases);
+    } else {
+        print_extended_report(&cases);
+    }
+
+    Ok(())
+}
+
+fn cases_from_fixture(fixture: &str, read_no_indent: bool) -> gix_testtools::Result<Vec<Case>> {
+    let worktree_path = crate::scripted_fixture_read_only(fixture)?;
     let asset_dir = worktree_path.join("assets");
 
     let dir = std::fs::read_dir(&worktree_path)?;
-    let should_print_extended_report = std::env::var_os("GIX_DIFF_SLIDER_REPORT").is_some();
-
     let mut cases = Vec::new();
 
     for entry in dir {
@@ -50,7 +77,7 @@ fn baseline() -> gix_testtools::Result {
         let baseline_path = worktree_path.join(&file_name);
         let baseline = std::fs::read(baseline_path)?;
         let baseline = crate::blob::skip_header_and_fold_to_unidiff(&baseline);
-        let git_no_indent_heuristic = if should_print_extended_report {
+        let git_no_indent_heuristic = if read_no_indent {
             read_no_indent_baseline(&worktree_path, &file_name)?
         } else {
             None
@@ -67,36 +94,74 @@ fn baseline() -> gix_testtools::Result {
         });
     }
 
-    if cases.is_empty() {
-        eprintln!("Slider baseline isn't set up – see ./gix-diff/tests/README.md for instructions");
-    }
-
-    if should_print_extended_report {
-        print_extended_report(&cases);
-    } else {
-        assert_diffs(&cases);
-    }
-
-    Ok(())
+    Ok(cases)
 }
 
 struct Case {
     file_name: String,
     algorithm: Algorithm,
+    /// The primary Git baseline, generated with `--indent-heuristic` and used for the pass/fail comparison.
     git_postprocess_indent_heuristic: String,
+    /// Git's simpler `--no-indent-heuristic` control, loaded only for the optional diagnostic report.
+    ///
+    /// If it matches Gix's no-heuristic output while the primary baseline does not, the mismatch is
+    /// isolated to slider/indent placement rather than the core diff or generic postprocessing.
     git_no_indent_heuristic: Option<String>,
+    /// Gix's algorithm output rendered immediately after `Diff::compute()`, before line postprocessing.
+    ///
+    /// This isolates whether the selected Myers or Histogram algorithm already agrees with Git.
     gix_no_postprocess: String,
+    /// The same Gix algorithm output after `Diff::postprocess_no_heuristic()`.
+    ///
+    /// Comparing this with [`gix_no_postprocess`](Self::gix_no_postprocess) isolates generic line
+    /// postprocessing from slider-placement decisions.
     gix_postprocess_no_heuristic: String,
+    /// Gix's final output from `diff_with_slider_heuristics()`, including line-placement heuristics.
+    ///
+    /// This is the candidate compared with the primary Git baseline to decide whether the test passes.
     gix_postprocess_slider_heuristics: String,
 }
 
+/// The closest observed relationship between a Gix diff pipeline and Git's reference output.
+///
+/// `Case::classify()` checks these relationships from most useful to least useful and returns the
+/// first match. "Git default", used by
+/// [`NoPostprocessMatchesGitDefault`](Self::NoPostprocessMatchesGitDefault) and
+/// [`PostprocessNoHeuristicMatchesGitDefault`](Self::PostprocessNoHeuristicMatchesGitDefault),
+/// means the primary baseline generated with `--indent-heuristic`. "Git no-indent", used by
+/// [`PostprocessNoHeuristicMatchesGitNoIndent`](Self::PostprocessNoHeuristicMatchesGitNoIndent),
+/// means the optional diagnostic baseline generated with `--no-indent-heuristic`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Classification {
+    /// Gix with slider heuristics exactly matches Git with its indent heuristic.
+    ///
+    /// This is the desired result and takes precedence over all diagnostic similarities below.
     Exact,
+    /// Gix's raw algorithm output, before any postprocessing, matches Git's indent-heuristic output.
+    ///
+    /// Since [`Exact`](Self::Exact) was checked first, Gix postprocessing moved an otherwise
+    /// matching diff away from Git's result.
     NoPostprocessMatchesGitDefault,
+    /// Gix postprocessing without a placement heuristic matches Git's indent-heuristic output.
+    ///
+    /// Since [`Exact`](Self::Exact) was checked first, applying Gix's slider heuristic is what
+    /// moves the final diff away from Git's result.
     PostprocessNoHeuristicMatchesGitDefault,
+    /// Gix postprocessing without a placement heuristic matches Git with its indent heuristic disabled.
+    ///
+    /// This comparison is available only in extended-report mode, which loads the additional
+    /// `*.no-indent.baseline` files. It shows that the implementations agree before their placement
+    /// heuristics make different choices.
     PostprocessNoHeuristicMatchesGitNoIndent,
+    /// The final Gix and Git diffs differ, but their added and removed lines have the same sequence.
+    ///
+    /// This is evidence of a slider-placement-only mismatch: context, positions, or hunk boundaries
+    /// differ while the changed content does not. It is intentionally a heuristic, not proof.
     LikelySliderOnlyMismatch,
+    /// None of the stronger relationships above applies.
+    ///
+    /// The changed-line content or ordering differs, or the available baselines are insufficient to
+    /// attribute the mismatch to a particular postprocessing stage.
     OtherMismatch,
 }
 
@@ -236,8 +301,8 @@ fn slider_detail(gix: &str, git: &str) -> String {
     let gix_hunk = &gix_hunks[0];
     let git_hunk = &git_hunks[0];
 
-    let gix_is_empty = gix_hunk.removed == 0 && gix_hunk.added == 0;
-    let git_is_empty = git_hunk.removed == 0 && git_hunk.added == 0;
+    let gix_is_empty = gix_hunk.removed.is_empty() && gix_hunk.added.is_empty();
+    let git_is_empty = git_hunk.removed.is_empty() && git_hunk.added.is_empty();
 
     match (gix_is_empty, git_is_empty) {
         (true, true) => return "diagnostic-error/empty-hunks/both".to_owned(),
@@ -246,7 +311,7 @@ fn slider_detail(gix: &str, git: &str) -> String {
         (false, false) => {}
     }
 
-    let kind = match (gix_hunk.removed > 0, gix_hunk.added > 0) {
+    let kind = match (!gix_hunk.removed.is_empty(), !gix_hunk.added.is_empty()) {
         (false, true) => "pure-insertion",
         (true, false) => "pure-deletion",
         (true, true) => "modification",
@@ -259,10 +324,10 @@ fn slider_detail(gix: &str, git: &str) -> String {
 }
 
 struct ParsedHunk {
-    before_start: u32,
-    after_start: u32,
-    removed: usize,
-    added: usize,
+    next_before_line: u32,
+    next_after_line: u32,
+    removed: Vec<u32>,
+    added: Vec<u32>,
 }
 
 fn parse_hunks(diff: &str) -> Vec<ParsedHunk> {
@@ -272,17 +337,22 @@ fn parse_hunks(diff: &str) -> Vec<ParsedHunk> {
         if line.starts_with("@@ ") {
             if let Some((before_start, after_start)) = parse_hunk_header(line) {
                 hunks.push(ParsedHunk {
-                    before_start,
-                    after_start,
-                    removed: 0,
-                    added: 0,
+                    next_before_line: before_start,
+                    next_after_line: after_start,
+                    removed: Vec::new(),
+                    added: Vec::new(),
                 });
             }
         } else if let Some(hunk) = hunks.last_mut() {
             if line.starts_with('-') {
-                hunk.removed += 1;
+                hunk.removed.push(hunk.next_before_line);
+                hunk.next_before_line += 1;
             } else if line.starts_with('+') {
-                hunk.added += 1;
+                hunk.added.push(hunk.next_after_line);
+                hunk.next_after_line += 1;
+            } else if line.starts_with(' ') {
+                hunk.next_before_line += 1;
+                hunk.next_after_line += 1;
             }
         }
     }
@@ -309,22 +379,40 @@ fn parse_range_start(range: &str) -> Option<u32> {
 }
 
 fn movement_direction(gix_hunk: &ParsedHunk, git_hunk: &ParsedHunk) -> &'static str {
-    match gix_hunk.before_start.cmp(&git_hunk.before_start) {
-        std::cmp::Ordering::Less => "gix-before-start-earlier",
-        std::cmp::Ordering::Greater => "gix-before-start-later",
-        std::cmp::Ordering::Equal => match gix_hunk.after_start.cmp(&git_hunk.after_start) {
-            std::cmp::Ordering::Less => "same-before-start/gix-after-start-earlier",
-            std::cmp::Ordering::Greater => "same-before-start/gix-after-start-later",
-            std::cmp::Ordering::Equal => "same-before-start",
-        },
+    let mut direction = std::cmp::Ordering::Equal;
+    for (gix_position, git_position) in gix_hunk
+        .removed
+        .iter()
+        .zip(&git_hunk.removed)
+        .chain(gix_hunk.added.iter().zip(&git_hunk.added))
+    {
+        let next = gix_position.cmp(git_position);
+        if next != std::cmp::Ordering::Equal {
+            if direction != std::cmp::Ordering::Equal && direction != next {
+                return "mixed-change-direction";
+            }
+            direction = next;
+        }
+    }
+
+    match direction {
+        std::cmp::Ordering::Less => "gix-change-earlier",
+        std::cmp::Ordering::Greater => "gix-change-later",
+        std::cmp::Ordering::Equal => "same-change-position",
     }
 }
 
 fn movement_distance_bucket(gix_hunk: &ParsedHunk, git_hunk: &ParsedHunk) -> &'static str {
-    let before_delta = gix_hunk.before_start.abs_diff(git_hunk.before_start);
-    let after_delta = gix_hunk.after_start.abs_diff(git_hunk.after_start);
+    let distance = gix_hunk
+        .removed
+        .iter()
+        .zip(&git_hunk.removed)
+        .chain(gix_hunk.added.iter().zip(&git_hunk.added))
+        .map(|(gix_position, git_position)| gix_position.abs_diff(*git_position))
+        .max()
+        .unwrap_or(0);
 
-    match before_delta.max(after_delta) {
+    match distance {
         0 => "0",
         1 => "1",
         2..=5 => "2-5",
@@ -412,6 +500,7 @@ fn print_extended_report(cases: &[Case]) {
 }
 
 mod baseline {
+    use super::{Case, Classification, slider_detail};
     use gix_diff::blob::Algorithm;
     use std::ffi::OsStr;
     use std::path::Path;
@@ -456,6 +545,53 @@ mod baseline {
             new_data,
         }
         .into())
+    }
+
+    #[test]
+    fn classification_distinguishes_slider_from_content_mismatches() {
+        fn classify(gix: &str, git: &str) -> Classification {
+            Case {
+                file_name: "synthetic.myers.baseline".into(),
+                algorithm: Algorithm::Myers,
+                git_postprocess_indent_heuristic: git.into(),
+                git_no_indent_heuristic: None,
+                gix_no_postprocess: String::new(),
+                gix_postprocess_no_heuristic: String::new(),
+                gix_postprocess_slider_heuristics: gix.into(),
+            }
+            .classify()
+        }
+
+        let gix = "@@ -1,3 +1,3 @@\n a\n-b\n+c\n d\n";
+        assert_eq!(
+            classify(gix, "@@ -2,3 +2,3 @@\n a\n-b\n+c\n d\n"),
+            Classification::LikelySliderOnlyMismatch,
+            "equal changes at different positions are a likely slider mismatch"
+        );
+        assert_eq!(
+            classify(gix, "@@ -1,3 +1,3 @@\n a\n-b\n+d\n d\n"),
+            Classification::OtherMismatch,
+            "different changed lines aren't a slider-only mismatch"
+        );
+    }
+
+    #[test]
+    fn slider_detail_uses_changed_line_positions() {
+        let gix = "@@ -1,6 +1,4 @@\n-x\n a\n-x\n b\n c\n d\n";
+        let git = "@@ -1,6 +1,4 @@\n-x\n a\n b\n-x\n c\n d\n";
+        assert_eq!(
+            slider_detail(gix, git),
+            "single-hunk/pure-deletion/gix-change-earlier/1",
+            "movement within an unchanged contextual hunk is measured at the changed lines"
+        );
+
+        let gix = format!("{gix}@@ -10,4 +8,3 @@\n a\n b\n-x\n c\n");
+        let git = format!("{git}@@ -10,4 +8,3 @@\n a\n-x\n b\n c\n");
+        assert_eq!(
+            slider_detail(&gix, &git),
+            "multi-hunk/same-count/mixed-direction",
+            "opposite movements within unchanged contextual hunk boundaries are distinguished"
+        );
     }
 }
 
