@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-macros"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 description = "Proc-macro utilities for gix"
 authors = [

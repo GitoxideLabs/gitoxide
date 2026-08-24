@@ -5,13 +5,126 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.49.1 (2026-08-24)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 1 calendar day.
+ - 2 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2932 from GitoxideLabs/fundamental-types-comp ([`6704303`](https://github.com/GitoxideLabs/gitoxide/commit/6704303ed5ef3403b129e2b6cc4a9214432ffd03))
+    - Release gix-error v0.3.1, gix-hash v0.26.2, gix-object v0.64.1, gix-ref v0.67.1, gix-packetline v0.22.1, gix-pack v0.74.1, gix-testtools v0.20.0 ([`e52fe9d`](https://github.com/GitoxideLabs/gitoxide/commit/e52fe9d03e82437a25bdfb1098e7046ec7e1b558))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.49.0 (2026-08-22)
+
+### Bug Fixes
+
+ - <csr-id-67467157bc5acc41546990aac2782e07701762f5/> resolve the empty pattern in `<rev>^{/}` like Git, instead of skipping it.
+   The parser dropped the `find()` delegate call whenever the pattern in
+   `<rev>^{/<pattern>}` was empty, turning the whole navigation step into a
+   no-op on the grounds that an empty pattern matches everything.
+   
+   That reasoning only holds for a commit anchor and a non-negated pattern.
+   Git routes `<rev>^{/...}` through `GET_OID_COMMITTISH` and searches from
+   the peeled commit even when the pattern is empty - object-name.c notes
+   "$commit^{/}. Some regex implementation may reject empty regex, but this
+   is safe". Thus `git rev-parse 'b-tag^{/}'` yields the commit the
+   annotated tag points at, while `gix` returned the tag object itself. A
+   negated empty pattern matches no commit at all, so Git fails `HEAD^{/!-}`
+   while `gix` silently succeeded with HEAD.
+   
+   Now the parser always forwards the pattern to `Navigate::find()`, whose
+   implementation in `gix` already handles the empty case correctly on both
+   the `revparse-regex` and the substring fallback paths: it peels the
+   anchor to a commit first and treats an empty pattern as match-all, which
+   fails naturally when negated. The delegate behind `gix revision explain`
+   makes no assumption about patterns and needs no change.
+   
+   The `make_rev_spec_parse_repos` fixture gains baselines for `@^{/}`,
+   `@^{/!-}` and `b-tag^{/}`; its archive needs regeneration.
+
+### Other
+
+ - <csr-id-548cb6895c04c074db830d77b5dd5fb1552fc3c0/> delegate zero ancestor traversal
+   <!-- agent -->
+   `~0` is a no-op only after resolving its anchor to a commit. The parser cannot
+   know whether the anchor is an annotated tag, and suppressing `NthAncestor(0)`
+   prevents higher-level delegates from peeling it as Git does. Always forward zero
+   so each `Navigate` implementation can apply its own object semantics.
+
+### Changed (BREAKING)
+
+ - <csr-id-8640d5b86526c03e029c7d591084d96ec5d0fb10/> accept `:3:<path>` for the 'theirs' index stage, like Git does.
+   The parser had arms for stages 0, 1 and 2 and let everything else fall through
+   to the catch-all, so `:3:file` was looked up as a path literally named
+   `3:file` at stage 0. `gitrevisions(7)` documents a stage number of 0 to 3, and
+   Git resolves `:3:file` to the blob from the branch being merged.
+   
+   The trait's own docs said stages range from 0 to 2 and labelled them base, ours
+   and theirs. That is off by one: 0 is unconflicted, and 1, 2 and 3 are the common
+   ancestor, the target branch and the branch being merged. The docs came first, in
+   cee04e126, and the arms written twenty minutes later in ea22d3e7c matched them.
+   
+   This is marked breaking because a `Navigate` implementation written against the
+   old documented range can now be handed a stage it does not expect. The one in
+   `gix` already maps 3 to `Stage::Theirs`, but the one behind `gix revision
+   explain` did not, which the next commit addresses.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 17 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2911 from codeAnqiang-ma/fix/empty-regex-revspec ([`05f905e`](https://github.com/GitoxideLabs/gitoxide/commit/05f905ee3647ddf5bf24c580fc64ba4e369d2c7d))
+    - Merge pull request #2910 from codeAnqiang-ma/fix/relative-date-month-rollover ([`566fea1`](https://github.com/GitoxideLabs/gitoxide/commit/566fea12b59005673dd4beede48df12d8884264e))
+    - Review ([`a8b1be5`](https://github.com/GitoxideLabs/gitoxide/commit/a8b1be50101d024977f3037c289951c1ec39a4d6))
+    - Resolve the empty pattern in `<rev>^{/}` like Git, instead of skipping it. ([`6746715`](https://github.com/GitoxideLabs/gitoxide/commit/67467157bc5acc41546990aac2782e07701762f5))
+    - Adapt to changes in `gix-date` ([`613ff86`](https://github.com/GitoxideLabs/gitoxide/commit/613ff86cf77922aaab1f7885e014792458b81606))
+    - Merge pull request #2901 from cruessler/switch-to-gix-odb-at-opts ([`2a4d996`](https://github.com/GitoxideLabs/gitoxide/commit/2a4d996ca53bd38a5e9889da0b180580315d905f))
+    - Introduce `Store::at()` where possible ([`17fea2a`](https://github.com/GitoxideLabs/gitoxide/commit/17fea2ab8a1c23f2e8bc50b78b90feb1e361f66a))
+    - Merge pull request #2897 from cruessler/run-more-tests-with-sha-256 ([`59f2d61`](https://github.com/GitoxideLabs/gitoxide/commit/59f2d610088abf6b5648ea34559827b539aac020))
+    - Review ([`98c29f6`](https://github.com/GitoxideLabs/gitoxide/commit/98c29f6bff71c8a43be1d7063c05325fac000175))
+    - Use `GIX_TEST_FIXTURE_HASH` for more tests ([`bbea2c4`](https://github.com/GitoxideLabs/gitoxide/commit/bbea2c4f231063937c997491b8cd23d8e3e2c4c9))
+    - Merge pull request #2892 from ameyypawar/rev-conformity ([`453c17c`](https://github.com/GitoxideLabs/gitoxide/commit/453c17c343c83b569ad817e6459fadf406926a42))
+    - Review ([`5a4e97b`](https://github.com/GitoxideLabs/gitoxide/commit/5a4e97bf27752091ec48cf1128645d20ea135b9d))
+    - Accept `:3:<path>` for the 'theirs' index stage, like Git does. ([`8640d5b`](https://github.com/GitoxideLabs/gitoxide/commit/8640d5b86526c03e029c7d591084d96ec5d0fb10))
+    - Merge pull request #2871 from shuvamk/fix/revspec-peel-tag-before-traversal ([`d14aefb`](https://github.com/GitoxideLabs/gitoxide/commit/d14aefbf23e9d5c510a6dea3a6f646cb9964731e))
+    - Delegate zero ancestor traversal ([`548cb68`](https://github.com/GitoxideLabs/gitoxide/commit/548cb6895c04c074db830d77b5dd5fb1552fc3c0))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
 ## 0.48.0 (2026-07-23)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 7 commits contributed to the release.
+ - 8 commits contributed to the release.
  - 31 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-actor v0.41.2, gix-features v0.49.0, gix-hash v0.26.0, gix-hashtable v0.16.0, gix-object v0.63.0, gix-glob v0.27.0, gix-attributes v0.34.0, gix-packetline v0.22.0, gix-filter v0.33.0, gix-fs v0.22.0, gix-chunk v0.7.3, gix-commitgraph v0.38.0, gix-revwalk v0.34.0, gix-traverse v0.60.0, gix-worktree-stream v0.35.0, gix-archive v0.35.0, gix-bitmap v0.3.3, gix-tempfile v24.0.0, gix-lock v24.0.0, gix-index v0.54.0, gix-pathspec v0.19.0, gix-ignore v0.22.0, gix-worktree v0.55.0, gix-imara-diff v0.2.4, gix-diff v0.66.0, gix-blame v0.16.0, gix-ref v0.66.0, gix-config v0.59.0, gix-discover v0.54.0, gix-dir v0.28.0, gix-mailmap v0.33.2, gix-revision v0.48.0, gix-merge v0.19.0, gix-negotiate v0.34.0, gix-zlib v0.1.0, gix-pack v0.73.0, gix-odb v0.83.0, gix-refspec v0.44.0, gix-shallow v0.13.0, gix-transport v0.58.0, gix-protocol v0.64.0, gix-status v0.33.0, gix-submodule v0.33.0, gix-worktree-state v0.33.0, gix v0.86.0, gix-fsck v0.24.0, gitoxide-core v0.60.0, gix-tix v0.1.0, gitoxide v0.56.0, safety bump 40 crates ([`842bc44`](https://github.com/GitoxideLabs/gitoxide/commit/842bc447e3aeacf5d9d36f7f8a01068eda4b7999))
     - Update changelogs prior to release ([`cb6ec7d`](https://github.com/GitoxideLabs/gitoxide/commit/cb6ec7dce283943d811b1600b577f586d7a13e1f))
     - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
     - Merge pull request #2722 from GitoxideLabs/reasons ([`c16b5a1`](https://github.com/GitoxideLabs/gitoxide/commit/c16b5a1892704b7c72a253bdd74a6848dd61032a))

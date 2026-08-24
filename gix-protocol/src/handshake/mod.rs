@@ -114,7 +114,7 @@ pub(crate) mod hero {
             #[cfg(feature = "async-client")]
             fetch!(
                 fetch_async,
-                ::bisync::asynchronous::bisync,
+                ::gix_macros::keep,
                 crate::transport::client::async_io::Transport,
                 invoke_async,
                 "async"
@@ -123,7 +123,7 @@ pub(crate) mod hero {
             #[cfg(feature = "blocking-client")]
             fetch!(
                 fetch_blocking,
-                ::bisync::synchronous::bisync,
+                ::gix_macros::sync,
                 crate::transport::client::blocking_io::Transport,
                 invoke_blocking,
                 "blocking"

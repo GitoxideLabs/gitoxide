@@ -7,7 +7,7 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-version = "0.57.0"
+version = "0.58.0"
 # Rust 1.85 is required so hash-related dependencies can use Rust 2024 crates,
 # notably `sha2` 0.11 and `hashbrown` 0.17.
 rust-version = "1.85"
@@ -171,10 +171,10 @@ gitoxide-core-async-client = ["gitoxide-core/async-client", "futures-lite"]
 [dependencies]
 anyhow = "1.0.98"
 
-gitoxide-core = { version = "^0.61.0", path = "gitoxide-core" }
+gitoxide-core = { version = "^0.61.1", path = "gitoxide-core" }
 gix-features = { version = "^0.49.1", path = "gix-features" }
-gix = { version = "^0.87.0", path = "gix", default-features = false }
-gix-tix = { version = "^0.2.0", path = "gix-tix", default-features = false, optional = true }
+gix = { version = "^0.87.1", path = "gix", default-features = false }
+gix-tix = { version = "^0.3.0", path = "gix-tix", default-features = false, optional = true }
 
 clap = { version = "4.5.42", features = ["derive", "cargo"] }
 clap_complete = "4.5.55"

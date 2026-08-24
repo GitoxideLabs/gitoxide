@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-refspec"
-version = "0.45.0"
+version = "0.45.1"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project for parsing and representing refspecs"

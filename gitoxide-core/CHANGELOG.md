@@ -5,7 +5,140 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.61.1 (2026-08-24)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 1 calendar day.
+ - 2 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2932 from GitoxideLabs/fundamental-types-comp ([`6704303`](https://github.com/GitoxideLabs/gitoxide/commit/6704303ed5ef3403b129e2b6cc4a9214432ffd03))
+    - Release gix-error v0.3.1, gix-hash v0.26.2, gix-object v0.64.1, gix-ref v0.67.1, gix-packetline v0.22.1, gix-pack v0.74.1, gix-testtools v0.20.0 ([`e52fe9d`](https://github.com/GitoxideLabs/gitoxide/commit/e52fe9d03e82437a25bdfb1098e7046ec7e1b558))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.61.0 (2026-08-22)
+
+### New Features
+
+ - <csr-id-d934f5b150146860b5a844218c3733869bfeb44f/> expose git notes in `gix::Repository`
+   <!-- agent -->
+   Add the notes feature and `Repository::notes` as the porcelain layer over `gix-note`
+   for repeated queries and mutations.
+   
+   Select the default notes ref from `core.notesRef`, including the `GIT_NOTES_REF`
+   environment override represented in `config::tree`, and fall back to
+   `refs/notes/commits`. Discover additional display refs from `notes.displayRef` or
+   `GIT_NOTES_DISPLAY_REF`, expand glob patterns, preserve display order, and avoid
+   duplicates.
+   
+   For mutations, accept conventional short notes-ref names, write note blobs and
+   notes commits, and update refs with compare-and-swap expectations so concurrent
+   changes are not silently overwritten.
+ - <csr-id-da39b92a4722d4e8eae47a78301cf005d2079835/> use Git signature configuration in `gix commit verify`
+   <!-- agent -->
+   Replace the command-specific GPG invocation with gix::Commit::verify_signature
+   so the CLI and library share one implementation and one interpretation of
+   repository configuration.
+   
+   This extends the command from hard-coded OpenPGP verification to the OpenPGP,
+   X.509, and SSH formats supported by Git, including configured programs and trust
+   policy. Preserve verifier diagnostics on stderr and fail when a signature is
+   invalid or insufficiently trusted.
+   
+   Enable the gix command feature in gitoxide-core to make the shared verification
+   API available.
+ - <csr-id-b1174b69b60b478be24f0b81787e95ac08564e7e/> support cloning a single revision
+   <!-- agent -->
+   A full object ID passed through with_ref_name() produced an object-ID refspec
+   mapping and panicked while clone assumed every mapping had a name. Branch and
+   tag checkout also retained ordinary clone tracking semantics instead of offering
+   a single-revision mode.
+   
+   Add PrepareFetch::with_revision() and gix clone --revision for full refs, HEAD,
+   and full object IDs. Revision clones use a one source-only implicit refspec,
+   detach HEAD to the fetched commit, create no ordinary refs, persist no fetch
+   refspec, and disable tag following. Existing with_ref_name() and --ref behavior
+   stays unchanged.
+   
+   This follows Git commit 337855629f59 (builtin/clone: teach git-clone(1) the
+   --revision= option) and its t/t5621-clone-revision.sh behavior.
+
+### Bug Fixes
+
+ - <csr-id-45e6d93fe48ed625b92363e94ed2053f2bc88e27/> peel revspecs to a commit in `gix merge-base`
+   The revspecs were resolved with `rev_parse_single()` and handed to the
+   commit-only merge-base traversal unchanged, so a revspec naming an annotated
+   tag arrived as the id of the tag object. No commit is found for such an id and
+   no error is raised. In a clone of this repository,
+   `gix merge-base HEAD cargo-smart-release-v0.10.0 cargo-smart-release-v0.1.0`
+   printed 0fa37f5d8c96aee551bb6442756059dc203a6cbc, dropping the tag and
+   computing the base of the two revspecs that were left, while `git merge-base`
+   with the same arguments prints ceb6dff13362a2b4318a551893217c1d11643b9f - the
+   commit the annotated tag points at. Git dereferences tags before computing
+   anything.
+   
+   Each revspec is now peeled to a commit before the traversal. Lightweight tags,
+   branches and raw commit ids resolve as before, and a revspec that cannot be
+   peeled to a commit is rejected with the peel error.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 26 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 1 unique issue was worked on: [#1930](https://github.com/GitoxideLabs/gitoxide/issues/1930)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#1930](https://github.com/GitoxideLabs/gitoxide/issues/1930)**
+    - Support cloning a single revision ([`b1174b6`](https://github.com/GitoxideLabs/gitoxide/commit/b1174b69b60b478be24f0b81787e95ac08564e7e))
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2930 from GitoxideLabs/gix-notes ([`7424676`](https://github.com/GitoxideLabs/gitoxide/commit/7424676f86cd3f5a67c53f8db6baf0803e937d4a))
+    - Expose git notes in `gix::Repository` ([`d934f5b`](https://github.com/GitoxideLabs/gitoxide/commit/d934f5b150146860b5a844218c3733869bfeb44f))
+    - Merge pull request #2926 from cruessler/remove-object-hash-from-options ([`b2d919a`](https://github.com/GitoxideLabs/gitoxide/commit/b2d919a11655fdab5c47001ec1b21d7bbebe24c0))
+    - Merge pull request #2905 from GitoxideLabs/various-improvements ([`f3bbfad`](https://github.com/GitoxideLabs/gitoxide/commit/f3bbfadd4b4f1d72c85c62eb3d7ae337c922f945))
+    - Adapt to changes in `gix-object` (object signing) ([`723d3de`](https://github.com/GitoxideLabs/gitoxide/commit/723d3dedc7a327d19103b53bf80d661f23ee8aca))
+    - Use Git signature configuration in `gix commit verify` ([`da39b92`](https://github.com/GitoxideLabs/gitoxide/commit/da39b92a4722d4e8eae47a78301cf005d2079835))
+    - Merge pull request #2919 from cruessler/require-object-hash-in-file-store-at ([`e5452ba`](https://github.com/GitoxideLabs/gitoxide/commit/e5452baec8ad94736a9f489ec5135c46091eab97))
+    - Adapt to changes in `gix-ref` ([`5810922`](https://github.com/GitoxideLabs/gitoxide/commit/5810922cdb1c2028236b923f6003db7445da35ea))
+    - Merge pull request #2916 from cruessler/require-object-hash-in-store-at ([`dd8c759`](https://github.com/GitoxideLabs/gitoxide/commit/dd8c759e0343c2b5c9776c948d109e9d1ea5943b))
+    - Adapt to changes in `gix-odb` ([`a0b93a3`](https://github.com/GitoxideLabs/gitoxide/commit/a0b93a3877678720f4268adc37317c0f99a8be6d))
+    - Merge pull request #2896 from shuvamk/fix/merge-base-peel-tag ([`e1af444`](https://github.com/GitoxideLabs/gitoxide/commit/e1af44408cf26cb6448a59b2b32b92b265ba2e8a))
+    - Peel revspecs to a commit in `gix merge-base` ([`45e6d93`](https://github.com/GitoxideLabs/gitoxide/commit/45e6d93fe48ed625b92363e94ed2053f2bc88e27))
+    - Merge pull request #2892 from ameyypawar/rev-conformity ([`453c17c`](https://github.com/GitoxideLabs/gitoxide/commit/453c17c343c83b569ad817e6459fadf406926a42))
+    - Adapt to changes in `gix-revision`. ([`21c5614`](https://github.com/GitoxideLabs/gitoxide/commit/21c5614e1eb3cfa21d208083544913305b3986f1))
+    - Merge pull request #2719 from cruessler/blame-untracked-changes ([`95e0213`](https://github.com/GitoxideLabs/gitoxide/commit/95e0213259162d357e68fe459962cbcdce38590f))
+    - Review ([`2ea191f`](https://github.com/GitoxideLabs/gitoxide/commit/2ea191fffb63a2c21f5ed8c9f9f77cc91a763bcc))
+    - Align line numbers in output and start `gix blame` from worktree contents ([`86e90d8`](https://github.com/GitoxideLabs/gitoxide/commit/86e90d8626c01613220ae88100eb3815b31f30ef))
+    - Adapt to changes in `gix-blame` ([`93d4019`](https://github.com/GitoxideLabs/gitoxide/commit/93d4019fdd97200bebcd7b2197da7db74e678877))
+    - Merge pull request #2824 from GitoxideLabs/fetch-revision ([`7a34c17`](https://github.com/GitoxideLabs/gitoxide/commit/7a34c175866222ba6ebeb108d2594369a97d5526))
+    - Merge pull request #2879 from GitoxideLabs/remove-jwalk ([`b6492d3`](https://github.com/GitoxideLabs/gitoxide/commit/b6492d3a4b10d1c4b58988fac62171b65731b42d))
+    - Replace jwalk with dua-core ([`c49dc45`](https://github.com/GitoxideLabs/gitoxide/commit/c49dc457b879eb9f9d6c844878d82e11c185babd))
+    - Merge pull request #2867 from GitoxideLabs/fix-url-authority-parsing ([`cc3ee80`](https://github.com/GitoxideLabs/gitoxide/commit/cc3ee8060ad7a32ee8d2eb9139854be7f7561b70))
+    - Release gix-path v0.12.4, gix-command v0.9.2, gix-config-value v0.19.1, gix-url v0.37.1, gix-credentials v0.39.1, gix-transport v0.58.1 ([`ab4fcb0`](https://github.com/GitoxideLabs/gitoxide/commit/ab4fcb0364ec4d01115595198f383b1ad9c29808))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
+## 0.60.0 (2026-07-23)
 
 ### New Features
 
@@ -100,7 +233,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 46 commits contributed to the release.
+ - 48 commits contributed to the release.
  - 31 days passed between releases.
  - 10 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 3 unique issues were worked on: [#1534](https://github.com/GitoxideLabs/gitoxide/issues/1534), [#2562](https://github.com/GitoxideLabs/gitoxide/issues/2562), [#2696](https://github.com/GitoxideLabs/gitoxide/issues/2696)
@@ -124,6 +257,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  * **[#2696](https://github.com/GitoxideLabs/gitoxide/issues/2696)**
     - Preserve multiple remote URLs ([`5f244b3`](https://github.com/GitoxideLabs/gitoxide/commit/5f244b32c44795062b0aa9e352404cbd1412a844))
  * **Uncategorized**
+    - Release gix-actor v0.41.2, gix-features v0.49.0, gix-hash v0.26.0, gix-hashtable v0.16.0, gix-object v0.63.0, gix-glob v0.27.0, gix-attributes v0.34.0, gix-packetline v0.22.0, gix-filter v0.33.0, gix-fs v0.22.0, gix-chunk v0.7.3, gix-commitgraph v0.38.0, gix-revwalk v0.34.0, gix-traverse v0.60.0, gix-worktree-stream v0.35.0, gix-archive v0.35.0, gix-bitmap v0.3.3, gix-tempfile v24.0.0, gix-lock v24.0.0, gix-index v0.54.0, gix-pathspec v0.19.0, gix-ignore v0.22.0, gix-worktree v0.55.0, gix-imara-diff v0.2.4, gix-diff v0.66.0, gix-blame v0.16.0, gix-ref v0.66.0, gix-config v0.59.0, gix-discover v0.54.0, gix-dir v0.28.0, gix-mailmap v0.33.2, gix-revision v0.48.0, gix-merge v0.19.0, gix-negotiate v0.34.0, gix-zlib v0.1.0, gix-pack v0.73.0, gix-odb v0.83.0, gix-refspec v0.44.0, gix-shallow v0.13.0, gix-transport v0.58.0, gix-protocol v0.64.0, gix-status v0.33.0, gix-submodule v0.33.0, gix-worktree-state v0.33.0, gix v0.86.0, gix-fsck v0.24.0, gitoxide-core v0.60.0, gix-tix v0.1.0, gitoxide v0.56.0, safety bump 40 crates ([`842bc44`](https://github.com/GitoxideLabs/gitoxide/commit/842bc447e3aeacf5d9d36f7f8a01068eda4b7999))
+    - Update changelogs prior to release ([`cb6ec7d`](https://github.com/GitoxideLabs/gitoxide/commit/cb6ec7dce283943d811b1600b577f586d7a13e1f))
     - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
     - Merge pull request #2737 from GitoxideLabs/encoding-fallback-pony ([`2315ede`](https://github.com/GitoxideLabs/gitoxide/commit/2315ede714da6a43c885ed534f37901b2e1db687))
     - Adapt to changes in `gix-filter` ([`552402f`](https://github.com/GitoxideLabs/gitoxide/commit/552402f6147b8ed4f412b9d24bf8408320b4a5d8))

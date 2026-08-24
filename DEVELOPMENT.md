@@ -113,9 +113,9 @@ Parameters which are not available in git or specific to `gitoxide` or the needs
       needs a lot of resources and threads will do just fine.~~
       * Support async out of the box without locking it into particular traits using conditional complication. This will make integrating
         into an async codebase easier, which we assume is given on the server side _these days_.
-  * **usage of `bisync`**
-    * Use async-shaped source with `bisync::asynchronous` or `bisync::synchronous` for shared blocking and async call paths and tests. Select the
-      mode at each integration point so both variants can coexist while being generated from one implementation that cannot drift.
+  * **shared blocking and async code**
+    * Use async-shaped source with the `keep`, `discard`, and `sync` attributes from `gix-macros`. Alias them in a local `bisync` module at each
+      integration point so both variants can coexist while being generated from one implementation that cannot drift.
 * **`Default` trait implementations**
   * These can change only if the effect is contained within the callers process.
     This means **changing the default of a file version** is a **breaking change**.

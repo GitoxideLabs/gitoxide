@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-packetline"
-version = "0.22.1"
+version = "0.22.2"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project implementing the pkt-line serialization format"
@@ -57,7 +57,7 @@ gix-odb = { path = "../gix-odb" }
 gix-pack-for-configuration = { package = "gix-pack", path = "../gix-pack", default-features = false, features = ["streaming-input"] }
 gix-hash = { path = "../gix-hash", features = ["sha1"] }
 async-std = { version = "1.9.0", features = ["attributes"] }
-bisync = "0.3.0"
+gix-macros = { path = "../gix-macros" }
 
 [package.metadata.docs.rs]
 features = ["document-features", "blocking-io", "serde"]

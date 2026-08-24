@@ -1,4 +1,6 @@
-pub use ::bisync::synchronous as bisync;
+pub mod bisync {
+    pub use gix_macros::{discard as only_async, keep as only_sync, sync as bisync};
+}
 
 pub type Result = std::result::Result<(), Box<dyn std::error::Error>>;
 

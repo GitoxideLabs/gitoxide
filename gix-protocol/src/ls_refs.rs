@@ -206,7 +206,7 @@ pub(crate) mod function {
         #[cfg(feature = "async-client")]
         invoke!(
             invoke_async,
-            ::bisync::asynchronous::bisync,
+            ::gix_macros::keep,
             crate::transport::client::async_io::Transport,
             crate::handshake::refs::async_io::from_v2_refs,
             "async"
@@ -215,7 +215,7 @@ pub(crate) mod function {
         #[cfg(feature = "blocking-client")]
         invoke!(
             invoke_blocking,
-            ::bisync::synchronous::bisync,
+            ::gix_macros::sync,
             crate::transport::client::blocking_io::Transport,
             crate::handshake::refs::blocking_io::from_v2_refs,
             "blocking"
