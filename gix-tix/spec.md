@@ -566,7 +566,9 @@ The Enter key is written as `<enter>` throughout.
   inactive. This lets explicitly pinned references and unrelated retained trees
   remain in history. Pins from other worktrees, dangling,
   malformed, and non-commit pins do not enter the view or its decorations.
-  Normal hidden-revision exclusions still apply.
+  Normal hidden-revision exclusions still apply. An ordinary pin at attached
+  `HEAD` remains decorated and can be removed, including when that commit is
+  displayed only as a hidden boundary, but does not add another history tip.
 - One or more worktree pins at a commit are shown as a single blue `📌`
   resource marker immediately after the hash and outside ordinary reference
   decorations. It remains visible when references are hidden, and internal pin

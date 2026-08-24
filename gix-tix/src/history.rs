@@ -1563,18 +1563,15 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
 pub(crate) fn applicable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
     let head = repo.head().context("could not read HEAD while resolving tix pins")?;
     let detached = head.is_detached();
-    let Some(head_id) = head.id().map(gix::Id::detach) else {
+    if head.id().is_none() {
         return Ok(Vec::new());
-    };
+    }
     drop(head);
     let pins = all_pins(repo)?;
     if detached {
         return Ok(pins);
     }
-    Ok(pins
-        .into_iter()
-        .filter(|pin| !pin.is_head() && pin.id != head_id)
-        .collect())
+    Ok(pins.into_iter().filter(|pin| !pin.is_head()).collect())
 }
 
 pub(crate) fn referenced_refs(
@@ -3359,6 +3356,44 @@ mod tests {
         assert!(
             main.iter().all(|decoration| decoration.kind != DecorationKind::Pin),
             "the HEAD pin has no ordinary pin marker"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn attached_hidden_base_keeps_its_ordinary_pin_decoration() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let head_id = repo.head_id()?.detach();
+        let (_, created) = crate::edit::time_travel::create_or_reuse_pin(
+            &repo,
+            gix::refs::Target::Object(head_id),
+            head_id,
+            "test hidden-base pin",
+        )?;
+        assert!(created, "the hidden base receives an ordinary pin");
+        drop(repo);
+
+        let events = loaded(fixture.path(), &[], &["main"])?;
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                Event::HiddenCommits(commits) if commits.rows.iter().any(|row| row.id == head_id)
+            )),
+            "the attached HEAD is displayed as the hidden boundary"
+        );
+        let decorations = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Decorations(decorations) => Some(decorations),
+                _ => None,
+            })
+            .expect("history loading emits decorations first");
+        assert!(
+            decorations.get(&head_id).is_some_and(|decorations| decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::Pin)),
+            "the hidden base pin remains visible so the action is offered as unpin"
         );
         Ok(())
     }
