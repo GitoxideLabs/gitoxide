@@ -109,12 +109,12 @@ mod program {
 
     #[cfg(unix)] // needs executable bits to work
     #[test]
-    fn path_to_helper_script() -> crate::Result {
+    fn path_to_helper_script() -> gix_testtools::TestResult {
         assert_eq!(
             gix_credentials::helper::invoke(
                 &mut Program::from_custom_definition(
-                    gix_path::into_bstr(gix_path::realpath(gix_testtools::fixture_path("custom-helper.sh"))?)
-                        .into_owned()
+                    gix_path::into_bstr(gix_path::realpath(gix_testtools::fixture_path("custom-helper.sh"))?,)
+                        .into_owned(),
                 ),
                 &helper::Action::get_for_url("/does/not/matter"),
             )?
