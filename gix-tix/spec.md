@@ -827,9 +827,10 @@ space first; changes blocks adapt within the remaining history width.
   staged index content when present and reports `nothing to amend` when the
   index matches `HEAD`, even if tracked worktree changes exist. This option does
   not alter the history-view amend action.
-- Command-line edits use the same default HEAD, applicable pin, and review tips
-  as the history view. Unrelated refs do not broaden their descendant rewrite
-  scope, while mutable refs pointing into that scope are still retargeted.
+- Command-line edits use the same default HEAD, applicable pin, review tips, and
+  inferred hidden base as the history view. Unrelated refs do not broaden their
+  descendant rewrite scope, while mutable refs pointing into that scope are
+  still retargeted.
 - After any command-line amend, spill, split, reword, new, rebase, or pending
   time-travel replay, successfully retargeted commit refs are printed after the
   command's existing result as sorted `full/ref/name: old-id -> new-id` lines.
@@ -1015,6 +1016,9 @@ space first; changes blocks adapt within the remaining history width.
   through its checkout destination.
   On conflict, `tix-rebase-parent` identifies the original base and later descendants
   remain marked instead of being cherry-picked.
+- Checkout-path validation considers only commits stored in the current history
+  view. Pending markers below its hidden boundary do not block edits in the
+  visible stack.
 - `Signature::RedoIfNeeded` signs every rewritten commit when signing is
   configured and otherwise removes stale signature headers.
   `InvalidateExisting` empties existing signature values when signing is
