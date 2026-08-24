@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.59.1 (2026-08-24)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 1 calendar day.
+ - 2 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2932 from GitoxideLabs/fundamental-types-comp ([`6704303`](https://github.com/GitoxideLabs/gitoxide/commit/6704303ed5ef3403b129e2b6cc4a9214432ffd03))
+    - Release gix-error v0.3.1, gix-hash v0.26.2, gix-object v0.64.1, gix-ref v0.67.1, gix-packetline v0.22.1, gix-pack v0.74.1, gix-testtools v0.20.0 ([`e52fe9d`](https://github.com/GitoxideLabs/gitoxide/commit/e52fe9d03e82437a25bdfb1098e7046ec7e1b558))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.59.0 (2026-08-22)
+
+### New Features
+
+ - <csr-id-b1174b69b60b478be24f0b81787e95ac08564e7e/> support cloning a single revision
+   <!-- agent -->
+   A full object ID passed through with_ref_name() produced an object-ID refspec
+   mapping and panicked while clone assumed every mapping had a name. Branch and
+   tag checkout also retained ordinary clone tracking semantics instead of offering
+   a single-revision mode.
+   
+   Add PrepareFetch::with_revision() and gix clone --revision for full refs, HEAD,
+   and full object IDs. Revision clones use a one source-only implicit refspec,
+   detach HEAD to the fetched commit, create no ordinary refs, persist no fetch
+   refspec, and disable tag following. Existing with_ref_name() and --ref behavior
+   stays unchanged.
+   
+   This follows Git commit 337855629f59 (builtin/clone: teach git-clone(1) the
+   --revision= option) and its t/t5621-clone-revision.sh behavior.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 6 commits contributed to the release over the course of 19 calendar days.
+ - 19 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 1 unique issue was worked on: [#1930](https://github.com/GitoxideLabs/gitoxide/issues/1930)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#1930](https://github.com/GitoxideLabs/gitoxide/issues/1930)**
+    - Support cloning a single revision ([`b1174b6`](https://github.com/GitoxideLabs/gitoxide/commit/b1174b69b60b478be24f0b81787e95ac08564e7e))
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2899 from ameyypawar/url-remote-helper ([`dbd162d`](https://github.com/GitoxideLabs/gitoxide/commit/dbd162d38833106425004a325a3a7852596c16f4))
+    - Adapt to changes in `gix-url` ([`2648dc1`](https://github.com/GitoxideLabs/gitoxide/commit/2648dc18a600aa3f1bdd062a8e0feadc68affdca))
+    - Merge pull request #2824 from GitoxideLabs/fetch-revision ([`7a34c17`](https://github.com/GitoxideLabs/gitoxide/commit/7a34c175866222ba6ebeb108d2594369a97d5526))
+    - Merge pull request #2867 from GitoxideLabs/fix-url-authority-parsing ([`cc3ee80`](https://github.com/GitoxideLabs/gitoxide/commit/cc3ee8060ad7a32ee8d2eb9139854be7f7561b70))
+</details>
+
 ## 0.58.1 (2026-08-03)
 
 ### Bug Fixes
@@ -31,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 3 commits contributed to the release over the course of 11 calendar days.
+ - 4 commits contributed to the release over the course of 11 calendar days.
  - 11 days passed between releases.
  - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -43,6 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-path v0.12.4, gix-command v0.9.2, gix-config-value v0.19.1, gix-url v0.37.1, gix-credentials v0.39.1, gix-transport v0.58.1 ([`ab4fcb0`](https://github.com/GitoxideLabs/gitoxide/commit/ab4fcb0364ec4d01115595198f383b1ad9c29808))
     - Preserve encoded HTTP paths across redirects. ([`60850df`](https://github.com/GitoxideLabs/gitoxide/commit/60850df267f902ef6b65e8211e6d40aeb45e1970))
     - Terminate URL authorities at query and fragment delimiters. ([`156b53d`](https://github.com/GitoxideLabs/gitoxide/commit/156b53de2b7d93087aceee623965110a19750d37))
     - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))

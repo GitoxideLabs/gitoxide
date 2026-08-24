@@ -5,13 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.36.1 (2026-08-24)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 1 calendar day.
+ - 2 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2932 from GitoxideLabs/fundamental-types-comp ([`6704303`](https://github.com/GitoxideLabs/gitoxide/commit/6704303ed5ef3403b129e2b6cc4a9214432ffd03))
+    - Release gix-error v0.3.1, gix-hash v0.26.2, gix-object v0.64.1, gix-ref v0.67.1, gix-packetline v0.22.1, gix-pack v0.74.1, gix-testtools v0.20.0 ([`e52fe9d`](https://github.com/GitoxideLabs/gitoxide/commit/e52fe9d03e82437a25bdfb1098e7046ec7e1b558))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
 ## 0.36.0 (2026-08-22)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 6 commits contributed to the release over the course of 30 calendar days.
+ - 7 commits contributed to the release over the course of 30 calendar days.
  - 30 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-error v0.3.0, gix-date v0.16.0, gix-actor v0.42.0, gix-validate v0.11.4, gix-path v0.12.5, gix-utils v0.3.6, gix-quote v0.8.0, gix-command v0.10.0, gix-features v0.49.1, gix-hash v0.26.1, gix-fs v0.22.1, gix-object v0.64.0, gix-glob v0.27.1, gix-attributes v0.35.0, gix-filter v0.34.0, gix-chunk v0.8.0, gix-commitgraph v0.39.0, gix-revwalk v0.35.0, gix-traverse v0.61.0, gix-worktree-stream v0.36.0, gix-archive v0.36.0, gix-bitmap v0.4.0, gix-index v0.55.0, gix-pathspec v0.20.0, gix-ignore v0.22.1, gix-worktree v0.56.0, gix-imara-diff v0.2.5, gix-diff v0.67.0, gix-blame v0.17.0, gix-ref v0.67.0, gix-config v0.60.0, gix-prompt v0.17.0, gix-url v0.38.0, gix-credentials v0.40.0, gix-discover v0.55.0, gix-dir v0.29.0, gix-mailmap v0.34.0, gix-revision v0.49.0, gix-merge v0.20.0, gix-negotiate v0.35.0, gix-note v0.1.0, gix-pack v0.74.0, gix-odb v0.84.0, gix-refspec v0.45.0, gix-transport v0.59.0, gix-protocol v0.65.0, gix-status v0.34.0, gix-submodule v0.34.0, gix-worktree-state v0.34.0, gix v0.87.0, gix-fsck v0.25.0, gitoxide-core v0.61.0, gix-tix v0.2.0, gitoxide v0.57.0 ([`d2af4ed`](https://github.com/GitoxideLabs/gitoxide/commit/d2af4ed5532ea660fbd643e48d8925cd88de5ee0))
     - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
     - Merge pull request #2901 from cruessler/switch-to-gix-odb-at-opts ([`2a4d996`](https://github.com/GitoxideLabs/gitoxide/commit/2a4d996ca53bd38a5e9889da0b180580315d905f))
     - Introduce `Store::at()` where possible ([`17fea2a`](https://github.com/GitoxideLabs/gitoxide/commit/17fea2ab8a1c23f2e8bc50b78b90feb1e361f66a))

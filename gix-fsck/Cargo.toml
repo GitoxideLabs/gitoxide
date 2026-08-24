@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-fsck"
-version = "0.25.0"
+version = "0.25.1"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Cameron Esfahani <cesfahani@gmail.com>", "Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"

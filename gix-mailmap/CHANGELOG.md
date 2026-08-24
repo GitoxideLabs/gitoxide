@@ -5,13 +5,100 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.34.1 (2026-08-24)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 1 calendar day.
+ - 2 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2932 from GitoxideLabs/fundamental-types-comp ([`6704303`](https://github.com/GitoxideLabs/gitoxide/commit/6704303ed5ef3403b129e2b6cc4a9214432ffd03))
+    - Release gix-error v0.3.1, gix-hash v0.26.2, gix-object v0.64.1, gix-ref v0.67.1, gix-packetline v0.22.1, gix-pack v0.74.1, gix-testtools v0.20.0 ([`e52fe9d`](https://github.com/GitoxideLabs/gitoxide/commit/e52fe9d03e82437a25bdfb1098e7046ec7e1b558))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.34.0 (2026-08-22)
+
+### Bug Fixes
+
+ - <csr-id-122125b49f2f42cc767cbcf13082a2659d9bc9dc/> match Git when parsing a second mailmap identity
+   <!-- agent -->
+   Git treats the second name-and-email pair differently from the first: an
+   empty email is accepted, and a malformed pair is ignored while retaining
+   the mapping parsed from the first identity. Mirror those rules instead of
+   rejecting the entire line.
+   
+   This also keeps arbitrary malformed trailing content from dropping an
+   otherwise valid mapping.
+ - <csr-id-8aab54dc473687b0eeb5e1af28d99da3cccd7fa0/> don't reject mailmap lines with content after the second email
+   Git's `read_mailmap_line()` parses at most two `name <email>` pairs and
+   discards whatever follows - the return value of the second
+   `parse_name_and_email()` call is unused. `gix-mailmap` instead rejected
+   any line with a non-empty remainder, and because `Snapshot::from_bytes()`
+   goes through `parse_ignore_errors()`, those lines were silently dropped.
+   
+   Git's own `.mailmap` contains 16 such lines out of 305, and
+   `torvalds/linux`'s contains one. Line 230 of git.git's `.mailmap`:
+   
+       Philip Oakley <philipoakley@iee.email> <philipoakley@iee.org> # secondary <philipoakley@dunelm.org.uk>
+   
+       $ git check-mailmap 'Philip Oakley <philipoakley@iee.org>'
+       Philip Oakley <philipoakley@iee.email>
+   
+   while `gix_mailmap::Snapshot::resolve()` returned the signature unchanged.
+   
+   The remainder check is replaced by Git's own condition: reject a line only
+   when it contains no email at all, which is what `if (email1)` guards in
+   `read_mailmap_line()`. Lines such as `just a name` therefore still produce
+   an error, so `parse()` keeps reporting genuinely unparseable input. The
+   message is reworded because "too many names or emails" can no longer
+   happen.
+   
+   Resolving every name and email appearing in git.git's and linux's
+   `.mailmap` - 904 and 2834 queries - now agrees with `git check-mailmap`
+   in every case; 16 and 2 of them disagreed before.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 5 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2857 from shuvamk/fix/mailmap-trailing-content ([`f14a495`](https://github.com/GitoxideLabs/gitoxide/commit/f14a495b0c30af82e2156f0dbdf60dfd74ac3612))
+    - Match Git when parsing a second mailmap identity ([`122125b`](https://github.com/GitoxideLabs/gitoxide/commit/122125b49f2f42cc767cbcf13082a2659d9bc9dc))
+    - Don't reject mailmap lines with content after the second email ([`8aab54d`](https://github.com/GitoxideLabs/gitoxide/commit/8aab54dc473687b0eeb5e1af28d99da3cccd7fa0))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
 ## 0.33.2 (2026-07-23)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 4 commits contributed to the release.
+ - 5 commits contributed to the release.
  - 58 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-actor v0.41.2, gix-features v0.49.0, gix-hash v0.26.0, gix-hashtable v0.16.0, gix-object v0.63.0, gix-glob v0.27.0, gix-attributes v0.34.0, gix-packetline v0.22.0, gix-filter v0.33.0, gix-fs v0.22.0, gix-chunk v0.7.3, gix-commitgraph v0.38.0, gix-revwalk v0.34.0, gix-traverse v0.60.0, gix-worktree-stream v0.35.0, gix-archive v0.35.0, gix-bitmap v0.3.3, gix-tempfile v24.0.0, gix-lock v24.0.0, gix-index v0.54.0, gix-pathspec v0.19.0, gix-ignore v0.22.0, gix-worktree v0.55.0, gix-imara-diff v0.2.4, gix-diff v0.66.0, gix-blame v0.16.0, gix-ref v0.66.0, gix-config v0.59.0, gix-discover v0.54.0, gix-dir v0.28.0, gix-mailmap v0.33.2, gix-revision v0.48.0, gix-merge v0.19.0, gix-negotiate v0.34.0, gix-zlib v0.1.0, gix-pack v0.73.0, gix-odb v0.83.0, gix-refspec v0.44.0, gix-shallow v0.13.0, gix-transport v0.58.0, gix-protocol v0.64.0, gix-status v0.33.0, gix-submodule v0.33.0, gix-worktree-state v0.33.0, gix v0.86.0, gix-fsck v0.24.0, gitoxide-core v0.60.0, gix-tix v0.1.0, gitoxide v0.56.0, safety bump 40 crates ([`842bc44`](https://github.com/GitoxideLabs/gitoxide/commit/842bc447e3aeacf5d9d36f7f8a01068eda4b7999))
     - Update changelogs prior to release ([`cb6ec7d`](https://github.com/GitoxideLabs/gitoxide/commit/cb6ec7dce283943d811b1600b577f586d7a13e1f))
     - Merge pull request #2714 from GitoxideLabs/fix-credentials-parsing ([`cf3053a`](https://github.com/GitoxideLabs/gitoxide/commit/cf3053a3c18e2de788cdaa9f41b5bd343bdc0091))
     - Release gix-path v0.12.2, gix-error v0.2.5, gix-utils v0.3.4, gix-date v0.15.6, gix-url v0.36.2, gix-credentials v0.38.2 ([`27aec47`](https://github.com/GitoxideLabs/gitoxide/commit/27aec474c113cc885d44631b329454dc1ad0fed2))

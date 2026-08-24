@@ -5,13 +5,139 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.45.1 (2026-08-24)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 1 calendar day.
+ - 2 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2932 from GitoxideLabs/fundamental-types-comp ([`6704303`](https://github.com/GitoxideLabs/gitoxide/commit/6704303ed5ef3403b129e2b6cc4a9214432ffd03))
+    - Release gix-error v0.3.1, gix-hash v0.26.2, gix-object v0.64.1, gix-ref v0.67.1, gix-packetline v0.22.1, gix-pack v0.74.1, gix-testtools v0.20.0 ([`e52fe9d`](https://github.com/GitoxideLabs/gitoxide/commit/e52fe9d03e82437a25bdfb1098e7046ec7e1b558))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.45.0 (2026-08-22)
+
+### Bug Fixes
+
+ - <csr-id-42f742d85ac6aa721c0f460f4e05d59bcd5893fa/> match Git refspec pattern and exclusion rules.
+   <!-- agent -->
+   Git refspec patterns are deliberately narrower than general globs. The
+   upstream parser accepts exactly one asterisk, requires a patterned fetch
+   source to have a patterned destination, and only permits the one-sided
+   pattern form for pushes and negative refspecs.
+   
+   Apply those rules uniformly instead of skipping validation for one-sided
+   specifications. This rejects general wildcard expressions and one-sided
+   fetch patterns while retaining valid one-sided push patterns.
+   
+   Accept partial negative refspecs as Git does, and compare their source
+   literally during matching instead of expanding it through the positive
+   partial-ref lookup rules. Thus a negative source such as ^main parses but
+   does not implicitly match refs/heads/main.
+   
+   Remove the now-unreachable wildmatch matcher, its complex-glob tests, and
+   the direct gix-glob dependency. Update the instruction documentation,
+   including the fact that deletion destinations cannot be patterns, and fix
+   the negative-object-hash error text.
+   
+   Extend and regenerate the Git baselines for one-sided fetch and push
+   patterns, invalid wildcard syntax, and partial negative refspecs. Remove
+   the baseline exceptions so every recorded result must now agree with Git.
+ - <csr-id-910197fad6fcd752cae808ce1414512b21c78ae8/> split refspecs on the last colon, like Git does
+   `parse_refspec()` in `refspec.c` locates the separator with
+   `rhs = strrchr(lhs, ':')`, so everything before the final colon is the source.
+   That matters for push, where the source is a revision rather than a ref name and
+   may itself contain a colon - `:/message` searches commit messages, `<rev>:<path>`
+   addresses a blob or tree. Both are accepted by Git today.
+   
+   Splitting on the first colon instead made `:/message:refs/heads/x` parse as the
+   destination `message:refs/heads/x`, which is not a valid reference name, so the
+   spec was rejected outright.
+   
+   Fetch is unaffected, as its source is a ref name that cannot contain a colon.
+   Baseline entries cover both operations; both archives are regenerated because the
+   archive identity derives from the fixture script.
+
+### Changed (BREAKING)
+
+ - <csr-id-05a126f9b4bdde603a1c5a9b5553c8d1dbb5d484/> take any non-glob push source, like Git does.
+   Git means the source of a push refspec to be an extended SHA-1, but says of it
+   that "there is no existing way to validate this" and takes whatever is written:
+   
+   	 * - otherwise, it must be an extended SHA-1, but
+   	 *   there is no existing way to validate this.
+   	 [...]
+   	else
+   		; /* anything goes, for now */
+   
+   This crate checked it against a ref name, falling back to parsing it as a
+   rev-spec, which `gix-revision` can do without a repository. That is stricter than
+   Git for seven of the shapes now in the baseline, among them `::a`, `~:x`,
+   `a^{bogus}:x` and `a@{:x`.
+   
+   The check is dropped for that one side only. A missing destination still requires
+   the source to be a ref name, an empty destination is still refused, the
+   destination itself is still validated, and both glob rules still hold, all as
+   before. Negative refspecs never reach it, as a destination rejects them first.
+   
+   Ten entries are added to the parse baseline, which records `git`'s own verdict;
+   the last two of them are destinations Git refuses, to pin that side. Both
+   archives are regenerated, since `just unit-tests` runs this crate under `sha256`
+   as well.
+   
+   With the rev-spec fallback gone, so is the only use of `gix-revision` here, the
+   `Error::RevSpec` variant that carried its failures, and the last use of
+   `gix-error`. Both dependencies are dropped.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 11 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2894 from ameyypawar/refspec-push-source ([`ef41caa`](https://github.com/GitoxideLabs/gitoxide/commit/ef41caafddba2fc97b0106f9cfd7fa3e5567f670))
+    - Match Git refspec pattern and exclusion rules. ([`42f742d`](https://github.com/GitoxideLabs/gitoxide/commit/42f742d85ac6aa721c0f460f4e05d59bcd5893fa))
+    - Review ([`81883b2`](https://github.com/GitoxideLabs/gitoxide/commit/81883b2ac2d356cf83ea1c4f8636858227ddad86))
+    - Take any non-glob push source, like Git does. ([`05a126f`](https://github.com/GitoxideLabs/gitoxide/commit/05a126f9b4bdde603a1c5a9b5553c8d1dbb5d484))
+    - Merge pull request #2888 from ameyypawar/refspec-last-colon ([`04b91a1`](https://github.com/GitoxideLabs/gitoxide/commit/04b91a1b66777e5d6e3d8ca4407960ceedec4c36))
+    - Review ([`9864e70`](https://github.com/GitoxideLabs/gitoxide/commit/9864e70a54f1d95733a7be365ff92a8daaf6d1ee))
+    - Split refspecs on the last colon, like Git does ([`910197f`](https://github.com/GitoxideLabs/gitoxide/commit/910197fad6fcd752cae808ce1414512b21c78ae8))
+    - Merge pull request #2886 from ameyypawar/validate-at-refname ([`12240ab`](https://github.com/GitoxideLabs/gitoxide/commit/12240ab1637a2f3feaef4ce48fd1f6d324705437))
+    - Review ([`1384133`](https://github.com/GitoxideLabs/gitoxide/commit/1384133eaa3815f03f7ba18bcc81a1e2bdb934f5))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
 ## 0.44.0 (2026-07-23)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 7 commits contributed to the release.
+ - 8 commits contributed to the release.
  - 31 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-actor v0.41.2, gix-features v0.49.0, gix-hash v0.26.0, gix-hashtable v0.16.0, gix-object v0.63.0, gix-glob v0.27.0, gix-attributes v0.34.0, gix-packetline v0.22.0, gix-filter v0.33.0, gix-fs v0.22.0, gix-chunk v0.7.3, gix-commitgraph v0.38.0, gix-revwalk v0.34.0, gix-traverse v0.60.0, gix-worktree-stream v0.35.0, gix-archive v0.35.0, gix-bitmap v0.3.3, gix-tempfile v24.0.0, gix-lock v24.0.0, gix-index v0.54.0, gix-pathspec v0.19.0, gix-ignore v0.22.0, gix-worktree v0.55.0, gix-imara-diff v0.2.4, gix-diff v0.66.0, gix-blame v0.16.0, gix-ref v0.66.0, gix-config v0.59.0, gix-discover v0.54.0, gix-dir v0.28.0, gix-mailmap v0.33.2, gix-revision v0.48.0, gix-merge v0.19.0, gix-negotiate v0.34.0, gix-zlib v0.1.0, gix-pack v0.73.0, gix-odb v0.83.0, gix-refspec v0.44.0, gix-shallow v0.13.0, gix-transport v0.58.0, gix-protocol v0.64.0, gix-status v0.33.0, gix-submodule v0.33.0, gix-worktree-state v0.33.0, gix v0.86.0, gix-fsck v0.24.0, gitoxide-core v0.60.0, gix-tix v0.1.0, gitoxide v0.56.0, safety bump 40 crates ([`842bc44`](https://github.com/GitoxideLabs/gitoxide/commit/842bc447e3aeacf5d9d36f7f8a01068eda4b7999))
     - Update changelogs prior to release ([`cb6ec7d`](https://github.com/GitoxideLabs/gitoxide/commit/cb6ec7dce283943d811b1600b577f586d7a13e1f))
     - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
     - Merge pull request #2722 from GitoxideLabs/reasons ([`c16b5a1`](https://github.com/GitoxideLabs/gitoxide/commit/c16b5a1892704b7c72a253bdd74a6848dd61032a))

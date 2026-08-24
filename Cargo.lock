@@ -1508,7 +1508,7 @@ dependencies = [
 
 [[package]]
 name = "gitoxide"
-version = "0.57.0"
+version = "0.58.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1532,7 +1532,7 @@ dependencies = [
 
 [[package]]
 name = "gitoxide-core"
-version = "0.61.0"
+version = "0.61.1"
 dependencies = [
  "anyhow",
  "async-io",
@@ -1572,7 +1572,7 @@ dependencies = [
 
 [[package]]
 name = "gix"
-version = "0.87.0"
+version = "0.87.1"
 dependencies = [
  "anyhow",
  "async-std",
@@ -1663,7 +1663,7 @@ dependencies = [
 
 [[package]]
 name = "gix-archive"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "bstr",
  "document-features",
@@ -1713,7 +1713,7 @@ dependencies = [
 
 [[package]]
 name = "gix-blame"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "gix-commitgraph",
  "gix-date",
@@ -1847,7 +1847,7 @@ dependencies = [
 
 [[package]]
 name = "gix-diff"
-version = "0.67.0"
+version = "0.67.1"
 dependencies = [
  "bstr",
  "criterion",
@@ -1878,7 +1878,7 @@ dependencies = [
 
 [[package]]
 name = "gix-dir"
-version = "0.29.0"
+version = "0.29.1"
 dependencies = [
  "bstr",
  "gix-dir",
@@ -1988,7 +1988,7 @@ dependencies = [
 
 [[package]]
 name = "gix-fsck"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "gix-hash",
  "gix-hashtable",
@@ -2114,7 +2114,7 @@ dependencies = [
 
 [[package]]
 name = "gix-macros"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2124,7 +2124,7 @@ dependencies = [
 
 [[package]]
 name = "gix-mailmap"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "bstr",
  "document-features",
@@ -2137,7 +2137,7 @@ dependencies = [
 
 [[package]]
 name = "gix-merge"
-version = "0.20.0"
+version = "0.20.1"
 dependencies = [
  "arbitrary",
  "bstr",
@@ -2171,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "gix-negotiate"
-version = "0.35.0"
+version = "0.35.1"
 dependencies = [
  "bitflags 2.13.0",
  "gix-commitgraph",
@@ -2186,7 +2186,7 @@ dependencies = [
 
 [[package]]
 name = "gix-note"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gix-error",
  "gix-hash",
@@ -2258,7 +2258,7 @@ dependencies = [
 
 [[package]]
 name = "gix-pack"
-version = "0.74.1"
+version = "0.74.2"
 dependencies = [
  "bstr",
  "clru",
@@ -2291,7 +2291,7 @@ dependencies = [
 
 [[package]]
 name = "gix-packetline"
-version = "0.22.1"
+version = "0.22.2"
 dependencies = [
  "async-std",
  "bstr",
@@ -2354,7 +2354,7 @@ dependencies = [
 
 [[package]]
 name = "gix-protocol"
-version = "0.65.0"
+version = "0.65.1"
 dependencies = [
  "async-std",
  "async-trait",
@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "gix-refspec"
-version = "0.45.0"
+version = "0.45.1"
 dependencies = [
  "bstr",
  "gix-hash",
@@ -2438,7 +2438,7 @@ dependencies = [
 
 [[package]]
 name = "gix-revision"
-version = "0.49.0"
+version = "0.49.1"
 dependencies = [
  "bitflags 2.13.0",
  "bstr",
@@ -2506,7 +2506,7 @@ dependencies = [
 
 [[package]]
 name = "gix-status"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "bstr",
  "document-features",
@@ -2596,7 +2596,7 @@ dependencies = [
 
 [[package]]
 name = "gix-tix"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2624,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "gix-transport"
-version = "0.59.0"
+version = "0.59.1"
 dependencies = [
  "async-std",
  "async-trait",
@@ -2737,7 +2737,7 @@ dependencies = [
 
 [[package]]
 name = "gix-worktree-state"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "bstr",
  "gix-discover",
@@ -2759,7 +2759,7 @@ dependencies = [
 
 [[package]]
 name = "gix-worktree-stream"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "gix-attributes",
  "gix-error",
