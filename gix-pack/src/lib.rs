@@ -57,6 +57,10 @@ pub mod multi_index;
 ///
 pub mod verify;
 
+///
+#[cfg(feature = "testing")]
+pub mod testing;
+
 mod mmap {
     use std::path::Path;
 

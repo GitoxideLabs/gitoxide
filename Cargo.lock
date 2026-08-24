@@ -2294,6 +2294,7 @@ dependencies = [
  "gix-testtools",
  "gix-traverse",
  "gix-zlib",
+ "insta",
  "maplit",
  "memmap2",
  "parking_lot",

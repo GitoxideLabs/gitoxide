@@ -367,6 +367,81 @@ fn traversals() -> crate::Result {
     Ok(())
 }
 
+#[test]
+fn tree_additions_from_each_merge_parent_are_kept() -> crate::Result {
+    use gix_object::Write;
+
+    let object_hash = object_hash();
+    let mut db = gix_odb::memory::Proxy::new(gix_odb::sink(object_hash), object_hash);
+    let added_blob_id = db.write_buf(gix_object::Kind::Blob, b"added")?;
+    let base_tree_id = db.write(&gix_object::Tree::empty())?;
+    let merged_tree_id = db.write(&gix_object::Tree {
+        entries: vec![gix_object::tree::Entry {
+            mode: gix_object::tree::EntryKind::Blob.into(),
+            oid: added_blob_id,
+            filename: "added".into(),
+        }],
+    })?;
+    let write_commit = |tree, parents: &[gix_hash::ObjectId]| {
+        db.write(&gix_object::Commit {
+            tree,
+            parents: parents.iter().copied().collect(),
+            author: Default::default(),
+            committer: Default::default(),
+            encoding: None,
+            message: "commit".into(),
+            extra_headers: Vec::new(),
+        })
+    };
+    let base_commit_id = write_commit(base_tree_id, &[])?;
+    let feature_commit_id = write_commit(merged_tree_id, &[base_commit_id])?;
+    let merge_commit_id = write_commit(merged_tree_id, &[base_commit_id, feature_commit_id])?;
+    let mut objects = db
+        .take_object_memory()
+        .expect("in-memory object storage is still enabled");
+    let db = gix_pack::testing::Memory::new(objects.drain());
+    let mut input = std::iter::once(Ok::<_, Box<dyn std::error::Error + Send + Sync>>(merge_commit_id));
+
+    let (counts, stats) = output::count::objects_unthreaded(
+        &db,
+        &mut input,
+        &progress::Discard,
+        &AtomicBool::new(false),
+        count::objects::ObjectExpansion::TreeAdditionsComparedToAncestor,
+    )?;
+
+    let expected_ids = std::collections::BTreeSet::from([
+        added_blob_id,
+        base_tree_id,
+        merged_tree_id,
+        base_commit_id,
+        feature_commit_id,
+        merge_commit_id,
+    ]);
+    assert_eq!(
+        counts.len(),
+        expected_ids.len(),
+        "each expected object must be counted exactly once"
+    );
+    assert_eq!(
+        counts
+            .iter()
+            .map(|count| count.id)
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected_ids,
+        "additions found against every merge parent must remain in the pack"
+    );
+    insta::assert_debug_snapshot!(stats, @"
+    Outcome {
+        input_objects: 1,
+        expanded_objects: 5,
+        decoded_objects: 5,
+        total_objects: 6,
+    }
+    ");
+    Ok(())
+}
+
 /// Reproduces https://github.com/GitoxideLabs/gitoxide/issues/2024: with the default backend's
 /// level 1 being much weaker than it used to be, entries have to be compressed with the
 /// configured level, defaulting to what `git` uses.

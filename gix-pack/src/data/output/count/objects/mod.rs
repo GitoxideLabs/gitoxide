@@ -220,6 +220,7 @@ mod expand {
                                     out = objects.dissolve(stats);
                                     &traverse_delegate.non_trees
                                 } else {
+                                    changes_delegate.clear();
                                     for commit_id in &parent_commit_ids {
                                         let parent_tree_id = {
                                             let (parent_commit_obj, location) = db.find(commit_id, buf2)?;
@@ -251,7 +252,6 @@ mod expand {
                                             )
                                         };
 
-                                        changes_delegate.clear();
                                         let objects = CountingObjects::new(db);
                                         gix_diff::tree(
                                             parent_tree,
