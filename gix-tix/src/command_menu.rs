@@ -13,6 +13,7 @@ pub(crate) enum CommandId {
     Trailers,
     Refs,
     Hidden,
+    Select,
     Reword,
     NewCommit,
     NewEmptyCommit,
@@ -103,7 +104,7 @@ impl Command {
 }
 
 pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_signatures: bool) -> Vec<Command> {
-    let mut out = Vec::with_capacity(35);
+    let mut out = Vec::with_capacity(36);
     let mut push = |id, group, row, label, shortcut, active, action| {
         out.push(Command {
             id,
@@ -209,6 +210,17 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
             "vh",
             app.show_hidden,
             Action::ToggleHidden,
+        );
+    }
+    if app.can_select_entry() {
+        push(
+            CommandId::Select,
+            CommandGroup::View,
+            0,
+            "select",
+            "vc",
+            true,
+            Action::SelectEntry,
         );
     }
 
@@ -630,6 +642,26 @@ mod tests {
             ],
             "groups alternate without disturbing their popup order"
         );
+    }
+
+    #[test]
+    fn select_is_available_for_numbered_history() {
+        let mut app = App::new(1);
+        app.extend_commits(vec![row(1, &[])]);
+        let rows = app
+            .start_lane_computation()
+            .expect("the loaded row starts lane computation");
+        let (rows, graph, lane_time) = crate::app::compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, lane_time);
+
+        let select = commands(&app, &Decorations::default(), false)
+            .into_iter()
+            .find(|command| command.id == CommandId::Select)
+            .expect("numbered history offers selection by entry number");
+        assert_eq!(select.group, CommandGroup::View);
+        assert_eq!(select.label, "select");
+        assert_eq!(select.shortcut, "vc");
+        assert_eq!(select.action, Action::SelectEntry);
     }
 
     #[test]
