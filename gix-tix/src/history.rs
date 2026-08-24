@@ -248,6 +248,11 @@ impl HistoryGraph {
         self.stored_order.iter().map(|index| self.id(*index))
     }
 
+    pub(crate) fn is_stored(&self, id: ObjectId) -> bool {
+        self.index(id)
+            .is_some_and(|index| self.commits[index.as_usize()].state & NODE_STORED != 0)
+    }
+
     pub(crate) fn is_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> bool {
         let (Some(ancestor), Some(descendant)) = (self.index(ancestor), self.index(descendant)) else {
             return false;

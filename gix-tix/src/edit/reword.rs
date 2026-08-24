@@ -850,6 +850,98 @@ mod tests {
     }
 
     #[test]
+    fn head_edits_ignore_pending_history_below_the_hidden_base() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let old_tip = repository.head_id()?.detach();
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        let base = repository.rev_parse_single("HEAD~2")?.detach();
+
+        let mut pending = repository.find_commit(middle)?.decode()?.into_owned()?;
+        pending
+            .extra_headers
+            .push(("tix-rebase-parent".into(), base.to_string().into()));
+        let pending = repository.write_object(&pending)?.detach();
+        let mut boundary = repository.find_commit(old_tip)?.decode()?.into_owned()?;
+        boundary.parents = [pending].into_iter().collect();
+        boundary.message = "hidden base".into();
+        let boundary = repository.write_object(&boundary)?.detach();
+        let mut head = repository.find_commit(old_tip)?.decode()?.into_owned()?;
+        head.parents = [boundary].into_iter().collect();
+        head.message = "head".into();
+        let head = repository.write_object(&head)?.detach();
+        repository
+            .find_reference("refs/heads/main")?
+            .set_target_id(head, "prepare hidden pending ancestry")?;
+        repository.reference(
+            "refs/heads/base",
+            boundary,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "prepare inferred hidden base",
+        )?;
+        let boundary = boundary.to_string();
+        for args in [
+            vec!["config", "remote.origin.url", "."],
+            vec!["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+            vec!["update-ref", "refs/remotes/origin/base", &boundary],
+            vec!["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/base"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(fixture.path())
+                    .args(&args)
+                    .status()?
+                    .success(),
+                "git {args:?} prepares remote HEAD inference"
+            );
+        }
+        let boundary = gix::ObjectId::from_hex(boundary.as_bytes())?;
+        drop(repository);
+        let repository = crate::test_repository::open(fixture.path())?;
+
+        let graph = super::super::loaded_view_graph(&repository)?;
+        let outcome = apply_message_reporting(repository.clone(), &graph, head, b"reworded head\n", None)?;
+        let rewritten = outcome.commit.expect("the message changed");
+        assert_eq!(
+            repository
+                .find_commit(rewritten)?
+                .parent_ids()
+                .next()
+                .map(gix::Id::detach),
+            Some(boundary),
+            "the reword keeps the hidden base"
+        );
+        std::fs::write(fixture.path().join("tip"), b"amended\n")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["add", "tip"])
+                .status()?
+                .success(),
+            "the index change is staged"
+        );
+        let graph = super::super::loaded_view_graph(&repository)?;
+        let amended =
+            super::super::head::amend_index(repository.clone(), &graph)?.expect("the staged tree changes amend HEAD");
+        assert_eq!(
+            repository
+                .find_commit(amended)?
+                .parent_ids()
+                .next()
+                .map(gix::Id::detach),
+            Some(boundary),
+            "the index amend keeps the hidden base"
+        );
+        assert!(
+            rebase::is_pending(&repository.find_commit(pending)?.decode()?.into_owned()?),
+            "pending history below the hidden base is unrelated"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn signed_rewords_sign_eager_checked_out_descendants() -> gix_testtools::Result {
         if !gix_testtools::signature::program_available("ssh-keygen") {
             return Ok(());

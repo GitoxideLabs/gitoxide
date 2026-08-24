@@ -41,9 +41,10 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         pins.iter()
             .map(|pin| gix::path::from_bstr(pin.name.as_bstr()).into_owned().into_os_string()),
     );
+    let hidden = crate::history::available_hidden_revisions(&repository, &[], true)?.0;
     let graph = match resolved_graph {
         Some(graph) => graph,
-        None => crate::edit::loaded_view_graph_with(&repository, &revisions)?,
+        None => crate::edit::loaded_view_graph_with_hidden(&repository, &revisions, &hidden)?,
     };
     ensure_retained_target(&graph, target, &pins, attached_head)?;
 
@@ -91,7 +92,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let mut repository = crate::open_repository(&repository_path, bare, false)
         .context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    let (graph, target) = crate::edit::reword::relocate_after_editor(&repository, &[], &[], change_id)?;
+    let (graph, target) = crate::edit::reword::relocate_after_editor(&repository, &[], &hidden, change_id)?;
     let pins = crate::history::all_pins(&repository)?;
     let head = repository.head().context("could not read HEAD after editing commit")?;
     let attached_head = !head.is_detached() && head.id().map(gix::Id::detach) == Some(target);
