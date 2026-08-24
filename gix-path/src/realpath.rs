@@ -1,25 +1,11 @@
 /// The error returned by [`realpath()`][super::realpath()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("The maximum allowed number {} of symlinks in path is exceeded", .max_symlinks)]
-    MaxSymlinksExceeded { max_symlinks: u8 },
-    #[error("Cannot resolve symlinks in path with more than {max_symlink_checks} components (takes too long)")]
-    ExcessiveComponentCount { max_symlink_checks: usize },
-    #[error(transparent)]
-    ReadLink(std::io::Error),
-    #[error(transparent)]
-    CurrentWorkingDir(std::io::Error),
-    #[error("Empty is not a valid path")]
-    EmptyPath,
-    #[error("Ran out of path components while following parent component '..'")]
-    MissingParent,
-}
+pub type Error = gix_error::Exn;
 
 /// The default amount of symlinks we may follow when resolving a path in [`realpath()`][crate::realpath()].
 pub const MAX_SYMLINKS: u8 = 32;
 
 pub(crate) mod function {
+    use gix_error::{ErrorExt, ResultExt, ValidationError};
     use std::path::{
         Component::{CurDir, Normal, ParentDir, Prefix, RootDir},
         Path, PathBuf,
@@ -40,7 +26,7 @@ pub(crate) mod function {
             .is_relative()
             .then(std::env::current_dir)
             .unwrap_or_else(|| Ok(PathBuf::default()))
-            .map_err(Error::CurrentWorkingDir)?;
+            .or_erased()?;
         realpath_opts(path, &cwd, MAX_SYMLINKS)
     }
 
@@ -48,7 +34,7 @@ pub(crate) mod function {
     /// This serves to avoid running into cycles or doing unreasonable amounts of work.
     pub fn realpath_opts(path: &Path, cwd: &Path, max_symlinks: u8) -> Result<PathBuf, Error> {
         if path.as_os_str().is_empty() {
-            return Err(Error::EmptyPath);
+            return Err(ValidationError::new("Empty is not a valid path").raise_erased());
         }
 
         let mut real_path = PathBuf::new();
@@ -67,7 +53,10 @@ pub(crate) mod function {
                 CurDir => {}
                 ParentDir => {
                     if !real_path.pop() {
-                        return Err(Error::MissingParent);
+                        return Err(ValidationError::new(
+                            "Ran out of path components while following parent component '..'",
+                        )
+                        .raise_erased());
                     }
                 }
                 Normal(part) => {
@@ -76,9 +65,12 @@ pub(crate) mod function {
                     if real_path.is_symlink() {
                         num_symlinks += 1;
                         if num_symlinks > max_symlinks {
-                            return Err(Error::MaxSymlinksExceeded { max_symlinks });
+                            return Err(ValidationError::new(format!(
+                                "The maximum allowed number {max_symlinks} of symlinks in path is exceeded"
+                            ))
+                            .raise_erased());
                         }
-                        let mut link_destination = std::fs::read_link(real_path.as_path()).map_err(Error::ReadLink)?;
+                        let mut link_destination = std::fs::read_link(real_path.as_path()).or_erased()?;
                         if link_destination.is_absolute() {
                             // pushing absolute path to real_path resets it to the pushed absolute path
                         } else {
@@ -89,9 +81,10 @@ pub(crate) mod function {
                         components = path_backing.components();
                     }
                     if symlink_checks > MAX_SYMLINK_CHECKS {
-                        return Err(Error::ExcessiveComponentCount {
-                            max_symlink_checks: MAX_SYMLINK_CHECKS,
-                        });
+                        return Err(ValidationError::new(format!(
+                            "Cannot resolve symlinks in path with more than {MAX_SYMLINK_CHECKS} components (takes too long)"
+                        ))
+                        .raise_erased());
                     }
                 }
             }
