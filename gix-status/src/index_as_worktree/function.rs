@@ -667,13 +667,16 @@ impl<'a, T> Iterator for OffsetIter<'a, T> {
 }
 
 impl Conflict {
-    /// Given `entries` and `path_backing`, both values obtained from an [index](gix_index::State), use `start_index` and enumerate
-    /// all conflict stages that still match `entry_path` to produce a conflict description.
-    /// Also return the amount of extra-entries that were part of the conflict declaration (not counting the entry at `start_index`)
+    /// Given `entries` and `path_backing` obtained from an [index](gix_index::State), inspect up to three consecutive
+    /// conflict-stage entries starting at `start_index` whose path equals `entry_path`.
     ///
-    /// If for some reason entry at `start_index` isn't in conflicting state, `None` is returned.
+    /// Returns `(conflict, num_extra_entries, entries_by_stage)`, where:
     ///
-    /// Return `(Self, num_consumed_entries, three_possibly_entries)`.
+    /// * `conflict` describes the conflict formed by the matching stages (this instance).
+    /// * `num_extra_entries` is the number of matching entries after the one at `start_index`.
+    /// * `entries_by_stage` contains base, ours, and theirs at indexes 0, 1, and 2 respectively; absent stages are `None`.
+    ///
+    /// Returns `None` if no matching conflict entry is found at `start_index`.
     pub fn try_from_entry<'entry>(
         entries: &'entry [gix_index::Entry],
         path_backing: &gix_index::PathStorageRef,
@@ -703,6 +706,7 @@ impl Conflict {
             seen[stage as usize - 1] = Some(entry);
             num_consumed_entries += 1;
         }
+        // It's always assumed we consume one entry, so deduct it.
         num_consumed_entries = num_consumed_entries.saturating_sub(1);
 
         mask.map(|mask| {

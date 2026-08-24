@@ -592,34 +592,6 @@ fn conflict_both_deleted_and_added_by_them_and_added_by_us() {
     );
 }
 
-fn index_with_stages(stages: &[(gix_index::entry::Stage, &str)]) -> gix_index::State {
-    let object_hash = gix_testtools::object_hash();
-    let mut state = gix_index::State::new(object_hash);
-    let id = object_hash.null();
-    for &(stage, path) in stages {
-        state.dangerously_push_entry(
-            Default::default(),
-            id,
-            Flags::from_stage(stage),
-            Mode::FILE,
-            BStr::new(path.as_bytes()),
-        );
-    }
-    state
-}
-
-fn assert_conflict_skip_count(stages: &[(gix_index::entry::Stage, &str)], summary: Conflict, extra: usize) {
-    let index = index_with_stages(stages);
-    let path = index.entry(0).path(&index);
-    let (got_summary, got_extra, _) = Conflict::try_from_entry(index.entries(), index.path_backing(), 0, path)
-        .expect("the first entry is a conflict stage");
-    assert_eq!(got_summary, summary, "{summary:?} classification");
-    assert_eq!(
-        got_extra, extra,
-        "{summary:?} extra skip count must be consecutive same-path stages after start, not stage-1"
-    );
-}
-
 /// Extra entries `try_from_entry` tells the status worker to skip after `start_index`.
 /// This must be consecutive same-path conflict stages, not `stage - 1`.
 #[test]
@@ -627,27 +599,82 @@ fn conflict_try_from_entry_skip_count_is_consecutive_same_path_stages() {
     use Conflict::*;
     use gix_index::entry::Stage::{Base, Ours, Theirs, Unconflicted};
 
+    fn assert_conflict_skip_count(
+        stages: &[(gix_index::entry::Stage, &str)],
+        (expected_conflict, expected_extra, diagnostic): (Conflict, usize, Option<&str>),
+    ) {
+        fn index_with_stages(stages: &[(gix_index::entry::Stage, &str)]) -> gix_index::State {
+            let object_hash = gix_testtools::object_hash();
+            let mut state = gix_index::State::new(object_hash);
+            let id = object_hash.null();
+            for &(stage, path) in stages {
+                state.dangerously_push_entry(
+                    Default::default(),
+                    id,
+                    Flags::from_stage(stage),
+                    Mode::FILE,
+                    BStr::new(path.as_bytes()),
+                );
+            }
+            state
+        }
+
+        let index = index_with_stages(stages);
+        let path = index.entry(0).path(&index);
+        let (actual_summary, actual_extra, _) =
+            Conflict::try_from_entry(index.entries(), index.path_backing(), 0, path)
+                .expect("the first entry is a conflict stage");
+        assert_eq!(
+            actual_summary,
+            expected_conflict,
+            "{}",
+            diagnostic.unwrap_or("conflict classification")
+        );
+        assert_eq!(
+            actual_extra, expected_extra,
+            "{expected_conflict:?} extra skip count must be consecutive same-path stages after start, not stage-1"
+        );
+    }
+
     assert_conflict_skip_count(
         &[(Theirs, "ua"), (Unconflicted, "next"), (Unconflicted, "next2")],
-        AddedByThem,
-        0,
+        (AddedByThem, 0, None),
     );
-    assert_conflict_skip_count(&[(Ours, "au"), (Unconflicted, "next")], AddedByUs, 0);
-    assert_conflict_skip_count(&[(Ours, "aa"), (Theirs, "aa"), (Unconflicted, "next")], BothAdded, 1);
-    assert_conflict_skip_count(&[(Base, "du"), (Theirs, "du"), (Unconflicted, "next")], DeletedByUs, 1);
-    assert_conflict_skip_count(&[(Base, "bm"), (Ours, "bm"), (Theirs, "bm")], BothModified, 2);
-}
-
-fn pad_count_for_chunk_size_gt_one() -> usize {
-    // `optimize_chunk_size` uses `(n / (threads * 2)).clamp(1, 1000)`.
-    // Need `n >= threads * 6` so chunk_size >= 3 and the two paths after AddedByThem share its chunk.
-    let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    threads.saturating_mul(6).max(32)
+    assert_conflict_skip_count(
+        &[(Ours, "au"), (Unconflicted, "next")],
+        (AddedByUs, 0, Some("an unconflicted entry terminates the conflict")),
+    );
+    assert_conflict_skip_count(
+        &[(Ours, "a"), (Theirs, "b")],
+        (
+            AddedByUs,
+            0,
+            Some("a conflict entry for another path terminates the current conflict"),
+        ),
+    );
+    assert_conflict_skip_count(&[(Base, "dd")], (BothDeleted, 0, None));
+    assert_conflict_skip_count(&[(Base, "dt"), (Ours, "dt")], (DeletedByThem, 1, None));
+    assert_conflict_skip_count(
+        &[(Base, "du"), (Theirs, "du"), (Unconflicted, "next")],
+        (DeletedByUs, 1, None),
+    );
+    assert_conflict_skip_count(
+        &[(Ours, "aa"), (Theirs, "aa"), (Unconflicted, "next")],
+        (BothAdded, 1, None),
+    );
+    assert_conflict_skip_count(&[(Base, "bm"), (Ours, "bm"), (Theirs, "bm")], (BothModified, 2, None));
 }
 
 #[test]
 fn conflict_added_by_them_does_not_skip_following_dirty_path_when_chunked() {
     use Conflict::*;
+
+    fn pad_count_for_chunk_size_gt_one() -> usize {
+        // `optimize_chunk_size` uses `(n / (threads * 2)).clamp(1, 1000)`.
+        // Need `n >= threads * 6` so chunk_size >= 3 and the two paths after AddedByThem share its chunk.
+        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        threads.saturating_mul(6).max(32)
+    }
     let pad = pad_count_for_chunk_size_gt_one();
     assert_eq!(
         fixture_filtered_detailed(
