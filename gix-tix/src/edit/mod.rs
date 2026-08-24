@@ -35,7 +35,8 @@ pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::His
 }
 
 pub(super) fn loaded_view_graph(repo: &gix::Repository) -> Result<crate::history::HistoryGraph> {
-    load_graph(repo, &[], &[])
+    let hidden = crate::history::available_hidden_revisions(repo, &[], true)?.0;
+    load_graph(repo, &[], &hidden)
 }
 
 pub(super) fn loaded_view_graph_with(
