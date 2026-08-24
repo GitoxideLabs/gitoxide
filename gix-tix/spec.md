@@ -920,19 +920,24 @@ space first; changes blocks adapt within the remaining history width.
   and Escape cancels before any repository change.
 - Starting requires a completely clean index and worktree, including no untracked
   files, and non-pending reviewed-tip and base commits. Only after confirmation,
-  tix creates the first unused direct `refs/worktree/tix/review/N` ref at the
-  reviewed tip and an unsigned ordinary `review` commit at the base with
+  tix claims the first numeric identity `N` unused by both its review and return
+  refs, creates `refs/worktree/tix/review/N` at the reviewed tip, and creates an
+  unsigned ordinary `review` commit at the base with
   `tix-rebase: onto refs/worktree/tix/review/N`. Starting always creates a
-  dedicated worktree-local tix pin for the departure, symbolic for an attached
+  dedicated review-owned worktree-local tix pin at
+  `refs/worktree/tix/pins/review/N` for the departure, symbolic for an attached
   branch and direct for a detached checkout, and names it in the
-  `tix-review-return-to` header. HEAD is detached at the review commit,
+  `tix-review-return-to` header. Ordinary travel, pin creation, and unpinning do
+  not consume or reuse these pins. HEAD is detached at the review commit,
   its base tree fills the index, and the reviewed tip tree remains in the worktree
-  as unstaged changes. The pin keeps the departure and its ancestry visible.
+  as unstaged changes. The internal pin keeps the departure and its ancestry
+  visible without appearing as an ordinary pin decoration.
   Reviews never share return pins, even when they depart from the same ref or
   commit, so finishing one cannot consume another review's return path.
-  Finishing maps the recorded return target through the rewrite and uses normal
-  time-travel checkout semantics to restore attached or detached HEAD and consume
-  its pin. Existing symbolic review refs remain readable.
+  Finishing maps the recorded return target through the rewrite, deletes that
+  exact pin with the review resources, and uses normal time-travel checkout
+  semantics to restore attached or detached HEAD. Existing symbolic review refs
+  remain readable.
 - Review refs are resources, not traversal tips; pins alone retain history. They
   remain visible in every ref mode: one active ref is shown as `review`, while
   multiple refs are shown as `review:N`. Review
