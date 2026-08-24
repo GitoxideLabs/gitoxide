@@ -8,7 +8,7 @@ use crate::blob::pipeline::convert_to_diffable::default_options;
 
 #[test]
 fn binary_diff_with_textconv() -> gix_testtools::Result {
-    let workdir = crate::scripted_fixture_read_only("make_blob_textconv_repo.sh")?;
+    let workdir = gix_testtools::scripted_fixture_read_only_needs_archive("make_blob_textconv_repo.sh")?;
 
     let new_file_id = read_id(&workdir.join("new-file.id"))?;
     let changed_file_id = read_id(&workdir.join("changed-file.id"))?;

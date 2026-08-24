@@ -1226,6 +1226,13 @@ pub(crate) fn load(
     if !rows.is_empty() && !emit(Event::Commits(LoadedCommits { rows, attributions })) {
         return Ok(());
     }
+    if graph.stored_order.is_empty() {
+        connected.extend(
+            tips.iter()
+                .copied()
+                .filter(|commit_id| connected_seen.insert(*commit_id)),
+        );
+    }
     if !hidden_revisions.is_empty() {
         connected.retain(|id| graph.index(*id).is_none_or(|index| !states[index.as_usize()].emitted));
         let mut rows = Vec::with_capacity(connected.len());
@@ -2723,10 +2730,11 @@ mod tests {
     }
 
     #[test]
-    fn unborn_views_show_only_the_hidden_tips() -> gix_testtools::Result {
+    fn views_without_visible_commits_emit_only_their_boundary_tips() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
         let main = repo.rev_parse_single("main")?.detach();
+        let behind = repo.rev_parse_single("main~1")?.detach();
         let topic = repo.rev_parse_single("topic")?.detach();
         drop(repo);
         assert!(
@@ -2738,11 +2746,13 @@ mod tests {
             "the fixture enters an unborn branch"
         );
 
-        for (hidden, expected) in [
-            (&["main"][..], HashSet::from([main])),
-            (&["main", "topic"][..], HashSet::from([main, topic])),
+        for (visible, hidden, expected) in [
+            (&[][..], &["main"][..], HashSet::from([main])),
+            (&[][..], &["main", "topic"][..], HashSet::from([main, topic])),
+            (&["main"][..], &["main"][..], HashSet::from([main])),
+            (&["main~1"][..], &["main"][..], HashSet::from([behind])),
         ] {
-            let events = loaded(fixture.path(), &[], hidden)?;
+            let events = loaded(fixture.path(), visible, hidden)?;
             let visible: Vec<_> = events
                 .iter()
                 .filter_map(|event| match event {
@@ -2768,7 +2778,7 @@ mod tests {
                 .expect("the hidden-only history completes");
 
             assert!(visible.is_empty(), "hidden ancestry is not exposed as visible history");
-            assert_eq!(boundaries, expected, "each hidden tip is emitted as a boundary");
+            assert_eq!(boundaries, expected, "only the applicable fallback tips are emitted");
             assert_eq!(
                 graph.stored_commit_ids().collect::<HashSet<_>>(),
                 expected,
