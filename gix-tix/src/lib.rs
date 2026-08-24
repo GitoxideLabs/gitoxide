@@ -2629,6 +2629,10 @@ fn event_loop(
                     terminal.backend_mut(),
                     CopyToClipboard::to_clipboard_from(id.to_hex().to_string())
                 )?,
+                Effect::CopyChangeId(id) => execute!(
+                    terminal.backend_mut(),
+                    CopyToClipboard::to_clipboard_from(id.to_reverse_hex().to_string())
+                )?,
                 Effect::CopyPath(path) => execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(path))?,
                 Effect::CopyAuthor(author) => {
                     let actor = actor_bytes(author);
