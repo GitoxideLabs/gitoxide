@@ -1,26 +1,52 @@
-## How to run diff-slider tests
+## Running the diff-slider tests
 
-The idea is to use https://github.com/mhagger/diff-slider-tools to create slider information for use to generate a test which invokes our own implementation and compares it to Git itself.
-Follow these instructions to set it up.
+The tests compare `gix-diff` with Git using data produced by
+[diff-slider-tools](https://github.com/mhagger/diff-slider-tools). The commands below don't create or discover
+a corpus: they require a `.sliders` file and its corresponding Git repository.
 
-1. DIFF_SLIDER_TOOLS=/your/anticipated/path/to/diff-slider-tools
-2. `git clone https://github.com/mhagger/diff-slider-tools $DIFF_SLIDER_TOOLS`
-3. `pushd $DIFF_SLIDER_TOOLS`
-4. Follow [these instructions](https://github.com/mhagger/diff-slider-tools/blob/b59ed13d7a2a6cfe14a8f79d434b6221cc8b04dd/README.md?plain=1#L122-L146) to     generate a file containing the slider information. Be sure to set the `repo` variable as it's used in later script invocations.
-   - Note that `get-corpus` must be run with `./get-corpus`.
-   - You can use an existing repository, for instance via `repo=git-human`, so there is no need to find your own repository to test.
-   - The script suite is very slow, and it's recommended to only set a range of commits, or use a small repository for testing.
+### Prepare the corpus once
 
-Finally, run the `internal-tools` program to turn that file into a fixture called `make_diff_for_sliders_repo.sh`.
+From a [diff-slider-tools](https://github.com/mhagger/diff-slider-tools) checkout:
 
 ```shell
-# run inside `gitoxide`
-popd
-cargo run --package internal-tools -- \
-  create-diff-cases \
-    --sliders-file $DIFF_SLIDER_TOOLS/corpus/$repo.sliders \
-    --worktree-dir $DIFF_SLIDER_TOOLS/corpus/$repo.git/ \
-    --destination-dir gix-diff/tests/fixtures/
+repo=gitoxide
+echo https://github.com/GitoxideLabs/gitoxide >"corpus/$repo.info"
+./get-corpus "$repo"
+git -C "corpus/$repo.git" log --min-parents=1 --max-parents=1 --format='%P..%H' HEAD |
+  ./enumerate-sliders --repo="$repo" >"corpus/$repo.sliders"
+
+export SLIDERS_FILE="$PWD/corpus/$repo.sliders"
+export SLIDER_REPOSITORY="$PWD/corpus/$repo.git"
 ```
 
-Finally, run `cargo test -p gix-diff sliders -- --nocapture` to execute the actual tests to compare.
+`get-corpus` reads `corpus/gitoxide.info` and creates `corpus/gitoxide.git`. `enumerate-sliders` then reads that
+repository and creates `corpus/gitoxide.sliders`.
+
+Optionally, see the complete
+[upstream corpus instructions](https://github.com/mhagger/diff-slider-tools/blob/b59ed13d7a2a6cfe14a8f79d434b6221cc8b04dd/README.md?plain=1#L122-L146)
+for other repositories or commit ranges.
+
+If the corpus already exists, only set its explicit paths:
+
+```shell
+export SLIDERS_FILE=/path/to/diff-slider-tools/corpus/gitoxide.sliders
+export SLIDER_REPOSITORY=/path/to/diff-slider-tools/corpus/gitoxide.git
+```
+
+Then run these two commands from the `gitoxide` root:
+
+```shell
+cargo run --package internal-tools -- create-diff-cases \
+  --count 2024 \
+  --sliders-file "$SLIDERS_FILE" \
+  --worktree-dir "$SLIDER_REPOSITORY" \
+  --destination-dir gix-diff/tests/fixtures/
+
+cargo test -p gix-diff slider::baseline -- --nocapture
+```
+
+`--count` limits how many slider records are read; lower it for a quicker run. With the current `gitoxide`
+corpus, `--count 2024` produces 3,094 cases after duplicate blob pairs are removed.
+
+The default report prints all mismatch categories without failing. Set `GIX_DIFF_SLIDER_STRICT=1` to require a
+non-empty external baseline and fail on any mismatch. The small built-in baseline always runs strictly.
