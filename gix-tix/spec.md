@@ -429,7 +429,7 @@ without trading responsiveness for metadata that is not visible.
 | `Shift-P` | Cycle the comparison parent while Tree has focus. |
 | `? e` | Cycle the tree/worktree changes display. |
 | `Shift-R` | Explicitly refresh the revision view and visible worktree status. |
-| `y` | Copy the selected commit ID, or the selected raw path when a changes block is focused. |
+| `y` | Copy the selected change ID when shown, otherwise the commit ID; copy the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
 | `@` | Time-travel to the selected commit, or return through its tix pin. Terminals reporting the base key as `Shift-2` are also accepted. |

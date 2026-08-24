@@ -415,6 +415,7 @@ pub(crate) enum Effect {
     Undo,
     Redo,
     CopyId(ObjectId),
+    CopyChangeId(ChangeId),
     CopyPath(BString),
     CopyAuthor(&'static Author),
     Reload(bool),
@@ -2135,8 +2136,12 @@ impl App {
             }
             Action::Copy => {
                 if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
+                    let effect = match self.effective_id_mode() {
+                        IdMode::Change => Effect::CopyChangeId(self.change_id(id)),
+                        IdMode::Commit | IdMode::Off => Effect::CopyId(id),
+                    };
                     self.copy_feedback = Some(CopyKind::Id);
-                    return vec![Effect::CopyId(id)];
+                    return vec![effect];
                 }
             }
             Action::CopyPath(path) => return vec![Effect::CopyPath(path)],
@@ -7044,7 +7049,25 @@ mod tests {
         );
         app.extend_commits(vec![row(7)]);
 
-        assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(row(7).id)]);
+        assert_eq!(
+            app.update(Action::Copy),
+            vec![Effect::CopyId(row(7).id)],
+            "hidden identifiers copy the commit ID"
+        );
+        app.id_mode = IdMode::Commit;
+        assert_eq!(
+            app.update(Action::Copy),
+            vec![Effect::CopyId(row(7).id)],
+            "shown commit IDs copy the commit ID"
+        );
+        let change_id = ChangeId::from(id(8));
+        app.set_change_ids(HashMap::from([(row(7).id, change_id)]), HashSet::new());
+        app.id_mode = IdMode::Change;
+        assert_eq!(
+            app.update(Action::Copy),
+            vec![Effect::CopyChangeId(change_id)],
+            "shown change IDs copy the change ID"
+        );
         assert_eq!(
             app.update(Action::CopyPath("dir/file".into())),
             vec![Effect::CopyPath("dir/file".into())]
