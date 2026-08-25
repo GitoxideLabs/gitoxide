@@ -955,7 +955,8 @@ space first; changes blocks adapt within the remaining history width.
   multiple refs are shown as `review:N`. Review
   commits replace the normal signature disc with a filled diamond in the graph;
   `@` still takes precedence at `HEAD`. A checked-out review shades the visible
-  row prefix purple up to a one-space margin before its title, even while selected. Ordinary
+  row prefix purple with contrasting black text up to a one-space margin before
+  its title, even while selected. Ordinary
   edits preserve the review header and otherwise keep
   their normal signing and lazy-rebase behavior.
 - At a checked-out review commit, amend follows the ordinary index-first,
