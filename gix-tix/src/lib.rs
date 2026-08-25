@@ -15,6 +15,7 @@ mod ref_tree;
 #[cfg(test)]
 mod test_repository;
 mod ui;
+mod worktrunk;
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -55,7 +56,12 @@ use gix::{
 use history::{Authors, Decorations, Event, HistoryGraph, SelectionRef, SharedAuthors};
 use menu::{Item as MenuItem, Menu};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend, layout::Position, text::Line};
+use ratatui::{
+    TerminalOptions, Viewport,
+    backend::CrosstermBackend,
+    layout::{Position, Rect},
+    text::Line,
+};
 
 const EVENT_BATCH_SIZE: usize = 256;
 const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
@@ -887,7 +893,43 @@ fn shade_terminal_background((red, green, blue): (u8, u8, u8), dark: bool) -> (u
 }
 
 /// Run the interactive commit graph for `repository`.
-pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut options: Options) -> Result<()> {
+pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, options: Options) -> Result<()> {
+    let UiExit::Quit(lane_time) = run_ui(repository, revisions, options, None)? else {
+        unreachable!("only worktrunk can promote a selected worktree")
+    };
+    if let Some(lane_time) = lane_time {
+        eprintln!("lane computation: {:.3}s", lane_time.as_secs_f64());
+    }
+    Ok(())
+}
+
+pub(crate) fn pick_worktree(
+    repository: gix::ThreadSafeRepository,
+    picker: &mut worktrunk::Worktrees,
+) -> Result<Option<PathBuf>> {
+    match run_ui(repository, Vec::new(), Options::default(), Some(picker))? {
+        UiExit::Quit(_) => Ok(None),
+        UiExit::Promote(path) => Ok(Some(path)),
+    }
+}
+
+enum UiExit {
+    Quit(Option<Duration>),
+    Promote(PathBuf),
+}
+
+enum EventLoopExit {
+    Quit(Option<Duration>),
+    Rebind(PathBuf),
+    Promote(PathBuf),
+}
+
+fn run_ui(
+    repository: gix::ThreadSafeRepository,
+    revisions: Vec<OsString>,
+    mut options: Options,
+    mut picker: Option<&mut worktrunk::Worktrees>,
+) -> Result<UiExit> {
     let _log_guard = logging::init();
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
@@ -942,14 +984,30 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
                     hook(info);
                 }));
             }
-            event_loop(
-                &mut terminal,
-                repository,
-                revisions,
-                options,
-                enhanced_keyboard,
-                commit_pane_background,
-            )
+            let mut repository = repository;
+            let mut picker_focused = picker.is_some();
+            loop {
+                match event_loop(
+                    &mut terminal,
+                    repository,
+                    revisions.clone(),
+                    options.clone(),
+                    enhanced_keyboard,
+                    commit_pane_background,
+                    picker.as_deref_mut(),
+                    &mut picker_focused,
+                )? {
+                    EventLoopExit::Rebind(path) => {
+                        std::env::set_current_dir(&path)
+                            .with_context(|| format!("could not enter worktree {}", path.display()))?;
+                        repository = gix::open(&path)
+                            .with_context(|| format!("could not open worktree {}", path.display()))?
+                            .into_sync();
+                    }
+                    EventLoopExit::Quit(lane_time) => break Ok(UiExit::Quit(lane_time)),
+                    EventLoopExit::Promote(path) => break Ok(UiExit::Promote(path)),
+                }
+            }
         });
     let keyboard_restore = if quit_on_finish {
         Ok(())
@@ -974,14 +1032,11 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
     if inline {
         eprintln!();
     }
-    let lane_time = result?;
+    let outcome = result?;
     keyboard_restore.context("could not restore keyboard events")?;
     cursor_restore.context("could not restore terminal cursor")?;
     restore?;
-    if let Some(lane_time) = lane_time {
-        eprintln!("lane computation: {:.3}s", lane_time.as_secs_f64());
-    }
-    Ok(())
+    Ok(outcome)
 }
 
 #[expect(clippy::type_complexity, reason = "forward the hidden-revision result unchanged")]
@@ -1019,6 +1074,57 @@ fn is_key_press(event: &TerminalEvent) -> bool {
     matches!(event, TerminalEvent::Key(key) if key.kind != KeyEventKind::Release)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorktrunkInput {
+    Cancel { force: bool },
+    FocusHistory,
+    Refresh,
+    Select(usize),
+    Promote,
+}
+
+fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> Option<WorktrunkInput> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    let select = |index| Some(WorktrunkInput::Select(index));
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(WorktrunkInput::Cancel { force: true })
+        }
+        KeyCode::Char('q' | 'Q') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            Some(WorktrunkInput::Cancel { force: false })
+        }
+        KeyCode::Esc => Some(WorktrunkInput::Cancel { force: false }),
+        KeyCode::Tab => Some(WorktrunkInput::FocusHistory),
+        KeyCode::Enter => Some(WorktrunkInput::Promote),
+        KeyCode::Char('r' | 'R') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            Some(WorktrunkInput::Refresh)
+        }
+        KeyCode::Up => select(selected.saturating_sub(1)),
+        KeyCode::Char('k' | 'K') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            select(selected.saturating_sub(1))
+        }
+        KeyCode::Down => select(selected.saturating_add(1).min(len.saturating_sub(1))),
+        KeyCode::Char('j' | 'J') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            select(selected.saturating_add(1).min(len.saturating_sub(1)))
+        }
+        KeyCode::PageUp => select(selected.saturating_sub(page.max(1))),
+        KeyCode::PageDown => select(selected.saturating_add(page.max(1)).min(len.saturating_sub(1))),
+        KeyCode::Home => select(0),
+        KeyCode::Char('g') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => select(0),
+        KeyCode::End => select(len.saturating_sub(1)),
+        KeyCode::Char('G') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            select(len.saturating_sub(1))
+        }
+        _ => None,
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the picker extends the existing event-loop context"
+)]
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     mut repository: gix::ThreadSafeRepository,
@@ -1026,7 +1132,9 @@ fn event_loop(
     options: Options,
     enhanced_keyboard: bool,
     commit_pane_background: Option<(u8, u8, u8)>,
-) -> Result<Option<Duration>> {
+    mut picker: Option<&mut worktrunk::Worktrees>,
+    picker_focused: &mut bool,
+) -> Result<EventLoopExit> {
     let Options {
         quit_on_finish, hide, ..
     } = options;
@@ -1158,6 +1266,8 @@ fn event_loop(
         focused,
         &mut ref_tree,
         &mut filesystem_responses,
+        picker.as_deref_mut(),
+        *picker_focused,
     )?;
     let mut last_draw = Instant::now();
     let mut dirty = false;
@@ -1172,7 +1282,10 @@ fn event_loop(
     let mut pending_todo_rebase_plan: Option<edit::rebase::Plan> = None;
     let mut pending_todo_ref_changes = Vec::new();
     let mut pending_conflict_resolution: Option<PendingConflictResolution> = None;
-    let result: Result<Option<Duration>> = (|| loop {
+    let result: Result<EventLoopExit> = (|| loop {
+        if picker.as_deref_mut().is_some_and(worktrunk::Worktrees::drain_updates) {
+            dirty = true;
+        }
         if let Some(pool) = line_diff_pool.as_mut() {
             pool.expire(Instant::now());
         }
@@ -1763,6 +1876,8 @@ fn event_loop(
                 focused,
                 &mut ref_tree,
                 &mut filesystem_responses,
+                picker.as_deref_mut(),
+                *picker_focused,
             )?;
             last_draw = Instant::now();
             dirty = false;
@@ -1777,7 +1892,7 @@ fn event_loop(
                 && lane_receiver.is_none()
                 && background_task.is_none()
             {
-                return Ok(app.lane_time);
+                return Ok(EventLoopExit::Quit(app.lane_time));
             }
             continue;
         }
@@ -1844,6 +1959,8 @@ fn event_loop(
                 focused,
                 &mut ref_tree,
                 &mut filesystem_responses,
+                picker.as_deref_mut(),
+                *picker_focused,
             )?;
             last_draw = Instant::now();
             dirty = false;
@@ -1862,6 +1979,15 @@ fn event_loop(
             .as_ref()
             .and_then(|pool| pool.idle_timeout(Instant::now()));
         let background_task_timeout = background_task.as_ref().map(|_| REF_EVENT_INTERVAL);
+        let picker_timeout = picker
+            .as_ref()
+            .is_some_and(|picker| {
+                picker
+                    .rows()
+                    .iter()
+                    .any(|row| matches!(row.state, worktrunk::LoadState::Loading))
+            })
+            .then_some(REF_EVENT_INTERVAL);
         let wake_after = [
             repeat_timeout,
             watcher_timeout,
@@ -1871,6 +1997,7 @@ fn event_loop(
             history_status_timeout,
             line_diff_timeout,
             background_task_timeout,
+            picker_timeout,
         ]
         .into_iter()
         .flatten()
@@ -1892,7 +2019,108 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
+        if picker.is_some() && *picker_focused && focused && !diagnostic_input {
+            let input = match &terminal_event {
+                TerminalEvent::Key(key) => {
+                    let picker = picker.as_ref().expect("picker presence was checked");
+                    let list_rows = worktrunk::areas(terminal.get_frame().area(), picker.rows().len())[0]
+                        .height
+                        .saturating_sub(1)
+                        .into();
+                    worktrunk_input(
+                        *key,
+                        picker.selected_index().unwrap_or_default(),
+                        picker.rows().len(),
+                        list_rows,
+                    )
+                }
+                TerminalEvent::FocusLost | TerminalEvent::FocusGained | TerminalEvent::Resize(_, _) => None,
+                TerminalEvent::Mouse(_) | TerminalEvent::Paste(_) => {
+                    dirty = true;
+                    urgent = true;
+                    continue;
+                }
+            };
+            if let Some(input) = input {
+                let switching_blocked = background_task.is_some()
+                    || pending_rebase_conflict.is_some()
+                    || pending_todo_rebase_conflict.is_some()
+                    || pending_todo_rebase_plan.is_some()
+                    || pending_conflict_resolution.is_some()
+                    || app.has_rebase_conflict();
+                match input {
+                    WorktrunkInput::Cancel { force } if force || background_task.is_none() => {
+                        cancelled.store(true, Ordering::Relaxed);
+                        return Ok(EventLoopExit::Quit(None));
+                    }
+                    WorktrunkInput::Cancel { .. } => {
+                        app.leave_attention("background task is still running; use Ctrl-C to quit");
+                    }
+                    WorktrunkInput::FocusHistory => *picker_focused = false,
+                    WorktrunkInput::Refresh => picker.as_deref_mut().expect("picker presence was checked").refresh(),
+                    WorktrunkInput::Select(index) => {
+                        let picker = picker.as_deref_mut().expect("picker presence was checked");
+                        if picker.selected_index() != Some(index) {
+                            if switching_blocked {
+                                app.leave_attention(
+                                    "finish the background task or conflict before switching worktrees",
+                                );
+                            } else {
+                                picker.select(index);
+                                let path = picker
+                                    .selected_path()
+                                    .context("worktree selection disappeared")?
+                                    .to_owned();
+                                cancelled.store(true, Ordering::Relaxed);
+                                return Ok(EventLoopExit::Rebind(path));
+                            }
+                        }
+                    }
+                    WorktrunkInput::Promote if switching_blocked => {
+                        app.leave_attention("finish the background task or conflict before switching worktrees");
+                    }
+                    WorktrunkInput::Promote => {
+                        let path = picker
+                            .as_ref()
+                            .and_then(|picker| picker.selected_path())
+                            .context("worktree selection disappeared")?
+                            .to_owned();
+                        cancelled.store(true, Ordering::Relaxed);
+                        return Ok(EventLoopExit::Promote(path));
+                    }
+                }
+                dirty = true;
+                urgent = true;
+                continue;
+            }
+            if matches!(&terminal_event, TerminalEvent::Key(_)) {
+                continue;
+            }
+        }
         if swallow_command_menu_key_event(&terminal_event, &mut command_picker_key) {
+            continue;
+        }
+        if picker.is_some()
+            && !*picker_focused
+            && app.worktrunk_history_root()
+            && pending_rebase_conflict.is_none()
+            && pending_todo_rebase_conflict.is_none()
+            && pending_todo_rebase_plan.is_none()
+            && pending_conflict_resolution.is_none()
+            && !ref_tree.is_active()
+            && !command_picker.is_open()
+            && matches!(
+                &terminal_event,
+                TerminalEvent::Key(KeyEvent {
+                    code: KeyCode::Esc,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                })
+            )
+        {
+            *picker_focused = true;
+            dirty = true;
+            urgent = true;
             continue;
         }
         if ref_tree.is_active() {
@@ -2071,7 +2299,7 @@ fn event_loop(
                         urgent = true;
                         continue;
                     }
-                    ref_tree::Input::Quit => return Ok(None),
+                    ref_tree::Input::Quit => return Ok(EventLoopExit::Quit(None)),
                 },
                 TerminalEvent::Mouse(mouse) if ref_tree.handle_mouse(mouse.kind, mouse.modifiers, 1) => {
                     dirty = true;
@@ -2731,7 +2959,14 @@ fn event_loop(
                         .and_then(|(change, path)| {
                             prepare_file_diff(&repository_path, repository_is_bare, change, path)
                         })
-                        .and_then(|diff| show_file_diff(terminal, diff, enhanced_keyboard));
+                        .and_then(|diff| {
+                            show_file_diff(
+                                terminal,
+                                diff,
+                                enhanced_keyboard,
+                                picker.as_deref().map(|picker| (picker, *picker_focused)),
+                            )
+                        });
                     match result {
                         Ok(true) => app.focus_history(),
                         Err(err) => app.changes_mut(pane).error = Some(format!("{err:#}")),
@@ -2757,7 +2992,14 @@ fn event_loop(
                         .filter(|(cached_target, _)| *cached_target == target)
                         .map(|(_, changes)| changes);
                     let result = prepare_commit_diff(&repository_path, repository_is_bare, target, cached, title)
-                        .and_then(|diff| show_commit_diff(terminal, diff, enhanced_keyboard));
+                        .and_then(|diff| {
+                            show_commit_diff(
+                                terminal,
+                                diff,
+                                enhanced_keyboard,
+                                picker.as_deref().map(|picker| (picker, *picker_focused)),
+                            )
+                        });
                     match result {
                         Ok(true) => app.focus_history(),
                         Err(err) => app.leave_error(format!("diff: {err:#}")),
@@ -3687,8 +3929,17 @@ fn event_loop(
                                         .map(|(_, changes)| changes);
                                     terminal
                                         .draw(|frame| {
+                                            let area = frame.area();
+                                            let [list, history] =
+                                                picker.as_ref().map_or([Rect::default(), area], |picker| {
+                                                    worktrunk::areas(area, picker.rows().len())
+                                                });
+                                            if let Some(picker) = picker.as_deref_mut() {
+                                                worktrunk::draw(frame, list, picker, *picker_focused);
+                                            }
                                             ui::draw_with_worktree(
                                                 frame,
+                                                history,
                                                 &mut app,
                                                 &decorations,
                                                 &mailmap,
@@ -3915,7 +4166,7 @@ fn event_loop(
                         ids,
                     ));
                 }
-                Effect::Quit if force_quit => return Ok(None),
+                Effect::Quit if force_quit => return Ok(EventLoopExit::Quit(None)),
                 Effect::Quit => {
                     if let Some(conflict) = pending_rebase_conflict.take() {
                         let mut changes = conflict.into_ref_changes();
@@ -3953,7 +4204,7 @@ fn event_loop(
                     {
                         tracing::warn!(error = %err, "could not record materialized rebase before exit");
                     }
-                    return Ok(None);
+                    return Ok(EventLoopExit::Quit(None));
                 }
             }
         }
@@ -4993,9 +5244,29 @@ fn draw(
     focused: bool,
     ref_tree: &mut ref_tree::Tree,
     filesystem_responses: &mut logging::FilesystemResponses,
+    picker: Option<&mut worktrunk::Worktrees>,
+    picker_focused: bool,
 ) -> Result<()> {
-    let render_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
+    let frame_area = terminal.get_frame().area();
+    let history_area = picker.as_ref().map_or(frame_area, |picker| {
+        worktrunk::areas(frame_area, picker.rows().len())[1]
+    });
+    let render_rows = history_area.height.saturating_sub(1) as usize;
     if !history_is_ready_to_draw(app.state, app.rows.len()) {
+        if let Some(picker) = picker {
+            terminal
+                .autoresize()
+                .context("could not resize the terminal before drawing")?;
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            let [list, history] = worktrunk::areas(area, picker.rows().len());
+            frame.render_widget(ratatui::widgets::Clear, history);
+            worktrunk::draw(&mut frame, list, picker, picker_focused);
+            terminal
+                .apply_buffer_with_cursor(None)
+                .context("could not draw worktree picker")?;
+            filesystem_responses.frame_presented();
+        }
         return Ok(());
     }
     if ref_tree.is_active() {
@@ -5004,7 +5275,14 @@ fn draw(
             .context("could not resize the terminal before drawing")?;
         {
             let mut frame = terminal.get_frame();
-            ref_tree.draw(&mut frame, history_graph.as_ref());
+            let area = frame.area();
+            let [list, history] = picker.as_ref().map_or([Rect::default(), area], |picker| {
+                worktrunk::areas(area, picker.rows().len())
+            });
+            if let Some(picker) = picker {
+                worktrunk::draw(&mut frame, list, picker, picker_focused);
+            }
+            ref_tree.draw(&mut frame, history, history_graph.as_ref());
         }
         terminal
             .apply_buffer_with_cursor(None)
@@ -5260,8 +5538,16 @@ fn draw(
         .context("could not resize the terminal before drawing")?;
     let cursor = {
         let mut frame = terminal.get_frame();
+        let area = frame.area();
+        let [list, history] = picker.as_ref().map_or([Rect::default(), area], |picker| {
+            worktrunk::areas(area, picker.rows().len())
+        });
+        if let Some(picker) = picker {
+            worktrunk::draw(&mut frame, list, picker, picker_focused);
+        }
         ui::draw_with_worktree(
             &mut frame,
+            history,
             app,
             decorations,
             mailmap,
@@ -5273,7 +5559,7 @@ fn draw(
             let commands = command_menu::commands(app, decorations, app.has_verifiable_signatures());
             let items = command_picker_items(&commands);
             command_picker.sync(&items);
-            ui::draw_command_menu(&mut frame, command_picker, &commands)
+            ui::draw_command_menu(&mut frame, history, command_picker, &commands)
         } else {
             None
         }
@@ -5627,11 +5913,16 @@ fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BStrin
     )
 }
 
-fn show_file_diff(terminal: &mut ratatui::DefaultTerminal, diff: FileDiff, enhanced_keyboard: bool) -> Result<bool> {
+fn show_file_diff(
+    terminal: &mut ratatui::DefaultTerminal,
+    diff: FileDiff,
+    enhanced_keyboard: bool,
+    picker: Option<(&worktrunk::Worktrees, bool)>,
+) -> Result<bool> {
     match diff {
         FileDiff::External(command) => run_external_diff(terminal, command, enhanced_keyboard).map(|()| false),
         FileDiff::Pager { command, diff } => run_pager(terminal, command, &diff, enhanced_keyboard).map(|()| false),
-        FileDiff::BuiltIn(diff) => show_builtin_diff(terminal, &diff),
+        FileDiff::BuiltIn(diff) => show_builtin_diff(terminal, &diff, picker),
     }
 }
 
@@ -5639,8 +5930,9 @@ fn show_commit_diff(
     terminal: &mut ratatui::DefaultTerminal,
     diff: CommitDiff,
     enhanced_keyboard: bool,
+    picker: Option<(&worktrunk::Worktrees, bool)>,
 ) -> Result<bool> {
-    if show_file_diff(terminal, diff.internal, enhanced_keyboard)? {
+    if show_file_diff(terminal, diff.internal, enhanced_keyboard, picker)? {
         return Ok(true);
     }
     for command in diff.external {
@@ -6449,20 +6741,33 @@ fn pager_needs_acknowledgement(elapsed: Duration) -> bool {
     elapsed <= IMMEDIATE_PAGER_EXIT
 }
 
-fn show_builtin_diff(terminal: &mut ratatui::DefaultTerminal, diff: &BuiltInDiff) -> Result<bool> {
+fn show_builtin_diff(
+    terminal: &mut ratatui::DefaultTerminal,
+    diff: &BuiltInDiff,
+    picker: Option<(&worktrunk::Worktrees, bool)>,
+) -> Result<bool> {
     let mut offset = 0usize;
     let mut horizontal_offset = 0usize;
     let mut focused = true;
     loop {
         let size = terminal.size().context("could not determine diff viewport")?;
-        let page = usize::from(size.height.saturating_sub(2)).max(1);
+        let frame_area = Rect::new(0, 0, size.width, size.height);
+        let [list_area, diff_area] = picker.map_or([Rect::default(), frame_area], |(picker, _)| {
+            worktrunk::areas(frame_area, picker.rows().len())
+        });
+        let page = usize::from(diff_area.height.saturating_sub(2)).max(1);
         let max = diff.display_line_count().saturating_sub(page);
-        let horizontal_page = usize::from(size.width).max(1);
+        let horizontal_page = usize::from(diff_area.width).max(1);
         let horizontal_max = diff.max_width.saturating_sub(horizontal_page);
         offset = offset.min(max);
         horizontal_offset = horizontal_offset.min(horizontal_max);
         terminal
-            .draw(|frame| ui::draw_file_diff(frame, diff, offset, horizontal_offset))
+            .draw(|frame| {
+                if let Some((picker, focused)) = picker {
+                    worktrunk::draw(frame, list_area, picker, focused);
+                }
+                ui::draw_file_diff(frame, diff_area, diff, offset, horizontal_offset);
+            })
             .context("could not draw file diff")?;
         let event = event::read().context("could not read file diff input")?;
         let key = match event {
@@ -7728,6 +8033,31 @@ fn mouse_scroll_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worktrunk_keys_navigate_focus_and_promote() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Char('j')), 1, 4, 2),
+            Some(WorktrunkInput::Select(2))
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::PageDown), 1, 4, 2),
+            Some(WorktrunkInput::Select(3))
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Tab), 1, 4, 2),
+            Some(WorktrunkInput::FocusHistory)
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Enter), 1, 4, 2),
+            Some(WorktrunkInput::Promote)
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Char('q')), 1, 4, 2),
+            Some(WorktrunkInput::Cancel { force: false })
+        );
+    }
 
     #[test]
     fn pasted_commit_ids_are_hex_only_and_must_name_commit_objects() -> gix_testtools::Result {

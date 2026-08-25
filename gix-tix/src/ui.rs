@@ -89,13 +89,14 @@ pub(crate) fn render_notice(frame: &mut Frame<'_>, area: Rect, notice: &Notice) 
 
 pub(crate) fn draw_command_menu(
     frame: &mut Frame<'_>,
+    bounds: Rect,
     menu: &mut Menu<CommandId>,
     commands: &[Command],
 ) -> Option<Position> {
     if !menu.is_open() {
         return None;
     }
-    let frame_area = frame.area();
+    let frame_area = bounds;
     let width = frame_area.width.saturating_sub(2).min(72);
     if width < 4 {
         menu.set_visible_rows(0);
@@ -335,10 +336,16 @@ fn changes_pane_areas(
     }
 }
 
-pub(crate) fn draw_file_diff(frame: &mut Frame<'_>, diff: &BuiltInDiff, offset: usize, horizontal_offset: usize) {
+pub(crate) fn draw_file_diff(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    diff: &BuiltInDiff,
+    offset: usize,
+    horizontal_offset: usize,
+) {
     let [header, body, footer] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-    frame.render_widget(Clear, frame.area());
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(area);
+    frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(diff.title.to_str_lossy()).style(Style::default().add_modifier(Modifier::BOLD)),
         header,
@@ -386,11 +393,26 @@ pub(crate) fn draw(
     commit_message: Option<&BStr>,
     tree_changes: Option<&Changes>,
 ) {
-    draw_with_worktree(frame, app, decorations, mailmap, commit_message, tree_changes, None);
+    let area = frame.area();
+    draw_with_worktree(
+        frame,
+        area,
+        app,
+        decorations,
+        mailmap,
+        commit_message,
+        tree_changes,
+        None,
+    );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the bounds extend the existing drawing context"
+)]
 pub(crate) fn draw_with_worktree(
     frame: &mut Frame<'_>,
+    area: Rect,
     app: &mut App,
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
@@ -404,7 +426,7 @@ pub(crate) fn draw_with_worktree(
         Constraint::Length(u16::from(background_progress.is_some())),
         Constraint::Length(1),
     ])
-    .areas(frame.area());
+    .areas(area);
     let full_body = body;
     let selected_segment = app.selected_is_segment();
     let time_travel_animation = app.time_travel_animation_origin().is_some();
@@ -436,7 +458,7 @@ pub(crate) fn draw_with_worktree(
     };
     let (changes_layout, mut changes_panes, _) = changes_pane_areas(
         body,
-        frame.area().height / 2,
+        area.height / 2,
         tree_shown.then(|| {
             (
                 pane_height(ChangePane::Tree, tree_changes.expect("visible tree changes exist")),
@@ -554,7 +576,7 @@ pub(crate) fn draw_with_worktree(
     let popup_rows = prefix_popup.as_ref().map_or(0, |(_, rows)| rows.len());
     let mut prefix_popup_allowed = prefix_popup
         .as_ref()
-        .is_some_and(|(anchor, _)| prefix_popup_can_render(frame.area(), footer, *anchor, popup_rows));
+        .is_some_and(|(anchor, _)| prefix_popup_can_render(area, footer, *anchor, popup_rows));
     if prefix_popup_allowed {
         let popup_y = footer.y - popup_rows as u16;
         let shifted_y = |area: Rect| area.y.saturating_sub(popup_rows as u16).max(full_body.y);
@@ -1269,7 +1291,7 @@ pub(crate) fn draw_with_worktree(
     let popup_anchor = background_progress.as_ref().map_or(footer, |_| progress_area);
     let _ = prefix_popup
         .filter(|_| prefix_popup_allowed)
-        .and_then(|(anchor, items)| render_prefix_popup(frame, popup_anchor, anchor, items));
+        .and_then(|(anchor, items)| render_prefix_popup(frame, area, popup_anchor, anchor, items));
 }
 
 fn render_background_progress(frame: &mut Frame<'_>, area: Rect, progress: &crate::app::BackgroundProgress) {
@@ -2233,12 +2255,13 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
 
 fn render_prefix_popup(
     frame: &mut Frame<'_>,
+    bounds: Rect,
     footer: Rect,
     anchor: usize,
     mut rows: Vec<Vec<Span<'static>>>,
 ) -> Option<Rect> {
     let height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
-    if !prefix_popup_can_render(frame.area(), footer, anchor, rows.len()) {
+    if !prefix_popup_can_render(bounds, footer, anchor, rows.len()) {
         return None;
     }
     let mut width = 0;
@@ -2872,6 +2895,7 @@ mod tests {
             frame.render_widget(Paragraph::new("underlying history"), Rect::new(0, 0, 20, 1));
             popup = render_prefix_popup(
                 frame,
+                Rect::new(0, 0, 20, 2),
                 Rect::new(0, 1, 20, 1),
                 12,
                 vec![vec![Span::raw("abcdefghijklmnopqrstuvwxyz")]],
@@ -2915,7 +2939,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(11, 4))?;
         let mut popup = None;
         terminal.draw(|frame| {
-            popup = render_prefix_popup(frame, Rect::new(0, 3, 11, 1), 0, rows);
+            popup = render_prefix_popup(frame, Rect::new(0, 0, 11, 4), Rect::new(0, 3, 11, 1), 0, rows);
         })?;
 
         assert_eq!(popup, Some(Rect::new(0, 0, 11, 3)));
@@ -2984,7 +3008,10 @@ mod tests {
         }
         let mut cursor = None;
         let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
-        terminal.draw(|frame| cursor = draw_command_menu(frame, &mut menu, &commands))?;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            cursor = draw_command_menu(frame, area, &mut menu, &commands);
+        })?;
 
         let rendered = (0..12)
             .map(|row| rendered_line(&terminal, row))
@@ -3009,17 +3036,84 @@ mod tests {
 
         menu.open(&items);
         let mut short = Terminal::new(TestBackend::new(60, 7))?;
-        short.draw(|frame| assert!(draw_command_menu(frame, &mut menu, &commands).is_some()))?;
+        short.draw(|frame| {
+            let area = frame.area();
+            assert!(draw_command_menu(frame, area, &mut menu, &commands).is_some());
+        })?;
         assert_eq!(menu.visible_indices().len(), 2, "only rendered rows are selectable");
         assert_eq!(menu.submit_digit('3', &items), None, "a clipped row cannot execute");
 
         menu.open(&items);
         let mut tiny = Terminal::new(TestBackend::new(3, 12))?;
-        tiny.draw(|frame| assert_eq!(draw_command_menu(frame, &mut menu, &commands), None))?;
+        tiny.draw(|frame| {
+            let area = frame.area();
+            assert_eq!(draw_command_menu(frame, area, &mut menu, &commands), None);
+        })?;
         assert_eq!(
             menu.submit_selected(&items),
             None,
             "an invisible selection cannot execute"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tix_view_and_overlays_stay_inside_their_area() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        let decorations = Decorations::new();
+        let commands = command_menu::commands(&app, &decorations, false);
+        let items = commands
+            .iter()
+            .map(|command| {
+                crate::menu::Item::with_search_prefix(
+                    command.label,
+                    command.group.label(),
+                    command.group.prefix(),
+                    command.id,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut menu = Menu::default();
+        menu.open(&items);
+        let diff = BuiltInDiff::new("M file".into(), vec!["+line".into()]);
+        let bounds = Rect::new(5, 3, 30, 7);
+        let mut cursor = None;
+        let mut terminal = Terminal::new(TestBackend::new(40, 12))?;
+
+        terminal.draw(|frame| {
+            for y in 0..frame.area().height {
+                for x in 0..frame.area().width {
+                    frame.buffer_mut()[(x, y)].set_symbol("x");
+                }
+            }
+            super::draw_with_worktree(
+                frame,
+                bounds,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                None,
+            );
+            draw_file_diff(frame, bounds, &diff, 0, 0);
+            cursor = draw_command_menu(frame, bounds, &mut menu, &commands);
+        })?;
+
+        for y in 0..12 {
+            for x in 0..40 {
+                if x < bounds.x || x >= bounds.right() || y < bounds.y || y >= bounds.bottom() {
+                    assert_eq!(
+                        terminal.backend().buffer()[(x, y)].symbol(),
+                        "x",
+                        "drawing escaped its supplied area at ({x}, {y})"
+                    );
+                }
+            }
+        }
+        assert!(
+            cursor.is_some_and(|position| bounds.contains(position)),
+            "the command cursor remains inside the supplied area"
         );
         Ok(())
     }
@@ -3032,8 +3126,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 5))?;
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -3063,8 +3159,10 @@ mod tests {
 
         app.update(Action::MoveDown);
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -3531,8 +3629,10 @@ mod tests {
 
         app.information_expanded = true;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -3748,7 +3848,10 @@ mod tests {
         );
         let mut terminal = Terminal::new(TestBackend::new(48, 7))?;
 
-        terminal.draw(|frame| draw_file_diff(frame, &diff, 0, 0))?;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            draw_file_diff(frame, area, &diff, 0, 0);
+        })?;
 
         assert_eq!(rendered_line(&terminal, 0).trim(), "M file");
         for (y, color) in [
@@ -3832,7 +3935,10 @@ mod tests {
         ));
         let mut terminal = Terminal::new(TestBackend::new(64, 9))?;
 
-        terminal.draw(|frame| draw_file_diff(frame, &diff, 0, 0))?;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            draw_file_diff(frame, area, &diff, 0, 0);
+        })?;
 
         assert_eq!(rendered_line(&terminal, 0).trim(), title);
         assert_eq!(rendered_line(&terminal, 1).trim(), "new       |   2 ++  +2");
@@ -4520,8 +4626,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(240, 3))?;
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -4742,8 +4850,10 @@ mod tests {
         assert!(app.can_amend(), "the focused worktree path is amendable");
         assert!(app.actions_expanded, "the actions prefix remains expanded");
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -4763,8 +4873,10 @@ mod tests {
 
         app.changes_focus = None;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -4785,8 +4897,10 @@ mod tests {
                 kind: DecorationKind::Stash,
             });
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -4807,8 +4921,10 @@ mod tests {
 
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -4823,8 +4939,10 @@ mod tests {
         );
         worktree.paths[0].group = ChangeGroup::Staged;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5415,8 +5533,10 @@ mod tests {
         app.selected = Some(1);
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5441,8 +5561,10 @@ mod tests {
 
         app.selected = Some(0);
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5488,8 +5610,10 @@ mod tests {
             ..Changes::default()
         };
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5512,8 +5636,10 @@ mod tests {
         );
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5530,8 +5656,10 @@ mod tests {
         app.arm_rebase_conflict(other);
         app.selected = Some(1);
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5550,8 +5678,10 @@ mod tests {
 
         app.changes_mode = Some(ChangesMode::Tree);
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5876,8 +6006,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6429,8 +6561,10 @@ mod tests {
         app.update(Action::ToggleCommit);
         let worktree_changes = Changes::default();
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6472,8 +6606,10 @@ mod tests {
 
         let mut wide_terminal = Terminal::new(TestBackend::new(240, 16))?;
         wide_terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6520,8 +6656,10 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6575,8 +6713,10 @@ mod tests {
             ..Changes::default()
         };
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6616,8 +6756,10 @@ mod tests {
         assert!(!summary.contains("= 12"), "a single term already expresses the total");
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6643,8 +6785,10 @@ mod tests {
         assert!(!app.worktree_changes_visible, "an empty block is not focusable");
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6689,8 +6833,10 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6703,8 +6849,10 @@ mod tests {
         app.update(Action::MoveDown);
         app.update(Action::MoveDown);
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6785,8 +6933,10 @@ mod tests {
         let worktree = path(ChangeGroup::Staged, "worktree-file");
         let mut terminal = Terminal::new(TestBackend::new(120, 10))?;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6819,8 +6969,10 @@ mod tests {
             "success success success success success success success success success success success success",
         );
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -7601,8 +7753,10 @@ mod tests {
         let mailmap = gix::mailmap::Snapshot::default();
         let stale_tree_changes = Changes::default();
         terminal.draw(|frame| {
+            let area = frame.area();
             draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &mailmap,
