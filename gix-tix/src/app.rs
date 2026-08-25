@@ -2391,24 +2391,11 @@ impl App {
             .collect();
         drop(self.store_commits(commits));
 
-        let visible = self.reachable_from(view_tips);
-        let hidden = self.reachable_from(hidden_tips);
-        let visible: HashSet<_> = visible.difference(&hidden).copied().collect();
-        let boundary: HashSet<_> = if visible.is_empty() {
-            if view_tips.is_empty() { hidden_tips } else { view_tips }
-                .iter()
-                .copied()
-                .collect()
-        } else if hidden_tips.is_empty() {
-            HashSet::new()
-        } else {
-            visible
-                .iter()
-                .filter_map(|id| self.all_rows.get(id))
-                .flat_map(|row| row.parent_ids.iter().copied())
-                .filter(|id| !visible.contains(id))
-                .collect()
-        };
+        let (visible, boundary) = crate::history::view_scope(view_tips, hidden_tips, |id, out| {
+            if let Some(row) = self.all_rows.get(&id) {
+                out.extend(row.parent_ids.iter().copied());
+            }
+        });
         let rows: Vec<_> = self
             .all_order
             .iter()
@@ -2446,20 +2433,6 @@ impl App {
         self.state = State::Computing;
         self.follow_tail = false;
         Some(rows)
-    }
-
-    fn reachable_from(&self, tips: &[ObjectId]) -> HashSet<ObjectId> {
-        let mut reachable = HashSet::new();
-        let mut pending = tips.to_vec();
-        while let Some(id) = pending.pop() {
-            if !reachable.insert(id) {
-                continue;
-            }
-            if let Some(row) = self.all_rows.get(&id) {
-                pending.extend(row.parent_ids.iter().copied());
-            }
-        }
-        reachable
     }
 
     fn is_known_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> bool {
