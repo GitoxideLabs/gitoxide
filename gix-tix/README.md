@@ -19,7 +19,9 @@ corresponding shell profile. The same command below `gix tix` generates a
 wrapper which uses `gix tix` throughout.
 
 `wt switch BRANCH` switches to an existing worktree or creates one for an
-unchecked-out local branch. `--path PATH` overrides the default sibling path.
+unchecked-out local branch. `wt switch --new-branch BRANCH` creates a missing
+branch at the logical Tix HEAD, or reuses it if it exists. `--path PATH`
+overrides the default sibling path.
 
 
 It's also an experiment to see how long, or if at all, this is maintainable.
