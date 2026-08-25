@@ -132,11 +132,8 @@ fn perform_inner(
                 anyhow::bail!("cannot amend with unresolved index conflicts");
             }
             if let Some(path) = selected_amend_path {
-                if review && path.group != crate::ChangeGroup::Staged {
-                    anyhow::bail!("review commits can amend only staged paths");
-                }
                 amend_path_tree(&repo, old_tree, path, &index)?
-            } else if review || index_only {
+            } else if index_only {
                 let index_tree = create::index_tree(&repo, &index)?;
                 if index_tree == old_tree && !pending {
                     return Ok(None);
