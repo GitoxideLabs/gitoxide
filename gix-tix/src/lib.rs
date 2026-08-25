@@ -858,10 +858,23 @@ pub struct Options {
     pub hide: Vec<OsString>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RefreshKind {
     History,
     RefTree { enter: bool },
+    WorktreePreview { index: usize, path: PathBuf },
+}
+
+struct HistoryRefresh {
+    history: history::Refresh,
+    worktree: Option<Result<worktrunk::GraphMetadata, String>>,
+}
+
+#[derive(Clone)]
+struct WorktreePreview {
+    path: PathBuf,
+    refs: history::RefSnapshot,
+    decorations: Decorations,
 }
 
 fn detect_commit_pane_background() -> Option<(u8, u8, u8)> {
@@ -907,7 +920,23 @@ pub(crate) fn pick_worktree(
     repository: gix::ThreadSafeRepository,
     picker: &mut worktrunk::Worktrees,
 ) -> Result<Option<PathBuf>> {
-    match run_ui(repository, Vec::new(), Options::default(), Some(picker))? {
+    let repository = repository.to_thread_local();
+    let (hide, unavailable) = history::available_hidden_revisions(&repository, &[], true)?;
+    for (revision, err) in unavailable {
+        eprintln!(
+            "warning: ignoring unavailable hidden revision {}: {err}",
+            revision.to_string_lossy()
+        );
+    }
+    match run_ui(
+        repository.into_sync(),
+        Vec::new(),
+        Options {
+            hide,
+            ..Options::default()
+        },
+        Some(picker),
+    )? {
         UiExit::Quit(_) => Ok(None),
         UiExit::Promote(path) => Ok(Some(path)),
     }
@@ -920,7 +949,6 @@ enum UiExit {
 
 enum EventLoopExit {
     Quit(Option<Duration>),
-    Rebind(PathBuf),
     Promote(PathBuf),
 }
 
@@ -928,7 +956,7 @@ fn run_ui(
     repository: gix::ThreadSafeRepository,
     revisions: Vec<OsString>,
     mut options: Options,
-    mut picker: Option<&mut worktrunk::Worktrees>,
+    picker: Option<&mut worktrunk::Worktrees>,
 ) -> Result<UiExit> {
     let _log_guard = logging::init();
     let mut repository_path = repository.git_dir().to_owned();
@@ -984,29 +1012,19 @@ fn run_ui(
                     hook(info);
                 }));
             }
-            let mut repository = repository;
             let mut picker_focused = picker.is_some();
-            loop {
-                match event_loop(
-                    &mut terminal,
-                    repository,
-                    revisions.clone(),
-                    options.clone(),
-                    enhanced_keyboard,
-                    commit_pane_background,
-                    picker.as_deref_mut(),
-                    &mut picker_focused,
-                )? {
-                    EventLoopExit::Rebind(path) => {
-                        std::env::set_current_dir(&path)
-                            .with_context(|| format!("could not enter worktree {}", path.display()))?;
-                        repository = gix::open(&path)
-                            .with_context(|| format!("could not open worktree {}", path.display()))?
-                            .into_sync();
-                    }
-                    EventLoopExit::Quit(lane_time) => break Ok(UiExit::Quit(lane_time)),
-                    EventLoopExit::Promote(path) => break Ok(UiExit::Promote(path)),
-                }
+            match event_loop(
+                &mut terminal,
+                repository,
+                revisions,
+                options,
+                enhanced_keyboard,
+                commit_pane_background,
+                picker,
+                &mut picker_focused,
+            )? {
+                EventLoopExit::Quit(lane_time) => Ok(UiExit::Quit(lane_time)),
+                EventLoopExit::Promote(path) => Ok(UiExit::Promote(path)),
             }
         });
     let keyboard_restore = if quit_on_finish {
@@ -1156,6 +1174,25 @@ fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> O
     }
 }
 
+fn request_worktree_preview(selected: Option<usize>, requested: &mut Option<usize>, queue: &mut VecDeque<usize>) {
+    let Some(index) = selected else { return };
+    *requested = Some(index);
+    queue.retain(|candidate| *candidate != index);
+    queue.push_front(index);
+}
+
+fn clear_worktree_preview_request(
+    index: usize,
+    cached: bool,
+    requested: &mut Option<usize>,
+    queue: &mut VecDeque<usize>,
+) {
+    *requested = None;
+    if cached {
+        queue.retain(|candidate| *candidate != index);
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the picker extends the existing event-loop context"
@@ -1180,6 +1217,7 @@ fn event_loop(
         .map(diagnostic_key)
         .collect();
     let quit_on_finish = quit_on_finish.is_some();
+    let preview_mode = picker.is_some();
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (mut view_repository, recovered_at_startup) = open_history_repository(&mut repository_path, &common_dir)?;
@@ -1199,12 +1237,16 @@ fn event_loop(
     }
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
     let mut watcher_retry_deadline = None;
-    let mut ref_watcher = match start_ref_watcher(&repository_path, &common_dir) {
-        Ok(watcher) => Some(watcher),
-        Err(err) => {
-            tracing::warn!(error = %err, "reference watcher startup failed");
-            schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
-            None
+    let mut ref_watcher = if preview_mode {
+        None
+    } else {
+        match start_ref_watcher(&repository_path, &common_dir) {
+            Ok(watcher) => Some(watcher),
+            Err(err) => {
+                tracing::warn!(error = %err, "reference watcher startup failed");
+                schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                None
+            }
         }
     };
     let mut ref_watch_set_changed = false;
@@ -1229,7 +1271,7 @@ fn event_loop(
         app.leave_attention("worktree removed; using the common repository without worktree changes");
     }
     let mut lane_receiver: Option<mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)>> = None;
-    let mut refresh_receiver: Option<mpsc::Receiver<(RefreshKind, HistoryGraph, Result<history::Refresh>)>> = None;
+    let mut refresh_receiver: Option<mpsc::Receiver<(RefreshKind, HistoryGraph, Result<HistoryRefresh>)>> = None;
     let mut refresh_pending = false;
     let mut ref_tree_refresh_pending = false;
     let mut return_to_history_after_refresh = None;
@@ -1266,7 +1308,7 @@ fn event_loop(
         repository_is_bare,
         line_diff_parallelism,
     );
-    if worktree_watcher_needed(repository_is_bare, app.changes_mode) {
+    if !preview_mode && worktree_watcher_needed(repository_is_bare, app.changes_mode) {
         match start_worktree_watcher(&repository_path, repository_is_bare) {
             Ok(watcher) => worktree_watcher = Some(watcher),
             Err(err) => {
@@ -1311,7 +1353,13 @@ fn event_loop(
     let mut repeat_deadline: Option<Instant> = None;
     let mut history_status_deadline: Option<Instant> = None;
     let mut pending_terminal_event = None;
-    let mut pending_worktree_rebind = None;
+    let worktree_count = picker.as_ref().map_or(0, |picker| picker.rows().len());
+    let mut worktree_previews: Vec<Option<WorktreePreview>> =
+        std::iter::repeat_with(|| None).take(worktree_count).collect();
+    let mut worktree_preview_queue: VecDeque<_> = (0..worktree_count).collect();
+    let mut requested_worktree_preview = None;
+    let mut active_worktree_preview = preview_mode.then_some(0);
+    let mut pending_worktree_activation = None;
     let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
     let mut pending_conflict_clear_undo_on_accept = false;
     let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
@@ -1357,12 +1405,16 @@ fn event_loop(
                 line_diff_parallelism,
             );
             tracing::warn!(common_dir = %repository_path.display(), "worktree disappeared; recovered with common repository");
-            ref_watcher = match start_ref_watcher(&repository_path, &repository_path) {
-                Ok(watcher) => Some(watcher),
-                Err(err) => {
-                    tracing::warn!(error = %err, "reference watcher recovery failed");
-                    schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
-                    None
+            ref_watcher = if preview_mode {
+                None
+            } else {
+                match start_ref_watcher(&repository_path, &repository_path) {
+                    Ok(watcher) => Some(watcher),
+                    Err(err) => {
+                        tracing::warn!(error = %err, "reference watcher recovery failed");
+                        schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                        None
+                    }
                 }
             };
             ref_watch_set_changed = false;
@@ -1596,7 +1648,7 @@ fn event_loop(
             dirty = true;
             urgent = true;
         }
-        if take_due(&mut watcher_retry_deadline, Instant::now()) {
+        if !preview_mode && take_due(&mut watcher_retry_deadline, Instant::now()) {
             let mut retry = false;
             if ref_watcher.is_none() {
                 match start_ref_watcher(&repository_path, &common_dir) {
@@ -1698,6 +1750,94 @@ fn event_loop(
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((rows, graph, lane_time)) => {
+                    let mut activated_worktree = None;
+                    if let Some((index, previous_state)) = pending_worktree_activation.take() {
+                        let picker = picker.as_deref_mut().expect("worktree activation has a picker");
+                        if picker.selected_index() != Some(index) {
+                            app.cancel_preview_refresh(previous_state);
+                            picker.cancel_preview();
+                            lane_receiver = None;
+                            dirty = true;
+                            urgent = true;
+                            continue;
+                        }
+                        let preview = worktree_previews
+                            .get(index)
+                            .and_then(Clone::clone)
+                            .context("completed worktree preview disappeared")?;
+                        let mut next_repository = gix::open(&preview.path)
+                            .with_context(|| format!("could not open worktree {}", preview.path.display()))?;
+                        next_repository.object_cache_size(None);
+                        let next_repository_path = next_repository.git_dir().to_owned();
+                        let next_repository_is_bare = next_repository.workdir().is_none();
+                        let next_mailmap = next_repository.open_mailmap();
+                        let next_head_unborn = !next_repository_is_bare && next_repository.head()?.is_unborn();
+                        drop(next_repository);
+                        std::env::set_current_dir(&preview.path)
+                            .with_context(|| format!("could not enter worktree {}", preview.path.display()))?;
+
+                        repository_path = next_repository_path;
+                        repository_is_bare = next_repository_is_bare;
+                        mailmap = next_mailmap;
+                        ref_snapshot = preview.refs;
+                        decorations = preview.decorations;
+                        worktree_head_unborn = next_head_unborn;
+                        refresh_pending = false;
+                        ref_tree_refresh_pending = false;
+                        refresh_expand_hidden = false;
+                        return_to_history_after_refresh = None;
+                        history_status_deadline = None;
+                        fill_repository.path.clone_from(&repository_path);
+                        fill_repository.bare = repository_is_bare;
+                        fill_repository.retain = false;
+                        fill_repository.retained = None;
+                        commit_message = None;
+                        tree_changes.clear();
+                        worktree_changes = None;
+                        cached_status_head = None;
+                        worktree_status_parts = WorktreeStatusParts::default();
+                        selection_relation = None;
+                        app.selection_relation = None;
+                        app.tree_changes.error = None;
+                        app.worktree_changes.error = None;
+                        app.set_worktree_conflicted(false);
+                        app.set_worktree_changes_available(!repository_is_bare);
+                        app.set_view_tips(&ref_snapshot.view_tips);
+                        app.set_worktree_head_unborn(worktree_head_unborn);
+                        app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
+                        app.set_active_branch(active_branch_name(&ref_snapshot));
+                        #[cfg(feature = "blocking-network-client")]
+                        app.set_fetch_remote(ref_snapshot.fetch_remote.clone());
+                        app.set_worktree_head(
+                            (!repository_is_bare).then(|| decoration_head(&decorations)).flatten(),
+                            false,
+                        );
+                        app.set_review_roots(decoration_review_roots(&decorations));
+                        line_diff_pool = None;
+                        sync_line_diff_pool(
+                            &mut line_diff_pool,
+                            app.changes_mode.is_some(),
+                            &repository_path,
+                            repository_is_bare,
+                            line_diff_parallelism,
+                        );
+                        let history = history_graph
+                            .as_mut()
+                            .expect("worktree activation requires the cached history graph");
+                        history.switch_view(
+                            &ref_snapshot.view_tips,
+                            if app.show_hidden {
+                                &[]
+                            } else {
+                                &ref_snapshot.hidden_tips
+                            },
+                        );
+                        app.set_known_descendants(history.commits_with_descendants());
+                        app.set_known_merge_descendants(history.commits_with_merge_descendants());
+                        ref_tree.rebuild(history, &ref_snapshot, &decorations);
+                        active_worktree_preview = Some(index);
+                        activated_worktree = Some(index);
+                    }
                     let scan =
                         scan_change_ids(&repository_path, repository_is_bare, change_id_scan_needed(&app), &rows)
                             .unwrap_or_else(|err| {
@@ -1706,6 +1846,14 @@ fn event_loop(
                             });
                     app.finish_lane_computation(rows, graph, lane_time);
                     app.set_change_ids(scan.overrides, scan.duplicates);
+                    if let Some(index) = activated_worktree
+                        && let Some(picker) = picker.as_deref_mut()
+                    {
+                        picker.mark_previewed(index);
+                        if requested_worktree_preview == Some(index) && picker.selected_index() == Some(index) {
+                            requested_worktree_preview = None;
+                        }
+                    }
                     ref_tree.set_history_commits(app.rows.iter().map(|row| row.id));
                     if return_to_history_after_refresh.take().is_some() {
                         ref_tree.leave();
@@ -1734,7 +1882,68 @@ fn event_loop(
         if let Some(result) = refresh_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((kind, mut graph, result)) => {
-                    let result = result?;
+                    let HistoryRefresh {
+                        history: result,
+                        worktree,
+                    } = match result {
+                        Ok(result) => result,
+                        Err(err) => {
+                            if let RefreshKind::WorktreePreview { index, .. } = kind {
+                                if let Some(picker) = picker.as_deref_mut() {
+                                    picker.set_graph_metadata(index, Err(format!("{err:#}")));
+                                }
+                                if requested_worktree_preview == Some(index) {
+                                    requested_worktree_preview = None;
+                                }
+                                graph.switch_view(
+                                    &ref_snapshot.view_tips,
+                                    if app.show_hidden {
+                                        &[]
+                                    } else {
+                                        &ref_snapshot.hidden_tips
+                                    },
+                                );
+                                history_graph = Some(graph);
+                                refresh_receiver = None;
+                                dirty = true;
+                                urgent = true;
+                                continue;
+                            }
+                            return Err(err);
+                        }
+                    };
+                    tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
+                    if let RefreshKind::WorktreePreview { index, path } = kind {
+                        app.cache_commits(result.commits);
+                        if let Some(picker) = picker.as_deref_mut() {
+                            picker.set_graph_metadata(
+                                index,
+                                worktree.unwrap_or_else(|| Err("worktree preview metadata is missing".into())),
+                            );
+                        }
+                        if let Some(slot) = worktree_previews.get_mut(index) {
+                            *slot = Some(WorktreePreview {
+                                path,
+                                refs: result.refs,
+                                decorations: result.decorations,
+                            });
+                        }
+                        graph.switch_view(
+                            &ref_snapshot.view_tips,
+                            if app.show_hidden {
+                                &[]
+                            } else {
+                                &ref_snapshot.hidden_tips
+                            },
+                        );
+                        app.set_known_descendants(graph.commits_with_descendants());
+                        app.set_known_merge_descendants(graph.commits_with_merge_descendants());
+                        history_graph = Some(graph);
+                        refresh_receiver = None;
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
                     if matches!(kind, RefreshKind::RefTree { .. }) {
                         graph.set_current_view(&ref_snapshot.view_tips);
                     }
@@ -1751,7 +1960,6 @@ fn event_loop(
                     app.set_review_roots(decoration_review_roots(&result.decorations));
                     ref_tree.rebuild(&graph, &result.refs, &result.decorations);
                     history_graph = Some(graph);
-                    tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
                     if let RefreshKind::RefTree { enter } = kind {
                         let hidden_tips = if app.show_hidden {
                             &[][..]
@@ -1796,6 +2004,13 @@ fn event_loop(
                             .and_then(|repo| Ok(repo.head()?.is_unborn()))
                             .unwrap_or(false);
                     app.set_worktree_head_unborn(worktree_head_unborn);
+                    if preview_mode {
+                        worktree_previews.iter_mut().for_each(|preview| *preview = None);
+                        worktree_preview_queue = (0..worktree_previews.len()).collect();
+                        if let Some(picker) = picker.as_deref_mut() {
+                            picker.invalidate_graph_metadata();
+                        }
+                    }
                     decorations = result.decorations;
                     selection_relation = None;
                     app.selection_relation = None;
@@ -1812,6 +2027,102 @@ fn event_loop(
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => anyhow::bail!("history refresh worker stopped unexpectedly"),
+            }
+        }
+        let mut next_worktree_preview = None;
+        if preview_mode
+            && refresh_receiver.is_none()
+            && lane_receiver.is_none()
+            && history_graph.is_some()
+            && matches!(app.state, State::Complete | State::Cancelled)
+        {
+            let picker = picker.as_deref_mut().expect("preview mode has a worktree picker");
+            if let Some(index) = requested_worktree_preview {
+                if picker.selected_index() != Some(index)
+                    || active_worktree_preview == Some(index) && !picker.preview_pending()
+                {
+                    clear_worktree_preview_request(
+                        index,
+                        worktree_previews.get(index).is_some_and(Option::is_some),
+                        &mut requested_worktree_preview,
+                        &mut worktree_preview_queue,
+                    );
+                } else {
+                    next_worktree_preview = Some((index, true));
+                }
+            }
+            if next_worktree_preview.is_none()
+                && requested_worktree_preview.is_none()
+                && *picker_focused
+                && !refresh_pending
+                && !ref_tree_refresh_pending
+                && pending_terminal_event.is_none()
+                && !event::poll(Duration::ZERO)?
+            {
+                while let Some(index) = worktree_preview_queue.pop_front() {
+                    if worktree_previews.get(index).is_some_and(Option::is_none) {
+                        next_worktree_preview = Some((index, false));
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some((index, activate)) = next_worktree_preview {
+            worktree_preview_queue.retain(|candidate| *candidate != index);
+            if activate && let Some(preview) = worktree_previews.get(index).and_then(Clone::clone) {
+                let graph = history_graph
+                    .as_ref()
+                    .expect("worktree activation requires the cached history graph");
+                let review_roots = decoration_review_roots(&preview.decorations);
+                let review_root = decoration_head(&preview.decorations).and_then(|head| {
+                    history::nearest_review_root(&review_roots, head, |ancestor, descendant| {
+                        graph.is_ancestor(ancestor, descendant)
+                    })
+                    .ok()
+                    .flatten()
+                });
+                let hidden_tips = if app.show_hidden {
+                    &[][..]
+                } else {
+                    preview.refs.hidden_tips.as_slice()
+                };
+                let previous_state = app.state;
+                let rows = app
+                    .start_preview_refresh(
+                        Vec::new().into(),
+                        &preview.refs.view_tips,
+                        hidden_tips,
+                        true,
+                        review_root,
+                    )
+                    .expect("worktree activation always projects cached history");
+                lane_receiver = Some(start_lane_worker(rows));
+                pending_worktree_activation = Some((index, previous_state));
+                picker
+                    .as_deref_mut()
+                    .expect("preview mode has a worktree picker")
+                    .begin_preview();
+                dirty = true;
+                urgent = true;
+            } else if worktree_previews.get(index).is_some_and(Option::is_none) {
+                let path = picker
+                    .as_deref()
+                    .and_then(|picker| picker.rows().get(index))
+                    .map(|row| row.path.clone())
+                    .context("worktree preview disappeared")?;
+                refresh_receiver = Some(start_history_refresh(
+                    path.clone(),
+                    false,
+                    Vec::new(),
+                    hide.clone(),
+                    false,
+                    Default::default(),
+                    gix::features::threading::OwnShared::clone(&authors),
+                    history_graph
+                        .take()
+                        .expect("worktree preview starts only with a cached history graph"),
+                    RefreshKind::WorktreePreview { index, path },
+                ));
             }
         }
         if ref_tree_refresh_pending
@@ -1915,10 +2226,6 @@ fn event_loop(
                 picker.as_deref_mut(),
                 *picker_focused,
             )?;
-            if let Some(path) = pending_worktree_rebind.take() {
-                cancelled.store(true, Ordering::Relaxed);
-                return Ok(EventLoopExit::Rebind(path));
-            }
             last_draw = Instant::now();
             dirty = false;
             urgent = false;
@@ -1977,6 +2284,7 @@ fn event_loop(
             }
         }
         let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing)
+            || refresh_receiver.is_some()
             || verification_receiver.is_some()
             || repeat_deadline.is_some();
         if should_draw(dirty, streaming, last_draw.elapsed()) {
@@ -2107,12 +2415,33 @@ fn event_loop(
                     WorktrunkInput::CancelSearch => {
                         if switching_blocked && picker.cancel_search_needs_rebind() {
                             app.leave_attention("finish the background task or conflict before switching worktrees");
-                        } else {
-                            pending_worktree_rebind = picker.cancel_search();
+                        } else if picker.cancel_search().is_some() {
+                            request_worktree_preview(
+                                picker.selected_index(),
+                                &mut requested_worktree_preview,
+                                &mut worktree_preview_queue,
+                            );
                         }
                     }
+                    WorktrunkInput::FocusHistory if picker.preview_pending() || refresh_receiver.is_some() => {
+                        app.leave_attention("wait for the selected worktree preview to finish loading");
+                    }
                     WorktrunkInput::FocusHistory => *picker_focused = false,
-                    WorktrunkInput::Refresh => picker.refresh(),
+                    WorktrunkInput::Refresh if refresh_receiver.is_some() || lane_receiver.is_some() => {
+                        app.leave_attention("wait for the current worktree preview to finish loading");
+                    }
+                    WorktrunkInput::Refresh => {
+                        picker.refresh();
+                        active_worktree_preview = None;
+                        pending_worktree_activation = None;
+                        worktree_previews.iter_mut().for_each(|preview| *preview = None);
+                        worktree_preview_queue = (0..picker.rows().len()).collect();
+                        request_worktree_preview(
+                            picker.selected_index(),
+                            &mut requested_worktree_preview,
+                            &mut worktree_preview_queue,
+                        );
+                    }
                     WorktrunkInput::Search(input) => {
                         picker.edit_search(input);
                         if picker.search_selection_needs_preview() {
@@ -2120,8 +2449,12 @@ fn event_loop(
                                 app.leave_attention(
                                     "finish the background task or conflict before switching worktrees",
                                 );
-                            } else {
-                                pending_worktree_rebind = picker.preview_search_selection();
+                            } else if picker.preview_search_selection().is_some() {
+                                request_worktree_preview(
+                                    picker.selected_index(),
+                                    &mut requested_worktree_preview,
+                                    &mut worktree_preview_queue,
+                                );
                             }
                         }
                     }
@@ -2134,11 +2467,11 @@ fn event_loop(
                                 );
                             } else {
                                 picker.select(index);
-                                let path = picker
-                                    .selected_path()
-                                    .context("worktree selection disappeared")?
-                                    .to_owned();
-                                pending_worktree_rebind = Some(path);
+                                request_worktree_preview(
+                                    picker.selected_index(),
+                                    &mut requested_worktree_preview,
+                                    &mut worktree_preview_queue,
+                                );
                             }
                         }
                     }
@@ -2636,7 +2969,7 @@ fn event_loop(
                     repository_is_bare,
                     line_diff_parallelism,
                 );
-                if worktree_watcher.is_none() {
+                if !preview_mode && worktree_watcher.is_none() {
                     match start_worktree_watcher(&repository_path, repository_is_bare) {
                         Ok(watcher) => worktree_watcher = Some(watcher),
                         Err(err) => {
@@ -2887,13 +3220,15 @@ fn event_loop(
             queued_worktree_status_full = false;
             queued_worktree_status_scopes.clear();
             worktree_refresh_deadline = None;
-            match start_worktree_watcher(&repository_path, repository_is_bare) {
-                Ok(watcher) => worktree_watcher = Some(watcher),
-                Err(err) => {
-                    tracing::warn!(error = %err, "worktree watcher refresh failed");
-                    app.worktree_changes.error = Some(format!("worktree watch: {err}"));
-                    worktree_watcher = None;
-                    schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+            if !preview_mode {
+                match start_worktree_watcher(&repository_path, repository_is_bare) {
+                    Ok(watcher) => worktree_watcher = Some(watcher),
+                    Err(err) => {
+                        tracing::warn!(error = %err, "worktree watcher refresh failed");
+                        app.worktree_changes.error = Some(format!("worktree watch: {err}"));
+                        worktree_watcher = None;
+                        schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                    }
                 }
             }
         }
@@ -2905,7 +3240,7 @@ fn event_loop(
                 repository_is_bare,
                 line_diff_parallelism,
             );
-            if app.changes_mode == Some(ChangesMode::Both) {
+            if app.changes_mode == Some(ChangesMode::Both) && !preview_mode {
                 invalidate_worktree_changes(&mut worktree_changes);
                 worktree_watch_refresh = WorktreeWatchRefresh::default();
                 queued_worktree_status_full = false;
@@ -4510,21 +4845,25 @@ fn start_history_refresh(
     authors: SharedAuthors,
     mut graph: HistoryGraph,
     kind: RefreshKind,
-) -> mpsc::Receiver<(RefreshKind, HistoryGraph, Result<history::Refresh>)> {
+) -> mpsc::Receiver<(RefreshKind, HistoryGraph, Result<HistoryRefresh>)> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let result = open_repository(&repository_path, bare, true)
             .context("could not reopen repository for history refresh")
             .and_then(|mut repository| {
                 repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
-                graph.refresh(
+                let history = graph.refresh(
                     &repository,
                     &revisions,
                     &hidden_revisions,
                     include_worktrees,
                     &expand,
                     &authors,
-                )
+                )?;
+                let worktree = matches!(&kind, RefreshKind::WorktreePreview { .. }).then(|| {
+                    worktrunk::graph_metadata(&repository, &graph, &history.refs).map_err(|err| format!("{err:#}"))
+                });
+                Ok(HistoryRefresh { history, worktree })
             });
         let _ = sender.send((kind, graph, result));
     });
@@ -8162,6 +8501,37 @@ mod tests {
             None,
             "a repeated opener does not leak into the search query"
         );
+    }
+
+    #[test]
+    fn latest_worktrunk_preview_request_is_queued_first() {
+        let mut requested = None;
+        let mut queue = VecDeque::from([0, 1, 2]);
+
+        request_worktree_preview(Some(1), &mut requested, &mut queue);
+        request_worktree_preview(Some(2), &mut requested, &mut queue);
+
+        assert_eq!(requested, Some(2));
+        assert_eq!(queue, [2, 1, 0], "the latest selection moves to the front once");
+    }
+
+    #[test]
+    fn clearing_an_uncached_worktrunk_request_keeps_its_preload_queued() {
+        let mut requested = Some(1);
+        let mut queue = VecDeque::from([1, 0]);
+
+        clear_worktree_preview_request(1, false, &mut requested, &mut queue);
+
+        assert_eq!(requested, None);
+        assert_eq!(
+            queue,
+            [1, 0],
+            "uncached metadata must still be loaded in the background"
+        );
+
+        requested = Some(1);
+        clear_worktree_preview_request(1, true, &mut requested, &mut queue);
+        assert_eq!(queue, [0], "cached metadata needs no background reload");
     }
 
     #[test]
