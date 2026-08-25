@@ -54,6 +54,11 @@
   inherit the repository owner's configured identity.
 - Never impersonate the repository owner, user, or another person when authoring
   an agent-created or materially agent-rewritten commit.
+- The explicit exception is any tracked change outside `gix-tix/`: isolate such
+  changes in a dedicated commit containing no `gix-tix/` files, author it as
+  `Byron <sebastian.thiel@icloud.com>`, and immediately mark it for review with
+  `tix enrich commit todo <commit>`. This makes the outstanding human review
+  visible in tix even when the outside change is required by gix-tix work.
 - Preserve the author of an existing commit when the agent is not responsible for its contents.
 - Keep this provenance in commit metadata so reviewers can distinguish agent-authored changes without relying on commit-message trailers.
 - If follow-up work semantically belongs to an existing local commit, amend it
