@@ -75,6 +75,30 @@ enum Command {
     /// Generate or apply a self-contained history-rebase todo.
     #[command(subcommand)]
     Rebase(rebase::Command),
+    /// Switch between this repository's worktrees.
+    #[command(visible_alias = "wt")]
+    Worktrunk {
+        #[command(subcommand)]
+        command: Option<WorktrunkCommand>,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum WorktrunkCommand {
+    /// Switch to an existing worktree, or create one for a local branch.
+    Switch {
+        /// Existing worktree path or local branch; omit to open the picker.
+        #[arg(value_name = "TARGET")]
+        target: Option<OsString>,
+        /// Path at which to create a worktree for a local branch.
+        #[arg(long, value_name = "PATH", requires = "target")]
+        path: Option<PathBuf>,
+    },
+    /// Print the `wt` function for SHELL.
+    ShellInit {
+        #[arg(value_enum)]
+        shell: crate::worktrunk::shell::Shell,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -181,9 +205,50 @@ pub fn parse() -> Platform {
     Cli::parse_from(gix::env::args_os()).platform
 }
 
+/// The executable through which the shared command was invoked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Invocation {
+    Tix,
+    GixTix,
+}
+
+impl Invocation {
+    fn shell_backend(self) -> crate::worktrunk::shell::Backend {
+        match self {
+            Invocation::Tix => crate::worktrunk::shell::Backend::Tix,
+            Invocation::GixTix => crate::worktrunk::shell::Backend::GixTix,
+        }
+    }
+}
+
 impl Platform {
+    /// Return whether running this command requires repository discovery.
+    pub fn requires_repository(&self) -> bool {
+        !matches!(
+            self.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::ShellInit { .. })
+            })
+        )
+    }
+
+    /// Run a repository-free command.
+    pub fn run_without_repository(self, invocation: Invocation) -> Result<()> {
+        match self.command {
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::ShellInit { shell }),
+            }) => print_shell_init(shell, invocation),
+            _ => anyhow::bail!("this command requires a repository"),
+        }
+    }
+
     /// Run this command against `repository`.
     pub fn run(self, repository: gix::ThreadSafeRepository) -> Result<()> {
+        self.run_as(repository, Invocation::Tix)
+    }
+
+    /// Run this command against `repository` using the given executable identity.
+    pub fn run_as(self, repository: gix::ThreadSafeRepository, invocation: Invocation) -> Result<()> {
         let Platform {
             no_alt_screen,
             quit_on_finish,
@@ -207,6 +272,15 @@ impl Platform {
         let command = match command {
             Command::RefTree(args) => return print_ref_tree(&repository, args),
             Command::Show(args) => return show(&repository, args),
+            Command::Worktrunk { command } => {
+                return match command {
+                    None => crate::worktrunk::run(repository.into_sync(), None, None),
+                    Some(WorktrunkCommand::Switch { target, path }) => {
+                        crate::worktrunk::run(repository.into_sync(), target, path)
+                    }
+                    Some(WorktrunkCommand::ShellInit { shell }) => print_shell_init(shell, invocation),
+                };
+            }
             command => command,
         };
         let _log_guard = crate::logging::init();
@@ -261,9 +335,17 @@ impl Platform {
             Command::New(args) => return new::run(repository, args),
             Command::Enrich(command) => return enrich::run(repository, command),
             Command::Rebase(command) => return rebase::run(repository, command),
+            Command::Worktrunk { .. } => unreachable!("worktrunk returns before logging"),
         }
         Ok(())
     }
+}
+
+fn print_shell_init(shell: crate::worktrunk::shell::Shell, invocation: Invocation) -> Result<()> {
+    std::io::stdout()
+        .lock()
+        .write_all(crate::worktrunk::shell::generate(shell, invocation.shell_backend()).as_bytes())
+        .context("could not write worktrunk shell integration")
 }
 
 fn print_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<()> {
@@ -1245,6 +1327,69 @@ mod tests {
     }
 
     #[test]
+    fn parses_worktrunk_commands_and_repository_requirements() {
+        let picker = Cli::try_parse_from(["tix", "worktrunk"])
+            .expect("bare worktrunk opens the picker")
+            .platform;
+        assert!(picker.requires_repository());
+        assert!(matches!(picker.command, Some(Command::Worktrunk { command: None })));
+
+        let alias = Cli::try_parse_from(["tix", "wt", "switch"])
+            .expect("the visible alias and target-less switch open the picker")
+            .platform;
+        assert!(matches!(
+            alias.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Switch {
+                    target: None,
+                    path: None,
+                })
+            })
+        ));
+
+        let switch = Cli::try_parse_from(["tix", "worktrunk", "switch", "topic", "--path", "../topic"])
+            .expect("explicit branch and worktree path parse")
+            .platform;
+        let Some(Command::Worktrunk {
+            command: Some(WorktrunkCommand::Switch { target, path }),
+        }) = switch.command
+        else {
+            panic!("worktrunk switch was expected")
+        };
+        assert_eq!(target.as_deref(), Some(OsStr::new("topic")));
+        assert_eq!(path.as_deref(), Some(std::path::Path::new("../topic")));
+        assert!(
+            Cli::try_parse_from(["tix", "worktrunk", "switch", "--path", "../topic"]).is_err(),
+            "a creation path requires a local-branch target"
+        );
+
+        let shell_init = Cli::try_parse_from(["tix", "wt", "shell-init", "pwsh"])
+            .expect("shell-init and shell aliases parse")
+            .platform;
+        assert!(!shell_init.requires_repository());
+        assert!(matches!(
+            shell_init.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::ShellInit {
+                    shell: crate::worktrunk::shell::Shell::PowerShell,
+                })
+            })
+        ));
+        assert!(
+            Cli::command().render_help().to_string().contains("wt"),
+            "top-level help advertises the worktrunk alias"
+        );
+        assert!(
+            crate::worktrunk::shell::generate(
+                crate::worktrunk::shell::Shell::Bash,
+                Invocation::GixTix.shell_backend(),
+            )
+            .contains("gix tix worktrunk"),
+            "embedded invocation generates an embedded shell wrapper"
+        );
+    }
+
+    #[test]
     fn copy_insert_command_rewrites_the_target_stack_and_is_undoable() -> gix_testtools::Result {
         fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
             let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
@@ -1565,6 +1710,9 @@ mod tests {
             &["rebase"],
             &["rebase", "todo"],
             &["rebase", "apply"],
+            &["worktrunk"],
+            &["worktrunk", "switch"],
+            &["worktrunk", "shell-init"],
         ] {
             for help in ["-h", "--help"] {
                 let arguments = std::iter::once("tix").chain(command.iter().copied()).chain([help]);
