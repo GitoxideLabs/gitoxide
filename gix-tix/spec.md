@@ -16,20 +16,24 @@ without trading responsiveness for metadata that is not visible.
 - `tix worktrunk`, its visible `tix wt` alias, and `tix worktrunk switch`
   open an existing-worktree picker above a fully interactive Tix history. The
   list occupies no more than half the terminal. Moving its cursor immediately
-  paints the new selection, then rebinds the history to that worktree without
-  changing repository state;
+  paints the new selection without changing repository state and requests its
+  history preview. If that preview is not ready, the previous history remains
+  visible, marked loading, and read-only; completion activates only the latest
+  selection. Each activation refreshes its tree and worktree-change diffs.
   `PageUp` and `PageDown` move by the visible list height. `/` opens a
   case-insensitive fuzzy search over worktree names; edits and navigation paint
-  and rebind the current match, `Enter` promotes it immediately, and `Escape`
+  and preview the current match, `Enter` promotes it immediately, and `Escape`
   cancels the search and restores its starting selection.
   `Tab` focuses history and `Escape` returns from root history to the list.
   `Enter` selects the worktree and promotes it to a normal full-screen history.
   Compact `Worktree`, `Status`, `Base ±`, and `Commits ↕` columns distinguish
   the launch, main, and linked worktrees and stream their dirty state, upstream
   ahead/behind counts, and additions and removals against the unambiguous
-  inferred hidden base. The list omits redundant branch and absolute-path
-  columns. Space pressure removes the left side of worktree names first while
-  retaining an ellipsis and suffix. Detached worktrees use
+  inferred hidden base. Additions and ahead counts are green; removals and behind
+  counts are light red, while a selected row retains its cyan background. The
+  list omits redundant branch and absolute-path columns. Space pressure removes
+  the left side of worktree names first while retaining an ellipsis and suffix.
+  Detached worktrees use
   their symbolic `refs/worktree/tix/pins/HEAD` branch when present. Without a
   configured upstream, ahead/behind is omitted unless exactly one hidden tip
   identifies the comparison history.
@@ -208,6 +212,11 @@ without trading responsiveness for metadata that is not visible.
 - The persistent graph is append-only and index-addressed, with one compact copy
   of each commit and flat parent edges. View refreshes project rows from this
   cache and stop walking when complete cached ancestry is reached.
+- One persistent graph is shared by every worktrunk preview. Resolving another
+  worktree adds only missing ancestry for its visible and hidden tips; selection
+  switches the active rev-set without rebuilding or rewalking cached topology.
+  Worktree ahead/behind and comparison-base discovery use this graph rather than
+  independent ancestry walks.
 - Local branch targets are reverse-indexed. Configured upstream targets are added
   as internal traversal tips so ahead/behind calculations have complete ancestry
   without a second repository walk.
@@ -1339,6 +1348,9 @@ space first; changes blocks adapt within the remaining history width.
   hide revspecs. Linked indexes, logs, locks, and unrelated metadata do not
   trigger history refreshes. Missing refs during an atomic update are transient;
   malformed or inaccessible ordinary refs remain errors.
+- The worktrunk picker starts neither reference nor worktree watchers. Promoting
+  a worktree to normal full-screen history restores the ordinary watched
+  lifecycle.
 - Ref changes that affect view or hidden tips trigger an incremental history
   refresh. Decoration-only changes avoid traversal. Filesystem-driven traversal
   changes, manual refresh, and display toggles preserve selection by commit ID.
@@ -1397,6 +1409,9 @@ space first; changes blocks adapt within the remaining history width.
   only for active work. Line-diff workers may remain for ten seconds after their
   latest batch, then are joined together and release their shared repository
   resources.
+- Worktrunk graph population is serialized, prioritizes the latest selection,
+  and may retain useful detached data from obsolete results, but an obsolete
+  result must never replace the selected preview or delay further list input.
 - Change IDs are scanned only while configured hidden tips are actively excluded.
   Unrestricted and explicitly expanded views perform no scan. A refresh keeps
   the current projection's IDs until it has synchronously scanned the replacement,

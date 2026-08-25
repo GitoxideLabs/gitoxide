@@ -3,7 +3,6 @@
 pub(crate) mod shell;
 
 use std::{
-    collections::{HashMap, HashSet},
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     sync::{
@@ -78,23 +77,25 @@ pub(crate) struct Relation {
 }
 
 #[derive(Debug)]
-struct Loaded {
-    head: LogicalHead,
-    dirty: bool,
-    relation: Option<Relation>,
-    diffstat: Option<(u64, u64)>,
-}
-
-#[derive(Debug)]
 struct Update {
     index: usize,
-    result: Result<Loaded, String>,
+    result: Result<bool, String>,
+}
+
+/// History-derived information for one worktree row.
+#[derive(Debug)]
+pub(crate) struct GraphMetadata {
+    head: LogicalHead,
+    relation: Option<Relation>,
+    diffstat: Option<(u64, u64)>,
 }
 
 /// Stable worktree rows whose expensive fields are filled by one short-lived worker per row.
 pub(crate) struct Worktrees {
     rows: Vec<Row>,
     selected: usize,
+    previewed: Option<usize>,
+    previewing: bool,
     search_origin: Option<usize>,
     search: Menu<usize>,
     updates: mpsc::Receiver<Update>,
@@ -109,6 +110,8 @@ impl Worktrees {
         Ok(Worktrees {
             rows: inventory(repository)?,
             selected: 0,
+            previewed: Some(0),
+            previewing: false,
             search_origin: None,
             search: Menu::default(),
             updates,
@@ -140,6 +143,59 @@ impl Worktrees {
     pub(crate) fn select(&mut self, index: usize) {
         if !self.rows.is_empty() {
             self.selected = index.min(self.rows.len() - 1);
+        }
+    }
+
+    pub(crate) fn preview_pending(&self) -> bool {
+        self.previewing || self.selected_index() != self.previewed
+    }
+
+    pub(crate) fn begin_preview(&mut self) {
+        self.previewing = true;
+    }
+
+    pub(crate) fn cancel_preview(&mut self) {
+        self.previewing = false;
+    }
+
+    pub(crate) fn mark_previewed(&mut self, index: usize) {
+        self.previewed = Some(index);
+        self.previewing = false;
+    }
+
+    pub(crate) fn set_graph_metadata(&mut self, index: usize, result: Result<GraphMetadata, String>) {
+        let Some(row) = self.rows.get_mut(index) else {
+            return;
+        };
+        match result {
+            Ok(GraphMetadata {
+                head,
+                relation,
+                diffstat,
+            }) => {
+                row.head = Some(head);
+                row.relation = relation;
+                (row.lines_added, row.lines_removed) = diffstat
+                    .map(|(added, removed)| (Some(added), Some(removed)))
+                    .unwrap_or_default();
+                if row.dirty.is_some() && !matches!(row.state, LoadState::Error(_)) {
+                    row.state = LoadState::Ready;
+                }
+            }
+            Err(err) => row.state = LoadState::Error(err),
+        }
+    }
+
+    pub(crate) fn invalidate_graph_metadata(&mut self) {
+        for row in &mut self.rows {
+            let dirty_error = row.head.is_some() && row.dirty.is_none() && matches!(row.state, LoadState::Error(_));
+            if !dirty_error {
+                row.state = LoadState::Loading;
+            }
+            row.head = None;
+            row.relation = None;
+            row.lines_added = None;
+            row.lines_removed = None;
         }
     }
 
@@ -246,7 +302,7 @@ impl Worktrees {
 
     /// Apply all currently available worker messages without blocking.
     pub(crate) fn drain_updates(&mut self) -> bool {
-        if self.workers.is_empty() && self.rows.iter().any(|row| row.state == LoadState::Loading) {
+        if self.workers.is_empty() && self.rows.iter().any(|row| row.dirty.is_none()) {
             self.start_workers();
         }
         let updates: Vec<_> = self.updates.try_iter().collect();
@@ -256,19 +312,11 @@ impl Worktrees {
                 continue;
             };
             match update.result {
-                Ok(Loaded {
-                    head,
-                    dirty,
-                    relation,
-                    diffstat,
-                }) => {
-                    row.head = Some(head);
+                Ok(dirty) => {
                     row.dirty = Some(dirty);
-                    row.relation = relation;
-                    (row.lines_added, row.lines_removed) = diffstat
-                        .map(|(added, removed)| (Some(added), Some(removed)))
-                        .unwrap_or_default();
-                    row.state = LoadState::Ready;
+                    if row.head.is_some() && !matches!(row.state, LoadState::Error(_)) {
+                        row.state = LoadState::Ready;
+                    }
                 }
                 Err(err) => row.state = LoadState::Error(err),
             }
@@ -278,18 +326,14 @@ impl Worktrees {
 
     /// Reload the expensive fields while preserving row order and selection.
     pub(crate) fn refresh(&mut self) {
-        if self.rows.iter().any(|row| row.state == LoadState::Loading) {
-            return;
-        }
         self.cancel.store(true, Ordering::Relaxed);
         self.workers.clear();
+        self.previewed = None;
+        self.previewing = false;
+        self.invalidate_graph_metadata();
         for row in &mut self.rows {
             row.state = LoadState::Loading;
-            row.head = None;
             row.dirty = None;
-            row.relation = None;
-            row.lines_added = None;
-            row.lines_removed = None;
         }
     }
 
@@ -317,7 +361,7 @@ impl Worktrees {
                     }
                     let result = gix::open(&path)
                         .with_context(|| format!("could not open worktree {}", path.display()))
-                        .and_then(|repository| load(repository, &cancel))
+                        .and_then(|repository| is_dirty(&repository, &cancel))
                         .map_err(|err| format!("{err:#}"));
                     if cancel.load(Ordering::Relaxed) || sender.send(Update { index, result }).is_err() {
                         break;
@@ -414,35 +458,25 @@ fn absolute(path: &Path) -> std::io::Result<PathBuf> {
     }
 }
 
-fn load(mut repository: gix::Repository, cancel: &Arc<AtomicBool>) -> Result<Loaded> {
-    repository.object_cache_size(None);
-    let head = logical_head(&repository)?;
-    let dirty = is_dirty(&repository, cancel)?;
+pub(crate) fn graph_metadata(
+    repository: &gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    refs: &crate::history::RefSnapshot,
+) -> Result<GraphMetadata> {
+    let head = logical_head(repository)?;
     let Some(head_id) = head.commit_id else {
-        return Ok(Loaded {
+        return Ok(GraphMetadata {
             head,
-            dirty,
             relation: None,
             diffstat: None,
         });
     };
-    let hidden_tips = hidden_tips(&repository)?;
-    let head_ancestry = ancestry(&repository, [head_id], cancel)?;
-    let hidden_ancestry = ancestry(&repository, hidden_tips.iter().copied(), cancel)?;
-    let relation = relation(
-        &repository,
-        &head,
-        &head_ancestry,
-        &hidden_tips,
-        &hidden_ancestry,
-        cancel,
-    )?;
-    let diffstat = unique_tix_boundary(head_id, &hidden_tips, &head_ancestry, &hidden_ancestry)
-        .map(|base_id| diffstat(&repository, base_id, head_id))
+    let relation = relation(repository, graph, &head, &refs.hidden_tips)?;
+    let diffstat = unique_tix_boundary(graph, head_id, &refs.hidden_tips)
+        .map(|base_id| diffstat(repository, base_id, head_id))
         .transpose()?;
-    Ok(Loaded {
+    Ok(GraphMetadata {
         head,
-        dirty,
         relation,
         diffstat,
     })
@@ -503,60 +537,15 @@ fn is_dirty(repository: &gix::Repository, cancel: &AtomicBool) -> Result<bool> {
     Ok(dirty)
 }
 
-#[derive(Default)]
-struct Ancestry {
-    ids: HashSet<gix::ObjectId>,
-    parents: HashMap<gix::ObjectId, Vec<gix::ObjectId>>,
-}
-
-fn ancestry(
-    repository: &gix::Repository,
-    tips: impl IntoIterator<Item = gix::ObjectId>,
-    cancel: &AtomicBool,
-) -> Result<Ancestry> {
-    let tips: Vec<_> = tips.into_iter().collect();
-    if tips.is_empty() {
-        return Ok(Ancestry::default());
-    }
-    let mut out = Ancestry::default();
-    for info in repository
-        .rev_walk(tips)
-        .all()
-        .context("could not start history traversal")?
-    {
-        if cancel.load(Ordering::Relaxed) {
-            anyhow::bail!("worktree loading was cancelled");
-        }
-        let info = info.context("could not traverse history")?;
-        out.ids.insert(info.id);
-        out.parents.insert(info.id, info.parent_ids.iter().copied().collect());
-    }
-    Ok(out)
-}
-
-fn hidden_tips(repository: &gix::Repository) -> Result<Vec<gix::ObjectId>> {
-    let (revisions, _) = crate::history::available_hidden_revisions(repository, &[], true)?;
-    let mut tips = revisions
-        .iter()
-        .map(|revision| {
-            let revision = gix::path::os_str_into_bstr(revision)
-                .with_context(|| format!("hidden revision {} is not valid UTF-8", revision.to_string_lossy()))?;
-            crate::history::resolve_revision(repository, revision).map(|(id, _)| id)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    tips.sort_unstable();
-    tips.dedup();
-    Ok(tips)
-}
-
 fn relation(
     repository: &gix::Repository,
+    graph: &crate::history::HistoryGraph,
     head: &LogicalHead,
-    head_ancestry: &Ancestry,
     hidden_tips: &[gix::ObjectId],
-    hidden_ancestry: &Ancestry,
-    cancel: &AtomicBool,
 ) -> Result<Option<Relation>> {
+    let Some(head_id) = head.commit_id else {
+        return Ok(None);
+    };
     if let Some(branch) = head.branch.as_ref()
         && let Some(upstream) =
             repository.branch_remote_tracking_ref_name(branch.as_ref(), gix::remote::Direction::Fetch)
@@ -572,27 +561,23 @@ fn relation(
             .peel_to_id()
             .context("could not resolve the configured upstream")?
             .detach();
-        let upstream_ancestry = ancestry(repository, [upstream_id], cancel)?;
-        return Ok(Some(compare(head_ancestry, &upstream_ancestry)));
+        return Ok(graph
+            .ahead_behind(head_id, &[upstream_id])
+            .map(|(ahead, behind)| Relation { ahead, behind }));
     }
-    Ok((hidden_tips.len() == 1).then(|| compare(head_ancestry, hidden_ancestry)))
-}
-
-fn compare(left: &Ancestry, right: &Ancestry) -> Relation {
-    Relation {
-        ahead: left.ids.difference(&right.ids).count(),
-        behind: right.ids.difference(&left.ids).count(),
-    }
+    Ok((hidden_tips.len() == 1)
+        .then(|| graph.ahead_behind(head_id, hidden_tips))
+        .flatten()
+        .map(|(ahead, behind)| Relation { ahead, behind }))
 }
 
 fn unique_tix_boundary(
+    graph: &crate::history::HistoryGraph,
     head_id: gix::ObjectId,
     hidden_tips: &[gix::ObjectId],
-    head: &Ancestry,
-    hidden: &Ancestry,
 ) -> Option<gix::ObjectId> {
     let (_, boundary) = crate::history::view_scope(&[head_id], hidden_tips, |id, out| {
-        if let Some(parents) = head.parents.get(&id).or_else(|| hidden.parents.get(&id)) {
+        if let Some(parents) = graph.parents_of(id) {
             out.extend(parents);
         }
     });
@@ -816,6 +801,9 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
                 LoadState::Loading | LoadState::Ready => None,
             })
             .unwrap_or_else(|| {
+                if worktrees.preview_pending() {
+                    return (" loading preview; previous history is read-only".into(), Color::Yellow);
+                }
                 if focused {
                     (
                         " worktrees  j/k select  PgUp/PgDn page  / search  enter switch  tab history".into(),
@@ -905,17 +893,6 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
             false,
         );
         text.push_str("  ");
-        let base = match (row.lines_added, row.lines_removed) {
-            (Some(added), Some(removed)) => format!("+{added} -{removed}"),
-            _ => String::new(),
-        };
-        push_cell(&mut text, &base, base_width, false);
-        text.push_str("  ");
-        let commits = row
-            .relation
-            .map(|relation| format!("↑{} ↓{}", relation.ahead, relation.behind))
-            .unwrap_or_default();
-        push_cell(&mut text, &commits, commits_width, false);
         let style = if index == selected {
             Style::default()
                 .fg(if focused { Color::Black } else { Color::White })
@@ -923,7 +900,23 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
         } else {
             Style::default()
         };
-        lines.push(Line::styled(text, style));
+        let mut spans = vec![Span::raw(text)];
+        let base_width_used = match (row.lines_added, row.lines_removed) {
+            (Some(added), Some(removed)) => {
+                push_positive_negative(&mut spans, format!("+{added}"), format!("-{removed}"))
+            }
+            _ => 0,
+        };
+        spans.push(Span::raw(" ".repeat(base_width.saturating_sub(base_width_used) + 2)));
+        let commits_width_used = row.relation.map_or(0, |relation| {
+            push_positive_negative(
+                &mut spans,
+                format!("↑{}", relation.ahead),
+                format!("↓{}", relation.behind),
+            )
+        });
+        spans.push(Span::raw(" ".repeat(commits_width.saturating_sub(commits_width_used))));
+        lines.push(Line::from(spans).style(style));
     }
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -955,6 +948,16 @@ fn push_cell(line: &mut String, value: &str, width: usize, truncate_from_left: b
     let padding = width.saturating_sub(Line::raw(&value).width());
     line.push_str(&value);
     line.extend(std::iter::repeat_n(' ', padding));
+}
+
+fn push_positive_negative(spans: &mut Vec<Span<'static>>, positive: String, negative: String) -> usize {
+    let width = Line::raw(&positive).width() + 1 + Line::raw(&negative).width();
+    spans.extend([
+        Span::styled(positive, Style::default().fg(Color::Green)),
+        Span::raw(" "),
+        Span::styled(negative, Style::default().fg(Color::LightRed)),
+    ]);
+    width
 }
 
 fn truncate_left(value: &str, width: usize) -> String {
@@ -1021,19 +1024,15 @@ mod tests {
         Ok(())
     }
 
-    fn wait_until_loaded(worktrees: &mut Worktrees) {
+    fn wait_until_dirty_loaded(worktrees: &mut Worktrees) {
         for _ in 0..500 {
             worktrees.drain_updates();
-            if worktrees
-                .rows()
-                .iter()
-                .all(|row| !matches!(row.state, LoadState::Loading))
-            {
+            if worktrees.rows().iter().all(|row| row.dirty.is_some()) {
                 return;
             }
             thread::sleep(Duration::from_millis(10));
         }
-        panic!("worktree rows did not finish loading");
+        panic!("worktree dirty states did not finish loading");
     }
 
     fn test_row(label: &str, state: LoadState) -> Row {
@@ -1056,6 +1055,8 @@ mod tests {
         Worktrees {
             rows,
             selected: 0,
+            previewed: Some(0),
+            previewing: false,
             search_origin: None,
             search: Menu::default(),
             updates,
@@ -1243,7 +1244,13 @@ mod tests {
             "the worktree-private pin supplies the logical branch"
         );
         assert_eq!(head.commit_id, Some(topic_id));
-        let loaded = load(crate::test_repository::open(&path)?, &Arc::new(AtomicBool::default()))?;
+        let hidden = crate::history::available_hidden_revisions(&worktree, &[], true)?.0;
+        let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
+            crate::history::Authors::default(),
+        ));
+        let mut graph = crate::history::HistoryGraph::default();
+        let refresh = graph.refresh(&worktree, &[], &hidden, false, &Default::default(), &authors)?;
+        let loaded = graph_metadata(&worktree, &graph, &refresh.refs)?;
         assert_eq!(
             loaded.relation,
             Some(Relation { ahead: 1, behind: 0 }),
@@ -1328,6 +1335,20 @@ mod tests {
         assert!(rendered_line(&terminal, 3).starts_with(" ^ main-worktree"));
         assert_eq!(terminal.backend().buffer()[(79, 2)].bg, Color::Cyan);
         assert_eq!(terminal.backend().buffer()[(0, 3)].bg, Color::Reset);
+        for (value, color) in [
+            ("+42", Color::Green),
+            ("-7", Color::LightRed),
+            ("↑12", Color::Green),
+            ("↓3", Color::LightRed),
+        ] {
+            let byte = selected.find(value).expect("statistic is visible");
+            let x = selected[..byte].chars().count() as u16;
+            for offset in 0..value.chars().count() as u16 {
+                let cell = &terminal.backend().buffer()[(x + offset, 2)];
+                assert_eq!(cell.fg, color, "{value} uses its semantic color");
+                assert_eq!(cell.bg, Color::Cyan, "{value} retains the selected-row background");
+            }
+        }
 
         worktrees.select(2);
         terminal.draw(|frame| draw(frame, frame.area(), &worktrees, true))?;
@@ -1414,35 +1435,13 @@ mod tests {
             commit_id: Some(head_id),
             is_detached: true,
         };
-        let head_ancestry = Ancestry {
-            ids: HashSet::from([head_id]),
-            ..Ancestry::default()
-        };
-        let hidden_ancestry = Ancestry {
-            ids: HashSet::from([other_id]),
-            ..Ancestry::default()
-        };
-        let cancel = AtomicBool::default();
+        let graph = crate::history::HistoryGraph::from_test_commits(&[(head_id, vec![]), (other_id, vec![])]);
         assert_eq!(
-            relation(
-                &repository,
-                &head,
-                &head_ancestry,
-                &[other_id],
-                &hidden_ancestry,
-                &cancel,
-            )?,
+            relation(&repository, &graph, &head, &[other_id])?,
             Some(Relation { ahead: 1, behind: 1 })
         );
         assert_eq!(
-            relation(
-                &repository,
-                &head,
-                &head_ancestry,
-                &[other_id, head_id],
-                &hidden_ancestry,
-                &cancel,
-            )?,
+            relation(&repository, &graph, &head, &[other_id, head_id])?,
             None,
             "unrelated hidden tips don't become one synthetic comparison base"
         );
@@ -1453,10 +1452,25 @@ mod tests {
     fn workers_stream_and_refresh_dirty_state() -> gix_testtools::Result {
         let (_temp, repository) = fixture()?;
         let mut worktrees = Worktrees::start(&repository)?;
-        wait_until_loaded(&mut worktrees);
+        wait_until_dirty_loaded(&mut worktrees);
         assert_eq!(worktrees.rows().len(), 1);
-        assert_eq!(worktrees.rows()[0].state, LoadState::Ready);
+        assert_eq!(worktrees.rows()[0].state, LoadState::Loading);
         assert_eq!(worktrees.rows()[0].dirty, Some(false));
+        let head = logical_head(&repository)?;
+        worktrees.set_graph_metadata(
+            0,
+            Ok(GraphMetadata {
+                head,
+                relation: None,
+                diffstat: None,
+            }),
+        );
+        assert_eq!(worktrees.rows()[0].state, LoadState::Ready);
+        assert!(!worktrees.preview_pending());
+        worktrees.begin_preview();
+        assert!(worktrees.preview_pending(), "lane computation keeps history read-only");
+        worktrees.mark_previewed(0);
+        assert!(!worktrees.preview_pending());
 
         std::fs::write(
             repository.workdir().expect("fixture has a worktree").join("untracked"),
@@ -1464,8 +1478,43 @@ mod tests {
         )?;
         worktrees.refresh();
         assert_eq!(worktrees.rows()[0].state, LoadState::Loading);
-        wait_until_loaded(&mut worktrees);
+        assert!(worktrees.preview_pending(), "refresh invalidates the visible preview");
+        wait_until_dirty_loaded(&mut worktrees);
         assert_eq!(worktrees.rows()[0].dirty, Some(true));
+        worktrees.mark_previewed(0);
+        assert!(!worktrees.preview_pending());
         Ok(())
+    }
+
+    #[test]
+    fn graph_metadata_invalidation_preserves_only_dirty_errors() {
+        let head = LogicalHead {
+            branch: None,
+            commit_id: None,
+            is_detached: false,
+        };
+        let mut dirty_error = test_row("dirty", LoadState::Error("status failed".into()));
+        dirty_error.head = Some(head);
+        dirty_error.relation = Some(Relation { ahead: 1, behind: 2 });
+        dirty_error.lines_added = Some(3);
+        dirty_error.lines_removed = Some(4);
+        let mut graph_error = test_row("graph", LoadState::Error("history failed".into()));
+        graph_error.dirty = Some(false);
+        let mut worktrees = test_worktrees(vec![dirty_error, graph_error]);
+
+        worktrees.invalidate_graph_metadata();
+
+        assert_eq!(worktrees.rows()[0].state, LoadState::Error("status failed".into()));
+        assert_eq!(worktrees.rows()[1].state, LoadState::Loading);
+        for row in worktrees.rows() {
+            assert!(row.head.is_none());
+            assert!(row.relation.is_none());
+            assert!(row.lines_added.is_none());
+            assert!(row.lines_removed.is_none());
+        }
+
+        worktrees.refresh();
+        assert!(worktrees.rows().iter().all(|row| row.state == LoadState::Loading));
+        assert!(worktrees.rows().iter().all(|row| row.dirty.is_none()));
     }
 }
