@@ -11,7 +11,7 @@ use crate::{history, open_repository};
 
 const HEADER: &[u8] = b"tix-rebase";
 const ONTO: &[u8] = b"onto ";
-pub(super) const RETURN_TO: &[u8] = b"tix-review-return-to";
+const RETURN_TO: &[u8] = b"tix-review-return-to";
 
 #[derive(Debug)]
 pub(crate) struct Started {
@@ -53,6 +53,13 @@ pub(crate) fn reference(commit: &gix::objs::Commit) -> Result<Option<gix::refs::
 
 pub(crate) fn is_review(commit: &gix::objs::Commit) -> bool {
     reference(commit).ok().flatten().is_some()
+}
+
+pub(super) fn remove_identity(commit: &mut gix::objs::Commit, review: &BStr) {
+    commit.extra_headers.retain(|(name, value)| {
+        !(name.as_slice() == HEADER && value.as_slice().strip_prefix(ONTO) == Some(review.as_ref()))
+            && name.as_slice() != RETURN_TO
+    });
 }
 
 pub(super) fn return_to(commit: &gix::objs::Commit) -> Result<Option<gix::refs::FullName>> {
