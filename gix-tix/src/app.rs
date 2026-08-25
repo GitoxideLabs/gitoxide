@@ -1718,6 +1718,18 @@ impl App {
         self.entry_selection.is_some()
     }
 
+    pub(crate) fn worktrunk_history_root(&self) -> bool {
+        self.changes_focus.is_none()
+            && self.reachable_rows.is_none()
+            && self.entry_selection.is_none()
+            && self.topological_navigation.is_none()
+            && self.pending_rebase_conflict.is_none()
+            && !self.rebase_continuation_pending
+            && !self.actions_expanded
+            && !self.enrich_expanded
+            && !self.information_expanded
+    }
+
     fn entry_number_target(&self, number: usize) -> Option<usize> {
         let selected = self.selected?;
         let base = selected.checked_add(self.visual_count(selected)?)?;
@@ -7495,6 +7507,35 @@ mod tests {
         );
 
         assert_eq!(app.update(Action::Cancel), vec![Effect::Cancel]);
+    }
+
+    #[test]
+    fn worktrunk_returns_to_its_list_only_from_root_history() {
+        let mut app = App::new(1);
+        assert!(
+            app.worktrunk_history_root(),
+            "loading itself is not a modal interaction"
+        );
+        app.extend_commits(vec![row(1)]);
+        complete(&mut app);
+        assert!(app.worktrunk_history_root());
+
+        app.set_worktree_conflicted(true);
+        assert!(
+            app.worktrunk_history_root(),
+            "an ordinary unmerged index can return to the worktree list"
+        );
+        app.set_worktree_conflicted(false);
+        app.arm_rebase_conflict(app.rows[0].id);
+        assert!(
+            !app.worktrunk_history_root(),
+            "an in-memory Tix conflict consumes Escape"
+        );
+        app.clear_rebase_conflict();
+
+        show_tree_changes(&mut app);
+        app.update(Action::ToggleChangesFocus);
+        assert!(!app.worktrunk_history_root(), "a focused changes pane consumes Escape");
     }
 
     #[test]

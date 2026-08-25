@@ -60,6 +60,13 @@ pub fn main() -> Result<()> {
     let verbose = args.verbose;
     let format = args.format;
     let cmd = args.cmd;
+    #[cfg(feature = "tix")]
+    let cmd = match cmd {
+        Subcommands::Tix(command) if !command.requires_repository() => {
+            return command.run_without_repository(gix_tix::command::Invocation::GixTix);
+        }
+        cmd => cmd,
+    };
     #[cfg_attr(not(feature = "tracing"), allow(unused_mut))]
     #[cfg_attr(feature = "tracing", allow(unused_assignments))]
     let mut trace = false;
@@ -158,7 +165,10 @@ pub fn main() -> Result<()> {
 
     match cmd {
         #[cfg(feature = "tix")]
-        Subcommands::Tix(command) => command.run(repository(Mode::Lenient)?.into_sync()),
+        Subcommands::Tix(command) => command.run_as(
+            repository(Mode::Lenient)?.into_sync(),
+            gix_tix::command::Invocation::GixTix,
+        ),
         Subcommands::Env => prepare_and_run(
             "env",
             trace,
@@ -1865,6 +1875,20 @@ mod tests {
                     Subcommands::Tix(_)
                 ),
                 "the complete tix command is delegated"
+            );
+        }
+        for (arguments, requires_repository) in [
+            (vec!["gix", "tix", "worktrunk"], true),
+            (vec!["gix", "tix", "worktrunk", "shell-init", "bash"], false),
+        ] {
+            let Subcommands::Tix(command) = Args::try_parse_from(arguments).expect("worktrunk command parses").cmd
+            else {
+                panic!("worktrunk routes to the tix command")
+            };
+            assert_eq!(
+                command.requires_repository(),
+                requires_repository,
+                "repository discovery is required exactly when the worktrunk command needs it"
             );
         }
         assert_eq!(

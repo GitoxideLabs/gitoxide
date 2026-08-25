@@ -13,6 +13,29 @@ without trading responsiveness for metadata that is not visible.
 
 - `tix [REVISION]...` shows commits reachable from the supplied revisions, or
   from `HEAD` when none are supplied.
+- `tix worktrunk`, its visible `tix wt` alias, and `tix worktrunk switch`
+  open an existing-worktree picker above a fully interactive Tix history. The
+  list occupies no more than half the terminal. Moving its cursor immediately
+  rebinds the history to that worktree without changing repository state;
+  `Tab` focuses history and `Escape` returns from root history to the list.
+  `Enter` selects the worktree and promotes it to a normal full-screen history.
+  Rows stream their dirty state, upstream ahead/behind counts, and additions and
+  removals against the unambiguous inferred hidden base. Detached worktrees use
+  their symbolic `refs/worktree/tix/pins/HEAD` branch when present. Without a
+  configured upstream, ahead/behind is omitted unless exactly one hidden tip
+  identifies the comparison history.
+- `tix worktrunk switch TARGET [--path PATH]` selects an exact existing
+  worktree path or local branch without opening the picker. A local branch not
+  checked out elsewhere creates a linked worktree at `PATH`, or beside the main
+  worktree as `<repository>.<branch>` with slashes replaced by dashes. It never
+  creates from remote-tracking branches. Creation returns the canonical path
+  recorded by Git so later selection of the same worktree is stable.
+- `tix worktrunk shell-init SHELL` prints a `wt` wrapper for Bash, Zsh, Fish,
+  Nushell, or PowerShell. The wrapper lets a successful selection change the
+  calling shell's directory and opens full-screen Tix only after picker
+  selection; setup output never edits shell profiles. `gix tix` emits a wrapper
+  which consistently invokes `gix tix` instead. Handoff rejects non-Unicode
+  worktree paths rather than passing a corrupted path to the shell.
 - `tix show [-x HIDDEN...] [--no-auto-hide] [TIP...]`, also available through
   the visible `tix status` alias, prints the complete
   history view without opening a terminal UI. Tips default to `HEAD`, and
