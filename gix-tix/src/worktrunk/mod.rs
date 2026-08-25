@@ -5,7 +5,6 @@ pub(crate) mod shell;
 use std::{
     collections::{HashMap, HashSet},
     ffi::{OsStr, OsString},
-    fmt::Write as _,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -636,7 +635,7 @@ fn write_shell_handoff(path: &Path, fullscreen: bool) -> Result<bool> {
 pub(crate) fn areas(area: Rect, row_count: usize) -> [Rect; 2] {
     let list_height = u16::try_from(row_count)
         .unwrap_or(u16::MAX)
-        .saturating_add(1)
+        .saturating_add(2)
         .min(area.height / 2);
     [
         Rect::new(area.x, area.y, area.width, list_height),
@@ -655,60 +654,107 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
         return;
     }
     frame.render_widget(Clear, area);
-    let header = if focused {
-        " worktrees  j/k select  enter switch  tab history"
-    } else {
-        " worktrees  esc return"
-    };
+    let help = worktrees
+        .selected()
+        .and_then(|row| match &row.state {
+            LoadState::Error(err) => Some((format!(" error: {err}"), Color::Red)),
+            LoadState::Loading | LoadState::Ready => None,
+        })
+        .unwrap_or_else(|| {
+            if focused {
+                (
+                    " worktrees  j/k select  PgUp/PgDn page  / search  enter switch  tab history".into(),
+                    Color::Cyan,
+                )
+            } else {
+                (" worktrees  esc return".into(), Color::DarkGray)
+            }
+        });
     let mut lines = vec![Line::from(Span::styled(
+        help.0,
+        Style::default().fg(help.1).add_modifier(Modifier::BOLD),
+    ))];
+    let status_width = Line::raw("Status").width();
+    let base_width = worktrees
+        .rows()
+        .iter()
+        .filter_map(|row| match (row.lines_added, row.lines_removed) {
+            (Some(added), Some(removed)) => Some(format!("+{added} -{removed}")),
+            _ => None,
+        })
+        .map(|value| Line::raw(value).width())
+        .max()
+        .unwrap_or_default()
+        .max(Line::raw("Base ±").width());
+    let commits_width = worktrees
+        .rows()
+        .iter()
+        .filter_map(|row| {
+            row.relation
+                .map(|relation| format!("↑{} ↓{}", relation.ahead, relation.behind))
+        })
+        .map(|value| Line::raw(value).width())
+        .max()
+        .unwrap_or_default()
+        .max(Line::raw("Commits ↕").width());
+    let fixed_width = 3 + 2 + status_width + 2 + base_width + 2 + commits_width;
+    let worktree_width = usize::from(area.width).saturating_sub(fixed_width);
+    let mut header = String::from("   ");
+    push_cell(&mut header, "Worktree", worktree_width, true);
+    header.push_str("  ");
+    push_cell(&mut header, "Status", status_width, false);
+    header.push_str("  ");
+    push_cell(&mut header, "Base ±", base_width, false);
+    header.push_str("  ");
+    push_cell(&mut header, "Commits ↕", commits_width, false);
+    lines.push(Line::from(Span::styled(
         header,
         Style::default()
             .fg(if focused { Color::Cyan } else { Color::DarkGray })
             .add_modifier(Modifier::BOLD),
-    ))];
-    let visible = usize::from(area.height.saturating_sub(1));
+    )));
+    let visible = usize::from(area.height.saturating_sub(2));
     let selected = worktrees.selected_index().unwrap_or_default();
     let start = selected
         .saturating_sub(visible / 2)
         .min(worktrees.rows().len().saturating_sub(visible));
     for (index, row) in worktrees.rows().iter().enumerate().skip(start).take(visible) {
         let mut text = format!(
-            "{}{} {}",
+            "{}{} ",
             if index == selected { '>' } else { ' ' },
-            if row.is_current { '@' } else { ' ' },
-            row.label
+            if row.is_current {
+                '@'
+            } else if row.is_main {
+                '^'
+            } else {
+                '+'
+            }
         );
-        if let Some(head) = &row.head {
-            match &head.branch {
-                Some(branch) => {
-                    text.push(' ');
-                    text.push_str(&branch.shorten().to_str_lossy());
-                }
-                None if head.commit_id.is_some() => text.push_str(" detached"),
-                None => text.push_str(" unborn"),
-            }
-            if head.is_detached && head.branch.is_some() {
-                text.push_str(" (detached)");
-            }
-        }
-        if row.dirty == Some(true) {
-            text.push_str(" *");
-        }
-        if let Some(relation) = row.relation {
-            let _ = write!(text, " ↑{} ↓{}", relation.ahead, relation.behind);
-        }
-        if let (Some(added), Some(removed)) = (row.lines_added, row.lines_removed) {
-            let _ = write!(text, " +{added} -{removed}");
-        }
-        match &row.state {
-            LoadState::Loading => text.push_str(" …"),
-            LoadState::Ready => {}
-            LoadState::Error(err) => {
-                let _ = write!(text, " ! {err}");
-            }
-        }
+        push_cell(&mut text, &row.label, worktree_width, true);
         text.push_str("  ");
-        text.push_str(&row.path.to_string_lossy());
+        push_cell(
+            &mut text,
+            match &row.state {
+                LoadState::Loading => "…",
+                LoadState::Ready if row.dirty == Some(true) => "*",
+                LoadState::Ready => "",
+                LoadState::Error(_) => "!",
+            },
+            status_width,
+            false,
+        );
+        text.push_str("  ");
+        let base = match (row.lines_added, row.lines_removed) {
+            (Some(added), Some(removed)) => format!("+{added} -{removed}"),
+            _ => String::new(),
+        };
+        push_cell(&mut text, &base, base_width, false);
+        text.push_str("  ");
+        let commits = row
+            .relation
+            .map(|relation| format!("↑{} ↓{}", relation.ahead, relation.behind))
+            .unwrap_or_default();
+        push_cell(&mut text, &commits, commits_width, false);
         let style = if index == selected {
             Style::default()
                 .fg(if focused { Color::Black } else { Color::White })
@@ -721,11 +767,40 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+fn push_cell(line: &mut String, value: &str, width: usize, truncate_from_left: bool) {
+    let value = if truncate_from_left {
+        truncate_left(value, width)
+    } else {
+        value.to_owned()
+    };
+    let padding = width.saturating_sub(Line::raw(&value).width());
+    line.push_str(&value);
+    line.extend(std::iter::repeat_n(' ', padding));
+}
+
+fn truncate_left(value: &str, width: usize) -> String {
+    if Line::raw(value).width() <= width {
+        return value.to_owned();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut start = value.len();
+    for (candidate, _) in value.char_indices().rev() {
+        if Line::raw(format!("…{}", &value[candidate..])).width() > width {
+            break;
+        }
+        start = candidate;
+    }
+    format!("…{}", &value[start..])
+}
+
 #[cfg(test)]
 mod tests {
     use std::{process::Command, time::Duration};
 
     use gix::refs::transaction::PreviousValue;
+    use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
 
@@ -780,6 +855,39 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         panic!("worktree rows did not finish loading");
+    }
+
+    fn test_row(label: &str, state: LoadState) -> Row {
+        Row {
+            path: PathBuf::from("/worktrees").join(label),
+            label: label.into(),
+            is_current: false,
+            is_main: false,
+            state,
+            head: None,
+            dirty: None,
+            relation: None,
+            lines_added: None,
+            lines_removed: None,
+        }
+    }
+
+    fn test_worktrees(rows: Vec<Row>) -> Worktrees {
+        let (_sender, updates) = mpsc::channel();
+        Worktrees {
+            rows,
+            selected: 0,
+            updates,
+            cancel: Arc::new(AtomicBool::default()),
+            workers: Vec::new(),
+        }
+    }
+
+    fn rendered_line(terminal: &Terminal<TestBackend>, y: u16) -> String {
+        (0..terminal.backend().buffer().area.width).fold(String::new(), |mut out, x| {
+            out.push_str(terminal.backend().buffer()[(x, y)].symbol());
+            out
+        })
     }
 
     #[test]
@@ -951,6 +1059,60 @@ mod tests {
             assert_eq!(list.height + history.height, height);
             assert_eq!(history.y, list.bottom());
         }
+    }
+
+    #[test]
+    fn picker_draws_aligned_compact_columns_and_worktree_kinds() -> gix_testtools::Result {
+        let mut current = test_row("repo", LoadState::Ready);
+        current.is_current = true;
+        current.is_main = true;
+        current.dirty = Some(true);
+        current.relation = Some(Relation { ahead: 12, behind: 3 });
+        current.lines_added = Some(42);
+        current.lines_removed = Some(7);
+        let mut main = test_row("main-worktree", LoadState::Loading);
+        main.is_main = true;
+        let failed = test_row("topic", LoadState::Error("unavailable".into()));
+        let mut worktrees = test_worktrees(vec![current, main, failed]);
+        let mut terminal = Terminal::new(TestBackend::new(80, 5))?;
+
+        terminal.draw(|frame| draw(frame, frame.area(), &worktrees, true))?;
+
+        assert_eq!(
+            rendered_line(&terminal, 0).trim_end(),
+            " worktrees  j/k select  PgUp/PgDn page  / search  enter switch  tab history"
+        );
+        let header = rendered_line(&terminal, 1);
+        assert!(header.starts_with("   Worktree"));
+        assert_eq!(header.find("Status"), Some(55));
+        assert_eq!(header.find("Base ±"), Some(63));
+        assert_eq!(header.find("Commits ↕"), Some(72));
+        let selected = rendered_line(&terminal, 2);
+        assert!(selected.starts_with(">@ repo"));
+        assert_eq!(&selected[55..], "*       +42 -7  ↑12 ↓3   ");
+        assert!(rendered_line(&terminal, 3).starts_with(" ^ main-worktree"));
+        assert_eq!(terminal.backend().buffer()[(79, 2)].bg, Color::Cyan);
+        assert_eq!(terminal.backend().buffer()[(0, 3)].bg, Color::Reset);
+
+        worktrees.select(2);
+        terminal.draw(|frame| draw(frame, frame.area(), &worktrees, true))?;
+        assert!(rendered_line(&terminal, 0).starts_with(" error: unavailable"));
+        Ok(())
+    }
+
+    #[test]
+    fn picker_truncates_worktree_names_from_the_left() -> gix_testtools::Result {
+        let mut row = test_row("repository-with-a-long-name", LoadState::Ready);
+        row.is_current = true;
+        let worktrees = test_worktrees(vec![row]);
+        let mut terminal = Terminal::new(TestBackend::new(40, 3))?;
+
+        terminal.draw(|frame| draw(frame, frame.area(), &worktrees, true))?;
+
+        assert_eq!(rendered_line(&terminal, 1), "   Worktree    Status  Base ±  Commits ↕");
+        assert_eq!(rendered_line(&terminal, 2), ">@ …long-name                           ");
+        assert_eq!(truncate_left("工作树-überlang", 6), "…rlang");
+        Ok(())
     }
 
     #[test]
