@@ -27,6 +27,8 @@ pub(crate) enum CommandId {
     Unstash,
     Rebase,
     RebaseUpdate,
+    #[cfg(feature = "blocking-network-client")]
+    Fetch,
     Push,
     StartReview,
     FinishReview,
@@ -377,6 +379,18 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
                 "au",
                 true,
                 Action::RebaseUpdate,
+            );
+        }
+        #[cfg(feature = "blocking-network-client")]
+        if app.changes_focus.is_none() && app.can_fetch() {
+            push(
+                CommandId::Fetch,
+                CommandGroup::Actions,
+                1,
+                "F fetch",
+                "aF",
+                true,
+                Action::Fetch,
             );
         }
         if app.changes_focus.is_none() && app.can_push() {
@@ -797,10 +811,12 @@ mod tests {
     }
 
     #[test]
-    fn push_is_a_second_row_action_only_while_no_background_task_runs() {
+    fn network_actions_use_the_second_row_and_the_single_background_slot() {
         let mut app = App::new(1);
         app.state = State::Complete;
-        app.set_push_branch(Some("topic".into()));
+        app.set_active_branch(Some("topic".into()));
+        #[cfg(feature = "blocking-network-client")]
+        app.set_fetch_remote(Some("origin".into()));
 
         let catalog = commands(&app, &Decorations::default(), false);
         let push = catalog
@@ -812,11 +828,28 @@ mod tests {
         assert_eq!(push.label, "P push");
         assert_eq!(push.shortcut, "aP");
         assert_eq!(push.action, Action::Push);
+        #[cfg(feature = "blocking-network-client")]
+        {
+            let fetch = catalog
+                .iter()
+                .find(|command| command.id == CommandId::Fetch)
+                .expect("an active branch can be fetched");
+            assert_eq!(fetch.group, CommandGroup::Actions);
+            assert_eq!(fetch.row, 1);
+            assert_eq!(fetch.label, "F fetch");
+            assert_eq!(fetch.shortcut, "aF");
+            assert_eq!(fetch.action, Action::Fetch);
+        }
 
         app.start_background_task("pushing topic to origin…");
         assert!(
             !has(&commands(&app, &Decorations::default(), false), CommandId::Push),
             "the single background-task slot hides push while occupied"
+        );
+        #[cfg(feature = "blocking-network-client")]
+        assert!(
+            !has(&commands(&app, &Decorations::default(), false), CommandId::Fetch),
+            "the single background-task slot hides fetch while occupied"
         );
     }
 }

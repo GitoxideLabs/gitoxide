@@ -64,6 +64,13 @@ pub(crate) struct Notice {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BackgroundProgress {
+    pub text: String,
+    pub completed: usize,
+    pub total: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct UndoPosition {
     applied: usize,
     total: usize,
@@ -409,10 +416,15 @@ pub(crate) enum Action {
     Forget,
     Rebase,
     RebaseUpdate,
+    #[cfg(feature = "blocking-network-client")]
+    Fetch,
     Push,
     Squash,
     CopyInsert,
-    PasteInsert { source: ObjectId, target: ObjectId },
+    PasteInsert {
+        source: ObjectId,
+        target: ObjectId,
+    },
     MoveInsert,
     StackInsert,
     Review,
@@ -457,6 +469,8 @@ pub(crate) enum Effect {
         onto: ObjectId,
         commits: Vec<ObjectId>,
     },
+    #[cfg(feature = "blocking-network-client")]
+    Fetch(BString),
     Push(BString),
     Squash {
         source: ObjectId,
@@ -615,8 +629,11 @@ pub(crate) struct App {
     selection_after_refresh: Option<ObjectId>,
     worktree_head: Option<ObjectId>,
     worktree_branch: Option<(ObjectId, bool)>,
-    push_branch: Option<BString>,
+    active_branch: Option<BString>,
+    #[cfg(feature = "blocking-network-client")]
+    fetch_remote: Option<BString>,
     background_task: Option<String>,
+    background_progress: Option<BackgroundProgress>,
     worktree_head_has_descendants: bool,
     worktree_head_unborn: bool,
     pending_rebase_conflict: Option<ObjectId>,
@@ -727,8 +744,11 @@ impl App {
             selection_after_refresh: None,
             worktree_head: None,
             worktree_branch: None,
-            push_branch: None,
+            active_branch: None,
+            #[cfg(feature = "blocking-network-client")]
+            fetch_remote: None,
             background_task: None,
+            background_progress: None,
             worktree_head_has_descendants: false,
             worktree_head_unborn: false,
             pending_rebase_conflict: None,
@@ -911,28 +931,83 @@ impl App {
         self.worktree_branch = branch;
     }
 
-    pub(crate) fn set_push_branch(&mut self, branch: Option<BString>) {
-        self.push_branch = branch;
+    pub(crate) fn set_active_branch(&mut self, branch: Option<BString>) {
+        self.active_branch = branch;
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    pub(crate) fn set_fetch_remote(&mut self, remote: Option<BString>) {
+        self.fetch_remote = remote;
+    }
+
+    fn can_start_background_task(&self) -> bool {
+        self.state == State::Complete
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.background_task.is_none()
     }
 
     pub(crate) fn can_push(&self) -> bool {
-        self.state == State::Complete
-            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self.push_branch.is_some()
-            && self.background_task.is_none()
+        self.active_branch.is_some() && self.can_start_background_task()
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    pub(crate) fn can_fetch(&self) -> bool {
+        self.fetch_remote.is_some() && self.can_start_background_task()
     }
 
     pub(crate) fn start_background_task(&mut self, label: impl Into<String>) {
         debug_assert!(self.background_task.is_none(), "only one background task may run");
         self.background_task = Some(label.into());
+        self.background_progress = None;
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    pub(crate) fn start_background_task_with_progress(&mut self, label: impl Into<String>) {
+        self.start_background_task(label);
+        self.background_progress = Some(BackgroundProgress {
+            text: self
+                .background_task
+                .clone()
+                .expect("the background task was just started"),
+            completed: 0,
+            total: 100,
+        });
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    pub(crate) fn update_background_progress(&mut self, text: String, completed: usize, total: usize) -> bool {
+        let Some(progress) = self.background_progress.as_mut() else {
+            return false;
+        };
+        let completed = completed.min(total);
+        let next = BackgroundProgress {
+            text: if completed < progress.completed {
+                progress.text.clone()
+            } else {
+                text
+            },
+            completed: progress.completed.max(completed),
+            total,
+        };
+        if *progress == next {
+            false
+        } else {
+            *progress = next;
+            true
+        }
     }
 
     pub(crate) fn finish_background_task(&mut self) {
         self.background_task = None;
+        self.background_progress = None;
     }
 
     pub(crate) fn background_task(&self) -> Option<&str> {
         self.background_task.as_deref()
+    }
+
+    pub(crate) fn background_progress(&self) -> Option<&BackgroundProgress> {
+        self.background_progress.as_ref()
     }
 
     pub(crate) fn set_worktree_head_unborn(&mut self, unborn: bool) {
@@ -1663,7 +1738,7 @@ impl App {
         ) {
             self.history_display_expanded = false;
         }
-        if !matches!(
+        let keeps_actions_open = matches!(
             &action,
             Action::ToggleActions
                 | Action::Reword
@@ -1686,7 +1761,10 @@ impl App {
                 | Action::Review
                 | Action::ForkCommit
                 | Action::Attach
-        ) {
+        );
+        #[cfg(feature = "blocking-network-client")]
+        let keeps_actions_open = keeps_actions_open || matches!(&action, Action::Fetch);
+        if !keeps_actions_open {
             self.actions_expanded = false;
         }
         if !matches!(
@@ -2115,9 +2193,15 @@ impl App {
                     commits: self.hidden_descendants(base),
                 }];
             }
+            #[cfg(feature = "blocking-network-client")]
+            Action::Fetch if self.can_fetch() => {
+                return vec![Effect::Fetch(
+                    self.fetch_remote.clone().expect("fetch availability requires a remote"),
+                )];
+            }
             Action::Push if self.can_push() => {
                 return vec![Effect::Push(
-                    self.push_branch.clone().expect("push availability requires a branch"),
+                    self.active_branch.clone().expect("push availability requires a branch"),
                 )];
             }
             Action::Squash if self.can_squash() => {
@@ -6945,6 +7029,9 @@ mod tests {
         app.update(Action::TimeTravel);
         app.update(Action::Rebase);
         app.update(Action::RebaseUpdate);
+        app.update(Action::Push);
+        #[cfg(feature = "blocking-network-client")]
+        app.update(Action::Fetch);
         app.update(Action::Review);
         app.update(Action::Squash);
         app.update(Action::CopyInsert);
@@ -7355,17 +7442,29 @@ mod tests {
     }
 
     #[test]
-    fn one_background_push_excludes_another_and_blocks_only_normal_quit() {
+    fn one_background_network_task_excludes_another_and_blocks_only_normal_quit() {
         let mut app = App::new(1);
         app.state = State::Complete;
-        app.set_push_branch(Some("topic".into()));
+        app.set_active_branch(Some("topic".into()));
+        #[cfg(feature = "blocking-network-client")]
+        app.set_fetch_remote(Some("origin".into()));
 
         assert!(app.can_push());
         assert_eq!(app.update(Action::Push), vec![Effect::Push("topic".into())]);
+        #[cfg(feature = "blocking-network-client")]
+        {
+            assert!(app.can_fetch());
+            assert_eq!(app.update(Action::Fetch), vec![Effect::Fetch("origin".into())]);
+        }
 
         app.start_background_task("pushing topic to origin…");
         assert!(!app.can_push(), "only one user background task may run");
         assert!(app.update(Action::Push).is_empty());
+        #[cfg(feature = "blocking-network-client")]
+        {
+            assert!(!app.can_fetch());
+            assert!(app.update(Action::Fetch).is_empty());
+        }
         assert!(app.update(Action::Quit).is_empty(), "ordinary quit waits for the task");
         assert_eq!(
             app.notice(),
@@ -7378,7 +7477,41 @@ mod tests {
 
         app.finish_background_task();
         assert!(app.can_push());
+        #[cfg(feature = "blocking-network-client")]
+        assert!(app.can_fetch());
         assert_eq!(app.update(Action::Quit), vec![Effect::Quit]);
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn fetch_requires_a_remote_but_not_an_active_branch() {
+        let mut app = App::new(1);
+        app.state = State::Complete;
+
+        assert!(!app.can_fetch());
+        app.set_fetch_remote(Some("origin".into()));
+        assert!(app.can_fetch());
+        assert!(!app.can_push());
+        assert_eq!(app.update(Action::Fetch), vec![Effect::Fetch("origin".into())]);
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn background_progress_is_monotonic() {
+        let mut app = App::new(1);
+        app.start_background_task_with_progress("fetching origin…");
+
+        assert!(app.update_background_progress("counting".into(), 40, 100));
+        assert!(!app.update_background_progress("indexing".into(), 25, 100));
+        assert_eq!(
+            app.background_progress(),
+            Some(&BackgroundProgress {
+                text: "counting".into(),
+                completed: 40,
+                total: 100,
+            }),
+            "stale phase snapshots cannot move the display backwards"
+        );
     }
 
     #[test]
