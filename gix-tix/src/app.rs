@@ -3046,7 +3046,6 @@ impl App {
         source.parent_ids.len() == 1
             && source.id != target.id
             && (copy || source.parent_ids.first().copied() != Some(target.id))
-            && (!copy || !source.is_review)
             && !self.is_row_hidden(target_index)
             && (copy || !self.known_merge_descendants.contains(&source.id))
             && !self.known_merge_descendants.contains(&target.id)
@@ -5264,7 +5263,7 @@ mod tests {
         review_app.set_worktree_head(Some(id(5)), false);
         complete(&mut review_app);
         review_app.selected = review_app.rows.iter().position(|row| row.id == id(3));
-        assert!(!review_app.can_copy_insert(), "review commits cannot be duplicated");
+        assert!(review_app.can_copy_insert(), "anything movable can also be copied");
         assert!(review_app.can_move_insert(), "review commits can still be moved");
 
         let mut merge_target = App::new(10);

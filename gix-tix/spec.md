@@ -1205,11 +1205,12 @@ space first; changes blocks adapt within the remaining history width.
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
   forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
-- Copy-insert requires a non-root, single-parent source that is not an active
-  review commit. `a y` copies current `HEAD`; `tix copy-insert C I` accepts any
-  resolvable source `C`. It inserts another occurrence of its change above the
-  target without removing the source occurrence, including when the target is
-  the source's current parent. The new copy becomes detached `HEAD`; the branch
+- Copy-insert requires a non-root, single-parent source. `a y` copies current
+  `HEAD`; `tix copy-insert C I` accepts any resolvable source `C`. It inserts
+  another occurrence of its change above the target without removing the source
+  occurrence, including when the target is the source's current parent. A copy
+  of an active review commit is ordinary and does not share its review resources.
+  The new copy becomes detached `HEAD`; the branch
   checked out before the operation remains visible through the ordinary HEAD
   pin. If the target is an ancestor of the source, that source occurrence is
   retained in its original logical position while its branch follows the
