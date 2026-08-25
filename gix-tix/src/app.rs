@@ -1201,6 +1201,10 @@ impl App {
             .collect()
     }
 
+    pub(crate) fn cache_commits(&mut self, commits: LoadedCommits) {
+        drop(self.store_commits(commits));
+    }
+
     pub(crate) fn extend_hidden_commits(&mut self, commits: impl Into<LoadedCommits>) {
         let commits = commits.into();
         self.hidden_rows.extend(commits.rows.iter().map(|row| row.id));
@@ -2543,8 +2547,31 @@ impl App {
         hidden_tips: &[ObjectId],
         select_top: bool,
     ) -> Option<LaneInput> {
-        self.topological_navigation = None;
         self.set_view_tips(view_tips);
+        let rows = self.prepare_refresh(commits, view_tips, hidden_tips, select_top);
+        Some(self.lane_input(rows))
+    }
+
+    pub(crate) fn start_preview_refresh(
+        &mut self,
+        commits: LoadedCommits,
+        view_tips: &[ObjectId],
+        hidden_tips: &[ObjectId],
+        select_top: bool,
+        review_root: Option<ObjectId>,
+    ) -> Option<LaneInput> {
+        let rows = self.prepare_refresh(commits, view_tips, hidden_tips, select_top);
+        Some(LaneInput { rows, review_root })
+    }
+
+    fn prepare_refresh(
+        &mut self,
+        commits: LoadedCommits,
+        view_tips: &[ObjectId],
+        hidden_tips: &[ObjectId],
+        select_top: bool,
+    ) -> Vec<SharedCommitRow> {
+        self.topological_navigation = None;
         if self.insert_selection.is_some() || self.stack_insert_base.is_some() {
             self.clear_reachability_selection();
         }
@@ -2597,7 +2624,13 @@ impl App {
         self.select_top_after_refresh = select_top;
         self.state = State::Computing;
         self.follow_tail = false;
-        Some(self.lane_input(rows))
+        rows
+    }
+
+    pub(crate) fn cancel_preview_refresh(&mut self, previous_state: State) {
+        self.pending_hidden_rows = None;
+        self.select_top_after_refresh = false;
+        self.state = previous_state;
     }
 
     fn lane_input(&self, rows: Vec<SharedCommitRow>) -> LaneInput {
@@ -4484,6 +4517,64 @@ mod tests {
                 .iter()
                 .all(|row| Arc::ptr_eq(row, app.all_rows.get(&row.id).expect("visible rows remain cached"))),
             "the active projection shares its immutable rows with the append-only cache"
+        );
+    }
+
+    #[test]
+    fn stale_preview_projection_leaves_the_displayed_history_untouched() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        app.set_view_tips(&[id(3)]);
+        complete(&mut app);
+        let displayed = app.rows.iter().map(|row| row.id).collect::<Vec<_>>();
+
+        let pending = app
+            .start_preview_refresh(Vec::<LoadedCommit>::new().into(), &[id(2)], &[], true, Some(id(2)))
+            .expect("a cached preview computes lanes");
+        assert_eq!(
+            pending.review_root,
+            Some(id(2)),
+            "the preview supplies its own review root"
+        );
+        let stale = compute_lanes(pending);
+        app.cancel_preview_refresh(State::Complete);
+        app.finish_lane_computation(stale.0, stale.1, stale.2);
+
+        assert_eq!(app.state, State::Complete);
+        assert_eq!(app.view_tips, HashSet::from([id(3)]));
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            displayed,
+            "discarding a stale preview never replaces the visible rows"
+        );
+    }
+
+    #[test]
+    fn preview_projection_preserves_a_displayed_compressed_segment() {
+        let mut app = compressed_linear_app();
+        app.update(Action::MoveDown);
+        assert!(app.selected_is_segment(), "the displayed history selects a segment");
+        let selected = app.compressed_segment;
+        let view_tips = app.view_tips.clone();
+
+        let pending = app
+            .start_preview_refresh(Vec::<LoadedCommit>::new().into(), &[id(3)], &[], true, None)
+            .expect("a cached preview computes lanes");
+
+        assert_eq!(
+            app.view_tips, view_tips,
+            "preview preparation keeps the displayed rev-set"
+        );
+        assert_eq!(
+            app.compressed_segment, selected,
+            "preview preparation keeps the displayed segment selected"
+        );
+        app.cancel_preview_refresh(State::Complete);
+        let stale = compute_lanes(pending);
+        app.finish_lane_computation(stale.0, stale.1, stale.2);
+        assert_eq!(
+            app.compressed_segment, selected,
+            "stale lanes cannot replace the selection"
         );
     }
 

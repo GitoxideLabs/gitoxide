@@ -394,6 +394,15 @@ impl HistoryGraph {
         }
     }
 
+    pub(crate) fn switch_view(&mut self, view_tips: &[ObjectId], hidden_tips: &[ObjectId]) {
+        self.set_current_view(if view_tips.is_empty() && !hidden_tips.is_empty() {
+            hidden_tips
+        } else {
+            view_tips
+        });
+        self.set_edit_scope(view_tips, hidden_tips);
+    }
+
     fn set_edit_scope(&mut self, view_tips: &[ObjectId], hidden_tips: &[ObjectId]) {
         let (visible, boundary) = view_scope(view_tips, hidden_tips, |id, out| {
             if let Some(index) = self.index(id) {
@@ -546,7 +555,7 @@ impl HistoryGraph {
             let relation = if let Some(relation) = self.relations.get(&pair).copied() {
                 Some(relation)
             } else {
-                let relation = self.paint(id, std::slice::from_ref(&upstream))?;
+                let relation = self.ahead_behind(id, std::slice::from_ref(&upstream))?;
                 self.relations.insert(pair, relation);
                 Some(relation)
             };
@@ -557,7 +566,7 @@ impl HistoryGraph {
         if has_upstream || refs.is_empty() || hidden.is_empty() {
             return None;
         }
-        self.paint(id, hidden)
+        self.ahead_behind(id, hidden)
             .map(|(visible, _)| crate::app::SelectionRelation::Visible(visible))
     }
 
@@ -584,7 +593,7 @@ impl HistoryGraph {
         out
     }
 
-    fn paint(&self, first: ObjectId, others: &[ObjectId]) -> Option<(usize, usize)> {
+    pub(crate) fn ahead_behind(&self, first: ObjectId, others: &[ObjectId]) -> Option<(usize, usize)> {
         self.paint_inner(first, others, false)
             .map(|(ahead, behind, _)| (ahead, behind))
     }
@@ -751,6 +760,7 @@ impl HistoryGraph {
 
         let mut rows = Vec::new();
         let mut attributions = Vec::new();
+        let mut newly_stored = Vec::new();
         while let Some((_time, index)) = queue.pop() {
             let state = &mut states[index.as_usize()];
             let delta = state.flags & !state.expanded;
@@ -760,8 +770,12 @@ impl HistoryGraph {
             state.expanded |= delta;
             let id = self.id(index);
             let commit = &self.commits[index.as_usize()];
-            let was_stored = commit.state & NODE_STORED != 0;
+            let was_stored = commit.state & NODE_STORED != 0 || state.stored;
             let should_store = delta & (VISIBLE | EXPAND) != 0 && !was_stored;
+            if should_store {
+                state.stored = true;
+                newly_stored.push(index);
+            }
             let stop = !should_store
                 && commit.state & NODE_COMPLETE != 0
                 && (delta & EXPAND == 0 || was_stored && !expand.contains(&id));
@@ -837,8 +851,6 @@ impl HistoryGraph {
                     is_review,
                     signature,
                 });
-                self.commits[index.as_usize()].state |= NODE_STORED;
-                self.stored_order.push(index);
             }
             if stop {
                 continue;
@@ -860,18 +872,17 @@ impl HistoryGraph {
             }
         }
         for (index, state) in states.into_iter().enumerate() {
-            if state.expanded & (VISIBLE | INTERNAL | EXPAND) != 0 {
+            if !hidden_only && state.expanded & (VISIBLE | INTERNAL | EXPAND) != 0 {
                 self.commits[index].state |= NODE_COMPLETE;
             }
         }
-        self.tracking = tracking;
-        self.set_current_view(if hidden_only {
-            &refs.hidden_tips
-        } else {
-            &refs.view_tips
-        });
-        self.set_edit_scope(&refs.view_tips, &refs.hidden_tips);
+        self.tracking.extend(tracking);
+        self.switch_view(&refs.view_tips, &refs.hidden_tips);
         let decorations = decorations(repo, &refs.pins, &refs.worktrees)?;
+        for index in newly_stored {
+            self.commits[index.as_usize()].state |= NODE_STORED;
+            self.stored_order.push(index);
+        }
         Ok(Refresh {
             refs,
             decorations,
@@ -959,6 +970,7 @@ const NODE_IN_VIEW: u8 = 1 << 3;
 struct WalkState {
     flags: u8,
     expanded: u8,
+    stored: bool,
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -1150,8 +1162,7 @@ pub(crate) fn load(
             return Ok(());
         }
         emit(Event::VisibleComplete);
-        graph.set_current_view(&hidden_tips);
-        graph.set_edit_scope(&tips, &hidden_tips);
+        graph.switch_view(&tips, &hidden_tips);
         emit(Event::Complete(graph));
         return Ok(());
     }
@@ -1195,7 +1206,9 @@ pub(crate) fn load(
             state.emitted |= should_emit;
             (delta, should_emit)
         };
-        graph.commits[index.as_usize()].state |= NODE_COMPLETE;
+        if hidden.is_empty() {
+            graph.commits[index.as_usize()].state |= NODE_COMPLETE;
+        }
         let parent_indices = graph.parents(index).to_vec();
         let parent_ids = graph.parent_ids(index);
         let generation = graph.commits[index.as_usize()].generation();
@@ -1344,8 +1357,7 @@ pub(crate) fn load(
     }
     emit(Event::VisibleComplete);
     graph.tracking = tracking;
-    graph.set_current_view(&tips);
-    graph.set_edit_scope(&tips, &hidden_tips);
+    graph.switch_view(&tips, &hidden_tips);
     emit(Event::Complete(graph));
     Ok(())
 }
@@ -2322,9 +2334,51 @@ mod tests {
         }
 
         assert_eq!(
-            graph.paint(id(6), &[id(7)]),
+            graph.ahead_behind(id(6), &[id(7)]),
             Some((2, 2)),
             "both merge tips stop at the shared criss-cross ancestry"
+        );
+    }
+
+    #[test]
+    fn switches_cached_rev_sets_without_leaking_the_previous_view() {
+        let mut graph = HistoryGraph::default();
+        for (n, parents, generation) in [(1, vec![], 1), (2, vec![1], 2), (3, vec![1], 2), (4, vec![2], 3)] {
+            insert_commit(&mut graph, n, &parents, generation);
+        }
+
+        graph.switch_view(&[id(4)], &[id(3)]);
+        assert!(
+            graph.is_in_edit_scope(id(4)) && graph.is_in_edit_scope(id(1)),
+            "the visible tip and its hidden boundary are editable"
+        );
+        assert!(!graph.is_in_edit_scope(id(3)), "hidden-only commits stay out of scope");
+        assert_eq!(
+            graph.ahead_behind(id(4), &[id(3)]),
+            Some((2, 1)),
+            "relations use every commit cached by either view"
+        );
+
+        graph.switch_view(&[id(3)], &[]);
+        assert!(
+            graph.is_in_edit_scope(id(3)) && graph.is_in_edit_scope(id(1)),
+            "a view without hidden tips makes its full ancestry editable"
+        );
+        assert!(!graph.is_in_edit_scope(id(4)), "the previous view is removed");
+        assert!(
+            graph.commits[graph.index(id(4)).expect("the old tip stays cached").as_usize()].state & NODE_IN_VIEW == 0,
+            "cached commits outside the new rev-set are no longer in view"
+        );
+
+        graph.switch_view(&[], &[id(3)]);
+        assert!(
+            graph.commits[graph.index(id(1)).expect("the root stays cached").as_usize()].state & NODE_IN_VIEW != 0,
+            "hidden-only views still display the selected tip's ancestry"
+        );
+        assert!(graph.is_in_edit_scope(id(3)), "the hidden fallback tip stays editable");
+        assert!(
+            !graph.is_in_edit_scope(id(1)),
+            "only the hidden fallback tip is editable"
         );
     }
 
@@ -2974,7 +3028,37 @@ mod tests {
     }
 
     #[test]
-    fn hidden_only_refresh_stops_after_the_new_tip() -> gix_testtools::Result {
+    fn refresh_walks_past_an_initial_hidden_frontier() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let tip = repo.rev_parse_single("topic")?.detach();
+        let expected: HashSet<_> = repo
+            .rev_walk([tip])
+            .all()?
+            .map(|info| info.map(|info| info.id))
+            .collect::<Result<_, _>>()?;
+        let mut graph = loaded(fixture.path(), &["topic"], &["main"])?
+            .into_iter()
+            .find_map(|event| match event {
+                Event::Complete(graph) => Some(graph),
+                _ => None,
+            })
+            .expect("history loading returns the persistent graph");
+
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        graph.refresh(&repo, &["topic".into()], &[], false, &HashSet::new(), &authors)?;
+
+        assert_eq!(
+            graph.stored_commit_ids().collect::<HashSet<_>>(),
+            expected,
+            "changing the hidden frontier materializes the newly visible ancestry"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hidden_only_refresh_does_not_mark_unwalked_ancestry_complete() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let path = fixture.path();
         assert!(
@@ -3018,6 +3102,74 @@ mod tests {
             [new_tip],
             "refresh emits the advanced hidden tip without walking its ancestry"
         );
+        graph.refresh(&repo, &["main".into()], &[], false, &HashSet::new(), &authors)?;
+        let expected: HashSet<_> = repo
+            .rev_walk([new_tip])
+            .all()?
+            .map(|info| info.map(|info| info.id))
+            .collect::<Result<_, _>>()?;
+        assert_eq!(
+            graph.stored_commit_ids().collect::<HashSet<_>>(),
+            expected,
+            "a hidden-only refresh does not truncate a later visible traversal"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_refresh_does_not_mark_unreturned_rows_stored() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let mut graph = loaded(fixture.path(), &["main"], &[])?
+            .into_iter()
+            .find_map(|event| match event {
+                Event::Complete(graph) => Some(graph),
+                _ => None,
+            })
+            .expect("history loading returns the persistent graph");
+        std::fs::write(fixture.path().join("new"), "new\n")?;
+        for args in [
+            &["add", "new"][..],
+            &["-c", "commit.gpgSign=false", "commit", "-q", "-m", "new"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .current_dir(fixture.path())
+                    .args(args)
+                    .status()?
+                    .success(),
+                "git prepares a commit for the failed refresh"
+            );
+        }
+        let broken_tag = fixture.path().join(".git/refs/tags/broken");
+        std::fs::create_dir_all(broken_tag.parent().expect("the tag has a parent directory"))?;
+        std::fs::write(&broken_tag, format!("{}\n", "f".repeat(40)))?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let new_tip = repo.rev_parse_single("main")?.detach();
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+
+        graph
+            .refresh(&repo, &["main".into()], &[], false, &HashSet::new(), &authors)
+            .expect_err("the broken tag makes decoration loading fail after traversal");
+        assert_eq!(
+            graph.commits[graph
+                .index(new_tip)
+                .expect("the failed traversal reached the new tip")
+                .as_usize()]
+            .state
+                & NODE_STORED,
+            0,
+            "rows not returned to the caller remain unstored"
+        );
+        drop(repo);
+        std::fs::remove_file(broken_tag)?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let retry = graph.refresh(&repo, &["main".into()], &[], false, &HashSet::new(), &authors)?;
+        assert_eq!(
+            retry.commits.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [new_tip],
+            "retrying returns the row discarded with the failed refresh"
+        );
         Ok(())
     }
 
@@ -3032,6 +3184,15 @@ mod tests {
                 _ => None,
             })
             .expect("history loading returns the persistent graph");
+        let repo = crate::test_repository::open(fixture.path())?;
+        let root = repo.rev_parse_single("main~2")?.detach();
+        let root_index = graph.index(root).expect("the initial view contains the root");
+        let cached_tracking = vec![SelectionRef {
+            name: "cached".into(),
+            upstream: Some(Some(root)),
+        }];
+        graph.tracking.insert(root_index, cached_tracking.clone());
+        drop(repo);
 
         std::fs::write(fixture.path().join("new"), "new\n")?;
         for args in [
@@ -3050,6 +3211,11 @@ mod tests {
         assert!(
             second.commits.rows.is_empty(),
             "an unchanged tip stops immediately at complete cached ancestry"
+        );
+        assert_eq!(
+            graph.tracking.get(&root_index),
+            Some(&cached_tracking),
+            "refresh retains tracking metadata cached for another view"
         );
         Ok(())
     }
