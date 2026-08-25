@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
-    fmt::Write,
     sync::atomic::AtomicBool,
 };
 
@@ -150,7 +149,7 @@ pub(crate) struct Tree {
     selected: Option<usize>,
     count_anchor: Option<ObjectId>,
     selection_after_reference_deletion: Option<SelectionFallback>,
-    choices: Vec<usize>,
+    topological_choice: Option<usize>,
     offset: Offset,
     placed: Option<Placed>,
     ensure_visible: bool,
@@ -178,6 +177,7 @@ impl Tree {
     pub(crate) fn leave(&mut self) {
         self.active = false;
         self.edit_expanded = false;
+        self.topological_choice = None;
     }
 
     pub(crate) fn leave_attention(&mut self, message: impl Into<String>) {
@@ -260,7 +260,7 @@ impl Tree {
         {
             self.count_anchor = None;
         }
-        self.choices = vec![0; overview.nodes.len()];
+        self.topological_choice = None;
         self.overview = Some(overview);
         self.alternate_overview = Some(alternate_overview);
         self.overlay = None;
@@ -274,6 +274,24 @@ impl Tree {
             || key.code == KeyCode::Char('q')
         {
             return Input::Quit;
+        }
+        if self.topological_choice.is_some() {
+            match key.code {
+                KeyCode::Left | KeyCode::Char('h' | 'H')
+                    if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.cycle_topological_choice(false);
+                }
+                KeyCode::Right | KeyCode::Char('l' | 'L')
+                    if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.cycle_topological_choice(true);
+                }
+                KeyCode::Enter => self.submit_topological_choice(),
+                KeyCode::Esc => self.topological_choice = None,
+                _ => {}
+            }
+            return Input::Handled;
         }
         if self.edit_expanded {
             self.edit_expanded = false;
@@ -375,13 +393,16 @@ impl Tree {
         let Some(direction) = direction(key.code) else {
             return Input::Handled;
         };
-        let topological =
-            key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('H' | 'J' | 'K' | 'L'));
+        let topological = matches!(direction, Direction::Up | Direction::Down)
+            && (key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('J' | 'K')));
         self.navigate(direction, topological);
         Input::Handled
     }
 
     pub(crate) fn handle_mouse(&mut self, kind: MouseEventKind, modifiers: KeyModifiers, distance: usize) -> bool {
+        if self.topological_choice.is_some() {
+            return true;
+        }
         let direction = match kind {
             MouseEventKind::ScrollUp => Direction::Up,
             MouseEventKind::ScrollDown => Direction::Down,
@@ -458,16 +479,10 @@ impl Tree {
                 offset.y..offset.y.saturating_add(usize::from(body.height)),
             );
         }
-        draw_rail_edges(
-            frame,
-            body,
-            overview,
-            self.overlay.as_ref(),
-            placed,
-            offset,
-            selected,
-            &self.choices,
-        );
+        draw_rail_edges(frame, body, overview, self.overlay.as_ref(), placed, offset);
+        let topological_choice = self
+            .topological_choice_status()
+            .map(|(choice, _)| choice_marker(choice));
         draw_nodes(
             frame,
             body,
@@ -476,10 +491,12 @@ impl Tree {
             placed,
             offset,
             selected,
-            &self.choices,
+            topological_choice,
             &self.history_commits,
         );
-        let footer_text = if self.edit_expanded {
+        let footer_text = if let Some((choice, total)) = self.topological_choice_status() {
+            format!("ref-tree · choose child {choice}/{total} · h/l cycle · <enter> move · Esc cancel")
+        } else if self.edit_expanded {
             let branches = self.selected_local_branches();
             if branches.is_empty() && self.remote_deletions.is_empty() {
                 "ref-tree · e edit (no actions)".into()
@@ -503,7 +520,7 @@ impl Tree {
                 |id| format!("Space counts:{}", self.node_label(id)),
             );
             format!(
-                "ref-tree · {counts} · g top · G root · T tags:{tags} · Shift+directions topo · mouse pan · Shift+mouse cursor · pages cursor · Shift+pages pan · p/<enter> pin · e edit · t/Esc history"
+                "ref-tree · {counts} · g top · G root · T tags:{tags} · J/K topo · mouse pan · Shift+mouse cursor · pages cursor · Shift+pages pan · p/<enter> pin · e edit · t/Esc history"
             )
         };
         frame.render_widget(
@@ -630,37 +647,90 @@ impl Tree {
     }
 
     fn navigate(&mut self, direction: Direction, topological: bool) {
-        let Some(overview) = self.overview.as_ref() else { return };
+        if topological {
+            self.start_topological_navigation(direction);
+            return;
+        }
         let Some(selected) = self.selected else { return };
-        let next = if topological {
-            match direction {
-                Direction::Up => overview.nodes[selected]
-                    .children
-                    .get(self.choices[selected].min(overview.nodes[selected].children.len().saturating_sub(1)))
-                    .copied(),
-                Direction::Down => overview.nodes[selected].parent,
-                Direction::Left | Direction::Right => {
-                    let last = overview.nodes[selected].children.len().saturating_sub(1);
-                    let choice = self.choices[selected].min(last);
-                    let next = if matches!(direction, Direction::Left) {
-                        choice.saturating_sub(1)
-                    } else {
-                        choice.saturating_add(1).min(last)
-                    };
-                    self.choices[selected] = next;
-                    None
-                }
-            }
-        } else {
-            self.placed
-                .as_ref()
-                .and_then(|placed| nearest(&placed.nodes, selected, direction))
-        };
+        let next = self
+            .placed
+            .as_ref()
+            .and_then(|placed| nearest(&placed.nodes, selected, direction));
         if let Some(next) = next {
             self.selected = Some(next);
             self.selection_changed();
             self.ensure_visible = true;
         }
+    }
+
+    fn start_topological_navigation(&mut self, direction: Direction) {
+        let Some(node) = self
+            .overview
+            .as_ref()
+            .and_then(|overview| overview.nodes.get(self.selected?))
+        else {
+            return;
+        };
+        let target = match direction {
+            Direction::Down => node.parent,
+            Direction::Up if node.children.len() > 1 => {
+                self.topological_choice = Some(0);
+                self.ensure_visible = true;
+                return;
+            }
+            Direction::Up => node.children.first().copied(),
+            Direction::Left | Direction::Right => None,
+        };
+        if let Some(target) = target {
+            self.selected = Some(target);
+            self.selection_changed();
+            self.ensure_visible = true;
+        }
+    }
+
+    fn cycle_topological_choice(&mut self, right: bool) {
+        let Some(choice) = self.topological_choice else {
+            return;
+        };
+        let total = self
+            .overview
+            .as_ref()
+            .and_then(|overview| overview.nodes.get(self.selected?))
+            .map_or(0, |node| node.children.len());
+        if total == 0 {
+            self.topological_choice = None;
+            return;
+        }
+        self.topological_choice = Some(if right {
+            (choice + 1) % total
+        } else {
+            (choice + total - 1) % total
+        });
+    }
+
+    fn submit_topological_choice(&mut self) {
+        let Some(choice) = self.topological_choice.take() else {
+            return;
+        };
+        let Some(target) = self
+            .overview
+            .as_ref()
+            .and_then(|overview| overview.nodes.get(self.selected?))
+            .and_then(|node| node.children.get(choice))
+            .copied()
+        else {
+            return;
+        };
+        self.selected = Some(target);
+        self.selection_changed();
+        self.ensure_visible = true;
+    }
+
+    fn topological_choice_status(&self) -> Option<(usize, usize)> {
+        let choice = self.topological_choice?;
+        let children = &self.overview.as_ref()?.nodes.get(self.selected?)?.children;
+        children.get(choice)?;
+        Some((choice + 1, children.len()))
     }
 
     fn jump_to_root(&mut self) {
@@ -712,13 +782,14 @@ impl Tree {
         {
             self.count_anchor = None;
         }
-        self.choices = vec![0; overview.nodes.len()];
+        self.topological_choice = None;
         self.overlay = None;
         self.placed = None;
         self.ensure_visible = true;
     }
 
     fn selection_changed(&mut self) {
+        self.topological_choice = None;
         if self.count_anchor.is_none() {
             self.overlay = None;
             self.placed = None;
@@ -1244,10 +1315,6 @@ fn place_rail(overview: &Overview, overlay: Option<&Overlay>) -> Placed {
     placed
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "drawing receives detached layout and style state"
-)]
 fn draw_rail_edges(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -1255,8 +1322,6 @@ fn draw_rail_edges(
     overlay: Option<&Overlay>,
     placed: &Placed,
     offset: Offset,
-    selected: Option<usize>,
-    choices: &[usize],
 ) {
     for (y, row) in placed.rail_rows.iter().enumerate() {
         if y < offset.y || y >= offset.y.saturating_add(usize::from(area.height)) {
@@ -1267,17 +1332,7 @@ fn draw_rail_edges(
             RailRowKind::Node(_) | RailRowKind::NodeConnector => row
                 .edge
                 .map(|edge| &overview.edges[edge])
-                .map_or_else(Style::default, |edge| {
-                    let chosen = selected == Some(edge.parent)
-                        && overview.nodes[edge.parent].children.get(
-                            choices[edge.parent].min(overview.nodes[edge.parent].children.len().saturating_sub(1)),
-                        ) == Some(&edge.child);
-                    if chosen {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                    } else {
-                        edge_style(overview, overlay, edge)
-                    }
-                }),
+                .map_or_else(Style::default, |edge| edge_style(overview, overlay, edge)),
         };
         draw_text(frame, area, offset, Point { x: 0, y }, &row.lane, style);
     }
@@ -1295,7 +1350,7 @@ fn draw_nodes(
     placed: &Placed,
     offset: Offset,
     selected: Option<usize>,
-    choices: &[usize],
+    topological_choice: Option<char>,
     history_commits: &HashSet<ObjectId>,
 ) {
     for (index, node) in overview.nodes.iter().enumerate() {
@@ -1307,16 +1362,7 @@ fn draw_nodes(
             continue;
         }
         let count = overlay.and_then(|overlay| overlay.counts[index]);
-        let mut text = rail_label(node, count);
-        if selected == Some(index) && node.children.len() > 1 {
-            write!(
-                text,
-                " {}/{}",
-                choices[index].min(node.children.len() - 1) + 1,
-                node.children.len()
-            )
-            .expect("writing to a string cannot fail");
-        }
+        let text = rail_label(node, count);
         let mut style = if node.is_anchor && history_commits.contains(&node.id) {
             Style::default().fg(Color::Cyan)
         } else if node.decorations.iter().any(|decoration| {
@@ -1342,7 +1388,14 @@ fn draw_nodes(
                 style = style.add_modifier(Modifier::DIM);
             }
         }
-        put(frame, area, offset, point, if node.is_head { '@' } else { '●' }, style);
+        let marker = if selected == Some(index) {
+            topological_choice.unwrap_or(if node.is_head { '@' } else { '●' })
+        } else if node.is_head {
+            '@'
+        } else {
+            '●'
+        };
+        put(frame, area, offset, point, marker, style);
         draw_text(
             frame,
             area,
@@ -1368,6 +1421,13 @@ fn draw_nodes(
             );
         }
     }
+}
+
+fn choice_marker(choice: usize) -> char {
+    u32::try_from(choice)
+        .ok()
+        .and_then(|digit| char::from_digit(digit, 10))
+        .unwrap_or('+')
 }
 
 fn rail_label(node: &Node, count: Option<usize>) -> String {
@@ -2209,7 +2269,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_navigation_is_topological_without_retaining_a_mode() {
+    fn ambiguous_topological_navigation_requires_a_choice() {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
@@ -2234,24 +2294,61 @@ mod tests {
         assert_eq!(tree.selected, nearest, "plain Up immediately returns to nearest motion");
 
         tree.selected = Some(fork);
-        tree.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-        assert_eq!(
-            tree.selected,
-            Some(fork),
-            "a usable branch choice does not move the cursor"
-        );
-        tree.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-        assert_eq!(tree.selected, Some(fork), "a saturated branch choice is a no-op");
-        let chosen = tree.overview.as_ref().expect("overview exists").nodes[fork].children[1];
+        tree.ensure_visible = false;
         tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
         assert_eq!(
             tree.selected,
-            Some(chosen),
-            "uppercase navigation is treated as shifted"
+            Some(fork),
+            "an ambiguous child does not move immediately"
         );
+        assert!(tree.topological_choice.is_some(), "the child choice remains pending");
+        assert!(tree.ensure_visible, "starting a choice reveals its source marker");
 
-        tree.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(tree.selected, Some(chosen), "Tab no longer toggles a motion mode");
+        tree.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(tree.topological_choice, Some(0), "modified choice keys are ignored");
+        tree.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert_eq!(tree.topological_choice, Some(1));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        assert_eq!(tree.topological_choice, Some(0));
+        tree.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let chosen = tree.overview.as_ref().expect("overview exists").nodes[fork].children[1];
+        tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            tree.selected,
+            Some(chosen),
+            "h wraps to the last child and Enter follows it"
+        );
+        assert!(tree.topological_choice.is_none(), "submission leaves choice mode");
+
+        tree.handle_key(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+        assert_eq!(
+            tree.selected,
+            Some(fork),
+            "J follows the unique visible parent immediately"
+        );
+        tree.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        assert!(tree.topological_choice.is_some());
+        tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(!tree.edit_expanded, "unrelated keys are consumed while choosing");
+        assert_eq!(
+            tree.topological_choice,
+            Some(0),
+            "unrelated keys keep the choice active"
+        );
+        tree.handle_mouse(MouseEventKind::ScrollUp, KeyModifiers::NONE, 1);
+        assert_eq!(tree.selected, Some(fork), "mouse input is consumed while choosing");
+        assert_eq!(tree.topological_choice, Some(0), "mouse input keeps the choice active");
+        tree.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(tree.topological_choice.is_none(), "Escape cancels the choice");
+
+        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            Input::Quit,
+            "quit remains available while choosing"
+        );
+        tree.rebuild(&graph, &refs, &decorations);
+        assert!(tree.topological_choice.is_none(), "rebuilding cancels a stale choice");
 
         tree.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
         assert_eq!(tree.selected, Some(main), "plain g reaches the top selectable node");
@@ -2630,28 +2727,42 @@ mod tests {
             [&graph.index(id(2)).expect("the fork exists")];
         tree.selected = Some(fork);
         tree.selection_changed();
+        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
         terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
         let point = tree.placed.as_ref().expect("drawing places the ref-tree").nodes[fork];
+        assert_eq!(
+            terminal.backend().buffer()[(point.x as u16, point.y as u16)].symbol(),
+            "1",
+            "the pending choice replaces the selected disk"
+        );
         assert!(
             terminal.backend().buffer()[(point.x as u16, point.y as u16)]
                 .modifier
                 .contains(Modifier::REVERSED),
-            "a selected synthetic node keeps its disk inverted"
+            "the choice marker keeps the selected disk inverted"
+        );
+        let footer = terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(100)
+            .nth(17)
+            .expect("the terminal has a footer")
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(
+            footer.contains("choose child 1/2 · h/l cycle · <enter> move · Esc cancel"),
+            "the footer shows the exact pending choice"
         );
         assert!(
-            terminal
-                .backend()
-                .buffer()
-                .content
-                .chunks(100)
-                .nth(point.y)
-                .expect("the selected fork has a rendered row")
-                .iter()
-                .map(ratatui::buffer::Cell::symbol)
-                .collect::<String>()
-                .contains("1/2"),
-            "a selected fork always identifies its chosen child"
+            (0..17).all(|y| {
+                (0..rail_width).all(|x| terminal.backend().buffer()[(x as u16, y as u16)].fg != Color::Yellow)
+            }),
+            "navigation choices do not recolor graph lanes"
         );
+        assert_eq!(choice_marker(9), '9');
+        assert_eq!(choice_marker(10), '+', "large ordinals use the overflow marker");
         tree.leave_error("remote deletion failed");
         terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
         assert_eq!(terminal.backend().buffer()[(2, 16)].bg, Color::LightRed);

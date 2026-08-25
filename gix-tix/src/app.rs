@@ -331,6 +331,19 @@ pub(crate) enum CopyKind {
     Author,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TopologicalDirection {
+    Parent,
+    Child,
+}
+
+#[derive(Debug)]
+struct TopologicalNavigation {
+    direction: TopologicalDirection,
+    candidates: Vec<usize>,
+    choice: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Action {
     Cancelled,
@@ -346,6 +359,8 @@ pub(crate) enum Action {
     PanDownBy(usize),
     PreviousChild,
     NextChild,
+    SubmitTopological,
+    CancelTopological,
     CycleDuplicate,
     ScrollLeft,
     ScrollRight,
@@ -586,7 +601,7 @@ pub(crate) struct App {
     pub(crate) actions_expanded: bool,
     pub(crate) enrich_expanded: bool,
     pub(crate) information_expanded: bool,
-    topo_children: HashMap<ObjectId, ObjectId>,
+    topological_navigation: Option<TopologicalNavigation>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -695,7 +710,7 @@ impl App {
             actions_expanded: false,
             enrich_expanded: false,
             information_expanded: false,
-            topo_children: HashMap::new(),
+            topological_navigation: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -793,7 +808,17 @@ impl App {
     }
 
     pub(crate) fn notice(&self) -> Option<Notice> {
-        let prompt = if let Some(entry) = self.entry_selection.as_deref() {
+        let prompt = if let Some(navigation) = self.topological_navigation.as_ref() {
+            Some(format!(
+                "choose {} {}/{} · h/l cycle · <enter> move · Esc cancel",
+                match navigation.direction {
+                    TopologicalDirection::Parent => "ancestor",
+                    TopologicalDirection::Child => "child",
+                },
+                navigation.choice + 1,
+                navigation.candidates.len()
+            ))
+        } else if let Some(entry) = self.entry_selection.as_deref() {
             Some(format!(
                 "select entry #{} · type number · <enter> jump · Esc cancel",
                 if entry.is_empty() { "_" } else { entry }
@@ -1171,13 +1196,6 @@ impl App {
         )
     }
 
-    fn history_row(&self, index: usize) -> Option<&CommitRow> {
-        self.active_compressed_history().map_or_else(
-            || self.rows.get(index).map(Arc::as_ref),
-            |history| history.rows.get(index).map(Arc::as_ref),
-        )
-    }
-
     pub(crate) fn history_index(&self, canonical_index: usize) -> Option<usize> {
         self.active_compressed_history().map_or_else(
             || (canonical_index < self.rows.len()).then_some(canonical_index),
@@ -1301,114 +1319,75 @@ impl App {
         self.reachable_rows.as_ref().is_none() || (self.is_row_reachable(index) && self.reachable_row_selectable(index))
     }
 
-    fn topological_positions(&self) -> HashMap<ObjectId, usize> {
-        (0..self.history_len())
-            .filter_map(|index| self.history_row(index).map(|row| (row.id, index)))
-            .collect()
-    }
-
     fn topological_graph(&self) -> Option<&Graph> {
         self.active_compressed_history()
             .map(|history| &history.graph)
             .or(self.graph.as_ref())
     }
 
-    fn topological_parent_from_rows(
-        &self,
-        index: usize,
-        positions: &HashMap<ObjectId, usize>,
-        stop: Option<usize>,
-    ) -> Option<usize> {
-        let mut parent = self.history_row(index)?.parent_ids.first().copied();
-        while let Some(id) = parent {
-            let index = *positions.get(&id)?;
-            if stop == Some(index) || self.history_entry_selectable(index) {
-                return Some(index);
+    fn topological_candidates(&self, selected: usize, direction: TopologicalDirection) -> Vec<usize> {
+        let fallback;
+        let graph = match self.topological_graph() {
+            Some(graph) => graph,
+            None => {
+                fallback = Graph::new(&self.rows);
+                &fallback
             }
-            parent = self.history_row(index)?.parent_ids.first().copied();
-        }
-        None
-    }
-
-    fn topological_parent(&self, index: usize, stop: Option<usize>) -> Option<usize> {
-        if let Some(graph) = self.topological_graph() {
-            let mut parent = graph.first_parents.get(index).copied().flatten();
-            while let Some(index) = parent {
-                if stop == Some(index) || self.history_entry_selectable(index) {
-                    return Some(index);
-                }
-                parent = graph.first_parents.get(index).copied().flatten();
+        };
+        let mut pending = graph
+            .neighbors(selected, direction)
+            .iter()
+            .rev()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        while let Some(index) = pending.pop() {
+            if !seen.insert(index) {
+                continue;
             }
-            return None;
-        }
-        self.topological_parent_from_rows(index, &self.topological_positions(), stop)
-    }
-
-    fn topological_children(&self, parent: usize) -> Vec<usize> {
-        if let Some(graph) = self.topological_graph() {
-            let mut pending = graph
-                .first_parent_children
-                .get(parent)
-                .into_iter()
-                .flatten()
-                .rev()
-                .copied()
-                .collect::<Vec<_>>();
-            let mut children = Vec::new();
-            while let Some(child) = pending.pop() {
-                if self.history_entry_selectable(child) {
-                    children.push(child);
-                } else if let Some(descendants) = graph.first_parent_children.get(child) {
-                    pending.extend(descendants.iter().rev().copied());
-                }
+            if self.history_entry_selectable(index) {
+                candidates.push(index);
+            } else {
+                pending.extend(graph.neighbors(index, direction).iter().rev().copied());
             }
-            children.sort_unstable();
-            return children;
         }
-        let positions = self.topological_positions();
-        (0..self.history_len())
-            .filter(|index| {
-                self.history_entry_selectable(*index)
-                    && self.topological_parent_from_rows(*index, &positions, Some(parent)) == Some(parent)
-            })
-            .collect()
+        if direction == TopologicalDirection::Child {
+            candidates.sort_unstable();
+        }
+        candidates
     }
 
-    fn topological_child_index(&self, parent: usize, children: &[usize]) -> usize {
-        self.history_row(parent)
-            .and_then(|row| self.topo_children.get(&row.id))
-            .and_then(|chosen| {
-                children
-                    .iter()
-                    .position(|child| self.history_row(*child).is_some_and(|row| row.id == *chosen))
-            })
-            .unwrap_or_default()
-    }
-
-    fn move_topologically(&mut self, down: bool) -> bool {
+    fn move_topologically(&mut self, direction: TopologicalDirection) {
         let Some(selected) = self.selected_history_index() else {
-            return false;
+            return;
         };
         if matches!(self.history_entry(selected), Some(HistoryEntry::Segment { .. })) {
-            return self.peel_compressed_segment(selected, !down, false).is_some();
+            let _ = self.peel_compressed_segment(selected, direction == TopologicalDirection::Child, false);
+            return;
         }
-        let next = if down {
-            self.topological_parent(selected, None)
-        } else {
-            let children = self.topological_children(selected);
-            children.get(self.topological_child_index(selected, &children)).copied()
-        };
-        let Some(next) = next else { return false };
-        if matches!(self.history_entry(next), Some(HistoryEntry::Segment { .. })) {
-            let source = self.history_row(selected).map(|row| row.id);
-            let peeled = self.peel_compressed_segment(next, down, true);
-            if !down && let Some((source, peeled)) = source.zip(peeled) {
-                self.topo_children.insert(source, self.rows[peeled].id);
+        let candidates = self.topological_candidates(selected, direction);
+        let [next] = candidates.as_slice() else {
+            if candidates.len() > 1 {
+                self.topological_navigation = Some(TopologicalNavigation {
+                    direction,
+                    candidates,
+                    choice: 0,
+                });
+                self.follow_tail = false;
+                self.ensure_visible();
             }
-            return peeled.is_some();
+            return;
+        };
+        self.move_topologically_to(*next, direction);
+    }
+
+    fn move_topologically_to(&mut self, next: usize, direction: TopologicalDirection) {
+        if matches!(self.history_entry(next), Some(HistoryEntry::Segment { .. })) {
+            let _ = self.peel_compressed_segment(next, direction == TopologicalDirection::Parent, true);
+        } else {
+            self.select_history_index(next);
         }
-        self.select_history_index(next);
-        true
     }
 
     fn peel_compressed_segment(&mut self, display: usize, newest: bool, select_peeled: bool) -> Option<usize> {
@@ -1455,41 +1434,45 @@ impl App {
         Some(peeled)
     }
 
-    fn adjust_topological_child(&mut self, right: bool) {
-        let Some(selected) = self.selected_history_index() else {
+    fn adjust_topological_choice(&mut self, right: bool) {
+        let Some(navigation) = self.topological_navigation.as_mut() else {
             return;
         };
-        let children = self.topological_children(selected);
-        let Some(last) = children.len().checked_sub(1) else {
-            return;
-        };
-        let current = self.topological_child_index(selected, &children);
-        let next = if right {
-            current.saturating_add(1).min(last)
+        navigation.choice = if right {
+            (navigation.choice + 1) % navigation.candidates.len()
         } else {
-            current.saturating_sub(1)
+            navigation
+                .choice
+                .checked_sub(1)
+                .unwrap_or(navigation.candidates.len() - 1)
         };
-        let Some((parent, child)) = self
-            .history_row(selected)
-            .zip(self.history_row(children[next]))
-            .map(|(parent, child)| (parent.id, child.id))
-        else {
+    }
+
+    fn submit_topological_choice(&mut self) {
+        let Some(navigation) = self.topological_navigation.take() else {
             return;
         };
-        self.topo_children.insert(parent, child);
+        let Some(next) = navigation.candidates.get(navigation.choice).copied() else {
+            return;
+        };
+        self.move_topologically_to(next, navigation.direction);
     }
 
     pub(crate) fn topological_choice(&self) -> Option<(usize, usize)> {
-        self.topological_graph()?;
-        let selected = self.selected_history_index()?;
-        let children = self.topological_children(selected);
-        (children.len() > 1).then(|| (self.topological_child_index(selected, &children) + 1, children.len()))
+        self.topological_navigation
+            .as_ref()
+            .map(|navigation| (navigation.choice + 1, navigation.candidates.len()))
+    }
+
+    pub(crate) fn topological_navigation_active(&self) -> bool {
+        self.topological_navigation.is_some()
     }
 
     fn select_history_index(&mut self, display: usize) {
         if !self.history_entry_selectable(display) {
             return;
         }
+        self.topological_navigation = None;
         match self.history_entry(display) {
             Some(HistoryEntry::Commit(index)) => self.select(index),
             Some(HistoryEntry::Segment { representative, .. }) => {
@@ -1557,9 +1540,23 @@ impl App {
                 self.test_lanes[range.start.min(self.test_lanes.len())..range.end.min(self.test_lanes.len())].iter(),
             );
         }
+        let choice_marker = self.topological_choice().and_then(|(choice, _)| {
+            self.selected_history_index().map(|index| {
+                (
+                    index,
+                    if choice < 10 {
+                        char::from(b'0' + choice as u8)
+                    } else {
+                        '+'
+                    },
+                )
+            })
+        });
         if let Some(history) = self.active_compressed_history() {
             return history.graph.render_with_markers(&history.rows, range, |index| {
-                if matches!(history.entries[index], HistoryEntry::Segment { .. }) {
+                if choice_marker.is_some_and(|(selected, _)| selected == index) {
+                    choice_marker.expect("the marker was checked above").1
+                } else if matches!(history.entries[index], HistoryEntry::Segment { .. }) {
                     '○'
                 } else {
                     '●'
@@ -1567,7 +1564,11 @@ impl App {
             });
         }
         match &self.graph {
-            Some(graph) => graph.render(&self.rows, range),
+            Some(graph) => graph.render_with_markers(&self.rows, range, |index| {
+                choice_marker
+                    .filter(|(selected, _)| *selected == index)
+                    .map_or('●', |(_, marker)| marker)
+            }),
             None => RenderedLanes::empty(range.len()),
         }
     }
@@ -1683,18 +1684,18 @@ impl App {
             Action::MoveDownBy(distance) => self.move_selection(distance, true),
             Action::TopologicalUp => {
                 self.pending_initial_selection = None;
-                self.move_topologically(false);
+                self.move_topologically(TopologicalDirection::Child);
             }
             Action::TopologicalDown => {
                 self.pending_initial_selection = None;
-                self.move_topologically(true);
+                self.move_topologically(TopologicalDirection::Parent);
             }
             Action::PanUpBy(distance) => self.pan_history(distance, false),
             Action::PanDownBy(distance) => self.pan_history(distance, true),
-            Action::PreviousChild if self.changes_focus.is_some() => self.pan_horizontal(false),
-            Action::NextChild if self.changes_focus.is_some() => self.pan_horizontal(true),
-            Action::PreviousChild => self.adjust_topological_child(false),
-            Action::NextChild => self.adjust_topological_child(true),
+            Action::PreviousChild => self.adjust_topological_choice(false),
+            Action::NextChild => self.adjust_topological_choice(true),
+            Action::SubmitTopological => self.submit_topological_choice(),
+            Action::CancelTopological => self.topological_navigation = None,
             Action::CycleDuplicate => {
                 if self.changes_focus.is_none()
                     && self.reachable_rows.is_none()
@@ -2379,6 +2380,7 @@ impl App {
         hidden_tips: &[ObjectId],
         select_top: bool,
     ) -> Option<Vec<SharedCommitRow>> {
+        self.topological_navigation = None;
         self.set_view_tips(view_tips);
         if self.stack_insert_base.is_some() {
             self.clear_reachability_selection();
@@ -2496,6 +2498,7 @@ impl App {
         } else {
             HashMap::new()
         };
+        self.topological_navigation = None;
         self.rows = rows;
         if let Some(hidden) = self.pending_hidden_rows.take() {
             self.hidden_rows = hidden;
@@ -2589,6 +2592,7 @@ impl App {
         self.clear_enrichments();
         self.graph = None;
         self.entry_selection = None;
+        self.topological_navigation = None;
         self.view_tips.clear();
         self.compressed_history = None;
         self.compressed_anchor = None;
@@ -2852,6 +2856,7 @@ impl App {
     }
 
     fn select(&mut self, selected: usize) {
+        self.topological_navigation = None;
         self.pending_initial_selection = None;
         self.compressed_segment = None;
         if !self.rows.is_empty() {
@@ -3682,32 +3687,37 @@ pub(crate) struct Graph {
     offsets: Vec<usize>,
     columns: Vec<ObjectId>,
     visual_counts: Vec<usize>,
-    first_parents: Vec<Option<usize>>,
-    first_parent_children: Vec<Vec<usize>>,
+    parent_offsets: Vec<usize>,
+    parents: Vec<usize>,
+    children: Vec<Vec<usize>>,
 }
 
 impl Graph {
     fn new(rows: &[SharedCommitRow]) -> Self {
         let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
-        let mut first_parent_children = vec![Vec::new(); rows.len()];
-        let first_parents = rows
-            .iter()
-            .enumerate()
-            .map(|(child, row)| {
-                row.parent_ids
-                    .first()
-                    .and_then(|parent| positions.get(parent))
-                    .copied()
-                    .inspect(|parent| first_parent_children[*parent].push(child))
-            })
-            .collect();
+        let mut parent_offsets = Vec::with_capacity(rows.len() + 1);
+        let mut parents = Vec::new();
+        let mut children = vec![Vec::new(); rows.len()];
+        for (child, row) in rows.iter().enumerate() {
+            parent_offsets.push(parents.len());
+            for parent in row
+                .parent_ids
+                .iter()
+                .filter_map(|parent| positions.get(parent).copied())
+            {
+                parents.push(parent);
+                children[parent].push(child);
+            }
+        }
+        parent_offsets.push(parents.len());
         let mut state = LaneState::default();
         let mut graph = Graph {
             offsets: Vec::with_capacity(rows.len().div_ceil(CHECKPOINT_INTERVAL) + 1),
             columns: Vec::new(),
             visual_counts: visual_counts(rows),
-            first_parents,
-            first_parent_children,
+            parent_offsets,
+            parents,
+            children,
         };
         for (index, row) in rows.iter().enumerate() {
             if index % CHECKPOINT_INTERVAL == 0 {
@@ -3718,6 +3728,16 @@ impl Graph {
         }
         graph.offsets.push(graph.columns.len());
         graph
+    }
+
+    fn neighbors(&self, index: usize, direction: TopologicalDirection) -> &[usize] {
+        match direction {
+            TopologicalDirection::Parent => self
+                .parent_offsets
+                .get(index..=index.saturating_add(1))
+                .map_or(&[], |offsets| &self.parents[offsets[0]..offsets[1]]),
+            TopologicalDirection::Child => self.children.get(index).map_or(&[], Vec::as_slice),
+        }
     }
 
     fn render(&self, rows: &[SharedCommitRow], range: Range<usize>) -> RenderedLanes {
@@ -5580,55 +5600,83 @@ mod tests {
     }
 
     #[test]
-    fn topological_navigation_follows_first_parents_and_remembers_children() {
-        let mut app = App::new(5);
+    fn topological_navigation_chooses_all_parents_and_children() {
+        let mut app = App::new(1);
         app.extend_commits(vec![
+            row_with_parents(6, &[4, 5]),
             row_with_parents(5, &[3]),
             row_with_parents(4, &[3]),
-            row_with_parents(3, &[2, 1]),
+            row_with_parents(3, &[2]),
             row_with_parents(2, &[1]),
             row(1),
         ]);
         complete(&mut app);
 
+        app.update(Action::PanDownBy(3));
         app.update(Action::TopologicalDown);
-        assert_eq!(app.rows[app.selected.expect("the fork is selected")].id, id(3));
+        assert_eq!(app.rows[app.selected.expect("the merge stays selected")].id, id(6));
         assert_eq!(app.topological_choice(), Some((1, 2)));
-        app.update(Action::TopologicalUp);
-        assert_eq!(app.rows[app.selected.expect("the first child is selected")].id, id(5));
-        app.update(Action::TopologicalDown);
+        assert_eq!(app.offset, 0, "starting a choice reveals its source marker");
+        app.update(Action::NextChild);
+        assert_eq!(app.topological_choice(), Some((2, 2)));
+        app.update(Action::SubmitTopological);
+        assert_eq!(app.rows[app.selected.expect("the second parent is selected")].id, id(5));
 
-        app.update(Action::NextChild);
-        app.update(Action::NextChild);
-        assert_eq!(app.topological_choice(), Some((2, 2)), "branch choices saturate");
         app.update(Action::TopologicalUp);
-        assert_eq!(app.rows[app.selected.expect("the second child is selected")].id, id(4));
+        assert_eq!(
+            app.rows[app.selected.expect("the merge is selected again")].id,
+            id(6),
+            "a commit is a child even through its secondary-parent edge"
+        );
+
         app.update(Action::TopologicalDown);
+        app.update(Action::PreviousChild);
+        assert_eq!(app.topological_choice(), Some((2, 2)), "choices wrap to the end");
+        app.update(Action::CancelTopological);
+        assert_eq!(
+            app.rows[app.selected.expect("cancel keeps the source selected")].id,
+            id(6)
+        );
+        assert_eq!(app.topological_choice(), None);
+
+        app.select_commit(id(3));
+        app.update(Action::TopologicalUp);
+        assert_eq!(app.topological_choice(), Some((1, 2)));
+        app.update(Action::NextChild);
+        app.update(Action::SubmitTopological);
+        assert_eq!(app.rows[app.selected.expect("the second child is selected")].id, id(5));
+    }
+
+    #[test]
+    fn lane_computation_cancels_indexed_topological_choices() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![
+            row_with_parents(4, &[2, 3]),
+            row(3),
+            row(1),
+            row_with_parents(2, &[1]),
+        ]);
+
+        app.follow_tail = true;
+        app.update(Action::TopologicalDown);
+        assert_eq!(app.topological_choice(), Some((1, 2)));
+        assert!(
+            !app.follow_tail,
+            "choosing keeps streamed commits from moving the source"
+        );
+        app.update(Action::CancelTopological);
+
+        let rows = app
+            .start_lane_computation()
+            .expect("loading completion starts lane work");
+        app.update(Action::TopologicalDown);
+        assert_eq!(app.topological_choice(), Some((1, 2)));
+        let (rows, graph, elapsed) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, elapsed);
         assert_eq!(
             app.topological_choice(),
-            Some((2, 2)),
-            "returning to a fork restores its choice"
-        );
-
-        app.update(Action::PreviousChild);
-        app.update(Action::TopologicalDown);
-        assert_eq!(
-            app.rows[app.selected.expect("the first parent is selected")].id,
-            id(2),
-            "secondary merge parents are not topo-walk edges"
-        );
-        app.update(Action::TopologicalDown);
-        app.update(Action::TopologicalDown);
-        assert_eq!(app.rows[app.selected.expect("the root remains selected")].id, id(1));
-
-        app.update(Action::TopologicalUp);
-        app.update(Action::TopologicalUp);
-        assert_eq!(app.rows[app.selected.expect("the fork is selected again")].id, id(3));
-        app.update(Action::MoveUp);
-        assert_eq!(
-            app.rows[app.selected.expect("ordinary navigation is restored")].id,
-            id(4),
-            "ordinary movement remains display ordered after topological movement"
+            None,
+            "lane reordering invalidates indexed choices"
         );
     }
 
@@ -5641,6 +5689,7 @@ mod tests {
             row_with_parents(2, &[1]),
             row(1),
         ]);
+        complete(&mut app);
         app.reachable_rows = Some(vec![true, false, true, true]);
 
         app.update(Action::TopologicalDown);
@@ -5659,6 +5708,19 @@ mod tests {
             id(4),
             "an ineligible current row still anchors its child walk"
         );
+    }
+
+    #[test]
+    fn topological_navigation_deduplicates_contracted_paths() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![row_with_parents(3, &[2, 1]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+        app.reachable_rows = Some(vec![true, false, true]);
+
+        app.update(Action::TopologicalDown);
+
+        assert_eq!(app.rows[app.selected.expect("the sole ancestor is selected")].id, id(1));
+        assert_eq!(app.topological_choice(), None, "the shared ancestor is offered once");
     }
 
     #[test]

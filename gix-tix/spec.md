@@ -358,9 +358,10 @@ without trading responsiveness for metadata that is not visible.
   whose disk is otherwise unlabelled.
 - Rendering clips lanes and node labels to the viewport.
 - Plain directions choose the nearest node in the requested screen direction.
-  Shift-directions instead navigate topologically: Up moves toward leaves, Down
-  toward roots, and Left/Right chooses a remembered child; `i/n` and an
-  emphasized edge always show the choice.
+  `K`/Shift-Up moves toward leaves in the displayed tree and `J`/Shift-Down moves
+  toward its root. At a fork, the source disk shows the pending child number
+  (`+` beyond nine choices); `h`/`l` cycles, Enter moves, and Escape cancels.
+  Navigation does not highlight edges.
 - `g` selects the top ref-tree node, and `Shift-G` selects the root of the current
   component. Unshifted mouse pans the viewport, while Shift-mouse moves to the
   nearest node. Unshifted full- or half-page Ctrl/Page input moves the cursor by
@@ -405,9 +406,9 @@ without trading responsiveness for metadata that is not visible.
 
 | Key | Behavior |
 | --- | --- |
-| `j`/Down, `k`/Up | Move one selectable row or changed path. Shift follows the first parent or chosen child. |
+| `j`/Down, `k`/Up | Move one selectable row or changed path. `J`/Shift-Down moves to an ancestor and `K`/Shift-Up moves to a child. |
 | Mouse/trackpad vertical scroll | Pan history by the coalesced scroll distance without moving its cursor; Shift moves the cursor instead. Mouse input continues to move paths when a changes block is focused. |
-| `h`/`l` | Pan history or the focused changes block horizontally. Shift chooses a remembered topological child. Shift-horizontal mouse input does the same. |
+| `h`/`l` | Pan history or the focused changes block horizontally; cycle an ambiguous topological destination while one is pending. |
 | `Ctrl-u`/`Ctrl-d` | Move the cursor half a page; Shift pans the viewport half a page. |
 | `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move the cursor a page; Shift pans the viewport a page. Both forms scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
@@ -440,13 +441,14 @@ Alignment uses only rows in the current viewport to determine widths and starts
 in title mode. Horizontal navigation pans the complete padded row in title and
 full-column alignment so clipped fields can be reached.
 
-Topological navigation treats the displayed history as a first-parent forest.
-Down moves toward roots, Up moves toward leaves, and Left/Right or `h`/`l`
-select among a fork's children in display order. The choice is remembered per
-fork and shown as `i/n` beside the selected row without extending its inverted
-selection style. Movement stops at missing roots or leaves and never follows a
-merge's secondary parents. A viewport panned away with the mouse or page keys
-stays detached until the next cursor movement makes its destination visible.
+Topological navigation follows every parent and child edge in the displayed
+history. A single destination is selected immediately. If there are multiple,
+the cursor stays put and its commit disk shows the pending one-based choice
+(`+` beyond nine choices); `h`/Left and `l`/Right cycle with wrapping, Enter
+moves, and Escape cancels.
+Parents retain commit order, children retain display order, and paths through
+ineligible rows are contracted and deduplicated. A viewport panned away with the
+mouse or page keys stays detached until movement makes its destination visible.
 
 Compressed history keeps the visible reference, pin, and worktree tips, the
 commit selected when compression begins, every graph endpoint or junction, and
