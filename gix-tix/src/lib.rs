@@ -2011,6 +2011,7 @@ fn event_loop(
         if focused
             && !diagnostic_input
             && !app.entry_selection_active()
+            && !app.topological_navigation_active()
             && opens_command_menu(&terminal_event, app.actions_expanded, command_picker.is_open())
         {
             let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
@@ -2055,6 +2056,7 @@ fn event_loop(
                         retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
                     (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
                 }
+                TerminalEvent::Mouse(_) if app.topological_navigation_active() => continue,
                 TerminalEvent::Mouse(mouse) => {
                     let kind = mouse.kind;
                     let modifiers = mouse.modifiers;
@@ -2083,6 +2085,7 @@ fn event_loop(
                 TerminalEvent::Paste(pasted) if app.entry_selection_active() => {
                     (Some(Action::SelectEntryInput(pasted)), false, false, false)
                 }
+                TerminalEvent::Paste(_) if app.topological_navigation_active() => continue,
                 TerminalEvent::Paste(pasted) => {
                     let action = (|| {
                         anyhow::ensure!(!repository_is_bare, "copy-insert requires a worktree");
@@ -7047,6 +7050,9 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
     if app.entry_selection_active() {
         return entry_selection_action(key);
     }
+    if app.topological_navigation_active() {
+        return topological_selection_action(key);
+    }
     if key.kind != KeyEventKind::Release {
         let shifted =
             key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('H' | 'J' | 'K' | 'L'));
@@ -7055,8 +7061,6 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
                 match key.code {
                     KeyCode::Up | KeyCode::Char('k' | 'K') => return Some(Action::TopologicalUp),
                     KeyCode::Down | KeyCode::Char('j' | 'J') => return Some(Action::TopologicalDown),
-                    KeyCode::Left | KeyCode::Char('h' | 'H') => return Some(Action::PreviousChild),
-                    KeyCode::Right | KeyCode::Char('l' | 'L') => return Some(Action::NextChild),
                     _ => {}
                 }
             } else {
@@ -7128,6 +7132,29 @@ fn entry_selection_action(key: KeyEvent) -> Option<Action> {
     }
 }
 
+fn topological_selection_action(key: KeyEvent) -> Option<Action> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
+        KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => Some(Action::Quit),
+        KeyCode::Esc => Some(Action::CancelTopological),
+        KeyCode::Enter => Some(Action::SubmitTopological),
+        KeyCode::Left | KeyCode::Char('h' | 'H')
+            if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(Action::PreviousChild)
+        }
+        KeyCode::Right | KeyCode::Char('l' | 'L')
+            if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(Action::NextChild)
+        }
+        _ => None,
+    }
+}
+
 fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_focused: bool) -> bool {
     matches!(
         action,
@@ -7142,6 +7169,8 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::TopologicalDown
                 | Action::PreviousChild
                 | Action::NextChild
+                | Action::SubmitTopological
+                | Action::CancelTopological
                 | Action::CycleDuplicate
                 | Action::ScrollLeft
                 | Action::ScrollRight
@@ -7331,8 +7360,6 @@ fn mouse_scroll_action(
         MouseEventKind::ScrollDown if shifted || changes_focused => Some(Action::MoveDownBy(distance.max(1))),
         MouseEventKind::ScrollUp => Some(Action::PanUpBy(distance.max(1))),
         MouseEventKind::ScrollDown => Some(Action::PanDownBy(distance.max(1))),
-        MouseEventKind::ScrollLeft if shifted => Some(Action::PreviousChild),
-        MouseEventKind::ScrollRight if shifted => Some(Action::NextChild),
         MouseEventKind::ScrollLeft => Some(Action::ScrollLeft),
         MouseEventKind::ScrollRight => Some(Action::ScrollRight),
         _ => None,
@@ -9227,6 +9254,36 @@ mod tests {
     }
 
     #[test]
+    fn topological_selection_accepts_only_choice_and_exit_keys() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Char('h'))),
+            Some(Action::PreviousChild)
+        );
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Left)),
+            Some(Action::PreviousChild)
+        );
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Char('l'))),
+            Some(Action::NextChild)
+        );
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Right)),
+            Some(Action::NextChild)
+        );
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Enter)),
+            Some(Action::SubmitTopological)
+        );
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Esc)),
+            Some(Action::CancelTopological)
+        );
+        assert_eq!(topological_selection_action(key(KeyCode::Char('j'))), None);
+    }
+
+    #[test]
     fn diagnostic_inputs_replay_only_read_only_actions() {
         let mut app = App::new(1);
         assert_eq!(diagnostic_action(diagnostic_key('j'), &app), Some(Action::MoveDown));
@@ -9266,12 +9323,6 @@ mod tests {
             (shifted(KeyCode::Down), Action::TopologicalDown),
             (shifted(KeyCode::Char('j')), Action::TopologicalDown),
             (key(KeyCode::Char('J')), Action::TopologicalDown),
-            (shifted(KeyCode::Left), Action::PreviousChild),
-            (shifted(KeyCode::Char('h')), Action::PreviousChild),
-            (key(KeyCode::Char('H')), Action::PreviousChild),
-            (shifted(KeyCode::Right), Action::NextChild),
-            (shifted(KeyCode::Char('l')), Action::NextChild),
-            (key(KeyCode::Char('L')), Action::NextChild),
         ] {
             assert_eq!(app_action(key, &app), Some(expected));
         }
@@ -9279,11 +9330,6 @@ mod tests {
         assert_eq!(app_action(key(KeyCode::Up), &app), Some(Action::MoveUp));
         app.history_display_expanded = true;
         assert_eq!(app_action(key(KeyCode::Char('h')), &app), Some(Action::ToggleHidden));
-        assert_eq!(
-            app_action(shifted(KeyCode::Char('h')), &app),
-            Some(Action::PreviousChild),
-            "shifted navigation outranks an open shortcut group"
-        );
         app.history_display_expanded = false;
 
         let control = |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
@@ -9478,7 +9524,7 @@ mod tests {
         );
         assert_eq!(
             mouse_scroll_action(MouseEventKind::ScrollRight, KeyModifiers::SHIFT, 1, false),
-            Some(Action::NextChild)
+            Some(Action::ScrollRight)
         );
         assert_eq!(
             mouse_scroll_action(MouseEventKind::ScrollUp, KeyModifiers::NONE, 2, true),
