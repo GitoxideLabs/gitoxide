@@ -279,6 +279,12 @@ pub(crate) type CommitRow = Commit<Range<usize>>;
 pub(crate) type SharedCommitRow = Arc<CommitRow>;
 
 #[derive(Debug)]
+pub(crate) struct LaneInput {
+    rows: Vec<SharedCommitRow>,
+    review_root: Option<ObjectId>,
+}
+
+#[derive(Debug)]
 pub(crate) struct LoadedCommits {
     pub rows: Vec<LoadedCommit>,
     pub attributions: Vec<Attribution>,
@@ -628,6 +634,7 @@ pub(crate) struct App {
     pending_initial_selection: Option<ObjectId>,
     selection_after_refresh: Option<ObjectId>,
     worktree_head: Option<ObjectId>,
+    review_roots: Vec<ObjectId>,
     worktree_branch: Option<(ObjectId, bool)>,
     active_branch: Option<BString>,
     #[cfg(feature = "blocking-network-client")]
@@ -743,6 +750,7 @@ impl App {
             pending_initial_selection: None,
             selection_after_refresh: None,
             worktree_head: None,
+            review_roots: Vec::new(),
             worktree_branch: None,
             active_branch: None,
             #[cfg(feature = "blocking-network-client")]
@@ -929,6 +937,10 @@ impl App {
 
     pub(crate) fn set_worktree_branch(&mut self, branch: Option<(ObjectId, bool)>) {
         self.worktree_branch = branch;
+    }
+
+    pub(crate) fn set_review_roots(&mut self, roots: Vec<ObjectId>) {
+        self.review_roots = roots;
     }
 
     pub(crate) fn set_active_branch(&mut self, branch: Option<BString>) {
@@ -2386,13 +2398,13 @@ impl App {
             && self.reachable_rows.is_none()
     }
 
-    pub(crate) fn start_lane_computation(&mut self) -> Option<Vec<SharedCommitRow>> {
+    pub(crate) fn start_lane_computation(&mut self) -> Option<LaneInput> {
         match self.state {
             State::Loading => {
                 self.state = State::Computing;
                 self.follow_tail = false;
                 self.reload_selection = None;
-                Some(self.rows.clone())
+                Some(self.lane_input(self.rows.clone()))
             }
             State::Cancelling => {
                 self.state = State::Cancelled;
@@ -2518,7 +2530,7 @@ impl App {
         view_tips: &[ObjectId],
         hidden_tips: &[ObjectId],
         select_top: bool,
-    ) -> Option<Vec<SharedCommitRow>> {
+    ) -> Option<LaneInput> {
         self.topological_navigation = None;
         self.set_view_tips(view_tips);
         if self.insert_selection.is_some() || self.stack_insert_base.is_some() {
@@ -2573,7 +2585,18 @@ impl App {
         self.select_top_after_refresh = select_top;
         self.state = State::Computing;
         self.follow_tail = false;
-        Some(rows)
+        Some(self.lane_input(rows))
+    }
+
+    fn lane_input(&self, rows: Vec<SharedCommitRow>) -> LaneInput {
+        let review_root = self.worktree_head.and_then(|head| {
+            crate::history::nearest_review_root(&self.review_roots, head, |ancestor, descendant| {
+                self.is_known_ancestor(ancestor, descendant)
+            })
+            .ok()
+            .flatten()
+        });
+        LaneInput { rows, review_root }
     }
 
     fn is_known_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> bool {
@@ -3795,35 +3818,64 @@ fn estimate_lane_width(rows: &[SharedCommitRow]) -> usize {
         .unwrap_or_default()
 }
 
-pub(crate) fn compute_lanes(mut rows: Vec<SharedCommitRow>) -> (Vec<SharedCommitRow>, Graph, Duration) {
+pub(crate) fn compute_lanes(input: LaneInput) -> (Vec<SharedCommitRow>, Graph, Duration) {
+    let LaneInput { mut rows, review_root } = input;
     let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
     for row in &mut rows {
         if row.parent_ids.iter().any(|id| !positions.contains_key(id)) {
             Arc::make_mut(row).parent_ids.retain(|id| positions.contains_key(id));
         }
     }
+    let review_root = review_root.and_then(|root| positions.get(&root).copied());
+    let mut child_indices = review_root.map(|_| vec![Vec::new(); rows.len()]);
     let mut children = vec![0usize; rows.len()];
-    for row in rows.iter() {
+    for (child, row) in rows.iter().enumerate() {
         for parent in &row.parent_ids {
             if let Some(index) = positions.get(parent) {
                 children[*index] += 1;
+                if let Some(child_indices) = &mut child_indices {
+                    child_indices[*index].push(child);
+                }
+            }
+        }
+    }
+    let mut review_rows = vec![false; rows.len()];
+    if let (Some(root), Some(child_indices)) = (review_root, child_indices) {
+        review_rows[root] = true;
+        let mut pending = vec![root];
+        while let Some(parent) = pending.pop() {
+            for &child in &child_indices[parent] {
+                if !std::mem::replace(&mut review_rows[child], true) {
+                    pending.push(child);
+                }
             }
         }
     }
 
-    let mut ready: Vec<_> = children
-        .iter()
-        .enumerate()
-        .rev()
-        .filter_map(|(index, count)| (*count == 0).then_some(index))
-        .collect();
+    let mut ready = Vec::new();
+    let mut review_ready = Vec::new();
+    for (index, count) in children.iter().enumerate().rev() {
+        if *count == 0 {
+            if review_rows[index] {
+                &mut review_ready
+            } else {
+                &mut ready
+            }
+            .push(index);
+        }
+    }
     let mut ordered = 0;
-    while let Some(index) = ready.pop() {
+    while let Some(index) = review_ready.pop().or_else(|| ready.pop()) {
         for parent in rows[index].parent_ids.iter().rev() {
             if let Some(parent_index) = positions.get(parent) {
                 children[*parent_index] -= 1;
                 if children[*parent_index] == 0 {
-                    ready.push(*parent_index);
+                    if review_rows[*parent_index] {
+                        &mut review_ready
+                    } else {
+                        &mut ready
+                    }
+                    .push(*parent_index);
                 }
             }
         }
@@ -4434,7 +4486,7 @@ mod tests {
             .start_refresh(vec![row_with_parents(2, &[1])].into(), &[id(1)], &[id(2)], false)
             .expect("a hidden-only refresh computes lanes");
         assert_eq!(
-            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            rows.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
             [id(1)],
             "the current view tip remains as the base instead of jumping forward"
         );
@@ -4609,7 +4661,7 @@ mod tests {
             .start_refresh(vec![row(0)].into(), &[id(2)], &[], false)
             .expect("refresh projects the extended ancestry");
         assert_eq!(
-            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            rows.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
             [id(2), id(1), id(0)],
             "lane pruning does not disconnect cached ancestry needed by a later expansion"
         );
@@ -4706,7 +4758,7 @@ mod tests {
             .into(),
         );
         app.state = State::Computing;
-        let (rows, graph, time) = compute_lanes(rows);
+        let (rows, graph, time) = compute_lanes(app.lane_input(rows));
         app.finish_lane_computation(rows, graph, time);
 
         assert_eq!(
@@ -4721,7 +4773,7 @@ mod tests {
 
         let rows = app.store_commits(vec![numbered_row(9, Some(8)), numbered_row(8, None)].into());
         app.state = State::Computing;
-        let (rows, graph, time) = compute_lanes(rows);
+        let (rows, graph, time) = compute_lanes(app.lane_input(rows));
         app.finish_lane_computation(rows, graph, time);
 
         assert_eq!(
@@ -5240,6 +5292,53 @@ mod tests {
             app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
             [row(5).id, row(3).id, row(4).id, row(2).id, row(1).id],
             "topological order finishes one line before showing another"
+        );
+    }
+
+    #[test]
+    fn completion_prioritizes_the_active_review_tree_from_its_root_or_descendant() {
+        for head in [id(2), id(4)] {
+            let mut app = App::new(10);
+            let mut review = row_with_parents(2, &[1]);
+            review.is_review = true;
+            app.extend_commits(vec![
+                row_with_parents(3, &[1]),
+                row_with_parents(4, &[2]),
+                review,
+                row(1),
+            ]);
+            app.set_worktree_head(Some(head), false);
+            app.set_review_roots(vec![id(2)]);
+
+            complete(&mut app);
+
+            assert_eq!(
+                app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+                [id(4), id(2), id(3), id(1)]
+            );
+            assert_eq!(
+                app.render_lanes(0..app.rows.len()).iter().collect::<Vec<_>>(),
+                ["● ", "◆ ", "├─● ", "● "]
+            );
+        }
+    }
+
+    #[test]
+    fn ambiguous_review_roots_keep_the_ordinary_order() {
+        let mut app = App::new(10);
+        let mut left = row_with_parents(2, &[1]);
+        left.is_review = true;
+        let mut right = row_with_parents(3, &[1]);
+        right.is_review = true;
+        app.extend_commits(vec![row_with_parents(4, &[2, 3]), right, left, row(1)]);
+        app.set_worktree_head(Some(id(4)), false);
+        app.set_review_roots(vec![id(2), id(3)]);
+
+        complete(&mut app);
+
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(4), id(2), id(3), id(1)]
         );
     }
 
