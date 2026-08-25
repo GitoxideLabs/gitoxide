@@ -1016,9 +1016,10 @@ space first; changes blocks adapt within the remaining history width.
   through its checkout destination.
   On conflict, `tix-rebase-parent` identifies the original base and later descendants
   remain marked instead of being cherry-picked.
-- Checkout-path validation considers only commits stored in the current history
-  view. Pending markers below its hidden boundary do not block edits in the
-  visible stack.
+- Checkout-path validation considers only the current edit scope: visible
+  commits and their displayed hidden boundary, or the frozen scope of a
+  self-contained rebase plan. Cached commits below that boundary do not block
+  edits in the visible stack.
 - `Signature::RedoIfNeeded` signs every rewritten commit when signing is
   configured and otherwise removes stale signature headers.
   `InvalidateExisting` empties existing signature values when signing is

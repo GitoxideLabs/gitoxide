@@ -2845,7 +2845,7 @@ fn event_loop(
                                 app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
                             let travel = open_repository(&repository_path, repository_is_bare, false)
                                 .context("could not reopen repository before travelling to fork")
-                                .and_then(|repository| edit::loaded_graph(&repository))
+                                .and_then(|repository| edit::loaded_view_graph(&repository))
                                 .and_then(|graph| {
                                     edit::time_travel::perform(
                                         &repository_path,
@@ -3008,7 +3008,11 @@ fn event_loop(
                                         kind,
                                         path.as_ref()
                                             .map(|(path, parent)| (std::slice::from_ref(path), *parent)),
-                                        resolving_conflict,
+                                        if resolving_conflict {
+                                            edit::rebase::PendingCheckout::FinalizeEditedHead
+                                        } else {
+                                            edit::rebase::PendingCheckout::Reject
+                                        },
                                         report,
                                     )
                                 })
@@ -3360,7 +3364,7 @@ fn event_loop(
                                 OsString::from(source.to_string()),
                                 OsString::from(target.to_string()),
                             ];
-                            loaded_graph = edit::loaded_view_graph_with(&repository, &graph_revisions)?;
+                            loaded_graph = edit::loaded_explicit_view_graph(&repository, &graph_revisions, &[])?;
                             &loaded_graph
                         } else {
                             history_graph
@@ -4461,7 +4465,8 @@ fn reconcile_external_conflict(
     );
     let finalized = if edit::rebase::is_pending(&replacement_commit) {
         drop(index);
-        let graph = edit::loaded_graph(&repository).context("could not load history to finalize the external amend")?;
+        let graph =
+            edit::loaded_view_graph(&repository).context("could not load history to finalize the external amend")?;
         let outcome = edit::head::amend_index_reporting(repository, &graph)
             .context("could not finalize the externally amended pending commit")?
             .context("the externally amended pending commit was not finalized")?;
