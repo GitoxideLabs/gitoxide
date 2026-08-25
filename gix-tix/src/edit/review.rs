@@ -472,14 +472,13 @@ mod tests {
         );
         assert!(run(fixture.path(), &["diff", "--cached", "--name-only"])?.is_empty());
 
-        run(fixture.path(), &["add", "file"])?;
         let repo = crate::test_repository::open_with(
             fixture.path(),
             ["user.name=reviewer", "user.email=reviewer@example.com"],
         )?;
         let graph = super::super::loaded_graph(&repo)?;
         let amended = super::super::head::perform(repo, &graph, super::super::head::Kind::Amend, None)?
-            .expect("staging the reviewed delta amends it into the review commit");
+            .expect("the reviewed worktree delta amends the review commit");
         let repo = crate::test_repository::open_with(
             fixture.path(),
             ["user.name=reviewer", "user.email=reviewer@example.com"],

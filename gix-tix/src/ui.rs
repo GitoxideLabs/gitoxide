@@ -480,10 +480,6 @@ pub(crate) fn draw_with_worktree(
             .get(&row.id)
             .is_some_and(|refs| refs.iter().any(|r| r.kind == DecorationKind::Head))
     });
-    let selected_is_review = app
-        .selected
-        .and_then(|index| app.rows.get(index))
-        .is_some_and(|row| row.is_review);
     let selected_has_stash = app
         .selected
         .and_then(|index| app.rows.get(index))
@@ -496,20 +492,10 @@ pub(crate) fn draw_with_worktree(
         });
     let worktree_path_amend = worktree_changes.is_some_and(|changes| {
         !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
-            && changes
-                .paths
-                .get(app.worktree_changes.selected)
-                .is_some_and(|change| !selected_is_review || change.group == ChangeGroup::Staged)
+            && changes.paths.get(app.worktree_changes.selected).is_some()
     });
     app.set_head_edit_availability(
-        selected_is_head
-            && worktree_changes.is_some_and(|changes| {
-                if selected_is_review {
-                    changes.paths.iter().any(|change| change.group == ChangeGroup::Staged)
-                } else {
-                    !changes.paths.is_empty()
-                }
-            }),
+        selected_is_head && worktree_changes.is_some_and(|changes| !changes.paths.is_empty()),
         stashable,
         selected_is_head && selected_has_stash,
         selected_is_head && worktree_path_amend,
@@ -4684,8 +4670,8 @@ mod tests {
             );
         })?;
         assert!(
-            !rendered_line(&terminal, 5).contains("amend"),
-            "a review cannot amend an unstaged selected path"
+            rendered_line(&terminal, 5).contains(" amend "),
+            "a review may amend its selected unstaged path"
         );
         worktree.paths[0].group = ChangeGroup::Staged;
         terminal.draw(|frame| {
