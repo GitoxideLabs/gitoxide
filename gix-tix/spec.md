@@ -149,11 +149,12 @@ without trading responsiveness for metadata that is not visible.
   Shutdown leaves the alternate screen without clearing it or writing afterward.
   `--quit-on-finish` draws without input reporting on the normal screen.
 - `Ctrl-C` exits immediately from any normal tix focus without recovery
-  bookkeeping. `q` always quits from history, including while a conflict or
-  rebase continuation is suspended. Before that normal exit, tix journals
-  already-materialized reference progress and drops only in-memory candidates;
-  it never rolls repository state back. `q` or `Escape` in a focused changes
-  block still returns focus to history.
+  bookkeeping. `q` quits from history, including while a conflict or rebase
+  continuation is suspended, except while a user background task is running;
+  then it reports that Ctrl-C is required to force exit. Before a normal exit,
+  tix journals already-materialized reference progress and drops only in-memory
+  candidates; it never rolls repository state back. `q` or `Escape` in a focused
+  changes block still returns focus to history.
 
 ## History model
 
@@ -1206,6 +1207,18 @@ space first; changes blocks adapt within the remaining history width.
   stack-insert for the linear ancestry from the selected commit through `HEAD`,
   `a f` creates and travels to a standalone child of the selected commit, and
   `a h` attaches the remembered branch at detached `HEAD` when available.
+- `a Shift-P` is available whenever the current worktree has a valid symbolic
+  `refs/worktree/tix/pins/HEAD`, including while attached, and runs
+  `git push <remote> <branch>` for that pin's local branch. The remote follows
+  Git's `branch.<name>.pushRemote`, `remote.pushDefault`, then
+  `branch.<name>.remote` precedence, falling back to the sole remote, `origin`,
+  or the literal `origin` when none is configured.
+- Push occupies the one user background-task slot while ordinary foreground
+  actions remain available. Its yellow footer label names the branch and remote;
+  completion clears the slot and refreshes references. Success uses a green
+  message, while launch or non-zero-exit failures use a red message containing
+  Git's captured diagnostic or exit status. The subprocess has closed standard
+  input and does not suspend the TUI.
 - Squash accepts any visible strict ancestor whose affected descendants contain no merges. With one eligible
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
