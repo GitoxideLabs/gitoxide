@@ -508,7 +508,9 @@ The Enter key is written as `<enter>` throughout.
   identity, so Stash and Unstash, Review and Finish Review, and Pin and Unpin are
   distinct commands rather than interchangeable labels for one action.
 - A single-line input filters entries by a case-insensitive ordered-subsequence
-  match against the command label or displayed prefix-group name. Up and Down move the selection,
+  match against the command label or displayed prefix-group name. The unscoped
+  `commit` query also finds all Actions and Enrich entries plus commit-message
+  and changes information. Up and Down move the selection,
   `<enter>` executes it, Escape closes the menu, and pasted text edits the query
   instead of invoking history paste behavior.
 - A displayed prefix key followed by an ASCII space scopes the menu to that
