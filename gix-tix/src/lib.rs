@@ -1276,6 +1276,7 @@ fn event_loop(
     let mut repeat_deadline: Option<Instant> = None;
     let mut history_status_deadline: Option<Instant> = None;
     let mut pending_terminal_event = None;
+    let mut pending_worktree_rebind = None;
     let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
     let mut pending_conflict_clear_undo_on_accept = false;
     let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
@@ -1879,6 +1880,10 @@ fn event_loop(
                 picker.as_deref_mut(),
                 *picker_focused,
             )?;
+            if let Some(path) = pending_worktree_rebind.take() {
+                cancelled.store(true, Ordering::Relaxed);
+                return Ok(EventLoopExit::Rebind(path));
+            }
             last_draw = Instant::now();
             dirty = false;
             urgent = false;
@@ -2071,8 +2076,7 @@ fn event_loop(
                                     .selected_path()
                                     .context("worktree selection disappeared")?
                                     .to_owned();
-                                cancelled.store(true, Ordering::Relaxed);
-                                return Ok(EventLoopExit::Rebind(path));
+                                pending_worktree_rebind = Some(path);
                             }
                         }
                     }
