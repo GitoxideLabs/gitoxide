@@ -1599,6 +1599,7 @@ fn event_loop(
                     app.set_active_branch(active_branch_name(&result.refs));
                     #[cfg(feature = "blocking-network-client")]
                     app.set_fetch_remote(result.refs.fetch_remote.clone());
+                    app.set_review_roots(decoration_review_roots(&result.decorations));
                     ref_tree.rebuild(&graph, &result.refs, &result.decorations);
                     history_graph = Some(graph);
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
@@ -1794,6 +1795,7 @@ fn event_loop(
             match message? {
                 Event::Decorations(value) => {
                     app.set_worktree_head((!repository_is_bare).then(|| decoration_head(&value)).flatten(), true);
+                    app.set_review_roots(decoration_review_roots(&value));
                     decorations = value;
                 }
                 Event::Commits(rows) => app.extend_commits(rows),
@@ -3959,7 +3961,7 @@ fn event_loop(
     result
 }
 
-fn start_lane_worker(rows: Vec<SharedCommitRow>) -> mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)> {
+fn start_lane_worker(rows: app::LaneInput) -> mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(app::compute_lanes(rows));
@@ -4808,6 +4810,18 @@ fn decoration_head(decorations: &Decorations) -> Option<gix::ObjectId> {
             .any(|decoration| decoration.kind == history::DecorationKind::Head)
             .then_some(*id)
     })
+}
+
+fn decoration_review_roots(decorations: &Decorations) -> Vec<gix::ObjectId> {
+    decorations
+        .iter()
+        .filter_map(|(id, decorations)| {
+            decorations
+                .iter()
+                .any(|decoration| decoration.kind == history::DecorationKind::Review)
+                .then_some(*id)
+        })
+        .collect()
 }
 
 fn current_worktree_branch(refs: &history::RefSnapshot) -> Option<(gix::ObjectId, bool)> {
