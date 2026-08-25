@@ -409,6 +409,7 @@ pub(crate) enum Action {
     Forget,
     Rebase,
     RebaseUpdate,
+    Push,
     Squash,
     CopyInsert,
     PasteInsert { source: ObjectId, target: ObjectId },
@@ -456,6 +457,7 @@ pub(crate) enum Effect {
         onto: ObjectId,
         commits: Vec<ObjectId>,
     },
+    Push(BString),
     Squash {
         source: ObjectId,
         target: ObjectId,
@@ -613,6 +615,8 @@ pub(crate) struct App {
     selection_after_refresh: Option<ObjectId>,
     worktree_head: Option<ObjectId>,
     worktree_branch: Option<(ObjectId, bool)>,
+    push_branch: Option<BString>,
+    background_task: Option<String>,
     worktree_head_has_descendants: bool,
     worktree_head_unborn: bool,
     pending_rebase_conflict: Option<ObjectId>,
@@ -723,6 +727,8 @@ impl App {
             selection_after_refresh: None,
             worktree_head: None,
             worktree_branch: None,
+            push_branch: None,
+            background_task: None,
             worktree_head_has_descendants: false,
             worktree_head_unborn: false,
             pending_rebase_conflict: None,
@@ -903,6 +909,30 @@ impl App {
 
     pub(crate) fn set_worktree_branch(&mut self, branch: Option<(ObjectId, bool)>) {
         self.worktree_branch = branch;
+    }
+
+    pub(crate) fn set_push_branch(&mut self, branch: Option<BString>) {
+        self.push_branch = branch;
+    }
+
+    pub(crate) fn can_push(&self) -> bool {
+        self.state == State::Complete
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.push_branch.is_some()
+            && self.background_task.is_none()
+    }
+
+    pub(crate) fn start_background_task(&mut self, label: impl Into<String>) {
+        debug_assert!(self.background_task.is_none(), "only one background task may run");
+        self.background_task = Some(label.into());
+    }
+
+    pub(crate) fn finish_background_task(&mut self) {
+        self.background_task = None;
+    }
+
+    pub(crate) fn background_task(&self) -> Option<&str> {
+        self.background_task.as_deref()
     }
 
     pub(crate) fn set_worktree_head_unborn(&mut self, unborn: bool) {
@@ -1647,6 +1677,7 @@ impl App {
                 | Action::TogglePin
                 | Action::Rebase
                 | Action::RebaseUpdate
+                | Action::Push
                 | Action::Squash
                 | Action::CopyInsert
                 | Action::MoveInsert
@@ -2084,6 +2115,11 @@ impl App {
                     commits: self.hidden_descendants(base),
                 }];
             }
+            Action::Push if self.can_push() => {
+                return vec![Effect::Push(
+                    self.push_branch.clone().expect("push availability requires a branch"),
+                )];
+            }
             Action::Squash if self.can_squash() => {
                 let source = self.rows[self.selected.expect("squash requires a selection")].id;
                 self.squash_source = Some(source);
@@ -2218,6 +2254,9 @@ impl App {
                 self.clear_reachability_selection();
             }
             Action::Cancel | Action::Quit if self.changes_focus.is_some() => self.focus_history(),
+            Action::Quit if self.background_task.is_some() => {
+                self.leave_attention("background task is still running; use Ctrl-C to quit");
+            }
             Action::Cancel if self.state == State::Loading => {
                 self.state = State::Cancelling;
                 return vec![Effect::Cancel];
@@ -7312,6 +7351,33 @@ mod tests {
         complete(&mut app);
         assert_eq!(app.state, State::Complete);
         assert_eq!(app.rows.len(), 1, "the loaded row count is the completed total");
+        assert_eq!(app.update(Action::Quit), vec![Effect::Quit]);
+    }
+
+    #[test]
+    fn one_background_push_excludes_another_and_blocks_only_normal_quit() {
+        let mut app = App::new(1);
+        app.state = State::Complete;
+        app.set_push_branch(Some("topic".into()));
+
+        assert!(app.can_push());
+        assert_eq!(app.update(Action::Push), vec![Effect::Push("topic".into())]);
+
+        app.start_background_task("pushing topic to origin…");
+        assert!(!app.can_push(), "only one user background task may run");
+        assert!(app.update(Action::Push).is_empty());
+        assert!(app.update(Action::Quit).is_empty(), "ordinary quit waits for the task");
+        assert_eq!(
+            app.notice(),
+            Some(Notice {
+                kind: NoticeKind::Attention,
+                text: "background task is still running; use Ctrl-C to quit".into(),
+            })
+        );
+        assert_eq!(app.update(Action::ForceQuit), vec![Effect::Quit]);
+
+        app.finish_background_task();
+        assert!(app.can_push());
         assert_eq!(app.update(Action::Quit), vec![Effect::Quit]);
     }
 

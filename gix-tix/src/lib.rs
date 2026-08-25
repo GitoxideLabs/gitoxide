@@ -49,7 +49,7 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
 };
 use gix::{
-    bstr::{BString, ByteSlice},
+    bstr::{BStr, BString, ByteSlice},
     prelude::TreeDiffChangeExt,
 };
 use history::{Authors, Decorations, Event, HistoryGraph, SelectionRef, SharedAuthors};
@@ -1066,6 +1066,7 @@ fn event_loop(
     app.set_view_tips(&ref_snapshot.view_tips);
     app.set_worktree_head_unborn(worktree_head_unborn);
     app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
+    app.set_push_branch(push_branch_name(&ref_snapshot));
     app.commit_pane_background = commit_pane_background;
     if recovered_at_startup {
         app.leave_attention("worktree removed; using the common repository without worktree changes");
@@ -1078,6 +1079,7 @@ fn event_loop(
     let mut ref_refresh_deadline: Option<Instant> = None;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
+    let mut background_task: Option<mpsc::Receiver<Result<String>>> = None;
     let mut commit_message = None;
     let mut tree_changes = TreeChangesCache::default();
     let mut worktree_changes = None;
@@ -1171,6 +1173,7 @@ fn event_loop(
             fill_repository.retained = None;
             app.set_worktree_changes_available(false);
             app.set_worktree_branch(None);
+            app.set_push_branch(None);
             worktree_watcher = None;
             worktree_refresh_deadline = None;
             worktree_watch_refresh = WorktreeWatchRefresh::default();
@@ -1501,6 +1504,23 @@ fn event_loop(
                 }
             }
         }
+        if let Some(result) = background_task.as_ref().map(mpsc::Receiver::try_recv) {
+            match result {
+                Ok(result) => {
+                    background_task = None;
+                    refresh_pending |= report_background_task(&mut app, result);
+                    dirty = true;
+                    urgent = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    background_task = None;
+                    report_background_task(&mut app, Err(anyhow::anyhow!("background task stopped unexpectedly")));
+                    dirty = true;
+                    urgent = true;
+                }
+            }
+        }
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((rows, graph, lane_time)) => {
@@ -1551,6 +1571,7 @@ fn event_loop(
                             .then(|| current_worktree_branch(&result.refs))
                             .flatten(),
                     );
+                    app.set_push_branch(push_branch_name(&result.refs));
                     ref_tree.rebuild(&graph, &result.refs, &result.decorations);
                     history_graph = Some(graph);
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
@@ -1664,6 +1685,7 @@ fn event_loop(
             );
             ref_snapshot = next;
             app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
+            app.set_push_branch(push_branch_name(&ref_snapshot));
             refresh_pending = false;
             let hidden = if app.show_hidden { Vec::new() } else { hide.clone() };
             let expand = if refresh_expand_hidden || hidden_changed {
@@ -1723,6 +1745,7 @@ fn event_loop(
                 && quit_inputs.is_empty()
                 && matches!(app.state, State::Complete)
                 && lane_receiver.is_none()
+                && background_task.is_none()
             {
                 return Ok(app.lane_time);
             }
@@ -1807,6 +1830,7 @@ fn event_loop(
         let line_diff_timeout = line_diff_pool
             .as_ref()
             .and_then(|pool| pool.idle_timeout(Instant::now()));
+        let background_task_timeout = background_task.as_ref().map(|_| REF_EVENT_INTERVAL);
         let wake_after = [
             repeat_timeout,
             watcher_timeout,
@@ -1815,6 +1839,7 @@ fn event_loop(
             retry_timeout,
             history_status_timeout,
             line_diff_timeout,
+            background_task_timeout,
         ]
         .into_iter()
         .flatten()
@@ -1840,6 +1865,14 @@ fn event_loop(
             continue;
         }
         if ref_tree.is_active() {
+            let force_quit = matches!(
+                &terminal_event,
+                TerminalEvent::Key(KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CONTROL)
+            );
             if matches!(
                 &terminal_event,
                 TerminalEvent::Key(KeyEvent {
@@ -1997,6 +2030,12 @@ fn event_loop(
                             }
                             Err(err) => ref_tree.leave_error(format!("delete on remote: {err:#}")),
                         }
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
+                    ref_tree::Input::Quit if background_task.is_some() && !force_quit => {
+                        ref_tree.leave_attention("background task is still running; use Ctrl-C to quit");
                         dirty = true;
                         urgent = true;
                         continue;
@@ -3816,6 +3855,22 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("Git note: {err:#}")),
                     }
                 }
+                Effect::Push(branch) => {
+                    let remote = open_repository(&repository_path, repository_is_bare, false)
+                        .context("could not open repository to select a push remote")
+                        .map(|repository| {
+                            let remote = push_remote_name(&repository, branch.as_bstr());
+                            let directory = repository.workdir().unwrap_or(repository.git_dir()).to_owned();
+                            (directory, remote)
+                        });
+                    match remote {
+                        Ok((directory, remote)) => {
+                            app.start_background_task(format!("pushing {branch} to {remote}…"));
+                            background_task = Some(start_push_worker(directory, remote, branch));
+                        }
+                        Err(err) => app.leave_error(format!("push: {err:#}")),
+                    }
+                }
                 Effect::VerifySignatures(ids) => {
                     verification_receiver = Some(start_signature_verification(
                         repository_path.clone(),
@@ -3875,6 +3930,61 @@ fn start_lane_worker(rows: Vec<SharedCommitRow>) -> mpsc::Receiver<(Vec<SharedCo
         let _ = sender.send(app::compute_lanes(rows));
     });
     receiver
+}
+
+fn start_push_worker(repository_path: PathBuf, remote: BString, branch: BString) -> mpsc::Receiver<Result<String>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(push_branch(&repository_path, remote.as_bstr(), branch.as_bstr()));
+    });
+    receiver
+}
+
+fn push_branch(repository_path: &Path, remote: &BStr, branch: &BStr) -> Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repository_path)
+        .arg("push")
+        .arg("--")
+        .arg(gix::path::from_bstr(remote).as_ref())
+        .arg(gix::path::from_bstr(branch).as_ref())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("could not launch git push")?;
+    if !output.status.success() {
+        let stderr = output.stderr.trim();
+        let detail = if stderr.is_empty() {
+            output.stdout.trim()
+        } else {
+            stderr
+        };
+        if detail.is_empty() {
+            anyhow::bail!("git push {remote} {branch} failed with {}", output.status);
+        }
+        anyhow::bail!(
+            "git push {remote} {branch} failed with {}: {}",
+            output.status,
+            detail.to_str_lossy()
+        );
+    }
+    Ok(format!("pushed {branch} to {remote}"))
+}
+
+fn report_background_task(app: &mut App, result: Result<String>) -> bool {
+    app.finish_background_task();
+    match result {
+        Ok(message) => {
+            app.leave_success(message);
+            true
+        }
+        Err(err) => {
+            app.leave_error(format!("{err:#}"));
+            false
+        }
+    }
 }
 
 fn scan_change_ids(
@@ -4619,6 +4729,18 @@ fn current_worktree_branch(refs: &history::RefSnapshot) -> Option<(gix::ObjectId
                     .is_some_and(|reference| reference.as_bstr().starts_with(b"refs/heads/"))
         })
         .map(|worktree| (worktree.label_id, worktree.is_detached))
+}
+
+fn push_branch_name(refs: &history::RefSnapshot) -> Option<BString> {
+    refs.head_pin_branch.as_ref().map(|branch| branch.shorten().to_owned())
+}
+
+fn push_remote_name(repository: &gix::Repository, branch: &BStr) -> BString {
+    repository
+        .branch_remote_name(branch, gix::remote::Direction::Push)
+        .map(|name| name.as_bstr().to_owned())
+        .or_else(|| repository.remote_default_name(gix::remote::Direction::Push))
+        .unwrap_or_else(|| "origin".into())
 }
 
 fn decoration_successor(selected: gix::ObjectId, current: &Decorations, next: &Decorations) -> Option<gix::ObjectId> {
@@ -7307,6 +7429,8 @@ fn action_with_shortcut_groups(
         KeyCode::Char('n') if actions_expanded => Some(Action::NewEmptyCommit),
         KeyCode::Char('e') if actions_expanded => Some(Action::Amend),
         KeyCode::Char('l') if actions_expanded => Some(Action::Spill),
+        KeyCode::Char('P') if actions_expanded => Some(Action::Push),
+        KeyCode::Char('p') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Push),
         KeyCode::Char('p') if actions_expanded && !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Split),
         KeyCode::Char('d') if actions_expanded => Some(Action::Forget),
         KeyCode::Char('i') if actions_expanded => Some(Action::TogglePin),
@@ -7799,6 +7923,7 @@ mod tests {
             view_tips: Vec::new(),
             hidden_tips: Vec::new(),
             pins: Vec::new(),
+            head_pin_branch: None,
             worktrees: vec![history::WorktreeCheckout {
                 id,
                 label_id: id,
@@ -7818,6 +7943,78 @@ mod tests {
             None,
             "manual detachment has no branch to move"
         );
+    }
+
+    #[test]
+    fn pushes_the_head_pin_branch_instead_of_detached_head() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let remote = gix_testtools::tempfile::tempdir()?;
+        let initialized = Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(remote.path())
+            .status()?;
+        assert!(initialized.success(), "git creates the local bare remote");
+        let remote_added = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["remote", "add", "origin"])
+            .arg(remote.path())
+            .status()?;
+        assert!(remote_added.success(), "git configures the push remote");
+        let pinned = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["symbolic-ref", "refs/worktree/tix/pins/HEAD", "refs/heads/main"])
+            .status()?;
+        assert!(pinned.success(), "git remembers main through the HEAD pin");
+        let detached = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["checkout", "-q", "--detach", "main~2"])
+            .status()?;
+        assert!(detached.success(), "the worktree moves away from the remembered branch");
+
+        let repository = test_repository::open(fixture.path())?;
+        let main_id = repository.rev_parse_single("main")?.detach();
+        assert_ne!(
+            repository.head_id()?,
+            main_id,
+            "the detached checkout differs from main"
+        );
+        let snapshot = history::snapshot(&repository, &[], &[], false)?;
+        let branch = snapshot
+            .head_pin_branch
+            .as_ref()
+            .context("the HEAD pin identifies a branch")?
+            .shorten()
+            .to_owned();
+        let remote_name = push_remote_name(&repository, branch.as_bstr());
+        assert_eq!(remote_name, "origin", "the sole remote is the push fallback");
+        let git_dir = repository.git_dir().to_owned();
+        drop(repository);
+
+        let message = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr())?;
+        assert_eq!(message, "pushed main to origin");
+        assert_eq!(
+            gix::open(remote.path())?.find_reference("refs/heads/main")?.id(),
+            main_id,
+            "the branch named by the pin is pushed, not detached HEAD"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn background_task_results_set_notice_severity_and_release_the_slot() {
+        let mut app = App::new(1);
+        app.start_background_task("running");
+        assert!(report_background_task(&mut app, Ok("done".into())));
+        assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Success));
+        assert!(app.background_task().is_none());
+
+        app.start_background_task("running");
+        assert!(!report_background_task(&mut app, Err(anyhow::anyhow!("failed"))));
+        assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Error));
+        assert!(app.background_task().is_none());
     }
 
     #[test]
@@ -9179,6 +9376,27 @@ mod tests {
                 "{key} is available after the actions prefix"
             );
         }
+        for key in [
+            KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(
+                action_with_shortcut_groups(key, false, true, false, false),
+                Some(Action::Push),
+                "Shift-P pushes only after the actions prefix"
+            );
+        }
+        assert_eq!(
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+                false,
+                false,
+                false,
+                false,
+            ),
+            Some(Action::CycleChangesParent),
+            "bare Shift-P keeps cycling the compared parent"
+        );
         for (history, actions, enrich, expected) in [
             (true, false, false, Action::ToggleName),
             (false, true, false, Action::Amend),

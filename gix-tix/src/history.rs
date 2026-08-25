@@ -907,6 +907,7 @@ pub(crate) struct RefSnapshot {
     pub view_tips: Vec<ObjectId>,
     pub hidden_tips: Vec<ObjectId>,
     pub pins: Vec<Pin>,
+    pub head_pin_branch: Option<gix::refs::FullName>,
     pub worktrees: Vec<WorktreeCheckout>,
 }
 
@@ -1377,7 +1378,8 @@ pub(crate) fn snapshot_ignoring_pin(
     include_worktrees: bool,
     ignored_pin: Option<&BStr>,
 ) -> Result<RefSnapshot> {
-    let pins = applicable_pins(repo)?
+    let (pins, head_pin_branch) = pins_for_head(repo)?;
+    let pins = pins
         .into_iter()
         .filter(|pin| ignored_pin != Some(pin.name.as_bstr()))
         .collect::<Vec<_>>();
@@ -1404,6 +1406,7 @@ pub(crate) fn snapshot_ignoring_pin(
         view_tips,
         hidden_tips: resolve_revisions(repo, hidden, "hidden ")?,
         pins,
+        head_pin_branch,
         worktrees,
     })
 }
@@ -1621,18 +1624,23 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
     Ok(out)
 }
 
-pub(crate) fn applicable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
+fn pins_for_head(repo: &gix::Repository) -> Result<(Vec<Pin>, Option<gix::refs::FullName>)> {
     let head = repo.head().context("could not read HEAD while resolving tix pins")?;
     let detached = head.is_detached();
-    if head.id().is_none() {
-        return Ok(Vec::new());
-    }
+    let has_head = head.id().is_some();
     drop(head);
-    let pins = all_pins(repo)?;
-    if detached {
-        return Ok(pins);
+    let mut pins = all_pins(repo)?;
+    let head_pin_branch = pins
+        .iter()
+        .find(|pin| pin.is_head())
+        .and_then(|pin| pin.target.try_name())
+        .map(ToOwned::to_owned);
+    if !has_head {
+        pins.clear();
+    } else if !detached {
+        pins.retain(|pin| !pin.is_head());
     }
-    Ok(pins.into_iter().filter(|pin| !pin.is_head()).collect())
+    Ok((pins, head_pin_branch))
 }
 
 pub(crate) fn referenced_refs(
@@ -2730,7 +2738,7 @@ mod tests {
                 .as_ref()
                 .is_some_and(|name| name == "refs/heads/topic")
         );
-        let remembered_pins = applicable_pins(&remembered_repo)?;
+        let remembered_pins = snapshot(&remembered_repo, &[], &[], false)?.pins;
         let remembered_decorations = decorations(&remembered_repo, &remembered_pins, &remembered_worktrees)?;
         assert!(remembered_decorations.get(&topic).is_some_and(|decorations| {
             decorations
@@ -3468,6 +3476,20 @@ mod tests {
             .args(["symbolic-ref", "refs/worktree/tix/pins/HEAD", "refs/heads/main"])
             .status()?;
         assert!(symbolic.success(), "git creates the symbolic HEAD pin");
+
+        let repo = crate::test_repository::open(fixture.path())?;
+        let attached = snapshot(&repo, &[], &[], false)?;
+        assert_eq!(
+            attached.head_pin_branch.as_ref().map(gix::refs::FullName::as_bstr),
+            Some(b"refs/heads/main".as_bstr()),
+            "the retained HEAD pin remains available while HEAD is attached"
+        );
+        assert!(
+            attached.pins.iter().all(|pin| !pin.is_head()),
+            "the attached HEAD pin remains excluded from history traversal"
+        );
+        drop(repo);
+
         let detached = Command::new("git")
             .current_dir(fixture.path())
             .args(["checkout", "-q", "--detach", "main~2"])
@@ -3477,6 +3499,10 @@ mod tests {
         let repo = crate::test_repository::open(fixture.path())?;
         let main = repo.rev_parse_single("main")?.detach();
         let snapshot = snapshot(&repo, &[], &[], false)?;
+        assert_eq!(
+            snapshot.head_pin_branch.as_ref().map(gix::refs::FullName::as_bstr),
+            Some(b"refs/heads/main".as_bstr())
+        );
         assert!(snapshot.view_tips.contains(&main), "the HEAD pin retains its branch");
         let decorations = decorations(&repo, &snapshot.pins, &snapshot.worktrees)?;
         let main = decorations.get(&main).expect("the remembered branch is decorated");
