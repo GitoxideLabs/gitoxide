@@ -189,7 +189,8 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
             * [ ] obtain 'prunable' information
         * [x] proper handling of worktree related refs
         * [x] create a byte stream and create archives for such a stream, including worktree filters and conversions
-        * [ ] create, move, remove, and repair
+        * [x] create linked worktrees
+        * [ ] move, remove, and repair linked worktrees
         * [x] access exclude information
         * [x] access attribute information
         * [x] respect `core.worktree` configuration
@@ -804,6 +805,7 @@ Make it the best-performing implementation and the most convenient one.
 
 ### gix-worktree
 * [x] A stack to to efficiently generate attribute lists for matching paths against.
+* [x] Transactionally prepare linked-worktree administration and roll it back on failure.
 
 ### gix-revision
 * [x] `describe()` (similar to `git name-rev`)
