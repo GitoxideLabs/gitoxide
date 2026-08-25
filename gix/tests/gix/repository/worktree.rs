@@ -1,5 +1,235 @@
 use gix_ref::bstr;
 
+#[cfg(feature = "worktree-mutation")]
+mod create {
+    use std::sync::atomic::AtomicBool;
+
+    use gix::refs::{FullName, transaction::PreviousValue};
+
+    fn branch(name: &str) -> FullName {
+        format!("refs/heads/{name}").try_into().expect("valid test branch name")
+    }
+
+    #[test]
+    fn attached_and_detached_worktrees_are_checked_out_and_recognized_by_git() -> crate::Result {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let commit_id = repo.head_id()?.detach();
+        let topic = branch("topic");
+        repo.reference(
+            topic.clone(),
+            commit_id,
+            PreviousValue::MustNotExist,
+            "create worktree test branch",
+        )?;
+
+        let attached_path = destinations.path().join("attached");
+        let (attached, attached_outcome) = repo.create_worktree(
+            &attached_path,
+            gix::worktree::create::Head::Attached(topic.clone()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        assert_eq!(attached.head_name()?, Some(topic));
+        assert_eq!(attached.head_id()?.detach(), commit_id);
+        assert!(attached_outcome.files_updated > 0, "the target tree was checked out");
+        assert!(attached_path.join("this").is_file(), "tracked files are present");
+        assert!(!attached.index()?.entries().is_empty(), "the linked index was written");
+        assert_eq!(
+            gix_testtools::git(&attached_path, "status --porcelain")?,
+            "",
+            "the checkout and its index agree"
+        );
+
+        let detached_path = destinations.path().join("detached");
+        let (detached, _) = repo.create_worktree(
+            &detached_path,
+            gix::worktree::create::Head::Detached(commit_id),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        assert_eq!(detached.head_name()?, None);
+        assert_eq!(detached.head_id()?.detach(), commit_id);
+
+        let listing = gix_testtools::git(repo.workdir().expect("non-bare fixture"), "worktree list --porcelain")?;
+        assert!(
+            listing.contains(attached_path.to_str().expect("test paths are UTF-8")),
+            "Git recognizes the attached worktree"
+        );
+        assert!(
+            listing.contains(detached_path.to_str().expect("test paths are UTF-8")),
+            "Git recognizes the detached worktree"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn creates_a_worktree_from_a_bare_parent() -> crate::Result {
+        let Some(fixture) = gix_testtools::scripted_fixture_writable_with_args_with_git_version(
+            "make_worktree_repo.sh",
+            ["bare"],
+            gix_testtools::Creation::CopyFromReadOnly,
+            |version| version >= (2, 31, 0),
+        )?
+        else {
+            return Ok(());
+        };
+        let repo = gix::open_opts(fixture.path().join("repo.git"), crate::restricted())?;
+        assert!(repo.is_bare(), "the creating repository has no main worktree");
+        let destination = fixture.path().join("created-from-bare");
+        let main = branch("main");
+
+        let (worktree, _) = repo.create_worktree(
+            &destination,
+            gix::worktree::create::Head::Attached(main.clone()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+
+        assert_eq!(worktree.head_name()?, Some(main));
+        assert_eq!(worktree.workdir(), Some(gix_path::realpath(&destination)?.as_path()));
+        assert_eq!(gix_testtools::git(&destination, "status --porcelain")?, "");
+        Ok(())
+    }
+
+    #[test]
+    fn validation_failures_leave_the_destination_absent() -> crate::Result {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let destination = destinations.path().join("rejected");
+        let main = branch("main");
+
+        let err = repo
+            .create_worktree(
+                &destination,
+                gix::worktree::create::Head::Attached(main.clone()),
+                gix::progress::Discard,
+                &AtomicBool::default(),
+            )
+            .expect_err("the main branch is already checked out");
+        assert!(
+            matches!(err, gix::worktree::create::Error::CheckedOut { name, .. } if name == main),
+            "the checked-out branch is identified"
+        );
+        assert!(!destination.exists(), "validation happens before creating files");
+
+        let interrupted = AtomicBool::new(true);
+        let err = repo
+            .create_worktree(
+                &destination,
+                gix::worktree::create::Head::Detached(repo.head_id()?.detach()),
+                gix::progress::Discard,
+                &interrupted,
+            )
+            .expect_err("an already-interrupted operation does no work");
+        assert!(matches!(err, gix::worktree::create::Error::Interrupted));
+        assert!(!destination.exists(), "interruption leaves no destination behind");
+
+        std::fs::create_dir(&destination)?;
+        std::fs::write(destination.join("keep"), b"user data")?;
+        let err = repo
+            .create_worktree(
+                &destination,
+                gix::worktree::create::Head::Detached(repo.head_id()?.detach()),
+                gix::progress::Discard,
+                &AtomicBool::default(),
+            )
+            .expect_err("a non-empty destination is rejected");
+        assert!(matches!(err, gix::worktree::create::Error::Prepare(_)));
+        assert_eq!(
+            std::fs::read(destination.join("keep"))?,
+            b"user data",
+            "failed creation preserves existing destination contents"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn registered_destinations_are_rejected_even_when_missing_or_empty() -> crate::Result {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let destination = destinations.path().join("registered");
+        let commit_id = repo.head_id()?.detach();
+        repo.create_worktree(
+            &destination,
+            gix::worktree::create::Head::Detached(commit_id),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+
+        std::fs::remove_dir_all(&destination)?;
+        for exists in [false, true] {
+            if exists {
+                std::fs::create_dir(&destination)?;
+            }
+            let err = repo
+                .create_worktree(
+                    &destination,
+                    gix::worktree::create::Head::Detached(commit_id),
+                    gix::progress::Discard,
+                    &AtomicBool::default(),
+                )
+                .expect_err("registered destinations cannot be reused");
+            assert!(
+                matches!(err, gix::worktree::create::Error::DestinationRegistered { destination: actual } if actual == destination),
+                "the registered destination is identified"
+            );
+        }
+
+        let case_variant = destination.with_file_name("REGISTERED");
+        if case_variant.exists() {
+            let err = repo
+                .create_worktree(
+                    &case_variant,
+                    gix::worktree::create::Head::Detached(commit_id),
+                    gix::progress::Discard,
+                    &AtomicBool::default(),
+                )
+                .expect_err("filesystem-equivalent casing cannot bypass registration");
+            assert!(
+                matches!(err, gix::worktree::create::Error::DestinationRegistered { destination } if destination == case_variant),
+                "the caller's case variant is identified"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn registered_destinations_are_matched_through_symlinked_parents() -> crate::Result {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let actual_parent = destinations.path().join("actual");
+        let linked_parent = destinations.path().join("linked");
+        std::fs::create_dir(&actual_parent)?;
+        std::os::unix::fs::symlink(&actual_parent, &linked_parent)?;
+        let destination = actual_parent.join("registered");
+        let commit_id = repo.head_id()?.detach();
+        repo.create_worktree(
+            &destination,
+            gix::worktree::create::Head::Detached(commit_id),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        std::fs::remove_dir_all(&destination)?;
+
+        let alias = linked_parent.join("registered");
+        let err = repo
+            .create_worktree(
+                &alias,
+                gix::worktree::create::Head::Detached(commit_id),
+                gix::progress::Discard,
+                &AtomicBool::default(),
+            )
+            .expect_err("registered destinations are compared by their real paths");
+        assert!(
+            matches!(err, gix::worktree::create::Error::DestinationRegistered { destination } if destination == alias),
+            "the alias supplied by the caller is identified"
+        );
+        Ok(())
+    }
+}
+
 /// The buffer length for SHA1 archives.
 #[cfg(target_pointer_width = "64")]
 #[cfg(feature = "worktree-stream")]
