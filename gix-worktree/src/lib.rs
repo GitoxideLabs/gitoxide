@@ -63,5 +63,9 @@ pub struct Stack {
 
 pub(crate) type PathIdMapping = (BString, gix_hash::ObjectId);
 
+/// Add linked worktrees by preparing their administrative files.
+#[cfg(feature = "add")]
+pub mod add;
+
 ///
 pub mod stack;
