@@ -2,6 +2,7 @@ use std::{io::Write, process::Command};
 
 use anyhow::{Context, Result};
 
+#[cfg(test)]
 pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::HistoryGraph> {
     if repo.head_id().is_err() {
         return Ok(crate::history::HistoryGraph::default());
@@ -45,14 +46,7 @@ pub(super) fn loaded_view_graph(repo: &gix::Repository) -> Result<crate::history
     load_graph(repo, &[], &hidden)
 }
 
-pub(super) fn loaded_view_graph_with(
-    repo: &gix::Repository,
-    revisions: &[std::ffi::OsString],
-) -> Result<crate::history::HistoryGraph> {
-    load_graph(repo, revisions, &[])
-}
-
-pub(super) fn loaded_view_graph_with_hidden(
+pub(super) fn loaded_explicit_view_graph(
     repo: &gix::Repository,
     revisions: &[std::ffi::OsString],
     hidden_revisions: &[std::ffi::OsString],

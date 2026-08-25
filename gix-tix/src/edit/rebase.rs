@@ -43,6 +43,12 @@ pub(crate) enum Tree {
     CherryPick,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PendingCheckout {
+    Reject,
+    FinalizeEditedHead,
+}
+
 pub(crate) enum Edit {
     Replace {
         target: ObjectId,
@@ -809,7 +815,7 @@ pub(crate) fn perform(
         tree_mode,
         Vec::new(),
         None,
-        false,
+        PendingCheckout::Reject,
         None,
         |_, _| {},
     )
@@ -832,7 +838,7 @@ pub(crate) fn perform_with_progress(
         tree_mode,
         Vec::new(),
         None,
-        false,
+        PendingCheckout::Reject,
         None,
         |_, progress| report(progress),
     )
@@ -856,7 +862,7 @@ pub(crate) fn perform_with_enrichment(
         tree_mode,
         Vec::new(),
         None,
-        false,
+        PendingCheckout::Reject,
         Some(headers),
         |_, _| {},
     )
@@ -879,13 +885,13 @@ pub(crate) fn perform_with_enrichment_and_progress(
         tree_mode,
         Vec::new(),
         None,
-        false,
+        PendingCheckout::Reject,
         Some(headers),
         |_, progress| report(progress),
     )
 }
 
-pub(super) fn perform_allowing_pending_checkout_with_progress(
+pub(super) fn perform_finalizing_pending_checkout_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     edit: Edit,
@@ -901,7 +907,7 @@ pub(super) fn perform_allowing_pending_checkout_with_progress(
         tree_mode,
         Vec::new(),
         None,
-        true,
+        PendingCheckout::FinalizeEditedHead,
         None,
         |_, progress| report(progress),
     )
@@ -924,7 +930,7 @@ pub(crate) fn perform_reporting_rebased(
         tree_mode,
         Vec::new(),
         None,
-        false,
+        PendingCheckout::Reject,
         None,
         |id, _| {
             if let Some(id) = id {
@@ -952,14 +958,14 @@ pub(super) fn perform_resetting_index_paths_with_progress(
         tree_mode,
         Vec::new(),
         Some(paths),
-        false,
+        PendingCheckout::Reject,
         None,
         |_, progress| report(progress),
     )
     .map(|(perform, _)| perform)
 }
 
-pub(super) fn perform_resetting_index_paths_allowing_pending_checkout_with_progress(
+pub(super) fn perform_resetting_index_paths_finalizing_pending_checkout_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     edit: Edit,
@@ -976,7 +982,7 @@ pub(super) fn perform_resetting_index_paths_allowing_pending_checkout_with_progr
         tree_mode,
         Vec::new(),
         Some(paths),
-        true,
+        PendingCheckout::FinalizeEditedHead,
         None,
         |_, progress| report(progress),
     )
@@ -1000,7 +1006,7 @@ pub(super) fn perform_deleting_refs_with_progress(
         tree_mode,
         deletions,
         None,
-        false,
+        PendingCheckout::Reject,
         None,
         |_, progress| report(progress),
     )
@@ -1019,7 +1025,7 @@ fn perform_inner(
     tree_mode: Tree,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     reset_index_paths: Option<Vec<BString>>,
-    allow_pending_checkout: bool,
+    pending_checkout: PendingCheckout,
     enrichment_headers: Option<&crate::enrich::Headers>,
     mut report: impl FnMut(Option<ObjectId>, Progress),
 ) -> Result<(Perform, Option<crate::enrich::Enrichment>)> {
@@ -1079,7 +1085,12 @@ fn perform_inner(
         .collect();
     if !repeat && !checkout_path.is_empty() {
         let checkout = checkout.expect("a non-empty checkout path has a checkout");
-        let scan_from = if allow_pending_checkout && root == Some(checkout) {
+        let review_boundary =
+            (root == Some(checkout) && replacement.as_ref().is_some_and(super::review::is_review)).then_some(checkout);
+        let scan_from = if pending_checkout == PendingCheckout::FinalizeEditedHead
+            && root == Some(checkout)
+            && replacement.as_ref().is_some_and(is_pending)
+        {
             repo.find_commit(checkout)?
                 .decode()?
                 .into_owned()?
@@ -1090,10 +1101,7 @@ fn perform_inner(
             Some(checkout)
         };
         if let Some(id) = scan_from {
-            let review_boundary = (root == Some(checkout)
-                && replacement.as_ref().is_some_and(super::review::is_review))
-            .then_some(checkout);
-            reject_pending_checkout_path(&repo, graph, id, review_boundary)?;
+            reject_pending_checkout_path(&repo, id, review_boundary, |id| graph.is_in_edit_scope(id))?;
         }
     }
     validate(&repo, graph, &affected, removed, repeat, tree_mode)?;
@@ -1417,9 +1425,9 @@ pub(super) fn finish_review_with_progress(
     if !checkout_path.is_empty() {
         reject_pending_checkout_path(
             &repo,
-            graph,
             checkout.as_ref().expect("a non-empty checkout path has a checkout").0,
             None,
+            |id| graph.is_in_edit_scope(id),
         )?;
     }
     for id in review_ids.iter().chain(&natural_ids) {
@@ -1679,7 +1687,7 @@ pub(crate) fn perform_plan_with_progress(
         && let Some(head) = repo.head()?.id().map(gix::Id::detach)
         && plan.scope.contains(&head)
     {
-        reject_pending_checkout_path(&repo, graph, head, None)?;
+        reject_pending_checkout_path(&repo, head, None, |id| scope.contains(&id))?;
     }
     let mut eager = HashSet::new();
     let mut cursor = checkout_target;
@@ -2558,12 +2566,12 @@ fn validate(
 
 fn reject_pending_checkout_path(
     repo: &gix::Repository,
-    graph: &HistoryGraph,
     mut id: ObjectId,
     review_boundary: Option<ObjectId>,
+    is_in_scope: impl Fn(ObjectId) -> bool,
 ) -> Result<()> {
     let mut seen = HashSet::new();
-    while graph.is_stored(id) && seen.insert(id) {
+    while is_in_scope(id) && seen.insert(id) {
         let commit = repo.find_commit(id)?.decode()?.into_owned()?;
         if is_pending(&commit) {
             anyhow::bail!("the current checkout has a pending rebase; time-travel to HEAD before editing it");
@@ -3920,6 +3928,61 @@ mod tests {
         };
         assert!(err.to_string().contains("time-travel to HEAD"), "{err:#}");
         assert_eq!(gix_testtools::repository::snapshot(fixture.path())?, before);
+        Ok(())
+    }
+
+    #[test]
+    fn an_inferred_checkout_plan_rejects_pending_ancestry_in_its_scope() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let old_tip = repo.head_id()?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+
+        let mut pending = repo.find_commit(middle)?.decode()?.into_owned()?;
+        pending
+            .extra_headers
+            .push((ORIGINAL_PARENT.into(), base.to_string().into()));
+        let pending = repo.write_object(&pending)?.detach();
+        let mut tip = repo.find_commit(old_tip)?.decode()?.into_owned()?;
+        tip.parents = [pending].into_iter().collect();
+        let tip = repo.write_object(&tip)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(tip, "prepare pending checkout ancestry")?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+
+        let err = match perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![pending, tip],
+                steps: vec![
+                    PlanStep {
+                        parent: PlanParent::Existing(base),
+                        commit: PlanCommit::Pick(pending),
+                        squash: Vec::new(),
+                    },
+                    PlanStep {
+                        parent: PlanParent::Step(0),
+                        commit: PlanCommit::Pick(tip),
+                        squash: Vec::new(),
+                    },
+                ],
+                checkout: None,
+                expected_refs: capture_refs(&repo, &[pending, tip], &[tip])?,
+            },
+        ) {
+            Ok(_) => return Err("an inferred checkout must reject pending ancestry in its plan scope".into()),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("time-travel to HEAD"), "{err:#}");
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "pending-plan rejection leaves the repository unchanged"
+        );
         Ok(())
     }
 

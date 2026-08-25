@@ -18,7 +18,16 @@ pub fn perform(
     kind: Kind,
     selected_paths: Option<(&[PathChange], Option<ObjectId>)>,
 ) -> Result<Option<ObjectId>> {
-    Ok(perform_inner(repo, graph, kind, selected_paths, false, false, |_| {})?.and_then(|outcome| outcome.selected))
+    Ok(perform_inner(
+        repo,
+        graph,
+        kind,
+        selected_paths,
+        false,
+        rebase::PendingCheckout::Reject,
+        |_| {},
+    )?
+    .and_then(|outcome| outcome.selected))
 }
 
 pub(crate) fn perform_with_changes(
@@ -26,10 +35,10 @@ pub(crate) fn perform_with_changes(
     graph: &crate::history::HistoryGraph,
     kind: Kind,
     selected_paths: Option<(&[PathChange], Option<ObjectId>)>,
-    resolve_pending: bool,
+    pending_checkout: rebase::PendingCheckout,
     report: impl FnMut(rebase::Progress),
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, kind, selected_paths, false, resolve_pending, report)
+    perform_inner(repo, graph, kind, selected_paths, false, pending_checkout, report)
 }
 
 pub(crate) fn perform_reporting(
@@ -37,20 +46,37 @@ pub(crate) fn perform_reporting(
     graph: &crate::history::HistoryGraph,
     kind: Kind,
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, kind, None, false, false, |_| {})
+    perform_inner(repo, graph, kind, None, false, rebase::PendingCheckout::Reject, |_| {})
 }
 
 #[tracing::instrument(skip_all)]
 #[cfg(test)]
 pub fn amend_index(repo: gix::Repository, graph: &crate::history::HistoryGraph) -> Result<Option<ObjectId>> {
-    Ok(perform_inner(repo, graph, Kind::Amend, None, true, true, |_| {})?.and_then(|outcome| outcome.selected))
+    Ok(perform_inner(
+        repo,
+        graph,
+        Kind::Amend,
+        None,
+        true,
+        rebase::PendingCheckout::FinalizeEditedHead,
+        |_| {},
+    )?
+    .and_then(|outcome| outcome.selected))
 }
 
 pub(crate) fn amend_index_reporting(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, Kind::Amend, None, true, true, |_| {})
+    perform_inner(
+        repo,
+        graph,
+        Kind::Amend,
+        None,
+        true,
+        rebase::PendingCheckout::FinalizeEditedHead,
+        |_| {},
+    )
 }
 
 fn perform_inner(
@@ -59,7 +85,7 @@ fn perform_inner(
     kind: Kind,
     selected_paths: Option<(&[PathChange], Option<ObjectId>)>,
     index_only: bool,
-    resolve_pending: bool,
+    pending_checkout: rebase::PendingCheckout,
     mut report: impl FnMut(rebase::Progress),
 ) -> Result<Option<rebase::Outcome>> {
     let head = repo
@@ -145,14 +171,14 @@ fn perform_inner(
         rebase::Tree::LeaveAsIsAndMark
     };
     let performed = match selected_amend_path {
-        Some(path) if resolve_pending => {
+        Some(path) if pending_checkout == rebase::PendingCheckout::FinalizeEditedHead => {
             let mut paths = vec![path.path.clone()];
             if path.kind == ChangeKind::Renamed
                 && let Some(source) = &path.source
             {
                 paths.push(source.clone());
             }
-            rebase::perform_resetting_index_paths_allowing_pending_checkout_with_progress(
+            rebase::perform_resetting_index_paths_finalizing_pending_checkout_with_progress(
                 &repo,
                 graph,
                 edit,
@@ -179,14 +205,16 @@ fn perform_inner(
                 &mut report,
             )?
         }
-        _ if kind == Kind::Amend && resolve_pending => rebase::perform_allowing_pending_checkout_with_progress(
-            &repo,
-            graph,
-            edit,
-            signature,
-            tree_mode,
-            &mut report,
-        )?,
+        _ if kind == Kind::Amend && pending_checkout == rebase::PendingCheckout::FinalizeEditedHead => {
+            rebase::perform_finalizing_pending_checkout_with_progress(
+                &repo,
+                graph,
+                edit,
+                signature,
+                tree_mode,
+                &mut report,
+            )?
+        }
         _ => rebase::perform_with_progress(&repo, graph, edit, signature, tree_mode, &mut report)?,
     };
     Ok(Some(performed.complete()?))
@@ -511,8 +539,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn review_amend_does_not_cross_its_boundary_when_checking_pending_ancestry() -> gix_testtools::Result {
+    fn assert_review_amend_does_not_cross_pending_base(index_only: bool) -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let reviewed = repo.head_id()?.detach();
@@ -544,7 +571,12 @@ mod tests {
 
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
-        let amended = perform(repo, &graph, Kind::Amend, None)?.expect("staged review changes amend HEAD");
+        let amended = if index_only {
+            amend_index(repo, &graph)?
+        } else {
+            perform(repo, &graph, Kind::Amend, None)?
+        }
+        .expect("staged review changes amend HEAD");
         let repo = open(fixture.path())?;
         let amended_commit = repo.find_commit(amended)?.decode()?.into_owned()?;
         assert_eq!(
@@ -562,6 +594,16 @@ mod tests {
         );
         assert_eq!(git(fixture.path(), &["show", "HEAD:middle"])?, b"reviewed\n");
         Ok(())
+    }
+
+    #[test]
+    fn review_amend_does_not_cross_its_boundary_when_checking_pending_ancestry() -> gix_testtools::Result {
+        assert_review_amend_does_not_cross_pending_base(false)
+    }
+
+    #[test]
+    fn index_only_review_amend_does_not_cross_its_pending_base() -> gix_testtools::Result {
+        assert_review_amend_does_not_cross_pending_base(true)
     }
 
     #[test]

@@ -51,7 +51,7 @@ pub(crate) fn relocate_after_editor(
     hidden_revisions: &[std::ffi::OsString],
     change_id: gix::hash::ChangeId,
 ) -> Result<(crate::history::HistoryGraph, gix::ObjectId)> {
-    let graph = super::loaded_view_graph_with_hidden(repo, revisions, hidden_revisions)?;
+    let graph = super::loaded_explicit_view_graph(repo, revisions, hidden_revisions)?;
     let mut matches = Vec::new();
     for id in graph.stored_commit_ids() {
         if crate::change_id::for_commit(repo, id)? == change_id {
