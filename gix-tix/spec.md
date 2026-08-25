@@ -1207,18 +1207,29 @@ space first; changes blocks adapt within the remaining history width.
   stack-insert for the linear ancestry from the selected commit through `HEAD`,
   `a f` creates and travels to a standalone child of the selected commit, and
   `a h` attaches the remembered branch at detached `HEAD` when available.
-- `a Shift-P` is available whenever the current worktree has a valid symbolic
-  `refs/worktree/tix/pins/HEAD`, including while attached, and runs
-  `git push <remote> <branch>` for that pin's local branch. The remote follows
+- The active branch for network actions is the attached `HEAD` branch, or the
+  branch remembered by `refs/worktree/tix/pins/HEAD` while detached.
+- `a Shift-P` is available whenever there is an active branch and runs
+  `git push <remote> <branch>` for it. The remote follows
   Git's `branch.<name>.pushRemote`, `remote.pushDefault`, then
   `branch.<name>.remote` precedence, falling back to the sole remote, `origin`,
   or the literal `origin` when none is configured.
-- Push occupies the one user background-task slot while ordinary foreground
-  actions remain available. Its yellow footer label names the branch and remote;
-  completion clears the slot and refreshes references. Success uses a green
-  message, while launch or non-zero-exit failures use a red message containing
-  Git's captured diagnostic or exit status. The subprocess has closed standard
-  input and does not suspend the TUI.
+- In blocking-network builds, `a Shift-F` is available whenever a fetch remote
+  can be resolved, including at a detached `HEAD` without a remembered branch.
+  It runs a gix fetch using the active branch's fetch remote when available,
+  then the sole remote or `origin`. It uses that remote's configured fetch
+  refspecs and tag policy and permits credential helpers without terminal
+  prompting.
+- Push and fetch share one user background-task slot while ordinary foreground
+  actions remain available. Push keeps its yellow footer label. Fetch reserves
+  one progress row directly above the footer, with completed work in dark gray
+  and the remaining status background unchanged; notices and prefix popups stay
+  above it. Its monotonic phases allocate 0–5% to setup, 5–10% to connection and
+  authentication, 10–15% to refs and negotiation, 15–30% to remote enumeration,
+  counting, and compression, 30–75% to pack receipt and indexing, 75–90% to
+  delta resolution, and 90–95% to index and ref finalization. Completion clears
+  the slot and refreshes references. Success uses a green message and failure a
+  red one. Neither operation accepts terminal input or suspends the TUI.
 - Squash accepts any visible strict ancestor whose affected descendants contain no merges. With one eligible
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling

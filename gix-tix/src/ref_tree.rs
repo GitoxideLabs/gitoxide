@@ -1743,7 +1743,9 @@ mod tests {
             view_tips: vec![id(6), id(5)],
             hidden_tips: Vec::new(),
             pins: Vec::new(),
-            head_pin_branch: None,
+            active_branch: None,
+            #[cfg(feature = "blocking-network-client")]
+            fetch_remote: None,
             worktrees: Vec::new(),
         };
         let decorations = Decorations::from([
@@ -2199,7 +2201,9 @@ mod tests {
             view_tips: vec![id(1), id(2), id(3)],
             hidden_tips: Vec::new(),
             pins: Vec::new(),
-            head_pin_branch: None,
+            active_branch: None,
+            #[cfg(feature = "blocking-network-client")]
+            fetch_remote: None,
             worktrees: Vec::new(),
         };
         let decorations = HashMap::from([
