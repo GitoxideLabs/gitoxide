@@ -18,6 +18,10 @@ without trading responsiveness for metadata that is not visible.
   list occupies no more than half the terminal. Moving its cursor immediately
   paints the new selection, then rebinds the history to that worktree without
   changing repository state;
+  `PageUp` and `PageDown` move by the visible list height. `/` opens a
+  case-insensitive fuzzy search over worktree names; edits and navigation paint
+  and rebind the current match, `Enter` promotes it immediately, and `Escape`
+  cancels the search and restores its starting selection.
   `Tab` focuses history and `Escape` returns from root history to the list.
   `Enter` selects the worktree and promotes it to a normal full-screen history.
   Compact `Worktree`, `Status`, `Base ±`, and `Commits ↕` columns distinguish
