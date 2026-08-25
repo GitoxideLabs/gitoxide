@@ -1197,8 +1197,8 @@ space first; changes blocks adapt within the remaining history width.
   available. `a b` rebases an eligible hidden base,
   `a u` rebases it onto the newer hidden branch tip when available, `a r` starts
   or finishes a review, `a s` squashes the selected commit, `a z` stashes or
-  restores changes at `@`, `a y` copy-inserts
-  current `HEAD` above the selected commit, `a m` move-inserts it, `a t` starts
+  restores changes at `@`, `a y` starts copy-insert from the selected commit,
+  `a m` starts move-insert from selected `HEAD`, `a t` starts
   stack-insert for the linear ancestry from the selected commit through `HEAD`,
   `a f` creates and travels to a standalone child of the selected commit, and
   `a h` attaches the remembered branch at detached `HEAD` when available.
@@ -1206,8 +1206,10 @@ space first; changes blocks adapt within the remaining history width.
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
   forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
-- Copy-insert requires a non-root, single-parent source. `a y` copies current
-  `HEAD`; `tix copy-insert C I` accepts any resolvable source `C`. It inserts
+- Copy-insert requires a non-root, single-parent selected source. `a y` limits
+  navigation to valid insertion targets; Enter copies the source above the
+  selected target and Escape cancels. `tix copy-insert C I` accepts any
+  resolvable source `C`. It inserts
   another occurrence of its change above the target without removing the source
   occurrence, including when the target is the source's current parent. A copy
   of an active review commit is ordinary and does not share its review resources.
@@ -1223,7 +1225,8 @@ space first; changes blocks adapt within the remaining history width.
   same progress, conflict, checkout, and undo behavior as `a y`. Other text,
   ambiguous or missing IDs, non-commit objects, and unavailable targets produce
   an attention message without changing the repository.
-- Move-insert requires a non-root, single-parent `HEAD`. It removes `HEAD` from
+- Move-insert requires selecting a non-root, single-parent `HEAD`, then limits
+  navigation to valid insertion targets; Enter applies and Escape cancels. It removes `HEAD` from
   its old position, reconnects its former children to its parent, inserts its
   rewritten change above the selected target, and reparents every former direct
   child of the target above it. The target may be an ancestor, descendant, or in

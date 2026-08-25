@@ -589,6 +589,7 @@ pub(crate) struct App {
     review_tip: Option<ObjectId>,
     review_return: Option<(ObjectId, ObjectId)>,
     squash_source: Option<ObjectId>,
+    insert_selection: Option<(ObjectId, bool)>,
     stack_insert_base: Option<ObjectId>,
     reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
@@ -698,6 +699,7 @@ impl App {
             review_tip: None,
             review_return: None,
             squash_source: None,
+            insert_selection: None,
             stack_insert_base: None,
             reachable_rows: None,
             copy_feedback: None,
@@ -839,6 +841,11 @@ impl App {
             Some("review base · j/k select ancestor · <enter> start · Esc cancel".into())
         } else if self.squash_selection_active() {
             Some("squash target · j/k select ancestor · <enter> squash · Esc cancel".into())
+        } else if let Some((_, copy)) = self.insert_selection {
+            Some(format!(
+                "{} target · j/k select insertion point · <enter> insert · Esc cancel",
+                if copy { "copy-insert" } else { "move-insert" }
+            ))
         } else if self.stack_insert_base.is_some() {
             Some("stack-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
         } else {
@@ -1971,6 +1978,24 @@ impl App {
                 self.clear_reachability_selection();
                 return vec![Effect::Squash { source, target }];
             }
+            Action::OpenDiff if self.insert_selection.is_some() => {
+                let (source, copy) = self.insert_selection.expect("insert target selection has a source");
+                let Some(target) = self
+                    .selected
+                    .filter(|index| self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
+                    .and_then(|index| self.rows.get(index))
+                    .map(|row| row.id)
+                else {
+                    return Vec::new();
+                };
+                self.clear_reachability_selection();
+                return vec![Effect::Insert {
+                    source,
+                    base: source,
+                    target,
+                    copy,
+                }];
+            }
             Action::OpenDiff if self.stack_insert_base.is_some() => {
                 let source = self.worktree_head.expect("stack insertion requires HEAD");
                 let base = self.stack_insert_base.expect("stack insertion has a base");
@@ -2076,25 +2101,13 @@ impl App {
                 }
             }
             Action::CopyInsert if self.can_copy_insert() => {
-                let source = self.worktree_head.expect("copy-insert availability requires HEAD");
-                return vec![Effect::Insert {
-                    source,
-                    base: source,
-                    target: self.rows[self.selected.expect("copy-insert requires a selection")].id,
-                    copy: true,
-                }];
+                self.begin_insert_selection(true);
             }
             Action::PasteInsert { source, target } => {
                 return vec![Effect::PasteInsert { source, target }];
             }
             Action::MoveInsert if self.can_move_insert() => {
-                let source = self.worktree_head.expect("move-insert availability requires HEAD");
-                return vec![Effect::Insert {
-                    source,
-                    base: source,
-                    target: self.rows[self.selected.expect("move-insert requires a selection")].id,
-                    copy: false,
-                }];
+                self.begin_insert_selection(false);
             }
             Action::StackInsert => {
                 if let Some((source, base, base_parent, stack)) = self.stack_insert() {
@@ -2197,6 +2210,7 @@ impl App {
                 if self.review_tip.is_some()
                     || self.review_return.is_some()
                     || self.squash_source.is_some()
+                    || self.insert_selection.is_some()
                     || self.stack_insert_base.is_some() =>
             {
                 self.clear_reachability_selection();
@@ -2382,7 +2396,7 @@ impl App {
     ) -> Option<Vec<SharedCommitRow>> {
         self.topological_navigation = None;
         self.set_view_tips(view_tips);
-        if self.stack_insert_base.is_some() {
+        if self.insert_selection.is_some() || self.stack_insert_base.is_some() {
             self.clear_reachability_selection();
         }
         let previous_order: HashMap<_, _> = self
@@ -2656,6 +2670,7 @@ impl App {
         self.review_tip = None;
         self.review_return = None;
         self.squash_source = None;
+        self.insert_selection = None;
         self.stack_insert_base = None;
         self.reachability_anchor = None;
         self.reachable_rows = None;
@@ -3028,27 +3043,53 @@ impl App {
         if self.state != State::Complete
             || self.changes_focus.is_some()
             || self.deferred_history_state.unwrap_or(self.state) != State::Complete
+            || self.reachable_rows.is_some()
         {
             return false;
         }
-        let Some(source) = self
-            .worktree_head
-            .and_then(|head| self.rows.iter().find(|row| row.id == head))
-        else {
-            return false;
-        };
-        let Some((target_index, target)) = self
+        let Some((source_index, source)) = self
             .selected
             .and_then(|index| self.rows.get(index).map(|row| (index, row)))
         else {
             return false;
         };
-        source.parent_ids.len() == 1
-            && source.id != target.id
-            && (copy || source.parent_ids.first().copied() != Some(target.id))
-            && !self.is_row_hidden(target_index)
-            && (copy || !self.known_merge_descendants.contains(&source.id))
-            && !self.known_merge_descendants.contains(&target.id)
+        !self.is_row_hidden(source_index)
+            && source.parent_ids.len() == 1
+            && (copy || Some(source.id) == self.worktree_head && !self.known_merge_descendants.contains(&source.id))
+            && self
+                .rows
+                .iter()
+                .enumerate()
+                .any(|(index, _)| self.is_insert_target(index, source.id, copy))
+    }
+
+    fn is_insert_target(&self, index: usize, source: ObjectId, copy: bool) -> bool {
+        let Some(source) = self.all_rows.get(&source) else {
+            return false;
+        };
+        self.rows.get(index).is_some_and(|target| {
+            source.id != target.id
+                && (copy || source.parent_ids.first().copied() != Some(target.id))
+                && !self.is_row_hidden(index)
+                && !self.known_merge_descendants.contains(&target.id)
+        })
+    }
+
+    fn begin_insert_selection(&mut self, copy: bool) {
+        let source = self
+            .selected
+            .and_then(|index| self.rows.get(index))
+            .map(|row| row.id)
+            .expect("insert availability requires a selected source");
+        let reachable = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, _)| self.is_insert_target(index, source, copy))
+            .collect();
+        self.insert_selection = Some((source, copy));
+        self.reachable_rows = Some(reachable);
+        self.ensure_visible();
     }
 
     pub(crate) fn can_stack_insert(&self) -> bool {
@@ -5203,7 +5244,7 @@ mod tests {
     }
 
     #[test]
-    fn single_commit_inserts_use_current_head_and_the_selected_target() {
+    fn single_commit_inserts_select_the_source_before_the_target() {
         let mut app = App::new(10);
         app.extend_commits(vec![
             row_with_parents(5, &[4]),
@@ -5217,18 +5258,39 @@ mod tests {
         app.selected = app.rows.iter().position(|row| row.id == id(3));
 
         assert!(app.can_copy_insert());
-        assert!(app.can_move_insert());
+        assert!(!app.can_move_insert(), "only HEAD can be moved");
+        assert!(app.update(Action::CopyInsert).is_empty());
         assert_eq!(
-            app.update(Action::CopyInsert),
+            app.notice().map(|notice| notice.text),
+            Some("copy-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
+        );
+        app.select_commit(id(2));
+        assert_eq!(
+            app.update(Action::OpenDiff),
             vec![Effect::Insert {
-                source: id(5),
-                base: id(5),
-                target: id(3),
+                source: id(3),
+                base: id(3),
+                target: id(2),
                 copy: true,
             }]
         );
+
+        app.select_commit(id(5));
+        assert!(app.can_copy_insert());
+        assert!(app.can_move_insert());
+        assert!(app.update(Action::MoveInsert).is_empty());
         assert_eq!(
-            app.update(Action::MoveInsert),
+            app.notice().map(|notice| notice.text),
+            Some("move-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
+        );
+        app.update(Action::MoveDown);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(3)),
+            "move-insert skips the source's current parent"
+        );
+        assert_eq!(
+            app.update(Action::OpenDiff),
             vec![Effect::Insert {
                 source: id(5),
                 base: id(5),
@@ -5237,18 +5299,16 @@ mod tests {
             }]
         );
 
-        app.selected = app.rows.iter().position(|row| row.id == id(4));
-        assert!(
-            app.can_copy_insert(),
-            "copying directly above the current parent adds another occurrence"
+        app.select_commit(id(5));
+        app.update(Action::CopyInsert);
+        app.update(Action::MoveDown);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(4)),
+            "copy-insert permits the source's parent as a target"
         );
-        assert!(
-            !app.can_move_insert(),
-            "the current parent is already directly below HEAD"
-        );
-        app.set_known_merge_descendants(HashSet::from([id(3)]));
-        app.selected = app.rows.iter().position(|row| row.id == id(3));
-        assert!(!app.can_move_insert(), "a target with an affected merge is rejected");
+        app.update(Action::Cancel);
+        assert!(app.notice().is_none(), "Escape cancels target selection");
 
         let mut review_head = row_with_parents(5, &[4]);
         review_head.is_review = true;
@@ -5262,9 +5322,21 @@ mod tests {
         ]);
         review_app.set_worktree_head(Some(id(5)), false);
         complete(&mut review_app);
-        review_app.selected = review_app.rows.iter().position(|row| row.id == id(3));
-        assert!(review_app.can_copy_insert(), "anything movable can also be copied");
-        assert!(review_app.can_move_insert(), "review commits can still be moved");
+        review_app.select_commit(id(3));
+        assert!(review_app.can_copy_insert(), "any single-parent commit can be copied");
+        assert!(!review_app.can_move_insert(), "a non-HEAD source cannot be moved");
+        review_app.update(Action::CopyInsert);
+        review_app.select_commit(id(5));
+        assert_eq!(
+            review_app.update(Action::OpenDiff),
+            vec![Effect::Insert {
+                source: id(3),
+                base: id(3),
+                target: id(5),
+                copy: true,
+            }],
+            "the selected source is copied onto the subsequently selected review HEAD"
+        );
 
         let mut merge_target = App::new(10);
         merge_target.extend_commits(vec![
@@ -5276,7 +5348,7 @@ mod tests {
         ]);
         merge_target.set_worktree_head(Some(id(5)), false);
         complete(&mut merge_target);
-        merge_target.selected = merge_target.rows.iter().position(|row| row.id == id(3));
+        merge_target.select_commit(id(5));
         assert!(merge_target.can_move_insert(), "an unchanged merge target is allowed");
     }
 
@@ -5407,44 +5479,46 @@ mod tests {
     }
 
     #[test]
-    fn refresh_cancels_stack_insert_selection_before_rows_change() {
-        let mut app = App::new(10);
-        app.extend_commits(vec![
-            row_with_parents(5, &[4]),
-            row_with_parents(4, &[3]),
-            row_with_parents(3, &[2]),
-            row_with_parents(2, &[1]),
-            row(1),
-        ]);
-        app.set_worktree_head(Some(id(5)), false);
-        complete(&mut app);
-        app.select_commit(id(3));
-        app.update(Action::StackInsert);
-        assert!(app.stack_insert_base.is_some(), "target selection is active");
+    fn refresh_cancels_insert_target_selections_before_rows_change() {
+        for action in [Action::CopyInsert, Action::StackInsert] {
+            let mut app = App::new(10);
+            app.extend_commits(vec![
+                row_with_parents(5, &[4]),
+                row_with_parents(4, &[3]),
+                row_with_parents(3, &[2]),
+                row_with_parents(2, &[1]),
+                row(1),
+            ]);
+            app.set_worktree_head(Some(id(5)), false);
+            complete(&mut app);
+            app.select_commit(id(3));
+            app.update(action);
+            assert!(app.reachable_rows.is_some(), "target selection is active");
 
-        let rows = app
-            .start_refresh(vec![row_with_parents(6, &[5])].into(), &[id(6)], &[], false)
-            .expect("the changed history starts lane computation");
-        assert!(
-            app.stack_insert_base.is_none(),
-            "refresh cancels the index-based selection"
-        );
-        assert!(
-            app.reachable_rows.is_none(),
-            "the stale row mask is discarded immediately"
-        );
-        assert!(app.notice().is_none(), "the cancelled selection no longer prompts");
+            let rows = app
+                .start_refresh(vec![row_with_parents(6, &[5])].into(), &[id(6)], &[], false)
+                .expect("the changed history starts lane computation");
+            assert!(
+                app.insert_selection.is_none() && app.stack_insert_base.is_none(),
+                "refresh cancels the index-based selection"
+            );
+            assert!(
+                app.reachable_rows.is_none(),
+                "the stale row mask is discarded immediately"
+            );
+            assert!(app.notice().is_none(), "the cancelled selection no longer prompts");
 
-        let (rows, graph, time) = compute_lanes(rows);
-        app.finish_lane_computation(rows, graph, time);
-        assert_eq!(app.rows.first().map(|row| row.id), Some(id(6)));
-        assert!(
-            app.rows
-                .iter()
-                .enumerate()
-                .all(|(index, _)| app.is_row_reachable(index)),
-            "the replacement projection has no stale eligibility mask"
-        );
+            let (rows, graph, time) = compute_lanes(rows);
+            app.finish_lane_computation(rows, graph, time);
+            assert_eq!(app.rows.first().map(|row| row.id), Some(id(6)));
+            assert!(
+                app.rows
+                    .iter()
+                    .enumerate()
+                    .all(|(index, _)| app.is_row_reachable(index)),
+                "the replacement projection has no stale eligibility mask"
+            );
+        }
     }
 
     #[test]
@@ -6186,13 +6260,15 @@ mod tests {
             );
         }
 
-        app.select_commit(id(2));
+        app.select_commit(id(6));
         assert!(
             app.can_copy_insert(),
-            "a retained merge base is an ordinary insertion target"
+            "a retained graph tip is an ordinary insertion source"
         );
+        assert!(app.update(Action::CopyInsert).is_empty());
+        app.select_commit(id(2));
         assert_eq!(
-            app.update(Action::CopyInsert),
+            app.update(Action::OpenDiff),
             vec![Effect::Insert {
                 source: id(6),
                 base: id(6),
