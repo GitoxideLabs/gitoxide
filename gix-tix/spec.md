@@ -953,8 +953,8 @@ space first; changes blocks adapt within the remaining history width.
 - Review refs are resources, not traversal tips; pins alone retain history. They
   remain visible in every ref mode: one active ref is shown as `review`, while
   multiple refs are shown as `review:N`. Review
-  commits show a filled diamond as the first resource marker, before pin and stash
-  markers, while retaining the normal signature disc or `@` at `HEAD`. Ordinary
+  commits replace the normal signature disc with a filled diamond in the graph;
+  `@` still takes precedence at `HEAD`. Ordinary
   edits preserve the review header and otherwise keep
   their normal signing and lazy-rebase behavior.
 - At a checked-out review commit, amend follows the ordinary index-first,
