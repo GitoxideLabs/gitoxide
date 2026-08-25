@@ -1098,7 +1098,8 @@ space first; changes blocks adapt within the remaining history width.
   interpreted with the opposite command order.
 - Standalone `(ref, ref)` lines place direct mutable refs at the following fork
   separator or command result below them. Multiple consecutive lines share that
-  destination.
+  destination. When multiple stacks share a fork destination, its mutable refs
+  appear once in the generated document.
   Commit command metadata omits ref decorations because these lines are their
   sole editable representation.
   Existing displayed names may be moved or removed, and new unqualified names
