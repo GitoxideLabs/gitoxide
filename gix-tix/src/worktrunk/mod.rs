@@ -24,6 +24,8 @@ use ratatui::{
     widgets::{Clear, Paragraph},
 };
 
+use crate::menu::{Item as MenuItem, Menu};
+
 /// Information that takes no repository traversal to obtain.
 #[derive(Debug)]
 pub(crate) struct Row {
@@ -93,6 +95,8 @@ struct Update {
 pub(crate) struct Worktrees {
     rows: Vec<Row>,
     selected: usize,
+    search_origin: Option<usize>,
+    search: Menu<usize>,
     updates: mpsc::Receiver<Update>,
     cancel: Arc<AtomicBool>,
     workers: Vec<thread::JoinHandle<()>>,
@@ -105,6 +109,8 @@ impl Worktrees {
         Ok(Worktrees {
             rows: inventory(repository)?,
             selected: 0,
+            search_origin: None,
+            search: Menu::default(),
             updates,
             cancel: Arc::new(AtomicBool::new(false)),
             workers: Vec::new(),
@@ -116,11 +122,15 @@ impl Worktrees {
     }
 
     pub(crate) fn selected(&self) -> Option<&Row> {
-        self.rows.get(self.selected)
+        self.selected_index().and_then(|index| self.rows.get(index))
     }
 
     pub(crate) fn selected_index(&self) -> Option<usize> {
-        (!self.rows.is_empty()).then_some(self.selected)
+        if self.search.is_open() {
+            self.search.selected_index()
+        } else {
+            (!self.rows.is_empty()).then_some(self.selected)
+        }
     }
 
     pub(crate) fn selected_path(&self) -> Option<&Path> {
@@ -131,6 +141,107 @@ impl Worktrees {
         if !self.rows.is_empty() {
             self.selected = index.min(self.rows.len() - 1);
         }
+    }
+
+    pub(crate) fn search_is_open(&self) -> bool {
+        self.search.is_open()
+    }
+
+    pub(crate) fn search_query(&self) -> &str {
+        self.search.query()
+    }
+
+    pub(crate) fn search_cursor(&self) -> usize {
+        self.search.cursor()
+    }
+
+    pub(crate) fn open_search(&mut self) {
+        self.search_origin = Some(self.selected);
+        let items = menu_items(&self.rows);
+        self.search.open_selected(&items, Some(&self.selected));
+    }
+
+    pub(crate) fn cancel_search(&mut self) -> Option<PathBuf> {
+        let origin = self.search_origin.take()?;
+        self.search.close();
+        if self.selected == origin {
+            return None;
+        }
+        self.selected = origin;
+        self.selected_path().map(ToOwned::to_owned)
+    }
+
+    pub(crate) fn cancel_search_needs_rebind(&self) -> bool {
+        self.search_origin.is_some_and(|origin| origin != self.selected)
+    }
+
+    pub(crate) fn submit_search(&mut self) -> Option<PathBuf> {
+        let items = menu_items(&self.rows);
+        let selected = self.search.submit_selected(&items)?;
+        self.search_origin = None;
+        self.selected = selected;
+        self.selected_path().map(ToOwned::to_owned)
+    }
+
+    pub(crate) fn edit_search(&mut self, input: SearchInput) {
+        let items = menu_items(&self.rows);
+        let had_query = !self.search.query().is_empty();
+        match input {
+            SearchInput::Insert(ch) => self.search.insert(ch, &items),
+            SearchInput::Paste(text) => self.search.paste(&text, &items),
+            SearchInput::Left => self.search.left(),
+            SearchInput::Right => self.search.right(),
+            SearchInput::Home => self.search.home(),
+            SearchInput::End => self.search.end(),
+            SearchInput::Backspace => self.search.backspace(&items),
+            SearchInput::Delete => self.search.delete(&items),
+            SearchInput::Up(amount) => self.search.up_by(amount, &items),
+            SearchInput::Down(amount) => self.search.down_by(amount, &items),
+        }
+        if had_query && self.search.query().is_empty() {
+            self.search
+                .open_selected(&items, self.search_origin.as_ref().or(Some(&self.selected)));
+        }
+    }
+
+    pub(crate) fn preview_search_selection(&mut self) -> Option<PathBuf> {
+        let selected = self.search.selected_index()?;
+        if selected == self.selected {
+            return None;
+        }
+        self.selected = selected;
+        self.rows.get(selected).map(|row| row.path.clone())
+    }
+
+    pub(crate) fn search_selection_needs_preview(&self) -> bool {
+        self.search
+            .selected_index()
+            .is_some_and(|selected| selected != self.selected)
+    }
+
+    pub(crate) fn display_row_count(&self) -> usize {
+        if self.search.is_open() {
+            self.search.matching_indices().len().max(1)
+        } else {
+            self.rows.len()
+        }
+    }
+
+    fn visible_indices(&self, visible: usize) -> Vec<usize> {
+        let indices: Vec<_> = if self.search.is_open() {
+            self.search.matching_indices().to_vec()
+        } else {
+            (0..self.rows.len()).collect()
+        };
+        let selected = if self.search.is_open() {
+            self.search.selected_match().unwrap_or_default()
+        } else {
+            self.selected
+        };
+        let start = selected
+            .saturating_sub(visible / 2)
+            .min(indices.len().saturating_sub(visible));
+        indices.into_iter().skip(start).take(visible).collect()
     }
 
     /// Apply all currently available worker messages without blocking.
@@ -215,6 +326,27 @@ impl Worktrees {
             }));
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum SearchInput {
+    Insert(char),
+    Paste(String),
+    Left,
+    Right,
+    Home,
+    End,
+    Backspace,
+    Delete,
+    Up(usize),
+    Down(usize),
+}
+
+fn menu_items(rows: &[Row]) -> Vec<MenuItem<'_, usize>> {
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| MenuItem::new(&row.label, index))
+        .collect()
 }
 
 impl Drop for Worktrees {
@@ -654,26 +786,30 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
         return;
     }
     frame.render_widget(Clear, area);
-    let help = worktrees
-        .selected()
-        .and_then(|row| match &row.state {
-            LoadState::Error(err) => Some((format!(" error: {err}"), Color::Red)),
-            LoadState::Loading | LoadState::Ready => None,
-        })
-        .unwrap_or_else(|| {
-            if focused {
-                (
-                    " worktrees  j/k select  PgUp/PgDn page  / search  enter switch  tab history".into(),
-                    Color::Cyan,
-                )
-            } else {
-                (" worktrees  esc return".into(), Color::DarkGray)
-            }
-        });
-    let mut lines = vec![Line::from(Span::styled(
-        help.0,
-        Style::default().fg(help.1).add_modifier(Modifier::BOLD),
-    ))];
+    let mut lines = if worktrees.search_is_open() {
+        vec![search_line(worktrees, focused)]
+    } else {
+        let help = worktrees
+            .selected()
+            .and_then(|row| match &row.state {
+                LoadState::Error(err) => Some((format!(" error: {err}"), Color::Red)),
+                LoadState::Loading | LoadState::Ready => None,
+            })
+            .unwrap_or_else(|| {
+                if focused {
+                    (
+                        " worktrees  j/k select  PgUp/PgDn page  / search  enter switch  tab history".into(),
+                        Color::Cyan,
+                    )
+                } else {
+                    (" worktrees  esc return".into(), Color::DarkGray)
+                }
+            });
+        vec![Line::from(Span::styled(
+            help.0,
+            Style::default().fg(help.1).add_modifier(Modifier::BOLD),
+        ))]
+    };
     let status_width = Line::raw("Status").width();
     let base_width = worktrees
         .rows()
@@ -715,10 +851,15 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
     )));
     let visible = usize::from(area.height.saturating_sub(2));
     let selected = worktrees.selected_index().unwrap_or_default();
-    let start = selected
-        .saturating_sub(visible / 2)
-        .min(worktrees.rows().len().saturating_sub(visible));
-    for (index, row) in worktrees.rows().iter().enumerate().skip(start).take(visible) {
+    let visible_indices = worktrees.visible_indices(visible);
+    if visible_indices.is_empty() && visible > 0 {
+        lines.push(Line::from(Span::styled(
+            "   no matching worktrees",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    for index in visible_indices {
+        let row = &worktrees.rows()[index];
         let mut text = format!(
             "{}{} ",
             if index == selected { '>' } else { ' ' },
@@ -765,6 +906,24 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
         lines.push(Line::styled(text, style));
     }
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn search_line(worktrees: &Worktrees, focused: bool) -> Line<'static> {
+    let query = worktrees.search_query();
+    let cursor = worktrees.search_cursor();
+    let before: String = query.chars().take(cursor).collect();
+    let current = query.chars().nth(cursor);
+    let after: String = query.chars().skip(cursor + usize::from(current.is_some())).collect();
+    let color = if focused { Color::Cyan } else { Color::DarkGray };
+    Line::from(vec![
+        Span::styled("/ ", Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::raw(before),
+        Span::styled(
+            current.map_or_else(|| " ".into(), |ch| ch.to_string()),
+            Style::default().add_modifier(Modifier::REVERSED),
+        ),
+        Span::raw(after),
+    ])
 }
 
 fn push_cell(line: &mut String, value: &str, width: usize, truncate_from_left: bool) {
@@ -877,6 +1036,8 @@ mod tests {
         Worktrees {
             rows,
             selected: 0,
+            search_origin: None,
+            search: Menu::default(),
             updates,
             cancel: Arc::new(AtomicBool::default()),
             workers: Vec::new(),
@@ -1112,6 +1273,60 @@ mod tests {
         assert_eq!(rendered_line(&terminal, 1), "   Worktree    Status  Base ±  Commits ↕");
         assert_eq!(rendered_line(&terminal, 2), ">@ …long-name                           ");
         assert_eq!(truncate_left("工作树-überlang", 6), "…rlang");
+        Ok(())
+    }
+
+    #[test]
+    fn picker_search_maps_filtered_positions_to_stable_worktrees() -> gix_testtools::Result {
+        let mut worktrees = test_worktrees(
+            ["alpha", "beta", "gamma"]
+                .into_iter()
+                .map(|label| test_row(label, LoadState::Ready))
+                .collect(),
+        );
+        worktrees.open_search();
+        worktrees.edit_search(SearchInput::Down(1));
+        assert_eq!(
+            worktrees.selected_path(),
+            Some(Path::new("/worktrees/beta")),
+            "an empty query still permits result navigation"
+        );
+        worktrees.edit_search(SearchInput::Backspace);
+        assert_eq!(
+            worktrees.selected_path(),
+            Some(Path::new("/worktrees/beta")),
+            "editing an already-empty query retains its candidate"
+        );
+        worktrees.cancel_search();
+
+        worktrees.open_search();
+        worktrees.edit_search(SearchInput::Paste("aa".into()));
+        assert_eq!(worktrees.visible_indices(10), [0, 2]);
+        assert_eq!(worktrees.selected_path(), Some(Path::new("/worktrees/alpha")));
+
+        worktrees.edit_search(SearchInput::Down(10));
+        assert_eq!(
+            worktrees.preview_search_selection(),
+            Some(PathBuf::from("/worktrees/gamma")),
+            "filtered navigation maps through the inventory instead of using its visible offset"
+        );
+        assert_eq!(worktrees.cancel_search(), Some(PathBuf::from("/worktrees/alpha")));
+        assert_eq!(worktrees.selected_path(), Some(Path::new("/worktrees/alpha")));
+
+        worktrees.open_search();
+        worktrees.edit_search(SearchInput::Paste("zzz".into()));
+        assert_eq!(worktrees.selected_index(), None);
+        assert_eq!(
+            worktrees.display_row_count(),
+            1,
+            "an empty-result message retains one row"
+        );
+        assert_eq!(worktrees.submit_search(), None);
+        assert!(worktrees.search_is_open(), "an empty search cannot be submitted");
+        let mut terminal = Terminal::new(TestBackend::new(50, 3))?;
+        terminal.draw(|frame| draw(frame, frame.area(), &worktrees, true))?;
+        assert!(rendered_line(&terminal, 0).starts_with("/ zzz "));
+        assert!(rendered_line(&terminal, 2).starts_with("   no matching worktrees"));
         Ok(())
     }
 

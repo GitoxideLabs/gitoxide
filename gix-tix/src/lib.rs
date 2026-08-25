@@ -1074,13 +1074,45 @@ fn is_key_press(event: &TerminalEvent) -> bool {
     matches!(event, TerminalEvent::Key(key) if key.kind != KeyEventKind::Release)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum WorktrunkInput {
     Cancel { force: bool },
+    CancelSearch,
     FocusHistory,
     Refresh,
+    Search(worktrunk::SearchInput),
+    StartSearch,
     Select(usize),
     Promote,
+    SubmitSearch,
+}
+
+fn worktrunk_search_input(key: KeyEvent, page: usize) -> Option<WorktrunkInput> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(WorktrunkInput::Cancel { force: true })
+        }
+        KeyCode::Esc => Some(WorktrunkInput::CancelSearch),
+        KeyCode::Enter => Some(WorktrunkInput::SubmitSearch),
+        KeyCode::Up => Some(WorktrunkInput::Search(worktrunk::SearchInput::Up(1))),
+        KeyCode::Down => Some(WorktrunkInput::Search(worktrunk::SearchInput::Down(1))),
+        KeyCode::PageUp => Some(WorktrunkInput::Search(worktrunk::SearchInput::Up(page.max(1)))),
+        KeyCode::PageDown => Some(WorktrunkInput::Search(worktrunk::SearchInput::Down(page.max(1)))),
+        KeyCode::Left => Some(WorktrunkInput::Search(worktrunk::SearchInput::Left)),
+        KeyCode::Right => Some(WorktrunkInput::Search(worktrunk::SearchInput::Right)),
+        KeyCode::Home => Some(WorktrunkInput::Search(worktrunk::SearchInput::Home)),
+        KeyCode::End => Some(WorktrunkInput::Search(worktrunk::SearchInput::End)),
+        KeyCode::Backspace => Some(WorktrunkInput::Search(worktrunk::SearchInput::Backspace)),
+        KeyCode::Delete => Some(WorktrunkInput::Search(worktrunk::SearchInput::Delete)),
+        KeyCode::Char('/') if key.kind == KeyEventKind::Repeat => None,
+        KeyCode::Char(ch) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            Some(WorktrunkInput::Search(worktrunk::SearchInput::Insert(ch)))
+        }
+        _ => None,
+    }
 }
 
 fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> Option<WorktrunkInput> {
@@ -1096,6 +1128,9 @@ fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> O
             Some(WorktrunkInput::Cancel { force: false })
         }
         KeyCode::Esc => Some(WorktrunkInput::Cancel { force: false }),
+        KeyCode::Char('/') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            Some(WorktrunkInput::StartSearch)
+        }
         KeyCode::Tab => Some(WorktrunkInput::FocusHistory),
         KeyCode::Enter => Some(WorktrunkInput::Promote),
         KeyCode::Char('r' | 'R') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
@@ -2028,16 +2063,23 @@ fn event_loop(
             let input = match &terminal_event {
                 TerminalEvent::Key(key) => {
                     let picker = picker.as_ref().expect("picker presence was checked");
-                    let list_rows = worktrunk::areas(terminal.get_frame().area(), picker.rows().len())[0]
+                    let list_rows = worktrunk::areas(terminal.get_frame().area(), picker.display_row_count())[0]
                         .height
-                        .saturating_sub(1)
+                        .saturating_sub(2)
                         .into();
-                    worktrunk_input(
-                        *key,
-                        picker.selected_index().unwrap_or_default(),
-                        picker.rows().len(),
-                        list_rows,
-                    )
+                    if picker.search_is_open() {
+                        worktrunk_search_input(*key, list_rows)
+                    } else {
+                        worktrunk_input(
+                            *key,
+                            picker.selected_index().unwrap_or_default(),
+                            picker.rows().len(),
+                            list_rows,
+                        )
+                    }
+                }
+                TerminalEvent::Paste(text) if picker.as_ref().is_some_and(|picker| picker.search_is_open()) => {
+                    Some(WorktrunkInput::Search(worktrunk::SearchInput::Paste(text.clone())))
                 }
                 TerminalEvent::FocusLost | TerminalEvent::FocusGained | TerminalEvent::Resize(_, _) => None,
                 TerminalEvent::Mouse(_) | TerminalEvent::Paste(_) => {
@@ -2053,6 +2095,7 @@ fn event_loop(
                     || pending_todo_rebase_plan.is_some()
                     || pending_conflict_resolution.is_some()
                     || app.has_rebase_conflict();
+                let picker = picker.as_deref_mut().expect("picker presence was checked");
                 match input {
                     WorktrunkInput::Cancel { force } if force || background_task.is_none() => {
                         cancelled.store(true, Ordering::Relaxed);
@@ -2061,10 +2104,29 @@ fn event_loop(
                     WorktrunkInput::Cancel { .. } => {
                         app.leave_attention("background task is still running; use Ctrl-C to quit");
                     }
+                    WorktrunkInput::CancelSearch => {
+                        if switching_blocked && picker.cancel_search_needs_rebind() {
+                            app.leave_attention("finish the background task or conflict before switching worktrees");
+                        } else {
+                            pending_worktree_rebind = picker.cancel_search();
+                        }
+                    }
                     WorktrunkInput::FocusHistory => *picker_focused = false,
-                    WorktrunkInput::Refresh => picker.as_deref_mut().expect("picker presence was checked").refresh(),
+                    WorktrunkInput::Refresh => picker.refresh(),
+                    WorktrunkInput::Search(input) => {
+                        picker.edit_search(input);
+                        if picker.search_selection_needs_preview() {
+                            if switching_blocked {
+                                app.leave_attention(
+                                    "finish the background task or conflict before switching worktrees",
+                                );
+                            } else {
+                                pending_worktree_rebind = picker.preview_search_selection();
+                            }
+                        }
+                    }
+                    WorktrunkInput::StartSearch => picker.open_search(),
                     WorktrunkInput::Select(index) => {
-                        let picker = picker.as_deref_mut().expect("picker presence was checked");
                         if picker.selected_index() != Some(index) {
                             if switching_blocked {
                                 app.leave_attention(
@@ -2080,13 +2142,25 @@ fn event_loop(
                             }
                         }
                     }
+                    WorktrunkInput::SubmitSearch if switching_blocked => {
+                        app.leave_attention("finish the background task or conflict before switching worktrees");
+                    }
+                    WorktrunkInput::SubmitSearch => {
+                        let Some(path) = picker.submit_search() else {
+                            app.leave_attention("no worktree matches the search");
+                            dirty = true;
+                            urgent = true;
+                            continue;
+                        };
+                        cancelled.store(true, Ordering::Relaxed);
+                        return Ok(EventLoopExit::Promote(path));
+                    }
                     WorktrunkInput::Promote if switching_blocked => {
                         app.leave_attention("finish the background task or conflict before switching worktrees");
                     }
                     WorktrunkInput::Promote => {
                         let path = picker
-                            .as_ref()
-                            .and_then(|picker| picker.selected_path())
+                            .selected_path()
                             .context("worktree selection disappeared")?
                             .to_owned();
                         cancelled.store(true, Ordering::Relaxed);
@@ -3936,7 +4010,7 @@ fn event_loop(
                                             let area = frame.area();
                                             let [list, history] =
                                                 picker.as_ref().map_or([Rect::default(), area], |picker| {
-                                                    worktrunk::areas(area, picker.rows().len())
+                                                    worktrunk::areas(area, picker.display_row_count())
                                                 });
                                             if let Some(picker) = picker.as_deref_mut() {
                                                 worktrunk::draw(frame, list, picker, *picker_focused);
@@ -5253,7 +5327,7 @@ fn draw(
 ) -> Result<()> {
     let frame_area = terminal.get_frame().area();
     let history_area = picker.as_ref().map_or(frame_area, |picker| {
-        worktrunk::areas(frame_area, picker.rows().len())[1]
+        worktrunk::areas(frame_area, picker.display_row_count())[1]
     });
     let render_rows = history_area.height.saturating_sub(1) as usize;
     if !history_is_ready_to_draw(app.state, app.rows.len()) {
@@ -5263,7 +5337,7 @@ fn draw(
                 .context("could not resize the terminal before drawing")?;
             let mut frame = terminal.get_frame();
             let area = frame.area();
-            let [list, history] = worktrunk::areas(area, picker.rows().len());
+            let [list, history] = worktrunk::areas(area, picker.display_row_count());
             frame.render_widget(ratatui::widgets::Clear, history);
             worktrunk::draw(&mut frame, list, picker, picker_focused);
             terminal
@@ -5281,7 +5355,7 @@ fn draw(
             let mut frame = terminal.get_frame();
             let area = frame.area();
             let [list, history] = picker.as_ref().map_or([Rect::default(), area], |picker| {
-                worktrunk::areas(area, picker.rows().len())
+                worktrunk::areas(area, picker.display_row_count())
             });
             if let Some(picker) = picker {
                 worktrunk::draw(&mut frame, list, picker, picker_focused);
@@ -5544,7 +5618,7 @@ fn draw(
         let mut frame = terminal.get_frame();
         let area = frame.area();
         let [list, history] = picker.as_ref().map_or([Rect::default(), area], |picker| {
-            worktrunk::areas(area, picker.rows().len())
+            worktrunk::areas(area, picker.display_row_count())
         });
         if let Some(picker) = picker {
             worktrunk::draw(&mut frame, list, picker, picker_focused);
@@ -6757,7 +6831,7 @@ fn show_builtin_diff(
         let size = terminal.size().context("could not determine diff viewport")?;
         let frame_area = Rect::new(0, 0, size.width, size.height);
         let [list_area, diff_area] = picker.map_or([Rect::default(), frame_area], |(picker, _)| {
-            worktrunk::areas(frame_area, picker.rows().len())
+            worktrunk::areas(frame_area, picker.display_row_count())
         });
         let page = usize::from(diff_area.height.saturating_sub(2)).max(1);
         let max = diff.display_line_count().saturating_sub(page);
@@ -8060,6 +8134,33 @@ mod tests {
         assert_eq!(
             worktrunk_input(key(KeyCode::Char('q')), 1, 4, 2),
             Some(WorktrunkInput::Cancel { force: false })
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Char('/')), 1, 4, 2),
+            Some(WorktrunkInput::StartSearch)
+        );
+        let search_cases = [
+            (
+                key(KeyCode::Char('j')),
+                WorktrunkInput::Search(worktrunk::SearchInput::Insert('j')),
+            ),
+            (
+                key(KeyCode::PageDown),
+                WorktrunkInput::Search(worktrunk::SearchInput::Down(2)),
+            ),
+            (key(KeyCode::Esc), WorktrunkInput::CancelSearch),
+            (key(KeyCode::Enter), WorktrunkInput::SubmitSearch),
+        ];
+        for (key, expected) in search_cases {
+            assert_eq!(worktrunk_search_input(key, 2), Some(expected));
+        }
+        assert_eq!(
+            worktrunk_search_input(
+                KeyEvent::new_with_kind(KeyCode::Char('/'), KeyModifiers::NONE, KeyEventKind::Repeat),
+                2,
+            ),
+            None,
+            "a repeated opener does not leak into the search query"
         );
     }
 
