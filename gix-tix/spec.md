@@ -20,8 +20,12 @@ without trading responsiveness for metadata that is not visible.
   changing repository state;
   `Tab` focuses history and `Escape` returns from root history to the list.
   `Enter` selects the worktree and promotes it to a normal full-screen history.
-  Rows stream their dirty state, upstream ahead/behind counts, and additions and
-  removals against the unambiguous inferred hidden base. Detached worktrees use
+  Compact `Worktree`, `Status`, `Base ±`, and `Commits ↕` columns distinguish
+  the launch, main, and linked worktrees and stream their dirty state, upstream
+  ahead/behind counts, and additions and removals against the unambiguous
+  inferred hidden base. The list omits redundant branch and absolute-path
+  columns. Space pressure removes the left side of worktree names first while
+  retaining an ellipsis and suffix. Detached worktrees use
   their symbolic `refs/worktree/tix/pins/HEAD` branch when present. Without a
   configured upstream, ahead/behind is omitted unless exactly one hidden tip
   identifies the comparison history.
