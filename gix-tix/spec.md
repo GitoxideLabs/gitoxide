@@ -927,10 +927,11 @@ space first; changes blocks adapt within the remaining history width.
   with it immediately. Otherwise tix limits navigation to the selected commit's
   ancestry; the connected hidden base remains selectable, `<enter>` confirms it,
   and Escape cancels before any repository change.
-- Starting requires a completely clean index and worktree, including no untracked
-  files, and non-pending reviewed-tip and base commits. Only after confirmation,
-  tix claims the first numeric identity `N` unused by both its review and return
-  refs, creates `refs/worktree/tix/review/N` at the reviewed tip, and creates an
+- Starting does not preflight index or worktree cleanliness; Git's checkout
+  decides whether existing changes permit activation. The reviewed tip and base
+  must not be pending. After confirmation, tix claims the first numeric identity
+  `N` unused by both its review and return refs, creates
+  `refs/worktree/tix/review/N` at the reviewed tip, and creates an
   unsigned ordinary `review` commit at the base with
   `tix-rebase: onto refs/worktree/tix/review/N`. Starting always creates a
   dedicated review-owned worktree-local tix pin at
@@ -941,6 +942,9 @@ space first; changes blocks adapt within the remaining history width.
   its base tree fills the index, and the reviewed tip tree remains in the worktree
   as unstaged changes. The internal pin keeps the departure and its ancestry
   visible without appearing as an ordinary pin decoration.
+  If checkout is blocked, the prepared review resources remain and tix reports
+  the full review commit ID so the user can clean the index and worktree before
+  switching to it.
   Reviews never share return pins, even when they depart from the same ref or
   commit, so finishing one cannot consume another review's return path.
   Finishing maps the recorded return target through the rewrite, deletes that

@@ -17,6 +17,7 @@ pub(super) const RETURN_TO: &[u8] = b"tix-review-return-to";
 pub(crate) struct Started {
     pub commit: ObjectId,
     pub reference: gix::refs::FullName,
+    pub checkout_error: Option<anyhow::Error>,
 }
 
 pub(crate) struct Finished {
@@ -128,8 +129,6 @@ pub(crate) fn start(
             anyhow::bail!("{label} has a pending rebase");
         }
     }
-    ensure_clean(&workdir)?;
-
     let name = next_reference(&repo)?;
     let departure_pin = match restore.1 {
         Some(id) => {
@@ -178,39 +177,28 @@ pub(crate) fn start(
         .detach();
     drop(repo);
 
-    if let Err(err) = git(&workdir, ["checkout", "--quiet", "--detach", &tip.to_string()]) {
-        remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
-        return Err(err.context("could not check out the reviewed commit"));
-    }
     let review_name = name.as_bstr().to_str_lossy();
     let create_ref = git(&workdir, ["update-ref", review_name.as_ref(), &tip.to_string()]);
     if let Err(err) = create_ref {
-        restore_checkout(&workdir, &restore)?;
         remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
         return Err(err.context("could not create review reference"));
     }
-    if let Err(err) = git(
-        &workdir,
-        ["update-ref", "--no-deref", "HEAD", &id.to_string(), &tip.to_string()],
-    ) {
-        let _ = git(&workdir, ["update-ref", "--no-deref", "-d", review_name.as_ref()]);
-        restore_checkout(&workdir, &restore)?;
-        remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
-        return Err(err.context("could not attach the worktree to the review commit"));
-    }
-    if let Err(err) = git(&workdir, ["read-tree", &id.to_string()]) {
-        let _ = git(
+
+    let checkout_error = (|| {
+        git(&workdir, ["checkout", "--quiet", "--detach", &tip.to_string()])
+            .context("could not check out the reviewed commit")?;
+        git(
             &workdir,
-            ["update-ref", "--no-deref", "HEAD", &tip.to_string(), &id.to_string()],
-        );
-        let _ = git(&workdir, ["update-ref", "--no-deref", "-d", review_name.as_ref()]);
-        restore_checkout(&workdir, &restore)?;
-        remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
-        return Err(err.context("could not reset the index to the review base"));
-    }
+            ["update-ref", "--no-deref", "HEAD", &id.to_string(), &tip.to_string()],
+        )
+        .context("could not attach the worktree to the review commit")?;
+        git(&workdir, ["read-tree", &id.to_string()]).context("could not reset the index to the review base")
+    })()
+    .err();
     Ok(Started {
         commit: id,
         reference: name,
+        checkout_error,
     })
 }
 
@@ -388,29 +376,6 @@ fn remove_new_departure_pin(repository_path: &Path, bare: bool, pin: Option<&his
     super::time_travel::delete_pin(&repo, pin).context("could not remove review departure pin")
 }
 
-fn restore_checkout(workdir: &Path, restore: &(Option<gix::refs::FullName>, Option<ObjectId>)) -> Result<()> {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(workdir).args(["checkout", "--quiet", "--force"]);
-    match restore {
-        (Some(name), _) => {
-            let name = gix::path::from_bstr(name.as_bstr());
-            command.arg(name.as_ref());
-        }
-        (None, Some(id)) => {
-            command.args(["--detach", &id.to_string()]);
-        }
-        (None, None) => anyhow::bail!("cannot restore an unborn checkout after review setup failed"),
-    }
-    let output = command
-        .output()
-        .context("could not restore checkout after review setup failed")?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,6 +431,7 @@ mod tests {
         let graph = super::super::loaded_graph(&repo)?;
         drop(repo);
         let started = start(fixture.path(), false, &graph, tip, base)?;
+        assert!(started.checkout_error.is_none());
 
         let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(repo.head_id()?, started.commit, "HEAD selects the review commit");
@@ -637,6 +603,45 @@ mod tests {
             repo.try_find_reference(stash_ref.as_ref())?.is_none(),
             "finishing also removes saved review worktree state"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_blocked_checkout_keeps_the_prepared_review_and_dirty_worktree() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let tip = repo.rev_parse_single("refs/patches/tip")?.detach();
+        let base = repo
+            .find_commit(tip)?
+            .parent_ids()
+            .next()
+            .expect("the reviewed tip has a parent")
+            .detach();
+        drop(repo);
+        std::fs::write(fixture.path().join("tip"), "departure\n")?;
+        run(fixture.path(), &["commit", "-qam", "departure"])?;
+        let departure = ObjectId::from_hex(run(fixture.path(), &["rev-parse", "HEAD"])?.trim())?;
+        std::fs::write(fixture.path().join("tip"), "dirty\n")?;
+
+        let repo = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+        let started = start(fixture.path(), false, &graph, tip, base)?;
+        let checkout_error = started
+            .checkout_error
+            .as_ref()
+            .expect("conflicting dirt blocks only the checkout");
+        assert!(format!("{checkout_error:#}").contains("could not check out the reviewed commit"));
+
+        let repo = crate::test_repository::open(fixture.path())?;
+        assert_eq!(repo.head_id()?, departure, "the failed checkout leaves HEAD untouched");
+        assert_eq!(repo.find_reference(started.reference.as_ref())?.id(), tip);
+        let commit = repo.find_commit(started.commit)?.decode()?.into_owned()?;
+        let return_name = return_to(&commit)?.expect("the prepared review records its return pin");
+        let mut return_ref = repo.find_reference(return_name.as_ref())?;
+        assert_eq!(return_ref.peel_to_id()?.detach(), departure);
+        assert_eq!(std::fs::read(fixture.path().join("tip"))?, b"dirty\n");
+        assert_eq!(run(fixture.path(), &["show", ":tip"])?, b"departure\n");
         Ok(())
     }
 

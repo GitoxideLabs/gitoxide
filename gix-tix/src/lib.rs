@@ -3470,16 +3470,32 @@ fn event_loop(
                     match result {
                         Ok(started) => {
                             app.dismiss_undo_position();
-                            let message = format!(
-                                "started review {} at {}",
-                                started.reference.shorten(),
-                                started.commit.to_hex_with_len(7)
-                            );
+                            let commit = started.commit;
+                            let (message, checkout_succeeded) = match started.checkout_error {
+                                None => (
+                                    format!(
+                                        "started review {} at {}",
+                                        started.reference.shorten(),
+                                        commit.to_hex_with_len(7)
+                                    ),
+                                    true,
+                                ),
+                                Some(err) => (
+                                    format!(
+                                        "prepared review {} at {commit}; checkout did not complete: {err:#}; clean the index and worktree, then switch to the review commit",
+                                        started.reference.shorten()
+                                    ),
+                                    false,
+                                ),
+                            };
                             match clear_undo_history(&repository_path, repository_is_bare) {
-                                Ok(()) => app.leave_success(message),
+                                Ok(()) if checkout_succeeded => app.leave_success(message),
+                                Ok(()) => app.leave_attention(message),
                                 Err(err) => app.leave_attention(format!("{message}; undo history: {err:#}")),
                             }
-                            app.select_commit_after_refresh(started.commit);
+                            if checkout_succeeded {
+                                app.select_commit_after_refresh(commit);
+                            }
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
