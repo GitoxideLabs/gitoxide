@@ -9,6 +9,10 @@ pub use gix_worktree_state as state;
 #[cfg(feature = "worktree-stream")]
 pub use gix_worktree_stream as stream;
 
+/// Create linked worktrees.
+#[cfg(feature = "worktree-mutation")]
+pub mod create;
+
 use crate::{
     Repository,
     bstr::{BStr, BString},

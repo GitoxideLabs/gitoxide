@@ -22,6 +22,8 @@ sha1 = ["gix-hash/sha1"]
 sha256 = ["gix-hash/sha256"]
 ## Instantiate stacks that can access `.gitattributes` information.
 attributes = ["dep:gix-attributes", "dep:gix-validate"]
+## Create the administrative files for linked worktrees.
+create = ["dep:gix-validate"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "bstr/serde", "gix-index/serde", "gix-hash/serde", "gix-object/serde", "gix-attributes?/serde", "gix-ignore/serde"]
 ## Enable thread-safety.
