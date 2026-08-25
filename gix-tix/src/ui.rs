@@ -398,7 +398,13 @@ pub(crate) fn draw_with_worktree(
     tree_changes: Option<&Changes>,
     worktree_changes: Option<&Changes>,
 ) {
-    let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+    let background_progress = app.background_progress().cloned();
+    let [mut body, progress_area, footer] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(u16::from(background_progress.is_some())),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
     let full_body = body;
     let selected_segment = app.selected_is_segment();
     let time_travel_animation = app.time_travel_animation_origin().is_some();
@@ -1192,7 +1198,9 @@ pub(crate) fn draw_with_worktree(
         emphasize_prefix(&mut view_prefix_spans[1..]);
     }
     let mut ordered = vec![Span::raw(history_position(app))];
-    if let Some(task) = app.background_task() {
+    if background_progress.is_none()
+        && let Some(task) = app.background_task()
+    {
         ordered.push(Span::raw(" · "));
         ordered.push(Span::styled(task.to_owned(), Style::default().fg(Color::Yellow)));
     }
@@ -1255,9 +1263,29 @@ pub(crate) fn draw_with_worktree(
             render_undo_progress(frame, area, notice.kind, applied, total);
         }
     }
+    if let Some(progress) = &background_progress {
+        render_background_progress(frame, progress_area, progress);
+    }
+    let popup_anchor = background_progress.as_ref().map_or(footer, |_| progress_area);
     let _ = prefix_popup
         .filter(|_| prefix_popup_allowed)
-        .and_then(|(anchor, items)| render_prefix_popup(frame, footer, anchor, items));
+        .and_then(|(anchor, items)| render_prefix_popup(frame, popup_anchor, anchor, items));
+}
+
+fn render_background_progress(frame: &mut Frame<'_>, area: Rect, progress: &crate::app::BackgroundProgress) {
+    frame.render_widget(
+        Paragraph::new(progress.text.as_str()).style(Style::default().bg(Color::Reset)),
+        area,
+    );
+    let completed_width = if progress.total == 0 {
+        0
+    } else {
+        (u128::from(area.width) * progress.completed.min(progress.total) as u128 / progress.total as u128) as u16
+    };
+    frame.buffer_mut().set_style(
+        Rect::new(area.x, area.y, completed_width, area.height),
+        Style::default().bg(Color::DarkGray),
+    );
 }
 
 fn render_undo_progress(frame: &mut Frame<'_>, area: Rect, kind: NoticeKind, applied: usize, total: usize) {
@@ -1324,7 +1352,9 @@ fn time_travel_label(app: &App, decorations: &Decorations) -> Option<&'static st
 
 fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<usize> {
     let mut width = history_position(app).chars().count();
-    if let Some(task) = app.background_task() {
+    if app.background_progress().is_none()
+        && let Some(task) = app.background_task()
+    {
         width += 3 + task.chars().count();
     }
     width += 3 + "p command".len();
@@ -3437,6 +3467,40 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn fetch_progress_reserves_a_row_above_the_footer_and_below_notices_and_popups()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        complete(&mut app);
+        app.set_active_branch(Some("topic".into()));
+        app.start_background_task_with_progress("fetching origin…");
+        assert!(app.update_background_progress("fetching origin: indexing 40/100".into(), 40, 100));
+        app.leave_attention("working tree notice");
+        let mut terminal = Terminal::new(TestBackend::new(100, 5))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        assert!(rendered_line(&terminal, 2).contains("working tree notice"));
+        assert!(rendered_line(&terminal, 3).contains("fetching origin: indexing 40/100"));
+        assert!(!rendered_line(&terminal, 4).contains("fetching origin"));
+        assert_eq!(terminal.backend().buffer()[(39, 3)].bg, Color::DarkGray);
+        assert_eq!(
+            terminal.backend().buffer()[(40, 3)].bg,
+            Color::Reset,
+            "the unfilled share keeps the status background"
+        );
+
+        app.update(Action::ToggleActions);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            (0..3).any(|row| rendered_line(&terminal, row).contains(" no actions ")),
+            "the prefix popup is rendered above progress"
+        );
+        assert!(rendered_line(&terminal, 3).contains("fetching origin"));
+        Ok(())
+    }
+
     #[test]
     fn materialized_rebase_continuation_uses_a_persistent_notice_above_the_footer()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -4563,7 +4627,9 @@ mod tests {
         ]);
         complete(&mut app);
         app.selected = app.rows.iter().position(|row| row.id == head);
-        app.set_push_branch(Some("topic".into()));
+        app.set_active_branch(Some("topic".into()));
+        #[cfg(feature = "blocking-network-client")]
+        app.set_fetch_remote(Some("origin".into()));
         app.actions_expanded = true;
         let mut terminal = Terminal::new(TestBackend::new(160, 5))?;
 
@@ -4574,6 +4640,8 @@ mod tests {
         assert!(popup.contains("move-insert"));
         assert!(popup.contains("fork"));
         assert!(popup.contains("attach"));
+        #[cfg(feature = "blocking-network-client")]
+        assert!(popup.contains("F fetch"));
         assert!(popup.contains("P push"));
         assert!(!popup.contains("cherry-"));
         let push = popup[..popup.find("P push").expect("the push action is visible")]

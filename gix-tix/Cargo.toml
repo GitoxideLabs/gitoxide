@@ -17,6 +17,8 @@ path = "src/main.rs"
 required-features = ["sha1"]
 
 [features]
+## Enable blocking network operations and their progress tree.
+blocking-network-client = ["gix/blocking-network-client", "gix/progress-tree"]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
 sha1 = ["gix/sha1"]
 ## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
