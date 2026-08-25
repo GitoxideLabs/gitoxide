@@ -623,6 +623,15 @@ pub(crate) fn draw_with_worktree(
         .filter_map(|index| app.history_entry(index))
         .collect();
     let lanes = app.render_lanes(start..render_end);
+    let compact_history = changes_layout == ChangesLayout::Stacked;
+    let displayed_lane = |index: usize| {
+        let lane = lanes.lane(index);
+        if compact_history && matches!(visible_entries[index], HistoryEntry::Commit(_)) {
+            lane_through_node(lane)
+        } else {
+            lane
+        }
+    };
     let enrichment_gutter = Line::raw(crate::enrich::marker(true, true, true)).width() as u16;
     let has_duplicate_change_id = app.has_duplicate_change_ids();
     let change_id_gutter = if has_duplicate_change_id {
@@ -654,6 +663,8 @@ pub(crate) fn draw_with_worktree(
     );
     let rendered_lane_width = lanes
         .iter()
+        .enumerate()
+        .map(|(index, _)| displayed_lane(index))
         .filter(|lane| !lane.is_empty())
         .map(|lane| lane.trim_end().chars().count().saturating_add(1))
         .max()
@@ -663,7 +674,11 @@ pub(crate) fn draw_with_worktree(
     } else {
         rendered_lane_width
     };
-    let alignment = app.alignment;
+    let alignment = if compact_history {
+        HistoryAlignment::None
+    } else {
+        app.alignment
+    };
     let date_mode = app.date_mode;
     let id_mode = app.effective_id_mode();
     let name_mode = app.name_mode;
@@ -687,7 +702,11 @@ pub(crate) fn draw_with_worktree(
                 .map(|note| gix::objs::commit::MessageRef::from_bytes(note).title);
             let mut metadata = metadata_columns(
                 row,
-                app.title(row),
+                if compact_history {
+                    title_without_conventional_prefix(app.title(row))
+                } else {
+                    app.title(row)
+                },
                 app.attributions(row),
                 decorations,
                 mailmap,
@@ -696,16 +715,22 @@ pub(crate) fn draw_with_worktree(
                     id_mode,
                     change_id: app.change_id(row.id),
                     show_author_name,
-                    show_emails: app.show_emails,
+                    show_emails: app.show_emails && !compact_history,
                     show_trailers,
                     has_notes: !app.notes(row.id).is_empty(),
-                    note_title,
+                    note_title: if compact_history { None } else { note_title },
                     use_mailmap: app.use_mailmap && copy_feedback != Some(CopyKind::Author),
                     ref_mode,
                     selected: row_selected || compared_parent == Some(row.id),
                     copy_feedback: if row_selected { copy_feedback } else { None },
                 },
             );
+            if compact_history {
+                for field in &mut metadata.fields[..5] {
+                    *field = Line::default();
+                }
+                metadata.fields[4] = Line::raw(" ");
+            }
             if !row_selected && let Some(decorations) = decorations.get(&row.id) {
                 let current_head = decorations
                     .iter()
@@ -731,11 +756,15 @@ pub(crate) fn draw_with_worktree(
         .collect();
     let title_column = lanes
         .iter()
+        .enumerate()
         .zip(&metadata_columns)
-        .filter_map(|(lane, metadata)| {
-            metadata
-                .as_ref()
-                .map(|metadata| lane.chars().count().saturating_add(metadata.prefix_width()))
+        .filter_map(|((index, _), metadata)| {
+            metadata.as_ref().map(|metadata| {
+                displayed_lane(index)
+                    .chars()
+                    .count()
+                    .saturating_add(metadata.prefix_width())
+            })
         })
         .max()
         .unwrap_or_default();
@@ -755,7 +784,7 @@ pub(crate) fn draw_with_worktree(
                     (metadata, 0, prefix_width)
                 }
                 HistoryAlignment::Title | HistoryAlignment::Compressed => {
-                    let lane_width = lanes.lane(index).chars().count();
+                    let lane_width = displayed_lane(index).chars().count();
                     let (metadata, prefix_width) = metadata.align_title(title_column.saturating_sub(lane_width));
                     (metadata, lane_width, prefix_width)
                 }
@@ -776,7 +805,7 @@ pub(crate) fn draw_with_worktree(
                 .count()
                 .saturating_add(format!("[{count}]").chars().count()),
             (HistoryEntry::Commit(_), Some((metadata, metadata_x, _))) => match alignment {
-                HistoryAlignment::None => lanes.lane(index).chars().count().saturating_add(metadata.width()),
+                HistoryAlignment::None => displayed_lane(index).chars().count().saturating_add(metadata.width()),
                 HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
                     metadata_x.saturating_add(metadata.width())
                 }
@@ -801,7 +830,7 @@ pub(crate) fn draw_with_worktree(
     let mut selection_info_area = None;
 
     for (index, metadata) in metadata.into_iter().enumerate() {
-        let lane = lanes.lane(index);
+        let lane = displayed_lane(index);
         let y = body.y.saturating_add(index as u16);
         let row_area = Rect::new(content.x, y, content.width, 1);
         let row_index = match visible_entries[index] {
@@ -2102,6 +2131,42 @@ fn markdown_title_spans(title: &BStr) -> Vec<Span<'static>> {
         }));
     }
     out
+}
+
+fn lane_through_node(lane: &str) -> &str {
+    lane.char_indices()
+        .find(|(_, symbol)| matches!(symbol, '●' | '◆' | '@' | '0'..='9' | '+'))
+        .map_or_else(
+            || lane.trim_end(),
+            |(offset, symbol)| &lane[..offset + symbol.len_utf8()],
+        )
+}
+
+fn title_without_conventional_prefix(title: &BStr) -> &BStr {
+    let Some(separator) = title.find(b": ") else {
+        return title;
+    };
+    let mut prefix: &[u8] = &title[..separator];
+    if let Some(without_bang) = prefix.strip_suffix(b"!") {
+        prefix = without_bang;
+    }
+    let valid_type = |value: &[u8]| {
+        value.first().is_some_and(u8::is_ascii_lowercase)
+            && value
+                .iter()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+    };
+    let valid = prefix.iter().position(|byte| *byte == b'(').map_or_else(
+        || valid_type(prefix),
+        |open| {
+            let scope = &prefix[open + 1..];
+            valid_type(&prefix[..open])
+                && scope.len() > 1
+                && scope.ends_with(b")")
+                && !scope[..scope.len() - 1].iter().any(|byte| matches!(byte, b'(' | b')'))
+        },
+    );
+    if valid { title[separator + 2..].as_bstr() } else { title }
 }
 
 fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
@@ -5495,14 +5560,15 @@ mod tests {
         app.extend_commits(
             [head, other]
                 .into_iter()
-                .map(|id| Commit {
+                .enumerate()
+                .map(|(index, id)| Commit {
                     id,
                     parent_ids: Default::default(),
                     author_time: gix::date::Time::default(),
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
-                    title: "subject".into(),
+                    title: if index == 0 { "feat(scope)!: subject" } else { "subject" }.into(),
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
@@ -5578,7 +5644,7 @@ mod tests {
         let start = line[..line.find("🫟").expect("the dirty marker is visible")]
             .chars()
             .count() as u16;
-        let title = line[..line.find("subject").expect("the title is visible")]
+        let title = line[..line.find("feat(scope)!: subject").expect("the title is visible")]
             .chars()
             .count() as u16;
         let end = title - 1;
@@ -5597,6 +5663,38 @@ mod tests {
             buffer[(end, 0)].modifier.contains(Modifier::REVERSED),
             "ordinary selection remains visible outside the review background"
         );
+
+        app.changes_mode = Some(ChangesMode::Both);
+        app.set_lane(0, "│ ◆─┐ ");
+        app.set_lane(1, "│ ● ");
+        let mut compact = Terminal::new(TestBackend::new(40, 8))?;
+        compact.draw(|frame| {
+            let area = frame.area();
+            super::draw_with_worktree(
+                frame,
+                area,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&dirty),
+                Some(&dirty),
+            );
+        })?;
+        assert_eq!(app.changes_layout, ChangesLayout::Stacked);
+        let line = rendered_line(&compact, 0);
+        assert!(line.contains("│ @ subject") && rendered_line(&compact, 1).contains("│ ● subject"));
+        let head_x = line.chars().position(|symbol| symbol == '@').expect("HEAD is visible") as u16;
+        let title_x = line[..line.find("subject").expect("the title is visible")]
+            .chars()
+            .count() as u16;
+        let buffer = compact.backend().buffer();
+        assert_eq!(title_x, head_x + 2, "one space separates the disc and title");
+        assert_eq!(buffer[(head_x, 0)].bg, REVIEW_BACKGROUND);
+        assert_ne!(buffer[(title_x - 1, 0)].bg, REVIEW_BACKGROUND);
+        assert!(buffer[(title_x, 0)].modifier.contains(Modifier::REVERSED));
+        app.set_lane(0, "◆ ");
+        app.set_lane(1, "● ");
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = false;
 
         let conflicted = Changes {
@@ -7137,6 +7235,23 @@ mod tests {
         assert!(rendered.contains("Heading") && rendered.contains("let value = 1;"));
         assert!(!rendered.contains('#') && !rendered.contains("```"));
         assert!(text.lines[0].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn strips_only_conventional_commit_prefixes() {
+        for (input, expected) in [
+            ("feat: subject", "subject"),
+            ("feat(gix-tix)!: subject", "subject"),
+            ("change(cli-tools): subject", "subject"),
+            ("Title: subject", "Title: subject"),
+            ("feat(scope: subject", "feat(scope: subject"),
+        ] {
+            assert_eq!(
+                title_without_conventional_prefix(input.as_bytes().as_bstr()),
+                expected.as_bytes().as_bstr(),
+                "prefix classification for {input:?}"
+            );
+        }
     }
 
     #[test]
