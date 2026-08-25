@@ -781,7 +781,6 @@ pub(crate) fn draw_with_worktree(
         (!time_travel_animation && !selected_segment)
             .then_some(app.selection_relation)
             .flatten(),
-        app.topological_choice(),
     );
     let selection_info_width = selection_info.width();
     let mut selection_info_area = None;
@@ -1389,21 +1388,8 @@ fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app:
     }
 }
 
-fn selection_info_line(
-    changes: Option<&Changes>,
-    relation: Option<SelectionRelation>,
-    topological_choice: Option<(usize, usize)>,
-) -> Line<'static> {
+fn selection_info_line(changes: Option<&Changes>, relation: Option<SelectionRelation>) -> Line<'static> {
     let mut spans = Vec::new();
-    if let Some((choice, total)) = topological_choice {
-        push_selection_span(
-            &mut spans,
-            Span::styled(
-                format!("{choice}/{total}"),
-                selection_color(Color::Yellow).add_modifier(Modifier::BOLD),
-            ),
-        );
-    }
     if let Some(changes) = changes {
         if changes.lines_added > 0 {
             push_selection_span(
@@ -2146,7 +2132,7 @@ fn active_prefix_popup(
         navigation.extend([
             vec![Span::raw("↑↓/jk move")],
             vec![Span::raw("h/l pan")],
-            vec![Span::raw("Shift+directions topo")],
+            vec![Span::raw("J/K topo")],
             vec![Span::raw("PgUp/PgDn move")],
             vec![Span::raw("Shift+PgUp/PgDn pan")],
         ]);
@@ -3597,7 +3583,7 @@ mod tests {
         assert!(buffer[(37, 0)].modifier.contains(Modifier::REVERSED));
 
         let text = |relation| {
-            selection_info_line(None, relation, None)
+            selection_info_line(None, relation)
                 .spans
                 .into_iter()
                 .map(|span| span.content.into_owned())
@@ -3606,16 +3592,14 @@ mod tests {
         assert_eq!(text(Some(SelectionRelation::Tracking { ahead: 0, behind: 2 })), "⇣2");
         assert_eq!(text(Some(SelectionRelation::Tracking { ahead: 0, behind: 0 })), "");
         assert!(
-            selection_info_line(Some(&Changes::default()), None, None)
-                .spans
-                .is_empty(),
+            selection_info_line(Some(&Changes::default()), None).spans.is_empty(),
             "selection information hides empty diff counts"
         );
         Ok(())
     }
 
     #[test]
-    fn renders_the_topological_child_choice_outside_selection_inversion() -> Result<(), Box<dyn std::error::Error>> {
+    fn renders_a_pending_topological_choice_in_the_source_disc() -> Result<(), Box<dyn std::error::Error>> {
         let ids = [1, 2, 3].map(|byte| gix::ObjectId::Sha1([byte; 20]));
         let commit = |id, parent: Option<gix::ObjectId>, title: &'static str| Commit {
             id,
@@ -3638,21 +3622,17 @@ mod tests {
         ]);
         complete(&mut app);
         app.select_commit(ids[0]);
-        app.update(Action::NextChild);
-        let mut terminal = Terminal::new(TestBackend::new(80, 4))?;
+        app.update(Action::TopologicalUp);
+        let mut terminal = Terminal::new(TestBackend::new(80, 6))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
         let row = rendered_line(&terminal, 2);
-        let choice_byte = row.find("2/2").expect("the selected fork shows its child choice");
-        let choice_x = row[..choice_byte].chars().count() as u16;
-        let cell = &terminal.backend().buffer()[(choice_x, 2)];
-        assert_eq!(cell.fg, Color::Yellow);
-        assert!(cell.modifier.contains(Modifier::BOLD));
         assert!(
-            !cell.modifier.contains(Modifier::REVERSED),
-            "the choice annotation does not extend row inversion"
+            row.trim_start().starts_with("> 1"),
+            "the pending choice replaces the selected commit disk: {row:?}"
         );
+        assert!(!row.contains("1/2"), "the old persistent choice annotation is gone");
         Ok(())
     }
 
@@ -4477,7 +4457,8 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(rendered_line(&terminal, 2).trim_end(), compact);
         let information = "[ title · ref-tree · message · changes";
-        let navigation = "p command · ↑↓/jk move · h/l pan · Shift+directions topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff";
+        let navigation =
+            "p command · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff";
         assert!(rendered_line(&terminal, 0).contains(information));
         assert!(rendered_line(&terminal, 1).contains(navigation));
         assert_reversed_group(&terminal, 2, "?");
@@ -5979,7 +5960,7 @@ mod tests {
         );
         assert!(
             rendered_line(&footer_terminal, 14).contains(
-                " p command · <tab> switch · ↑↓/jk move · h/l pan · Shift+directions topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff "
+                " p command · <tab> switch · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff "
             ),
             "the expanded information prefix keeps keyboard help next to the footer"
         );
