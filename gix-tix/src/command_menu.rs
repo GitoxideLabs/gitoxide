@@ -27,6 +27,7 @@ pub(crate) enum CommandId {
     Unstash,
     Rebase,
     RebaseUpdate,
+    Push,
     StartReview,
     FinishReview,
     Squash,
@@ -376,6 +377,17 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
                 "au",
                 true,
                 Action::RebaseUpdate,
+            );
+        }
+        if app.changes_focus.is_none() && app.can_push() {
+            push(
+                CommandId::Push,
+                CommandGroup::Actions,
+                1,
+                "P push",
+                "aP",
+                true,
+                Action::Push,
             );
         }
         if app.changes_focus.is_none() && app.can_finish_review() {
@@ -782,5 +794,29 @@ mod tests {
             menu.down(&items);
         }
         assert_eq!(actual, expected, "commit aliases retain catalog order");
+    }
+
+    #[test]
+    fn push_is_a_second_row_action_only_while_no_background_task_runs() {
+        let mut app = App::new(1);
+        app.state = State::Complete;
+        app.set_push_branch(Some("topic".into()));
+
+        let catalog = commands(&app, &Decorations::default(), false);
+        let push = catalog
+            .iter()
+            .find(|command| command.id == CommandId::Push)
+            .expect("a remembered branch can be pushed");
+        assert_eq!(push.group, CommandGroup::Actions);
+        assert_eq!(push.row, 1);
+        assert_eq!(push.label, "P push");
+        assert_eq!(push.shortcut, "aP");
+        assert_eq!(push.action, Action::Push);
+
+        app.start_background_task("pushing topic to origin…");
+        assert!(
+            !has(&commands(&app, &Decorations::default(), false), CommandId::Push),
+            "the single background-task slot hides push while occupied"
+        );
     }
 }

@@ -1191,7 +1191,12 @@ pub(crate) fn draw_with_worktree(
     if app.history_display_expanded {
         emphasize_prefix(&mut view_prefix_spans[1..]);
     }
-    let mut ordered = vec![Span::raw(history_position(app)), Span::raw(" · ")];
+    let mut ordered = vec![Span::raw(history_position(app))];
+    if let Some(task) = app.background_task() {
+        ordered.push(Span::raw(" · "));
+        ordered.push(Span::styled(task.to_owned(), Style::default().fg(Color::Yellow)));
+    }
+    ordered.push(Span::raw(" · "));
     ordered.extend(shortcut("p command", 'p', true));
     if selected_segment {
         ordered.push(Span::raw(" · <enter> expand"));
@@ -1319,6 +1324,9 @@ fn time_travel_label(app: &App, decorations: &Decorations) -> Option<&'static st
 
 fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<usize> {
     let mut width = history_position(app).chars().count();
+    if let Some(task) = app.background_task() {
+        width += 3 + task.chars().count();
+    }
     width += 3 + "p command".len();
     let selected_segment = app.selected_is_segment();
     if selected_segment {
@@ -3406,6 +3414,30 @@ mod tests {
     }
 
     #[test]
+    fn shows_the_running_background_task_in_yellow_in_the_footer() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.start_background_task("pushing topic to origin…");
+        let mut terminal = Terminal::new(TestBackend::new(120, 2))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        let footer = rendered_line(&terminal, 1);
+        let label = "pushing topic to origin…";
+        let start = footer[..footer.find(label).expect("the running task is visible")]
+            .chars()
+            .count() as u16;
+        for x in start..start + label.chars().count() as u16 {
+            assert_eq!(
+                terminal.backend().buffer()[(x, 1)].fg,
+                Color::Yellow,
+                "task cell {x} ({:?}) is yellow",
+                terminal.backend().buffer()[(x, 1)].symbol()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn materialized_rebase_continuation_uses_a_persistent_notice_above_the_footer()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
@@ -4499,7 +4531,8 @@ mod tests {
     }
 
     #[test]
-    fn actions_popup_shows_insert_shortcuts_without_the_cherry_prefix() -> Result<(), Box<dyn std::error::Error>> {
+    fn actions_popup_shows_push_and_insert_shortcuts_without_the_cherry_prefix()
+    -> Result<(), Box<dyn std::error::Error>> {
         let head = gix::ObjectId::Sha1([1; 20]);
         let base = gix::ObjectId::Sha1([2; 20]);
         let parent = gix::ObjectId::Sha1([3; 20]);
@@ -4530,6 +4563,7 @@ mod tests {
         ]);
         complete(&mut app);
         app.selected = app.rows.iter().position(|row| row.id == head);
+        app.set_push_branch(Some("topic".into()));
         app.actions_expanded = true;
         let mut terminal = Terminal::new(TestBackend::new(160, 5))?;
 
@@ -4540,7 +4574,16 @@ mod tests {
         assert!(popup.contains("move-insert"));
         assert!(popup.contains("fork"));
         assert!(popup.contains("attach"));
+        assert!(popup.contains("P push"));
         assert!(!popup.contains("cherry-"));
+        let push = popup[..popup.find("P push").expect("the push action is visible")]
+            .chars()
+            .count() as u16;
+        assert!(
+            terminal.backend().buffer()[(push, 3)]
+                .modifier
+                .contains(Modifier::UNDERLINED)
+        );
         let label = "stack-insert";
         let start = popup[..popup.find(label).expect("the stack-insert action is visible")]
             .chars()
