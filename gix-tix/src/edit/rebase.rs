@@ -19,7 +19,6 @@ use gix::{
 
 use crate::history::HistoryGraph;
 
-const MARKER: &[u8] = b"tix-rebase";
 const ORIGINAL_PARENT: &[u8] = b"tix-rebase-parent";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -557,16 +556,6 @@ pub(crate) fn copy_insert_plan(
     let [_source_parent] = source_parents.as_slice() else {
         anyhow::bail!("copying a commit requires it to have exactly one parent");
     };
-    let source_commit = repo
-        .find_commit(source)
-        .context("could not find the copy source")?
-        .decode()
-        .context("could not decode the copy source")?
-        .into_owned()
-        .context("could not own the copy source")?;
-    if super::review::reference(&source_commit)?.is_some() {
-        anyhow::bail!("review commits cannot be copied");
-    }
     if source == target {
         anyhow::bail!("the copy source and target must differ");
     }
@@ -1458,11 +1447,7 @@ pub(super) fn finish_review_with_progress(
         };
         commit.parents = new_parents.into_iter().collect();
         if *old == review {
-            commit.extra_headers.retain(|(name, value)| {
-                !(name.as_slice() == MARKER
-                    && value.as_slice().strip_prefix(b"onto ") == Some(review_ref.as_bstr().as_ref()))
-                    && name.as_slice() != super::review::RETURN_TO
-            });
+            super::review::remove_identity(&mut commit, review_ref.as_bstr());
         }
         let (new, signing_time) = write_commit_timed(
             &repo,
@@ -1760,6 +1745,11 @@ pub(crate) fn perform_plan_with_progress(
                 extra_headers: Vec::new(),
             },
         };
+        if matches!(step.commit, PlanCommit::Copy(_))
+            && let Some(reference) = super::review::reference(&commit)?
+        {
+            super::review::remove_identity(&mut commit, reference.as_bstr());
+        }
         let graph_parents = match step.commit {
             PlanCommit::Pick(id) | PlanCommit::Copy(id) | PlanCommit::Resolved(id) => {
                 graph.parents_of(id).context("a picked commit is incomplete")?
@@ -4681,7 +4671,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_insert_rejects_review_sources() -> gix_testtools::Result {
+    fn copy_insert_makes_an_ordinary_copy_of_a_review_source() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let target = repo.rev_parse_single("HEAD~2")?.detach();
@@ -4690,6 +4680,9 @@ mod tests {
         source
             .extra_headers
             .push(("tix-rebase".into(), "onto refs/worktree/tix/review/1".into()));
+        source
+            .extra_headers
+            .push(("tix-review-return-to".into(), "refs/worktree/tix/pins/review/1".into()));
         let source = repo.write_object(&source)?.detach();
         repo.reference(
             "refs/heads/main",
@@ -4699,9 +4692,27 @@ mod tests {
         )?;
         let graph = super::super::loaded_graph(&repo)?;
 
-        let err = copy_insert_plan(&repo, &graph, source, target)
-            .expect_err("copying a review commit would duplicate its resource identity");
-        assert!(err.to_string().contains("review commits cannot be copied"), "{err:#}");
+        let outcome = perform_plan(&repo, &graph, copy_insert_plan(&repo, &graph, source, target)?)?.complete()?;
+        let copied = outcome.selected.context("copy-insert selects the ordinary copy")?;
+        let retained = outcome.map(source).context("copy-insert retains the review source")?;
+        let copied = repo.find_commit(copied)?.decode()?.into_owned()?;
+        assert!(
+            !super::super::review::is_review(&copied),
+            "the copy does not duplicate review identity"
+        );
+        assert!(
+            super::super::review::return_to(&copied)?.is_none(),
+            "the copy does not own the review return path"
+        );
+        let retained = repo.find_commit(retained)?.decode()?.into_owned()?;
+        assert!(
+            super::super::review::is_review(&retained),
+            "the source remains the active review"
+        );
+        assert!(
+            super::super::review::return_to(&retained)?.is_some(),
+            "the source keeps the review return path"
+        );
         Ok(())
     }
 
