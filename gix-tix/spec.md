@@ -33,12 +33,15 @@ without trading responsiveness for metadata that is not visible.
   their symbolic `refs/worktree/tix/pins/HEAD` branch when present. Without a
   configured upstream, ahead/behind is omitted unless exactly one hidden tip
   identifies the comparison history.
-- `tix worktrunk switch TARGET [--path PATH]` selects an exact existing
-  worktree path or local branch without opening the picker. A local branch not
-  checked out elsewhere creates a linked worktree at `PATH`, or beside the main
-  worktree as `<repository>.<branch>` with slashes replaced by dashes. It never
-  creates from remote-tracking branches. Creation returns the canonical path
-  recorded by Git so later selection of the same worktree is stable.
+- `tix worktrunk switch TARGET [--path PATH]` and `tix worktrunk switch
+  --new-branch NAME [--path PATH]` select without opening the picker. `TARGET`
+  is an exact existing worktree path or local branch; an unchecked-out branch
+  gets a linked worktree at `PATH`, or beside the main worktree as
+  `<repository>.<branch>` with slashes replaced by dashes. Remote-tracking
+  branches are never inferred. `--new-branch` creates a missing local branch at
+  the logical Tix HEAD, while reusing it unchanged if it already exists.
+  Creation returns the canonical path recorded by Git so later selection of the
+  same worktree is stable.
 - `tix worktrunk shell-init SHELL` prints a `wt` wrapper for Bash, Zsh, Fish,
   Nushell, or PowerShell. The wrapper lets a successful selection change the
   calling shell's directory and opens full-screen Tix only after picker
