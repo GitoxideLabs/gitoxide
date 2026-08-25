@@ -80,6 +80,18 @@ struct FillRepository {
     retain: bool,
 }
 
+struct BackgroundWorker {
+    receiver: mpsc::Receiver<Result<String>>,
+    #[cfg(feature = "blocking-network-client")]
+    fetch_progress: Option<FetchProgressSource>,
+}
+
+#[cfg(feature = "blocking-network-client")]
+struct FetchProgressSource {
+    tree: Arc<gix::progress::tree::Root>,
+    label: String,
+}
+
 struct PendingConflictResolution {
     commit: gix::ObjectId,
     head: Option<ConflictHead>,
@@ -1066,7 +1078,9 @@ fn event_loop(
     app.set_view_tips(&ref_snapshot.view_tips);
     app.set_worktree_head_unborn(worktree_head_unborn);
     app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
-    app.set_push_branch(push_branch_name(&ref_snapshot));
+    app.set_active_branch(active_branch_name(&ref_snapshot));
+    #[cfg(feature = "blocking-network-client")]
+    app.set_fetch_remote(ref_snapshot.fetch_remote.clone());
     app.commit_pane_background = commit_pane_background;
     if recovered_at_startup {
         app.leave_attention("worktree removed; using the common repository without worktree changes");
@@ -1079,7 +1093,7 @@ fn event_loop(
     let mut ref_refresh_deadline: Option<Instant> = None;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
-    let mut background_task: Option<mpsc::Receiver<Result<String>>> = None;
+    let mut background_task: Option<BackgroundWorker> = None;
     let mut commit_message = None;
     let mut tree_changes = TreeChangesCache::default();
     let mut worktree_changes = None;
@@ -1173,7 +1187,9 @@ fn event_loop(
             fill_repository.retained = None;
             app.set_worktree_changes_available(false);
             app.set_worktree_branch(None);
-            app.set_push_branch(None);
+            app.set_active_branch(None);
+            #[cfg(feature = "blocking-network-client")]
+            app.set_fetch_remote(recovered.remote_default_name(gix::remote::Direction::Fetch));
             worktree_watcher = None;
             worktree_refresh_deadline = None;
             worktree_watch_refresh = WorktreeWatchRefresh::default();
@@ -1504,7 +1520,16 @@ fn event_loop(
                 }
             }
         }
-        if let Some(result) = background_task.as_ref().map(mpsc::Receiver::try_recv) {
+        #[cfg(feature = "blocking-network-client")]
+        if let Some(progress) = background_task
+            .as_ref()
+            .and_then(|worker| worker.fetch_progress.as_ref())
+            .map(fetch_progress_snapshot)
+            && app.update_background_progress(progress.text, progress.completed, progress.total)
+        {
+            dirty = true;
+        }
+        if let Some(result) = background_task.as_ref().map(|worker| worker.receiver.try_recv()) {
             match result {
                 Ok(result) => {
                     background_task = None;
@@ -1571,7 +1596,9 @@ fn event_loop(
                             .then(|| current_worktree_branch(&result.refs))
                             .flatten(),
                     );
-                    app.set_push_branch(push_branch_name(&result.refs));
+                    app.set_active_branch(active_branch_name(&result.refs));
+                    #[cfg(feature = "blocking-network-client")]
+                    app.set_fetch_remote(result.refs.fetch_remote.clone());
                     ref_tree.rebuild(&graph, &result.refs, &result.decorations);
                     history_graph = Some(graph);
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
@@ -1685,7 +1712,9 @@ fn event_loop(
             );
             ref_snapshot = next;
             app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
-            app.set_push_branch(push_branch_name(&ref_snapshot));
+            app.set_active_branch(active_branch_name(&ref_snapshot));
+            #[cfg(feature = "blocking-network-client")]
+            app.set_fetch_remote(ref_snapshot.fetch_remote.clone());
             refresh_pending = false;
             let hidden = if app.show_hidden { Vec::new() } else { hide.clone() };
             let expand = if refresh_expand_hidden || hidden_changed {
@@ -3871,6 +3900,12 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("push: {err:#}")),
                     }
                 }
+                #[cfg(feature = "blocking-network-client")]
+                Effect::Fetch(remote) => {
+                    let label = format!("fetching {remote}…");
+                    app.start_background_task_with_progress(label);
+                    background_task = Some(start_fetch_worker(repository_path.clone(), repository_is_bare, remote));
+                }
                 Effect::VerifySignatures(ids) => {
                     verification_receiver = Some(start_signature_verification(
                         repository_path.clone(),
@@ -3932,12 +3967,69 @@ fn start_lane_worker(rows: Vec<SharedCommitRow>) -> mpsc::Receiver<(Vec<SharedCo
     receiver
 }
 
-fn start_push_worker(repository_path: PathBuf, remote: BString, branch: BString) -> mpsc::Receiver<Result<String>> {
+fn start_push_worker(repository_path: PathBuf, remote: BString, branch: BString) -> BackgroundWorker {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(push_branch(&repository_path, remote.as_bstr(), branch.as_bstr()));
     });
-    receiver
+    BackgroundWorker {
+        receiver,
+        #[cfg(feature = "blocking-network-client")]
+        fetch_progress: None,
+    }
+}
+
+#[cfg(feature = "blocking-network-client")]
+fn start_fetch_worker(repository_path: PathBuf, bare: bool, remote: BString) -> BackgroundWorker {
+    let (sender, receiver) = mpsc::channel();
+    let tree = gix::progress::tree::Root::new();
+    let worker_tree = Arc::clone(&tree);
+    let label = format!("fetching {remote}");
+    std::thread::spawn(move || {
+        let _ = sender.send(fetch_remote(&repository_path, bare, remote.as_bstr(), worker_tree));
+    });
+    BackgroundWorker {
+        receiver,
+        fetch_progress: Some(FetchProgressSource { tree, label }),
+    }
+}
+
+#[cfg(feature = "blocking-network-client")]
+fn fetch_remote(
+    repository_path: &Path,
+    bare: bool,
+    remote_name: &BStr,
+    progress_tree: Arc<gix::progress::tree::Root>,
+) -> Result<String> {
+    let mut phase = progress_tree.add_child_with_id("setup", *b"TIXF");
+    phase.init(Some(100), gix::progress::steps());
+    let mut repository = open_repository(repository_path, bare, false).context("could not open repository")?;
+    repository
+        .config_snapshot_mut()
+        .set_raw_value("gitoxide.credentials.terminalPrompt", "false")
+        .context("could not disable terminal credential prompts")?;
+    let remote = repository
+        .find_fetch_remote(Some(remote_name))
+        .with_context(|| format!("could not find fetch remote {remote_name}"))?;
+    phase.set(5);
+    phase.set_name("connect/auth");
+    let connection = remote
+        .connect(gix::remote::Direction::Fetch)
+        .with_context(|| format!("could not connect to {remote_name}"))?;
+    phase.set(10);
+    phase.set_name("refs/negotiation");
+    let mut progress = phase.add_child("fetch");
+    let fetch = connection
+        .prepare_fetch(&mut progress, Default::default())
+        .with_context(|| format!("could not prepare fetch from {remote_name}"))?;
+    phase.set(15);
+    phase.set_name("remote enumeration");
+    fetch
+        .receive(&mut progress, &AtomicBool::default())
+        .with_context(|| format!("could not fetch from {remote_name}"))?;
+    phase.set(95);
+    phase.set_name("finalizing refs");
+    Ok(format!("fetched {remote_name}"))
 }
 
 fn push_branch(repository_path: &Path, remote: &BStr, branch: &BStr) -> Result<String> {
@@ -4731,8 +4823,8 @@ fn current_worktree_branch(refs: &history::RefSnapshot) -> Option<(gix::ObjectId
         .map(|worktree| (worktree.label_id, worktree.is_detached))
 }
 
-fn push_branch_name(refs: &history::RefSnapshot) -> Option<BString> {
-    refs.head_pin_branch.as_ref().map(|branch| branch.shorten().to_owned())
+fn active_branch_name(refs: &history::RefSnapshot) -> Option<BString> {
+    refs.active_branch.as_ref().map(|branch| branch.shorten().to_owned())
 }
 
 fn push_remote_name(repository: &gix::Repository, branch: &BStr) -> BString {
@@ -4741,6 +4833,76 @@ fn push_remote_name(repository: &gix::Repository, branch: &BStr) -> BString {
         .map(|name| name.as_bstr().to_owned())
         .or_else(|| repository.remote_default_name(gix::remote::Direction::Push))
         .unwrap_or_else(|| "origin".into())
+}
+
+#[cfg(feature = "blocking-network-client")]
+fn fetch_progress_snapshot(source: &FetchProgressSource) -> app::BackgroundProgress {
+    let mut tasks = Vec::new();
+    source.tree.sorted_snapshot(&mut tasks);
+    let mut completed = 0;
+    let mut detail = "setup".to_owned();
+    for (_, task) in tasks {
+        let step = task
+            .progress
+            .as_ref()
+            .map_or(0, |progress| progress.step.load(Ordering::Relaxed));
+        let within = |start: usize, end: usize| {
+            let Some(total) = task.progress.as_ref().and_then(|progress| progress.done_at) else {
+                return start;
+            };
+            start
+                + ((end - start) as u128 * step.min(total) as u128)
+                    .checked_div(total as u128)
+                    .unwrap_or((end - start) as u128) as usize
+        };
+        let name = task.name.to_ascii_lowercase();
+        let mapped = if task.id == *b"TIXF" {
+            step.min(95)
+        } else if task.id == *b"FERP" {
+            if name.contains("enumerating") {
+                within(15, 20)
+            } else if name.contains("counting") {
+                within(20, 25)
+            } else if name.contains("compressing") {
+                within(25, 30)
+            } else if name.contains("receiving") {
+                within(30, 75)
+            } else if name.contains("resolving") {
+                within(75, 90)
+            } else {
+                15
+            }
+        } else if task.id == *b"BWRB" || task.id == *b"IWIO" {
+            within(30, 75)
+        } else if task.id == *b"IWRO" {
+            within(75, 90)
+        } else if task.id == *b"IWBW" {
+            within(90, 95)
+        } else if name.starts_with("authentication") || name.starts_with("handshake") {
+            5
+        } else if name.starts_with("negotiate") {
+            10
+        } else if name.starts_with("receiving pack") {
+            30
+        } else {
+            continue;
+        };
+        if mapped >= completed {
+            completed = mapped;
+            detail = if let Some(total) = task.progress.as_ref().and_then(|progress| progress.done_at) {
+                format!("{} {}/{total}", task.name, step.min(total))
+            } else if step > 0 {
+                format!("{} {step}", task.name)
+            } else {
+                task.name
+            };
+        }
+    }
+    app::BackgroundProgress {
+        text: format!("{}: {detail}", source.label),
+        completed,
+        total: 100,
+    }
 }
 
 fn decoration_successor(selected: gix::ObjectId, current: &Decorations, next: &Decorations) -> Option<gix::ObjectId> {
@@ -7419,6 +7581,10 @@ fn action_with_shortcut_groups(
         KeyCode::Char('y') if actions_expanded => Some(Action::CopyInsert),
         KeyCode::Char('m') if actions_expanded => Some(Action::MoveInsert),
         KeyCode::Char('t') if actions_expanded => Some(Action::StackInsert),
+        #[cfg(feature = "blocking-network-client")]
+        KeyCode::Char('F') if actions_expanded => Some(Action::Fetch),
+        #[cfg(feature = "blocking-network-client")]
+        KeyCode::Char('f') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Fetch),
         KeyCode::Char('f') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::ForkCommit)
         }
@@ -7923,7 +8089,9 @@ mod tests {
             view_tips: Vec::new(),
             hidden_tips: Vec::new(),
             pins: Vec::new(),
-            head_pin_branch: None,
+            active_branch: None,
+            #[cfg(feature = "blocking-network-client")]
+            fetch_remote: None,
             worktrees: vec![history::WorktreeCheckout {
                 id,
                 label_id: id,
@@ -7946,7 +8114,7 @@ mod tests {
     }
 
     #[test]
-    fn pushes_the_head_pin_branch_instead_of_detached_head() -> gix_testtools::Result {
+    fn pushes_the_remembered_active_branch_instead_of_detached_head() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let remote = gix_testtools::tempfile::tempdir()?;
         let initialized = Command::new("git")
@@ -7983,7 +8151,7 @@ mod tests {
         );
         let snapshot = history::snapshot(&repository, &[], &[], false)?;
         let branch = snapshot
-            .head_pin_branch
+            .active_branch
             .as_ref()
             .context("the HEAD pin identifies a branch")?
             .shorten()
@@ -8001,6 +8169,157 @@ mod tests {
             "the branch named by the pin is pushed, not detached HEAD"
         );
         Ok(())
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn selects_the_branch_fetch_remote_then_origin_or_the_sole_remote() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let git = |args: &[&str]| Command::new("git").current_dir(fixture.path()).args(args).status();
+        assert!(git(&["remote", "add", "origin", "./origin.git"])?.success());
+        assert!(git(&["remote", "add", "upstream", "./upstream.git"])?.success());
+        assert!(git(&["config", "branch.main.remote", "upstream"])?.success());
+
+        let repository = test_repository::open(fixture.path())?;
+        assert_eq!(
+            history::snapshot(&repository, &[], &[], false)?
+                .fetch_remote
+                .as_ref()
+                .map(|name| name.as_bstr()),
+            Some(b"upstream".as_bstr())
+        );
+        drop(repository);
+
+        assert!(git(&["config", "--unset", "branch.main.remote"])?.success());
+        let repository = test_repository::open(fixture.path())?;
+        assert_eq!(
+            history::snapshot(&repository, &[], &[], false)?
+                .fetch_remote
+                .as_ref()
+                .map(|name| name.as_bstr()),
+            Some(b"origin".as_bstr())
+        );
+        drop(repository);
+
+        assert!(git(&["checkout", "-q", "--detach"])?.success());
+        let repository = test_repository::open(fixture.path())?;
+        let snapshot = history::snapshot(&repository, &[], &[], false)?;
+        assert_eq!(snapshot.active_branch, None);
+        assert_eq!(
+            snapshot.fetch_remote.as_ref().map(|name| name.as_bstr()),
+            Some(b"origin".as_bstr())
+        );
+        drop(repository);
+
+        assert!(git(&["remote", "remove", "origin"])?.success());
+        let repository = test_repository::open(fixture.path())?;
+        assert_eq!(
+            history::snapshot(&repository, &[], &[], false)?
+                .fetch_remote
+                .as_ref()
+                .map(|name| name.as_bstr()),
+            Some(b"upstream".as_bstr())
+        );
+        drop(repository);
+
+        assert!(git(&["remote", "remove", "upstream"])?.success());
+        let repository = test_repository::open(fixture.path())?;
+        assert_eq!(history::snapshot(&repository, &[], &[], false)?.fetch_remote, None);
+        Ok(())
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn fetches_configured_refspecs_into_remote_tracking_refs_with_gix() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let remote = gix_testtools::tempfile::tempdir()?;
+        assert!(
+            Command::new("git")
+                .args(["init", "-q", "--bare"])
+                .arg(remote.path())
+                .status()?
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .current_dir(fixture.path())
+                .args(["remote", "add", "origin"])
+                .arg(remote.path())
+                .status()?
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .current_dir(fixture.path())
+                .args(["push", "-q", "origin", "main"])
+                .status()?
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .current_dir(fixture.path())
+                .args(["update-ref", "-d", "refs/remotes/origin/main"])
+                .status()?
+                .success()
+        );
+
+        let expected = test_repository::open(fixture.path())?
+            .rev_parse_single("main")?
+            .detach();
+        let message = fetch_remote(
+            fixture.path(),
+            false,
+            b"origin".as_bstr(),
+            gix::progress::tree::Root::new(),
+        )?;
+        assert_eq!(message, "fetched origin");
+        assert_eq!(
+            test_repository::open(fixture.path())?
+                .find_reference("refs/remotes/origin/main")?
+                .id(),
+            expected,
+            "the configured fetch refspec updates its tracking reference"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn fetch_progress_maps_real_tasks_into_monotonic_phases() {
+        let tree = gix::progress::tree::Root::new();
+        let source = FetchProgressSource {
+            tree: Arc::clone(&tree),
+            label: "fetching origin".into(),
+        };
+        let mut phase = tree.add_child_with_id("connect/auth", *b"TIXF");
+        phase.init(Some(100), gix::progress::steps());
+        phase.set(5);
+        let mut values = vec![fetch_progress_snapshot(&source).completed];
+
+        let mut fetch = phase.add_child("negotiate (round 1)");
+        values.push(fetch_progress_snapshot(&source).completed);
+        let remote = fetch.add_child_with_id("remote: Counting objects", *b"FERP");
+        remote.init(Some(100), gix::progress::count("objects"));
+        remote.set(50);
+        values.push(fetch_progress_snapshot(&source).completed);
+        let indexing = fetch.add_child_with_id("indexing", *b"IWIO");
+        indexing.init(Some(100), gix::progress::count("objects"));
+        indexing.set(50);
+        values.push(fetch_progress_snapshot(&source).completed);
+        let resolving = fetch.add_child_with_id("Resolving", *b"IWRO");
+        resolving.init(Some(100), gix::progress::count("objects"));
+        resolving.set(50);
+        values.push(fetch_progress_snapshot(&source).completed);
+        let writing = fetch.add_child_with_id("writing index file", *b"IWBW");
+        writing.init(Some(100), gix::progress::bytes());
+        writing.set(50);
+        values.push(fetch_progress_snapshot(&source).completed);
+
+        assert_eq!(values, [5, 10, 22, 52, 82, 92]);
+        assert!(
+            values.windows(2).all(|pair| pair[0] <= pair[1]),
+            "progress never moves backwards between phases"
+        );
     }
 
     #[test]
@@ -9384,6 +9703,17 @@ mod tests {
                 action_with_shortcut_groups(key, false, true, false, false),
                 Some(Action::Push),
                 "Shift-P pushes only after the actions prefix"
+            );
+        }
+        #[cfg(feature = "blocking-network-client")]
+        for key in [
+            KeyEvent::new(KeyCode::Char('F'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(
+                action_with_shortcut_groups(key, false, true, false, false),
+                Some(Action::Fetch),
+                "Shift-F fetches only after the actions prefix"
             );
         }
         assert_eq!(

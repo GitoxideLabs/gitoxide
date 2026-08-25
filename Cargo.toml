@@ -152,7 +152,7 @@ gitoxide-core-tools-clean = ["gitoxide-core/clean"]
 #! The backends are mutually exclusive, e.g. choose either `curl` or `request`.
 #!
 ## Use blocking client networking.
-gitoxide-core-blocking-client = ["gitoxide-core/blocking-client"]
+gitoxide-core-blocking-client = ["gitoxide-core/blocking-client", "gix-tix?/blocking-network-client"]
 ## Support synchronous 'http' and 'https' transports (e.g. for clone, fetch and push) using **curl**.
 http-client-curl = ["gix/blocking-http-transport-curl"]
 ## Implies `http-client-curl` and configures `curl` to use the `rust-tls` backend.
