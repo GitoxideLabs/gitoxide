@@ -4492,7 +4492,7 @@ mod tests {
             commit(target, None),
         ]);
         complete(&mut app);
-        app.selected = app.rows.iter().position(|row| row.id == parent);
+        app.selected = app.rows.iter().position(|row| row.id == head);
         app.actions_expanded = true;
         let mut terminal = Terminal::new(TestBackend::new(160, 5))?;
 
