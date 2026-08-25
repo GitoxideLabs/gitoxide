@@ -206,6 +206,7 @@ pub(crate) fn prepare(
     let mut body = Vec::new();
     let mut enrichments = crate::enrich::open(repo)?;
     let mut tree_enrichments = crate::enrich::open_tree(repo)?;
+    let mut written_external_refs = HashSet::new();
     for (section_index, section) in sections.iter().enumerate() {
         if section_index > 0 {
             body.push(b'\n');
@@ -217,7 +218,7 @@ pub(crate) fn prepare(
             (section.parent == onto).then_some((anchor_kind, anchor_title.as_str())),
             show_change_ids,
         )?;
-        if !scope_set.contains(&section.parent) {
+        if !scope_set.contains(&section.parent) && written_external_refs.insert(section.parent) {
             write_refs_at(&mut body, &state.expected_refs, section.parent)?;
         }
         for id in &section.commits {
@@ -1638,6 +1639,73 @@ mod tests {
         );
         let plan = parse_plan(&repo, document.as_bytes())?;
         assert_eq!(plan.steps.len(), 3, "display annotations do not alter the plan");
+        Ok(())
+    }
+
+    #[test]
+    fn shared_updated_base_refs_are_written_once_during_review() -> gix_testtools::Result {
+        let (fixture, repo) = repo()?;
+        let (_old_base, base, reviewed, _) = commits(&repo)?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["switch", "-q", "-c", "topic"])
+                .status()?
+                .success(),
+            "the review return branch is prepared"
+        );
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+        let started = super::super::review::start(fixture.path(), false, &graph, reviewed, base)?;
+        assert!(started.checkout_error.is_none(), "the review checkout succeeds");
+
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            ["core.abbrev=7", "user.name=todo author", "user.email=todo@example.com"],
+        )?;
+        let mut updated = repo.find_commit(base)?.decode()?.into_owned()?;
+        updated.parents = [base].into_iter().collect();
+        updated.message = "updated base".into();
+        let updated = repo.write_object(&updated)?.detach();
+        repo.reference(
+            "refs/heads/main",
+            updated,
+            gix::refs::transaction::PreviousValue::ExistingMustMatch(gix::refs::Target::Object(reviewed)),
+            "advance the hidden base",
+        )?;
+
+        let prepared = prepare_test(
+            &repo,
+            base,
+            updated,
+            &[
+                Commit {
+                    id: started.commit,
+                    parents: vec![base],
+                    info: "review".into(),
+                },
+                Commit {
+                    id: reviewed,
+                    parents: vec![base],
+                    info: "reviewed".into(),
+                },
+            ],
+            Some(started.commit),
+        )?;
+        let document = String::from_utf8(prepared.document.clone())?;
+        assert_eq!(
+            document.lines().filter(|line| *line == "(main)").count(),
+            1,
+            "a mutable ref at a shared fork target is emitted once"
+        );
+        let plan = parse_plan(&repo, &prepared.document)?;
+        assert!(
+            plan.expected_refs.iter().any(|reference| {
+                reference.name == started.reference && !reference.editable && reference.target == reviewed
+            }),
+            "the active review remains part of the rebase transaction"
+        );
         Ok(())
     }
 
