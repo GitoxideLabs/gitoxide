@@ -128,7 +128,7 @@ dirwalk = ["dep:gix-dir", "attributes", "excludes"]
 credentials = ["dep:gix-credentials", "dep:gix-prompt", "dep:gix-negotiate"]
 
 ## Various ways to alter the worktree makeup by checkout and reset.
-worktree-mutation = ["attributes", "dep:gix-worktree-state"]
+worktree-mutation = ["attributes", "dep:gix-worktree-state", "gix-worktree/create"]
 
 ## Retrieve a worktree stack for querying exclude information
 excludes = ["dep:gix-ignore", "dep:gix-worktree", "index"]
