@@ -418,7 +418,7 @@ impl Tree {
         true
     }
 
-    pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, graph: Option<&HistoryGraph>) {
+    pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, area: Rect, graph: Option<&HistoryGraph>) {
         let overlay_selected = self
             .count_anchor
             .and_then(|id| self.overview.as_ref()?.nodes.iter().position(|node| node.id == id))
@@ -436,8 +436,8 @@ impl Tree {
                 .as_ref()
                 .map(|overview| Overlay::new(graph, overview, selected));
         }
-        let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-        frame.render_widget(Clear, frame.area());
+        let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+        frame.render_widget(Clear, area);
         let notice = self.notice.clone();
         let notice_area = notice
             .as_ref()
@@ -1728,6 +1728,11 @@ mod tests {
         ObjectId::Sha1(bytes)
     }
 
+    fn draw_tree(frame: &mut Frame<'_>, tree: &mut Tree, graph: &HistoryGraph) {
+        let area = frame.area();
+        tree.draw(frame, area, Some(graph));
+    }
+
     fn fixture() -> (HistoryGraph, RefSnapshot, Decorations) {
         let graph = HistoryGraph::from_test_commits(&[
             (id(1), vec![]),
@@ -1771,6 +1776,37 @@ mod tests {
             ),
         ]);
         (graph, refs, decorations)
+    }
+
+    #[test]
+    fn drawing_stays_inside_the_supplied_area() -> gix_testtools::Result {
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+        let bounds = Rect::new(4, 2, 32, 8);
+        let mut terminal = Terminal::new(TestBackend::new(40, 12))?;
+
+        terminal.draw(|frame| {
+            for y in 0..frame.area().height {
+                for x in 0..frame.area().width {
+                    frame.buffer_mut()[(x, y)].set_symbol("x");
+                }
+            }
+            tree.draw(frame, bounds, Some(&graph));
+        })?;
+
+        for y in 0..12 {
+            for x in 0..40 {
+                if x < bounds.x || x >= bounds.right() || y < bounds.y || y >= bounds.bottom() {
+                    assert_eq!(
+                        terminal.backend().buffer()[(x, y)].symbol(),
+                        "x",
+                        "ref-tree drawing escaped its supplied area at ({x}, {y})"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -2011,7 +2047,7 @@ mod tests {
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
         let mut terminal = Terminal::new(TestBackend::new(100, 18))?;
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         let main = tree
             .selected
             .and_then(|selected| tree.overview.as_ref()?.nodes.get(selected))
@@ -2028,7 +2064,7 @@ mod tests {
             graph.index(main),
             "the retained overlay still uses the anchored commit"
         );
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         let footer: String = terminal
             .backend()
             .buffer()
@@ -2049,7 +2085,7 @@ mod tests {
             tree.overlay.is_none(),
             "moving the anchor invalidates reachability once"
         );
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         let moved = tree
             .selected
             .and_then(|selected| tree.overview.as_ref()?.nodes.get(selected))
@@ -2673,7 +2709,7 @@ mod tests {
         tree.rebuild(&graph, &refs, &decorations);
         let mut terminal = Terminal::new(TestBackend::new(100, 18))?;
 
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         let rendered = terminal
             .backend()
             .buffer()
@@ -2722,7 +2758,7 @@ mod tests {
             "an out-of-history linked worktree uses dark green"
         );
         tree.set_history_commits([id(6), id(5)]);
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         assert_eq!(
             terminal.backend().buffer()[(rail_width as u16, point.y as u16)].fg,
             Color::Cyan,
@@ -2734,7 +2770,7 @@ mod tests {
         tree.selected = Some(fork);
         tree.selection_changed();
         tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         let point = tree.placed.as_ref().expect("drawing places the ref-tree").nodes[fork];
         assert_eq!(
             terminal.backend().buffer()[(point.x as u16, point.y as u16)].symbol(),
@@ -2770,7 +2806,7 @@ mod tests {
         assert_eq!(choice_marker(9), '9');
         assert_eq!(choice_marker(10), '+', "large ordinals use the overflow marker");
         tree.leave_error("remote deletion failed");
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         assert_eq!(terminal.backend().buffer()[(2, 16)].bg, Color::LightRed);
         assert!(
             terminal
