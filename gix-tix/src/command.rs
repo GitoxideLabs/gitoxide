@@ -86,12 +86,20 @@ enum Command {
 #[derive(Debug, clap::Subcommand)]
 enum WorktrunkCommand {
     /// Switch to an existing worktree, or create one for a local branch.
+    #[command(group(
+        clap::ArgGroup::new("switch_target")
+            .multiple(false)
+            .args(["target", "new_branch"])
+    ))]
     Switch {
         /// Existing worktree path or local branch; omit to open the picker.
         #[arg(value_name = "TARGET")]
         target: Option<OsString>,
+        /// Create this local branch at the logical Tix HEAD, or use it if it exists.
+        #[arg(long, value_name = "NAME")]
+        new_branch: Option<OsString>,
         /// Path at which to create a worktree for a local branch.
-        #[arg(long, value_name = "PATH", requires = "target")]
+        #[arg(long, value_name = "PATH", requires = "switch_target")]
         path: Option<PathBuf>,
     },
     /// Print the `wt` function for SHELL.
@@ -274,9 +282,19 @@ impl Platform {
             Command::Show(args) => return show(&repository, args),
             Command::Worktrunk { command } => {
                 return match command {
-                    None => crate::worktrunk::run(repository.into_sync(), None, None),
-                    Some(WorktrunkCommand::Switch { target, path }) => {
-                        crate::worktrunk::run(repository.into_sync(), target, path)
+                    None => crate::worktrunk::run(repository.into_sync(), None, None, false),
+                    Some(WorktrunkCommand::Switch {
+                        target,
+                        new_branch,
+                        path,
+                    }) => {
+                        let create_branch_if_missing = new_branch.is_some();
+                        crate::worktrunk::run(
+                            repository.into_sync(),
+                            new_branch.or(target),
+                            path,
+                            create_branch_if_missing,
+                        )
                     }
                     Some(WorktrunkCommand::ShellInit { shell }) => print_shell_init(shell, invocation),
                 };
@@ -1342,6 +1360,7 @@ mod tests {
             Some(Command::Worktrunk {
                 command: Some(WorktrunkCommand::Switch {
                     target: None,
+                    new_branch: None,
                     path: None,
                 })
             })
@@ -1351,13 +1370,36 @@ mod tests {
             .expect("explicit branch and worktree path parse")
             .platform;
         let Some(Command::Worktrunk {
-            command: Some(WorktrunkCommand::Switch { target, path }),
+            command:
+                Some(WorktrunkCommand::Switch {
+                    target,
+                    new_branch: None,
+                    path,
+                }),
         }) = switch.command
         else {
             panic!("worktrunk switch was expected")
         };
         assert_eq!(target.as_deref(), Some(OsStr::new("topic")));
         assert_eq!(path.as_deref(), Some(std::path::Path::new("../topic")));
+
+        let create = Cli::try_parse_from(["tix", "wt", "switch", "--new-branch", "topic", "--path", "../topic"])
+            .expect("a new branch and its worktree path parse")
+            .platform;
+        assert!(matches!(
+            create.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Switch {
+                    target: None,
+                    new_branch: Some(branch),
+                    path: Some(_),
+                })
+            }) if branch == "topic"
+        ));
+        assert!(
+            Cli::try_parse_from(["tix", "wt", "switch", "topic", "--new-branch", "other"]).is_err(),
+            "a positional target and new branch are mutually exclusive"
+        );
         assert!(
             Cli::try_parse_from(["tix", "worktrunk", "switch", "--path", "../topic"]).is_err(),
             "a creation path requires a local-branch target"
