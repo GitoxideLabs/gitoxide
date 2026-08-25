@@ -216,6 +216,9 @@ without trading responsiveness for metadata that is not visible.
   author date by default, author and attribution information, markers, and title.
   Simple lane turns use rounded corners in both the TUI and `tix show`; merge
   tees and crossings remain orthogonal so every commit still occupies one row.
+- When the current worktree HEAD is in an active review tree, its nearest review
+  root and all descendants are drawn before other ready branches. Ambiguous
+  unrelated review roots retain the ordinary history order.
 - The commit marker is blue when unsigned, orange when signed but unverified or
   being verified, green when verified, and bright red when verification fails.
 - The current `HEAD` commit, including a review commit, uses `@` instead of the

@@ -53,6 +53,26 @@ pub(crate) const STASH_PREFIX: &[u8] = b"refs/tix/stash/";
 pub(crate) const REVIEW_PREFIX: &[u8] = b"refs/worktree/tix/review/";
 pub(crate) const REVIEW_STASH_PREFIX: &[u8] = b"refs/worktree/tix/review/stashes/";
 
+pub(crate) fn nearest_review_root(
+    roots: &[ObjectId],
+    commit: ObjectId,
+    mut is_ancestor: impl FnMut(ObjectId, ObjectId) -> bool,
+) -> std::result::Result<Option<ObjectId>, ()> {
+    let mut nearest = None;
+    for root in roots.iter().copied() {
+        if !is_ancestor(root, commit) {
+            continue;
+        }
+        nearest = match nearest {
+            None => Some(root),
+            Some(current) if is_ancestor(current, root) => Some(root),
+            Some(current) if is_ancestor(root, current) => Some(current),
+            Some(_) => return Err(()),
+        };
+    }
+    Ok(nearest)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Pin {
     pub name: gix::refs::FullName,
