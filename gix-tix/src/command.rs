@@ -677,9 +677,10 @@ fn resolve_spill_paths(repository: &gix::Repository, paths: &[OsString]) -> Resu
 fn split(repository: gix::Repository, graph: &crate::history::HistoryGraph, args: Split) -> Result<()> {
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
-    let prepared = crate::edit::split::prepare(repository, args.todo)?;
+    let mut prepared = crate::edit::split::prepare(repository, args.todo)?;
+    let editor = prepared.editor.take().expect("prepared splits have an editor");
     let Some(edited) = crate::edit::edit_document_without_terminal(
-        &prepared.editor,
+        editor,
         &prepared.document,
         &format!("tix-split-{}.md", std::process::id()),
     )?

@@ -85,9 +85,12 @@ fn todo(repo: gix::Repository, args: Todo) -> Result<()> {
         return Ok(());
     }
 
-    let editor = repo.editor().context("no Git editor is available")?;
+    let editor = repo
+        .editor_command()
+        .context("could not prepare Git editor")?
+        .context("no Git editor is available")?;
     let edited = edit::edit_document_without_terminal(
-        &editor,
+        editor,
         &prepared.document,
         &format!("tix-rebase-{}.md", std::process::id()),
     )?

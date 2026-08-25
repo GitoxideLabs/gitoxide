@@ -85,6 +85,8 @@ fn defaults_are_deterministic_and_case_specific_overrides_win() -> gix_testtools
     assert_eq!(committer.name, "reviewer");
     assert_eq!(committer.time.seconds, 978_307_200);
     assert!(repo.commit_signing_options_if_enabled()?.is_none());
-    assert_eq!(repo.editor(), Some(":".into()));
+    let editor = repo.editor_command()?.expect("the test editor is configured");
+    assert_eq!(editor.command, ":");
+    assert!(editor.use_shell, "the shell provides the colon builtin");
     Ok(())
 }

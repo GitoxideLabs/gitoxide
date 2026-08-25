@@ -1,6 +1,5 @@
+use crate::{bstr::ByteSlice, config};
 use std::{collections::BTreeSet, ffi::OsString};
-
-use crate::{bstr::ByteSlice, config, config::tree::Core};
 
 /// General Configuration
 impl crate::Repository {
@@ -25,26 +24,68 @@ impl crate::Repository {
         config::Snapshot { repo: self }
     }
 
-    /// Return the editor program selected by Git's precedence rules.
+    /// Return the editor selected by Git's precedence rules.
     ///
     /// `GIT_EDITOR` takes precedence over `core.editor`. If the terminal isn't dumb, `VISUAL` is considered next,
-    /// followed by `EDITOR`. If none are set, `vi` is returned unless `TERM` is unset or `dumb`, in which case there
-    /// is no usable editor.
+    /// followed by `EDITOR`. If none are set, a bundled `vi` (or its `vim` implementation) is returned when available
+    /// unless `TERM` is unset or `dumb`, in which case there is no usable editor.
+    ///
+    /// Use [`editor_command()`](Self::editor_command) to obtain a command prepared for execution.
     pub fn editor(&self) -> Option<OsString> {
-        if let Some(editor) = self.config_snapshot().trusted_program(Core::EDITOR) {
-            return Some(editor);
-        }
+        use crate::config::tree::{Core, Gitoxide};
 
-        let terminal_is_dumb = std::env::var_os("TERM").is_none_or(|terminal| terminal == "dumb");
-        if !terminal_is_dumb {
-            if let Some(editor) = std::env::var_os("VISUAL") {
-                return Some(editor);
-            }
+        let config = self.config_snapshot();
+        let terminal_is_dumb = config.string(Gitoxide::TERM).is_none_or(|terminal| terminal == "dumb");
+        config
+            .trusted_program(Core::EDITOR)
+            .or_else(|| {
+                (!terminal_is_dumb)
+                    .then(|| config.trusted_program(Gitoxide::VISUAL))
+                    .flatten()
+            })
+            .or_else(|| config.trusted_program(Gitoxide::EDITOR))
+            .or_else(|| {
+                (!terminal_is_dumb).then(|| {
+                    gix_path::env::installation_program("vi")
+                        // Current Git for Windows versions provide `vi` as a shell script that delegates to `vim.exe`.
+                        // Select the directly executable implementation when no `vi.exe` is installed.
+                        .or_else(|| {
+                            cfg!(windows)
+                                .then(|| gix_path::env::installation_program("vim"))
+                                .flatten()
+                        })
+                        .unwrap_or_else(|| "vi".into())
+                        .into_os_string()
+                })
+            })
+            .filter(|editor| !editor.is_empty())
+    }
+
+    /// Return the prepared [`editor`](Self::editor) command.
+    ///
+    /// The returned command has repository context and inherited standard streams. Add the paths to edit as arguments
+    /// before spawning it.
+    #[cfg(feature = "command")]
+    pub fn editor_command(&self) -> Result<Option<gix_command::Prepare>, config::command_context::Error> {
+        use std::{path::Path, process::Stdio};
+
+        let Some(editor) = self.editor() else {
+            return Ok(None);
+        };
+
+        let mut command = gix_command::prepare(&editor);
+        if editor.to_string_lossy().trim_ascii() == ":" {
+            command = command.with_shell();
+        } else if !Path::new(&editor).is_file() {
+            command = command.command_may_be_shell_script();
         }
-        if let Some(editor) = std::env::var_os("EDITOR") {
-            return Some(editor);
-        }
-        (!terminal_is_dumb).then(|| "vi".into())
+        Ok(Some(
+            command
+                .with_context(self.command_context()?)
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit()),
+        ))
     }
 
     /// Resolve all Git configuration needed to sign a commit with [`gix_object::Commit::sign()`].
@@ -157,7 +198,7 @@ impl crate::Repository {
 
     /// Return the context to be passed to any spawned program that is supposed to interact with the repository, like
     /// hooks or filters.
-    #[cfg(feature = "attributes")]
+    #[cfg(feature = "command")]
     pub fn command_context(&self) -> Result<gix_command::Context, config::command_context::Error> {
         use crate::config::{cache::util::ApplyLeniency, tree::gitoxide};
 

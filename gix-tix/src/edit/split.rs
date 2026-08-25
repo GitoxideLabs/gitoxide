@@ -5,7 +5,7 @@ use super::{create, rebase};
 use crate::{ChangeGroup, ChangeKind, load_worktree_changes_without_lines};
 
 pub(crate) struct Prepared {
-    pub editor: std::ffi::OsString,
+    pub editor: Option<gix::command::Prepare>,
     pub document: Vec<u8>,
     create: create::Prepared,
     target: ObjectId,
@@ -57,7 +57,7 @@ pub(crate) fn prepare(mut repo: gix::Repository, todo: bool) -> Result<Prepared>
         .context("candidate object memory was unavailable")?;
 
     Ok(Prepared {
-        editor: create.editor.clone(),
+        editor: create.editor.take(),
         document: create.document.clone(),
         create,
         target,

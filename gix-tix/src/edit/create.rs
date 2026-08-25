@@ -1,5 +1,3 @@
-use std::ffi::OsString;
-
 use anyhow::{Context, Result};
 use gix::{ObjectId, bstr::ByteSlice};
 
@@ -11,7 +9,7 @@ use crate::{
 use super::{rebase, reword};
 
 pub(crate) struct Prepared {
-    pub editor: OsString,
+    pub editor: Option<gix::command::Prepare>,
     pub document: Vec<u8>,
     pub(super) parent: Option<ObjectId>,
     pub(super) tree: ObjectId,
@@ -69,7 +67,10 @@ fn prepare_inner(
     if parent.is_none() {
         head.referent_name().context("an unborn HEAD must point to a branch")?;
     }
-    let editor = repo.editor().context("no Git editor is available")?;
+    let editor = repo
+        .editor_command()
+        .context("could not prepare Git editor")?
+        .context("no Git editor is available")?;
     let mut author = repo
         .author()
         .context("no Git author is configured")?
@@ -164,7 +165,7 @@ fn prepare_inner(
         .context("candidate object memory was unavailable")?;
     objects.remove(&provisional);
     Ok(Prepared {
-        editor,
+        editor: Some(editor),
         document,
         parent,
         tree,

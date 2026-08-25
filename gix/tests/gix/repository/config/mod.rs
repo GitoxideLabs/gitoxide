@@ -1,4 +1,5 @@
 mod config_snapshot;
+#[cfg(feature = "command")]
 mod editor;
 mod identity;
 mod remote;

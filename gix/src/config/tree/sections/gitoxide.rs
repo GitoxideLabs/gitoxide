@@ -34,6 +34,15 @@ impl Gitoxide {
         "The user agent presented on the git protocol layer, serving as fallback for when no `http.userAgent` is set",
     );
 
+    /// The `gitoxide.term` key. Mainly used for supporting building an editor command, Git style.
+    pub const TERM: keys::Any = keys::Any::new("term", &config::Tree::GITOXIDE).with_environment_override("TERM");
+    /// The `gitoxide.visual` key. Mainly used for supporting building an editor command, Git style.
+    pub const VISUAL: keys::Program =
+        keys::Program::new_program("visual", &config::Tree::GITOXIDE).with_environment_override("VISUAL");
+    /// The `gitoxide.editor` key. Mainly used for supporting building an editor command, Git style.
+    pub const EDITOR: keys::Program =
+        keys::Program::new_program("editor", &config::Tree::GITOXIDE).with_environment_override("EDITOR");
+
     /// The `gitoxide.tracePacket` Key.
     pub const TRACE_PACKET: keys::Boolean = keys::Boolean::new_boolean("tracePacket", &config::Tree::GITOXIDE)
         .with_environment_override("GIT_TRACE_PACKET");
@@ -48,7 +57,14 @@ impl Section for Gitoxide {
     }
 
     fn keys(&self) -> &[&dyn Key] {
-        &[&Self::USER_AGENT, &Self::TRACE_PACKET, &Self::PARSE_PRECIOUS]
+        &[
+            &Self::USER_AGENT,
+            &Self::TERM,
+            &Self::VISUAL,
+            &Self::EDITOR,
+            &Self::TRACE_PACKET,
+            &Self::PARSE_PRECIOUS,
+        ]
     }
 
     fn sub_sections(&self) -> &[&dyn Section] {
