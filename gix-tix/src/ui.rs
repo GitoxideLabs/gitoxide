@@ -968,6 +968,7 @@ pub(crate) fn draw_with_worktree(
                 buffer.set_style(
                     Rect::new(start, y, end - start, 1),
                     Style::default()
+                        .fg(Color::Black)
                         .bg(REVIEW_BACKGROUND)
                         .remove_modifier(Modifier::REVERSED),
                 );
@@ -5349,8 +5350,11 @@ mod tests {
             .count() as u16;
         let end = title - 1;
         let buffer = terminal.backend().buffer();
-        let highlighted =
-            |x| buffer[(x, 0)].bg == REVIEW_BACKGROUND && !buffer[(x, 0)].modifier.contains(Modifier::REVERSED);
+        let highlighted = |x| {
+            buffer[(x, 0)].fg == Color::Black
+                && buffer[(x, 0)].bg == REVIEW_BACKGROUND
+                && !buffer[(x, 0)].modifier.contains(Modifier::REVERSED)
+        };
         assert!(
             highlighted(start) && (start + Line::raw("🫟").width() as u16..end).all(highlighted),
             "the review background wins from the first visible gutter through its metadata"
