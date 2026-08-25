@@ -6932,7 +6932,12 @@ fn command_picker_items(commands: &[MenuCommand]) -> Vec<MenuItem<'_, CommandId>
     commands
         .iter()
         .map(|command| {
-            MenuItem::with_search_prefix(command.label, command.group.label(), command.group.prefix(), command.id)
+            MenuItem::with_search_prefix(
+                command.label,
+                command.search_prefix(),
+                command.group.prefix(),
+                command.id,
+            )
         })
         .collect()
 }

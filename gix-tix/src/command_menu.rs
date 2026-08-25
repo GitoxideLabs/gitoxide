@@ -101,6 +101,17 @@ impl Command {
             .next_back()
             .expect("command shortcuts always contain a leaf key")
     }
+
+    pub(crate) fn search_prefix(&self) -> &'static str {
+        match self.group {
+            CommandGroup::Actions => "Actions commit",
+            CommandGroup::Enrich => "Enrich commit",
+            CommandGroup::Information if matches!(self.id, CommandId::CommitMessage | CommandId::Changes) => {
+                "Information commit"
+            }
+            group => group.label(),
+        }
+    }
 }
 
 pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_signatures: bool) -> Vec<Command> {
@@ -738,5 +749,38 @@ mod tests {
             None,
             "a contextual opposite does not replace the unavailable recalled command"
         );
+    }
+
+    #[test]
+    fn commit_query_finds_every_command_applied_to_a_commit() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row(2, &[1]), row(1, &[])]);
+        app.state = State::Complete;
+        app.set_worktree_head(Some(id(2)), false);
+        app.set_head_edit_availability(false, true, false, false, false, false, false);
+
+        let commands = commands(&app, &Decorations::default(), false);
+        let items = crate::command_picker_items(&commands);
+        let expected = commands
+            .iter()
+            .filter(|command| {
+                matches!(command.group, CommandGroup::Actions | CommandGroup::Enrich)
+                    || matches!(command.id, CommandId::CommitMessage | CommandId::Changes)
+            })
+            .map(|command| command.id)
+            .collect::<Vec<_>>();
+        let mut menu = Menu::default();
+        menu.open(&items);
+        menu.paste("commit", &items);
+
+        let mut actual = Vec::new();
+        while let Some(index) = menu.selected_index() {
+            if actual.last() == Some(&commands[index].id) {
+                break;
+            }
+            actual.push(commands[index].id);
+            menu.down(&items);
+        }
+        assert_eq!(actual, expected, "commit aliases retain catalog order");
     }
 }
