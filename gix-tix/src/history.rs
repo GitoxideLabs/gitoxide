@@ -131,6 +131,7 @@ pub(crate) struct HistoryGraph {
     parents: Vec<CommitIndex>,
     by_id: HashMap<ObjectId, CommitIndex>,
     stored_order: Vec<CommitIndex>,
+    edit_scope: HashSet<ObjectId>,
     tracking: HashMap<CommitIndex, Vec<SelectionRef>>,
     relations: HashMap<(CommitIndex, CommitIndex), (usize, usize)>,
 }
@@ -188,7 +189,9 @@ impl HistoryGraph {
                 state: NODE_LOADED,
             };
         }
-        graph.set_current_view(&commits.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+        let ids = commits.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        graph.set_current_view(&ids);
+        graph.edit_scope.extend(ids);
         graph
     }
 
@@ -208,6 +211,7 @@ impl HistoryGraph {
             graph.ensure_commit(repo, commit_graph.as_ref(), &shallow, *id, &mut buf)?;
         }
         graph.set_current_view(ids);
+        graph.edit_scope.extend(ids.iter().copied());
         Ok(graph)
     }
 
@@ -248,9 +252,8 @@ impl HistoryGraph {
         self.stored_order.iter().map(|index| self.id(*index))
     }
 
-    pub(crate) fn is_stored(&self, id: ObjectId) -> bool {
-        self.index(id)
-            .is_some_and(|index| self.commits[index.as_usize()].state & NODE_STORED != 0)
+    pub(crate) fn is_in_edit_scope(&self, id: ObjectId) -> bool {
+        self.edit_scope.contains(&id)
     }
 
     pub(crate) fn is_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> bool {
@@ -369,6 +372,16 @@ impl HistoryGraph {
             self.commits[index.as_usize()].state |= NODE_IN_VIEW;
             pending.extend_from_slice(self.parents(index));
         }
+    }
+
+    fn set_edit_scope(&mut self, view_tips: &[ObjectId], hidden_tips: &[ObjectId]) {
+        let (visible, boundary) = view_scope(view_tips, hidden_tips, |id, out| {
+            if let Some(index) = self.index(id) {
+                out.extend(self.parents(index).iter().map(|parent| self.id(*parent)));
+            }
+        });
+        self.edit_scope = visible;
+        self.edit_scope.extend(boundary);
     }
 
     fn parent_ids(&self, index: CommitIndex) -> gix::traverse::commit::ParentIds {
@@ -837,6 +850,7 @@ impl HistoryGraph {
         } else {
             &refs.view_tips
         });
+        self.set_edit_scope(&refs.view_tips, &refs.hidden_tips);
         let decorations = decorations(repo, &refs.pins, &refs.worktrees)?;
         Ok(Refresh {
             refs,
@@ -844,6 +858,46 @@ impl HistoryGraph {
             commits: LoadedCommits { rows, attributions },
         })
     }
+}
+
+/// Return the visible commits and their displayed hidden boundary.
+pub(crate) fn view_scope(
+    view_tips: &[ObjectId],
+    hidden_tips: &[ObjectId],
+    mut extend_parents: impl FnMut(ObjectId, &mut Vec<ObjectId>),
+) -> (HashSet<ObjectId>, HashSet<ObjectId>) {
+    fn reachable_from(
+        tips: &[ObjectId],
+        extend_parents: &mut impl FnMut(ObjectId, &mut Vec<ObjectId>),
+    ) -> HashSet<ObjectId> {
+        let mut reachable = HashSet::new();
+        let mut pending = tips.to_vec();
+        while let Some(id) = pending.pop() {
+            if reachable.insert(id) {
+                extend_parents(id, &mut pending);
+            }
+        }
+        reachable
+    }
+
+    let visible = reachable_from(view_tips, &mut extend_parents);
+    let hidden = reachable_from(hidden_tips, &mut extend_parents);
+    let visible: HashSet<_> = visible.difference(&hidden).copied().collect();
+    let boundary = if visible.is_empty() {
+        if view_tips.is_empty() { hidden_tips } else { view_tips }
+            .iter()
+            .copied()
+            .collect()
+    } else if hidden_tips.is_empty() {
+        HashSet::new()
+    } else {
+        let mut parents = Vec::new();
+        for id in &visible {
+            extend_parents(*id, &mut parents);
+        }
+        parents.into_iter().filter(|id| !visible.contains(id)).collect()
+    };
+    (visible, boundary)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1074,6 +1128,7 @@ pub(crate) fn load(
         }
         emit(Event::VisibleComplete);
         graph.set_current_view(&hidden_tips);
+        graph.set_edit_scope(&tips, &hidden_tips);
         emit(Event::Complete(graph));
         return Ok(());
     }
@@ -1267,6 +1322,7 @@ pub(crate) fn load(
     emit(Event::VisibleComplete);
     graph.tracking = tracking;
     graph.set_current_view(&tips);
+    graph.set_edit_scope(&tips, &hidden_tips);
     emit(Event::Complete(graph));
     Ok(())
 }
@@ -2802,6 +2858,76 @@ mod tests {
                 "only hidden tips are retained as rows"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn edit_scope_is_visible_history_plus_its_hidden_boundary() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let topic = repo.rev_parse_single("topic")?.detach();
+        let boundary = repo.rev_parse_single("topic^")?.detach();
+        let root = repo.rev_parse_single("topic^^")?.detach();
+        let hidden_tip = repo.rev_parse_single("main")?.detach();
+        let mut graph = loaded(fixture.path(), &["topic"], &["main"])?
+            .into_iter()
+            .find_map(|event| match event {
+                Event::Complete(graph) => Some(graph),
+                _ => None,
+            })
+            .expect("history loading returns the completed graph");
+
+        assert!(graph.is_in_edit_scope(topic), "visible commits are in the edit scope");
+        assert!(
+            graph.is_in_edit_scope(boundary),
+            "the displayed hidden base is in the edit scope"
+        );
+        assert!(
+            !graph.is_in_edit_scope(root),
+            "history below the hidden base is excluded"
+        );
+        assert!(
+            !graph.is_in_edit_scope(hidden_tip),
+            "hidden-only descendants are excluded"
+        );
+
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        graph.refresh(
+            &repo,
+            &[OsString::from("main")],
+            &[OsString::from("main")],
+            false,
+            &HashSet::new(),
+            &authors,
+        )?;
+        assert!(graph.is_in_edit_scope(hidden_tip), "refresh installs its new boundary");
+        assert!(
+            !graph.is_in_edit_scope(topic),
+            "refresh removes the previous visible scope"
+        );
+        assert!(
+            !graph.is_in_edit_scope(boundary),
+            "refresh removes the previous boundary"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_commit_graph_has_exact_edit_scope() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let tip = repo.rev_parse_single("topic")?.detach();
+        let parent = repo.rev_parse_single("topic^")?.detach();
+
+        let graph = HistoryGraph::for_commits(&repo, &[tip])?;
+
+        assert!(graph.is_in_edit_scope(tip), "the requested commit is in the edit scope");
+        assert!(graph.index(parent).is_some(), "the requested commit's parent is known");
+        assert!(
+            !graph.is_in_edit_scope(parent),
+            "an interned parent stays outside the explicit edit scope"
+        );
         Ok(())
     }
 

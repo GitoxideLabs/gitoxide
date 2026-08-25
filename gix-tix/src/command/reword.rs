@@ -36,15 +36,11 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     drop(head);
 
     let pins = crate::history::all_pins(&repository)?;
-    let mut revisions = vec![OsString::from("HEAD"), OsString::from(target.to_string())];
-    revisions.extend(
-        pins.iter()
-            .map(|pin| gix::path::from_bstr(pin.name.as_bstr()).into_owned().into_os_string()),
-    );
+    let revisions = [OsString::from("HEAD"), OsString::from(target.to_string())];
     let hidden = crate::history::available_hidden_revisions(&repository, &[], true)?.0;
     let graph = match resolved_graph {
         Some(graph) => graph,
-        None => crate::edit::loaded_view_graph_with_hidden(&repository, &revisions, &hidden)?,
+        None => crate::edit::loaded_explicit_view_graph(&repository, &revisions, &hidden)?,
     };
     ensure_retained_target(&graph, target, &pins, attached_head)?;
 

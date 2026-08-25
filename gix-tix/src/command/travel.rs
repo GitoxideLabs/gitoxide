@@ -60,7 +60,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         (None, Some(to)) => {
             let hidden = crate::history::available_hidden_revisions(&repository, &[], true)?.0;
             let hidden_tips = crate::history::snapshot(&repository, &[], &hidden, false)?.hidden_tips;
-            let graph = crate::edit::loaded_view_graph_with_hidden(&repository, &[], &hidden)?;
+            let graph = crate::edit::loaded_explicit_view_graph(&repository, &[], &hidden)?;
             let selected = relative_destination(&repository, &graph, &hidden_tips, head_id, to)?;
             (selected, Some(graph))
         }
@@ -74,7 +74,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let revisions = vec![OsString::from("HEAD"), OsString::from(selected.to_string())];
     let graph = match resolved_graph {
         Some(graph) => graph,
-        None => crate::edit::loaded_view_graph_with(&repository, &revisions)?,
+        None => crate::edit::loaded_explicit_view_graph(&repository, &revisions, &[])?,
     };
     let forward = graph.is_ancestor(head_id, selected);
     if detached && !forward {

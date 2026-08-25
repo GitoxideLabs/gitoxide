@@ -27,7 +27,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .context("could not read HEAD before creating a commit")?
         .id()
         .map(gix::Id::detach);
-    let graph = crate::edit::loaded_graph(&repository)?;
+    let graph = crate::edit::loaded_view_graph(&repository)?;
     let source = if args.index {
         crate::edit::create::Source::Index
     } else if args.worktree_untracked {
@@ -118,6 +118,53 @@ mod tests {
         Ok(output.stdout)
     }
 
+    fn prepare_pending_ancestry(path: &Path, hide_pending: bool) -> gix_testtools::Result<gix::ObjectId> {
+        let repository = crate::test_repository::open(path)?;
+        let old_tip = repository.head_id()?.detach();
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        let base = repository.rev_parse_single("HEAD~2")?.detach();
+
+        let mut pending = repository.find_commit(middle)?.decode()?.into_owned()?;
+        pending
+            .extra_headers
+            .push(("tix-rebase-parent".into(), base.to_string().into()));
+        let pending = repository.write_object(&pending)?.detach();
+        let mut boundary = repository.find_commit(old_tip)?.decode()?.into_owned()?;
+        boundary.parents = [pending].into_iter().collect();
+        boundary.message = "hidden base".into();
+        let boundary = repository.write_object(&boundary)?.detach();
+        let mut head = repository.find_commit(old_tip)?.decode()?.into_owned()?;
+        head.parents = [boundary].into_iter().collect();
+        head.message = "head".into();
+        let head = repository.write_object(&head)?.detach();
+        repository
+            .find_reference("refs/heads/main")?
+            .set_target_id(head, "prepare pending ancestry")?;
+        if hide_pending {
+            repository.reference(
+                "refs/heads/base",
+                boundary,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "prepare inferred hidden base",
+            )?;
+            let boundary = boundary.to_string();
+            drop(repository);
+            git(path, &["config", "remote.origin.url", "."])?;
+            git(
+                path,
+                &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+            )?;
+            git(path, &["update-ref", "refs/remotes/origin/base", &boundary])?;
+            git(
+                path,
+                &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/base"],
+            )?;
+        }
+        std::fs::write(path.join("new"), b"new\n")?;
+        git(path, &["add", "new"])?;
+        Ok(head)
+    }
+
     #[test]
     fn explicit_message_uses_the_default_staged_tree_and_author() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
@@ -156,6 +203,49 @@ mod tests {
             .todo,
             "--todo marks a non-interactive new commit"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn new_sources_ignore_pending_history_below_the_hidden_base() -> gix_testtools::Result {
+        for index in [false, true] {
+            let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+            let parent = prepare_pending_ancestry(fixture.path(), true)?;
+            let mut input = args();
+            input.index = index;
+            run(crate::test_repository::open(fixture.path())?, input)?;
+
+            let repository = crate::test_repository::open(fixture.path())?;
+            assert_eq!(
+                repository.head_commit()?.parent_ids().next().map(gix::Id::detach),
+                Some(parent),
+                "new{} keeps the visible HEAD as its parent",
+                if index { " --index" } else { "" }
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn new_sources_reject_visible_pending_history() -> gix_testtools::Result {
+        for index in [false, true] {
+            let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+            let head = prepare_pending_ancestry(fixture.path(), false)?;
+            let mut input = args();
+            input.index = index;
+            let err = run(crate::test_repository::open(fixture.path())?, input)
+                .expect_err("visible pending history blocks creating a commit");
+            assert!(
+                format!("{err:#}").contains("the current checkout has a pending rebase"),
+                "new{} reports the visible pending ancestry: {err:#}",
+                if index { " --index" } else { "" }
+            );
+            assert_eq!(
+                crate::test_repository::open(fixture.path())?.head_id()?,
+                head,
+                "rejected creation leaves HEAD unchanged"
+            );
+        }
         Ok(())
     }
 
