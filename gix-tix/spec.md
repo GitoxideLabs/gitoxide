@@ -16,7 +16,8 @@ without trading responsiveness for metadata that is not visible.
 - `tix worktrunk`, its visible `tix wt` alias, and `tix worktrunk switch`
   open an existing-worktree picker above a fully interactive Tix history. The
   list occupies no more than half the terminal. Moving its cursor immediately
-  rebinds the history to that worktree without changing repository state;
+  paints the new selection, then rebinds the history to that worktree without
+  changing repository state;
   `Tab` focuses history and `Escape` returns from root history to the list.
   `Enter` selects the worktree and promotes it to a normal full-screen history.
   Rows stream their dirty state, upstream ahead/behind counts, and additions and
