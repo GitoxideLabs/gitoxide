@@ -2333,9 +2333,6 @@ fn metadata_columns<'a>(
     }
     let mut refs = Vec::new();
     let row_decorations = decorations.get(&row.id).map(Vec::as_slice).unwrap_or_default();
-    if row.is_review {
-        refs.push(Span::styled(" ◆", decoration_style(DecorationKind::Review)));
-    }
     if row_decorations
         .iter()
         .any(|decoration| decoration.kind == DecorationKind::Pin)
@@ -2346,10 +2343,9 @@ fn metadata_columns<'a>(
         .iter()
         .any(|decoration| decoration.kind == DecorationKind::Stash)
     {
-        let marker = if row.is_review
-            || row_decorations
-                .iter()
-                .any(|decoration| decoration.kind == DecorationKind::Pin)
+        let marker = if row_decorations
+            .iter()
+            .any(|decoration| decoration.kind == DecorationKind::Pin)
         {
             "🎁"
         } else {
@@ -2687,18 +2683,21 @@ fn color_graph(
         if symbol.is_whitespace() {
             continue;
         }
+        let node = matches!(symbol, '●' | '◆');
         let mut style = if let Some(highlight) = highlight {
             color(highlight).add_modifier(Modifier::REVERSED)
-        } else if symbol == '●' {
+        } else if symbol == '◆' && head.is_none() {
+            decoration_style(DecorationKind::Review)
+        } else if node {
             color(signature_color(signature))
         } else {
             graph_style(offset.saturating_add(x) / 2)
         };
-        if head.is_some_and(|head| head.has_descendants) && symbol == '●' {
+        if head.is_some_and(|head| head.has_descendants) && node {
             style = style.add_modifier(Modifier::BOLD);
         }
         let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
-        if head.is_some() && symbol == '●' {
+        if head.is_some() && node {
             cell.set_symbol("@");
             if head.is_some_and(|head| head.attached) {
                 style = style.add_modifier(Modifier::ITALIC);
@@ -3608,6 +3607,8 @@ mod tests {
         ]);
         complete(&mut app);
         app.select_commit(ids[0]);
+        let selected = app.selected.expect("the fork is selected");
+        std::sync::Arc::make_mut(&mut app.rows[selected]).is_review = true;
         app.update(Action::TopologicalUp);
         let mut terminal = Terminal::new(TestBackend::new(80, 6))?;
 
@@ -4306,13 +4307,31 @@ mod tests {
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let row = rendered_row(&terminal);
-        let review = row.find("◆").expect("a review has its resource marker");
+        let review = row.find("◆").expect("a review replaces its graph disc");
+        let hash = row.find("0101010").expect("the row contains its hash");
         let pin = row.find("📌").expect("the row contains its pin");
         let gift = row.find("🎁").expect("the row contains its stash marker");
+        assert_eq!(row.matches("◆").count(), 1, "a review has one diamond: {row:?}");
         assert!(
-            review < pin && pin < gift,
-            "review is the first resource marker: {row:?}"
+            review < hash && hash < pin && pin < gift,
+            "the graph diamond does not disturb resource ordering: {row:?}"
         );
+        decorations
+            .get_mut(&selected)
+            .expect("the selected commit has resources")
+            .retain(|decoration| decoration.kind == DecorationKind::Stash);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_row(&terminal).contains("0101010 🎁"),
+            "a lone stash remains separated from the hash"
+        );
+        decorations
+            .get_mut(&selected)
+            .expect("the selected commit has a stash")
+            .push(Decoration {
+                name: "pin:01010101".into(),
+                kind: DecorationKind::Pin,
+            });
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = false;
         app.ref_mode = RefMode::None;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
@@ -4894,14 +4913,23 @@ mod tests {
     }
 
     #[test]
-    fn review_commit_at_head_uses_the_head_marker() -> Result<(), Box<dyn std::error::Error>> {
-        let mut terminal = Terminal::new(TestBackend::new(2, 1))?;
+    fn review_diamond_uses_review_style_unless_head() -> Result<(), Box<dyn std::error::Error>> {
+        let mut terminal = Terminal::new(TestBackend::new(4, 1))?;
         terminal.draw(|frame| {
-            frame.render_widget(Paragraph::new("●─"), Rect::new(0, 0, 2, 1));
+            frame.render_widget(Paragraph::new("◆─◆─"), Rect::new(0, 0, 4, 1));
             color_graph(
                 frame,
                 Rect::new(0, 0, 2, 1),
-                "●─",
+                "◆─",
+                0,
+                None,
+                SignatureState::Unsigned,
+                None,
+            );
+            color_graph(
+                frame,
+                Rect::new(2, 0, 2, 1),
+                "◆─",
                 0,
                 None,
                 SignatureState::Unsigned,
@@ -4911,8 +4939,13 @@ mod tests {
                 }),
             );
         })?;
-        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "@");
-        assert_eq!(terminal.backend().buffer()[(1, 0)].symbol(), "─");
+        let review = &terminal.backend().buffer()[(0, 0)];
+        assert_eq!(review.symbol(), "◆");
+        assert_eq!(review.fg, Color::LightMagenta);
+        assert!(review.modifier.contains(Modifier::BOLD));
+        assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), "@");
+        assert_eq!(terminal.backend().buffer()[(2, 0)].fg, Color::Blue);
+        assert_eq!(terminal.backend().buffer()[(3, 0)].symbol(), "─");
         Ok(())
     }
 

@@ -1559,14 +1559,16 @@ impl App {
                 )
             })
         });
+        let commit_marker = |index: usize| if self.rows[index].is_review { '◆' } else { '●' };
         if let Some(history) = self.active_compressed_history() {
             return history.graph.render_with_markers(&history.rows, range, |index| {
                 if choice_marker.is_some_and(|(selected, _)| selected == index) {
                     choice_marker.expect("the marker was checked above").1
-                } else if matches!(history.entries[index], HistoryEntry::Segment { .. }) {
-                    '○'
                 } else {
-                    '●'
+                    match history.entries[index] {
+                        HistoryEntry::Commit(index) => commit_marker(index),
+                        HistoryEntry::Segment { .. } => '○',
+                    }
                 }
             });
         }
@@ -1574,7 +1576,7 @@ impl App {
             Some(graph) => graph.render_with_markers(&self.rows, range, |index| {
                 choice_marker
                     .filter(|(selected, _)| *selected == index)
-                    .map_or('●', |(_, marker)| marker)
+                    .map_or_else(|| commit_marker(index), |(_, marker)| marker)
             }),
             None => RenderedLanes::empty(range.len()),
         }
@@ -5937,8 +5939,10 @@ mod tests {
     #[test]
     fn compressed_history_retains_tips_and_selection_and_selects_segments() {
         let mut app = App::new(2);
+        let mut review = row_with_parents(6, &[5]);
+        review.is_review = true;
         app.extend_commits(vec![
-            row_with_parents(6, &[5]),
+            review,
             row_with_parents(5, &[4]),
             row_with_parents(4, &[3]),
             row_with_parents(3, &[2]),
@@ -5946,6 +5950,7 @@ mod tests {
             row(1),
         ]);
         complete(&mut app);
+        assert_eq!(app.render_lanes(0..1).lane(0), "◆ ");
         app.set_view_tips(&[id(6)]);
         app.select_commit(id(3));
         app.alignment = Alignment::None;
@@ -5969,8 +5974,8 @@ mod tests {
         );
         assert_eq!(
             app.render_lanes(0..app.history_len()).iter().collect::<Vec<_>>(),
-            ["● ", "○ ", "● ", "● ", "● "],
-            "only segments use the quieter ring marker"
+            ["◆ ", "○ ", "● ", "● ", "● "],
+            "review commits retain their diamond while segments use the quieter ring"
         );
 
         app.update(Action::MoveUp);
