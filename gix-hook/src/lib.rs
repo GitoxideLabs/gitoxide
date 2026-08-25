@@ -76,13 +76,15 @@ fn is_executable_file(path: &Path) -> bool {
 
 #[cfg(windows)]
 fn is_executable_file(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| meta.is_file()
-        && match path.extension().and_then(|ext| ext.to_str()) {
-            Some(ext) => {
-                matches!(ext.to_lowercase().as_str(), "" | "exe")
+    std::fs::metadata(path).is_ok_and(|meta| {
+        meta.is_file()
+            && match path.extension().and_then(|ext| ext.to_str()) {
+                Some(ext) => {
+                    matches!(ext.to_lowercase().as_str(), "" | "exe")
+                }
+                None => true,
             }
-            None => true,
-        })
+    })
 }
 
 /// Whether `s` contains a byte in the same control-byte range `gix_validate::reference::name()`
