@@ -705,6 +705,8 @@ space first; changes blocks adapt within the remaining history width.
 - Blocks are side by side when both condensed titles fit, otherwise Worktree is
   stacked above Tree. A shared vertical divider joins side-by-side blocks. Blocks
   size to content but together use no more than half the terminal.
+- While the blocks are stacked, history rows retain the gutters and graph only
+  through their commit disc, followed by the title without its conventional-commit prefix.
 - If paths overflow, the final row reports the remaining line count and updates
   while scrolling. A single path is never replaced by overflow text.
 - `Tab` cycles focus in visual order through visible changes blocks and history.
