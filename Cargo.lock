@@ -2738,6 +2738,7 @@ dependencies = [
  "gix-path",
  "gix-testtools",
  "gix-validate",
+ "gix-worktree",
  "serde",
 ]
 
