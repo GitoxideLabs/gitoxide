@@ -24,6 +24,7 @@ const COMMIT_PANE_WIDTH: u16 = 84;
 const FILESYSTEM_NOTIFICATION_COLOR: Color = Color::Rgb(255, 165, 0);
 const NOTE_COLOR: Color = Color::LightMagenta;
 const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
+const REVIEW_BACKGROUND: Color = Color::Magenta;
 
 #[derive(Clone)]
 struct MarkdownStyle;
@@ -955,6 +956,22 @@ pub(crate) fn draw_with_worktree(
                 Rect::new(body.x, y, end.saturating_sub(body.x), 1),
                 Style::default().add_modifier(Modifier::REVERSED),
             );
+        }
+        if row.is_review && head && title_offset > horizontal_offset {
+            let end = content
+                .x
+                .saturating_add(u16::try_from(title_offset - horizontal_offset).unwrap_or(u16::MAX))
+                .saturating_sub(1)
+                .min(body.right());
+            let buffer = frame.buffer_mut();
+            if let Some(start) = (body.x..end).find(|x| !buffer[(*x, y)].symbol().trim().is_empty()) {
+                buffer.set_style(
+                    Rect::new(start, y, end - start, 1),
+                    Style::default()
+                        .bg(REVIEW_BACKGROUND)
+                        .remove_modifier(Modifier::REVERSED),
+                );
+            }
         }
         if selected && body.width > 0 {
             let marker_limit = hidden_branch_marker
@@ -5241,7 +5258,7 @@ mod tests {
     }
 
     #[test]
-    fn marks_dirty_head_independently_of_history_selection() -> Result<(), Box<dyn std::error::Error>> {
+    fn marks_and_highlights_a_dirty_review_head_independently_of_selection() -> Result<(), Box<dyn std::error::Error>> {
         let head = gix::ObjectId::Sha1([1; 20]);
         let other = gix::ObjectId::Sha1([2; 20]);
         let mut app = App::new(5);
@@ -5284,6 +5301,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 8))?;
 
         app.selected = Some(1);
+        std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
         terminal.draw(|frame| {
             super::draw_with_worktree(
                 frame,
@@ -5297,7 +5315,12 @@ mod tests {
         })?;
         assert!(rendered_line(&terminal, 0).trim_start().starts_with("🫟 @"));
         assert!(rendered_line(&terminal, 1).trim_start().starts_with("> ●"));
-        assert_eq!(terminal.backend().buffer()[(6, 0)].modifier, Modifier::empty());
+        assert_eq!(terminal.backend().buffer()[(6, 0)].bg, REVIEW_BACKGROUND);
+        assert!(
+            !terminal.backend().buffer()[(6, 0)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
         assert!(
             terminal.backend().buffer()[(6, 1)]
                 .modifier
@@ -5316,12 +5339,28 @@ mod tests {
                 Some(&dirty),
             );
         })?;
-        assert!(rendered_line(&terminal, 0).trim_start().starts_with("🫟 @"));
+        let line = rendered_line(&terminal, 0);
+        assert!(line.trim_start().starts_with("🫟 @"));
+        let start = line[..line.find("🫟").expect("the dirty marker is visible")]
+            .chars()
+            .count() as u16;
+        let title = line[..line.find("subject").expect("the title is visible")]
+            .chars()
+            .count() as u16;
+        let end = title - 1;
+        let buffer = terminal.backend().buffer();
+        let highlighted =
+            |x| buffer[(x, 0)].bg == REVIEW_BACKGROUND && !buffer[(x, 0)].modifier.contains(Modifier::REVERSED);
         assert!(
-            terminal.backend().buffer()[(6, 0)]
-                .modifier
-                .contains(Modifier::REVERSED)
+            highlighted(start) && (start + Line::raw("🫟").width() as u16..end).all(highlighted),
+            "the review background wins from the first visible gutter through its metadata"
         );
+        assert_ne!(buffer[(end, 0)].bg, REVIEW_BACKGROUND, "one space separates the title");
+        assert!(
+            buffer[(end, 0)].modifier.contains(Modifier::REVERSED),
+            "ordinary selection remains visible outside the review background"
+        );
+        std::sync::Arc::make_mut(&mut app.rows[0]).is_review = false;
 
         let conflicted = Changes {
             paths: vec![crate::app::PathChange {
