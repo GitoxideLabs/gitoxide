@@ -846,10 +846,9 @@ space first; changes blocks adapt within the remaining history width.
 - With a path selected in the focused worktree-changes block, the main `a`
   prefix offers `amend` and `a e` amends only that path. A staged row uses its
   index version; an unstaged row uses its filtered worktree version. If both
-  rows exist for one path, the selected row determines the version. Review
-  commits accept only staged rows, and unresolved indexes cannot be amended.
-  Unrelated staged entries retain their index state. The CLI intentionally
-  supports only whole-commit amending.
+  rows exist for one path, the selected row determines the version. Unresolved
+  indexes cannot be amended. Unrelated staged entries retain their index state.
+  The CLI intentionally supports only whole-commit amending.
 - `a p` is offered at `@` only when both staged and unstaged changes exist. It
   amends the unstaged changes into the source commit, then creates a new upper
   commit from the staged delta using the standard Markdown editor buffer. Both
@@ -958,11 +957,11 @@ space first; changes blocks adapt within the remaining history width.
   markers, while retaining the normal signature disc or `@` at `HEAD`. Ordinary
   edits preserve the review header and otherwise keep
   their normal signing and lazy-rebase behavior.
-- At a checked-out review commit, amend is offered only for staged changes and
-  consumes only the index tree. It leaves worktree bytes and the review header
-  intact, removes signatures, and marks only affected descendants for lazy replay.
-  Pending ancestry below the review boundary remains untouched and does not block
-  the amend.
+- At a checked-out review commit, amend follows the ordinary index-first,
+  worktree-fallback behavior, including worktree-only review deltas. It leaves
+  worktree bytes and the review header intact, removes signatures, and marks only
+  affected descendants for lazy replay. Pending ancestry below the review
+  boundary remains untouched and does not block the amend.
 - `a r` finishes a selected review when status is completely clean and the current
   worktree HEAD is the review commit or one of its successors. The
   review commit is inserted after its reviewed tip with its exact tree, review
