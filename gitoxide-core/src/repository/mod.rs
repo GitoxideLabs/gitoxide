@@ -17,11 +17,13 @@ pub use credential::function as credential;
 pub mod attributes;
 #[cfg(feature = "clean")]
 pub mod clean;
+#[cfg(feature = "clean")]
+pub use clean::function::clean;
 pub mod diff;
 pub mod dirty;
 pub mod dirwalk;
-#[cfg(feature = "clean")]
-pub use clean::function::clean;
+mod editor;
+pub use editor::function as editor;
 #[cfg(feature = "blocking-client")]
 pub mod clone;
 pub mod exclude;

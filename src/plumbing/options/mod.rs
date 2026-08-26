@@ -161,6 +161,11 @@ pub enum Subcommands {
     Merge(merge::Platform),
     /// Print paths relevant to the Git installation.
     Env,
+    /// Open paths in the editor selected by Git's precedence rules.
+    Editor {
+        /// Paths to open, or none to start the editor without a file.
+        paths: Vec<PathBuf>,
+    },
     Diff(diff::Platform),
     Log(log::Platform),
     /// Interactively browse commits and their graph.
