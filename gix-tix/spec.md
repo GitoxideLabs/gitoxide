@@ -183,7 +183,9 @@ without trading responsiveness for metadata that is not visible.
   characters are replayed as read-only keyboard input before the retained final
   frame, allowing navigation such as `--quit-on-finish=jjjl`. Inputs that would
   mutate the repository, launch another program, or copy data are ignored. The
-  frame is drawn on the normal screen and remains visible after exit.
+  frame is drawn on the normal screen and remains visible after exit. It may be
+  combined with the target-less worktrunk picker forms; there it also waits for
+  every worktree's status and graph metadata before drawing the final frame.
 - `--no-alt-screen` runs the interactive UI in a full-height inline viewport on
   the normal screen, retaining its frame and panic output for diagnostics. Input
   handling otherwise matches the default interactive mode.
