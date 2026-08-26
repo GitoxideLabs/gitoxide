@@ -257,7 +257,9 @@ without trading responsiveness for metadata that is not visible.
   worktree adds only missing ancestry for its visible and hidden tips; selection
   switches the active rev-set without rebuilding or rewalking cached topology.
   Worktree ahead/behind and comparison-base discovery use this graph rather than
-  independent ancestry walks.
+  independent ancestry walks. The picker extends the graph for all worktree heads
+  in one background metadata pass before idle preview warming, so table completion
+  neither serializes one graph refresh per row nor blocks terminal input.
 - Local branch targets are reverse-indexed. Configured upstream targets are added
   as internal traversal tips so ahead/behind calculations have complete ancestry
   without a second repository walk.
