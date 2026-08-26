@@ -133,9 +133,12 @@ pub struct Environment {
     /// Control if environment variables related to the object database are handled. This includes features and performance
     /// options alike.
     pub objects: gix_sec::Permission,
-    /// Control if resources pointed to by `GIT_*` prefixed environment variables can be used, **but only** if they
-    /// are not contained in any other category. This is a catch-all section.
+    /// Control if `GIT_*` prefixed environment variables can be used, **but only** if they are not contained in any
+    /// other category. This is a catch-all for Git-prefixed variables.
     pub git_prefix: gix_sec::Permission,
+    /// Control if environment variables not contained in any other category can be used, like `TERM`, `VISUAL`, and
+    /// `EDITOR`.
+    pub other: gix_sec::Permission,
     /// Control if resources pointed to by `SSH_*` prefixed environment variables can be used (like `SSH_ASKPASS`)
     pub ssh_prefix: gix_sec::Permission,
 }
@@ -148,6 +151,7 @@ impl Environment {
             xdg_config_home: allow,
             home: allow,
             git_prefix: allow,
+            other: allow,
             ssh_prefix: allow,
             http_transport: allow,
             identity: allow,
@@ -163,6 +167,7 @@ impl Environment {
             home: deny,
             ssh_prefix: deny,
             git_prefix: deny,
+            other: deny,
             http_transport: deny,
             identity: deny,
             objects: deny,

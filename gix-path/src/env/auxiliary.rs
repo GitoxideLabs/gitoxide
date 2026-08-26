@@ -91,12 +91,11 @@ const BIN_DIR_FRAGMENTS: &[&str] = &["bin", "usr/bin"];
 /// The resulting path uses only `/` separators so long as the path obtained from `git --exec-path`
 /// does, which is the case unless it is overridden by setting `GIT_EXEC_PATH` to an unusual value.
 ///
-/// This is currently only used (and only heavily exercised in tests) for finding `sh.exe`. It may
-/// be used to find other executables in the future, but may need adjustment. In particular,
-/// depending on desired semantics, it should possibly also check a `cmd` directory; directories
-/// like `<platform>/bin`, for any applicable variants (such as `mingw64`); and `super::core_dir()`
-/// itself, which it could safely check even if its value is not safe for inferring other paths.
-fn find_git_associated_windows_executable(stem: &str) -> Option<WindowsExecutable> {
+/// This is used for finding `sh.exe` and by [`super::installation_program()`]. Depending on desired
+/// semantics for future callers, it should possibly also check a `cmd` directory; directories like
+/// `<platform>/bin`, for any applicable variants (such as `mingw64`); and `super::core_dir()` itself,
+/// which it could safely check even if its value is not safe for inferring other paths.
+pub(super) fn find_git_associated_windows_executable(stem: &str) -> Option<WindowsExecutable> {
     let git_root = git_for_windows_root()?;
 
     BIN_DIR_FRAGMENTS

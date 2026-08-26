@@ -46,7 +46,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .context("author is not valid UTF-8")?;
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
-    let prepared = crate::edit::create::prepare_from(repository, parent, source, author, args.todo)?;
+    let mut prepared = crate::edit::create::prepare_from(repository, parent, source, author, args.todo)?;
     if prepared.is_empty && !args.allow_empty {
         anyhow::bail!("the new commit would be empty; use --allow-empty to create it anyway");
     }
@@ -58,8 +58,9 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         repository.object_cache_size(None);
         crate::edit::create::apply_message_reporting(repository, &graph, prepared, &message)?
     } else {
+        let editor = prepared.editor.take().expect("prepared commits have an editor");
         let Some(edited) = crate::edit::edit_document_without_terminal(
-            &prepared.editor,
+            editor,
             &prepared.document,
             &format!("tix-commit-{}.md", std::process::id()),
         )?

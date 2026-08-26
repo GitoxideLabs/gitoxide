@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, io::Write, process::Command};
+use std::{io::Write, process::Command};
 
 use anyhow::{Context, Result};
 
@@ -102,21 +102,18 @@ pub(crate) mod undo;
 #[tracing::instrument(skip_all, fields(filename))]
 pub(crate) fn edit_document(
     terminal: &mut ratatui::DefaultTerminal,
-    editor: &OsStr,
+    editor: gix::command::Prepare,
     document: &[u8],
     filename: &str,
     enhanced_keyboard: bool,
 ) -> Result<Option<Vec<u8>>> {
-    if editor == ":" {
-        return edit_document_without_terminal(editor, document, filename);
-    }
     crate::with_suspended_terminal(terminal, enhanced_keyboard, || {
         edit_document_without_terminal(editor, document, filename)
     })
 }
 
 pub(crate) fn edit_document_without_terminal(
-    editor: &OsStr,
+    editor: gix::command::Prepare,
     document: &[u8],
     filename: &str,
 ) -> Result<Option<Vec<u8>>> {
@@ -135,17 +132,12 @@ pub(crate) fn edit_document_without_terminal(
         .context("commit message file disappeared")?;
     let _tempfile = tempfile.close().context("could not close commit message file")?;
 
-    if editor != ":" {
-        let status = Command::from(
-            gix::command::prepare(editor)
-                .arg(&path)
-                .command_may_be_shell_script_allow_manual_argument_splitting(),
-        )
+    let editor_display = editor.command.to_string_lossy().into_owned();
+    let status = Command::from(editor.arg(&path))
         .status()
-        .with_context(|| format!("could not launch Git editor {}", editor.to_string_lossy()))?;
-        if !status.success() {
-            anyhow::bail!("Git editor {} exited with {status}", editor.to_string_lossy());
-        }
+        .with_context(|| format!("could not launch Git editor {editor_display}"))?;
+    if !status.success() {
+        anyhow::bail!("Git editor {editor_display} exited with {status}");
     }
     let edited = std::fs::read(path).context("could not read edited commit message")?;
     Ok((edited != document).then_some(edited))

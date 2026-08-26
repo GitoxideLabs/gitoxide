@@ -168,6 +168,7 @@ pub fn main() -> Result<()> {
             None,
             move |_progress, out, _err| core::env(out, format),
         ),
+        Subcommands::Editor { paths } => core::repository::editor(repository(Mode::Lenient)?, paths),
         Subcommands::Merge(merge::Platform { cmd }) => match cmd {
             merge::SubCommands::File {
                 resolve_with,

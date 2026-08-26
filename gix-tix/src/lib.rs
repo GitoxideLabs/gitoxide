@@ -5333,12 +5333,15 @@ fn edit_note(
         let change_id = change_id::for_commit(&repository, id)?;
         let enrichment = enrich::load(&mut enrich::open(&repository)?, change_id)?;
         let document = enrichment.note.clone().unwrap_or_default();
-        let editor = repository.editor().context("no Git editor is available")?;
+        let editor = repository
+            .editor_command()
+            .context("could not prepare Git editor")?
+            .context("no Git editor is available")?;
         (editor, enrichment, document)
     };
     let edited = edit::edit_document(
         terminal,
-        &editor,
+        editor,
         &document,
         &format!("tix-note-{}.md", std::process::id()),
         enhanced_keyboard,
@@ -5376,7 +5379,10 @@ fn edit_git_note(
     let (editor, reference, document) = {
         let repository = open_repository(repository_path, bare, false)
             .context("could not open repository before editing Git note")?;
-        let editor = repository.editor().context("no Git editor is available")?;
+        let editor = repository
+            .editor_command()
+            .context("could not prepare Git editor")?
+            .context("no Git editor is available")?;
         let notes = repository.notes()?;
         let reference = notes
             .default_ref()
@@ -5392,7 +5398,7 @@ fn edit_git_note(
     };
     let edited = edit::edit_document(
         terminal,
-        &editor,
+        editor,
         &document,
         &format!("tix-git-note-{}.md", std::process::id()),
         enhanced_keyboard,
@@ -5474,7 +5480,7 @@ fn reword_commit(
     };
     let Some(edited) = edit::edit_document(
         terminal,
-        &editor,
+        editor,
         &document,
         &format!("tix-reword-{}.md", std::process::id()),
         enhanced_keyboard,
@@ -5563,7 +5569,10 @@ fn rebase_history(
         let mut repository =
             open_repository(repository_path, bare, false).context("could not open repository before rebasing")?;
         repository.object_cache_size(None);
-        let editor = repository.editor().context("no Git editor is available")?;
+        let editor = repository
+            .editor_command()
+            .context("could not prepare Git editor")?
+            .context("no Git editor is available")?;
         let prepared = edit::todo::prepare(
             &repository,
             base,
@@ -5577,7 +5586,7 @@ fn rebase_history(
     };
     let edited = edit::edit_document(
         terminal,
-        &editor,
+        editor,
         &prepared.document,
         &format!("tix-rebase-{}.md", std::process::id()),
         enhanced_keyboard,
@@ -5885,7 +5894,7 @@ fn create_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before creating commit")?;
     repository.object_cache_size(None);
-    let prepared = if matches!(mode, CreateMode::InsertEmpty) {
+    let mut prepared = if matches!(mode, CreateMode::InsertEmpty) {
         edit::create::prepare_empty(repository, parent)?
     } else {
         edit::create::prepare(repository, parent)?
@@ -5893,9 +5902,10 @@ fn create_commit(
     if matches!(mode, CreateMode::Insert) && prepared.is_empty {
         anyhow::bail!("the new commit would be empty; use new-empty instead");
     }
+    let editor = prepared.editor.take().expect("prepared commits have an editor");
     let Some(edited) = edit::edit_document(
         terminal,
-        &prepared.editor,
+        editor,
         &prepared.document,
         &format!("tix-commit-{}.md", std::process::id()),
         enhanced_keyboard,
@@ -5932,10 +5942,11 @@ fn split_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before splitting HEAD")?;
     repository.object_cache_size(None);
-    let prepared = edit::split::prepare(repository, false)?;
+    let mut prepared = edit::split::prepare(repository, false)?;
+    let editor = prepared.editor.take().expect("prepared splits have an editor");
     let Some(edited) = edit::edit_document(
         terminal,
-        &prepared.editor,
+        editor,
         &prepared.document,
         &format!("tix-split-{}.md", std::process::id()),
         enhanced_keyboard,

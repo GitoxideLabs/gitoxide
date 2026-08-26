@@ -234,7 +234,7 @@ pub mod checkout_options {
 }
 
 ///
-#[cfg(feature = "attributes")]
+#[cfg(feature = "command")]
 pub mod command_context {
     use crate::config;
 

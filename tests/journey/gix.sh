@@ -54,6 +54,35 @@ title "gix (with repository)"
 (with "a git repository"
   snapshot="$snapshot/repository"
 
+  title "gix editor"
+  (sandbox
+    git init -q
+    touch first second
+    printf '%s\n' '#!/bin/sh' \
+      'test "$#" = 2 && test "$1" = first && test "$2" = second' >check-editor
+    cp check-editor "check editor"
+    chmod +x "check editor"
+
+    it "launches the configured editor with all paths" && {
+      expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose -c "core.editor=sh check-editor" editor first second
+    }
+    it "preserves shell execution for editor command strings" && {
+      expect_run $SUCCESSFULLY env GIT_EDITOR='exec true' "$exe_plumbing" --no-verbose editor first second
+    }
+    it "launches an existing editor path with spaces directly" && {
+      expect_run $SUCCESSFULLY env GIT_EDITOR="$PWD/check editor" "$exe_plumbing" --no-verbose editor first second
+    }
+    it "launches a trusted relative editor path from the repository directly" && {
+      expect_run $SUCCESSFULLY env GIT_EDITOR='./check editor' "$exe_plumbing" --no-verbose editor first second
+    }
+    it "rejects an explicitly empty editor" && {
+      expect_run $WITH_FAILURE env GIT_EDITOR= "$exe_plumbing" --no-verbose editor
+    }
+    it "honors the whitespace-padded no-op editor" && {
+      expect_run $SUCCESSFULLY env 'GIT_EDITOR=: ' "$exe_plumbing" --no-verbose editor first second
+    }
+  )
+
   title "gix index"
   (with "the 'entries' sub-command"
     snapshot="$snapshot/index/entries"

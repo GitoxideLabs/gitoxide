@@ -73,7 +73,7 @@ pub(crate) fn relocate_after_editor(
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
-pub(crate) fn document(repo: &gix::Repository, id: gix::ObjectId) -> Result<(std::ffi::OsString, Vec<u8>)> {
+pub(crate) fn document(repo: &gix::Repository, id: gix::ObjectId) -> Result<(gix::command::Prepare, Vec<u8>)> {
     document_with_author(repo, id, None)
 }
 
@@ -81,8 +81,11 @@ pub(crate) fn document_with_author(
     repo: &gix::Repository,
     id: gix::ObjectId,
     author: Option<&[u8]>,
-) -> Result<(std::ffi::OsString, Vec<u8>)> {
-    let editor = repo.editor().context("no Git editor is available")?;
+) -> Result<(gix::command::Prepare, Vec<u8>)> {
+    let editor = repo
+        .editor_command()
+        .context("could not prepare Git editor")?
+        .context("no Git editor is available")?;
     let mut commit = repo
         .find_commit(id)
         .context("could not find commit to reword")?
@@ -506,7 +509,8 @@ mod tests {
         )?;
         let topic = repository.find_reference("refs/heads/topic")?.id().detach();
         let (editor, document) = document(&repository, topic)?;
-        assert_eq!(editor, ":", "the configured editor is returned");
+        assert_eq!(editor.command, ":", "the configured editor is returned");
+        assert!(editor.use_shell, "the shell provides the colon builtin");
         let edit = parse(&document)?;
         assert_eq!(
             edit.committer, b"Current Committer <current@example.com>",

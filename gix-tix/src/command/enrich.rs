@@ -136,9 +136,12 @@ fn edit_note(repository: &gix::Repository, args: &Target) -> Result<()> {
         crate::change_id::for_commit(repository, target)?,
     )?;
     let document = enrichment.note.clone().unwrap_or_default();
-    let editor = repository.editor().context("no Git editor is available")?;
+    let editor = repository
+        .editor_command()
+        .context("could not prepare Git editor")?
+        .context("no Git editor is available")?;
     let edited = crate::edit::edit_document_without_terminal(
-        &editor,
+        editor,
         &document,
         &format!("tix-note-{}-{}.md", std::process::id(), target.to_hex_with_len(7)),
     )?;
@@ -177,9 +180,12 @@ fn edit_git_note(repository: &gix::Repository, args: &Target) -> Result<()> {
         .first()
         .map(|note| note.blob.data.clone())
         .unwrap_or_default();
-    let editor = repository.editor().context("no Git editor is available")?;
+    let editor = repository
+        .editor_command()
+        .context("could not prepare Git editor")?
+        .context("no Git editor is available")?;
     let edited = crate::edit::edit_document_without_terminal(
-        &editor,
+        editor,
         &document,
         &format!("tix-git-note-{}-{}.md", std::process::id(), target.to_hex_with_len(7)),
     )?;

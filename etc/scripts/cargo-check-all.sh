@@ -2,7 +2,10 @@
 
 set -eux
 
-cargo check --workspace
+cargo check --workspace --all-targets
+for manifest in gix-*/fuzz/Cargo.toml; do
+    cargo check --manifest-path "$manifest" --all-targets
+done
 cargo check --no-default-features --features small
 etc/scripts/check-gix-crates-without-hash-features.sh
 etc/scripts/check-gix-crates-require-hash-features.sh

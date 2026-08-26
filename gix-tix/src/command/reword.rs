@@ -75,7 +75,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let (editor, document) = crate::edit::reword::document_with_author(&repository, target, author.map(AsRef::as_ref))?;
     drop(repository);
     let edited = crate::edit::edit_document_without_terminal(
-        &editor,
+        editor,
         &document,
         &format!("tix-reword-{}-{}.md", std::process::id(), target.to_hex_with_len(7)),
     )?;

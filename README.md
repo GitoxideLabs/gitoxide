@@ -349,21 +349,12 @@ Project non-goals can change over time as we learn more, and they can be challen
 
 ## Contributions
 
-If what you have seen so far sparked your interest to contribute, then let us say: We are happy to have you and help you to get started.
+If what you have seen so far sparked your interest to contribute, then let us say: We are happy to have you and help you to get started. What's paricularly welcome is the discovery of deviations from Git, or the prodding 
+and probing to find bugs and other forms of undesirable behaviour.
 
-We recommend running `just test` during the development process to assure CI is green before pushing.
+Please read the [contribution guide] before starting. It covers when prior discussion is required and how to prepare a submission.
 
-A backlog for work ready to be picked up is [available in the Project's Kanban board][project-board], which contains instructions on how
-to pick a task. If it's empty or you have other questions, feel free to [start a discussion][discussions] or reach out to @Byron [privately][keybase].
-
-For additional details, also take a look at the [collaboration guide]. If an AI agent communicates through your account,
-please follow the [agent impersonation policy].
-
-[agent impersonation policy]: https://github.com/GitoxideLabs/gitoxide/blob/main/CONTRIBUTING.md#prevent-agent-impersonation
-[collaboration guide]: https://github.com/GitoxideLabs/gitoxide/blob/main/COLLABORATING.md
-[project-board]: https://github.com/GitoxideLabs/gitoxide/projects
-[discussions]: https://github.com/GitoxideLabs/gitoxide/discussions
-[keybase]: https://keybase.io/byronbates
+[contribution guide]: https://github.com/GitoxideLabs/gitoxide/blob/main/CONTRIBUTING.md
 [cargo-diet]: https://crates.io/crates/cargo-diet
 
 ### Getting started with Video Tutorials

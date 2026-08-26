@@ -115,7 +115,8 @@ mod prepare {
         /// scripts, and if found will use `sh` to execute it or whatever is set as
         /// [`with_shell_program()`](Self::with_shell_program()).
         ///
-        /// If the command isn't valid UTF-8, a shell will always be used.
+        /// Commands are inspected as bytes, including non-UTF-8 commands on Unix. If the platform
+        /// cannot represent a command as bytes, it is invoked directly.
         ///
         /// If a shell is used, then arguments given here with [arg()](Self::arg) or
         /// [args()](Self::args) will be substituted via `"$@"` if it's not already present in the
@@ -129,10 +130,8 @@ mod prepare {
         /// If neither this method nor [`with_shell()`](Self::with_shell()) is called, commands are
         /// always executed verbatim and directly, without the use of a shell.
         pub fn command_may_be_shell_script(mut self) -> Self {
-            self.use_shell = self
-                .command
-                .to_str()
-                .is_none_or(|cmd| cmd.as_bytes().find_byteset(b"|&;<>()$`\\\"' \t\n*?[#~=%").is_some());
+            self.use_shell = gix_path::os_str_into_bstr(&self.command)
+                .is_ok_and(|cmd| cmd.find_byteset(b"|&;<>()$`\\\"' \t\n*?[#~=%").is_some());
             self
         }
 
@@ -281,10 +280,12 @@ mod prepare {
                 let split_args = prep
                     .allow_manual_arg_splitting
                     .then(|| {
-                        if gix_path::into_bstr(std::borrow::Cow::Borrowed(prep.command.as_ref()))
-                            .find_byteset(b"\\|&;<>()$`\n*?[#~%")
-                            .is_none()
-                        {
+                        let command = gix_path::into_bstr(std::borrow::Cow::Borrowed(prep.command.as_ref()));
+                        let first_word_has_assignment = command
+                            .split(u8::is_ascii_whitespace)
+                            .find(|word| !word.is_empty())
+                            .is_some_and(|word| word.contains(&b'='));
+                        if !first_word_has_assignment && command.find_byteset(b"\\|&;<>()$`\n*?[#~%").is_none() {
                             prep.command.to_str().and_then(|args| {
                                 shell_words::split(args)
                                     .ok()
@@ -319,7 +320,7 @@ mod prepare {
                             .to_os_string();
                         cmd.arg("-c");
                         if !prep.args.is_empty() {
-                            if prep.command.to_str().is_none_or(|cmd| !cmd.contains("$@")) {
+                            if !gix_path::os_str_into_bstr(&prep.command).is_ok_and(|cmd| cmd.contains_str("$@")) {
                                 if prep.quote_command {
                                     if let Ok(command) = gix_path::os_str_into_bstr(&prep.command) {
                                         prep.command = gix_path::from_bstring(gix_quote::single(command)).into();
@@ -470,34 +471,28 @@ pub mod shebang {
         line = line.strip_prefix(b"#!")?;
 
         let slash_idx = line.rfind_byteset(br"/\")?;
-        Some(match line[slash_idx..].find_byte(b' ') {
+        match line[slash_idx..].find_byte(b' ') {
             Some(space_idx) => {
                 let space = slash_idx + space_idx;
-                Data {
-                    interpreter: gix_path::from_byte_slice(line[..space].trim()).to_owned(),
-                    args: line
-                        .get(space + 1..)
-                        .and_then(|mut r| {
-                            r = r.trim();
-                            if r.is_empty() {
-                                return None;
-                            }
-
-                            match r.as_bstr().to_str() {
-                                Ok(args) => shell_words::split(args)
-                                    .ok()
-                                    .map(|args| args.into_iter().map(Into::into).collect()),
-                                Err(_) => Some(vec![gix_path::from_byte_slice(r).to_owned().into()]),
-                            }
-                        })
-                        .unwrap_or_default(),
-                }
+                let interpreter = gix_path::try_from_byte_slice(line[..space].trim()).ok()?.to_owned();
+                let args = match line.get(space + 1..).map(ByteSlice::trim).filter(|r| !r.is_empty()) {
+                    Some(r) => match r.as_bstr().to_str() {
+                        Ok(args) => shell_words::split(args)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
+                        Err(_) => vec![gix_path::try_from_byte_slice(r).ok()?.to_owned().into()],
+                    },
+                    None => Vec::new(),
+                };
+                Some(Data { interpreter, args })
             }
-            None => Data {
-                interpreter: gix_path::from_byte_slice(line.trim()).to_owned(),
+            None => Some(Data {
+                interpreter: gix_path::try_from_byte_slice(line.trim()).ok()?.to_owned(),
                 args: Vec::new(),
-            },
-        })
+            }),
+        }
     }
 
     /// Shebang information as [parsed](parse()) from a buffer that should contain at least one line.
@@ -516,7 +511,8 @@ pub mod shebang {
         pub interpreter: PathBuf,
         /// The remainder of the line past the space after `interpreter`, without leading or trailing whitespace,
         /// as pre-split arguments just like a shell would do it.
-        /// Note that we accept that illformed UTF-8 will prevent argument splitting.
+        /// Note that we accept that illformed UTF-8 will prevent argument splitting on Unix. On other platforms,
+        /// unrepresentable input causes parsing to fail.
         pub args: Vec<OsString>,
     }
 }
