@@ -980,6 +980,7 @@ pub(crate) fn run_without_logging(
 pub(crate) fn pick_worktree(
     repository: gix::ThreadSafeRepository,
     picker: &mut worktrunk::Worktrees,
+    quit_on_finish: Option<String>,
 ) -> Result<Option<PathBuf>> {
     let repository = repository.to_thread_local();
     let (hide, unavailable) = history::available_hidden_revisions(&repository, &[], true)?;
@@ -993,6 +994,7 @@ pub(crate) fn pick_worktree(
         repository.into_sync(),
         Vec::new(),
         Options {
+            quit_on_finish,
             hide,
             ..Options::default()
         },
@@ -1483,6 +1485,7 @@ fn event_loop(
     let result: Result<EventLoopExit> = (|| loop {
         if picker.as_deref_mut().is_some_and(worktrunk::Worktrees::drain_updates) {
             dirty = true;
+            urgent |= quit_on_finish;
         }
         if let Some(pool) = line_diff_pool.as_mut() {
             pool.expire(Instant::now());
@@ -2382,6 +2385,9 @@ fn event_loop(
                 && quit_inputs.is_empty()
                 && matches!(app.state, State::Complete)
                 && lane_receiver.is_none()
+                && refresh_receiver.is_none()
+                && worktree_preview_queue.is_empty()
+                && picker.as_ref().is_none_or(|picker| !picker.is_loading())
                 && background_task.is_none()
                 && pending_force_push.is_none()
             {
@@ -2475,12 +2481,7 @@ fn event_loop(
         let background_task_timeout = background_task.as_ref().map(|_| REF_EVENT_INTERVAL);
         let picker_timeout = picker
             .as_ref()
-            .is_some_and(|picker| {
-                picker
-                    .rows()
-                    .iter()
-                    .any(|row| matches!(row.state, worktrunk::LoadState::Loading))
-            })
+            .is_some_and(|picker| picker.is_loading())
             .then_some(REF_EVENT_INTERVAL);
         let wake_after = [
             repeat_timeout,

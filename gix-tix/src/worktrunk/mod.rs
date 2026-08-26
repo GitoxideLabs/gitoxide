@@ -303,6 +303,10 @@ impl Worktrees {
         }
     }
 
+    pub(crate) fn is_loading(&self) -> bool {
+        self.rows.iter().any(|row| matches!(row.state, LoadState::Loading))
+    }
+
     fn visible_indices(&self, visible: usize) -> Vec<usize> {
         let indices: Vec<_> = if self.search.is_open() {
             self.search.matching_indices().to_vec()
@@ -801,6 +805,7 @@ pub(crate) fn run(
     target: Option<OsString>,
     path: Option<PathBuf>,
     create_branch_if_missing: bool,
+    quit_on_finish: Option<String>,
 ) -> Result<()> {
     let repository = repository.to_thread_local();
     if let Some(target) = target {
@@ -820,7 +825,7 @@ pub(crate) fn run(
 
     let mut worktrees = Worktrees::start(&repository)?;
     anyhow::ensure!(!worktrees.rows().is_empty(), "this repository has no worktrees");
-    let selected = crate::pick_worktree(repository.into_sync(), &mut worktrees)?;
+    let selected = crate::pick_worktree(repository.into_sync(), &mut worktrees, quit_on_finish)?;
     let Some(selected) = selected else {
         return Ok(());
     };
