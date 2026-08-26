@@ -35,6 +35,7 @@ ratatui = { version = "0.30.2", default-features = false, features = ["crossterm
 terminal-colorsaurus = "1.0.3"
 tracing = "0.1.37"
 tracing-appender = "0.2.4"
+tracing-forest = "0.1.5"
 tracing-subscriber = "0.3.17"
 tui-markdown = { version = "0.3.9", default-features = false }
 

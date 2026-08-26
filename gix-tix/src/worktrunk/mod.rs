@@ -820,7 +820,7 @@ pub(crate) fn run(
     }
     drop(worktrees);
     std::env::set_current_dir(&selected).with_context(|| format!("could not enter worktree {}", selected.display()))?;
-    crate::run(
+    crate::run_without_logging(
         gix::open(&selected)
             .with_context(|| format!("could not open worktree {}", selected.display()))?
             .into_sync(),
