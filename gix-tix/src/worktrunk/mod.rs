@@ -576,6 +576,49 @@ fn graph_metadata_for_head(
     })
 }
 
+pub(crate) fn graph_metadata_for_paths(
+    repository: &gix::Repository,
+    paths: Vec<PathBuf>,
+    hidden: &[OsString],
+    graph: &mut crate::history::HistoryGraph,
+) -> Result<Vec<(usize, Result<GraphMetadata, String>)>> {
+    let mut opened = Vec::with_capacity(paths.len());
+    let mut head_ids = Vec::new();
+    let mut metadata = Vec::with_capacity(paths.len());
+    for (index, path) in paths.into_iter().enumerate() {
+        match gix::open(&path)
+            .with_context(|| format!("could not open worktree {}", path.display()))
+            .and_then(|repository| logical_head(&repository).map(|head| (repository, head)))
+        {
+            Ok((repository, head)) => {
+                if let Some(head_id) = head.commit_id
+                    && !head_ids.contains(&head_id)
+                {
+                    head_ids.push(head_id);
+                }
+                opened.push((index, repository, head));
+            }
+            Err(err) => metadata.push((index, Err(format!("{err:#}")))),
+        }
+    }
+    let revisions = head_ids
+        .iter()
+        .map(|id| OsString::from(id.to_hex().to_string()))
+        .collect::<Vec<_>>();
+    let hidden_tips = if revisions.is_empty() {
+        Vec::new()
+    } else {
+        graph.refresh_graph(repository, &revisions, hidden)?.hidden_tips
+    };
+    metadata.extend(opened.into_iter().map(|(index, repository, head)| {
+        (
+            index,
+            graph_metadata_for_head(&repository, graph, &hidden_tips, head).map_err(|err| format!("{err:#}")),
+        )
+    }));
+    Ok(metadata)
+}
+
 fn logical_head(repository: &gix::Repository) -> Result<LogicalHead> {
     let mut head = repository.head().context("could not read HEAD")?;
     let is_detached = head.is_detached();
@@ -856,37 +899,9 @@ pub(crate) fn show(repository: &gix::Repository, mut out: impl Write) -> Result<
     let mut worktrees = Worktrees::start(repository)?;
     anyhow::ensure!(!worktrees.rows().is_empty(), "this repository has no worktrees");
     worktrees.drain_updates();
+    let paths = worktrees.rows().iter().map(|row| row.path.clone()).collect();
     let mut graph = crate::history::HistoryGraph::default();
-    let mut opened = Vec::with_capacity(worktrees.rows().len());
-    let mut head_ids = Vec::new();
-    for index in 0..worktrees.rows().len() {
-        let path = worktrees.rows()[index].path.clone();
-        match gix::open(&path)
-            .with_context(|| format!("could not open worktree {}", path.display()))
-            .and_then(|repository| logical_head(&repository).map(|head| (repository, head)))
-        {
-            Ok((repository, head)) => {
-                if let Some(head_id) = head.commit_id
-                    && !head_ids.contains(&head_id)
-                {
-                    head_ids.push(head_id);
-                }
-                opened.push((index, repository, head));
-            }
-            Err(err) => worktrees.set_graph_metadata(index, Err(format!("{err:#}"))),
-        }
-    }
-    let revisions = head_ids
-        .iter()
-        .map(|id| OsString::from(id.to_hex().to_string()))
-        .collect::<Vec<_>>();
-    let hidden_tips = if revisions.is_empty() {
-        Vec::new()
-    } else {
-        graph.refresh_graph(repository, &revisions, &hidden)?.hidden_tips
-    };
-    for (index, repository, head) in opened {
-        let result = graph_metadata_for_head(&repository, &graph, &hidden_tips, head).map_err(|err| format!("{err:#}"));
+    for (index, result) in graph_metadata_for_paths(repository, paths, &hidden, &mut graph)? {
         worktrees.set_graph_metadata(index, result);
     }
     worktrees.finish_workers()?;
@@ -1676,6 +1691,33 @@ mod tests {
         assert!(
             !output.contains(['…', '\u{1b}']),
             "plain output has no loading or ANSI state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn graph_metadata_is_loaded_for_all_worktrees_with_one_shared_graph() -> gix_testtools::Result {
+        let (_temp, repository) = fixture()?;
+        create_branch(&repository, "topic")?;
+        let topic = resolve_or_create(
+            &repository,
+            OsStr::new("topic"),
+            None,
+            false,
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        git(&topic, &["commit", "--allow-empty", "-m", "topic"])?;
+
+        let worktrees = Worktrees::start(&repository)?;
+        let paths = worktrees.rows().iter().map(|row| row.path.clone()).collect();
+        let mut graph = crate::history::HistoryGraph::default();
+        let metadata = graph_metadata_for_paths(&repository, paths, &[], &mut graph)?;
+
+        assert_eq!(metadata.len(), 2, "every inventoried worktree has metadata");
+        assert!(
+            metadata.into_iter().all(|(_, result)| result.is_ok()),
+            "each worktree is resolved against the shared graph"
         );
         Ok(())
     }

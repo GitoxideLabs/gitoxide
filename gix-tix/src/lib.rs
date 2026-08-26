@@ -913,14 +913,22 @@ pub struct Options {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RefreshKind {
     History,
-    RefTree { enter: bool },
-    WorktreePreview { index: usize, path: PathBuf },
+    RefTree {
+        enter: bool,
+    },
+    WorktreePreview {
+        index: usize,
+        path: PathBuf,
+        load_metadata: bool,
+    },
 }
 
 struct HistoryRefresh {
     history: history::Refresh,
     worktree: Option<Result<worktrunk::GraphMetadata, String>>,
 }
+
+type WorktreeMetadata = Vec<(usize, Result<worktrunk::GraphMetadata, String>)>;
 
 #[derive(Clone)]
 struct WorktreePreview {
@@ -1284,8 +1292,13 @@ fn disarms_worktree_removal(input: Option<&WorktrunkInput>, event: &TerminalEven
     }
 }
 
-fn worktrunk_refresh_blocked(switching_blocked: bool, refresh_running: bool, lanes_running: bool) -> bool {
-    switching_blocked || refresh_running || lanes_running
+fn worktrunk_refresh_blocked(
+    switching_blocked: bool,
+    refresh_running: bool,
+    metadata_running: bool,
+    lanes_running: bool,
+) -> bool {
+    switching_blocked || refresh_running || metadata_running || lanes_running
 }
 
 fn request_worktree_preview(selected: Option<usize>, requested: &mut Option<usize>, queue: &mut VecDeque<usize>) {
@@ -1472,6 +1485,7 @@ fn event_loop(
     let mut worktree_previews: Vec<Option<WorktreePreview>> =
         std::iter::repeat_with(|| None).take(worktree_count).collect();
     let mut worktree_preview_queue: VecDeque<_> = (0..worktree_count).collect();
+    let mut worktree_metadata_receiver: Option<mpsc::Receiver<(HistoryGraph, Result<WorktreeMetadata>)>> = None;
     let mut requested_worktree_preview = None;
     let mut active_worktree_preview = preview_mode.then_some(0);
     let mut pending_worktree_activation = None;
@@ -2024,6 +2038,44 @@ fn event_loop(
                 }
             }
         }
+        if let Some(result) = worktree_metadata_receiver.as_ref().map(mpsc::Receiver::try_recv) {
+            match result {
+                Ok((mut graph, result)) => {
+                    let picker = picker
+                        .as_deref_mut()
+                        .expect("metadata loading requires the worktree picker");
+                    match result {
+                        Ok(metadata) => {
+                            for (index, result) in metadata {
+                                picker.set_graph_metadata(index, result);
+                            }
+                        }
+                        Err(err) => {
+                            let message = format!("{err:#}");
+                            for index in 0..picker.rows().len() {
+                                picker.set_graph_metadata(index, Err(message.clone()));
+                            }
+                        }
+                    }
+                    graph.switch_view(
+                        &ref_snapshot.view_tips,
+                        if app.show_hidden {
+                            &[]
+                        } else {
+                            &ref_snapshot.hidden_tips
+                        },
+                    );
+                    history_graph = Some(graph);
+                    worktree_metadata_receiver = None;
+                    dirty = true;
+                    urgent = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    anyhow::bail!("worktree metadata worker stopped unexpectedly")
+                }
+            }
+        }
         if let Some(result) = refresh_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((kind, mut graph, result)) => {
@@ -2058,13 +2110,12 @@ fn event_loop(
                         }
                     };
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
-                    if let RefreshKind::WorktreePreview { index, path } = kind {
+                    if let RefreshKind::WorktreePreview { index, path, .. } = kind {
                         app.cache_commits(result.commits);
-                        if let Some(picker) = picker.as_deref_mut() {
-                            picker.set_graph_metadata(
-                                index,
-                                worktree.unwrap_or_else(|| Err("worktree preview metadata is missing".into())),
-                            );
+                        if let Some(result) = worktree
+                            && let Some(picker) = picker.as_deref_mut()
+                        {
+                            picker.set_graph_metadata(index, result);
                         }
                         if let Some(slot) = worktree_previews.get_mut(index) {
                             *slot = Some(WorktreePreview {
@@ -2174,6 +2225,35 @@ fn event_loop(
                 Err(mpsc::TryRecvError::Disconnected) => anyhow::bail!("history refresh worker stopped unexpectedly"),
             }
         }
+        if picker.as_ref().is_some_and(|picker| {
+            picker
+                .rows()
+                .iter()
+                .any(|row| row.head.is_none() && matches!(row.state, worktrunk::LoadState::Loading))
+        }) && requested_worktree_preview.is_none()
+            && worktree_metadata_receiver.is_none()
+            && refresh_receiver.is_none()
+            && lane_receiver.is_none()
+            && history_graph.is_some()
+            && matches!(app.state, State::Complete | State::Cancelled)
+        {
+            let paths = picker
+                .as_ref()
+                .expect("metadata loading requires the worktree picker")
+                .rows()
+                .iter()
+                .map(|row| row.path.clone())
+                .collect();
+            worktree_metadata_receiver = Some(start_worktree_metadata(
+                repository_path.clone(),
+                repository_is_bare,
+                paths,
+                hide.clone(),
+                history_graph
+                    .take()
+                    .expect("metadata loading requires the cached history graph"),
+            ));
+        }
         let mut next_worktree_preview = None;
         if preview_mode
             && refresh_receiver.is_none()
@@ -2201,6 +2281,7 @@ fn event_loop(
             }
             if next_worktree_preview.is_none()
                 && requested_worktree_preview.is_none()
+                && !quit_on_finish
                 && *picker_focused
                 && !refresh_pending
                 && !ref_tree_refresh_pending
@@ -2258,6 +2339,10 @@ fn event_loop(
                     .and_then(|picker| picker.rows().get(index))
                     .map(|row| row.path.clone())
                     .context("worktree preview disappeared")?;
+                let load_metadata = picker
+                    .as_deref()
+                    .and_then(|picker| picker.rows().get(index))
+                    .is_some_and(|row| row.head.is_none() && matches!(row.state, worktrunk::LoadState::Loading));
                 refresh_receiver = Some(start_history_refresh(
                     path.clone(),
                     false,
@@ -2269,7 +2354,11 @@ fn event_loop(
                     history_graph
                         .take()
                         .expect("worktree preview starts only with a cached history graph"),
-                    RefreshKind::WorktreePreview { index, path },
+                    RefreshKind::WorktreePreview {
+                        index,
+                        path,
+                        load_metadata,
+                    },
                 ));
             }
         }
@@ -2386,7 +2475,7 @@ fn event_loop(
                 && matches!(app.state, State::Complete)
                 && lane_receiver.is_none()
                 && refresh_receiver.is_none()
-                && worktree_preview_queue.is_empty()
+                && worktree_metadata_receiver.is_none()
                 && picker.as_ref().is_none_or(|picker| !picker.is_loading())
                 && background_task.is_none()
                 && pending_force_push.is_none()
@@ -2437,6 +2526,7 @@ fn event_loop(
         }
         let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing)
             || refresh_receiver.is_some()
+            || worktree_metadata_receiver.is_some()
             || verification_receiver.is_some()
             || repeat_deadline.is_some();
         if should_draw(dirty, streaming, last_draw.elapsed()) {
@@ -2482,7 +2572,7 @@ fn event_loop(
         let picker_timeout = picker
             .as_ref()
             .is_some_and(|picker| picker.is_loading())
-            .then_some(REF_EVENT_INTERVAL);
+            .then_some(FRAME_INTERVAL);
         let wake_after = [
             repeat_timeout,
             watcher_timeout,
@@ -2612,7 +2702,11 @@ fn event_loop(
                             );
                         }
                     }
-                    WorktrunkInput::FocusHistory if picker.preview_pending() || refresh_receiver.is_some() => {
+                    WorktrunkInput::FocusHistory
+                        if picker.preview_pending()
+                            || refresh_receiver.is_some()
+                            || worktree_metadata_receiver.is_some() =>
+                    {
                         app.leave_attention("wait for the selected worktree preview to finish loading");
                     }
                     WorktrunkInput::FocusHistory => *picker_focused = false,
@@ -2620,6 +2714,7 @@ fn event_loop(
                         if worktrunk_refresh_blocked(
                             switching_blocked,
                             refresh_receiver.is_some(),
+                            worktree_metadata_receiver.is_some(),
                             lane_receiver.is_some(),
                         ) =>
                     {
@@ -2641,7 +2736,10 @@ fn event_loop(
                         app.leave_attention("finish the background task or conflict before removing a worktree");
                     }
                     WorktrunkInput::Remove(_)
-                        if picker.preview_pending() || refresh_receiver.is_some() || lane_receiver.is_some() =>
+                        if picker.preview_pending()
+                            || refresh_receiver.is_some()
+                            || worktree_metadata_receiver.is_some()
+                            || lane_receiver.is_some() =>
                     {
                         app.leave_attention("wait for the selected worktree preview to finish loading");
                     }
@@ -5236,6 +5334,24 @@ fn start_history(
     (cancelled, receiver)
 }
 
+fn start_worktree_metadata(
+    repository_path: PathBuf,
+    bare: bool,
+    paths: Vec<PathBuf>,
+    hidden: Vec<OsString>,
+    mut graph: HistoryGraph,
+) -> mpsc::Receiver<(HistoryGraph, Result<WorktreeMetadata>)> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = open_repository(&repository_path, bare, false).and_then(|mut repository| {
+            repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
+            worktrunk::graph_metadata_for_paths(&repository, paths, &hidden, &mut graph)
+        });
+        let _ = sender.send((graph, result));
+    });
+    receiver
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the worker owns each independent refresh input"
@@ -5265,7 +5381,14 @@ fn start_history_refresh(
                     &expand,
                     &authors,
                 )?;
-                let worktree = matches!(&kind, RefreshKind::WorktreePreview { .. }).then(|| {
+                let worktree = matches!(
+                    &kind,
+                    RefreshKind::WorktreePreview {
+                        load_metadata: true,
+                        ..
+                    }
+                )
+                .then(|| {
                     worktrunk::graph_metadata(&repository, &graph, &history.refs).map_err(|err| format!("{err:#}"))
                 });
                 Ok(HistoryRefresh { history, worktree })
@@ -9036,10 +9159,11 @@ mod tests {
 
     #[test]
     fn worktrunk_refresh_waits_for_background_tasks_and_preview_workers() {
-        assert!(worktrunk_refresh_blocked(true, false, false));
-        assert!(worktrunk_refresh_blocked(false, true, false));
-        assert!(worktrunk_refresh_blocked(false, false, true));
-        assert!(!worktrunk_refresh_blocked(false, false, false));
+        assert!(worktrunk_refresh_blocked(true, false, false, false));
+        assert!(worktrunk_refresh_blocked(false, true, false, false));
+        assert!(worktrunk_refresh_blocked(false, false, true, false));
+        assert!(worktrunk_refresh_blocked(false, false, false, true));
+        assert!(!worktrunk_refresh_blocked(false, false, false, false));
     }
 
     #[test]
