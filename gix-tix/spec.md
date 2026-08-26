@@ -529,8 +529,8 @@ trailing graph cells before placing metadata. If the drawable history width
 shows less than 60% of the average rendered width of visible commit titles,
 valid conventional-commit prefixes are shortened to `…:` without a following
 space. If the shortened titles still fall below 60%, rows retain their gutters
-and graph through the commit disc, followed by one space and the shortened
-title; other metadata is hidden. Widths are terminal display cells and exactly
+and complete graph, followed by one space and the shortened title; other
+metadata is hidden. Widths are terminal display cells and exactly
 60% retains the more detailed form. Unaligned history never adapts its titles
 or metadata and remains horizontally scrollable.
 
