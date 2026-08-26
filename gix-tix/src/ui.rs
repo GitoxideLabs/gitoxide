@@ -825,8 +825,6 @@ pub(crate) fn draw_with_worktree(
         let lane = lanes.lane(index);
         if hidden_entries[index] || requested_alignment == HistoryAlignment::None {
             lane
-        } else if compact_history && matches!(visible_entries[index], HistoryEntry::Commit(_)) {
-            lane_through_node(lane)
         } else {
             lane.trim_end()
         }
@@ -2230,15 +2228,6 @@ fn lane_width(lane: &str, alignment: HistoryAlignment) -> usize {
         lane.trim_end()
     };
     Line::raw(lane).width() + usize::from(alignment != HistoryAlignment::None && !lane.is_empty())
-}
-
-fn lane_through_node(lane: &str) -> &str {
-    lane.char_indices()
-        .find(|(_, symbol)| matches!(symbol, '●' | '◆' | '@' | '0'..='9' | '+'))
-        .map_or_else(
-            || lane.trim_end(),
-            |(offset, symbol)| &lane[..offset + symbol.len_utf8()],
-        )
 }
 
 fn conventional_title_subject(title: &BStr) -> Option<&BStr> {
@@ -5829,8 +5818,8 @@ mod tests {
         compact.draw(|frame| draw(frame, &mut app, &decorations))?;
         let line = rendered_line(&compact, 0);
         assert!(
-            line.contains("│ @ …:subject") && !line.contains("1970-01-01") && !line.contains("─┐"),
-            "narrow history minimizes without a changes pane: {line:?}"
+            line.contains("│ @─┐ …:subject") && !line.contains("1970-01-01"),
+            "narrow history keeps the graph and places the title directly after it: {line:?}"
         );
         let head_x = line.chars().position(|symbol| symbol == '@').expect("HEAD is visible") as u16;
         assert_eq!(compact.backend().buffer()[(head_x, 0)].bg, REVIEW_BACKGROUND);
