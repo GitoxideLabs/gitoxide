@@ -83,6 +83,36 @@ title "gix (with repository)"
     }
   )
 
+  title "gix worktree"
+  (with "the 'add' and 'remove' sub-commands"
+    (sandbox
+      git init -q
+      git config commit.gpgsign false
+      touch file
+      git add file
+      git commit -q -m initial
+      git branch topic
+
+      it "adds and removes attached worktrees" && {
+        expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose worktree add ../topic topic
+        expect_equals "$(git -C ../topic symbolic-ref --short HEAD)" topic
+        expect_exists ../topic/file
+        touch ../topic/untracked
+        expect_run $WITH_FAILURE "$exe_plumbing" --no-verbose worktree remove ../topic
+        expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose worktree remove -f ../topic
+        expect_run $WITH_FAILURE test -e ../topic
+      }
+      it "adds detached worktrees and maps repeated force flags" && {
+        expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose worktree add --detach ../detached HEAD
+        expect_run $WITH_FAILURE git -C ../detached symbolic-ref --quiet HEAD
+        git worktree lock ../detached
+        expect_run $WITH_FAILURE "$exe_plumbing" --no-verbose worktree remove -f ../detached
+        expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose worktree remove -ff ../detached
+        expect_run $WITH_FAILURE test -e ../detached
+      }
+    )
+  )
+
   title "gix index"
   (with "the 'entries' sub-command"
     snapshot="$snapshot/index/entries"

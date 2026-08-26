@@ -388,6 +388,10 @@ pub mod merge_base {
 }
 
 pub mod worktree {
+    use std::path::PathBuf;
+
+    use gix::bstr::BString;
+
     #[derive(Debug, clap::Parser)]
     #[command(about = "Commands for handling worktrees")]
     pub struct Platform {
@@ -399,6 +403,25 @@ pub mod worktree {
     pub enum SubCommands {
         /// List all worktrees, along with some accompanying information.
         List,
+        /// Add a linked worktree for an existing branch or commit.
+        Add {
+            /// Check out the given commit with a detached HEAD instead of treating it as a branch.
+            #[clap(long)]
+            detach: bool,
+            /// The path at which to create the worktree.
+            path: PathBuf,
+            /// An existing local branch, or a commit-ish if `--detach` is used.
+            #[clap(value_parser = crate::shared::AsBString)]
+            reference: BString,
+        },
+        /// Remove a linked worktree.
+        Remove {
+            /// Discard changes; repeat to also override a worktree lock.
+            #[clap(long, short = 'f', action = clap::ArgAction::Count)]
+            force: u8,
+            /// The worktree path or a unique trailing path suffix.
+            worktree: PathBuf,
+        },
     }
 }
 
