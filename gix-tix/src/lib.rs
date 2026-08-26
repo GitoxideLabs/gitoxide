@@ -939,6 +939,15 @@ fn shade_terminal_background((red, green, blue): (u8, u8, u8), dark: bool) -> (u
 
 /// Run the interactive commit graph for `repository`.
 pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, options: Options) -> Result<()> {
+    let _log_guard = logging::init(0)?;
+    run_without_logging(repository, revisions, options)
+}
+
+pub(crate) fn run_without_logging(
+    repository: gix::ThreadSafeRepository,
+    revisions: Vec<OsString>,
+    options: Options,
+) -> Result<()> {
     let UiExit::Quit(lane_time) = run_ui(repository, revisions, options, None)? else {
         unreachable!("only worktrunk can promote a selected worktree")
     };
@@ -990,7 +999,6 @@ fn run_ui(
     mut options: Options,
     picker: Option<&mut worktrunk::Worktrees>,
 ) -> Result<UiExit> {
-    let _log_guard = logging::init();
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (hide, unavailable) = validate_hidden_revisions(&mut repository_path, &common_dir, &options.hide)?;

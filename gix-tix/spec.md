@@ -13,6 +13,16 @@ without trading responsiveness for metadata that is not visible.
 
 - `tix [REVISION]...` shows commits reachable from the supplied revisions, or
   from `HEAD` when none are supplied.
+- Standalone `tix` accepts `-t|--trace` up to four times. One occurrence emits
+  forest-formatted info events, two emit forest-formatted debug events, three
+  emit flat debug events, and four emit flat trace events. `gix tix` inherits
+  the same option from `gix` instead of repeating it after the subcommand.
+  Traces are buffered independently of progress and printed to stderr after the
+  command and any terminal UI teardown. Flat output includes completed spans.
+  Explicit trace setup precedes standalone repository discovery, reports setup
+  failure, and emits a start event even for non-interactive commands.
+  History-view options cannot be combined with a subcommand; use `--` before a
+  revision whose name is also a command.
 - `tix worktrunk`, its visible `tix wt` alias, and `tix worktrunk switch`
   open an existing-worktree picker above a fully interactive Tix history. The
   list occupies no more than half the terminal. Moving its cursor immediately
