@@ -230,6 +230,249 @@ mod create {
     }
 }
 
+#[cfg(feature = "worktree-mutation")]
+mod remove {
+    use std::sync::atomic::AtomicBool;
+
+    use gix::{
+        refs::{FullName, transaction::PreviousValue},
+        worktree::remove::Force,
+    };
+
+    fn branch(name: &str) -> FullName {
+        format!("refs/heads/{name}").try_into().expect("valid test branch name")
+    }
+
+    #[test]
+    fn removes_a_clean_worktree_by_suffix_without_deleting_its_branch() -> crate::Result {
+        let (mut repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let destination = destinations.path().join("nested/topic-checkout");
+        let topic = branch("remove-topic");
+        repo.reference(
+            topic.clone(),
+            repo.head_id()?.detach(),
+            PreviousValue::MustNotExist,
+            "create worktree removal test branch",
+        )?;
+        let (linked, _) = repo.create_worktree(
+            &destination,
+            gix::worktree::create::Head::Attached(topic.clone()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        let private_git_dir = linked.git_dir().to_owned();
+        drop(linked);
+        let malformed = repo.common_dir().join("worktrees/malformed");
+        std::fs::create_dir(&malformed)?;
+        std::fs::write(malformed.join("gitdir"), b"not a gitdir\n")?;
+        repo.config_snapshot_mut()
+            .set_value(&gix::config::tree::Core::IGNORE_CASE, "true")?;
+
+        let target = repo.prepare_remove_worktree("TOPIC-CHECKOUT")?;
+        assert_eq!(target.base(), gix_path::realpath(&destination)?);
+        assert_eq!(
+            target.repository()?.head_name()?,
+            Some(topic.clone()),
+            "the resolved worktree can be inspected before removal"
+        );
+        target.remove(Force::Never, gix::progress::Discard)?;
+
+        assert!(!destination.exists(), "the checkout is removed");
+        assert!(!private_git_dir.exists(), "the registration is removed");
+        assert!(
+            repo.try_find_reference(topic.as_ref())?.is_some(),
+            "core worktree removal leaves the attached branch untouched"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn permits_removing_the_current_linked_worktree_but_not_the_main_worktree() -> crate::Result {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let destination = destinations.path().join("current");
+        let (linked, _) = repo.create_worktree(
+            &destination,
+            gix::worktree::create::Head::Detached(repo.head_id()?.detach()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        let private_git_dir = linked.git_dir().to_owned();
+
+        linked.remove_worktree(&destination, Force::Never, gix::progress::Discard)?;
+        assert!(!destination.exists(), "the current linked checkout is removed");
+        assert!(!private_git_dir.exists(), "its registration is removed");
+
+        let main_path = repo.workdir().expect("non-bare fixture").to_owned();
+        let err = repo
+            .remove_worktree(&main_path, Force::OverrideLock, gix::progress::Discard)
+            .expect_err("the main worktree is never removable");
+        assert!(matches!(err, gix::worktree::remove::Error::MainWorktree { path } if path == main_path));
+        Ok(())
+    }
+
+    #[test]
+    fn dirty_and_locked_worktrees_require_the_corresponding_force_level() -> crate::Result {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let dirty_path = gix_path::realpath(destinations.path().join("dirty"))?;
+        let (dirty, _) = repo.create_worktree(
+            &dirty_path,
+            gix::worktree::create::Head::Detached(repo.head_id()?.detach()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        std::fs::write(dirty_path.join("untracked"), b"changes")?;
+        drop(dirty);
+        let err = repo
+            .remove_worktree(&dirty_path, Force::Never, gix::progress::Discard)
+            .expect_err("an untracked file makes the worktree dirty");
+        assert!(
+            matches!(err, gix::worktree::remove::Error::Dirty { ref path } if path == &dirty_path),
+            "an untracked file is rejected as dirty, got {err:?}"
+        );
+        repo.remove_worktree(&dirty_path, Force::DiscardChanges, gix::progress::Discard)?;
+
+        let locked_path = gix_path::realpath(destinations.path().join("locked"))?;
+        let (locked, _) = repo.create_worktree(
+            &locked_path,
+            gix::worktree::create::Head::Detached(repo.head_id()?.detach()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        let private_git_dir = locked.git_dir().to_owned();
+        std::fs::write(private_git_dir.join("locked"), b"on external storage\n")?;
+        drop(locked);
+        let err = repo
+            .remove_worktree(&locked_path, Force::DiscardChanges, gix::progress::Discard)
+            .expect_err("one force does not override a lock");
+        assert!(
+            matches!(err, gix::worktree::remove::Error::Locked { path, reason: Some(reason) }
+                if path == locked_path && reason == "on external storage"),
+            "the lock and its reason are reported"
+        );
+        repo.remove_worktree(&locked_path, Force::OverrideLock, gix::progress::Discard)?;
+        Ok(())
+    }
+
+    #[test]
+    fn initialized_submodules_require_force() -> crate::Result {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let destination = destinations.path().join("submodules");
+        let (linked, _) = repo.create_worktree(
+            &destination,
+            gix::worktree::create::Head::Detached(repo.head_id()?.detach()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        std::fs::create_dir(linked.git_dir().join("modules"))?;
+        drop(linked);
+
+        let err = repo
+            .remove_worktree(&destination, Force::Never, gix::progress::Discard)
+            .expect_err("initialized submodules prevent an unforced removal");
+        assert!(matches!(err, gix::worktree::remove::Error::ContainsSubmodule { .. }));
+        repo.remove_worktree(&destination, Force::DiscardChanges, gix::progress::Discard)?;
+        Ok(())
+    }
+
+    #[test]
+    fn backlink_validation_is_never_forced_and_missing_checkouts_are_unregistered() -> crate::Result {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let invalid_path = destinations.path().join("invalid-backlink");
+        let (invalid, _) = repo.create_worktree(
+            &invalid_path,
+            gix::worktree::create::Head::Detached(repo.head_id()?.detach()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        let private_git_dir = invalid.git_dir().to_owned();
+        std::fs::write(invalid_path.join(".git"), "gitdir: ../elsewhere\n")?;
+        drop(invalid);
+        let err = repo
+            .remove_worktree(&invalid_path, Force::OverrideLock, gix::progress::Discard)
+            .expect_err("force cannot bypass backlink validation");
+        assert!(matches!(err, gix::worktree::remove::Error::BacklinkMismatch { .. }));
+        assert!(invalid_path.exists(), "an invalid checkout is retained");
+        assert!(private_git_dir.exists(), "an invalid registration is retained");
+
+        let missing_path = destinations.path().join("missing");
+        let (missing, _) = repo.create_worktree(
+            &missing_path,
+            gix::worktree::create::Head::Detached(repo.head_id()?.detach()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        let private_git_dir = missing.git_dir().to_owned();
+        drop(missing);
+        std::fs::remove_dir_all(&missing_path)?;
+        let target = repo.prepare_remove_worktree(&missing_path)?;
+        assert_eq!(
+            target.repository()?.head_id()?.detach(),
+            repo.head_id()?.detach(),
+            "private metadata remains inspectable without the checkout"
+        );
+        target.remove(Force::Never, gix::progress::Discard)?;
+        assert!(!private_git_dir.exists(), "a missing checkout is unregistered");
+
+        let blocked_parent = destinations.path().join("non-directory");
+        let blocked_path = blocked_parent.join("missing");
+        let (blocked, _) = repo.create_worktree(
+            &blocked_path,
+            gix::worktree::create::Head::Detached(repo.head_id()?.detach()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        let private_git_dir = blocked.git_dir().to_owned();
+        drop(blocked);
+        std::fs::remove_dir_all(&blocked_parent)?;
+        std::fs::write(&blocked_parent, b"not a directory")?;
+        repo.remove_worktree(&blocked_path, Force::Never, gix::progress::Discard)?;
+        assert!(
+            !private_git_dir.exists(),
+            "a checkout hidden behind a non-directory ancestor is unregistered"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ambiguous_suffixes_can_be_disambiguated_with_an_exact_path() -> crate::Result {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let first_path = destinations.path().join("one/shared");
+        let second_path = destinations.path().join("two/shared");
+        for destination in [&first_path, &second_path] {
+            repo.create_worktree(
+                destination,
+                gix::worktree::create::Head::Detached(repo.head_id()?.detach()),
+                gix::progress::Discard,
+                &AtomicBool::default(),
+            )?;
+        }
+
+        let err = repo
+            .remove_worktree("shared", Force::Never, gix::progress::Discard)
+            .expect_err("a non-unique suffix is ambiguous");
+        assert!(
+            matches!(err, gix::worktree::remove::Error::Ambiguous { candidates, .. } if candidates.len() == 2),
+            "all suffix matches are reported"
+        );
+        repo.remove_worktree(&first_path, Force::Never, gix::progress::Discard)?;
+        assert!(!first_path.exists(), "the exact match was removed");
+        assert!(second_path.exists(), "the other suffix match remains");
+
+        let missing = destinations.path().join("does-not-exist");
+        let err = repo
+            .remove_worktree(&missing, Force::Never, gix::progress::Discard)
+            .expect_err("an unknown path is reported as such");
+        assert!(matches!(err, gix::worktree::remove::Error::NotFound { target } if target == missing));
+        Ok(())
+    }
+}
+
 /// The buffer length for SHA1 archives.
 #[cfg(target_pointer_width = "64")]
 #[cfg(feature = "worktree-stream")]

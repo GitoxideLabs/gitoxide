@@ -28,6 +28,9 @@ pub use gix_validate as validate;
 /// Create linked-worktree administrative files.
 #[cfg(feature = "create")]
 pub mod create;
+/// Remove linked worktrees and their administrative files.
+#[cfg(feature = "remove")]
+pub mod remove;
 
 /// A cache for efficiently executing operations on directories and files which are encountered in sorted order.
 /// That way, these operations can be re-used for subsequent invocations in the same directory.
