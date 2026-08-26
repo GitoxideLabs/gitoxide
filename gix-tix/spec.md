@@ -48,6 +48,9 @@ without trading responsiveness for metadata that is not visible.
   their symbolic `refs/worktree/tix/pins/HEAD` branch when present. Without a
   configured upstream, ahead/behind is omitted unless exactly one hidden tip
   identifies the comparison history.
+- `tix worktrunk show` prints that table without opening a terminal UI. It waits
+  for every worktree's dirty state, ahead/behind relation, and base diffstat,
+  then writes every row without colors, selection, or name truncation.
 - `tix worktrunk switch TARGET [--path PATH]` and `tix worktrunk switch
   --new-branch NAME [--path PATH]` select without opening the picker. `TARGET`
   is an exact existing worktree path or local branch; an unchecked-out branch
