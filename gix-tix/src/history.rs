@@ -685,7 +685,43 @@ impl HistoryGraph {
         expand: &HashSet<ObjectId>,
         authors: &SharedAuthors,
     ) -> Result<Refresh> {
-        let refs = snapshot(repo, revisions, hidden_revisions, include_worktrees)?;
+        self.refresh_inner(
+            repo,
+            revisions,
+            hidden_revisions,
+            include_worktrees,
+            expand,
+            Some(authors),
+        )
+    }
+
+    pub(crate) fn refresh_graph(
+        &mut self,
+        repo: &gix::Repository,
+        revisions: &[OsString],
+        hidden_revisions: &[OsString],
+    ) -> Result<RefSnapshot> {
+        self.refresh_inner(repo, revisions, hidden_revisions, false, &HashSet::new(), None)
+            .map(|refresh| refresh.refs)
+    }
+
+    fn refresh_inner(
+        &mut self,
+        repo: &gix::Repository,
+        revisions: &[OsString],
+        hidden_revisions: &[OsString],
+        include_worktrees: bool,
+        expand: &HashSet<ObjectId>,
+        authors: Option<&SharedAuthors>,
+    ) -> Result<Refresh> {
+        let refs = snapshot_inner(
+            repo,
+            revisions,
+            hidden_revisions,
+            include_worktrees,
+            None,
+            include_worktrees || authors.is_some(),
+        )?;
         let hidden_only = refs.view_tips.is_empty() && !refs.hidden_tips.is_empty();
         let shallow: HashSet<_> = repo
             .shallow_commits()
@@ -769,19 +805,16 @@ impl HistoryGraph {
             }
             state.expanded |= delta;
             let id = self.id(index);
-            let commit = &self.commits[index.as_usize()];
-            let was_stored = commit.state & NODE_STORED != 0 || state.stored;
+            let was_stored = self.commits[index.as_usize()].state & NODE_STORED != 0 || state.stored;
             let should_store = delta & (VISIBLE | EXPAND) != 0 && !was_stored;
             if should_store {
                 state.stored = true;
                 newly_stored.push(index);
             }
             let stop = !should_store
-                && commit.state & NODE_COMPLETE != 0
+                && self.commits[index.as_usize()].state & NODE_COMPLETE != 0
                 && (delta & EXPAND == 0 || was_stored && !expand.contains(&id));
             let parent_indices = self.parents(index).to_vec();
-            let parent_ids = self.parent_ids(index);
-            let generation = commit.generation();
             if should_store {
                 if let Some(names) = local_refs.get(&id) {
                     let tracked = resolve_tracking(repo, names)?;
@@ -811,46 +844,48 @@ impl HistoryGraph {
                     }
                     tracking.insert(index, tracked);
                 }
-                let metadata = if generation.is_some() {
-                    None
-                } else {
-                    let object = repo.find_commit(id).context("could not read refreshed commit")?;
-                    let mut authors = gix::features::threading::lock(authors);
-                    Some(decode_metadata(object.iter(), &mut authors, &mut attributions)?)
-                };
-                let metadata_loaded = metadata.is_some();
-                let Metadata {
-                    committer_time,
-                    author_time,
-                    author,
-                    attributions: row_attributions,
-                    title,
-                    has_agent_marker,
-                    is_review,
-                    signature,
-                } = metadata.unwrap_or_else(|| Metadata {
-                    committer_time: Default::default(),
-                    author_time: Default::default(),
-                    author: &EMPTY_AUTHOR,
-                    attributions: 0..0,
-                    title: BString::default(),
-                    has_agent_marker: false,
-                    is_review: false,
-                    signature: SignatureState::Unsigned,
-                });
-                rows.push(Commit {
-                    id,
-                    parent_ids: parent_ids.clone(),
-                    committer_time,
-                    author_time,
-                    author,
-                    attributions: row_attributions,
-                    title,
-                    metadata_loaded,
-                    has_agent_marker,
-                    is_review,
-                    signature,
-                });
+                if let Some(authors) = authors {
+                    let metadata = if self.commits[index.as_usize()].generation().is_some() {
+                        None
+                    } else {
+                        let object = repo.find_commit(id).context("could not read refreshed commit")?;
+                        let mut authors = gix::features::threading::lock(authors);
+                        Some(decode_metadata(object.iter(), &mut authors, &mut attributions)?)
+                    };
+                    let metadata_loaded = metadata.is_some();
+                    let Metadata {
+                        committer_time,
+                        author_time,
+                        author,
+                        attributions: row_attributions,
+                        title,
+                        has_agent_marker,
+                        is_review,
+                        signature,
+                    } = metadata.unwrap_or_else(|| Metadata {
+                        committer_time: Default::default(),
+                        author_time: Default::default(),
+                        author: &EMPTY_AUTHOR,
+                        attributions: 0..0,
+                        title: BString::default(),
+                        has_agent_marker: false,
+                        is_review: false,
+                        signature: SignatureState::Unsigned,
+                    });
+                    rows.push(Commit {
+                        id,
+                        parent_ids: self.parent_ids(index),
+                        committer_time,
+                        author_time,
+                        author,
+                        attributions: row_attributions,
+                        title,
+                        metadata_loaded,
+                        has_agent_marker,
+                        is_review,
+                        signature,
+                    });
+                }
             }
             if stop {
                 continue;
@@ -878,7 +913,10 @@ impl HistoryGraph {
         }
         self.tracking.extend(tracking);
         self.switch_view(&refs.view_tips, &refs.hidden_tips);
-        let decorations = decorations(repo, &refs.pins, &refs.worktrees)?;
+        let decorations = match authors {
+            Some(_) => decorations(repo, &refs.pins, &refs.worktrees)?,
+            None => Decorations::new(),
+        };
         for index in newly_stored {
             self.commits[index.as_usize()].state |= NODE_STORED;
             self.stored_order.push(index);
@@ -1412,6 +1450,17 @@ pub(crate) fn snapshot_ignoring_pin(
     include_worktrees: bool,
     ignored_pin: Option<&BStr>,
 ) -> Result<RefSnapshot> {
+    snapshot_inner(repo, revisions, hidden, include_worktrees, ignored_pin, true)
+}
+
+fn snapshot_inner(
+    repo: &gix::Repository,
+    revisions: &[OsString],
+    hidden: &[OsString],
+    include_worktrees: bool,
+    ignored_pin: Option<&BStr>,
+    collect_worktrees: bool,
+) -> Result<RefSnapshot> {
     let (pins, active_branch) = pins_for_head(repo)?;
     #[cfg(feature = "blocking-network-client")]
     let fetch_remote = active_branch
@@ -1423,7 +1472,11 @@ pub(crate) fn snapshot_ignoring_pin(
         .into_iter()
         .filter(|pin| ignored_pin != Some(pin.name.as_bstr()))
         .collect::<Vec<_>>();
-    let worktrees = worktree_checkouts(repo);
+    let worktrees = if collect_worktrees {
+        worktree_checkouts(repo)
+    } else {
+        Vec::new()
+    };
     let mut view = referenced_refs(repo, revisions)?;
     for pin in &pins {
         insert_ref_chain(repo, pin.name.as_bstr(), &mut view)?;
