@@ -1121,6 +1121,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dua-core"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9b51096d83a9774c5f198a07fcf9ddb23e77791a2dad39a6312fc859624b73d"
+dependencies = [
+ "crossbeam",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1542,7 +1553,7 @@ dependencies = [
  "bytesize",
  "crossbeam-channel",
  "document-features",
- "dua-core",
+ "dua-core 2.41.1",
  "fs-err",
  "futures-io",
  "futures-lite",
@@ -2718,6 +2729,7 @@ version = "0.56.0"
 dependencies = [
  "bstr",
  "document-features",
+ "dua-core 3.3.0",
  "gix-attributes",
  "gix-discover",
  "gix-features",
@@ -2732,6 +2744,7 @@ dependencies = [
  "gix-testtools",
  "gix-validate",
  "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
