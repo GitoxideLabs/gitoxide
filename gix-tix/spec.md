@@ -26,6 +26,17 @@ without trading responsiveness for metadata that is not visible.
   cancels the search and restores its starting selection.
   `Tab` focuses history and `Escape` returns from root history to the list.
   `Enter` selects the worktree and promotes it to a normal full-screen history.
+  `d` twice removes a clean selected linked worktree; `D` twice removes it while
+  discarding changes. A different key cancels the confirmation, and `Escape`
+  cancels it without closing the picker. The launch and main worktrees cannot be
+  removed, and locked worktrees direct the user to the CLI's double-force form.
+  Removal uses the sole background-task slot, reports phased progress, and
+  immediately selects and previews the surviving row at the same index (or the
+  previous final row). A safe removal also deletes its logical local branch when
+  exactly one inferred local default exists and the observed branch tip is
+  already its ancestor. A concurrent branch move retains the branch and warns;
+  configuration cleanup failure warns that the branch was removed but its
+  configuration remains.
   Compact `Worktree`, `Status`, `Base ±`, and `Commits ↕` columns distinguish
   the launch, main, and linked worktrees and stream their dirty state, upstream
   ahead/behind counts, and additions and removals against the unambiguous
@@ -46,6 +57,19 @@ without trading responsiveness for metadata that is not visible.
   the logical Tix HEAD, while reusing it unchanged if it already exists.
   Creation returns the canonical path recorded by Git so later selection of the
   same worktree is stable.
+- `tix worktrunk remove [TARGET] [-f...] [-D|--force-delete]` removes a linked
+  worktree with Git's force levels: no `-f` protects changes and submodules, one
+  `-f` discards them, and two or more also override a lock. An omitted target
+  selects the current linked worktree. It safely deletes an associated
+  non-default branch only when it is merged into the one inferred local default;
+  `--force-delete` skips the mergedness check but still retains the inferred
+  default branch. Branch cleanup failure is a warning after successful worktree
+  removal and distinguishes a retained branch from a removed branch whose
+  configuration remains. Success hands the shell to the main worktree, or to the
+  parent of the common Git directory when no main worktree exists; without shell
+  integration that destination is printed on stdout. If removal of the current
+  worktree fails after deletion starts, the shell still moves there while
+  preserving the failure status.
 - `tix worktrunk shell-init SHELL` prints a `wt` wrapper for Bash, Zsh, Fish,
   Nushell, or PowerShell. The wrapper lets a successful selection change the
   calling shell's directory and opens full-screen Tix only after picker
@@ -1269,16 +1293,21 @@ space first; changes blocks adapt within the remaining history width.
   then the sole remote or `origin`. It uses that remote's configured fetch
   refspecs and tag policy and permits credential helpers without terminal
   prompting.
-- Push and fetch share one user background-task slot while ordinary foreground
-  actions remain available. Push keeps its yellow footer label. Fetch reserves
-  one progress row directly above the footer, with completed work in dark gray
-  and the remaining status background unchanged; notices and prefix popups stay
-  above it. Its monotonic phases allocate 0–5% to setup, 5–10% to connection and
-  authentication, 10–15% to refs and negotiation, 15–30% to remote enumeration,
-  counting, and compression, 30–75% to pack receipt and indexing, 75–90% to
-  delta resolution, and 90–95% to index and ref finalization. Completion clears
-  the slot and refreshes references. Success uses a green message and failure a
-  red one. Neither operation accepts terminal input or suspends the TUI.
+- Push, fetch, and picker worktree removal share one user background-task slot.
+  Ordinary foreground actions remain available during push and fetch; worktree
+  removal blocks exit and worktree switching until deletion finishes. Push keeps
+  its yellow footer label. Fetch reserves one progress row directly above the
+  footer, with completed work in dark gray and the remaining status background
+  unchanged; notices and prefix popups stay above it. Its monotonic phases
+  allocate 0–5% to setup, 5–10% to connection and authentication, 10–15% to refs
+  and negotiation, 15–30% to remote enumeration, counting, and compression,
+  30–75% to pack receipt and indexing, 75–90% to delta resolution, and 90–95%
+  to index and ref finalization. Completion clears the slot and refreshes
+  references. Success uses a green message and failure a red one. Neither
+  network operation accepts terminal input or suspends the TUI.
+  Worktree removal maps validation to 0–5%, checkout scanning to 5%, checkout
+  deletion to 10–85%, administration scanning to 85%, and administration
+  deletion to 90–100%.
 - Squash accepts any visible strict ancestor whose affected descendants contain no merges. With one eligible
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
@@ -1351,6 +1380,11 @@ space first; changes blocks adapt within the remaining history width.
 - The worktrunk picker starts neither reference nor worktree watchers. Promoting
   a worktree to normal full-screen history restores the ordinary watched
   lifecycle.
+- Before deleting the previewed worktree, the picker moves to the common
+  repository and drops fill and line-diff repositories so redraws cannot reopen
+  the disappearing checkout. Success and failure both re-inventory worktrees,
+  discard index-keyed worker results and preview caches, and request the selected
+  survivor immediately because Git-compatible removal may partly clean up.
 - Ref changes that affect view or hidden tips trigger an incremental history
   refresh. Decoration-only changes avoid traversal. Filesystem-driven traversal
   changes, manual refresh, and display toggles preserve selection by commit ID.
