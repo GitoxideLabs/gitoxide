@@ -179,6 +179,63 @@ fn missing_branches_are_successful_and_their_config_is_removed() -> crate::Resul
 }
 
 #[test]
+fn expected_targets_prevent_deleting_a_branch_that_moved() -> crate::Result {
+    let (mut repo, _tmp) = crate::repo_rw("make_references_repo.sh")?;
+    let branch = refname("refs/heads/d1");
+    let original = repo.find_reference(branch.as_ref())?.target().into_owned();
+    let replacement = repo.write_blob(b"replacement target")?.detach();
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(repo.common_dir().join("config"))?;
+    write!(config, "\n[branch \"d1\"]\n\tremote = origin\n")?;
+    drop(config);
+    repo.reference(
+        branch.clone(),
+        replacement,
+        PreviousValue::Any,
+        "move branch after observing it",
+    )?;
+
+    repo.delete_local_branches_if_unchanged([(branch.clone(), original)])
+        .expect_err("a moved branch must not be deleted");
+
+    assert_eq!(
+        repo.find_reference(branch.as_ref())?.target().into_owned(),
+        Target::Object(replacement),
+        "the concurrently moved branch remains"
+    );
+    assert!(
+        std::fs::read_to_string(repo.common_dir().join("config"))?.contains("branch \"d1\""),
+        "configuration remains when reference deletion is refused"
+    );
+    Ok(())
+}
+
+#[test]
+fn expected_targets_delete_the_branch_and_its_config() -> crate::Result {
+    let (mut repo, _tmp) = crate::repo_rw("make_references_repo.sh")?;
+    let branch = refname("refs/heads/d1");
+    let expected = repo.find_reference(branch.as_ref())?.target().into_owned();
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(repo.common_dir().join("config"))?;
+    write!(config, "\n[branch \"d1\"]\n\tremote = origin\n")?;
+    drop(config);
+
+    repo.delete_local_branches_if_unchanged([(branch.clone(), expected)])?;
+
+    assert!(
+        repo.try_find_reference(branch.as_ref())?.is_none(),
+        "the branch is gone"
+    );
+    assert!(
+        !std::fs::read_to_string(repo.common_dir().join("config"))?.contains("branch \"d1\""),
+        "branch configuration is removed"
+    );
+    Ok(())
+}
+
+#[test]
 fn linked_worktree_branches_are_protected_and_common_config_is_updated() -> crate::Result {
     // `git worktree add --relative-paths`, used by the fixture, was added in Git 2.48.
     let Some(fixture) = gix_testtools::scripted_fixture_writable_with_args_with_git_version(
