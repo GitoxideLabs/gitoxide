@@ -523,7 +523,8 @@ without trading responsiveness for metadata that is not visible.
 | `x` | Select the next visible commit with the same change ID, wrapping at the end. |
 
 Alignment uses only rows in the current viewport to determine widths and starts
-in title mode. Title, full-column, and compressed alignment discard unused
+in title mode. Hidden boundary rows remain unaligned and do not participate in
+alignment width calculations. Title, full-column, and compressed alignment discard unused
 trailing graph cells before placing metadata. If the drawable history width
 shows less than 60% of the average rendered width of visible commit titles,
 valid conventional-commit prefixes are shortened to `…:` without a following
