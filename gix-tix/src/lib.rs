@@ -75,6 +75,7 @@ const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const LINE_DIFF_POOL_IDLE: Duration = Duration::from_secs(10);
 const THEME_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
+const PUSH_RETRY_PROMPT: &str = "push requires force · <enter> retry with force-with-lease · Esc cancel";
 const WORKTREE_STATUS_CURRENT: usize = 0;
 const WORKTREE_STATUS_PARTIAL: usize = usize::MAX - 1;
 const WORKTREE_STATUS_FULL: usize = usize::MAX;
@@ -128,6 +129,25 @@ impl BackgroundTaskKind {
 enum BackgroundCompletion {
     Success(String),
     Attention(String),
+    PushNeedsForce(PushRequest),
+}
+
+struct PushRequest {
+    repository_path: PathBuf,
+    remote: BString,
+    branch: BString,
+}
+
+enum PushOutcome {
+    Pushed(String),
+    NeedsForce,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum PushRetryInput {
+    Retry,
+    Cancel,
+    Ignore,
 }
 
 struct PendingConflictResolution {
@@ -1365,6 +1385,7 @@ fn event_loop(
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
     let mut background_task: Option<BackgroundWorker> = None;
+    let mut pending_force_push = None;
     let mut commit_message = None;
     let mut tree_changes = TreeChangesCache::default();
     let mut worktree_changes = None;
@@ -1828,7 +1849,8 @@ fn event_loop(
             });
         if let Some((kind, result)) = background_completion {
             background_task = None;
-            let succeeded = report_background_task(&mut app, result);
+            let (succeeded, force_push) = report_background_task(&mut app, result);
+            pending_force_push = force_push;
             match kind {
                 BackgroundTaskKind::References => refresh_pending |= succeeded,
                 BackgroundTaskKind::RemoveWorktree => {
@@ -2355,6 +2377,7 @@ fn event_loop(
                 && matches!(app.state, State::Complete)
                 && lane_receiver.is_none()
                 && background_task.is_none()
+                && pending_force_push.is_none()
             {
                 return Ok(EventLoopExit::Quit(app.lane_time));
             }
@@ -2484,6 +2507,31 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
+        if pending_force_push.is_some()
+            && let Some(input) = push_retry_input(&terminal_event)
+        {
+            match input {
+                PushRetryInput::Retry => {
+                    let request = pending_force_push
+                        .take()
+                        .expect("a force-push retry was checked before accepting it");
+                    app.clear_notice();
+                    app.start_background_task(format!(
+                        "pushing {} to {} with force-with-lease…",
+                        request.branch, request.remote
+                    ));
+                    background_task = Some(start_push_worker(request, true));
+                }
+                PushRetryInput::Cancel => {
+                    pending_force_push = None;
+                    app.clear_notice();
+                }
+                PushRetryInput::Ignore => continue,
+            }
+            dirty = true;
+            urgent = true;
+            continue;
+        }
         if picker.is_some() && *picker_focused && focused && !diagnostic_input {
             let input = match &terminal_event {
                 TerminalEvent::Key(key) => {
@@ -4773,7 +4821,14 @@ fn event_loop(
                     match remote {
                         Ok((directory, remote)) => {
                             app.start_background_task(format!("pushing {branch} to {remote}…"));
-                            background_task = Some(start_push_worker(directory, remote, branch));
+                            background_task = Some(start_push_worker(
+                                PushRequest {
+                                    repository_path: directory,
+                                    remote,
+                                    branch,
+                                },
+                                false,
+                            ));
                         }
                         Err(err) => app.leave_error(format!("push: {err:#}")),
                     }
@@ -4848,11 +4903,20 @@ fn start_lane_worker(rows: app::LaneInput) -> mpsc::Receiver<(Vec<SharedCommitRo
     receiver
 }
 
-fn start_push_worker(repository_path: PathBuf, remote: BString, branch: BString) -> BackgroundWorker {
+fn start_push_worker(request: PushRequest, force_with_lease: bool) -> BackgroundWorker {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender
-            .send(push_branch(&repository_path, remote.as_bstr(), branch.as_bstr()).map(BackgroundCompletion::Success));
+        let completion = match push_branch(
+            &request.repository_path,
+            request.remote.as_bstr(),
+            request.branch.as_bstr(),
+            force_with_lease,
+        ) {
+            Ok(PushOutcome::Pushed(message)) => Ok(BackgroundCompletion::Success(message)),
+            Ok(PushOutcome::NeedsForce) => Ok(BackgroundCompletion::PushNeedsForce(request)),
+            Err(err) => Err(err),
+        };
+        let _ = sender.send(completion);
     });
     BackgroundWorker {
         receiver,
@@ -4991,11 +5055,13 @@ fn fetch_remote(
     Ok(format!("fetched {remote_name}"))
 }
 
-fn push_branch(repository_path: &Path, remote: &BStr, branch: &BStr) -> Result<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repository_path)
-        .arg("push")
+fn push_branch(repository_path: &Path, remote: &BStr, branch: &BStr, force_with_lease: bool) -> Result<PushOutcome> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repository_path).arg("push").arg("--porcelain");
+    if force_with_lease {
+        command.arg("--force-with-lease");
+    }
+    let output = command
         .arg("--")
         .arg(gix::path::from_bstr(remote).as_ref())
         .arg(gix::path::from_bstr(branch).as_ref())
@@ -5006,38 +5072,73 @@ fn push_branch(repository_path: &Path, remote: &BStr, branch: &BStr) -> Result<S
         .output()
         .context("could not launch git push")?;
     if !output.status.success() {
+        if retryable_push_rejection(force_with_lease, &output.stdout) {
+            return Ok(PushOutcome::NeedsForce);
+        }
+        let stdout = output.stdout.trim();
         let stderr = output.stderr.trim();
-        let detail = if stderr.is_empty() {
-            output.stdout.trim()
+        let detail = if stdout.is_empty() {
+            stderr.to_str_lossy().into_owned()
+        } else if stderr.is_empty() {
+            stdout.to_str_lossy().into_owned()
         } else {
-            stderr
+            format!("{}\n{}", stdout.to_str_lossy(), stderr.to_str_lossy())
         };
         if detail.is_empty() {
             anyhow::bail!("git push {remote} {branch} failed with {}", output.status);
         }
-        anyhow::bail!(
-            "git push {remote} {branch} failed with {}: {}",
-            output.status,
-            detail.to_str_lossy()
-        );
+        anyhow::bail!("git push {remote} {branch} failed with {}: {}", output.status, detail);
     }
-    Ok(format!("pushed {branch} to {remote}"))
+    Ok(PushOutcome::Pushed(format!("pushed {branch} to {remote}")))
 }
 
-fn report_background_task(app: &mut App, result: Result<BackgroundCompletion>) -> bool {
+fn retryable_push_rejection(force_with_lease: bool, stdout: &[u8]) -> bool {
+    !force_with_lease
+        && stdout.split(|byte| *byte == b'\n').any(|line| {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let mut fields = line.split(|byte| *byte == b'\t');
+            if fields.next() != Some(b"!".as_slice()) {
+                return false;
+            }
+            let _ = fields.next();
+            matches!(fields.next(), Some(status) if status == b"[rejected] (fetch first)"
+                || status == b"[rejected] (non-fast-forward)"
+                || status == b"[rejected] (needs force)")
+        })
+}
+
+fn push_retry_input(event: &TerminalEvent) -> Option<PushRetryInput> {
+    match event {
+        TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => match key.code {
+            KeyCode::Enter => Some(PushRetryInput::Retry),
+            KeyCode::Esc => Some(PushRetryInput::Cancel),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => None,
+            KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => None,
+            _ => Some(PushRetryInput::Ignore),
+        },
+        TerminalEvent::FocusLost | TerminalEvent::FocusGained | TerminalEvent::Resize(_, _) => None,
+        _ => Some(PushRetryInput::Ignore),
+    }
+}
+
+fn report_background_task(app: &mut App, result: Result<BackgroundCompletion>) -> (bool, Option<PushRequest>) {
     app.finish_background_task();
     match result {
         Ok(BackgroundCompletion::Success(message)) => {
             app.leave_success(message);
-            true
+            (true, None)
         }
         Ok(BackgroundCompletion::Attention(message)) => {
             app.leave_attention(message);
-            true
+            (true, None)
+        }
+        Ok(BackgroundCompletion::PushNeedsForce(request)) => {
+            app.leave_attention(PUSH_RETRY_PROMPT);
+            (false, Some(request))
         }
         Err(err) => {
             app.leave_error(format!("{err:#}"));
-            false
+            (false, None)
         }
     }
 }
@@ -9356,7 +9457,7 @@ mod tests {
     }
 
     #[test]
-    fn pushes_the_remembered_active_branch_instead_of_detached_head() -> gix_testtools::Result {
+    fn pushes_the_remembered_active_branch_and_retries_rewrites_with_a_lease() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let remote = gix_testtools::tempfile::tempdir()?;
         let initialized = Command::new("git")
@@ -9403,14 +9504,82 @@ mod tests {
         let git_dir = repository.git_dir().to_owned();
         drop(repository);
 
-        let message = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr())?;
+        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), false)?
+        else {
+            panic!("the empty remote accepts the initial push");
+        };
         assert_eq!(message, "pushed main to origin");
         assert_eq!(
             gix::open(remote.path())?.find_reference("refs/heads/main")?.id(),
             main_id,
             "the branch named by the pin is pushed, not detached HEAD"
         );
+
+        let topic_id = test_repository::open(fixture.path())?
+            .rev_parse_single("topic")?
+            .detach();
+        let rewritten = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["update-ref", "refs/heads/main", &topic_id.to_hex().to_string()])
+            .status()?;
+        assert!(rewritten.success(), "the pushed branch is rewritten locally");
+        assert!(
+            matches!(
+                push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), false)?,
+                PushOutcome::NeedsForce
+            ),
+            "a non-fast-forward push offers the guarded retry"
+        );
+        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), true)? else {
+            panic!("a forced retry cannot request another retry");
+        };
+        assert_eq!(message, "pushed main to origin");
+        assert_eq!(
+            gix::open(remote.path())?.find_reference("refs/heads/main")?.id(),
+            topic_id,
+            "force-with-lease updates the rewritten branch"
+        );
+
+        let stale_remote = Command::new("git")
+            .arg("--git-dir")
+            .arg(remote.path())
+            .args(["update-ref", "refs/heads/main", &main_id.to_hex().to_string()])
+            .status()?;
+        assert!(stale_remote.success(), "the remote changes without local knowledge");
+        let err = match push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), true) {
+            Err(err) => err,
+            Ok(_) => panic!("a stale lease fails permanently"),
+        };
+        let message = format!("{err:#}");
+        assert!(message.contains("[rejected] (stale info)"), "{message}");
+        assert!(message.contains("failed to push some refs"), "{message}");
         Ok(())
+    }
+
+    #[test]
+    fn only_initial_local_push_rejections_offer_force_with_lease() {
+        for reason in ["fetch first", "non-fast-forward", "needs force"] {
+            let output = format!("!\trefs/heads/main:refs/heads/main\t[rejected] ({reason})\n");
+            assert!(
+                retryable_push_rejection(false, output.as_bytes()),
+                "{reason} needs a force retry"
+            );
+            assert!(
+                !retryable_push_rejection(true, output.as_bytes()),
+                "the force-with-lease attempt is final"
+            );
+        }
+        for output in [
+            "!\trefs/heads/main:refs/heads/main\t[remote rejected] (hook declined)\n",
+            "!\trefs/heads/main:refs/heads/main\t[rejected] (stale info)\n",
+            "fatal: could not read from remote repository\n",
+        ] {
+            assert!(
+                !retryable_push_rejection(false, output.as_bytes()),
+                "unrelated failures do not suggest force"
+            );
+        }
     }
 
     #[cfg(feature = "blocking-network-client")]
@@ -9606,23 +9775,37 @@ mod tests {
     fn background_task_results_set_notice_severity_and_release_the_slot() {
         let mut app = App::new(1);
         app.start_background_task("running");
-        assert!(report_background_task(
-            &mut app,
-            Ok(BackgroundCompletion::Success("done".into()))
-        ));
+        assert!(report_background_task(&mut app, Ok(BackgroundCompletion::Success("done".into()))).0);
         assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Success));
         assert!(app.background_task().is_none());
 
         app.start_background_task("running");
-        assert!(report_background_task(
-            &mut app,
-            Ok(BackgroundCompletion::Attention("partly done".into()))
-        ));
+        assert!(report_background_task(&mut app, Ok(BackgroundCompletion::Attention("partly done".into()))).0);
         assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Attention));
 
         app.start_background_task("running");
-        assert!(!report_background_task(&mut app, Err(anyhow::anyhow!("failed"))));
+        assert!(!report_background_task(&mut app, Err(anyhow::anyhow!("failed"))).0);
         assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Error));
+        assert!(app.background_task().is_none());
+
+        app.start_background_task("running");
+        let (succeeded, retry) = report_background_task(
+            &mut app,
+            Ok(BackgroundCompletion::PushNeedsForce(PushRequest {
+                repository_path: "repository".into(),
+                remote: "origin".into(),
+                branch: "main".into(),
+            })),
+        );
+        assert!(!succeeded);
+        assert!(retry.is_some(), "the rejected push remains available for retry");
+        assert_eq!(
+            app.notice(),
+            Some(app::Notice {
+                kind: app::NoticeKind::Attention,
+                text: PUSH_RETRY_PROMPT.into(),
+            })
+        );
         assert!(app.background_task().is_none());
     }
 
@@ -11349,6 +11532,23 @@ mod tests {
         assert!(is_key_press(&key(KeyEventKind::Press)));
         assert!(is_key_press(&key(KeyEventKind::Repeat)));
         assert!(!is_key_press(&key(KeyEventKind::Release)));
+    }
+
+    #[test]
+    fn force_push_retry_accepts_enter_or_escape_and_ignores_other_input() {
+        let key = |code| TerminalEvent::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        assert_eq!(push_retry_input(&key(KeyCode::Enter)), Some(PushRetryInput::Retry));
+        assert_eq!(push_retry_input(&key(KeyCode::Esc)), Some(PushRetryInput::Cancel));
+        assert_eq!(push_retry_input(&key(KeyCode::Char('j'))), Some(PushRetryInput::Ignore));
+        assert_eq!(push_retry_input(&key(KeyCode::Char('q'))), None, "quit still works");
+        assert_eq!(
+            push_retry_input(&TerminalEvent::Key(KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL
+            ))),
+            None,
+            "forced quit still works"
+        );
     }
 
     #[test]
