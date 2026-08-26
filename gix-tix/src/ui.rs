@@ -623,7 +623,11 @@ pub(crate) fn draw_with_worktree(
         .filter_map(|index| app.history_entry(index))
         .collect();
     let lanes = app.render_lanes(start..render_end);
-    let compact_history = changes_layout == ChangesLayout::Stacked;
+    let compact_history = (if app.changes_suppressed {
+        app.changes_layout
+    } else {
+        changes_layout
+    }) == ChangesLayout::Stacked;
     let displayed_lane = |index: usize| {
         let lane = lanes.lane(index);
         if compact_history && matches!(visible_entries[index], HistoryEntry::Commit(_)) {
@@ -5693,6 +5697,26 @@ mod tests {
         assert_eq!(buffer[(head_x, 0)].bg, REVIEW_BACKGROUND);
         assert_ne!(buffer[(title_x - 1, 0)].bg, REVIEW_BACKGROUND);
         assert!(buffer[(title_x, 0)].modifier.contains(Modifier::REVERSED));
+
+        app.changes_suppressed = true;
+        compact.draw(|frame| {
+            let area = frame.area();
+            super::draw_with_worktree(
+                frame,
+                area,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&dirty),
+                Some(&dirty),
+            );
+        })?;
+        assert!(
+            rendered_line(&compact, 0).contains("│ @ subject") && rendered_line(&compact, 1).contains("│ ● subject"),
+            "repeat suppression retains the compact row layout"
+        );
+        app.changes_suppressed = false;
         app.set_lane(0, "◆ ");
         app.set_lane(1, "● ");
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = false;
