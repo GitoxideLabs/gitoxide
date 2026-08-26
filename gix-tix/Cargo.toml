@@ -19,6 +19,10 @@ required-features = ["sha1"]
 [features]
 ## Enable blocking network operations and their progress tree.
 blocking-network-client = ["gix/blocking-network-client"]
+## Support synchronous HTTP transports using curl.
+http-client-curl = ["blocking-network-client", "gix/blocking-http-transport-curl"]
+## Support synchronous HTTP transports using reqwest and rustls.
+http-client-reqwest = ["blocking-network-client", "gix/blocking-http-transport-reqwest-rust-tls"]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
 sha1 = ["gix/sha1"]
 ## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
