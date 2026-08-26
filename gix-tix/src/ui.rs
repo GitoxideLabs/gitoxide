@@ -623,19 +623,6 @@ pub(crate) fn draw_with_worktree(
         .filter_map(|index| app.history_entry(index))
         .collect();
     let lanes = app.render_lanes(start..render_end);
-    let compact_history = (if app.changes_suppressed {
-        app.changes_layout
-    } else {
-        changes_layout
-    }) == ChangesLayout::Stacked;
-    let displayed_lane = |index: usize| {
-        let lane = lanes.lane(index);
-        if compact_history && matches!(visible_entries[index], HistoryEntry::Commit(_)) {
-            lane_through_node(lane)
-        } else {
-            lane
-        }
-    };
     let enrichment_gutter = Line::raw(crate::enrich::marker(true, true, true)).width() as u16;
     let has_duplicate_change_id = app.has_duplicate_change_ids();
     let change_id_gutter = if has_duplicate_change_id {
@@ -665,23 +652,18 @@ pub(crate) fn draw_with_worktree(
         ),
         body.height,
     );
+    let requested_alignment = app.alignment;
+    let aligned_lane_width = |index: usize| lane_width(lanes.lane(index), requested_alignment);
     let rendered_lane_width = lanes
         .iter()
         .enumerate()
-        .map(|(index, _)| displayed_lane(index))
-        .filter(|lane| !lane.is_empty())
-        .map(|lane| lane.trim_end().chars().count().saturating_add(1))
+        .map(|(index, _)| aligned_lane_width(index))
         .max()
         .unwrap_or_default();
     let max_lane_width = if rendered_lane_width == 0 {
         app.estimated_lane_width
     } else {
         rendered_lane_width
-    };
-    let alignment = if compact_history {
-        HistoryAlignment::None
-    } else {
-        app.alignment
     };
     let date_mode = app.date_mode;
     let id_mode = app.effective_id_mode();
@@ -691,93 +673,146 @@ pub(crate) fn draw_with_worktree(
     let show_trailers = name_mode == NameMode::All && app.show_trailers;
     let ref_mode = app.ref_mode;
     let selected = app.selected_history_index();
-    let metadata_columns: Vec<_> = visible_entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            let HistoryEntry::Commit(row_index) = entry else {
-                return None;
-            };
-            let row = &app.rows[*row_index];
-            let row_selected = selected == Some(start + index);
-            let note_title = row_selected
-                .then(|| app.note(row.id))
-                .flatten()
-                .map(|note| gix::objs::commit::MessageRef::from_bytes(note).title);
-            let mut metadata = metadata_columns(
-                row,
+    let build_metadata_columns = |shorten_titles: bool, compact_history: bool| {
+        visible_entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let HistoryEntry::Commit(row_index) = entry else {
+                    return None;
+                };
+                let row = &app.rows[*row_index];
+                let row_selected = selected == Some(start + index);
+                let note_title = row_selected
+                    .then(|| app.note(row.id))
+                    .flatten()
+                    .map(|note| gix::objs::commit::MessageRef::from_bytes(note).title);
+                let mut metadata = metadata_columns(
+                    row,
+                    app.title(row),
+                    app.attributions(row),
+                    decorations,
+                    mailmap,
+                    MetadataOptions {
+                        date_mode,
+                        id_mode,
+                        change_id: app.change_id(row.id),
+                        show_author_name,
+                        show_emails: app.show_emails && !compact_history,
+                        show_trailers,
+                        has_notes: !app.notes(row.id).is_empty(),
+                        note_title: if compact_history { None } else { note_title },
+                        shorten_title: shorten_titles,
+                        use_mailmap: app.use_mailmap && copy_feedback != Some(CopyKind::Author),
+                        ref_mode,
+                        selected: row_selected || compared_parent == Some(row.id),
+                        copy_feedback: if row_selected { copy_feedback } else { None },
+                    },
+                );
                 if compact_history {
-                    title_without_conventional_prefix(app.title(row))
-                } else {
-                    app.title(row)
-                },
-                app.attributions(row),
-                decorations,
-                mailmap,
-                MetadataOptions {
-                    date_mode,
-                    id_mode,
-                    change_id: app.change_id(row.id),
-                    show_author_name,
-                    show_emails: app.show_emails && !compact_history,
-                    show_trailers,
-                    has_notes: !app.notes(row.id).is_empty(),
-                    note_title: if compact_history { None } else { note_title },
-                    use_mailmap: app.use_mailmap && copy_feedback != Some(CopyKind::Author),
-                    ref_mode,
-                    selected: row_selected || compared_parent == Some(row.id),
-                    copy_feedback: if row_selected { copy_feedback } else { None },
-                },
-            );
-            if compact_history {
-                for field in &mut metadata.fields[..5] {
-                    *field = Line::default();
+                    for field in &mut metadata.fields[..5] {
+                        *field = Line::default();
+                    }
+                    metadata.fields[4] = Line::raw(" ");
                 }
-                metadata.fields[4] = Line::raw(" ");
-            }
-            if !row_selected && let Some(decorations) = decorations.get(&row.id) {
-                let current_head = decorations
-                    .iter()
-                    .any(|decoration| decoration.kind == DecorationKind::Head);
-                let foreign_head = decorations.iter().any(|decoration| {
-                    matches!(
-                        decoration.kind,
-                        DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
-                    )
-                });
-                if current_head || foreign_head {
-                    for span in &mut metadata.fields[5].spans {
-                        span.style = if current_head {
-                            span.style.add_modifier(Modifier::REVERSED)
-                        } else {
-                            span.style.bg(Color::DarkGray)
-                        };
+                if !row_selected && let Some(decorations) = decorations.get(&row.id) {
+                    let current_head = decorations
+                        .iter()
+                        .any(|decoration| decoration.kind == DecorationKind::Head);
+                    let foreign_head = decorations.iter().any(|decoration| {
+                        matches!(
+                            decoration.kind,
+                            DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
+                        )
+                    });
+                    if current_head || foreign_head {
+                        for span in &mut metadata.fields[5].spans {
+                            span.style = if current_head {
+                                span.style.add_modifier(Modifier::REVERSED)
+                            } else {
+                                span.style.bg(Color::DarkGray)
+                            };
+                        }
                     }
                 }
-            }
-            Some(metadata)
-        })
-        .collect();
+                Some(metadata)
+            })
+            .collect::<Vec<_>>()
+    };
+    let full_metadata_columns = build_metadata_columns(false, false);
     let title_column = lanes
         .iter()
         .enumerate()
-        .zip(&metadata_columns)
+        .zip(&full_metadata_columns)
         .filter_map(|((index, _), metadata)| {
-            metadata.as_ref().map(|metadata| {
-                displayed_lane(index)
-                    .chars()
-                    .count()
-                    .saturating_add(metadata.prefix_width())
-            })
+            metadata
+                .as_ref()
+                .map(|metadata| aligned_lane_width(index).saturating_add(metadata.prefix_width()))
         })
         .max()
         .unwrap_or_default();
-    let column_widths = metadata_columns.iter().flatten().fold([0; 5], |mut widths, metadata| {
-        for (width, field) in widths.iter_mut().zip(&metadata.fields[..5]) {
-            *width = (*width).max(field.width());
+    let column_widths = full_metadata_columns
+        .iter()
+        .flatten()
+        .fold([0; 5], |mut widths, metadata| {
+            for (width, field) in widths.iter_mut().zip(&metadata.fields[..5]) {
+                *width = (*width).max(field.width());
+            }
+            widths
+        });
+    let title_start = match requested_alignment {
+        HistoryAlignment::None => 0,
+        HistoryAlignment::Title | HistoryAlignment::Compressed => title_column,
+        HistoryAlignment::Columns => max_lane_width.saturating_add(column_widths.iter().sum()),
+    };
+    let available_title_width = usize::from(content.width).saturating_sub(title_start);
+    let visible_title_widths: Vec<_> = if app.show_emails {
+        Vec::new()
+    } else {
+        visible_entries
+            .iter()
+            .filter_map(|entry| {
+                let HistoryEntry::Commit(row_index) = entry else {
+                    return None;
+                };
+                let title = app.title(&app.rows[*row_index]);
+                Some((
+                    Line::from(commit_title_spans(title, false)).width(),
+                    Line::from(commit_title_spans(title, true)).width(),
+                ))
+            })
+            .collect()
+    };
+    let shorten_titles = requested_alignment != HistoryAlignment::None
+        && less_than_sixty_percent(
+            available_title_width,
+            visible_title_widths.iter().map(|widths| widths.0),
+        );
+    let compact_history = shorten_titles
+        && less_than_sixty_percent(
+            available_title_width,
+            visible_title_widths.iter().map(|widths| widths.1),
+        );
+    let alignment = if compact_history {
+        HistoryAlignment::None
+    } else {
+        requested_alignment
+    };
+    let displayed_lane = |index: usize| {
+        let lane = lanes.lane(index);
+        if requested_alignment == HistoryAlignment::None {
+            lane
+        } else if compact_history && matches!(visible_entries[index], HistoryEntry::Commit(_)) {
+            lane_through_node(lane)
+        } else {
+            lane.trim_end()
         }
-        widths
-    });
+    };
+    let metadata_columns = if shorten_titles {
+        build_metadata_columns(true, compact_history)
+    } else {
+        full_metadata_columns
+    };
     let metadata: Vec<_> = metadata_columns
         .into_iter()
         .enumerate()
@@ -788,7 +823,7 @@ pub(crate) fn draw_with_worktree(
                     (metadata, 0, prefix_width)
                 }
                 HistoryAlignment::Title | HistoryAlignment::Compressed => {
-                    let lane_width = displayed_lane(index).chars().count();
+                    let lane_width = aligned_lane_width(index);
                     let (metadata, prefix_width) = metadata.align_title(title_column.saturating_sub(lane_width));
                     (metadata, lane_width, prefix_width)
                 }
@@ -803,11 +838,9 @@ pub(crate) fn draw_with_worktree(
         .iter()
         .enumerate()
         .map(|(index, entry)| match (entry, &metadata[index]) {
-            (HistoryEntry::Segment { count, .. }, _) => lanes
-                .lane(index)
-                .chars()
-                .count()
-                .saturating_add(format!("[{count}]").chars().count()),
+            (HistoryEntry::Segment { count, .. }, _) => {
+                aligned_lane_width(index).saturating_add(format!("[{count}]").chars().count())
+            }
             (HistoryEntry::Commit(_), Some((metadata, metadata_x, _))) => match alignment {
                 HistoryAlignment::None => displayed_lane(index).chars().count().saturating_add(metadata.width()),
                 HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
@@ -854,8 +887,18 @@ pub(crate) fn draw_with_worktree(
                     );
                 }
                 frame.render_widget(
-                    Paragraph::new(Line::styled(format!("{lane}[{count}]"), style))
-                        .scroll((0, horizontal_offset as u16)),
+                    Paragraph::new(Line::styled(
+                        format!(
+                            "{lane}{}[{count}]",
+                            if requested_alignment == HistoryAlignment::None || lane.is_empty() {
+                                ""
+                            } else {
+                                " "
+                            }
+                        ),
+                        style,
+                    ))
+                    .scroll((0, horizontal_offset as u16)),
                     row_area,
                 );
                 color_graph(
@@ -2137,6 +2180,34 @@ fn markdown_title_spans(title: &BStr) -> Vec<Span<'static>> {
     out
 }
 
+fn commit_title_spans(title: &BStr, shorten_conventional_prefix: bool) -> Vec<Span<'static>> {
+    let Some(subject) = shorten_conventional_prefix
+        .then(|| conventional_title_subject(title))
+        .flatten()
+    else {
+        return markdown_title_spans(title);
+    };
+    let mut shortened = BString::from("…:");
+    shortened.extend_from_slice(subject);
+    markdown_title_spans(shortened.as_bstr())
+}
+
+fn less_than_sixty_percent(available_width: usize, title_widths: impl IntoIterator<Item = usize>) -> bool {
+    let (sum, count) = title_widths
+        .into_iter()
+        .fold((0_u128, 0_u128), |(sum, count), width| (sum + width as u128, count + 1));
+    count > 0 && available_width as u128 * count * 5 < sum * 3
+}
+
+fn lane_width(lane: &str, alignment: HistoryAlignment) -> usize {
+    let lane = if alignment == HistoryAlignment::None {
+        lane
+    } else {
+        lane.trim_end()
+    };
+    Line::raw(lane).width() + usize::from(alignment != HistoryAlignment::None && !lane.is_empty())
+}
+
 fn lane_through_node(lane: &str) -> &str {
     lane.char_indices()
         .find(|(_, symbol)| matches!(symbol, '●' | '◆' | '@' | '0'..='9' | '+'))
@@ -2146,10 +2217,8 @@ fn lane_through_node(lane: &str) -> &str {
         )
 }
 
-fn title_without_conventional_prefix(title: &BStr) -> &BStr {
-    let Some(separator) = title.find(b": ") else {
-        return title;
-    };
+fn conventional_title_subject(title: &BStr) -> Option<&BStr> {
+    let separator = title.find(b": ")?;
     let mut prefix: &[u8] = &title[..separator];
     if let Some(without_bang) = prefix.strip_suffix(b"!") {
         prefix = without_bang;
@@ -2170,7 +2239,7 @@ fn title_without_conventional_prefix(title: &BStr) -> &BStr {
                 && !scope[..scope.len() - 1].iter().any(|byte| matches!(byte, b'(' | b')'))
         },
     );
-    if valid { title[separator + 2..].as_bstr() } else { title }
+    valid.then(|| title[separator + 2..].as_bstr())
 }
 
 fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
@@ -2386,6 +2455,7 @@ struct MetadataOptions<'a> {
     show_trailers: bool,
     has_notes: bool,
     note_title: Option<&'a BStr>,
+    shorten_title: bool,
     use_mailmap: bool,
     ref_mode: RefMode,
     selected: bool,
@@ -2449,6 +2519,7 @@ fn metadata_columns<'a>(
         show_trailers,
         has_notes,
         note_title,
+        shorten_title,
         use_mailmap,
         ref_mode,
         selected,
@@ -2660,7 +2731,7 @@ fn metadata_columns<'a>(
             title_spans.extend(note_title);
             title_spans.push(Span::raw(" "));
         }
-        title_spans.extend(markdown_title_spans(title));
+        title_spans.extend(commit_title_spans(title, shorten_title));
     }
     MetadataColumns {
         fields: [
@@ -2708,6 +2779,7 @@ pub(crate) fn plain_history_metadata(
             show_trailers: app.name_mode == NameMode::All && app.show_trailers,
             has_notes,
             note_title: None,
+            shorten_title: false,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
             selected: false,
@@ -2739,6 +2811,7 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
             show_trailers: app.name_mode == crate::app::NameMode::All && app.show_trailers,
             has_notes: !app.notes(row.id).is_empty(),
             note_title: None,
+            shorten_title: false,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
             selected: false,
@@ -4304,7 +4377,7 @@ mod tests {
         for x in 0..selected_line.chars().count() as u16 {
             expected[(x, 0)].set_style(Style::default().add_modifier(Modifier::REVERSED));
         }
-        for x in 6..10 {
+        for x in 6..9 {
             expected[(x, 0)].set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         }
         for x in 10..17 {
@@ -5572,7 +5645,12 @@ mod tests {
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
-                    title: if index == 0 { "feat(scope)!: subject" } else { "subject" }.into(),
+                    title: if index == 0 {
+                        "feat(scope)!: subject"
+                    } else {
+                        "fix(scope)!: subject"
+                    }
+                    .into(),
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
@@ -5671,8 +5749,8 @@ mod tests {
         app.changes_mode = Some(ChangesMode::Both);
         app.set_lane(0, "│ ◆─┐ ");
         app.set_lane(1, "│ ● ");
-        let mut compact = Terminal::new(TestBackend::new(40, 8))?;
-        compact.draw(|frame| {
+        let mut shortened = Terminal::new(TestBackend::new(41, 8))?;
+        shortened.draw(|frame| {
             let area = frame.area();
             super::draw_with_worktree(
                 frame,
@@ -5686,20 +5764,25 @@ mod tests {
             );
         })?;
         assert_eq!(app.changes_layout, ChangesLayout::Stacked);
-        let line = rendered_line(&compact, 0);
-        assert!(line.contains("│ @ subject") && rendered_line(&compact, 1).contains("│ ● subject"));
+        let line = rendered_line(&shortened, 0);
+        let other_line = rendered_line(&shortened, 1);
+        assert!(
+            line.contains("│ @─┐")
+                && line.contains("1970-01-01 author …:")
+                && other_line.contains("1970-01-01 author")
+                && other_line.contains("…:"),
+            "stacking does not minimize rows when shortening is sufficient: {line:?} / {other_line:?}"
+        );
         let head_x = line.chars().position(|symbol| symbol == '@').expect("HEAD is visible") as u16;
-        let title_x = line[..line.find("subject").expect("the title is visible")]
-            .chars()
-            .count() as u16;
-        let buffer = compact.backend().buffer();
-        assert_eq!(title_x, head_x + 2, "one space separates the disc and title");
+        let title_x = line[..line.find("…:").expect("the title is visible")].chars().count() as u16;
+        let buffer = shortened.backend().buffer();
+        assert!(title_x > head_x + 2, "metadata remains between the disc and title");
         assert_eq!(buffer[(head_x, 0)].bg, REVIEW_BACKGROUND);
         assert_ne!(buffer[(title_x - 1, 0)].bg, REVIEW_BACKGROUND);
         assert!(buffer[(title_x, 0)].modifier.contains(Modifier::REVERSED));
 
         app.changes_suppressed = true;
-        compact.draw(|frame| {
+        shortened.draw(|frame| {
             let area = frame.area();
             super::draw_with_worktree(
                 frame,
@@ -5713,10 +5796,33 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&compact, 0).contains("│ @ subject") && rendered_line(&compact, 1).contains("│ ● subject"),
-            "repeat suppression retains the compact row layout"
+            rendered_line(&shortened, 0).contains("…:") && rendered_line(&shortened, 1).contains("…:"),
+            "repeat suppression retains the width-derived row layout"
         );
         app.changes_suppressed = false;
+        app.changes_mode = None;
+        let mut compact = Terminal::new(TestBackend::new(31, 3))?;
+        compact.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let line = rendered_line(&compact, 0);
+        assert!(
+            line.contains("│ @ …:subject") && !line.contains("1970-01-01") && !line.contains("─┐"),
+            "narrow history minimizes without a changes pane: {line:?}"
+        );
+        let head_x = line.chars().position(|symbol| symbol == '@').expect("HEAD is visible") as u16;
+        assert_eq!(compact.backend().buffer()[(head_x, 0)].bg, REVIEW_BACKGROUND);
+
+        app.alignment = HistoryAlignment::None;
+        compact.draw(|frame| draw(frame, &mut app, &decorations))?;
+        app.update(Action::ScrollRight);
+        compact.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let line = rendered_line(&compact, 0);
+        assert!(
+            line.contains("feat(scope)!:") && !line.contains("…:"),
+            "unaligned history retains the complete prefix while scrolling: {line:?}"
+        );
+        app.alignment = HistoryAlignment::Title;
+        app.horizontal_offset = 0;
+        app.changes_mode = Some(ChangesMode::Both);
         app.set_lane(0, "◆ ");
         app.set_lane(1, "● ");
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = false;
@@ -7262,20 +7368,43 @@ mod tests {
     }
 
     #[test]
-    fn strips_only_conventional_commit_prefixes() {
+    fn shortens_only_conventional_commit_prefixes() {
         for (input, expected) in [
-            ("feat: subject", "subject"),
-            ("feat(gix-tix)!: subject", "subject"),
-            ("change(cli-tools): subject", "subject"),
+            ("feat: subject", "…:subject"),
+            ("feat(gix-tix)!: subject", "…:subject"),
+            ("change(cli-tools): subject", "…:subject"),
+            ("feat: **🧪 subject**", "…:🧪 subject"),
+            ("feat: # heading", "…:# heading"),
+            ("feat: ---", "…:---"),
             ("Title: subject", "Title: subject"),
             ("feat(scope: subject", "feat(scope: subject"),
+            ("feat:subject", "feat:subject"),
         ] {
             assert_eq!(
-                title_without_conventional_prefix(input.as_bytes().as_bstr()),
-                expected.as_bytes().as_bstr(),
+                commit_title_spans(input.as_bytes().as_bstr(), true)
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>(),
+                expected,
                 "prefix classification for {input:?}"
             );
         }
+    }
+
+    #[test]
+    fn adapts_history_detail_below_sixty_percent_of_the_average_title() {
+        assert!(!less_than_sixty_percent(6, [10]));
+        assert!(less_than_sixty_percent(5, [10]));
+        assert!(!less_than_sixty_percent(6, [8, 12]));
+        assert!(less_than_sixty_percent(5, [8, 12]));
+        assert!(!less_than_sixty_percent(0, []));
+        assert_eq!(
+            Line::from(commit_title_spans("feat: 🧪".as_bytes().as_bstr(), true)).width(),
+            Line::raw("…:🧪").width(),
+            "title widths use terminal cells rather than bytes"
+        );
+        assert_eq!(lane_width("●       ", HistoryAlignment::Title), 2);
+        assert_eq!(lane_width("●       ", HistoryAlignment::None), 8);
     }
 
     #[test]
@@ -7360,6 +7489,7 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         complete(&mut app);
+        app.alignment = HistoryAlignment::None;
         app.update(Action::Last);
         let mut terminal = Terminal::new(TestBackend::new(24, 3))?;
 
@@ -7493,6 +7623,7 @@ mod tests {
             "the hidden base is selectable"
         );
 
+        app.alignment = HistoryAlignment::None;
         let mut narrow = Terminal::new(TestBackend::new(28, 3))?;
         narrow.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
@@ -7573,6 +7704,7 @@ mod tests {
                 show_trailers: true,
                 has_notes: false,
                 note_title: None,
+                shorten_title: false,
                 use_mailmap: false,
                 ref_mode: RefMode::All,
                 selected: false,
@@ -7682,6 +7814,7 @@ mod tests {
                 show_trailers: false,
                 has_notes: false,
                 note_title: None,
+                shorten_title: false,
                 use_mailmap: false,
                 ref_mode: RefMode::None,
                 selected: false,
@@ -7800,19 +7933,22 @@ mod tests {
             column(&rendered_line(&terminal, 1), "1970-01-01"),
             "title mode leaves earlier fields at natural positions"
         );
+        app.set_lane(0, "●                                                  ");
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert_eq!(
+            column(&rendered_line(&terminal, 0), "first-title"),
+            first_title,
+            "trailing graph storage does not consume visible columns"
+        );
+        app.set_lane(0, "● ");
 
         let mut narrow_title = Terminal::new(TestBackend::new(40, 3))?;
         narrow_title.draw(|frame| draw(frame, &mut app, &decorations))?;
-        let before = rendered_line(&narrow_title, 0);
-        app.update(Action::ScrollRight);
         assert!(
-            app.horizontal_offset > 0,
-            "title-aligned rows expose their clipped width"
+            rendered_line(&narrow_title, 0).contains("● first-title")
+                && !rendered_line(&narrow_title, 0).contains("1970-01-01"),
+            "narrow title alignment minimizes metadata"
         );
-        narrow_title.draw(|frame| draw(frame, &mut app, &decorations))?;
-        assert_ne!(rendered_line(&narrow_title, 0), before, "l pans the title-aligned row");
-        app.update(Action::ScrollLeft);
-        assert_eq!(app.horizontal_offset, 0, "h returns to the title-aligned row start");
 
         app.update(Action::ToggleAlign);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
@@ -7836,15 +7972,10 @@ mod tests {
 
         let mut narrow = Terminal::new(TestBackend::new(46, 3))?;
         narrow.draw(|frame| draw(frame, &mut app, &decorations))?;
-        app.update(Action::ScrollRight);
-        assert!(app.horizontal_offset > 0, "wide aligned columns create a scroll range");
-        narrow.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(
-            rendered_line(&narrow, 0).contains("first-title"),
-            "l reveals the clipped aligned title"
+            rendered_line(&narrow, 0).contains("● first-title") && !rendered_line(&narrow, 0).contains("1970-01-01"),
+            "narrow column alignment minimizes metadata"
         );
-        app.update(Action::ScrollLeft);
-        assert_eq!(app.horizontal_offset, 0, "h returns to the aligned row start");
 
         let visible_title = column(&first, "first-title");
         app.offset = 1;
@@ -7853,6 +7984,17 @@ mod tests {
             column(&rendered_line(&terminal, 0), "second-title") > visible_title,
             "an off-screen wide author affects alignment only after entering the viewport"
         );
+
+        app.offset = 0;
+        app.update(Action::ToggleAlign);
+        assert_eq!(app.alignment, HistoryAlignment::None);
+        narrow.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let before = rendered_line(&narrow, 0);
+        assert!(before.contains("1970-01-01"), "unaligned rows retain metadata");
+        app.update(Action::ScrollRight);
+        assert!(app.horizontal_offset > 0, "unaligned rows expose their clipped width");
+        narrow.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert_ne!(rendered_line(&narrow, 0), before, "l pans the unaligned row");
         Ok(())
     }
 
