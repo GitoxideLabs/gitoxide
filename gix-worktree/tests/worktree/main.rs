@@ -2,6 +2,8 @@ use gix_hash::ObjectId;
 
 #[cfg(feature = "add")]
 mod add;
+#[cfg(feature = "remove")]
+mod remove;
 mod stack;
 
 pub use gix_testtools::Result;
