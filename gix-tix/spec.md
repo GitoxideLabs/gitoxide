@@ -32,8 +32,9 @@ without trading responsiveness for metadata that is not visible.
   selection. Each activation refreshes its tree and worktree-change diffs.
   `PageUp` and `PageDown` move by the visible list height. `/` opens a
   case-insensitive fuzzy search over worktree names; edits and navigation paint
-  and preview the current match, `Enter` promotes it immediately, and `Escape`
-  cancels the search and restores its starting selection.
+  and preview the current match, `Ctrl-P` and `Ctrl-N` move up and down, `Enter`
+  promotes it immediately, and `Escape` cancels the search and restores its
+  starting selection.
   `Tab` focuses history and `Escape` returns from root history to the list.
   `Enter` selects the worktree and promotes it to a normal full-screen history.
   `d` twice removes a clean selected linked worktree; `D` twice removes it while
