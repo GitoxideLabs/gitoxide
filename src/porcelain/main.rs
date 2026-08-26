@@ -23,7 +23,7 @@ pub fn main() -> Result<()> {
             move || should_interrupt.store(true, Ordering::SeqCst)
         })?;
     }
-    let trace = false;
+    let trace = 0;
     let verbose = !args.quiet;
     let progress = args.progress;
     #[cfg(feature = "gitoxide-core-tools")]
