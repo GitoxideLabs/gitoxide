@@ -829,6 +829,10 @@ impl App {
         self.leave_notice(NoticeKind::Error, message);
     }
 
+    pub(crate) fn clear_notice(&mut self) {
+        self.notice = None;
+    }
+
     pub(crate) fn close_shortcut_groups(&mut self) {
         self.history_display_expanded = false;
         self.actions_expanded = false;
@@ -973,7 +977,6 @@ impl App {
         self.background_progress = None;
     }
 
-    #[cfg(feature = "blocking-network-client")]
     pub(crate) fn start_background_task_with_progress(&mut self, label: impl Into<String>) {
         self.start_background_task(label);
         self.background_progress = Some(BackgroundProgress {
@@ -986,7 +989,6 @@ impl App {
         });
     }
 
-    #[cfg(feature = "blocking-network-client")]
     pub(crate) fn update_background_progress(&mut self, text: String, completed: usize, total: usize) -> bool {
         let Some(progress) = self.background_progress.as_mut() else {
             return false;
@@ -7726,7 +7728,6 @@ mod tests {
         assert_eq!(app.update(Action::Fetch), vec![Effect::Fetch("origin".into())]);
     }
 
-    #[cfg(feature = "blocking-network-client")]
     #[test]
     fn background_progress_is_monotonic() {
         let mut app = App::new(1);

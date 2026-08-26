@@ -1,5 +1,6 @@
 //! Worktree discovery and the asynchronously loaded information shown by the worktrunk picker.
 
+pub(crate) mod remove;
 pub(crate) mod shell;
 
 use std::{
@@ -36,6 +37,8 @@ pub(crate) struct Row {
     pub(crate) is_current: bool,
     /// Whether this is the repository's main worktree.
     pub(crate) is_main: bool,
+    /// Whether Git currently considers this worktree locked.
+    pub(crate) locked: bool,
     /// Whether the row is still loading, ready, or failed to load.
     pub(crate) state: LoadState,
     /// The logical Tix head, once loaded.
@@ -48,6 +51,20 @@ pub(crate) struct Row {
     pub(crate) lines_added: Option<u64>,
     /// Lines removed compared to the unambiguous Tix base, if there is one.
     pub(crate) lines_removed: Option<u64>,
+}
+
+impl Row {
+    pub(crate) fn removal_blocker(&self) -> Option<&'static str> {
+        if self.is_current {
+            Some("the worktree from which tix was launched cannot be removed")
+        } else if self.is_main {
+            Some("the main worktree cannot be removed")
+        } else if self.locked {
+            Some("locked worktrees require `tix wt remove -ff`")
+        } else {
+            None
+        }
+    }
 }
 
 /// Loading state of a [`Row`].
@@ -101,6 +118,7 @@ pub(crate) struct Worktrees {
     updates: mpsc::Receiver<Update>,
     cancel: Arc<AtomicBool>,
     workers: Vec<thread::JoinHandle<()>>,
+    workers_suspended: bool,
 }
 
 impl Worktrees {
@@ -117,6 +135,7 @@ impl Worktrees {
             updates,
             cancel: Arc::new(AtomicBool::new(false)),
             workers: Vec::new(),
+            workers_suspended: false,
         })
     }
 
@@ -302,7 +321,7 @@ impl Worktrees {
 
     /// Apply all currently available worker messages without blocking.
     pub(crate) fn drain_updates(&mut self) -> bool {
-        if self.workers.is_empty() && self.rows.iter().any(|row| row.dirty.is_none()) {
+        if !self.workers_suspended && self.workers.is_empty() && self.rows.iter().any(|row| row.dirty.is_none()) {
             self.start_workers();
         }
         let updates: Vec<_> = self.updates.try_iter().collect();
@@ -326,8 +345,8 @@ impl Worktrees {
 
     /// Reload the expensive fields while preserving row order and selection.
     pub(crate) fn refresh(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
-        self.workers.clear();
+        self.cancel_and_join_workers();
+        self.workers_suspended = false;
         self.previewed = None;
         self.previewing = false;
         self.invalidate_graph_metadata();
@@ -335,6 +354,37 @@ impl Worktrees {
             row.state = LoadState::Loading;
             row.dirty = None;
         }
+    }
+
+    /// Stop every indexed loader before its checkout can disappear.
+    pub(crate) fn suspend_workers_for_removal(&mut self) {
+        self.workers_suspended = true;
+        self.cancel_and_join_workers();
+    }
+
+    /// Rebuild the inventory after a removal and return the selected survivor.
+    pub(crate) fn reinventory_after_removal(&mut self, repository: &gix::Repository) -> Result<Option<PathBuf>> {
+        let launch_path = self.rows.iter().find(|row| row.is_current).map(|row| row.path.clone());
+        let selected_path = self.selected_path().map(ToOwned::to_owned);
+        let selected = self.selected;
+
+        self.cancel_and_join_workers();
+        self.workers_suspended = false;
+        self.rows = inventory(repository)?;
+        if let Some(launch_path) = launch_path {
+            for row in &mut self.rows {
+                row.is_current = row.path == launch_path;
+            }
+            sort_rows(&mut self.rows);
+        }
+        self.selected = selected_path
+            .and_then(|path| self.rows.iter().position(|row| row.path == path))
+            .unwrap_or_else(|| selected.min(self.rows.len().saturating_sub(1)));
+        self.previewed = None;
+        self.previewing = false;
+        self.search_origin = None;
+        self.search.close();
+        Ok(self.selected_path().map(ToOwned::to_owned))
     }
 
     fn start_workers(&mut self) {
@@ -370,6 +420,15 @@ impl Worktrees {
             }));
         }
     }
+
+    fn cancel_and_join_workers(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+        let (_sender, updates) = mpsc::channel();
+        self.updates = updates;
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -395,8 +454,7 @@ fn menu_items(rows: &[Row]) -> Vec<MenuItem<'_, usize>> {
 
 impl Drop for Worktrees {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
-        self.workers.clear();
+        self.cancel_and_join_workers();
     }
 }
 
@@ -409,28 +467,33 @@ fn inventory(repository: &gix::Repository) -> Result<Vec<Row>> {
     if let Some(path) = main.workdir() {
         let path = absolute(path)?;
         if path.is_dir() {
-            entries.push(row(path, current == Some(None), true));
+            entries.push(row(path, current == Some(None), true, false));
         }
     }
     for proxy in repository.worktrees().context("could not list linked worktrees")? {
         let id = proxy.id().to_owned();
+        let locked = proxy.is_locked();
         let path = absolute(&proxy.base().context("could not read a linked worktree path")?)?;
         if !path.is_dir() {
             continue;
         }
         let is_current = current.as_ref().and_then(Option::as_ref) == Some(&id);
-        entries.push(row(path, is_current, false));
+        entries.push(row(path, is_current, false, locked));
     }
+    sort_rows(&mut entries);
+    Ok(entries)
+}
+
+fn sort_rows(entries: &mut [Row]) {
     entries.sort_by(|a, b| {
         b.is_current
             .cmp(&a.is_current)
             .then_with(|| b.is_main.cmp(&a.is_main))
             .then_with(|| a.path.cmp(&b.path))
     });
-    Ok(entries)
 }
 
-fn row(path: PathBuf, is_current: bool, is_main: bool) -> Row {
+fn row(path: PathBuf, is_current: bool, is_main: bool, locked: bool) -> Row {
     let label = path
         .file_name()
         .unwrap_or(path.as_os_str())
@@ -441,6 +504,7 @@ fn row(path: PathBuf, is_current: bool, is_main: bool) -> Row {
         label,
         is_current,
         is_main,
+        locked,
         state: LoadState::Loading,
         head: None,
         dirty: None,
@@ -806,7 +870,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
                 }
                 if focused {
                     (
-                        " worktrees  j/k select  PgUp/PgDn page  / search  enter switch  tab history".into(),
+                        " worktrees  j/k select  dd remove  DD force  / search  enter switch  tab history".into(),
                         Color::Cyan,
                     )
                 } else {
@@ -1041,6 +1105,7 @@ mod tests {
             label: label.into(),
             is_current: false,
             is_main: false,
+            locked: false,
             state,
             head: None,
             dirty: None,
@@ -1062,6 +1127,7 @@ mod tests {
             updates,
             cancel: Arc::new(AtomicBool::default()),
             workers: Vec::new(),
+            workers_suspended: false,
         }
     }
 
@@ -1206,6 +1272,63 @@ mod tests {
     }
 
     #[test]
+    fn reinventory_discards_indexed_state_and_selects_the_neighbor_of_a_removed_row() -> gix_testtools::Result {
+        let (_temp, repository) = fixture()?;
+        for branch in ["alpha", "topic"] {
+            create_branch(&repository, branch)?;
+        }
+        let interrupt = AtomicBool::default();
+        let alpha = resolve_or_create(
+            &repository,
+            OsStr::new("alpha"),
+            None,
+            false,
+            gix::progress::Discard,
+            &interrupt,
+        )?;
+        let topic = resolve_or_create(
+            &repository,
+            OsStr::new("topic"),
+            None,
+            false,
+            gix::progress::Discard,
+            &interrupt,
+        )?;
+        let mut worktrees = Worktrees::start(&repository)?;
+        let topic_index = worktrees
+            .rows()
+            .iter()
+            .position(|row| row.path == topic)
+            .expect("the topic worktree is inventoried");
+        worktrees.select(topic_index);
+        worktrees.open_search();
+        worktrees.drain_updates();
+        worktrees.suspend_workers_for_removal();
+        assert!(worktrees.workers.is_empty(), "all dirty-state workers are joined");
+        assert!(
+            worktrees.workers_suspended,
+            "drawing cannot restart workers during removal"
+        );
+
+        repository.remove_worktree(
+            &topic,
+            gix::worktree::remove::Force::DiscardChanges,
+            gix::progress::Discard,
+        )?;
+        let selected = worktrees
+            .reinventory_after_removal(&repository)?
+            .expect("another worktree survives");
+
+        assert_eq!(selected, alpha, "removing the final row selects its predecessor");
+        assert!(!worktrees.search_is_open(), "removal closes index-based search state");
+        assert!(!worktrees.workers_suspended, "the new inventory can load dirty state");
+        assert!(worktrees.preview_pending(), "the survivor receives a fresh preview");
+        assert!(worktrees.rows()[0].is_current, "the launch marker survives reinventory");
+        assert!(worktrees.rows().iter().all(|row| row.path != topic));
+        Ok(())
+    }
+
+    #[test]
     fn detached_head_uses_the_symbolic_tix_head_pin() -> gix_testtools::Result {
         let (_temp, repository) = fixture()?;
         create_branch(&repository, "topic")?;
@@ -1304,6 +1427,24 @@ mod tests {
     }
 
     #[test]
+    fn removal_blockers_protect_launch_main_and_locked_worktrees() {
+        let mut row = test_row("topic", LoadState::Ready);
+        assert_eq!(row.removal_blocker(), None);
+        row.locked = true;
+        assert_eq!(
+            row.removal_blocker(),
+            Some("locked worktrees require `tix wt remove -ff`")
+        );
+        row.is_main = true;
+        assert_eq!(row.removal_blocker(), Some("the main worktree cannot be removed"));
+        row.is_current = true;
+        assert_eq!(
+            row.removal_blocker(),
+            Some("the worktree from which tix was launched cannot be removed")
+        );
+    }
+
+    #[test]
     fn picker_draws_aligned_compact_columns_and_worktree_kinds() -> gix_testtools::Result {
         let mut current = test_row("repo", LoadState::Ready);
         current.is_current = true;
@@ -1322,7 +1463,7 @@ mod tests {
 
         assert_eq!(
             rendered_line(&terminal, 0).trim_end(),
-            " worktrees  j/k select  PgUp/PgDn page  / search  enter switch  tab history"
+            " worktrees  j/k select  dd remove  DD force  / search  enter switch  tab history"
         );
         let header = rendered_line(&terminal, 1);
         assert!(header.starts_with("   Worktree"));
