@@ -527,14 +527,15 @@ without trading responsiveness for metadata that is not visible.
 Alignment uses only rows in the current viewport to determine widths and starts
 in title mode. Hidden boundary rows remain unaligned and do not participate in
 alignment width calculations. Title, full-column, and compressed alignment discard unused
-trailing graph cells before placing metadata. If the drawable history width
-shows less than 60% of the average rendered width of visible commit titles,
+trailing graph cells before placing metadata. If their shared title column
+leaves less than 60% of the average rendered width of visible commit titles,
+rows first fall back to natural per-row spacing. If that leaves less than 60%,
 valid conventional-commit prefixes are shortened to `…:` without a following
 space. If the shortened titles still fall below 60%, rows retain their gutters
 and complete graph, followed by one space and the shortened title; other
-metadata is hidden. Widths are terminal display cells and exactly
-60% retains the more detailed form. Unaligned history never adapts its titles
-or metadata and remains horizontally scrollable.
+metadata is hidden. Widths are terminal display cells and exactly 60% retains
+the more detailed form. Explicitly selected unaligned history never adapts its
+titles or metadata and remains horizontally scrollable.
 
 Topological navigation follows every parent and child edge in the displayed
 history. A single destination is selected immediately. If there are multiple,
