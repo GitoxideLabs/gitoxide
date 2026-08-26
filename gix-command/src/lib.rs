@@ -17,12 +17,49 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     io::Read,
     path::{Path, PathBuf},
 };
 
 use bstr::{BString, ByteSlice};
+
+///
+pub mod parse;
+
+mod prepare;
+
+///
+pub mod shebang {
+    use std::{ffi::OsString, path::PathBuf};
+
+    use bstr::{BStr, ByteSlice};
+
+    /// Parse `buf` to extract all shebang information.
+    pub fn parse(buf: &BStr) -> Option<Data> {
+        let mut line = buf.lines().next()?;
+        line = line.strip_prefix(b"#!")?;
+
+        let slash_idx = line.rfind_byteset(br"/\")?;
+        let space_idx = line[slash_idx..]
+            .find_byte(b' ')
+            .map_or(line.len(), |space_idx| slash_idx + space_idx);
+        let (interpreter, args) = line.split_at(space_idx);
+        Some(Data {
+            interpreter: gix_path::try_from_byte_slice(interpreter.trim()).ok()?.to_owned(),
+            args: crate::parse::arguments(args.trim().as_bstr()).unwrap_or_default(),
+        })
+    }
+
+    /// Shebang information as [parsed](parse()) from a buffer that should contain at least one line.
+    #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
+    pub struct Data {
+        /// The interpreter to run.
+        pub interpreter: PathBuf,
+        /// Arguments following the interpreter, split like [`crate::parse::command_line()`], or empty if malformed.
+        pub args: Vec<OsString>,
+    }
+}
 
 /// A structure to keep settings to use when invoking a command via [`spawn()`][Prepare::spawn()],
 /// after creating it with [`prepare()`].
@@ -98,348 +135,48 @@ pub struct Context {
     pub stderr: Option<bool>,
 }
 
-mod prepare {
-    use std::{
-        borrow::Cow,
-        ffi::OsString,
-        process::{Command, Stdio},
-    };
-
-    use bstr::ByteSlice;
-
-    use crate::{Context, Prepare, extract_interpreter, win_path_lookup};
-
-    /// Builder
-    impl Prepare {
-        /// If called, the command will be checked for characters that are typical for shell
-        /// scripts, and if found will use `sh` to execute it or whatever is set as
-        /// [`with_shell_program()`](Self::with_shell_program()).
-        ///
-        /// Commands are inspected as bytes, including non-UTF-8 commands on Unix. If the platform
-        /// cannot represent a command as bytes, it is invoked directly.
-        ///
-        /// If a shell is used, then arguments given here with [arg()](Self::arg) or
-        /// [args()](Self::args) will be substituted via `"$@"` if it's not already present in the
-        /// command.
-        ///
-        ///
-        /// The [`command_may_be_shell_script_allow_manual_argument_splitting()`](Self::command_may_be_shell_script_allow_manual_argument_splitting())
-        /// and [`command_may_be_shell_script_disallow_manual_argument_splitting()`](Self::command_may_be_shell_script_disallow_manual_argument_splitting())
-        /// methods also call this method.
-        ///
-        /// If neither this method nor [`with_shell()`](Self::with_shell()) is called, commands are
-        /// always executed verbatim and directly, without the use of a shell.
-        pub fn command_may_be_shell_script(mut self) -> Self {
-            self.use_shell = gix_path::os_str_into_bstr(&self.command)
-                .is_ok_and(|cmd| cmd.find_byteset(b"|&;<>()$`\\\"' \t\n*?[#~=%").is_some());
-            self
-        }
-
-        /// If called, unconditionally use a shell to execute the command and its arguments.
-        ///
-        /// This uses `sh` to execute it, or whatever is set as
-        /// [`with_shell_program()`](Self::with_shell_program()).
-        ///
-        /// Arguments given here with [arg()](Self::arg) or [args()](Self::args) will be
-        /// substituted via `"$@"` if it's not already present in the command.
-        ///
-        /// If neither this method nor
-        /// [`command_may_be_shell_script()`](Self::command_may_be_shell_script()) is called,
-        /// commands are always executed verbatim and directly, without the use of a shell. (But
-        /// see [`command_may_be_shell_script()`](Self::command_may_be_shell_script()) on other
-        /// methods that call that method.)
-        ///
-        /// We also disallow manual argument splitting
-        /// (see [`command_may_be_shell_script_disallow_manual_argument_splitting`](Self::command_may_be_shell_script_disallow_manual_argument_splitting()))
-        /// to assure a shell is indeed used, no matter what.
-        pub fn with_shell(mut self) -> Self {
-            self.use_shell = true;
-            self.allow_manual_arg_splitting = false;
-            self
-        }
-
-        /// Quote the command if it is run in a shell, so its path is left intact.
-        ///
-        /// This is only meaningful if the command has been arranged to run in a shell, either
-        /// unconditionally with [`with_shell()`](Self::with_shell()), or conditionally with
-        /// [`command_may_be_shell_script()`](Self::command_may_be_shell_script()).
-        ///
-        /// Note that this should not be used if the command is a script - quoting is only the
-        /// right choice if it's known to be a program path.
-        ///
-        /// Note also that this does not affect arguments passed with [arg()](Self::arg) or
-        /// [args()](Self::args), which do not have to be quoted by the *caller* because they are
-        /// passed as `"$@"` positional parameters (`"$1"`, `"$2"`, and so on).
-        pub fn with_quoted_command(mut self) -> Self {
-            self.quote_command = true;
-            self
-        }
-
-        /// Set the name or path to the shell `program` to use if a shell is to be used, to avoid
-        /// using the default shell which is `sh`.
-        ///
-        /// Note that shells that are not Bourne-style cannot be expected to work correctly,
-        /// because POSIX shell syntax is assumed when searching for and conditionally adding
-        /// `"$@"` to receive arguments, where applicable (and in the behaviour of
-        /// [`with_quoted_command()`](Self::with_quoted_command()), if called).
-        pub fn with_shell_program(mut self, program: impl Into<OsString>) -> Self {
-            self.shell_program = Some(program.into());
-            self
-        }
-
-        /// Unconditionally turn off using the shell when spawning the command.
-        ///
-        /// Note that not using the shell is the default. So an effective use of this method
-        /// is some time after [`command_may_be_shell_script()`](Self::command_may_be_shell_script())
-        /// or [`with_shell()`](Self::with_shell()) was called.
-        pub fn without_shell(mut self) -> Self {
-            self.use_shell = false;
-            self
-        }
-
-        /// Set additional `ctx` to be used when spawning the process.
-        ///
-        /// Note that this is a must for most kind of commands that `git` usually spawns, as at
-        /// least they need to know the correct Git repository to function.
-        pub fn with_context(mut self, ctx: Context) -> Self {
-            self.context = Some(ctx);
-            self
-        }
-
-        /// Like [`command_may_be_shell_script()`](Self::command_may_be_shell_script()), but try to
-        /// split arguments by hand if this can be safely done without a shell.
-        ///
-        /// This is useful on platforms where spawning processes is slow, or where many processes
-        /// have to be spawned in a row which should be sped up. Manual argument splitting is
-        /// enabled by default on Windows only.
-        ///
-        /// Note that this does *not* check for the use of possible shell builtins. Commands may
-        /// fail or behave differently if they are available as shell builtins and no corresponding
-        /// external command exists, or the external command behaves differently.
-        pub fn command_may_be_shell_script_allow_manual_argument_splitting(mut self) -> Self {
-            self.allow_manual_arg_splitting = true;
-            self.command_may_be_shell_script()
-        }
-
-        /// Like [`command_may_be_shell_script()`](Self::command_may_be_shell_script()), but don't
-        /// allow to bypass the shell even if manual argument splitting can be performed safely.
-        pub fn command_may_be_shell_script_disallow_manual_argument_splitting(mut self) -> Self {
-            self.allow_manual_arg_splitting = false;
-            self.command_may_be_shell_script()
-        }
-
-        /// Configure the process to use `stdio` for _stdin_.
-        pub fn stdin(mut self, stdio: Stdio) -> Self {
-            self.stdin = stdio;
-            self
-        }
-        /// Configure the process to use `stdio` for _stdout_.
-        pub fn stdout(mut self, stdio: Stdio) -> Self {
-            self.stdout = stdio;
-            self
-        }
-        /// Configure the process to use `stdio` for _stderr_.
-        pub fn stderr(mut self, stdio: Stdio) -> Self {
-            self.stderr = stdio;
-            self
-        }
-
-        /// Add `arg` to the list of arguments to call the command with.
-        pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
-            self.args.push(arg.into());
-            self
-        }
-
-        /// Add `args` to the list of arguments to call the command with.
-        pub fn args(mut self, args: impl IntoIterator<Item = impl Into<OsString>>) -> Self {
-            self.args
-                .append(&mut args.into_iter().map(Into::into).collect::<Vec<_>>());
-            self
-        }
-
-        /// Add `key` with `value` to the environment of the spawned command.
-        pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
-            self.env.push((key.into(), value.into()));
-            self
-        }
-    }
-
-    /// Finalization
-    impl Prepare {
-        /// Spawn the command as configured.
-        pub fn spawn(self) -> std::io::Result<std::process::Child> {
-            let mut cmd = Command::from(self);
-            gix_trace::debug!(cmd = ?cmd);
-            cmd.spawn()
-        }
-    }
-
-    impl From<Prepare> for Command {
-        fn from(mut prep: Prepare) -> Command {
-            let mut cmd = if prep.use_shell {
-                let split_args = prep
-                    .allow_manual_arg_splitting
-                    .then(|| {
-                        let command = gix_path::into_bstr(std::borrow::Cow::Borrowed(prep.command.as_ref()));
-                        let first_word_has_assignment = command
-                            .split(u8::is_ascii_whitespace)
-                            .find(|word| !word.is_empty())
-                            .is_some_and(|word| word.contains(&b'='));
-                        if !first_word_has_assignment && command.find_byteset(b"\\|&;<>()$`\n*?[#~%").is_none() {
-                            prep.command.to_str().and_then(|args| {
-                                shell_words::split(args)
-                                    .ok()
-                                    .filter(|args| !args.is_empty())
-                                    .map(Vec::into_iter)
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten();
-                match split_args {
-                    Some(mut args) => {
-                        let mut cmd = Command::new(args.next().expect("non-empty input"));
-                        cmd.args(args);
-                        cmd
-                    }
-                    None => {
-                        let mut cmd = match prep.shell_program {
-                            Some(shell) => Command::new(shell),
-                            None => gix_path::env::shell_command(),
-                        };
-                        // Passed as `command_name` after `-c <script>`; the shell uses it
-                        // as `$0`, which prefixes its own diagnostic messages. If the
-                        // shell path has no extractable basename — reachable only via
-                        // degenerate input like `""` or `/` — fall back to `_`, the
-                        // conventional placeholder for an unused `$0`, rather than
-                        // making a false claim about which shell is running.
-                        let arg0 = std::path::Path::new(cmd.get_program())
-                            .file_name()
-                            .unwrap_or(std::ffi::OsStr::new("_"))
-                            .to_os_string();
-                        cmd.arg("-c");
-                        if !prep.args.is_empty() {
-                            if !gix_path::os_str_into_bstr(&prep.command).is_ok_and(|cmd| cmd.contains_str("$@")) {
-                                if prep.quote_command {
-                                    if let Ok(command) = gix_path::os_str_into_bstr(&prep.command) {
-                                        prep.command = gix_path::from_bstring(gix_quote::single(command)).into();
-                                    }
-                                }
-                                prep.command.push(r#" "$@""#);
-                            } else {
-                                gix_trace::debug!(
-                                    r#"Will not add '"$@"' to '{:?}' as it seems to contain '$@' already"#,
-                                    prep.command
-                                );
-                            }
-                        }
-                        cmd.arg(prep.command);
-                        cmd.arg(arg0);
-                        cmd
-                    }
-                }
-            } else if cfg!(windows) {
-                let program: Cow<'_, std::path::Path> = std::env::var_os("PATH")
-                    .and_then(|path| win_path_lookup(prep.command.as_ref(), &path))
-                    .map(Cow::Owned)
-                    .unwrap_or(Cow::Borrowed(prep.command.as_ref()));
-                if let Some(shebang) = extract_interpreter(program.as_ref()) {
-                    let mut cmd = Command::new(shebang.interpreter);
-                    // For relative paths, we may have picked up a file in the current repository
-                    // for which an attacker could control everything. Hence, strip options just like Git.
-                    // If the file was found in the PATH though, it should be trustworthy.
-                    if program.is_absolute() {
-                        cmd.args(shebang.args);
-                    }
-                    cmd.arg(prep.command);
-                    cmd
-                } else {
-                    Command::new(prep.command)
-                }
-            } else {
-                Command::new(prep.command)
-            };
-            // We never want to have terminals pop-up on Windows if this runs from a GUI application.
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x08000000;
-                cmd.creation_flags(CREATE_NO_WINDOW);
-            }
-            cmd.stdin(prep.stdin)
-                .stdout(prep.stdout)
-                .stderr(prep.stderr)
-                .envs(prep.env)
-                .args(prep.args);
-            if let Some(ctx) = prep.context {
-                if let Some(git_dir) = ctx.git_dir {
-                    cmd.env("GIT_DIR", &git_dir);
-                }
-                if let Some(worktree_dir) = ctx.worktree_dir {
-                    cmd.env("GIT_WORK_TREE", worktree_dir);
-                }
-                if let Some(value) = ctx.no_replace_objects {
-                    cmd.env("GIT_NO_REPLACE_OBJECTS", usize::from(value).to_string());
-                }
-                if let Some(namespace) = ctx.ref_namespace {
-                    cmd.env("GIT_NAMESPACE", gix_path::from_bstring(namespace));
-                }
-                if let Some(value) = ctx.literal_pathspecs {
-                    cmd.env("GIT_LITERAL_PATHSPECS", usize::from(value).to_string());
-                }
-                if let Some(value) = ctx.glob_pathspecs {
-                    cmd.env(
-                        if value {
-                            "GIT_GLOB_PATHSPECS"
-                        } else {
-                            "GIT_NOGLOB_PATHSPECS"
-                        },
-                        "1",
-                    );
-                }
-                if let Some(value) = ctx.icase_pathspecs {
-                    cmd.env("GIT_ICASE_PATHSPECS", usize::from(value).to_string());
-                }
-                if let Some(stderr) = ctx.stderr {
-                    cmd.stderr(if stderr { Stdio::inherit() } else { Stdio::null() });
-                }
-            }
-            cmd
-        }
-    }
-}
-
+#[cfg(windows)]
 fn is_exe(executable: &Path) -> bool {
     executable.extension() == Some(std::ffi::OsStr::new("exe"))
 }
 
-/// Try to find `command` in the `path_value` (the value of `PATH`) as separated by `;`, or return `None`.
-/// Has special handling for `.exe` extensions, as these will be appended automatically if needed.
+/// Split a joined `PATH` value according to platform conventions, omitting empty entries.
+///
+/// Git's Windows lookup skips empty entries instead of treating them as the current directory. This also prevents an
+/// explicitly empty `PATH` from finding a command there.
+fn split_paths(joined_paths: &OsStr) -> impl Iterator<Item = PathBuf> + '_ {
+    std::env::split_paths(joined_paths).filter(|path| !path.as_os_str().is_empty())
+}
+
+/// Return whether `command` is a single path component eligible for `PATH` lookup.
+fn is_bare_command(command: &Path) -> bool {
+    command.components().take(2).count() == 1
+}
+
+/// Try to find `command` in `joined_paths` using [`split_paths()`].
+/// Commands with an explicit extension are matched verbatim. Otherwise, `.exe` is preferred over an extensionless file.
 /// Note that just like Git, no lookup is performed if a slash or backslash is in `command`.
-fn win_path_lookup(command: &Path, path_value: &std::ffi::OsStr) -> Option<PathBuf> {
-    fn lookup(root: &bstr::BStr, command: &Path, is_exe: bool) -> Option<PathBuf> {
-        let mut path = gix_path::try_from_bstr(root).ok()?.join(command);
-        if !is_exe {
-            path.set_extension("exe");
+fn win_path_lookup(command: &Path, joined_paths: &std::ffi::OsStr) -> Option<PathBuf> {
+    fn lookup(root: &Path, command: &Path, has_extension: bool) -> Option<PathBuf> {
+        let mut path = root.join(command);
+        if has_extension {
+            return path.is_file().then_some(path);
         }
+
+        path.set_extension("exe");
         if path.is_file() {
             return Some(path);
-        }
-        if is_exe {
-            return None;
         }
         path.set_extension("");
         path.is_file().then_some(path)
     }
-    if command.components().take(2).count() == 2 {
+    if !is_bare_command(command) {
         return None;
     }
-    let path = gix_path::os_str_into_bstr(path_value).ok()?;
-    let is_exe = is_exe(command);
+    let has_extension = command.extension().is_some();
 
-    for root in path.split(|b| *b == b';') {
-        if let Some(executable) = lookup(root.as_bstr(), command, is_exe) {
+    for root in split_paths(joined_paths) {
+        if let Some(executable) = lookup(&root, command, has_extension) {
             return Some(executable);
         }
     }
@@ -457,64 +194,6 @@ pub fn extract_interpreter(executable: &Path) -> Option<shebang::Data> {
     let mut file = std::fs::File::open(executable).ok()?;
     let n = file.read(&mut buf).ok()?;
     shebang::parse(buf[..n].as_bstr())
-}
-
-///
-pub mod shebang {
-    use std::{ffi::OsString, path::PathBuf};
-
-    use bstr::{BStr, ByteSlice};
-
-    /// Parse `buf` to extract all shebang information.
-    pub fn parse(buf: &BStr) -> Option<Data> {
-        let mut line = buf.lines().next()?;
-        line = line.strip_prefix(b"#!")?;
-
-        let slash_idx = line.rfind_byteset(br"/\")?;
-        match line[slash_idx..].find_byte(b' ') {
-            Some(space_idx) => {
-                let space = slash_idx + space_idx;
-                let interpreter = gix_path::try_from_byte_slice(line[..space].trim()).ok()?.to_owned();
-                let args = match line.get(space + 1..).map(ByteSlice::trim).filter(|r| !r.is_empty()) {
-                    Some(r) => match r.as_bstr().to_str() {
-                        Ok(args) => shell_words::split(args)
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(Into::into)
-                            .collect(),
-                        Err(_) => vec![gix_path::try_from_byte_slice(r).ok()?.to_owned().into()],
-                    },
-                    None => Vec::new(),
-                };
-                Some(Data { interpreter, args })
-            }
-            None => Some(Data {
-                interpreter: gix_path::try_from_byte_slice(line.trim()).ok()?.to_owned(),
-                args: Vec::new(),
-            }),
-        }
-    }
-
-    /// Shebang information as [parsed](parse()) from a buffer that should contain at least one line.
-    ///
-    /// ### Deviation
-    ///
-    /// According to the [shebang documentation](https://en.wikipedia.org/wiki/Shebang_(Unix)), it will only consider
-    /// the path of the executable, along with the arguments as the consecutive portion after the space that separates
-    /// them. Argument splitting would then have to be done elsewhere, probably in the kernel.
-    ///
-    /// To make that work without the kernel, we perform the splitting while Git just ignores options.
-    /// For now it seems more compatible to not ignore options, but if it is important this could be changed.
-    #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
-    pub struct Data {
-        /// The interpreter to run.
-        pub interpreter: PathBuf,
-        /// The remainder of the line past the space after `interpreter`, without leading or trailing whitespace,
-        /// as pre-split arguments just like a shell would do it.
-        /// Note that we accept that illformed UTF-8 will prevent argument splitting on Unix. On other platforms,
-        /// unrepresentable input causes parsing to fail.
-        pub args: Vec<OsString>,
-    }
 }
 
 /// Prepare `cmd` for [spawning][std::process::Command::spawn()] by configuring it with various builder methods.
@@ -549,39 +228,4 @@ pub fn prepare(cmd: impl Into<OsString>) -> Prepare {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn internal_win_path_lookup() -> gix_testtools::Result {
-        let root = gix_testtools::scripted_fixture_read_only("win_path_lookup.sh")?;
-        let mut paths: Vec<_> = std::fs::read_dir(&root)?
-            .filter_map(Result::ok)
-            .map(|e| e.path().to_str().expect("no illformed UTF8").to_owned())
-            .collect();
-        paths.sort();
-        let lookup_path: OsString = paths.join(";").into();
-
-        assert_eq!(
-            win_path_lookup("a/b".as_ref(), &lookup_path),
-            None,
-            "any path with separator is considered ready to use"
-        );
-        assert_eq!(
-            win_path_lookup("x".as_ref(), &lookup_path),
-            Some(root.join("a").join("x.exe")),
-            "exe will be preferred, and it searches left to right thus doesn't find c/x.exe"
-        );
-        assert_eq!(
-            win_path_lookup("x.exe".as_ref(), &lookup_path),
-            Some(root.join("a").join("x.exe")),
-            "no matter what, a/x won't be found as it's shadowed by an exe file"
-        );
-        assert_eq!(
-            win_path_lookup("exe".as_ref(), &lookup_path),
-            Some(root.join("b").join("exe")),
-            "it finds files further down the path as well"
-        );
-        Ok(())
-    }
-}
+mod tests;

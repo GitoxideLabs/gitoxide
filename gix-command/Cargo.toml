@@ -9,7 +9,7 @@ description = "A crate of the gitoxide project handling internal git command exe
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 rust-version = "1.85"
-include = ["/src/lib.rs", "/LICENSE-*"]
+include = ["/src/*.rs", "/LICENSE-*"]
 
 [lib]
 doctest = true
@@ -20,7 +20,6 @@ gix-path = { version = "^0.12.5", path = "../gix-path" }
 gix-quote = { version = "^0.8.0", path = "../gix-quote" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std", "unicode"] }
-shell-words = "1.1"
 
 [dev-dependencies]
-gix-testtools = { path = "../tests/tools" }
+gix-testtools = { path = "../tests/tools", features = ["sha1"] }

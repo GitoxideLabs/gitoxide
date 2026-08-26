@@ -188,13 +188,26 @@ fn comparable_ext_diff(
     >,
 ) -> String {
     let cmd = cmd.expect("no error");
-    let tokens = shell_words::split(&format!("{:?}", *cmd)).expect("parses fine");
-    let ofs = if cfg!(windows) { 3 } else { 0 }; // Windows doesn't show env vars
-    tokens
+    let command = format!("{:?}", *cmd);
+    let parsed = gix_diff::command::parse::command_line(command.as_str().into()).expect("parses fine");
+    let env_len = parsed.env.len();
+    parsed
+        .env
         .into_iter()
+        .map(|(name, value)| {
+            format!(
+                "{name}={}",
+                value.into_string().expect("parsing a UTF-8 command preserves UTF-8")
+            )
+        })
+        .chain(
+            std::iter::once(parsed.command)
+                .chain(parsed.args)
+                .map(|arg| arg.into_string().expect("parsing a UTF-8 command preserves UTF-8")),
+        )
         .enumerate()
         .filter_map(|(idx, s)| {
-            (idx != (5 - ofs) && idx != (8 - ofs))
+            (idx != env_len + 2 && idx != env_len + 5)
                 .then_some(s)
                 .or_else(|| Some("<tmp-path>".into()))
         })
