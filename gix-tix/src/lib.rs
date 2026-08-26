@@ -1174,6 +1174,12 @@ fn worktrunk_search_input(key: KeyEvent, page: usize) -> Option<WorktrunkInput> 
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(WorktrunkInput::Cancel { force: true })
         }
+        KeyCode::Char('p' | 'P') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(WorktrunkInput::Search(worktrunk::SearchInput::Up(1)))
+        }
+        KeyCode::Char('n' | 'N') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(WorktrunkInput::Search(worktrunk::SearchInput::Down(1)))
+        }
         KeyCode::Esc => Some(WorktrunkInput::CancelSearch),
         KeyCode::Enter => Some(WorktrunkInput::SubmitSearch),
         KeyCode::Up => Some(WorktrunkInput::Search(worktrunk::SearchInput::Up(1))),
@@ -8948,6 +8954,14 @@ mod tests {
             "holding d cannot confirm a destructive action"
         );
         let search_cases = [
+            (
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+                WorktrunkInput::Search(worktrunk::SearchInput::Up(1)),
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+                WorktrunkInput::Search(worktrunk::SearchInput::Down(1)),
+            ),
             (
                 key(KeyCode::Char('j')),
                 WorktrunkInput::Search(worktrunk::SearchInput::Insert('j')),
