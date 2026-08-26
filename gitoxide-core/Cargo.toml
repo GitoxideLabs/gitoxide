@@ -89,7 +89,7 @@ parking_lot = { version = "0.12.4", optional = true }
 # Specific version needed for MSRV 1.88
 sysinfo = { version = "0.38.3", optional = true, default-features = false, features = ["system"] }
 serde_json = { version = "1.0.150", optional = true }
-tracing-forest = { version = "0.2.0", features = ["serde"], optional = true }
+tracing-forest = { version = "0.2.0", features = ["ansi", "serde"], optional = true }
 tracing-subscriber = { version = "0.3.22", optional = true }
 tracing = { version = "0.1.43", optional = true }
 
