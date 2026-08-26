@@ -1267,6 +1267,20 @@ fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> O
     }
 }
 
+fn diagnostic_worktrunk_input(input: Option<WorktrunkInput>) -> Option<WorktrunkInput> {
+    input.filter(|input| {
+        matches!(
+            input,
+            WorktrunkInput::CancelSearch
+                | WorktrunkInput::FocusHistory
+                | WorktrunkInput::Refresh
+                | WorktrunkInput::Search(_)
+                | WorktrunkInput::StartSearch
+                | WorktrunkInput::Select(_)
+        )
+    })
+}
+
 fn confirm_worktree_removal(
     armed: &mut Option<(PathBuf, gix::worktree::remove::Force)>,
     path: &Path,
@@ -2589,7 +2603,14 @@ fn event_loop(
         .min();
         let (terminal_event, diagnostic_input) = match pending_terminal_event.take() {
             Some(event) => (Some(event), false),
-            None => match next_diagnostic_input(&mut quit_inputs, app.state, lane_receiver.is_some()) {
+            None => match next_diagnostic_input(
+                &mut quit_inputs,
+                app.state,
+                lane_receiver.is_some()
+                    || refresh_receiver.is_some()
+                    || worktree_metadata_receiver.is_some()
+                    || requested_worktree_preview.is_some(),
+            ) {
                 Some(key) => (Some(TerminalEvent::Key(key)), true),
                 None => (
                     match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
@@ -2629,7 +2650,7 @@ fn event_loop(
             urgent = true;
             continue;
         }
-        if picker.is_some() && *picker_focused && focused && !diagnostic_input {
+        if picker.is_some() && *picker_focused && focused {
             let input = match &terminal_event {
                 TerminalEvent::Key(key) => {
                     let picker = picker.as_ref().expect("picker presence was checked");
@@ -2657,6 +2678,11 @@ fn event_loop(
                     urgent = true;
                     continue;
                 }
+            };
+            let input = if diagnostic_input {
+                diagnostic_worktrunk_input(input)
+            } else {
+                input
             };
             let disarm_only = armed_worktree_removal.is_some()
                 && matches!(input.as_ref(), Some(WorktrunkInput::Cancel { force: false }))
@@ -8685,8 +8711,8 @@ fn diagnostic_key(character: char) -> KeyEvent {
     KeyEvent::new(code, modifiers)
 }
 
-fn next_diagnostic_input(inputs: &mut VecDeque<KeyEvent>, state: State, lane_computing: bool) -> Option<KeyEvent> {
-    (state == State::Complete && !lane_computing)
+fn next_diagnostic_input(inputs: &mut VecDeque<KeyEvent>, state: State, busy: bool) -> Option<KeyEvent> {
+    (state == State::Complete && !busy)
         .then(|| inputs.pop_front())
         .flatten()
 }
@@ -9108,6 +9134,27 @@ mod tests {
             None,
             "a repeated opener does not leak into the search query"
         );
+    }
+
+    #[test]
+    fn diagnostic_worktrunk_inputs_are_read_only() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            diagnostic_worktrunk_input(worktrunk_input(key(KeyCode::Char('j')), 1, 4, 2)),
+            Some(WorktrunkInput::Select(2)),
+            "diagnostics use worktree navigation"
+        );
+        for input in [
+            worktrunk_input(key(KeyCode::Char('d')), 1, 4, 2),
+            worktrunk_input(key(KeyCode::Enter), 1, 4, 2),
+            worktrunk_input(key(KeyCode::Char('q')), 1, 4, 2),
+        ] {
+            assert_eq!(
+                diagnostic_worktrunk_input(input),
+                None,
+                "diagnostics ignore mutating or terminating worktree input"
+            );
+        }
     }
 
     #[test]
@@ -11596,7 +11643,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_inputs_wait_for_completed_lanes() {
+    fn diagnostic_inputs_wait_for_completed_work() {
         let key = diagnostic_key('j');
         let mut inputs = VecDeque::from([key]);
         assert!(next_diagnostic_input(&mut inputs, State::Loading, false).is_none());

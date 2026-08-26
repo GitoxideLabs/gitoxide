@@ -809,7 +809,6 @@ impl HistoryGraph {
             let should_store = delta & (VISIBLE | EXPAND) != 0 && !was_stored;
             if should_store {
                 state.stored = true;
-                newly_stored.push(index);
             }
             let stop = !should_store
                 && self.commits[index.as_usize()].state & NODE_COMPLETE != 0
@@ -885,6 +884,7 @@ impl HistoryGraph {
                         is_review,
                         signature,
                     });
+                    newly_stored.push(index);
                 }
             }
             if stop {
@@ -3165,6 +3165,31 @@ mod tests {
             graph.stored_commit_ids().collect::<HashSet<_>>(),
             expected,
             "a hidden-only refresh does not truncate a later visible traversal"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn graph_only_refresh_leaves_rows_available_for_display() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let tip = repo.rev_parse_single("topic")?.detach();
+        let revisions = [OsString::from("topic")];
+        let mut graph = HistoryGraph::default();
+
+        graph.refresh_graph(&repo, &revisions, &[])?;
+        assert_eq!(
+            graph.stored_commit_ids().count(),
+            0,
+            "graph-only traversal does not claim rows were sent to the UI"
+        );
+
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        let refresh = graph.refresh(&repo, &revisions, &[], false, &HashSet::new(), &authors)?;
+        assert!(
+            refresh.commits.rows.iter().any(|row| row.id == tip),
+            "the next display refresh emits graph-only commits"
         );
         Ok(())
     }
