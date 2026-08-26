@@ -25,9 +25,10 @@ without trading responsiveness for metadata that is not visible.
   revision whose name is also a command.
 - `tix worktrunk`, its visible `tix wt` alias, and `tix worktrunk switch`
   open an existing-worktree picker above a fully interactive Tix history. The
-  list occupies no more than half the terminal. Moving its cursor immediately
-  paints the new selection without changing repository state and requests its
-  history preview. If that preview is not ready, the previous history remains
+  list occupies no more than half the terminal, with its status/search line
+  below it as a separator from the history. Moving its cursor immediately paints
+  the new selection without changing repository state and requests its history
+  preview. If that preview is not ready, the previous history remains
   visible, marked loading, and read-only; completion activates only the latest
   selection. Each activation refreshes its tree and worktree-change diffs.
   `PageUp` and `PageDown` move by the visible list height. `/` opens a

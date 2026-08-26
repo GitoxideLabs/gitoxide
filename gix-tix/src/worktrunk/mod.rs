@@ -911,8 +911,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
         return;
     }
     frame.render_widget(Clear, area);
-    let mut lines = if worktrees.search_is_open() {
-        vec![search_line(worktrees, focused)]
+    let status = if worktrees.search_is_open() {
+        search_line(worktrees, focused)
     } else {
         let help = worktrees
             .selected()
@@ -933,26 +933,27 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
                     (" worktrees  esc return".into(), Color::DarkGray)
                 }
             });
-        vec![Line::from(Span::styled(
+        Line::from(Span::styled(
             help.0,
             Style::default().fg(help.1).add_modifier(Modifier::BOLD),
-        ))]
+        ))
     };
     let visible = usize::from(area.height.saturating_sub(2));
     let visible_indices = worktrees.visible_indices(visible);
-    lines.extend(table_lines(
+    let mut lines = table_lines(
         worktrees.rows(),
         usize::from(area.width),
         &visible_indices,
         worktrees.selected_index(),
         focused,
-    ));
+    );
     if visible_indices.is_empty() && visible > 0 {
         lines.push(Line::from(Span::styled(
             "   no matching worktrees",
             Style::default().fg(Color::DarkGray),
         )));
     }
+    lines.push(status);
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -1557,20 +1558,20 @@ mod tests {
         terminal.draw(|frame| draw(frame, frame.area(), &worktrees, true))?;
 
         assert_eq!(
-            rendered_line(&terminal, 0).trim_end(),
+            rendered_line(&terminal, 4).trim_end(),
             " worktrees  j/k select  dd remove  DD force  / search  enter switch  tab history"
         );
-        let header = rendered_line(&terminal, 1);
+        let header = rendered_line(&terminal, 0);
         assert!(header.starts_with("   Worktree"));
         assert_eq!(header.find("Status"), Some(55));
         assert_eq!(header.find("Base ±"), Some(63));
         assert_eq!(header.find("Commits ↕"), Some(72));
-        let selected = rendered_line(&terminal, 2);
+        let selected = rendered_line(&terminal, 1);
         assert!(selected.starts_with(">@ repo"));
         assert_eq!(&selected[55..], "*       +42 -7  ↑12 ↓3   ");
-        assert!(rendered_line(&terminal, 3).starts_with(" ^ main-worktree"));
-        assert_eq!(terminal.backend().buffer()[(79, 2)].bg, Color::Cyan);
-        assert_eq!(terminal.backend().buffer()[(0, 3)].bg, Color::Reset);
+        assert!(rendered_line(&terminal, 2).starts_with(" ^ main-worktree"));
+        assert_eq!(terminal.backend().buffer()[(79, 1)].bg, Color::Cyan);
+        assert_eq!(terminal.backend().buffer()[(0, 2)].bg, Color::Reset);
         for (value, color) in [
             ("+42", Color::Green),
             ("-7", Color::LightRed),
@@ -1580,7 +1581,7 @@ mod tests {
             let byte = selected.find(value).expect("statistic is visible");
             let x = selected[..byte].chars().count() as u16;
             for offset in 0..value.chars().count() as u16 {
-                let cell = &terminal.backend().buffer()[(x + offset, 2)];
+                let cell = &terminal.backend().buffer()[(x + offset, 1)];
                 assert_eq!(cell.fg, color, "{value} uses its semantic color");
                 assert_eq!(cell.bg, Color::Cyan, "{value} retains the selected-row background");
             }
@@ -1588,7 +1589,7 @@ mod tests {
 
         worktrees.select(2);
         terminal.draw(|frame| draw(frame, frame.area(), &worktrees, true))?;
-        assert!(rendered_line(&terminal, 0).starts_with(" error: unavailable"));
+        assert!(rendered_line(&terminal, 4).starts_with(" error: unavailable"));
         Ok(())
     }
 
@@ -1653,8 +1654,8 @@ mod tests {
 
         terminal.draw(|frame| draw(frame, frame.area(), &worktrees, true))?;
 
-        assert_eq!(rendered_line(&terminal, 1), "   Worktree    Status  Base ±  Commits ↕");
-        assert_eq!(rendered_line(&terminal, 2), ">@ …long-name                           ");
+        assert_eq!(rendered_line(&terminal, 0), "   Worktree    Status  Base ±  Commits ↕");
+        assert_eq!(rendered_line(&terminal, 1), ">@ …long-name                           ");
         assert_eq!(truncate_left("工作树-überlang", 6), "…rlang");
         Ok(())
     }
@@ -1708,8 +1709,8 @@ mod tests {
         assert!(worktrees.search_is_open(), "an empty search cannot be submitted");
         let mut terminal = Terminal::new(TestBackend::new(50, 3))?;
         terminal.draw(|frame| draw(frame, frame.area(), &worktrees, true))?;
-        assert!(rendered_line(&terminal, 0).starts_with("/ zzz "));
-        assert!(rendered_line(&terminal, 2).starts_with("   no matching worktrees"));
+        assert!(rendered_line(&terminal, 1).starts_with("   no matching worktrees"));
+        assert!(rendered_line(&terminal, 2).starts_with("/ zzz "));
         Ok(())
     }
 
