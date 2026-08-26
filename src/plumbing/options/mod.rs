@@ -25,17 +25,27 @@ pub struct Args {
     /// The amount of threads to use for some operations.
     ///
     /// If unset, or the value is 0, there is no limit and all logical cores can be used.
-    #[clap(long, short = 't')]
+    #[clap(long)]
     pub threads: Option<usize>,
 
     /// Display verbose messages and progress information
     #[clap(long, short = 'v')]
     pub verbose: bool,
 
-    /// Display structured `tracing` output in a tree-like structure.
-    #[clap(long)]
+    /// Display tracing output; repeat for more detail and a flat format.
+    ///
+    /// Once is forest-formatted at info, twice is forest-formatted at debug,
+    /// three times is flat at debug, and four times is flat at trace.
+    /// Output is buffered independently and written to stderr when the command finishes.
+    /// Colors follow stderr's terminal capabilities and environment configuration.
+    #[clap(
+        long,
+        short = 't',
+        action = clap::ArgAction::Count,
+        value_parser = clap::value_parser!(u8).range(0..=4)
+    )]
     #[cfg(feature = "tracing")]
-    pub trace: bool,
+    pub trace: u8,
 
     /// Turn off verbose message display for commands where these are shown by default.
     #[clap(long, conflicts_with("verbose"))]

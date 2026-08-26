@@ -108,7 +108,7 @@ fast = ["gix/max-performance", "gix/comfort"]
 fast-safe = ["fast"]
 
 ## Enable tracing in `gitoxide-core`.
-tracing = ["dep:tracing-forest", "dep:tracing-subscriber", "dep:tracing", "gix-features/tracing", "gix-features/tracing-detail"]
+tracing = ["dep:anstream", "dep:tracing-forest", "dep:tracing-subscriber", "dep:tracing", "gix-features/tracing", "gix-features/tracing-detail"]
 
 ## Use `clap` 3.0 to build the prettiest, best documented and most user-friendly CLI at the expense of binary size.
 ## Provides a terminal user interface for detailed and exhaustive progress.
@@ -184,7 +184,8 @@ crosstermion = { version = "0.16.0", optional = true, default-features = false }
 futures-lite = { version = "2.1.0", optional = true }
 
 # for 'tracing'
-tracing-forest = { version = "0.1.5", features = ["serde"], optional = true }
+anstream = { version = "1.0.0", optional = true }
+tracing-forest = { version = "0.1.5", features = ["ansi", "serde"], optional = true }
 tracing-subscriber = { version = "0.3.17", optional = true }
 tracing = { version = "0.1.37", optional = true }
 
