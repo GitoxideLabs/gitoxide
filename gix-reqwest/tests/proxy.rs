@@ -386,6 +386,40 @@ async fn tunnel_includes_proxy_auth() {
     );
 }
 
+#[cfg(feature = "__rustls")]
+#[tokio::test]
+async fn tunnel_to_ipv6_literal() {
+    let url = "https://[2001:db8::1]/prox";
+
+    let server = server::http(move |req| {
+        assert_eq!(req.method(), "CONNECT");
+        assert_eq!(req.uri(), "[2001:db8::1]:443");
+
+        async {
+            // return 200 so the client goes on to the TLS handshake
+            http::Response::default()
+        }
+    });
+
+    let proxy = format!("http://{}", server.addr());
+
+    let err = gix_reqwest::Client::builder()
+        .proxy(gix_reqwest::Proxy::https(&proxy).unwrap())
+        .build()
+        .unwrap()
+        .get(url)
+        .send()
+        .await
+        .unwrap_err();
+
+    let err = support::error::inspect(err).pop().unwrap();
+    assert!(
+        !err.contains("Invalid Server Name"),
+        "server name rejected before the handshake, got: {:?}",
+        err
+    );
+}
+
 #[cfg(feature = "__tls")]
 #[tokio::test]
 async fn tunnel_includes_user_agent() {
