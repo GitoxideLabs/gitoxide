@@ -101,6 +101,22 @@ mod shebang {
                     "illformed UTF8 in the executable path is fine as well"
                 );
             }
+
+            #[cfg(not(unix))]
+            {
+                use bstr::ByteSlice;
+
+                assert_eq!(
+                    shebang::parse(b"#!/bin/sh   -x \xC3\x28\x41 -y  ".as_bstr()),
+                    None,
+                    "unrepresentable arguments invalidate the shebang"
+                );
+                assert_eq!(
+                    shebang::parse(b"#!/bin/\xC3\x28\x41 ".as_bstr()),
+                    None,
+                    "an unrepresentable interpreter invalidates the shebang"
+                );
+            }
         }
 
         #[test]
@@ -296,6 +312,53 @@ mod prepare {
     }
 
     #[test]
+    fn shell_assignments_are_not_manually_split() {
+        let cmd = std::process::Command::from(
+            gix_command::prepare("  FOO=bar echo").command_may_be_shell_script_allow_manual_argument_splitting(),
+        );
+        assert_eq!(
+            format!("{cmd:?}"),
+            quoted_default_shell(&["-c", "  FOO=bar echo", SH_BASENAME]),
+            "a leading assignment requires shell semantics"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn invalid_utf8_commands_are_checked_for_shell_syntax() {
+        use std::os::unix::ffi::OsStringExt;
+
+        assert!(
+            !gix_command::prepare(std::ffi::OsString::from_vec(vec![0xff]))
+                .command_may_be_shell_script()
+                .use_shell,
+            "invalid UTF-8 alone doesn't require a shell"
+        );
+        assert!(
+            gix_command::prepare(std::ffi::OsString::from_vec(vec![0xff, b' ']))
+                .command_may_be_shell_script()
+                .use_shell,
+            "shell syntax is detected without requiring UTF-8"
+        );
+    }
+
+    #[test]
+    fn relative_existing_paths_with_shell_syntax_still_use_the_shell() -> crate::Result {
+        let temp = gix_testtools::tempfile::Builder::new()
+            .prefix("$HOME")
+            .tempdir_in(".")?;
+        let program = std::path::Path::new(temp.path().file_name().expect("a temporary directory has a file name"))
+            .join("editor");
+        std::fs::File::create(temp.path().join("editor"))?;
+
+        assert!(
+            gix_command::prepare(&program).command_may_be_shell_script().use_shell,
+            "filesystem state doesn't change shell-syntax detection"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn single_and_multiple_arguments_as_part_of_command() {
         let cmd = std::process::Command::from(gix_command::prepare("ls first second third"));
         assert_eq!(
@@ -459,6 +522,29 @@ mod prepare {
             quoted_default_shell(&["-c", r#"echo \"$@\" >&2"#, SH_BASENAME, "store"]),
             "this is how credential helpers have to work as for some reason they don't get '$@' added in Git.\
             We deal with it by not doubling the '$@' argument, which seems more flexible."
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn non_utf8_script_with_dollar_at_does_not_duplicate_arguments() {
+        use bstr::ByteSlice;
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let script = std::ffi::OsString::from_vec(b"echo \xff \"$@\"".to_vec());
+        let cmd = std::process::Command::from(
+            gix_command::prepare(script.clone())
+                .command_may_be_shell_script()
+                .arg("argument"),
+        );
+        assert_eq!(
+            cmd.get_args()
+                .nth(1)
+                .expect("the script follows -c")
+                .as_bytes()
+                .as_bstr(),
+            script.as_bytes().as_bstr(),
+            "the existing byte-encoded $@ is retained without appending another one"
         );
     }
 
