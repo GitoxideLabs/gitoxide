@@ -791,25 +791,37 @@ pub(crate) fn draw_with_worktree(
                 let HistoryEntry::Commit(row_index) = entry else {
                     return None;
                 };
+                let metadata = full_metadata_columns[index].as_ref()?;
                 let title = app.title(&app.rows[*row_index]);
                 Some((
+                    usize::from(content.width).saturating_sub(
+                        lane_width(lanes.lane(index), HistoryAlignment::None).saturating_add(metadata.prefix_width()),
+                    ),
                     Line::from(commit_title_spans(title, false)).width(),
                     Line::from(commit_title_spans(title, true)).width(),
                 ))
             })
             .collect()
     };
-    let shorten_titles = requested_alignment != HistoryAlignment::None
+    let drop_alignment = requested_alignment != HistoryAlignment::None
         && less_than_sixty_percent(
-            available_title_width,
-            visible_title_widths.iter().map(|widths| widths.0),
+            visible_title_widths
+                .iter()
+                .map(|(_, full, _)| (available_title_width, *full)),
+        );
+    let shorten_titles = drop_alignment
+        && less_than_sixty_percent(
+            visible_title_widths
+                .iter()
+                .map(|(available, full, _)| (*available, *full)),
         );
     let compact_history = shorten_titles
         && less_than_sixty_percent(
-            available_title_width,
-            visible_title_widths.iter().map(|widths| widths.1),
+            visible_title_widths
+                .iter()
+                .map(|(available, _, short)| (*available, *short)),
         );
-    let alignment = if compact_history {
+    let alignment = if drop_alignment {
         HistoryAlignment::None
     } else {
         requested_alignment
@@ -823,7 +835,7 @@ pub(crate) fn draw_with_worktree(
     };
     let displayed_lane = |index: usize| {
         let lane = lanes.lane(index);
-        if hidden_entries[index] || requested_alignment == HistoryAlignment::None {
+        if hidden_entries[index] || (alignment == HistoryAlignment::None && !compact_history) {
             lane
         } else {
             lane.trim_end()
@@ -2214,11 +2226,13 @@ fn commit_title_spans(title: &BStr, shorten_conventional_prefix: bool) -> Vec<Sp
     markdown_title_spans(shortened.as_bstr())
 }
 
-fn less_than_sixty_percent(available_width: usize, title_widths: impl IntoIterator<Item = usize>) -> bool {
-    let (sum, count) = title_widths
+fn less_than_sixty_percent(widths: impl IntoIterator<Item = (usize, usize)>) -> bool {
+    let (available, title, count) = widths
         .into_iter()
-        .fold((0_u128, 0_u128), |(sum, count), width| (sum + width as u128, count + 1));
-    count > 0 && available_width as u128 * count * 5 < sum * 3
+        .fold((0_u128, 0_u128, 0_u128), |(available, title, count), widths| {
+            (available + widths.0 as u128, title + widths.1 as u128, count + 1)
+        });
+    count > 0 && available * 5 < title * 3
 }
 
 fn lane_width(lane: &str, alignment: HistoryAlignment) -> usize {
@@ -7412,11 +7426,11 @@ mod tests {
 
     #[test]
     fn adapts_history_detail_below_sixty_percent_of_the_average_title() {
-        assert!(!less_than_sixty_percent(6, [10]));
-        assert!(less_than_sixty_percent(5, [10]));
-        assert!(!less_than_sixty_percent(6, [8, 12]));
-        assert!(less_than_sixty_percent(5, [8, 12]));
-        assert!(!less_than_sixty_percent(0, []));
+        assert!(!less_than_sixty_percent([(6, 10)]));
+        assert!(less_than_sixty_percent([(5, 10)]));
+        assert!(!less_than_sixty_percent([(6, 8), (6, 12)]));
+        assert!(less_than_sixty_percent([(5, 8), (5, 12)]));
+        assert!(!less_than_sixty_percent([]));
         assert_eq!(
             Line::from(commit_title_spans("feat: 🧪".as_bytes().as_bstr(), true)).width(),
             Line::raw("…:🧪").width(),
@@ -7549,7 +7563,9 @@ mod tests {
         app.id_mode = IdMode::Commit;
         app.extend_commits(vec![commit(1)]);
         std::sync::Arc::make_mut(&mut app.rows[0]).parent_ids = [gix::ObjectId::Sha1([2; 20])].into_iter().collect();
-        app.extend_hidden_commits(vec![commit(2)]);
+        let mut hidden = commit(2);
+        hidden.title = format!("subject 2 {}", "wide ".repeat(20)).into();
+        app.extend_hidden_commits(vec![hidden]);
         std::sync::Arc::make_mut(&mut app.rows[1]).author =
             author(b"an extraordinarily long hidden author", b"author@example.com");
         complete(&mut app);
@@ -7646,6 +7662,14 @@ mod tests {
             terminal.backend().buffer()[(6, 1)].symbol(),
             ">",
             "the hidden base is selectable"
+        );
+
+        let mut narrow_detail = Terminal::new(TestBackend::new(50, 3))?;
+        narrow_detail.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&narrow_detail, 0).contains("1970-01-01 author subject 1"),
+            "a wide hidden title does not minimize visible history: {:?}",
+            rendered_line(&narrow_detail, 0)
         );
 
         app.set_lane(0, "●──────────────────────────────── ");
@@ -7975,6 +7999,14 @@ mod tests {
             "trailing graph storage does not consume visible columns"
         );
         app.set_lane(0, "● ");
+
+        let mut padded = Terminal::new(TestBackend::new(56, 3))?;
+        padded.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_line(&padded, 1).contains("1970-01-01 Byron Co: GPT [A] second-title"),
+            "alignment padding falls away before metadata is minimized: {:?}",
+            rendered_line(&padded, 1)
+        );
 
         let mut narrow_title = Terminal::new(TestBackend::new(40, 3))?;
         narrow_title.draw(|frame| draw(frame, &mut app, &decorations))?;
