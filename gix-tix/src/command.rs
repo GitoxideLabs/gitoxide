@@ -85,6 +85,8 @@ enum Command {
 
 #[derive(Debug, clap::Subcommand)]
 enum WorktrunkCommand {
+    /// Print the fully populated worktree table without opening the terminal UI.
+    Show,
     /// Switch to an existing worktree, or create one for a local branch.
     #[command(group(
         clap::ArgGroup::new("switch_target")
@@ -295,6 +297,7 @@ impl Platform {
             Command::Worktrunk { command } => {
                 return match command {
                     None => crate::worktrunk::run(repository.into_sync(), None, None, false),
+                    Some(WorktrunkCommand::Show) => crate::worktrunk::show(&repository, std::io::stdout().lock()),
                     Some(WorktrunkCommand::Switch {
                         target,
                         new_branch,
@@ -1383,6 +1386,16 @@ mod tests {
             })
         ));
 
+        let show = Cli::try_parse_from(["tix", "wt", "show"])
+            .expect("non-interactive worktree display parses")
+            .platform;
+        assert!(matches!(
+            show.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Show)
+            })
+        ));
+
         let switch = Cli::try_parse_from(["tix", "worktrunk", "switch", "topic", "--path", "../topic"])
             .expect("explicit branch and worktree path parse")
             .platform;
@@ -1798,6 +1811,7 @@ mod tests {
             &["rebase", "todo"],
             &["rebase", "apply"],
             &["worktrunk"],
+            &["worktrunk", "show"],
             &["worktrunk", "switch"],
             &["worktrunk", "remove"],
             &["worktrunk", "shell-init"],
