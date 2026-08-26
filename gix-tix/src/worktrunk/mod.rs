@@ -5,6 +5,7 @@ pub(crate) mod shell;
 
 use std::{
     ffi::{OsStr, OsString},
+    io::Write,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -327,20 +328,36 @@ impl Worktrees {
         let updates: Vec<_> = self.updates.try_iter().collect();
         let changed = !updates.is_empty();
         for update in updates {
-            let Some(row) = self.rows.get_mut(update.index) else {
-                continue;
-            };
-            match update.result {
-                Ok(dirty) => {
-                    row.dirty = Some(dirty);
-                    if row.head.is_some() && !matches!(row.state, LoadState::Error(_)) {
-                        row.state = LoadState::Ready;
-                    }
-                }
-                Err(err) => row.state = LoadState::Error(err),
-            }
+            self.apply_update(update);
         }
         changed
+    }
+
+    fn finish_workers(&mut self) -> Result<()> {
+        let mut panicked = false;
+        for worker in std::mem::take(&mut self.workers) {
+            panicked |= worker.join().is_err();
+        }
+        anyhow::ensure!(!panicked, "a worktree status worker panicked");
+        for update in self.updates.try_iter().collect::<Vec<_>>() {
+            self.apply_update(update);
+        }
+        Ok(())
+    }
+
+    fn apply_update(&mut self, update: Update) {
+        let Some(row) = self.rows.get_mut(update.index) else {
+            return;
+        };
+        match update.result {
+            Ok(dirty) => {
+                row.dirty = Some(dirty);
+                if row.head.is_some() && !matches!(row.state, LoadState::Error(_)) {
+                    row.state = LoadState::Ready;
+                }
+            }
+            Err(err) => row.state = LoadState::Error(err),
+        }
     }
 
     /// Reload the expensive fields while preserving row order and selection.
@@ -812,6 +829,45 @@ pub(crate) fn run(
     )
 }
 
+/// Print the fully populated worktree picker table without opening the terminal UI.
+pub(crate) fn show(repository: &gix::Repository, mut out: impl Write) -> Result<()> {
+    let (hidden, unavailable) = crate::history::available_hidden_revisions(repository, &[], true)?;
+    for (revision, err) in unavailable {
+        eprintln!(
+            "warning: ignoring unavailable hidden revision {}: {err}",
+            revision.to_string_lossy()
+        );
+    }
+
+    let mut worktrees = Worktrees::start(repository)?;
+    anyhow::ensure!(!worktrees.rows().is_empty(), "this repository has no worktrees");
+    worktrees.drain_updates();
+    let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
+        crate::history::Authors::default(),
+    ));
+    let mut graph = crate::history::HistoryGraph::default();
+    for index in 0..worktrees.rows().len() {
+        let path = worktrees.rows()[index].path.clone();
+        let result = gix::open(&path)
+            .with_context(|| format!("could not open worktree {}", path.display()))
+            .and_then(|worktree| {
+                let refresh = graph.refresh(&worktree, &[], &hidden, false, &Default::default(), &authors)?;
+                graph_metadata(&worktree, &graph, &refresh.refs)
+            })
+            .map_err(|err| format!("{err:#}"));
+        worktrees.set_graph_metadata(index, result);
+    }
+    worktrees.finish_workers()?;
+
+    if let Some((row, err)) = worktrees.rows().iter().find_map(|row| match &row.state {
+        LoadState::Error(err) => Some((row, err)),
+        LoadState::Loading | LoadState::Ready => None,
+    }) {
+        anyhow::bail!("could not load worktree {}: {err}", row.path.display());
+    }
+    write_table(&worktrees, &mut out)
+}
+
 fn write_shell_handoff(path: &Path, fullscreen: bool) -> Result<bool> {
     let Some(cd_file) = std::env::var_os(shell::CD_FILE_ENV) else {
         return Ok(false);
@@ -882,31 +938,35 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
             Style::default().fg(help.1).add_modifier(Modifier::BOLD),
         ))]
     };
+    let visible = usize::from(area.height.saturating_sub(2));
+    let visible_indices = worktrees.visible_indices(visible);
+    lines.extend(table_lines(
+        worktrees.rows(),
+        usize::from(area.width),
+        &visible_indices,
+        worktrees.selected_index(),
+        focused,
+    ));
+    if visible_indices.is_empty() && visible > 0 {
+        lines.push(Line::from(Span::styled(
+            "   no matching worktrees",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn table_lines(
+    rows: &[Row],
+    width: usize,
+    indices: &[usize],
+    selected: Option<usize>,
+    focused: bool,
+) -> Vec<Line<'static>> {
     let status_width = Line::raw("Status").width();
-    let base_width = worktrees
-        .rows()
-        .iter()
-        .filter_map(|row| match (row.lines_added, row.lines_removed) {
-            (Some(added), Some(removed)) => Some(format!("+{added} -{removed}")),
-            _ => None,
-        })
-        .map(|value| Line::raw(value).width())
-        .max()
-        .unwrap_or_default()
-        .max(Line::raw("Base ±").width());
-    let commits_width = worktrees
-        .rows()
-        .iter()
-        .filter_map(|row| {
-            row.relation
-                .map(|relation| format!("↑{} ↓{}", relation.ahead, relation.behind))
-        })
-        .map(|value| Line::raw(value).width())
-        .max()
-        .unwrap_or_default()
-        .max(Line::raw("Commits ↕").width());
+    let (base_width, commits_width) = statistic_widths(rows);
     let fixed_width = 3 + 2 + status_width + 2 + base_width + 2 + commits_width;
-    let worktree_width = usize::from(area.width).saturating_sub(fixed_width);
+    let worktree_width = width.saturating_sub(fixed_width);
     let mut header = String::from("   ");
     push_cell(&mut header, "Worktree", worktree_width, true);
     header.push_str("  ");
@@ -915,26 +975,18 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
     push_cell(&mut header, "Base ±", base_width, false);
     header.push_str("  ");
     push_cell(&mut header, "Commits ↕", commits_width, false);
-    lines.push(Line::from(Span::styled(
+    let mut lines = vec![Line::from(Span::styled(
         header,
         Style::default()
             .fg(if focused { Color::Cyan } else { Color::DarkGray })
             .add_modifier(Modifier::BOLD),
-    )));
-    let visible = usize::from(area.height.saturating_sub(2));
-    let selected = worktrees.selected_index().unwrap_or_default();
-    let visible_indices = worktrees.visible_indices(visible);
-    if visible_indices.is_empty() && visible > 0 {
-        lines.push(Line::from(Span::styled(
-            "   no matching worktrees",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    for index in visible_indices {
-        let row = &worktrees.rows()[index];
+    ))];
+    for &index in indices {
+        let row = &rows[index];
+        let is_selected = selected == Some(index);
         let mut text = format!(
             "{}{} ",
-            if index == selected { '>' } else { ' ' },
+            if is_selected { '>' } else { ' ' },
             if row.is_current {
                 '@'
             } else if row.is_main {
@@ -957,7 +1009,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
             false,
         );
         text.push_str("  ");
-        let style = if index == selected {
+        let style = if is_selected {
             Style::default()
                 .fg(if focused { Color::Black } else { Color::White })
                 .bg(if focused { Color::Cyan } else { Color::DarkGray })
@@ -982,7 +1034,50 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, worktrees: &Worktrees, foc
         spans.push(Span::raw(" ".repeat(commits_width.saturating_sub(commits_width_used))));
         lines.push(Line::from(spans).style(style));
     }
-    frame.render_widget(Paragraph::new(lines), area);
+    lines
+}
+
+fn statistic_widths(rows: &[Row]) -> (usize, usize) {
+    let base = rows
+        .iter()
+        .filter_map(|row| match (row.lines_added, row.lines_removed) {
+            (Some(added), Some(removed)) => Some(format!("+{added} -{removed}")),
+            _ => None,
+        })
+        .map(|value| Line::raw(value).width())
+        .max()
+        .unwrap_or_default()
+        .max(Line::raw("Base ±").width());
+    let commits = rows
+        .iter()
+        .filter_map(|row| {
+            row.relation
+                .map(|relation| format!("↑{} ↓{}", relation.ahead, relation.behind))
+        })
+        .map(|value| Line::raw(value).width())
+        .max()
+        .unwrap_or_default()
+        .max(Line::raw("Commits ↕").width());
+    (base, commits)
+}
+
+fn write_table(worktrees: &Worktrees, mut out: impl Write) -> Result<()> {
+    let worktree_width = worktrees
+        .rows()
+        .iter()
+        .map(|row| Line::raw(&row.label).width())
+        .max()
+        .unwrap_or_default()
+        .max(Line::raw("Worktree").width());
+    let status_width = Line::raw("Status").width();
+    let (base_width, commits_width) = statistic_widths(worktrees.rows());
+    let width = 3 + worktree_width + 2 + status_width + 2 + base_width + 2 + commits_width;
+    let indices = (0..worktrees.rows().len()).collect::<Vec<_>>();
+    for line in table_lines(worktrees.rows(), width, &indices, None, false) {
+        let plain = line.spans.iter().map(|span| span.content.as_ref()).collect::<String>();
+        writeln!(out, "{}", plain.trim_end()).context("could not write worktree table")?;
+    }
+    Ok(())
 }
 
 fn search_line(worktrees: &Worktrees, focused: bool) -> Line<'static> {
@@ -1494,6 +1589,58 @@ mod tests {
         worktrees.select(2);
         terminal.draw(|frame| draw(frame, frame.area(), &worktrees, true))?;
         assert!(rendered_line(&terminal, 0).starts_with(" error: unavailable"));
+        Ok(())
+    }
+
+    #[test]
+    fn show_prints_every_fully_loaded_row_without_terminal_formatting() -> gix_testtools::Result {
+        let (_temp, repository) = fixture()?;
+        create_branch(&repository, "topic")?;
+        let topic = resolve_or_create(
+            &repository,
+            OsStr::new("topic"),
+            None,
+            false,
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        let main = repository.workdir().context("fixture has a main worktree")?;
+        git(main, &["remote", "add", "origin", "."])?;
+        git(main, &["update-ref", "refs/remotes/origin/main", "refs/heads/main"])?;
+        git(
+            main,
+            &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
+        )?;
+        git(&topic, &["config", "branch.topic.remote", "origin"])?;
+        git(&topic, &["config", "branch.topic.merge", "refs/heads/main"])?;
+        std::fs::write(topic.join("topic"), "topic\n")?;
+        git(&topic, &["add", "topic"])?;
+        git(&topic, &["commit", "-m", "topic"])?;
+        std::fs::write(topic.join("untracked"), "dirty\n")?;
+
+        let repository = crate::test_repository::open(main)?;
+        let mut output = Vec::new();
+        show(&repository, &mut output)?;
+        let output = String::from_utf8(output)?;
+        let lines = output.lines().collect::<Vec<_>>();
+
+        assert_eq!(lines.len(), 3, "the header and both worktrees are printed");
+        assert!(lines[0].starts_with("   Worktree"), "the picker header is retained");
+        assert!(lines[1].starts_with(" @ repo"), "the current main worktree is marked");
+        assert!(
+            lines[1].contains("+0 -0") && lines[1].contains("↑0 ↓0"),
+            "zero-valued data is filled rather than omitted: {output:?}"
+        );
+        assert!(lines[2].starts_with(" + repo.topic"), "the linked worktree is marked");
+        assert!(lines[2].contains('*'), "the completed dirty state is printed");
+        assert!(
+            lines[2].contains("+1 -0") && lines[2].contains("↑1 ↓0"),
+            "base diffstat and ahead/behind data are complete: {output:?}"
+        );
+        assert!(
+            !output.contains(['…', '\u{1b}']),
+            "plain output has no loading or ANSI state"
+        );
         Ok(())
     }
 

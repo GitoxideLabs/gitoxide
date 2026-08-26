@@ -23,5 +23,7 @@ unchecked-out local branch. `wt switch --new-branch BRANCH` creates a missing
 branch at the logical Tix HEAD, or reuses it if it exists. `--path PATH`
 overrides the default sibling path.
 
+`wt show` prints the fully populated worktree table without opening the picker.
+
 
 It's also an experiment to see how long, or if at all, this is maintainable.
