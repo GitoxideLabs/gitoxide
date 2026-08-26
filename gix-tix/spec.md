@@ -523,8 +523,15 @@ without trading responsiveness for metadata that is not visible.
 | `x` | Select the next visible commit with the same change ID, wrapping at the end. |
 
 Alignment uses only rows in the current viewport to determine widths and starts
-in title mode. Horizontal navigation pans the complete padded row in title and
-full-column alignment so clipped fields can be reached.
+in title mode. Title, full-column, and compressed alignment discard unused
+trailing graph cells before placing metadata. If the drawable history width
+shows less than 60% of the average rendered width of visible commit titles,
+valid conventional-commit prefixes are shortened to `…:` without a following
+space. If the shortened titles still fall below 60%, rows retain their gutters
+and graph through the commit disc, followed by one space and the shortened
+title; other metadata is hidden. Widths are terminal display cells and exactly
+60% retains the more detailed form. Unaligned history never adapts its titles
+or metadata and remains horizontally scrollable.
 
 Topological navigation follows every parent and child edge in the displayed
 history. A single destination is selected immediately. If there are multiple,
@@ -763,8 +770,8 @@ space first; changes blocks adapt within the remaining history width.
 - Blocks are side by side when both condensed titles fit, otherwise Worktree is
   stacked above Tree. A shared vertical divider joins side-by-side blocks. Blocks
   size to content but together use no more than half the terminal.
-- While the blocks are stacked, history rows retain the gutters and graph only
-  through their commit disc, followed by the title without its conventional-commit prefix.
+- Stacking changes blocks has no independent effect on history-row detail; only
+  the resulting drawable history width participates in adaptive title layout.
 - If paths overflow, the final row reports the remaining line count and updates
   while scrolling. A single path is never replaced by overflow text.
 - `Tab` cycles focus in visual order through visible changes blocks and history.
