@@ -545,6 +545,15 @@ pub(crate) fn graph_metadata(
     refs: &crate::history::RefSnapshot,
 ) -> Result<GraphMetadata> {
     let head = logical_head(repository)?;
+    graph_metadata_for_head(repository, graph, &refs.hidden_tips, head)
+}
+
+fn graph_metadata_for_head(
+    repository: &gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    hidden_tips: &[gix::ObjectId],
+    head: LogicalHead,
+) -> Result<GraphMetadata> {
     let Some(head_id) = head.commit_id else {
         return Ok(GraphMetadata {
             head,
@@ -552,8 +561,8 @@ pub(crate) fn graph_metadata(
             diffstat: None,
         });
     };
-    let relation = relation(repository, graph, &head, &refs.hidden_tips)?;
-    let diffstat = unique_tix_boundary(graph, head_id, &refs.hidden_tips)
+    let relation = relation(repository, graph, &head, hidden_tips)?;
+    let diffstat = unique_tix_boundary(graph, head_id, hidden_tips)
         .map(|base_id| diffstat(repository, base_id, head_id))
         .transpose()?;
     Ok(GraphMetadata {
@@ -842,19 +851,37 @@ pub(crate) fn show(repository: &gix::Repository, mut out: impl Write) -> Result<
     let mut worktrees = Worktrees::start(repository)?;
     anyhow::ensure!(!worktrees.rows().is_empty(), "this repository has no worktrees");
     worktrees.drain_updates();
-    let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
-        crate::history::Authors::default(),
-    ));
     let mut graph = crate::history::HistoryGraph::default();
+    let mut opened = Vec::with_capacity(worktrees.rows().len());
+    let mut head_ids = Vec::new();
     for index in 0..worktrees.rows().len() {
         let path = worktrees.rows()[index].path.clone();
-        let result = gix::open(&path)
+        match gix::open(&path)
             .with_context(|| format!("could not open worktree {}", path.display()))
-            .and_then(|worktree| {
-                let refresh = graph.refresh(&worktree, &[], &hidden, false, &Default::default(), &authors)?;
-                graph_metadata(&worktree, &graph, &refresh.refs)
-            })
-            .map_err(|err| format!("{err:#}"));
+            .and_then(|repository| logical_head(&repository).map(|head| (repository, head)))
+        {
+            Ok((repository, head)) => {
+                if let Some(head_id) = head.commit_id
+                    && !head_ids.contains(&head_id)
+                {
+                    head_ids.push(head_id);
+                }
+                opened.push((index, repository, head));
+            }
+            Err(err) => worktrees.set_graph_metadata(index, Err(format!("{err:#}"))),
+        }
+    }
+    let revisions = head_ids
+        .iter()
+        .map(|id| OsString::from(id.to_hex().to_string()))
+        .collect::<Vec<_>>();
+    let hidden_tips = if revisions.is_empty() {
+        Vec::new()
+    } else {
+        graph.refresh_graph(repository, &revisions, &hidden)?.hidden_tips
+    };
+    for (index, repository, head) in opened {
+        let result = graph_metadata_for_head(&repository, &graph, &hidden_tips, head).map_err(|err| format!("{err:#}"));
         worktrees.set_graph_metadata(index, result);
     }
     worktrees.finish_workers()?;
@@ -1618,6 +1645,9 @@ mod tests {
         git(&topic, &["add", "topic"])?;
         git(&topic, &["commit", "-m", "topic"])?;
         std::fs::write(topic.join("untracked"), "dirty\n")?;
+        let broken_tag = repository.common_dir().join("refs/tags/broken");
+        std::fs::create_dir_all(broken_tag.parent().expect("the tag has a parent directory"))?;
+        std::fs::write(broken_tag, format!("{}\n", "f".repeat(40)))?;
 
         let repository = crate::test_repository::open(main)?;
         let mut output = Vec::new();
