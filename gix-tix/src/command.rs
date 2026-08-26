@@ -102,6 +102,18 @@ enum WorktrunkCommand {
         #[arg(long, value_name = "PATH", requires = "switch_target")]
         path: Option<PathBuf>,
     },
+    /// Remove a linked worktree and its associated branch when safe.
+    Remove {
+        /// Worktree path or unique trailing path; omit to remove the current linked worktree.
+        #[arg(value_name = "TARGET")]
+        target: Option<PathBuf>,
+        /// Discard changes; repeat to also override a worktree lock.
+        #[arg(short = 'f', action = clap::ArgAction::Count)]
+        force: u8,
+        /// Delete the associated branch even if it is not merged into the inferred default branch.
+        #[arg(short = 'D', long)]
+        force_delete: bool,
+    },
     /// Print the `wt` function for SHELL.
     ShellInit {
         #[arg(value_enum)]
@@ -296,6 +308,11 @@ impl Platform {
                             create_branch_if_missing,
                         )
                     }
+                    Some(WorktrunkCommand::Remove {
+                        target,
+                        force,
+                        force_delete,
+                    }) => crate::worktrunk::remove::run(repository, target, force, force_delete),
                     Some(WorktrunkCommand::ShellInit { shell }) => print_shell_init(shell, invocation),
                 };
             }
@@ -1405,6 +1422,34 @@ mod tests {
             "a creation path requires a local-branch target"
         );
 
+        let remove = Cli::try_parse_from(["tix", "wt", "remove"])
+            .expect("target-less worktree removal parses")
+            .platform;
+        assert!(matches!(
+            remove.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Remove {
+                    target: None,
+                    force: 0,
+                    force_delete: false,
+                })
+            })
+        ));
+
+        let remove = Cli::try_parse_from(["tix", "wt", "remove", "topic", "-ff", "-D"])
+            .expect("worktree removal options parse")
+            .platform;
+        assert!(matches!(
+            remove.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Remove {
+                    target: Some(target),
+                    force: 2,
+                    force_delete: true,
+                })
+            }) if target == std::path::Path::new("topic")
+        ));
+
         let shell_init = Cli::try_parse_from(["tix", "wt", "shell-init", "pwsh"])
             .expect("shell-init and shell aliases parse")
             .platform;
@@ -1754,6 +1799,7 @@ mod tests {
             &["rebase", "apply"],
             &["worktrunk"],
             &["worktrunk", "switch"],
+            &["worktrunk", "remove"],
             &["worktrunk", "shell-init"],
         ] {
             for help in ["-h", "--help"] {

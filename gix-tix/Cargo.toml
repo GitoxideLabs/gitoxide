@@ -18,7 +18,7 @@ required-features = ["sha1"]
 
 [features]
 ## Enable blocking network operations and their progress tree.
-blocking-network-client = ["gix/blocking-network-client", "gix/progress-tree"]
+blocking-network-client = ["gix/blocking-network-client"]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
 sha1 = ["gix/sha1"]
 ## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
@@ -29,7 +29,7 @@ anyhow = "1.0.98"
 clap = { version = "4.5.42", features = ["derive"] }
 crossterm = { version = "0.29.0", features = ["osc52"] }
 directories = "6.0.0"
-gix = { version = "^0.87.1", path = "../gix", default-features = false, features = ["blob-diff", "mailmap", "merge", "notes", "parallel", "revision", "command", "status", "worktree-mutation"] }
+gix = { version = "^0.87.1", path = "../gix", default-features = false, features = ["blob-diff", "mailmap", "merge", "notes", "parallel", "progress-tree", "revision", "command", "status", "worktree-mutation"] }
 notify = "8.2.0"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 terminal-colorsaurus = "1.0.3"
