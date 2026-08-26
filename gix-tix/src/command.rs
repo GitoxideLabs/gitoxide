@@ -340,7 +340,7 @@ impl Platform {
             Command::Show(args) => return show(&repository, args),
             Command::Worktrunk { command } => {
                 return match command {
-                    None => crate::worktrunk::run(repository.into_sync(), None, None, false),
+                    None => crate::worktrunk::run(repository.into_sync(), None, None, false, quit_on_finish),
                     Some(WorktrunkCommand::Show) => crate::worktrunk::show(&repository, std::io::stdout().lock()),
                     Some(WorktrunkCommand::Switch {
                         target,
@@ -353,6 +353,7 @@ impl Platform {
                             new_branch.or(target),
                             path,
                             create_branch_if_missing,
+                            quit_on_finish,
                         )
                     }
                     Some(WorktrunkCommand::Remove {
@@ -423,9 +424,20 @@ impl Platform {
 
     fn validate_command_options(&self) -> Result<()> {
         if self.command.is_some() {
+            let opens_worktree_picker = matches!(
+                self.command,
+                Some(Command::Worktrunk {
+                    command: None
+                        | Some(WorktrunkCommand::Switch {
+                            target: None,
+                            new_branch: None,
+                            path: None,
+                        }),
+                })
+            );
             anyhow::ensure!(
                 !self.no_alt_screen
-                    && self.quit_on_finish.is_none()
+                    && (self.quit_on_finish.is_none() || opens_worktree_picker)
                     && self.hide.is_empty()
                     && self.revisions.is_empty(),
                 "history-view options cannot be combined with a command; use `--` before a command-named revision"
@@ -1521,6 +1533,14 @@ mod tests {
         let alias = Cli::try_parse_from(["tix", "wt", "switch"])
             .expect("the visible alias and target-less switch open the picker")
             .platform;
+        assert!(
+            Cli::try_parse_from(["tix", "--quit-on-finish", "wt", "switch"])
+                .expect("worktree picker diagnostics parse")
+                .platform
+                .validate_command_options()
+                .is_ok(),
+            "quit-on-finish can exercise the worktree picker"
+        );
         assert!(matches!(
             alias.command,
             Some(Command::Worktrunk {
