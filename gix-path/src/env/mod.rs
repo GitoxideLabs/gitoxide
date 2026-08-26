@@ -181,16 +181,44 @@ pub fn core_dir() -> Option<&'static Path> {
 /// useful to invoke programs like `git-upload-pack` that are shipped with Git but aren't necessarily
 /// present in `PATH`.
 ///
+/// Use [`installation_program()`] to also search Git for Windows' wider installation for bundled
+/// programs such as `sh` and `vim`.
+///
 /// Note that installations differ in which programs they provide as separate executables - builds
 /// with `SKIP_DASHED_BUILT_INS`, like Git for Windows, omit programs for builtin subcommands, which
 /// can then still be run through `git` itself.
 pub fn core_dir_program(name: &str) -> Option<PathBuf> {
-    let mut components = Path::new(name).components();
-    if !matches!(components.next(), Some(std::path::Component::Normal(_))) || components.next().is_some() {
+    if !is_bare_program_name(name) {
         return None;
     }
     let path = core_dir()?.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
     path.is_file().then_some(path)
+}
+
+/// Return the path at which a program distributed with Git resides, or `None` if it cannot be found.
+///
+/// Unlike [`core_dir_program()`], which searches only [`core_dir()`], this also searches the `bin`
+/// and `usr/bin` directories of the Git for Windows installation on Windows. These contain programs
+/// such as `sh`, `vim`, and, in some versions, `vi`.
+///
+/// Only a bare program `name` without path separators is accepted.
+pub fn installation_program(name: &str) -> Option<PathBuf> {
+    if !is_bare_program_name(name) {
+        return None;
+    }
+
+    core_dir_program(name).or_else(|| {
+        if cfg!(windows) {
+            auxiliary::find_git_associated_windows_executable(name).map(|executable| executable.program.into())
+        } else {
+            None
+        }
+    })
+}
+
+fn is_bare_program_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_))) && components.next().is_none()
 }
 
 fn system_prefix_from_core_dir<F>(core_dir_func: F) -> Option<PathBuf>

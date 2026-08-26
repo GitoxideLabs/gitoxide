@@ -90,6 +90,11 @@ fn core_dir_program() {
             None,
             "program names with path components are rejected"
         );
+        assert_eq!(
+            gix_path::env::installation_program(name),
+            None,
+            "installation program names with path components are rejected"
+        );
     }
 
     #[cfg(windows)]
@@ -97,6 +102,29 @@ fn core_dir_program() {
         gix_path::env::core_dir_program(r"git\program"),
         None,
         "Windows path separators in program names are rejected"
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        gix_path::env::installation_program(r"git\program"),
+        None,
+        "Windows path separators in installation program names are rejected"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "Git's bundled bin directories are specific to Git for Windows"
+)]
+fn installation_program_finds_programs_outside_the_core_directory() {
+    let vim =
+        gix_path::env::installation_program("vim").expect("Git for Windows bundles vim outside its core directory");
+    assert!(vim.is_absolute(), "the bundled program path is absolute");
+    assert!(vim.is_file(), "the bundled program exists");
+    assert_ne!(
+        vim.parent(),
+        gix_path::env::core_dir(),
+        "vim is found in a bundled bin directory, not the Git core directory"
     );
 }
 
