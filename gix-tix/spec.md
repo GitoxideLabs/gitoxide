@@ -1299,7 +1299,10 @@ space first; changes blocks adapt within the remaining history width.
   `git push <remote> <branch>` for it. The remote follows
   Git's `branch.<name>.pushRemote`, `remote.pushDefault`, then
   `branch.<name>.remote` precedence, falling back to the sole remote, `origin`,
-  or the literal `origin` when none is configured.
+  or the literal `origin` when none is configured. If Git rejects the initial
+  push because it requires force, tix offers `<enter>` to retry once with
+  `git push --force-with-lease <remote> <branch>`; Escape cancels, and any
+  failure of the guarded retry is final.
 - In blocking-network builds, `a Shift-F` is available whenever a fetch remote
   can be resolved, including at a detached `HEAD` without a remembered branch.
   It runs a gix fetch using the active branch's fetch remote when available,
@@ -1316,8 +1319,9 @@ space first; changes blocks adapt within the remaining history width.
   and negotiation, 15–30% to remote enumeration, counting, and compression,
   30–75% to pack receipt and indexing, 75–90% to delta resolution, and 90–95%
   to index and ref finalization. Completion clears the slot and refreshes
-  references. Success uses a green message and failure a red one. Neither
-  network operation accepts terminal input or suspends the TUI.
+  references. Success uses a green message and failure a red one. Except for
+  the rejected-push retry prompt, neither network operation accepts terminal
+  input or suspends the TUI.
   Worktree removal maps validation to 0–5%, checkout scanning to 5%, checkout
   deletion to 10–85%, administration scanning to 85%, and administration
   deletion to 90–100%.
