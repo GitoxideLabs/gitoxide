@@ -18,7 +18,6 @@ mod travel;
 
 /// Arguments and commands shared by the standalone `tix` binary and `gix tix`.
 #[derive(Debug, clap::Args)]
-#[command(args_conflicts_with_subcommands = true)]
 pub struct Platform {
     /// Draw on the normal screen so panic output remains visible.
     #[arg(long)]
@@ -217,14 +216,22 @@ struct CopyInsert {
     about = "Browse or edit commit history",
     after_long_help = "Commands which open an editor use Git's normal editor selection. Set GIT_EDITOR=<command> to override it."
 )]
-struct Cli {
+pub struct Cli {
+    /// Display tracing output; repeat for more detail and a flat format.
+    #[arg(
+        short = 't',
+        long,
+        action = clap::ArgAction::Count,
+        value_parser = clap::value_parser!(u8).range(0..=4)
+    )]
+    trace: u8,
     #[command(flatten)]
     platform: Platform,
 }
 
 /// Parse the standalone `tix` command line.
-pub fn parse() -> Platform {
-    Cli::parse_from(gix::env::args_os()).platform
+pub fn parse() -> Cli {
+    Cli::parse_from(gix::env::args_os())
 }
 
 /// The executable through which the shared command was invoked.
@@ -256,6 +263,17 @@ impl Platform {
 
     /// Run a repository-free command.
     pub fn run_without_repository(self, invocation: Invocation) -> Result<()> {
+        self.run_without_repository_with_trace(invocation, 0)
+    }
+
+    /// Run a repository-free command with inherited tracing verbosity.
+    pub fn run_without_repository_with_trace(self, invocation: Invocation, trace: u8) -> Result<()> {
+        self.validate_command_options()?;
+        let _log_guard = crate::logging::init(trace)?;
+        self.run_without_repository_initialized(invocation)
+    }
+
+    fn run_without_repository_initialized(self, invocation: Invocation) -> Result<()> {
         match self.command {
             Some(Command::Worktrunk {
                 command: Some(WorktrunkCommand::ShellInit { shell }),
@@ -271,6 +289,32 @@ impl Platform {
 
     /// Run this command against `repository` using the given executable identity.
     pub fn run_as(self, repository: gix::ThreadSafeRepository, invocation: Invocation) -> Result<()> {
+        self.run_as_with_trace(repository, invocation, 0)
+    }
+
+    /// Run this command with inherited tracing verbosity.
+    pub fn run_as_with_trace(
+        self,
+        repository: gix::ThreadSafeRepository,
+        invocation: Invocation,
+        trace: u8,
+    ) -> Result<()> {
+        self.run_with_repository_as_with_trace(|| Ok(repository), invocation, trace)
+    }
+
+    /// Initialize tracing before obtaining and running against a repository.
+    pub fn run_with_repository_as_with_trace(
+        self,
+        repository: impl FnOnce() -> Result<gix::ThreadSafeRepository>,
+        invocation: Invocation,
+        trace: u8,
+    ) -> Result<()> {
+        self.validate_command_options()?;
+        let _log_guard = crate::logging::init(trace)?;
+        self.run_as_initialized(repository()?, invocation)
+    }
+
+    fn run_as_initialized(self, repository: gix::ThreadSafeRepository, invocation: Invocation) -> Result<()> {
         let Platform {
             no_alt_screen,
             quit_on_finish,
@@ -279,7 +323,7 @@ impl Platform {
             revisions,
         } = self;
         let Some(command) = command else {
-            return crate::run(
+            return crate::run_without_logging(
                 repository,
                 revisions,
                 crate::Options {
@@ -321,7 +365,6 @@ impl Platform {
             }
             command => command,
         };
-        let _log_guard = crate::logging::init();
         match command {
             Command::RefTree(_) | Command::Show(_) => unreachable!("display commands return before logging"),
             Command::Amend(args) => {
@@ -376,6 +419,39 @@ impl Platform {
             Command::Worktrunk { .. } => unreachable!("worktrunk returns before logging"),
         }
         Ok(())
+    }
+
+    fn validate_command_options(&self) -> Result<()> {
+        if self.command.is_some() {
+            anyhow::ensure!(
+                !self.no_alt_screen
+                    && self.quit_on_finish.is_none()
+                    && self.hide.is_empty()
+                    && self.revisions.is_empty(),
+                "history-view options cannot be combined with a command; use `--` before a command-named revision"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Cli {
+    /// Run the standalone command.
+    pub fn run(self) -> Result<()> {
+        if !self.platform.requires_repository() {
+            return self
+                .platform
+                .run_without_repository_with_trace(Invocation::Tix, self.trace);
+        }
+        self.platform.run_with_repository_as_with_trace(
+            || {
+                let current_dir = std::env::current_dir().context("could not determine current directory")?;
+                gix::ThreadSafeRepository::discover_with_environment_overrides(current_dir)
+                    .context("could not discover repository")
+            },
+            Invocation::Tix,
+            self.trace,
+        )
     }
 }
 
@@ -931,6 +1007,76 @@ mod tests {
     #[test]
     fn clap_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn standalone_trace_is_repeatable_but_bounded() {
+        for (argument, expected) in [("tix", 0), ("-t", 1), ("-tt", 2), ("-ttt", 3), ("-tttt", 4)] {
+            let arguments = if expected == 0 {
+                vec![argument]
+            } else {
+                vec!["tix", argument]
+            };
+            assert_eq!(
+                Cli::try_parse_from(arguments)
+                    .expect("supported trace level parses")
+                    .trace,
+                expected
+            );
+        }
+        assert_eq!(
+            Cli::try_parse_from(["tix", "--trace", "--trace"])
+                .expect("the long flag can be repeated")
+                .trace,
+            2
+        );
+        assert_eq!(
+            Cli::try_parse_from(["tix", "-ttttt"])
+                .expect_err("trace output has only four levels")
+                .kind(),
+            ErrorKind::ValueValidation
+        );
+        assert!(
+            {
+                let cli = Cli::try_parse_from(["tix", "-t", "amend"]).expect("trace can precede a command");
+                cli.platform.validate_command_options().is_ok()
+                    && matches!(cli.platform.command, Some(Command::Amend(_)))
+            },
+            "standalone-only flags do not turn command names into revisions"
+        );
+        for arguments in [
+            &["tix", "--no-alt-screen", "amend"][..],
+            &["tix", "-x", "main", "amend"][..],
+        ] {
+            let cli = Cli::try_parse_from(arguments).expect("the unsafe combination reaches validation");
+            assert!(
+                cli.platform.validate_command_options().is_err(),
+                "history-view options cannot silently turn a command-looking revision into a command"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_trace_is_initialized_before_repository_discovery() {
+        let mut discovered = false;
+        let err = Cli::try_parse_from(["tix"])
+            .expect("history view parses")
+            .platform
+            .run_with_repository_as_with_trace(
+                || {
+                    discovered = true;
+                    anyhow::bail!("repository discovery should not run")
+                },
+                Invocation::GixTix,
+                5,
+            )
+            .expect_err("an invalid programmatic trace level is rejected");
+
+        assert!(
+            err.to_string().contains("trace level must be between one and four"),
+            "the trace error is retained: {err:#}"
+        );
+        assert!(!discovered, "tracing is initialized before repository discovery");
     }
 
     #[test]

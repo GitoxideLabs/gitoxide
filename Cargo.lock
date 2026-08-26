@@ -2620,6 +2620,7 @@ dependencies = [
  "terminal-colorsaurus",
  "tracing",
  "tracing-appender",
+ "tracing-forest 0.1.6",
  "tracing-subscriber",
  "tui-markdown",
 ]
