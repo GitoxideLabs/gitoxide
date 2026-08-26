@@ -87,15 +87,47 @@ struct FillRepository {
 }
 
 struct BackgroundWorker {
-    receiver: mpsc::Receiver<Result<String>>,
-    #[cfg(feature = "blocking-network-client")]
-    fetch_progress: Option<FetchProgressSource>,
+    receiver: mpsc::Receiver<Result<BackgroundCompletion>>,
+    progress: Option<BackgroundProgressSource>,
+    kind: BackgroundTaskKind,
+    join: Option<std::thread::JoinHandle<()>>,
 }
 
-#[cfg(feature = "blocking-network-client")]
-struct FetchProgressSource {
+impl Drop for BackgroundWorker {
+    fn drop(&mut self) {
+        if let Some(worker) = self.join.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+struct BackgroundProgressSource {
     tree: Arc<gix::progress::tree::Root>,
     label: String,
+    kind: BackgroundProgressKind,
+}
+
+enum BackgroundProgressKind {
+    #[cfg(feature = "blocking-network-client")]
+    Fetch,
+    RemoveWorktree,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BackgroundTaskKind {
+    References,
+    RemoveWorktree,
+}
+
+impl BackgroundTaskKind {
+    fn blocks_exit(self) -> bool {
+        self == BackgroundTaskKind::RemoveWorktree
+    }
+}
+
+enum BackgroundCompletion {
+    Success(String),
+    Attention(String),
 }
 
 struct PendingConflictResolution {
@@ -1098,6 +1130,7 @@ enum WorktrunkInput {
     CancelSearch,
     FocusHistory,
     Refresh,
+    Remove(gix::worktree::remove::Force),
     Search(worktrunk::SearchInput),
     StartSearch,
     Select(usize),
@@ -1154,6 +1187,22 @@ fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> O
         KeyCode::Char('r' | 'R') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
             Some(WorktrunkInput::Refresh)
         }
+        KeyCode::Char('D')
+            if key.kind == KeyEventKind::Press
+                && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(WorktrunkInput::Remove(gix::worktree::remove::Force::DiscardChanges))
+        }
+        KeyCode::Char('d')
+            if key.kind == KeyEventKind::Press
+                && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(WorktrunkInput::Remove(if key.modifiers.contains(KeyModifiers::SHIFT) {
+                gix::worktree::remove::Force::DiscardChanges
+            } else {
+                gix::worktree::remove::Force::Never
+            }))
+        }
         KeyCode::Up => select(selected.saturating_sub(1)),
         KeyCode::Char('k' | 'K') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
             select(selected.saturating_sub(1))
@@ -1172,6 +1221,35 @@ fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> O
         }
         _ => None,
     }
+}
+
+fn confirm_worktree_removal(
+    armed: &mut Option<(PathBuf, gix::worktree::remove::Force)>,
+    path: &Path,
+    force: gix::worktree::remove::Force,
+) -> bool {
+    if armed
+        .as_ref()
+        .is_some_and(|(candidate, candidate_force)| candidate == path && *candidate_force == force)
+    {
+        *armed = None;
+        true
+    } else {
+        *armed = Some((path.to_owned(), force));
+        false
+    }
+}
+
+fn disarms_worktree_removal(input: Option<&WorktrunkInput>, event: &TerminalEvent) -> bool {
+    match input {
+        Some(WorktrunkInput::Remove(_)) => false,
+        Some(_) => true,
+        None => matches!(event, TerminalEvent::Key(key) if key.kind != KeyEventKind::Release),
+    }
+}
+
+fn worktrunk_refresh_blocked(switching_blocked: bool, refresh_running: bool, lanes_running: bool) -> bool {
+    switching_blocked || refresh_running || lanes_running
 }
 
 fn request_worktree_preview(selected: Option<usize>, requested: &mut Option<usize>, queue: &mut VecDeque<usize>) {
@@ -1360,6 +1438,7 @@ fn event_loop(
     let mut requested_worktree_preview = None;
     let mut active_worktree_preview = preview_mode.then_some(0);
     let mut pending_worktree_activation = None;
+    let mut armed_worktree_removal = None;
     let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
     let mut pending_conflict_clear_undo_on_accept = false;
     let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
@@ -1721,31 +1800,58 @@ fn event_loop(
                 }
             }
         }
-        #[cfg(feature = "blocking-network-client")]
         if let Some(progress) = background_task
             .as_ref()
-            .and_then(|worker| worker.fetch_progress.as_ref())
-            .map(fetch_progress_snapshot)
+            .and_then(|worker| worker.progress.as_ref())
+            .map(background_progress_snapshot)
             && app.update_background_progress(progress.text, progress.completed, progress.total)
         {
             dirty = true;
         }
-        if let Some(result) = background_task.as_ref().map(|worker| worker.receiver.try_recv()) {
-            match result {
-                Ok(result) => {
-                    background_task = None;
-                    refresh_pending |= report_background_task(&mut app, result);
-                    dirty = true;
-                    urgent = true;
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    background_task = None;
-                    report_background_task(&mut app, Err(anyhow::anyhow!("background task stopped unexpectedly")));
-                    dirty = true;
-                    urgent = true;
+        let background_completion = background_task
+            .as_ref()
+            .and_then(|worker| match worker.receiver.try_recv() {
+                Ok(result) => Some((worker.kind, result)),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some((
+                    worker.kind,
+                    Err(anyhow::anyhow!("background task stopped unexpectedly")),
+                )),
+            });
+        if let Some((kind, result)) = background_completion {
+            background_task = None;
+            let succeeded = report_background_task(&mut app, result);
+            match kind {
+                BackgroundTaskKind::References => refresh_pending |= succeeded,
+                BackgroundTaskKind::RemoveWorktree => {
+                    let reinventory = recover_common_repository(&common_dir)
+                        .context("could not reopen the common repository after removing a worktree")
+                        .and_then(|repository| {
+                            picker
+                                .as_deref_mut()
+                                .context("worktree removal requires the picker")?
+                                .reinventory_after_removal(&repository)
+                        });
+                    match reinventory {
+                        Ok(_) => {
+                            let picker = picker.as_deref_mut().expect("worktree removal has a picker");
+                            worktree_previews = std::iter::repeat_with(|| None).take(picker.rows().len()).collect();
+                            worktree_preview_queue = (0..picker.rows().len()).collect();
+                            requested_worktree_preview = None;
+                            active_worktree_preview = None;
+                            pending_worktree_activation = None;
+                            request_worktree_preview(
+                                picker.selected_index(),
+                                &mut requested_worktree_preview,
+                                &mut worktree_preview_queue,
+                            );
+                        }
+                        Err(err) => app.leave_error(format!("worktree inventory: {err:#}")),
+                    }
                 }
             }
+            dirty = true;
+            urgent = true;
         }
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
@@ -2033,6 +2139,9 @@ fn event_loop(
         if preview_mode
             && refresh_receiver.is_none()
             && lane_receiver.is_none()
+            && !background_task
+                .as_ref()
+                .is_some_and(|worker| worker.kind == BackgroundTaskKind::RemoveWorktree)
             && history_graph.is_some()
             && matches!(app.state, State::Complete | State::Cancelled)
         {
@@ -2396,6 +2505,17 @@ fn event_loop(
                     continue;
                 }
             };
+            let disarm_only = armed_worktree_removal.is_some()
+                && matches!(input.as_ref(), Some(WorktrunkInput::Cancel { force: false }))
+                && matches!(&terminal_event, TerminalEvent::Key(KeyEvent { code: KeyCode::Esc, .. }));
+            let disarmed_removal =
+                armed_worktree_removal.is_some() && disarms_worktree_removal(input.as_ref(), &terminal_event);
+            if disarmed_removal {
+                armed_worktree_removal = None;
+                app.clear_notice();
+                dirty = true;
+                urgent = true;
+            }
             if let Some(input) = input {
                 let switching_blocked = background_task.is_some()
                     || pending_rebase_conflict.is_some()
@@ -2405,6 +2525,12 @@ fn event_loop(
                     || app.has_rebase_conflict();
                 let picker = picker.as_deref_mut().expect("picker presence was checked");
                 match input {
+                    WorktrunkInput::Cancel { .. }
+                        if background_task.as_ref().is_some_and(|worker| worker.kind.blocks_exit()) =>
+                    {
+                        app.leave_attention("worktree removal is still running; wait for it to finish");
+                    }
+                    WorktrunkInput::Cancel { force: false } if disarm_only => {}
                     WorktrunkInput::Cancel { force } if force || background_task.is_none() => {
                         cancelled.store(true, Ordering::Relaxed);
                         return Ok(EventLoopExit::Quit(None));
@@ -2427,8 +2553,14 @@ fn event_loop(
                         app.leave_attention("wait for the selected worktree preview to finish loading");
                     }
                     WorktrunkInput::FocusHistory => *picker_focused = false,
-                    WorktrunkInput::Refresh if refresh_receiver.is_some() || lane_receiver.is_some() => {
-                        app.leave_attention("wait for the current worktree preview to finish loading");
+                    WorktrunkInput::Refresh
+                        if worktrunk_refresh_blocked(
+                            switching_blocked,
+                            refresh_receiver.is_some(),
+                            lane_receiver.is_some(),
+                        ) =>
+                    {
+                        app.leave_attention("wait for the current task to finish before refreshing worktrees");
                     }
                     WorktrunkInput::Refresh => {
                         picker.refresh();
@@ -2441,6 +2573,70 @@ fn event_loop(
                             &mut requested_worktree_preview,
                             &mut worktree_preview_queue,
                         );
+                    }
+                    WorktrunkInput::Remove(_) if switching_blocked => {
+                        app.leave_attention("finish the background task or conflict before removing a worktree");
+                    }
+                    WorktrunkInput::Remove(_)
+                        if picker.preview_pending() || refresh_receiver.is_some() || lane_receiver.is_some() =>
+                    {
+                        app.leave_attention("wait for the selected worktree preview to finish loading");
+                    }
+                    WorktrunkInput::Remove(force) => {
+                        let row = picker.selected().context("worktree selection disappeared")?;
+                        if let Some(message) = row.removal_blocker() {
+                            app.leave_attention(message);
+                        } else {
+                            let path = row.path.clone();
+                            let label = row.label.clone();
+                            if !confirm_worktree_removal(&mut armed_worktree_removal, &path, force) {
+                                app.leave_attention(match force {
+                                    gix::worktree::remove::Force::Never => {
+                                        format!("press d again to remove {label}")
+                                    }
+                                    gix::worktree::remove::Force::DiscardChanges => {
+                                        format!("press D again to remove {label} and discard changes")
+                                    }
+                                    gix::worktree::remove::Force::OverrideLock => {
+                                        unreachable!("the picker never overrides worktree locks")
+                                    }
+                                });
+                            } else {
+                                picker.suspend_workers_for_removal();
+                                let common_repository = recover_common_repository(&common_dir)
+                                    .context("could not leave the worktree before removing it")?;
+                                mailmap = common_repository.open_mailmap();
+                                repository_path.clone_from(&common_dir);
+                                repository_is_bare = true;
+                                fill_repository.path.clone_from(&common_dir);
+                                fill_repository.bare = true;
+                                fill_repository.retain = false;
+                                fill_repository.retained = None;
+                                line_diff_pool = None;
+                                worktree_changes = None;
+                                cached_status_head = None;
+                                worktree_status_parts = WorktreeStatusParts::default();
+                                app.set_worktree_changes_available(false);
+                                app.set_worktree_head_unborn(false);
+                                app.set_worktree_head(None, false);
+                                app.set_worktree_branch(None);
+                                app.set_active_branch(None);
+                                #[cfg(feature = "blocking-network-client")]
+                                app.set_fetch_remote(
+                                    common_repository.remote_default_name(gix::remote::Direction::Fetch),
+                                );
+                                drop(common_repository);
+                                picker.begin_preview();
+                                requested_worktree_preview = None;
+                                worktree_preview_queue.clear();
+                                active_worktree_preview = None;
+                                filesystem_responses.cancel_pending_worktree("worktree-removal");
+                                app.clear_notice();
+                                app.start_background_task_with_progress(format!("removing {label}…"));
+                                background_task =
+                                    Some(start_remove_worktree_worker(common_dir.clone(), path, label, force));
+                            }
+                        }
                     }
                     WorktrunkInput::Search(input) => {
                         picker.edit_search(input);
@@ -2700,6 +2896,14 @@ fn event_loop(
                             }
                             Err(err) => ref_tree.leave_error(format!("delete on remote: {err:#}")),
                         }
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
+                    ref_tree::Input::Quit
+                        if background_task.as_ref().is_some_and(|worker| worker.kind.blocks_exit()) =>
+                    {
+                        ref_tree.leave_attention("worktree removal is still running; wait for it to finish");
                         dirty = true;
                         urgent = true;
                         continue;
@@ -4579,6 +4783,9 @@ fn event_loop(
                         ids,
                     ));
                 }
+                Effect::Quit if background_task.as_ref().is_some_and(|worker| worker.kind.blocks_exit()) => {
+                    app.leave_attention("worktree removal is still running; wait for it to finish");
+                }
                 Effect::Quit if force_quit => return Ok(EventLoopExit::Quit(None)),
                 Effect::Quit => {
                     if let Some(conflict) = pending_rebase_conflict.take() {
@@ -4636,12 +4843,14 @@ fn start_lane_worker(rows: app::LaneInput) -> mpsc::Receiver<(Vec<SharedCommitRo
 fn start_push_worker(repository_path: PathBuf, remote: BString, branch: BString) -> BackgroundWorker {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(push_branch(&repository_path, remote.as_bstr(), branch.as_bstr()));
+        let _ = sender
+            .send(push_branch(&repository_path, remote.as_bstr(), branch.as_bstr()).map(BackgroundCompletion::Success));
     });
     BackgroundWorker {
         receiver,
-        #[cfg(feature = "blocking-network-client")]
-        fetch_progress: None,
+        progress: None,
+        kind: BackgroundTaskKind::References,
+        join: None,
     }
 }
 
@@ -4652,11 +4861,87 @@ fn start_fetch_worker(repository_path: PathBuf, bare: bool, remote: BString) -> 
     let worker_tree = Arc::clone(&tree);
     let label = format!("fetching {remote}");
     std::thread::spawn(move || {
-        let _ = sender.send(fetch_remote(&repository_path, bare, remote.as_bstr(), worker_tree));
+        let _ = sender.send(
+            fetch_remote(&repository_path, bare, remote.as_bstr(), worker_tree).map(BackgroundCompletion::Success),
+        );
     });
     BackgroundWorker {
         receiver,
-        fetch_progress: Some(FetchProgressSource { tree, label }),
+        progress: Some(BackgroundProgressSource {
+            tree,
+            label,
+            kind: BackgroundProgressKind::Fetch,
+        }),
+        kind: BackgroundTaskKind::References,
+        join: None,
+    }
+}
+
+fn start_remove_worktree_worker(
+    common_dir: PathBuf,
+    target: PathBuf,
+    label: String,
+    force: gix::worktree::remove::Force,
+) -> BackgroundWorker {
+    let (sender, receiver) = mpsc::channel();
+    let tree = gix::progress::tree::Root::new();
+    let worker_tree = Arc::clone(&tree);
+    let progress_label = format!("removing {label}");
+    let join = std::thread::spawn(move || {
+        let _ = sender.send(remove_worktree(&common_dir, &target, &label, force, worker_tree));
+    });
+    BackgroundWorker {
+        receiver,
+        progress: Some(BackgroundProgressSource {
+            tree,
+            label: progress_label,
+            kind: BackgroundProgressKind::RemoveWorktree,
+        }),
+        kind: BackgroundTaskKind::RemoveWorktree,
+        join: Some(join),
+    }
+}
+
+fn remove_worktree(
+    common_dir: &Path,
+    target: &Path,
+    label: &str,
+    force: gix::worktree::remove::Force,
+    progress: Arc<gix::progress::tree::Root>,
+) -> Result<BackgroundCompletion> {
+    let mut repository = open_repository(common_dir, true, false).context("could not open the common repository")?;
+    let progress = progress.add_child("worktree removal");
+    let target = repository
+        .prepare_remove_worktree(target)
+        .with_context(|| format!("could not resolve worktree {label}"))?;
+    let branch_cleanup = target
+        .repository()
+        .context("could not open the worktree to inspect its branch")
+        .and_then(|worktree| worktrunk::remove::branch_cleanup_for_repository(&worktree, false));
+    target
+        .remove(force, progress)
+        .with_context(|| format!("could not remove worktree {label}"))?;
+    let (branch, expected) = match branch_cleanup {
+        Ok(Some(cleanup)) => cleanup,
+        Ok(None) => return Ok(BackgroundCompletion::Success(format!("removed worktree {label}"))),
+        Err(err) => {
+            return Ok(BackgroundCompletion::Attention(format!(
+                "removed worktree {label}; branch cleanup was skipped: {err:#}"
+            )));
+        }
+    };
+    match worktrunk::remove::delete_branch(&mut repository, (branch, expected)) {
+        worktrunk::remove::BranchCleanupOutcome::Deleted(branch) => Ok(BackgroundCompletion::Success(format!(
+            "removed worktree {label} and branch {branch}"
+        ))),
+        worktrunk::remove::BranchCleanupOutcome::DeletedWithWarning { branch, warning } => {
+            Ok(BackgroundCompletion::Attention(format!(
+                "removed worktree {label} and branch {branch}; branch configuration cleanup failed: {warning}"
+            )))
+        }
+        worktrunk::remove::BranchCleanupOutcome::Retained { branch, reason } => Ok(BackgroundCompletion::Attention(
+            format!("removed worktree {label}; kept branch {branch}: {reason}"),
+        )),
     }
 }
 
@@ -4731,11 +5016,15 @@ fn push_branch(repository_path: &Path, remote: &BStr, branch: &BStr) -> Result<S
     Ok(format!("pushed {branch} to {remote}"))
 }
 
-fn report_background_task(app: &mut App, result: Result<String>) -> bool {
+fn report_background_task(app: &mut App, result: Result<BackgroundCompletion>) -> bool {
     app.finish_background_task();
     match result {
-        Ok(message) => {
+        Ok(BackgroundCompletion::Success(message)) => {
             app.leave_success(message);
+            true
+        }
+        Ok(BackgroundCompletion::Attention(message)) => {
+            app.leave_attention(message);
             true
         }
         Err(err) => {
@@ -5517,8 +5806,16 @@ fn push_remote_name(repository: &gix::Repository, branch: &BStr) -> BString {
         .unwrap_or_else(|| "origin".into())
 }
 
+fn background_progress_snapshot(source: &BackgroundProgressSource) -> app::BackgroundProgress {
+    match source.kind {
+        #[cfg(feature = "blocking-network-client")]
+        BackgroundProgressKind::Fetch => fetch_progress_snapshot(source),
+        BackgroundProgressKind::RemoveWorktree => remove_worktree_progress_snapshot(source),
+    }
+}
+
 #[cfg(feature = "blocking-network-client")]
-fn fetch_progress_snapshot(source: &FetchProgressSource) -> app::BackgroundProgress {
+fn fetch_progress_snapshot(source: &BackgroundProgressSource) -> app::BackgroundProgress {
     let mut tasks = Vec::new();
     source.tree.sorted_snapshot(&mut tasks);
     let mut completed = 0;
@@ -5568,6 +5865,51 @@ fn fetch_progress_snapshot(source: &FetchProgressSource) -> app::BackgroundProgr
             30
         } else {
             continue;
+        };
+        if mapped >= completed {
+            completed = mapped;
+            detail = if let Some(total) = task.progress.as_ref().and_then(|progress| progress.done_at) {
+                format!("{} {}/{total}", task.name, step.min(total))
+            } else if step > 0 {
+                format!("{} {step}", task.name)
+            } else {
+                task.name
+            };
+        }
+    }
+    app::BackgroundProgress {
+        text: format!("{}: {detail}", source.label),
+        completed,
+        total: 100,
+    }
+}
+
+fn remove_worktree_progress_snapshot(source: &BackgroundProgressSource) -> app::BackgroundProgress {
+    let mut tasks = Vec::new();
+    source.tree.sorted_snapshot(&mut tasks);
+    let mut completed = 0;
+    let mut detail = "validate".to_owned();
+    for (_, task) in tasks {
+        let step = task
+            .progress
+            .as_ref()
+            .map_or(0, |progress| progress.step.load(Ordering::Relaxed));
+        let within = |start: usize, end: usize| {
+            let Some(total) = task.progress.as_ref().and_then(|progress| progress.done_at) else {
+                return start;
+            };
+            start
+                + ((end - start) as u128 * step.min(total) as u128)
+                    .checked_div(total as u128)
+                    .unwrap_or((end - start) as u128) as usize
+        };
+        let mapped = match task.name.to_ascii_lowercase().as_str() {
+            "validate" => within(0, 5),
+            "scan worktree" => 5,
+            "remove worktree" => within(10, 85),
+            "scan administration" => 85,
+            "remove administration" => within(90, 100),
+            _ => continue,
         };
         if mapped >= completed {
             completed = mapped;
@@ -8478,6 +8820,24 @@ mod tests {
             worktrunk_input(key(KeyCode::Char('/')), 1, 4, 2),
             Some(WorktrunkInput::StartSearch)
         );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Char('d')), 1, 4, 2),
+            Some(WorktrunkInput::Remove(gix::worktree::remove::Force::Never))
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Char('D')), 1, 4, 2),
+            Some(WorktrunkInput::Remove(gix::worktree::remove::Force::DiscardChanges))
+        );
+        assert_eq!(
+            worktrunk_input(
+                KeyEvent::new_with_kind(KeyCode::Char('d'), KeyModifiers::NONE, KeyEventKind::Repeat),
+                1,
+                4,
+                2,
+            ),
+            None,
+            "holding d cannot confirm a destructive action"
+        );
         let search_cases = [
             (
                 key(KeyCode::Char('j')),
@@ -8501,6 +8861,61 @@ mod tests {
             None,
             "a repeated opener does not leak into the search query"
         );
+    }
+
+    #[test]
+    fn worktrunk_removal_requires_the_same_path_and_force_twice() {
+        let path = Path::new("/worktrees/topic");
+        let mut armed = None;
+        assert!(!confirm_worktree_removal(
+            &mut armed,
+            path,
+            gix::worktree::remove::Force::Never
+        ));
+        assert!(!confirm_worktree_removal(
+            &mut armed,
+            path,
+            gix::worktree::remove::Force::DiscardChanges
+        ));
+        assert!(confirm_worktree_removal(
+            &mut armed,
+            path,
+            gix::worktree::remove::Force::DiscardChanges
+        ));
+        assert!(armed.is_none(), "confirmation consumes the armed removal");
+
+        let removal = WorktrunkInput::Remove(gix::worktree::remove::Force::Never);
+        assert!(!disarms_worktree_removal(
+            Some(&removal),
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+        ));
+        assert!(disarms_worktree_removal(
+            Some(&WorktrunkInput::Select(1)),
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))
+        ));
+        assert!(disarms_worktree_removal(
+            None,
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+        ));
+        assert!(
+            !disarms_worktree_removal(
+                None,
+                &TerminalEvent::Key(KeyEvent::new_with_kind(
+                    KeyCode::Char('x'),
+                    KeyModifiers::NONE,
+                    KeyEventKind::Release,
+                ))
+            ),
+            "release events do not cancel an armed command"
+        );
+    }
+
+    #[test]
+    fn worktrunk_refresh_waits_for_background_tasks_and_preview_workers() {
+        assert!(worktrunk_refresh_blocked(true, false, false));
+        assert!(worktrunk_refresh_blocked(false, true, false));
+        assert!(worktrunk_refresh_blocked(false, false, true));
+        assert!(!worktrunk_refresh_blocked(false, false, false));
     }
 
     #[test]
@@ -9106,9 +9521,10 @@ mod tests {
     #[test]
     fn fetch_progress_maps_real_tasks_into_monotonic_phases() {
         let tree = gix::progress::tree::Root::new();
-        let source = FetchProgressSource {
+        let source = BackgroundProgressSource {
             tree: Arc::clone(&tree),
             label: "fetching origin".into(),
+            kind: BackgroundProgressKind::Fetch,
         };
         let mut phase = tree.add_child_with_id("connect/auth", *b"TIXF");
         phase.init(Some(100), gix::progress::steps());
@@ -9142,12 +9558,59 @@ mod tests {
     }
 
     #[test]
+    fn worktree_removal_progress_maps_stable_phases() {
+        let tree = gix::progress::tree::Root::new();
+        let source = BackgroundProgressSource {
+            tree: Arc::clone(&tree),
+            label: "removing topic".into(),
+            kind: BackgroundProgressKind::RemoveWorktree,
+        };
+        let validate = tree.add_child("validate");
+        validate.init(Some(1), gix::progress::count("worktree"));
+        validate.set(1);
+        let mut values = vec![remove_worktree_progress_snapshot(&source).completed];
+        let scan = tree.add_child("scan worktree");
+        scan.init(None, gix::progress::count("entries"));
+        scan.set(30);
+        values.push(remove_worktree_progress_snapshot(&source).completed);
+        let remove = tree.add_child("remove worktree");
+        remove.init(Some(100), gix::progress::count("entries"));
+        remove.set(50);
+        values.push(remove_worktree_progress_snapshot(&source).completed);
+        let scan_admin = tree.add_child("scan administration");
+        scan_admin.init(None, gix::progress::count("entries"));
+        values.push(remove_worktree_progress_snapshot(&source).completed);
+        let remove_admin = tree.add_child("remove administration");
+        remove_admin.init(Some(10), gix::progress::count("entries"));
+        remove_admin.set(10);
+        values.push(remove_worktree_progress_snapshot(&source).completed);
+
+        assert_eq!(values, [5, 5, 47, 85, 100]);
+    }
+
+    #[test]
+    fn only_worktree_removal_blocks_forced_exit() {
+        assert!(BackgroundTaskKind::RemoveWorktree.blocks_exit());
+        assert!(!BackgroundTaskKind::References.blocks_exit());
+    }
+
+    #[test]
     fn background_task_results_set_notice_severity_and_release_the_slot() {
         let mut app = App::new(1);
         app.start_background_task("running");
-        assert!(report_background_task(&mut app, Ok("done".into())));
+        assert!(report_background_task(
+            &mut app,
+            Ok(BackgroundCompletion::Success("done".into()))
+        ));
         assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Success));
         assert!(app.background_task().is_none());
+
+        app.start_background_task("running");
+        assert!(report_background_task(
+            &mut app,
+            Ok(BackgroundCompletion::Attention("partly done".into()))
+        ));
+        assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Attention));
 
         app.start_background_task("running");
         assert!(!report_background_task(&mut app, Err(anyhow::anyhow!("failed"))));

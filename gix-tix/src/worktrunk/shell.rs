@@ -56,7 +56,7 @@ pub(crate) fn generate(shell: Shell, backend: Backend) -> String {
 
 const POSIX: &str = r#"# tix worktrunk shell integration
 wt() {
-    local cd_file fullscreen_file exit_code=0 open_tix=false target
+    local cd_file cd_exit fullscreen_file exit_code=0 open_tix=false target
     cd_file="$(mktemp)" || return $?
     fullscreen_file="$(mktemp)" || {
         exit_code=$?
@@ -67,7 +67,7 @@ wt() {
     TIX_WORKTRUNK_CD_FILE="$cd_file" TIX_WORKTRUNK_FULLSCREEN_FILE="$fullscreen_file" \
         command @WORKTRUNK@ "$@" || exit_code=$?
 
-    if [[ $exit_code -eq 0 && -s "$cd_file" ]]; then
+    if [[ -s "$cd_file" ]]; then
         target="$(command cat "$cd_file"; printf x)"
         target="${target%x}"
     fi
@@ -76,8 +76,11 @@ wt() {
     fi
     command rm -f "$cd_file" "$fullscreen_file"
 
-    if [[ $exit_code -eq 0 && -n "$target" ]]; then
-        builtin cd -- "$target" || exit_code=$?
+    if [[ -n "$target" ]]; then
+        builtin cd -- "$target" || {
+            cd_exit=$?
+            [[ $exit_code -ne 0 ]] || exit_code=$cd_exit
+        }
     fi
     if [[ $exit_code -eq 0 && $open_tix == true ]]; then
         command @TIX@ || exit_code=$?
@@ -102,7 +105,7 @@ function wt
     set -l target
     set -l open_tix false
 
-    if test $exit_code -eq 0; and test -s "$cd_file"
+    if test -s "$cd_file"
         set target (string collect -N < "$cd_file")
     end
     if test $exit_code -eq 0; and test -s "$fullscreen_file"
@@ -110,9 +113,12 @@ function wt
     end
     command rm -f "$cd_file" "$fullscreen_file"
 
-    if test $exit_code -eq 0; and test -n "$target"
+    if test -n "$target"
         builtin cd -- "$target"
-        set exit_code $status
+        set -l cd_exit $status
+        if test $exit_code -eq 0
+            set exit_code $cd_exit
+        end
     end
     if test $exit_code -eq 0; and test "$open_tix" = true
         command @TIX@
@@ -139,7 +145,7 @@ export def --env --wrapped wt [...args] {
         $env.LAST_EXIT_CODE? | default 1
     })
 
-    let target = if $exit_code == 0 and ($cd_file | path exists) and (($cd_file | path type) == "file") {
+    let target = if ($cd_file | path exists) and (($cd_file | path type) == "file") {
         open $cd_file --raw | decode utf-8
     } else {
         ""
@@ -152,15 +158,15 @@ export def --env --wrapped wt [...args] {
         try { ^rm -rf $handoff_dir }
     }
 
+    if ($target | is-not-empty) {
+        cd $target
+    }
     if $exit_code != 0 {
         if $nu.os-info.family == "windows" {
             ^cmd.exe /c $"exit ($exit_code)"
         } else {
             ^sh -c $"exit ($exit_code)"
         }
-    }
-    if ($target | is-not-empty) {
-        cd $target
     }
     if $open_tix {
         ^@TIX@
@@ -203,7 +209,7 @@ function wt {
     $target = $null
     $openTix = $false
     try {
-        if ($exitCode -eq 0 -and (Test-Path -LiteralPath $cdFile) -and (Get-Item -LiteralPath $cdFile).Length -gt 0) {
+        if ((Test-Path -LiteralPath $cdFile) -and (Get-Item -LiteralPath $cdFile).Length -gt 0) {
             $target = Get-Content -LiteralPath $cdFile -Raw -Encoding UTF8
         }
         if ($exitCode -eq 0 -and (Test-Path -LiteralPath $fullscreenFile) -and (Get-Item -LiteralPath $fullscreenFile).Length -gt 0) {
@@ -214,9 +220,9 @@ function wt {
         Remove-Item -LiteralPath $handoffDir -Recurse -ErrorAction SilentlyContinue
     }
 
-    if ($exitCode -eq 0 -and $target) {
+    if ($target) {
         Set-Location -LiteralPath $target
-        if (-not $?) { $exitCode = 1 }
+        if (-not $? -and $exitCode -eq 0) { $exitCode = 1 }
     }
     if ($exitCode -eq 0 -and $openTix) {
         & @TIX@
@@ -290,5 +296,27 @@ mod tests {
                 && powershell.contains("$env:TIX_WORKTRUNK_FULLSCREEN_FILE = $oldFullscreenFile.Value"),
             "PowerShell restores inherited handoff variables"
         );
+    }
+
+    #[test]
+    fn wrappers_honor_a_directory_handoff_after_command_failure() {
+        let posix = generate(Shell::Bash, Backend::Tix);
+        assert!(posix.contains("if [[ -s \"$cd_file\" ]]"));
+        assert!(posix.contains("if [[ -n \"$target\" ]]"));
+
+        let fish = generate(Shell::Fish, Backend::Tix);
+        assert!(fish.contains("if test -s \"$cd_file\""));
+        assert!(fish.contains("if test -n \"$target\""));
+
+        let nushell = generate(Shell::Nushell, Backend::Tix);
+        assert!(!nushell.contains("if $exit_code == 0 and ($cd_file | path exists)"));
+        assert!(
+            nushell.find("cd $target").expect("Nushell changes directory")
+                < nushell.find("if $exit_code != 0").expect("Nushell restores failure")
+        );
+
+        let powershell = generate(Shell::PowerShell, Backend::Tix);
+        assert!(!powershell.contains("if ($exitCode -eq 0 -and (Test-Path -LiteralPath $cdFile)"));
+        assert!(powershell.contains("if ($target)"));
     }
 }
