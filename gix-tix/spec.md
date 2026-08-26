@@ -96,7 +96,9 @@ without trading responsiveness for metadata that is not visible.
   history view without opening a terminal UI. Tips default to `HEAD`, and
   applicable pins participate exactly as they do in the history view. Output
   uses the history view's graph lanes and default metadata, without colors,
-  selection, clipping, or a footer. Each visible root replaces its ordinary row
+  selection, clipping, or a footer. The current `HEAD` uses the history view's
+  `@` node even when detached; a base separator places it after `base`. Each visible
+  root replaces its ordinary row
   with a centered `──── base <metadata> ────` separator; distinct roots therefore
   delineate their trees while retaining the commit's markers and metadata. Each
   seven-character commit hash is followed by its seven-character reverse-hex

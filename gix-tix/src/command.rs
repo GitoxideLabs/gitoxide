@@ -610,6 +610,7 @@ fn write_history(
 
     let mailmap = repository.open_mailmap();
     let lanes = app.render_lanes(0..app.rows.len());
+    let head = crate::decoration_head(&decorations);
     let enrichment_gutter = app
         .rows
         .iter()
@@ -625,6 +626,7 @@ fn write_history(
         .unwrap_or_default();
     let ambiguity_gutter = (!change_ids.ambiguous.is_empty()).then(|| Line::raw("💥").width());
     let render_line = |index: usize, row: &crate::app::SharedCommitRow| {
+        let is_head = head == Some(row.id);
         let metadata = crate::ui::plain_history_metadata(
             &app,
             row,
@@ -656,9 +658,15 @@ fn write_history(
             .hidden_branch_behind(row.id)
             .map(|behind| format!(" ⇣{behind}"))
             .unwrap_or_default();
-        let line = format!("{gutter}{}{metadata}{behind}", lanes.lane(index));
-        let base = (app.visual_count(index) == Some(0))
-            .then(|| format!("base {enrichment_marker}{ambiguity_marker}{metadata}{behind}"));
+        let lane = lanes.lane(index);
+        let marked_lane = is_head.then(|| lane.replacen(['●', '◆'], "@", 1));
+        let line = format!("{gutter}{}{metadata}{behind}", marked_lane.as_deref().unwrap_or(lane));
+        let base = (app.visual_count(index) == Some(0)).then(|| {
+            format!(
+                "base {}{enrichment_marker}{ambiguity_marker}{metadata}{behind}",
+                if is_head { "@ " } else { "" }
+            )
+        });
         (line, base)
     };
     let width = app
@@ -2377,6 +2385,66 @@ mod tests {
             "the hidden boundary row is included"
         );
         assert!(!output.contains('\u{1b}'), "plain output contains no terminal escapes");
+        Ok(())
+    }
+
+    #[test]
+    fn show_marks_attached_and_detached_head() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let head = repository.head_id()?.detach();
+        let short_head = head.to_hex_with_len(7).to_string();
+        let render = |repository: &gix::Repository, hidden: &str| -> gix_testtools::Result<String> {
+            let mut output = Vec::new();
+            write_history(repository, &[], &[OsString::from(hidden)], &mut output)?;
+            Ok(String::from_utf8(output)?)
+        };
+
+        let attached = render(&repository, "v1")?;
+        let attached_line = attached
+            .lines()
+            .find(|line| line.contains(&short_head))
+            .context("attached HEAD is shown")?;
+        let attached_graph = attached_line
+            .split_once(&short_head)
+            .context("attached HEAD has graph output")?
+            .0;
+        assert!(
+            attached_graph.contains('@'),
+            "attached HEAD has a direct marker: {attached_line:?}"
+        );
+        assert!(
+            attached_line.contains("@main"),
+            "the checked-out branch label remains: {attached_line:?}"
+        );
+
+        let status = ProcessCommand::new("git")
+            .current_dir(fixture.path())
+            .args(["checkout", "-q", "--detach", "HEAD"])
+            .status()?;
+        assert!(status.success(), "git detaches HEAD");
+        drop(repository);
+        let repository = crate::test_repository::open(fixture.path())?;
+
+        let detached = render(&repository, "v1")?;
+        let detached_line = detached
+            .lines()
+            .find(|line| line.contains(&short_head))
+            .context("detached HEAD is shown")?;
+        let detached_graph = detached_line
+            .split_once(&short_head)
+            .context("detached HEAD has graph output")?
+            .0;
+        assert!(
+            detached_graph.contains('@'),
+            "detached HEAD has a direct marker: {detached_line:?}"
+        );
+
+        let base = render(&repository, "HEAD")?;
+        assert!(
+            base.lines().any(|line| line.contains(&format!("base @ {short_head}"))),
+            "a HEAD base separator retains the marker: {base:?}"
+        );
         Ok(())
     }
 
