@@ -573,9 +573,10 @@ impl ConnectorService {
                     let conn = socks::connect(proxy, dst, dns, &self.resolver, http).await?;
                     let conn = TokioIo::new(conn);
                     let conn = TokioIo::new(conn);
-                    let server_name =
-                        rustls_pki_types::ServerName::try_from(host.as_str().to_owned())
-                            .map_err(|_| "Invalid Server Name")?;
+                    let server_name = rustls_pki_types::ServerName::try_from(
+                        unbracket_ipv6(host.as_str()).to_owned(),
+                    )
+                    .map_err(|_| "Invalid Server Name")?;
                     let io = RustlsConnector::from(tls)
                         .connect(server_name, conn)
                         .await?;
@@ -869,8 +870,9 @@ impl ConnectorService {
                     // and we know this is definitely HTTPS.
                     let tunneled = tunnel.call(dst.clone()).await?;
                     let host = dst.host().ok_or("no host in url")?.to_string();
-                    let server_name = ServerName::try_from(host.as_str().to_owned())
-                        .map_err(|_| "Invalid Server Name")?;
+                    let server_name =
+                        ServerName::try_from(unbracket_ipv6(host.as_str()).to_owned())
+                            .map_err(|_| "Invalid Server Name")?;
                     let io = RustlsConnector::from(tls.clone())
                         .connect(server_name, TokioIo::new(tunneled))
                         .await?;
@@ -899,6 +901,14 @@ impl ConnectorService {
         #[cfg(target_os = "windows")]
         return self.windows_named_pipe.is_some();
     }
+}
+
+// Uri::host() brackets IPv6 addresses; ServerName does not accept them.
+#[cfg(feature = "__rustls")]
+fn unbracket_ipv6(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host)
 }
 
 async fn with_timeout<T, F>(f: F, timeout: Option<Duration>) -> Result<T, BoxError>
