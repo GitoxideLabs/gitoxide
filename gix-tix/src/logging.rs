@@ -1,12 +1,17 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
+    io::Write,
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
 
 use anyhow::{Context, Result};
-use tracing_subscriber::{filter::Targets, prelude::*};
+use gix::features::threading::{Mutable, OwnShared, lock};
+use tracing_subscriber::{
+    filter::{LevelFilter, Targets},
+    prelude::*,
+};
 
 const FILE_PREFIX: &str = "tix.log";
 const RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -332,8 +337,91 @@ fn classify_reference_path(path: &Path, git_dir: &Path, common_dir: &Path) -> Tr
     }
 }
 
-pub(crate) fn init() -> Option<tracing::subscriber::DefaultGuard> {
-    try_init().ok()
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TraceFormat {
+    Forest,
+    Flat,
+}
+
+fn trace_settings(trace: u8) -> Option<(TraceFormat, LevelFilter)> {
+    match trace {
+        1 => Some((TraceFormat::Forest, LevelFilter::INFO)),
+        2 => Some((TraceFormat::Forest, LevelFilter::DEBUG)),
+        3 => Some((TraceFormat::Flat, LevelFilter::DEBUG)),
+        4 => Some((TraceFormat::Flat, LevelFilter::TRACE)),
+        _ => None,
+    }
+}
+
+#[derive(Default)]
+struct TraceBuffer(Mutable<Vec<u8>>);
+
+impl Write for &TraceBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        lock(&self.0).extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+type SharedTraceBuffer = OwnShared<TraceBuffer>;
+
+pub(crate) struct Guard {
+    _default: Option<tracing::subscriber::DefaultGuard>,
+    trace: Option<SharedTraceBuffer>,
+}
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        let trace = lock(&trace.0);
+        let _ = std::io::stderr().write_all(&trace);
+    }
+}
+
+pub(crate) fn init(trace: u8) -> Result<Guard> {
+    if trace == 0 {
+        return Ok(Guard {
+            _default: try_init().ok(),
+            trace: None,
+        });
+    }
+    let output = SharedTraceBuffer::default();
+    try_init_trace(trace, output.clone())?;
+    tracing::info!(trace, "started tix invocation");
+    Ok(Guard {
+        _default: None,
+        trace: Some(output),
+    })
+}
+
+fn trace_subscriber(trace: u8, output: SharedTraceBuffer) -> Result<Box<dyn tracing::Subscriber + Send + Sync>> {
+    let (format, level) = trace_settings(trace).context("trace level must be between one and four")?;
+    Ok(match format {
+        TraceFormat::Forest => {
+            let printer = tracing_forest::Printer::new().writer(output);
+            Box::new(tracing_subscriber::registry().with(tracing_forest::ForestLayer::from(printer).with_filter(level)))
+        }
+        TraceFormat::Flat => Box::new(
+            tracing_subscriber::registry().with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+                    .with_writer(output)
+                    .with_filter(level),
+            ),
+        ),
+    })
+}
+
+fn try_init_trace(trace: u8, output: SharedTraceBuffer) -> Result<()> {
+    tracing::subscriber::set_global_default(trace_subscriber(trace, output)?)?;
+    Ok(())
 }
 
 fn try_init() -> Result<tracing::subscriber::DefaultGuard> {
@@ -425,6 +513,41 @@ mod tests {
 
     fn modified(path: impl Into<PathBuf>) -> notify::Event {
         notify::Event::new(notify::EventKind::Modify(ModifyKind::Any)).add_path(path.into())
+    }
+
+    #[test]
+    fn trace_repetitions_choose_format_and_level() {
+        assert_eq!(trace_settings(0), None);
+        assert_eq!(trace_settings(1), Some((TraceFormat::Forest, LevelFilter::INFO)));
+        assert_eq!(trace_settings(2), Some((TraceFormat::Forest, LevelFilter::DEBUG)));
+        assert_eq!(trace_settings(3), Some((TraceFormat::Flat, LevelFilter::DEBUG)));
+        assert_eq!(trace_settings(4), Some((TraceFormat::Flat, LevelFilter::TRACE)));
+        assert_eq!(trace_settings(5), None);
+        assert!(
+            trace_subscriber(5, SharedTraceBuffer::default()).is_err(),
+            "invalid programmatic levels are reported"
+        );
+    }
+
+    #[test]
+    fn flat_traces_include_closed_spans_in_the_deferred_output() -> Result<()> {
+        let output = SharedTraceBuffer::default();
+        let subscriber = trace_subscriber(3, output.clone())?;
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::debug_span!("operation");
+            let _entered = span.enter();
+            tracing::debug!("visible event");
+            tracing::trace!("filtered event");
+        });
+        let output = lock(&output.0);
+        let output = String::from_utf8_lossy(&output);
+        assert!(output.contains("visible event"), "debug events are retained: {output}");
+        assert!(output.contains("close"), "span completion is retained: {output}");
+        assert!(
+            !output.contains("filtered event"),
+            "the selected level still filters: {output}"
+        );
+        Ok(())
     }
 
     #[test]
