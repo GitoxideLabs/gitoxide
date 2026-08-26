@@ -550,13 +550,13 @@ pub(crate) fn draw_with_worktree(
                 && worktree_changes.is_some_and(Changes::is_visible),
         );
     }
-    app.viewport_rows = history_changes_panes
+    let visible_history_rows = history_changes_panes
         .iter()
         .map(|pane| pane.outer.y.saturating_sub(body.y))
         .chain(history_notice_area.map(|area| area.y.saturating_sub(body.y)))
         .min()
-        .unwrap_or(body.height)
-        .max(1) as usize;
+        .unwrap_or(body.height) as usize;
+    app.viewport_rows = visible_history_rows.max(1);
     app.center_initial_selection();
     app.prepare_history_viewport();
     let commands =
@@ -618,9 +618,16 @@ pub(crate) fn draw_with_worktree(
             .iter()
             .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0);
     let start = app.offset.min(app.history_len());
-    let render_end = start.saturating_add(body.height as usize).min(app.history_len());
+    let render_end = start.saturating_add(visible_history_rows).min(app.history_len());
     let visible_entries: Vec<_> = (start..render_end)
         .filter_map(|index| app.history_entry(index))
+        .collect();
+    let hidden_entries: Vec<_> = visible_entries
+        .iter()
+        .map(|entry| match *entry {
+            HistoryEntry::Commit(index) => app.is_row_hidden(index),
+            HistoryEntry::Segment { .. } => false,
+        })
         .collect();
     let lanes = app.render_lanes(start..render_end);
     let enrichment_gutter = Line::raw(crate::enrich::marker(true, true, true)).width() as u16;
@@ -657,6 +664,7 @@ pub(crate) fn draw_with_worktree(
     let rendered_lane_width = lanes
         .iter()
         .enumerate()
+        .filter(|(index, _)| !hidden_entries[*index])
         .map(|(index, _)| aligned_lane_width(index))
         .max()
         .unwrap_or_default();
@@ -682,6 +690,8 @@ pub(crate) fn draw_with_worktree(
                     return None;
                 };
                 let row = &app.rows[*row_index];
+                let shorten_titles = shorten_titles && !hidden_entries[index];
+                let compact_history = compact_history && !hidden_entries[index];
                 let row_selected = selected == Some(start + index);
                 let note_title = row_selected
                     .then(|| app.note(row.id))
@@ -745,15 +755,17 @@ pub(crate) fn draw_with_worktree(
         .enumerate()
         .zip(&full_metadata_columns)
         .filter_map(|((index, _), metadata)| {
-            metadata
-                .as_ref()
+            (!hidden_entries[index])
+                .then_some(metadata.as_ref())
+                .flatten()
                 .map(|metadata| aligned_lane_width(index).saturating_add(metadata.prefix_width()))
         })
         .max()
         .unwrap_or_default();
     let column_widths = full_metadata_columns
         .iter()
-        .flatten()
+        .enumerate()
+        .filter_map(|(index, metadata)| (!hidden_entries[index]).then_some(metadata.as_ref()).flatten())
         .fold([0; 5], |mut widths, metadata| {
             for (width, field) in widths.iter_mut().zip(&metadata.fields[..5]) {
                 *width = (*width).max(field.width());
@@ -771,7 +783,11 @@ pub(crate) fn draw_with_worktree(
     } else {
         visible_entries
             .iter()
-            .filter_map(|entry| {
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                if hidden_entries[index] {
+                    return None;
+                }
                 let HistoryEntry::Commit(row_index) = entry else {
                     return None;
                 };
@@ -798,9 +814,16 @@ pub(crate) fn draw_with_worktree(
     } else {
         requested_alignment
     };
+    let alignment_for = |index: usize| {
+        if hidden_entries[index] {
+            HistoryAlignment::None
+        } else {
+            alignment
+        }
+    };
     let displayed_lane = |index: usize| {
         let lane = lanes.lane(index);
-        if requested_alignment == HistoryAlignment::None {
+        if hidden_entries[index] || requested_alignment == HistoryAlignment::None {
             lane
         } else if compact_history && matches!(visible_entries[index], HistoryEntry::Commit(_)) {
             lane_through_node(lane)
@@ -817,7 +840,7 @@ pub(crate) fn draw_with_worktree(
         .into_iter()
         .enumerate()
         .map(|(index, metadata)| {
-            metadata.map(|metadata| match alignment {
+            metadata.map(|metadata| match alignment_for(index) {
                 HistoryAlignment::None => {
                     let (metadata, prefix_width) = metadata.into_line_with_prefix();
                     (metadata, 0, prefix_width)
@@ -841,7 +864,7 @@ pub(crate) fn draw_with_worktree(
             (HistoryEntry::Segment { count, .. }, _) => {
                 aligned_lane_width(index).saturating_add(format!("[{count}]").chars().count())
             }
-            (HistoryEntry::Commit(_), Some((metadata, metadata_x, _))) => match alignment {
+            (HistoryEntry::Commit(_), Some((metadata, metadata_x, _))) => match alignment_for(index) {
                 HistoryAlignment::None => displayed_lane(index).chars().count().saturating_add(metadata.width()),
                 HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
                     metadata_x.saturating_add(metadata.width())
@@ -920,6 +943,7 @@ pub(crate) fn draw_with_worktree(
             }
         };
         let row = &app.rows[row_index];
+        let row_alignment = alignment_for(index);
         let (metadata, metadata_x, metadata_prefix_width) = metadata.expect("commit history entries have metadata");
         let selected = app.selected == Some(row_index);
         let head = decorations.get(&row.id).is_some_and(|decorations| {
@@ -938,14 +962,14 @@ pub(crate) fn draw_with_worktree(
             attached: attached_head,
         });
         let metadata_width = metadata.width();
-        let title_offset = match alignment {
+        let title_offset = match row_alignment {
             HistoryAlignment::None => lane.chars().count().saturating_add(metadata_prefix_width),
             HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
                 metadata_x.saturating_add(metadata_prefix_width)
             }
         };
         let hidden_branch_behind = app.hidden_branch_behind(row.id);
-        let line_width = match alignment {
+        let line_width = match row_alignment {
             HistoryAlignment::None => lane
                 .chars()
                 .count()
@@ -1027,7 +1051,7 @@ pub(crate) fn draw_with_worktree(
 
         let mut spans = Vec::with_capacity(metadata.spans.len() + 2);
         spans.push(Span::styled(lane, style));
-        if alignment != HistoryAlignment::None {
+        if row_alignment != HistoryAlignment::None {
             spans.push(Span::raw(" ".repeat(metadata_x.saturating_sub(lane.chars().count()))));
         }
         spans.extend(metadata.spans);
@@ -6275,6 +6299,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
         );
+        std::sync::Arc::make_mut(&mut app.rows[9]).author =
+            author(b"an extraordinarily long covered author", b"author@example.com");
         complete(&mut app);
         app.selected = Some(7);
         app.ensure_visible();
@@ -6306,6 +6332,10 @@ mod tests {
         let short = rendered_line(&terminal, 0)
             .find("0101010")
             .expect("metadata is visible with a short changes pane");
+        assert!(
+            rendered_line(&terminal, 6).contains("author subject 7"),
+            "a covered row does not add alignment padding"
+        );
         assert_eq!((app.selected, app.offset), (selection, 0));
 
         terminal.draw(|frame| {
@@ -7531,6 +7561,8 @@ mod tests {
         app.extend_commits(vec![commit(1)]);
         std::sync::Arc::make_mut(&mut app.rows[0]).parent_ids = [gix::ObjectId::Sha1([2; 20])].into_iter().collect();
         app.extend_hidden_commits(vec![commit(2)]);
+        std::sync::Arc::make_mut(&mut app.rows[1]).author =
+            author(b"an extraordinarily long hidden author", b"author@example.com");
         complete(&mut app);
         app.select_commit(gix::ObjectId::Sha1([2; 20]));
         app.set_hidden_branch_updates(std::collections::HashMap::from([(
@@ -7574,6 +7606,10 @@ mod tests {
             "the hidden commit keeps its normal content: {line:?}"
         );
         let visible = rendered_line(&terminal, 0);
+        assert!(
+            visible.contains("author subject 1"),
+            "the hidden boundary does not add alignment padding: {visible:?}"
+        );
         let visible_hash = visible.find("0101010").expect("the visible hash is present") as u16;
         assert_ne!(terminal.backend().buffer()[(visible_hash, 0)].fg, Color::Reset);
         let hash = line.find("0202020").expect("the hidden hash is visible") as u16;
@@ -7621,6 +7657,15 @@ mod tests {
             terminal.backend().buffer()[(6, 1)].symbol(),
             ">",
             "the hidden base is selectable"
+        );
+
+        app.set_lane(0, "●──────────────────────────────── ");
+        std::sync::Arc::make_mut(&mut app.rows[1]).author = author(b"hidden", b"author@example.com");
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let hidden = rendered_line(&terminal, 1);
+        assert!(
+            hidden.contains("hidden subject"),
+            "hidden boundary fields remain unaligned: {hidden:?}"
         );
 
         app.alignment = HistoryAlignment::None;
