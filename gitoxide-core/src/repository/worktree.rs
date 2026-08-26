@@ -1,8 +1,51 @@
 use anyhow::bail;
-use gix::prelude::ObjectIdExt;
+use gix::{
+    bstr::{BString, ByteSlice},
+    prelude::ObjectIdExt,
+};
 use unicode_width::UnicodeWidthStr;
 
 use crate::OutputFormat;
+
+pub fn add<P>(
+    repo: gix::Repository,
+    path: std::path::PathBuf,
+    reference: BString,
+    detach: bool,
+    progress: P,
+) -> anyhow::Result<()>
+where
+    P: gix::NestedProgress,
+    P::SubProgress: gix::NestedProgress + 'static,
+{
+    let head = if detach {
+        let commit_id = repo
+            .rev_parse_single(reference.as_bstr())?
+            .object()?
+            .peel_to_commit()?
+            .id;
+        gix::worktree::create::Head::Detached(commit_id)
+    } else {
+        let branch = repo.find_reference(reference.as_bstr())?.name().to_owned();
+        gix::worktree::create::Head::Attached(branch)
+    };
+    repo.create_worktree(path, head, progress, &gix::interrupt::IS_INTERRUPTED)?;
+    Ok(())
+}
+
+pub fn remove<P>(repo: gix::Repository, worktree: std::path::PathBuf, force: u8, progress: P) -> anyhow::Result<()>
+where
+    P: gix::NestedProgress,
+    P::SubProgress: gix::NestedProgress + 'static,
+{
+    let force = match force {
+        0 => gix::worktree::remove::Force::Never,
+        1 => gix::worktree::remove::Force::DiscardChanges,
+        _ => gix::worktree::remove::Force::OverrideLock,
+    };
+    repo.remove_worktree(worktree, force, progress)?;
+    Ok(())
+}
 
 pub fn list(repo: gix::Repository, out: &mut dyn std::io::Write, format: OutputFormat) -> anyhow::Result<()> {
     if format != OutputFormat::Human {
