@@ -813,6 +813,33 @@ impl App {
         self.duplicate_change_ids = duplicates;
     }
 
+    pub(crate) fn show_ambiguous_pasted_change_id(
+        &mut self,
+        change_id: ChangeId,
+        candidates: impl IntoIterator<Item = ObjectId>,
+    ) {
+        let candidates: HashSet<_> = candidates.into_iter().collect();
+        for id in &candidates {
+            self.change_ids.insert(*id, change_id);
+        }
+        self.duplicate_change_ids.extend(candidates.iter().copied());
+        self.id_mode = IdMode::Commit;
+        let current = self.selected.unwrap_or_default();
+        if let Some(index) = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| candidates.contains(&row.id))
+            .map(|(index, _)| index)
+            .min_by_key(|index| index.abs_diff(current))
+        {
+            self.select(index);
+        }
+        self.leave_attention(
+            "pasted change ID is ambiguous; press 'x' to switch siblings and copy/paste the commit hash instead",
+        );
+    }
+
     #[cfg(test)]
     fn clear_change_ids(&mut self) {
         self.change_ids.clear();
@@ -4452,6 +4479,37 @@ mod tests {
         assert!(!app.can_cycle_duplicate());
         app.update(Action::CycleDuplicate);
         assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(2)));
+    }
+
+    #[test]
+    fn ambiguous_paste_shows_the_closest_sibling_by_commit_id() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row(1), row(2), row(3), row(4), row(5)]);
+        complete(&mut app);
+        app.select_commit(id(4));
+        let duplicate = ChangeId::from(id(9));
+
+        app.show_ambiguous_pasted_change_id(duplicate, [id(1), id(5)]);
+
+        assert_eq!(app.id_mode, IdMode::Commit, "ambiguous entries show commit hashes");
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(5)),
+            "the nearest ambiguous entry is selected"
+        );
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some(
+                "pasted change ID is ambiguous; press 'x' to switch siblings and copy/paste the commit hash instead"
+                    .into()
+            )
+        );
+        app.update(Action::CycleDuplicate);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(1)),
+            "the revealed siblings remain cycleable"
+        );
     }
 
     fn show_tree_changes(app: &mut App) {

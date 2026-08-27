@@ -1373,12 +1373,15 @@ space first; changes blocks adapt within the remaining history width.
   follows the necessary rewrite. Git notes are copied to the new occurrence.
   Copy-insert uses the history-todo conflict and continuation rules.
 - Bracketed paste in the history view trims surrounding whitespace and accepts
-  one uniquely resolvable hexadecimal object-ID prefix. If that object is a
-  commit, its change is copy-inserted above the commit at the cursor using the
-  same progress, conflict, checkout, and undo behavior as `a y`. Any selected
-  hidden boundary is a valid read-only target. Other text, ambiguous or missing
-  IDs, non-commit objects, and unavailable targets produce an attention message
-  without changing the repository.
+  one uniquely resolvable hexadecimal object-ID prefix or one full reverse-hex
+  change ID present in the Tix view. If it identifies one commit, its change is
+  copy-inserted above the commit at the cursor using the same progress, conflict,
+  checkout, and undo behavior as `a y`. Any selected hidden boundary is a valid
+  read-only target. An ambiguous change ID switches the history view to commit
+  hashes, selects the closest matching sibling, and prompts the user to press
+  `x` to switch siblings and copy/paste the hash instead. Other text, ambiguous
+  or missing object IDs, missing change IDs, non-commit objects, and unavailable
+  targets produce an attention message without changing the repository.
 - Move-insert requires selecting a non-root, single-parent `HEAD`, then limits
   navigation to valid insertion targets; Enter applies and Escape cancels. It removes `HEAD` from
   its old position, reconnects its former children to its parent, inserts its
