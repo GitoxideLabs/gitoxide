@@ -1233,6 +1233,113 @@ mod blocking_io {
         Ok(())
     }
 
+    fn reftable_create_options() -> gix::create::Options {
+        gix::create::Options {
+            reference_storage: gix::create::ReferenceStorage::Reftable,
+            ..Default::default()
+        }
+    }
+
+    fn git_supports_reftable() -> bool {
+        !gix_testtools::should_skip_as_git_version_is_smaller_than(2, 45, 0)
+    }
+
+    fn reftable_git(git_dir: &std::path::Path, args: &[&str]) -> crate::Result<String> {
+        let output = gix_testtools::isolated_git_output_checked(Some(git_dir), args)?;
+        Ok(String::from_utf8(output.stdout)?)
+    }
+
+    fn origin_remote_count(repo: &gix::Repository) -> usize {
+        repo.config_snapshot()
+            .plumbing()
+            .sections_by_name("remote")
+            .map_or(0, |sections| {
+                sections
+                    .filter(|section| section.header().subsection_name() == Some("origin".into()))
+                    .count()
+            })
+    }
+
+    fn assert_reftable_clone(repo: &gix::Repository) -> crate::Result {
+        assert_eq!(
+            repo.config_snapshot()
+                .string("extensions.refStorage")
+                .expect("configured reference storage"),
+            "reftable",
+            "the clone records reftable as its authoritative reference storage"
+        );
+        assert!(
+            repo.git_dir().join("reftable/tables.list").is_file(),
+            "the clone publishes a reftable stack generation"
+        );
+        assert!(
+            repo.git_dir().join("refs/heads").is_file(),
+            "reftable clone creates Git's required refs/heads marker file"
+        );
+        assert_eq!(
+            std::fs::read(repo.git_dir().join("HEAD"))?,
+            b"ref: refs/heads/.invalid\n",
+            "the compatibility HEAD cannot override the reftable HEAD"
+        );
+        assert!(
+            !repo.git_dir().join("packed-refs").exists(),
+            "a reftable clone does not create packed-refs"
+        );
+        if git_supports_reftable() {
+            let git_head = reftable_git(repo.git_dir(), &["rev-parse", "HEAD"])?;
+            assert_eq!(
+                git_head.trim(),
+                repo.head_id()?.to_string(),
+                "Git and gix resolve the cloned HEAD to the same object"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_only_writes_a_reftable_repository_directly() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let (repo, _) = gix::clone::PrepareFetch::new(
+            remote::repo("base").path(),
+            tmp.path(),
+            gix::create::Kind::Bare,
+            reftable_create_options(),
+            restricted(),
+        )?
+        .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+        assert_reftable_clone(&repo)
+    }
+
+    #[test]
+    fn empty_remote_keeps_an_authoritative_reftable_symbolic_head() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let mut prepare = gix::clone::PrepareFetch::new(
+            gix_testtools::scripted_fixture_read_only("make_empty_repo.sh")?,
+            tmp.path(),
+            gix::create::Kind::WithWorktree,
+            reftable_create_options(),
+            restricted(),
+        )?;
+        let (mut checkout, _) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
+        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
+        let head = repo.head()?;
+        assert!(head.is_unborn(), "an empty remote leaves the local HEAD unborn");
+        assert!(
+            head.referent_name().is_some(),
+            "the remote or local default branch remains symbolic"
+        );
+        assert_eq!(
+            std::fs::read(repo.git_dir().join("HEAD"))?,
+            b"ref: refs/heads/.invalid\n",
+            "the compatibility HEAD remains deliberately invalid"
+        );
+        assert!(
+            repo.git_dir().join("reftable/tables.list").is_file(),
+            "the authoritative unborn HEAD remains in the reftable stack"
+        );
+        Ok(())
+    }
+
     #[test]
     #[cfg(feature = "sha256")]
     fn fetch_only_adopts_remote_sha256_object_format() -> crate::Result {
@@ -1268,16 +1375,121 @@ mod blocking_io {
             gix::hash::Kind::Sha256,
             "the adopted object format is persisted on disk, not just in memory"
         );
-        let config = persisted.config_snapshot();
-        let origin_remotes = config.plumbing().sections_by_name("remote").map_or(0, |sections| {
-            sections
-                .filter(|section| section.header().subsection_name() == Some("origin".into()))
-                .count()
-        });
         assert_eq!(
-            origin_remotes, 1,
-            "exactly one `origin` remote is written despite the adoption retry"
+            origin_remote_count(&persisted),
+            1,
+            "exactly one `origin` remote is written during object-format adoption"
         );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "sha256")]
+    fn reftable_clone_adopts_remote_sha256_before_writing_fetched_refs() -> crate::Result {
+        let remote = gix_testtools::scripted_fixture_read_only("make_sha256_remote.sh")?.join("remote");
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let (repo, _) = gix::clone::PrepareFetch::new(
+            remote,
+            tmp.path(),
+            gix::create::Kind::Bare,
+            reftable_create_options(),
+            restricted(),
+        )?
+        .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+
+        assert_eq!(
+            repo.object_hash(),
+            gix::hash::Kind::Sha256,
+            "the reftable clone adopts the remote object format before writing refs"
+        );
+        assert_reftable_clone(&repo)?;
+        if git_supports_reftable() {
+            assert_eq!(
+                reftable_git(repo.git_dir(), &["rev-parse", "--show-object-format"])?.trim(),
+                "sha256",
+                "Git observes the same SHA-256 repository format"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "sha256")]
+    fn interrupted_reftable_receive_can_retry_after_the_object_format_handoff() -> crate::Result {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let remote = gix_testtools::scripted_fixture_read_only("make_sha256_remote.sh")?.join("remote");
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let configure_calls = Arc::new(AtomicUsize::new(0));
+        let mut prepare = gix::clone::PrepareFetch::new(
+            remote,
+            tmp.path(),
+            gix::create::Kind::Bare,
+            reftable_create_options(),
+            restricted(),
+        )?
+        .with_in_memory_config_overrides(["http.extraHeader=X-Retry: once"])
+        .configure_remote({
+            let configure_calls = Arc::clone(&configure_calls);
+            move |remote| {
+                let fetch_tags = match configure_calls.fetch_add(1, Ordering::Relaxed) {
+                    0 => gix::remote::fetch::Tags::None,
+                    _ => gix::remote::fetch::Tags::All,
+                };
+                Ok(remote.with_fetch_tags(fetch_tags))
+            }
+        });
+        let should_interrupt = AtomicBool::new(true);
+        assert!(
+            prepare.fetch_only(gix::progress::Discard, &should_interrupt).is_err(),
+            "the first receive observes the requested interruption"
+        );
+        assert_eq!(
+            gix::open_opts(tmp.path(), gix::open::Options::isolated())?.object_hash(),
+            gix::hash::Kind::Sha256,
+            "the completed handoff remains authoritative after the later receive error"
+        );
+
+        should_interrupt.store(false, std::sync::atomic::Ordering::Relaxed);
+        let (repo, _) = prepare.fetch_only(gix::progress::Discard, &should_interrupt)?;
+        assert_eq!(
+            repo.object_hash(),
+            gix::hash::Kind::Sha256,
+            "retry uses the repository handle reopened for the negotiated format"
+        );
+        assert_eq!(
+            origin_remote_count(&repo),
+            1,
+            "retry does not append a duplicate origin remote"
+        );
+        assert_eq!(
+            configure_calls.load(Ordering::Relaxed),
+            2,
+            "the stateful remote configurator runs once per attempt"
+        );
+        assert_eq!(
+            repo.config_snapshot()
+                .plumbing()
+                .strings("http.extraHeader")
+                .expect("the in-memory override remains present"),
+            ["X-Retry: once"],
+            "retry reapplies an in-memory multi-valued setting exactly once"
+        );
+        assert_eq!(
+            repo.find_remote("origin")?.fetch_tags(),
+            gix::remote::fetch::Tags::All,
+            "the successful attempt replaces the first attempt's persisted remote configuration"
+        );
+        let reopened = gix::open_opts(tmp.path(), gix::open::Options::isolated())?;
+        assert_eq!(
+            reopened.find_remote("origin")?.fetch_tags(),
+            gix::remote::fetch::Tags::All,
+            "the successful attempt's remote configuration is persisted on disk"
+        );
+        assert_reftable_clone(&repo)?;
         Ok(())
     }
 }
@@ -1294,7 +1506,45 @@ fn clone_and_early_persist_without_receive() -> crate::Result {
     )?
     .persist();
     assert!(repo.is_bare(), "repo is now ours and remains");
-    assert_eq!(repo.kind(), gix::repository::Kind::Common);
+    assert_eq!(
+        repo.kind(),
+        gix::repository::Kind::Common,
+        "an early-persisted bare clone remains a common repository"
+    );
+    Ok(())
+}
+
+#[test]
+fn reftable_clone_and_early_persist_is_a_valid_unborn_repository() -> crate::Result {
+    let tmp = gix_testtools::tempfile::TempDir::new()?;
+    let repo = gix::clone::PrepareFetch::new(
+        remote::repo("base").path(),
+        tmp.path(),
+        gix::create::Kind::Bare,
+        gix::create::Options {
+            reference_storage: gix::create::ReferenceStorage::Reftable,
+            ..Default::default()
+        },
+        restricted(),
+    )?
+    .persist();
+    assert!(
+        repo.head()?.is_unborn(),
+        "early persistence leaves the seeded reftable HEAD unborn"
+    );
+    assert_eq!(
+        repo.head()?.referent_name().expect("symbolic HEAD"),
+        "refs/heads/main",
+        "early persistence preserves the seeded default branch"
+    );
+    if !gix_testtools::should_skip_as_git_version_is_smaller_than(2, 45, 0) {
+        let output = gix_testtools::isolated_git_output_checked(Some(repo.git_dir()), ["symbolic-ref", "HEAD"])?;
+        assert_eq!(
+            String::from_utf8(output.stdout)?.trim(),
+            "refs/heads/main",
+            "Git reads the same reftable-backed symbolic HEAD"
+        );
+    }
     Ok(())
 }
 

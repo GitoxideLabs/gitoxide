@@ -67,6 +67,8 @@ pub enum Error {
     EnvironmentAccessDenied(#[from] gix_sec::permission::Error<std::path::PathBuf>),
     #[error(transparent)]
     PrefixNotRelative(#[from] gix_path::relative_path::Error),
+    #[error("Could not open the configured reference storage")]
+    References(#[source] gix_ref::store::BackendError),
 }
 
 mod options;

@@ -102,6 +102,37 @@ pub enum Error {
          set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build)"
     )]
     ObjectFormatRequiresV1,
+    #[error(
+        "extensions.refStorage is a v1-only extension, but the repository format version is 0; \
+         set core.repositoryFormatVersion=1 to use it, or remove extensions.refStorage to use the files reference backend"
+    )]
+    RefStorageRequiresV1,
+    #[error(
+        "Found reftable storage at '{}', but repository configuration at '{}' is missing; \
+         refusing to fall back to the files reference backend",
+        storage_path.display(),
+        config_path.display()
+    )]
+    ReftableStorageWithoutConfig {
+        config_path: std::path::PathBuf,
+        storage_path: std::path::PathBuf,
+    },
+    #[error(
+        "Found reftable storage at '{}', but repository configuration at '{}' could not be read; \
+         refusing to fall back to the files reference backend",
+        storage_path.display(),
+        config_path.display()
+    )]
+    ReftableStorageWithUnreadableConfig {
+        source: std::io::Error,
+        config_path: std::path::PathBuf,
+        storage_path: std::path::PathBuf,
+    },
+    #[error("Unsafe linked-worktree reftable storage at '{}': {reason}", path.display())]
+    UnsafeReftableWorktreeStorage {
+        path: std::path::PathBuf,
+        reason: &'static str,
+    },
     #[error("Unsupported repository format version {version}; only versions 0 and 1 are supported")]
     UnsupportedRepositoryFormatVersion { version: usize },
     #[error(transparent)]

@@ -823,6 +823,37 @@ mod extensions {
         assert!(Extensions::OBJECT_FORMAT.validate("invalid".into()).is_err());
         Ok(())
     }
+
+    #[test]
+    fn reference_storage() -> crate::Result {
+        assert_eq!(
+            Extensions::REF_STORAGE.try_into_reference_storage("files")?,
+            gix::create::ReferenceStorage::Files,
+            "the files token selects the traditional reference store"
+        );
+        assert_eq!(
+            Extensions::REF_STORAGE.try_into_reference_storage("reftable")?,
+            gix::create::ReferenceStorage::Reftable,
+            "the reftable token selects the reftable reference store"
+        );
+        assert!(
+            Extensions::REF_STORAGE.try_into_reference_storage("REFTABLE").is_err(),
+            "Git treats reference-storage names as case-sensitive"
+        );
+        assert!(
+            Extensions::REF_STORAGE.validate("reftable".into()).is_ok(),
+            "the supported reftable token validates"
+        );
+        assert_eq!(
+            Extensions::REF_STORAGE
+                .try_into_reference_storage("unknown")
+                .expect_err("unknown reference storage is rejected")
+                .to_string(),
+            "The key \"extensions.refStorage=unknown\" was invalid",
+            "unknown storage reports the offending configuration key and value"
+        );
+        Ok(())
+    }
 }
 
 mod checkout {

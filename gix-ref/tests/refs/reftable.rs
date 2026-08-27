@@ -67,6 +67,92 @@ fn empty_store() -> TestResult<(gix_testtools::tempfile::TempDir, gix_ref::Store
 }
 
 #[test]
+fn creation_seeds_an_unlogged_head_and_retains_options_after_reopen() -> TestResult {
+    let temp = gix_testtools::tempfile::TempDir::new()?;
+    let git_dir = temp.path().join(".git");
+    let initial_head: gix_ref::FullName = "refs/heads/main".try_into()?;
+    let options = gix_ref::store::init::Options {
+        write_reflog: gix_ref::store::WriteReflog::Always,
+        precompose_unicode: true,
+        prohibit_windows_device_names: true,
+    };
+    let store = gix_ref::Store::create_reftable_opts(
+        git_dir.clone(),
+        crate::fixture_hash_kind(),
+        initial_head.clone(),
+        options,
+    )?;
+
+    assert_eq!(
+        store.find("HEAD")?.target.try_name(),
+        Some(initial_head.as_ref()),
+        "the seeded symbolic HEAD is authoritative"
+    );
+    assert!(
+        !store.reflog_exists("HEAD")?,
+        "initialization does not manufacture a reflog entry for unborn HEAD"
+    );
+    assert_eq!(
+        store.write_reflog(),
+        gix_ref::store::WriteReflog::Always,
+        "the requested reflog policy is restored after seeding HEAD"
+    );
+
+    let precomposed = "caf\u{e9}";
+    let decomposed = "cafe\u{301}";
+    let other_stack = create_stack(&git_dir.join("worktrees").join(precomposed).join("reftable"))?;
+    let target_id = crate::hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
+    other_stack.begin_addition(Default::default())?.commit(
+        &[gix_reftable::RefRecord {
+            name: "HEAD".into(),
+            update_index: 1,
+            value: gix_reftable::RefValue::Direct(target_id),
+        }],
+        &[],
+    )?;
+    let decomposed_head = format!("worktrees/{decomposed}/HEAD");
+    assert_eq!(
+        store
+            .try_find(decomposed_head.as_str())?
+            .expect("precomposition selects the on-disk worktree stack")
+            .target
+            .try_id(),
+        Some(target_id.as_ref()),
+        "creation retains the Unicode path option"
+    );
+    assert!(
+        store.try_find("worktrees/con/HEAD").is_err(),
+        "creation retains the Windows device-name prohibition"
+    );
+
+    drop(store);
+    let reopened = gix_ref::Store::open_reftable_opts(git_dir, crate::fixture_hash_kind(), options)?;
+    assert_eq!(
+        reopened.find("HEAD")?.target.try_name(),
+        Some(initial_head.as_ref()),
+        "the authoritative unborn HEAD survives reopening"
+    );
+    assert!(
+        !reopened.reflog_exists("HEAD")?,
+        "reopening confirms initialization left no HEAD reflog"
+    );
+    assert_eq!(
+        reopened
+            .try_find(decomposed_head.as_str())?
+            .expect("the precomposed worktree remains reachable after reopen")
+            .target
+            .try_id(),
+        Some(target_id.as_ref()),
+        "the same options preserve path routing after reopen"
+    );
+    assert!(
+        reopened.try_find("worktrees/con/HEAD").is_err(),
+        "the device-name option also remains effective after reopen"
+    );
+    Ok(())
+}
+
+#[test]
 fn atomically_replaces_a_parent_reference_with_its_child() -> TestResult {
     let (_temp, store) = empty_store()?;
     let commit_id = crate::hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");

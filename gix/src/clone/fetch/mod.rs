@@ -84,6 +84,50 @@ pub enum Error {
     #[cfg(feature = "sha256")]
     #[error("Failed to transfer in-memory configuration after adopting the remote's object format")]
     TransferInMemoryConfig(#[from] gix_config::file::init::Error),
+    #[cfg(feature = "sha256")]
+    #[error("Failed to inspect the pristine reftable HEAD before adopting the remote object format")]
+    InspectReftableHead(#[from] gix_ref::store::find::existing::Error),
+    #[cfg(feature = "sha256")]
+    #[error("The pristine reftable HEAD is not symbolic")]
+    ReftableHeadNotSymbolic,
+    #[cfg(feature = "sha256")]
+    #[error("Failed to inspect whether the reftable stack is still pristine")]
+    InspectReftablePristine {
+        #[source]
+        source: gix_ref::store::BackendError,
+    },
+    #[cfg(feature = "sha256")]
+    #[error("Refusing to replace a reftable stack after clone initialization wrote references")]
+    ReftableNotPristine,
+    #[cfg(feature = "sha256")]
+    #[error("Failed to initialize the negotiated reftable object format")]
+    ReinitializeReferenceStorage(#[from] gix_ref::store::BackendError),
+    #[cfg(feature = "sha256")]
+    #[error("Could not {operation} during the pristine reftable object-format handoff at '{}'", path.display())]
+    ReftableHandoffIo {
+        source: std::io::Error,
+        operation: &'static str,
+        path: std::path::PathBuf,
+    },
+    #[cfg(feature = "sha256")]
+    #[error("Could not lock '{}' to {operation} during the pristine reftable object-format handoff", path.display())]
+    ReftableHandoffLock {
+        source: gix_lock::acquire::Error,
+        operation: &'static str,
+        path: std::path::PathBuf,
+    },
+    #[cfg(feature = "sha256")]
+    #[error("The pristine reftable object-format handoff failed ({original}); rollback also failed")]
+    ReftableHandoffRollback {
+        original: Box<Error>,
+        #[source]
+        rollback: Box<Error>,
+    },
+    #[cfg(feature = "sha256")]
+    #[error(
+        "The previous pristine reftable object-format handoff had an incomplete rollback; this clone preparation cannot be retried safely"
+    )]
+    ReftableHandoffRetryBlocked,
 }
 
 /// Modification
@@ -91,7 +135,10 @@ impl PrepareFetch {
     /// Fetch a pack and update local branches according to refspecs, providing `progress` and checking `should_interrupt` to stop
     /// the operation.
     /// On success, the persisted repository is returned, and this method must not be called again to avoid a **panic**.
-    /// On error, the method may be called again to retry as often as needed.
+    /// On error, the method may be called again to retry as often as needed, except after
+    /// [`Error::ReftableHandoffRollback`]. That error means repository rollback itself was
+    /// incomplete, so later calls fail with [`Error::ReftableHandoffRetryBlocked`] without
+    /// using a potentially stale repository handle.
     ///
     /// If the remote repository was empty, that is newly initialized, the returned repository will also be empty and like
     /// it was newly initialized.
@@ -113,6 +160,11 @@ impl PrepareFetch {
         P::SubProgress: 'static,
     {
         use crate::{bstr::ByteVec, remote, remote::fetch::RefLogMessage};
+
+        #[cfg(feature = "sha256")]
+        if self.retry_blocked_by_handoff_rollback {
+            return Err(Error::ReftableHandoffRetryBlocked);
+        }
 
         let mut repo = self
             .repo
@@ -270,15 +322,17 @@ impl PrepareFetch {
             remote = remote.with_fetch_tags(remote::fetch::Tags::None);
         }
 
-        // The remote section just written to `.git/config`, kept around so we can
-        // mirror it into the repository's in-memory config once we know which
-        // repo handle survives.
-        let config = Some(util::append_remote_to_local_config_file(
-            &mut remote,
-            remote_name.clone(),
-        )?);
-        #[cfg(feature = "sha256")]
-        let mut config = config;
+        // The configurator is stateful and runs on every attempt, so persist its
+        // complete result on every attempt as an idempotent replacement. Retain
+        // the same resolved view for a later retry before performing any I/O.
+        let resolved_config = util::upsert_remote_in_local_config(&mut remote, remote_name.clone())?;
+        self.repo
+            .as_mut()
+            .expect("the repository is retained until success")
+            .reread_values_and_clear_caches_replacing_config(resolved_config.clone().into())?;
+        // These overrides now live in the retained repository configuration. Keeping
+        // them here as well would append multi-valued settings again on every retry.
+        self.config_overrides.clear();
 
         // Now we are free to apply remote configuration we don't want to be written to disk.
         if let Some(fetch_tags) = clone_fetch_tags {
@@ -352,6 +406,7 @@ impl PrepareFetch {
             }
         };
         drop(remote);
+        repo.reread_values_and_clear_caches_replacing_config(resolved_config.into())?;
 
         // Assure problems with custom branch names fail early, not after getting the pack or during negotiation.
         if let Some(ref_name) = &self.ref_name {
@@ -371,8 +426,18 @@ impl PrepareFetch {
                 repo.config.resolved.write_to_filter(&mut in_memory_config, |section| {
                     section.meta().source == gix_config::Source::Api
                 })?;
-                // Reopen the still-empty repo with the remote's format; on error the original is kept for a retry.
-                repo = util::reinitialize_with_object_hash(&repo, remote_object_hash)?;
+                // Reopen the still-empty repo with the remote's format. Retain the reopened
+                // handle immediately: the on-disk handoff has committed, so every later
+                // error must retry or persist through the matching reference store.
+                repo = match util::reinitialize_with_object_hash(&repo, remote_object_hash) {
+                    Ok(repo) => repo,
+                    Err(error @ Error::ReftableHandoffRollback { .. }) => {
+                        self.retry_blocked_by_handoff_rollback = true;
+                        return Err(error);
+                    }
+                    Err(error) => return Err(error),
+                };
+                *self.repo.as_mut().expect("the repository is retained until success") = repo.clone();
                 let mut resolved_config = repo.config.resolved.as_ref().clone();
                 // The reopened repo has the rewritten local config. Reapply the
                 // old API-only layer and then the remote config written during
@@ -387,7 +452,7 @@ impl PrepareFetch {
                 )?)?;
                 repo.config
                     .reread_values_and_clear_caches_replacing_config(resolved_config.into())?;
-                config = None;
+                *self.repo.as_mut().expect("the repository is retained until success") = repo.clone();
             }
         }
         let reflog_message = {
@@ -404,11 +469,6 @@ impl PrepareFetch {
             .receive(&repo, &mut progress, should_interrupt)
             .await?;
 
-        // Before finalisation, the current repo handle still needs to
-        // learn about the remote config written after it was opened.
-        if let Some(config) = config {
-            util::append_config_to_repo_config(&mut repo, config)?;
-        }
         util::update_head(
             &mut repo,
             &outcome.ref_map,
@@ -446,3 +506,43 @@ impl PrepareFetch {
 }
 
 mod util;
+
+#[cfg(all(test, feature = "sha256", feature = "blocking-network-client"))]
+mod tests {
+    use super::util;
+    use gix_testtools::tempfile;
+
+    #[test]
+    fn incomplete_handoff_rollback_blocks_retry_before_using_the_retained_repository() -> gix_testtools::Result {
+        let temp = tempfile::tempdir()?;
+        let remote = gix_testtools::scripted_fixture_read_only("make_sha256_remote.sh")?.join("remote");
+        let mut prepare = crate::clone::PrepareFetch::new(
+            remote,
+            temp.path().join("clone"),
+            crate::create::Kind::Bare,
+            crate::create::Options {
+                reference_storage: crate::create::ReferenceStorage::Reftable,
+                ..Default::default()
+            },
+            crate::open::Options::isolated(),
+        )?;
+        let _injection = util::inject_incomplete_handoff_rollback_once();
+
+        let handoff_err = prepare
+            .fetch_only(crate::progress::Discard, &std::sync::atomic::AtomicBool::default())
+            .expect_err("the injected handoff and rollback failure must be reported");
+        assert!(
+            matches!(handoff_err, super::Error::ReftableHandoffRollback { .. }),
+            "the first call reports that handoff and rollback both failed: {handoff_err}"
+        );
+
+        let retry_err = prepare
+            .fetch_only(crate::progress::Discard, &std::sync::atomic::AtomicBool::default())
+            .expect_err("an incomplete rollback makes the builder unsafe to retry");
+        assert!(
+            matches!(retry_err, super::Error::ReftableHandoffRetryBlocked),
+            "the retry is rejected before the stale retained repository can be used: {retry_err}"
+        );
+        Ok(())
+    }
+}

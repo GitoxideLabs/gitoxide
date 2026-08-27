@@ -3,6 +3,32 @@ use std::path::PathBuf;
 use crate::{file, store_impl::reftable};
 
 impl crate::Store {
+    /// Create a reftable-backed store with an authoritative symbolic `HEAD`.
+    pub fn create_reftable(
+        git_dir: PathBuf,
+        object_hash: gix_hash::Kind,
+        initial_head: crate::FullName,
+    ) -> Result<Self, crate::store::BackendError> {
+        Self::create_reftable_opts(git_dir, object_hash, initial_head, Default::default())
+    }
+
+    /// Create a reftable-backed store with an authoritative symbolic `HEAD` and reference options.
+    pub fn create_reftable_opts(
+        git_dir: PathBuf,
+        object_hash: gix_hash::Kind,
+        initial_head: crate::FullName,
+        opts: crate::store::init::Options,
+    ) -> Result<Self, crate::store::BackendError> {
+        Ok(crate::Store {
+            inner: crate::store::State::Reftable {
+                store: Box::new(
+                    reftable::Store::create(git_dir, object_hash, initial_head, opts)
+                        .map_err(|err| crate::store::BackendError::new("create a reftable reference store", err))?,
+                ),
+            },
+        })
+    }
+
     /// Create a new store at the given location, typically the `.git/` directory.
     /// Use [`at_opts()`](Self::at_opts) to adjust options.
     ///

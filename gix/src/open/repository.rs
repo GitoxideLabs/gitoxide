@@ -233,14 +233,31 @@ impl ThreadSafeRepository {
                 precompose_unicode: repo_config.precompose_unicode,
                 prohibit_windows_device_names: repo_config.protect_windows,
             };
-            match &common_dir {
-                Some(common_dir) => crate::RefStore::for_linked_worktree_opts(
-                    git_dir.to_owned(),
-                    common_dir.into(),
-                    object_hash,
-                    ref_store_init_opts,
-                ),
-                None => crate::RefStore::at_opts(git_dir.to_owned(), object_hash, ref_store_init_opts),
+            match (repo_config.reference_storage, &common_dir) {
+                (crate::create::ReferenceStorage::Files, Some(common_dir)) => {
+                    crate::RefStore::for_linked_worktree_opts(
+                        git_dir.to_owned(),
+                        common_dir.into(),
+                        object_hash,
+                        ref_store_init_opts,
+                    )
+                }
+                (crate::create::ReferenceStorage::Files, None) => {
+                    crate::RefStore::at_opts(git_dir.to_owned(), object_hash, ref_store_init_opts)
+                }
+                (crate::create::ReferenceStorage::Reftable, Some(common_dir)) => {
+                    crate::RefStore::open_reftable_for_linked_worktree_opts(
+                        git_dir.to_owned(),
+                        common_dir.into(),
+                        object_hash,
+                        ref_store_init_opts,
+                    )
+                    .map_err(Error::References)?
+                }
+                (crate::create::ReferenceStorage::Reftable, None) => {
+                    crate::RefStore::open_reftable_opts(git_dir.to_owned(), object_hash, ref_store_init_opts)
+                        .map_err(Error::References)?
+                }
             }
         };
         let head = refs.find("HEAD").ok();

@@ -108,25 +108,399 @@ fn on_root_with_decomposed_unicode() -> crate::Result {
 
 #[test]
 fn non_bare_reftable() -> crate::Result {
-    let Some(root) = gix_testtools::scripted_fixture_read_only_with_git_version("make_reftable_repo.sh", |version| {
-        version >= (2, 44, 0)
+    let Some(root) = gix_testtools::scripted_fixture_writable_with_git_version("make_reftable_repo.sh", |version| {
+        version >= (2, 45, 0)
     })?
     else {
         return Ok(());
     };
-    let repo = gix::open_opts(root.join("reftable-clone"), gix::open::Options::isolated())?;
-    assert!(
-        repo.head_id().is_err(),
-        "Trying to do anything with head will fail as we don't support reftables yet"
+    let repo = gix::open_opts(
+        root.path().join("reftable-clone"),
+        gix::open::Options::isolated().config_overrides(["user.name=gix", "user.email=gix@example.com"]),
+    )?;
+    let head_id = repo.head_id()?;
+    repo.reference(
+        "refs/heads/from-gix",
+        head_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "created by gix",
+    )?;
+    if !gix_testtools::should_skip_as_git_version_is_smaller_than(2, 45, 0) {
+        let output =
+            gix_testtools::isolated_git_output_checked(Some(repo.git_dir()), ["rev-parse", "refs/heads/from-gix"])?;
+        assert_eq!(
+            String::from_utf8(output.stdout)?.trim(),
+            head_id.to_string(),
+            "Git sees a reference written through the normally opened reftable store"
+        );
+    }
+    assert!(!repo.is_bare(), "the Git-created fixture has a worktree");
+    assert_eq!(
+        repo.kind(),
+        gix::repository::Kind::Common,
+        "the Git-created fixture opens as a common repository"
     );
-    assert!(!repo.is_bare());
-    assert_eq!(repo.kind(), gix::repository::Kind::Common);
     assert_ne!(
         repo.workdir(),
         None,
-        "Otherwise it can be used, but it's hard to do without refs"
+        "the normally opened non-bare reftable repository exposes its worktree"
     );
     Ok(())
+}
+
+mod ref_storage_extension {
+    use std::{error::Error as _, io::Write};
+
+    fn git_command(cwd: &std::path::Path) -> std::process::Command {
+        gix_testtools::isolated_git_command(Some(cwd))
+    }
+
+    fn git(cwd: &std::path::Path, args: &[&str]) -> crate::Result<std::process::Output> {
+        gix_testtools::isolated_git_output(Some(cwd), args)
+    }
+
+    fn append_config(repo: &gix::Repository, value: &str) -> crate::Result {
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(repo.git_dir().join("config"))?;
+        writeln!(config, "{value}")?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_ref_storage_on_v0_repo() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let repo = gix::init(tmp.path())?;
+        append_config(&repo, "[extensions]\n\trefStorage = reftable")?;
+        drop(repo);
+
+        let err =
+            gix::open_opts(tmp.path(), gix::open::Options::isolated()).expect_err("refStorage is a v1-only extension");
+        assert!(
+            matches!(err, gix::open::Error::Config(gix::config::Error::RefStorageRequiresV1)),
+            "unexpected error: {err:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_unknown_storage_and_does_not_fall_back_when_the_stack_is_missing() -> crate::Result {
+        for (storage, expected_unknown) in [("unknown", true), ("reftable", false)] {
+            let tmp = gix_testtools::tempfile::TempDir::new()?;
+            let repo = gix::init(tmp.path())?;
+            append_config(
+                &repo,
+                &format!("[core]\n\trepositoryFormatVersion = 1\n[extensions]\n\trefStorage = {storage}"),
+            )?;
+            drop(repo);
+
+            let err = gix::open_opts(tmp.path(), gix::open::Options::isolated())
+                .expect_err("the configured backend must be authoritative");
+            if expected_unknown {
+                assert!(
+                    matches!(err, gix::open::Error::Config(gix::config::Error::ConfigTypedString(_))),
+                    "unknown storage must be a configuration error: {err:?}"
+                );
+            } else {
+                assert!(
+                    matches!(err, gix::open::Error::References(_)),
+                    "a missing configured stack must not fall back to loose refs: {err:?}"
+                );
+            }
+        }
+
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let repo = gix::ThreadSafeRepository::init(
+            tmp.path(),
+            gix::create::Kind::WithWorktree,
+            gix::create::Options {
+                reference_storage: gix::create::ReferenceStorage::Reftable,
+                ..Default::default()
+            },
+        )?
+        .to_thread_local();
+        let list_path = repo.git_dir().join("reftable/tables.list");
+        std::fs::remove_file(&list_path)?;
+        drop(repo);
+        let err = gix::open_opts(tmp.path(), gix::open::Options::isolated())
+            .expect_err("a configured stack without its authoritative list must fail closed");
+        assert!(
+            matches!(err, gix::open::Error::References(_)),
+            "a missing tables.list must not be interpreted as an empty repository: {err:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_or_unreadable_config_does_not_activate_files_storage_for_reftable_layout() -> crate::Result {
+        for config_is_directory in [false, true] {
+            let tmp = gix_testtools::tempfile::TempDir::new()?;
+            let repo = gix::ThreadSafeRepository::init(
+                tmp.path(),
+                gix::create::Kind::WithWorktree,
+                gix::create::Options {
+                    reference_storage: gix::create::ReferenceStorage::Reftable,
+                    ..Default::default()
+                },
+            )?;
+            let config_path = repo.git_dir().join("config");
+            drop(repo);
+            std::fs::remove_file(&config_path)?;
+            if config_is_directory {
+                std::fs::create_dir(&config_path)?;
+            }
+
+            let err = gix::open_opts(tmp.path(), gix::open::Options::isolated())
+                .expect_err("visible reftable storage without its selecting config must fail closed");
+            let reports_expected_cause = if config_is_directory {
+                matches!(
+                    &err,
+                    gix::open::Error::Config(gix::config::Error::ReftableStorageWithUnreadableConfig { .. })
+                )
+            } else {
+                matches!(
+                    &err,
+                    gix::open::Error::Config(gix::config::Error::ReftableStorageWithoutConfig { .. })
+                )
+            };
+            assert!(
+                reports_expected_cause,
+                "visible reftable storage must report ambiguous routing when its selecting config is {}: {err:?}",
+                if config_is_directory { "unreadable" } else { "missing" }
+            );
+            if config_is_directory {
+                let config_error = err.source().expect("open errors retain their configuration cause");
+                assert!(
+                    config_error.source().is_some(),
+                    "the routing error retains the underlying configuration I/O failure"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn readable_config_without_ref_storage_keeps_files_authoritative() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let repo = gix::init(tmp.path())?;
+        std::fs::create_dir(repo.git_dir().join("reftable"))?;
+        drop(repo);
+
+        gix::open_opts(tmp.path(), gix::open::Options::isolated())
+            .expect("a readable config without refStorage deliberately selects files despite unselected artifacts");
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn linked_worktree_reftable_storage_prevents_files_fallback_from_current_or_main_worktree() -> crate::Result {
+        if gix_testtools::should_skip_as_git_version_is_smaller_than(2, 45, 0) {
+            return Ok(());
+        }
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let main = tmp.path().join("main");
+        let linked = tmp.path().join("linked");
+        let init = git(tmp.path(), &["init", "--ref-format=reftable", "main"])?;
+        assert!(
+            init.status.success(),
+            "Git must initialize the reftable repository used by this routing regression: {}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        for args in [
+            ["config", "user.name", "Git"],
+            ["config", "user.email", "git@example.com"],
+        ] {
+            let output = git(&main, &args)?;
+            assert!(
+                output.status.success(),
+                "Git must configure the test repository: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let commit = git(&main, &["commit", "--allow-empty", "-m", "initial"])?;
+        assert!(
+            commit.status.success(),
+            "Git must create the commit needed for a linked worktree: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+        let worktree = git_command(&main)
+            .args(["worktree", "add", "--detach"])
+            .arg(&linked)
+            .arg("HEAD")
+            .output()?;
+        assert!(
+            worktree.status.success(),
+            "Git must create the linked reftable worktree: {}",
+            String::from_utf8_lossy(&worktree.stderr)
+        );
+
+        let linked_repo = gix::open_opts(&linked, gix::open::Options::isolated())?;
+        let git_dir = linked_repo.git_dir().to_owned();
+        let common_dir = linked_repo.common_dir().to_owned();
+        let worktree_reftable = git_dir.join("reftable");
+        assert!(
+            worktree_reftable.is_dir(),
+            "Git creates an authoritative reftable stack for the linked worktree"
+        );
+        drop(linked_repo);
+        std::fs::remove_file(common_dir.join("config"))?;
+        std::fs::remove_dir_all(common_dir.join("reftable"))?;
+
+        let err = gix::open_opts(&linked, gix::open::Options::isolated())
+            .expect_err("a remaining linked-worktree stack must prevent fallback to files storage");
+        assert!(
+            matches!(
+                err,
+                gix::open::Error::Config(gix::config::Error::ReftableStorageWithoutConfig {
+                    ref storage_path,
+                    ..
+                }) if storage_path == &worktree_reftable
+            ),
+            "the linked-worktree stack must provide the fail-closed routing evidence: {err:?}"
+        );
+
+        let err = gix::open_opts(&main, gix::open::Options::isolated())
+            .expect_err("another worktree's remaining stack must prevent fallback to files storage");
+        let gix::open::Error::Config(gix::config::Error::ReftableStorageWithoutConfig { storage_path, .. }) = &err
+        else {
+            panic!("the other-worktree stack must provide fail-closed routing evidence: {err:?}");
+        };
+        assert_eq!(
+            std::fs::canonicalize(storage_path)?,
+            std::fs::canonicalize(&worktree_reftable)?,
+            "the discovered other-worktree evidence is the surviving private stack"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_worktree_reftable_storage_does_not_permit_files_fallback() -> crate::Result {
+        use std::os::unix::fs::symlink;
+
+        for symlink_worktrees_directory in [true, false] {
+            let tmp = gix_testtools::tempfile::TempDir::new()?;
+            let repo = gix::init(tmp.path())?;
+            let common_dir = repo.common_dir().to_owned();
+            drop(repo);
+            std::fs::remove_file(common_dir.join("config"))?;
+
+            let outside = tmp.path().join("outside");
+            let outside_worktree = outside.join("escaped");
+            std::fs::create_dir_all(outside_worktree.join("reftable"))?;
+            let worktrees_dir = common_dir.join("worktrees");
+            let unsafe_path = if symlink_worktrees_directory {
+                symlink(&outside, &worktrees_dir)?;
+                worktrees_dir
+            } else {
+                std::fs::create_dir(&worktrees_dir)?;
+                let entry = std::fs::canonicalize(&worktrees_dir)?.join("escaped");
+                symlink(&outside_worktree, &entry)?;
+                entry
+            };
+
+            let err = gix::open_opts(tmp.path(), gix::open::Options::isolated())
+                .expect_err("unsafe worktree paths must prevent fallback to files storage");
+            let gix::open::Error::Config(gix::config::Error::UnsafeReftableWorktreeStorage { path, .. }) = &err else {
+                panic!("the unsafe worktree path must be reported explicitly: {err:?}");
+            };
+            assert_eq!(
+                path, &unsafe_path,
+                "the routing error identifies the symlink that made worktree storage unsafe"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn opens_git_created_bare_and_linked_worktree_repositories() -> crate::Result {
+        if gix_testtools::should_skip_as_git_version_is_smaller_than(2, 45, 0) {
+            return Ok(());
+        }
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let main = tmp.path().join("main");
+        let bare = tmp.path().join("bare.git");
+        let linked = tmp.path().join("linked");
+        let init = git(tmp.path(), &["init", "--ref-format=reftable", "main"])?;
+        assert!(
+            init.status.success(),
+            "git init failed: {}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        for args in [
+            ["config", "user.name", "Git"],
+            ["config", "user.email", "git@example.com"],
+        ] {
+            let output = git(&main, &args)?;
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::fs::write(main.join("file"), b"content")?;
+        for args in [&["add", "file"][..], &["commit", "-m", "initial"][..]] {
+            let output = git(&main, args)?;
+            assert!(
+                output.status.success(),
+                "git failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let clone = git_command(tmp.path())
+            .args(["clone", "--bare", "--ref-format=reftable"])
+            .arg(&main)
+            .arg(&bare)
+            .output()?;
+        assert!(
+            clone.status.success(),
+            "git clone failed: {}",
+            String::from_utf8_lossy(&clone.stderr)
+        );
+        let worktree = git_command(&main)
+            .args(["worktree", "add", "--detach"])
+            .arg(&linked)
+            .arg("HEAD")
+            .output()?;
+        assert!(
+            worktree.status.success(),
+            "git worktree add failed: {}",
+            String::from_utf8_lossy(&worktree.stderr)
+        );
+
+        let bare_repo = gix::open_opts(&bare, gix::open::Options::isolated())?;
+        assert!(bare_repo.is_bare(), "the Git-created bare clone opens as bare");
+        let expected_commit_id = bare_repo.head_id()?;
+
+        let linked_repo = gix::open_opts(
+            &linked,
+            gix::open::Options::isolated().config_overrides(["user.name=gix", "user.email=gix@example.com"]),
+        )?;
+        assert_eq!(
+            linked_repo.head_id()?,
+            expected_commit_id,
+            "the linked worktree and common reftable resolve the same HEAD"
+        );
+        linked_repo.reference(
+            "HEAD",
+            expected_commit_id,
+            gix::refs::transaction::PreviousValue::Any,
+            "detach through gix",
+        )?;
+        let observed = git(&linked, &["rev-parse", "HEAD"])?;
+        assert!(
+            observed.status.success(),
+            "Git reads the HEAD detached by gix: {}",
+            String::from_utf8_lossy(&observed.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(observed.stdout)?.trim(),
+            expected_commit_id.to_string(),
+            "Git observes the object ID written through the linked-worktree adapter"
+        );
+        Ok(())
+    }
 }
 
 #[test]

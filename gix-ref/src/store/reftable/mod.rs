@@ -149,6 +149,53 @@ pub(crate) enum Error {
 }
 
 impl Store {
+    pub(crate) fn create(
+        git_dir: PathBuf,
+        object_hash: gix_hash::Kind,
+        initial_head: FullName,
+        mut opts: crate::store::init::Options,
+    ) -> Result<Self, Error> {
+        let snapshot_options = gix_reftable::SnapshotOptions::default();
+        let limits = gix_reftable::Limits::default();
+        let main = gix_reftable::Stack::create(git_dir.join("reftable"), object_hash, snapshot_options, limits)?;
+        let requested_write_reflog = opts.write_reflog;
+        opts.write_reflog = WriteReflog::Disable;
+        let mut store = Store {
+            git_dir,
+            common_dir: None,
+            object_hash,
+            write_reflog: opts.write_reflog,
+            precompose_unicode: opts.precompose_unicode,
+            prohibit_windows_device_names: opts.prohibit_windows_device_names,
+            namespace: None,
+            snapshot_options,
+            limits,
+            main,
+            current: None,
+        };
+        transaction::Transaction::new(&store)
+            .prepare(
+                [crate::transaction::RefEdit {
+                    change: crate::transaction::Change::Update {
+                        log: crate::transaction::LogChange {
+                            mode: crate::transaction::RefLog::AndReference,
+                            force_create_reflog: false,
+                            message: BString::default(),
+                        },
+                        expected: crate::transaction::PreviousValue::MustNotExist,
+                        new: Target::Symbolic(initial_head),
+                    },
+                    name: "HEAD".try_into().expect("HEAD is always a valid reference name"),
+                    deref: false,
+                }],
+                gix_lock::acquire::Fail::Immediately,
+                gix_lock::acquire::Fail::Immediately,
+            )?
+            .commit(None)?;
+        store.write_reflog = requested_write_reflog;
+        Ok(store)
+    }
+
     pub(crate) fn open(
         git_dir: PathBuf,
         common_dir: Option<PathBuf>,

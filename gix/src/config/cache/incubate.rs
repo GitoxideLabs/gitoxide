@@ -6,6 +6,17 @@ use crate::config::{
     tree::{Core, Extensions, gitoxide},
 };
 
+enum ConfigAvailability {
+    Available,
+    Missing {
+        path: std::path::PathBuf,
+    },
+    Unreadable {
+        source: std::io::Error,
+        path: std::path::PathBuf,
+    },
+}
+
 /// A utility to deal with the cyclic dependency between the ref store and the configuration. The ref-store needs the
 /// object hash kind, and the configuration needs the current branch name to resolve conditional includes with `onbranch`.
 pub(crate) struct StageOne {
@@ -15,6 +26,7 @@ pub(crate) struct StageOne {
     pub is_bare: Option<bool>,
     pub lossy: bool,
     pub object_hash: gix_hash::Kind,
+    pub reference_storage: crate::create::ReferenceStorage,
     pub reflog: Option<gix_ref::store::WriteReflog>,
     pub precompose_unicode: bool,
     pub protect_windows: bool,
@@ -30,7 +42,7 @@ impl StageOne {
         lenient: bool,
     ) -> Result<Self, Error> {
         let mut buf = Vec::with_capacity(512);
-        let mut config = load_config(
+        let (mut config, config_availability) = load_config(
             common_dir.join("config"),
             &mut buf,
             gix_config::Source::Local,
@@ -43,12 +55,48 @@ impl StageOne {
         let repo_format_version = Core::REPOSITORY_FORMAT_VERSION
             .try_into_usize(config.integer("core.repositoryFormatVersion"))?
             .unwrap_or_default();
-        let object_hash = match (repo_format_version, config.string(Extensions::OBJECT_FORMAT)) {
-            // objectFormat is a repository format version 1 extension.
-            (1, Some(format)) => Extensions::OBJECT_FORMAT.try_into_object_format(format)?,
-            (0, Some(_)) => return Err(Error::ObjectFormatRequiresV1),
-            (0 | 1, None) => legacy_object_hash()?,
-            (version, _) => return Err(Error::UnsupportedRepositoryFormatVersion { version }),
+        let object_format = config.string(Extensions::OBJECT_FORMAT);
+        let ref_storage = config.string(Extensions::REF_STORAGE);
+        if ref_storage.is_none() {
+            match config_availability {
+                ConfigAvailability::Available => {}
+                ConfigAvailability::Missing { path: config_path } => {
+                    if let Some(storage_path) = find_reftable_storage(common_dir, git_dir)? {
+                        return Err(Error::ReftableStorageWithoutConfig {
+                            config_path,
+                            storage_path,
+                        });
+                    }
+                }
+                ConfigAvailability::Unreadable {
+                    source,
+                    path: config_path,
+                } => {
+                    if let Some(storage_path) = find_reftable_storage(common_dir, git_dir)? {
+                        return Err(Error::ReftableStorageWithUnreadableConfig {
+                            source,
+                            config_path,
+                            storage_path,
+                        });
+                    }
+                }
+            }
+        }
+        let (object_hash, reference_storage) = match repo_format_version {
+            0 if object_format.is_some() => return Err(Error::ObjectFormatRequiresV1),
+            0 if ref_storage.is_some() => return Err(Error::RefStorageRequiresV1),
+            0 => (legacy_object_hash()?, crate::create::ReferenceStorage::Files),
+            1 => (
+                object_format
+                    .map(|format| Extensions::OBJECT_FORMAT.try_into_object_format(format))
+                    .transpose()?
+                    .map_or_else(legacy_object_hash, Ok)?,
+                ref_storage
+                    .map(|storage| Extensions::REF_STORAGE.try_into_reference_storage(storage))
+                    .transpose()?
+                    .unwrap_or_default(),
+            ),
+            version => return Err(Error::UnsupportedRepositoryFormatVersion { version }),
         };
 
         let extension_worktree = util::config_bool(
@@ -59,7 +107,7 @@ impl StageOne {
             lenient,
         )?;
         if extension_worktree {
-            let worktree_config = load_config(
+            let (worktree_config, _) = load_config(
                 git_dir.join("config.worktree"),
                 &mut buf,
                 gix_config::Source::Worktree,
@@ -88,6 +136,7 @@ impl StageOne {
             is_bare,
             lossy,
             object_hash,
+            reference_storage,
             reflog,
             precompose_unicode,
             protect_windows,
@@ -111,6 +160,120 @@ fn legacy_object_hash() -> Result<gix_hash::Kind, Error> {
     }
 }
 
+fn find_reftable_storage(
+    common_dir: &std::path::Path,
+    git_dir: &std::path::Path,
+) -> Result<Option<std::path::PathBuf>, Error> {
+    let common_reftable = common_dir.join("reftable");
+    if let Some(path) = existing_reftable_storage(common_reftable)? {
+        return Ok(Some(path));
+    }
+    if git_dir != common_dir {
+        let current_reftable = git_dir.join("reftable");
+        if let Some(path) = existing_reftable_storage(current_reftable)? {
+            return Ok(Some(path));
+        }
+    }
+
+    let worktrees_dir = common_dir.join("worktrees");
+    let metadata = match std::fs::symlink_metadata(&worktrees_dir) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(Error::Io {
+                source,
+                path: worktrees_dir.clone(),
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(Error::UnsafeReftableWorktreeStorage {
+            path: worktrees_dir,
+            reason: "the worktrees directory is a symbolic link",
+        });
+    }
+    if !metadata.is_dir() {
+        return Err(Error::UnsafeReftableWorktreeStorage {
+            path: worktrees_dir,
+            reason: "the worktrees path is not a directory",
+        });
+    }
+    let worktrees_dir = std::fs::canonicalize(&worktrees_dir).map_err(|source| Error::Io {
+        source,
+        path: worktrees_dir,
+    })?;
+    let entries = std::fs::read_dir(&worktrees_dir).map_err(|source| Error::Io {
+        source,
+        path: worktrees_dir.clone(),
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|source| Error::Io {
+            source,
+            path: worktrees_dir.clone(),
+        })?;
+        let entry_path = entry.path();
+        let file_type = entry.file_type().map_err(|source| Error::Io {
+            source,
+            path: entry_path.clone(),
+        })?;
+        if file_type.is_symlink() {
+            return Err(Error::UnsafeReftableWorktreeStorage {
+                path: entry_path,
+                reason: "the worktree entry is a symbolic link",
+            });
+        }
+        if !file_type.is_dir() {
+            continue;
+        }
+        if let Some(path) = existing_worktree_reftable_storage(&worktrees_dir, entry_path.join("reftable"))? {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+fn existing_worktree_reftable_storage(
+    worktrees_dir: &std::path::Path,
+    path: std::path::PathBuf,
+) -> Result<Option<std::path::PathBuf>, Error> {
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(Error::Io { source, path }),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(Error::UnsafeReftableWorktreeStorage {
+            path,
+            reason: "the reftable stack is a symbolic link",
+        });
+    }
+    if !metadata.is_dir() {
+        return Err(Error::UnsafeReftableWorktreeStorage {
+            path,
+            reason: "the reftable stack is not a directory",
+        });
+    }
+    let canonical = std::fs::canonicalize(&path).map_err(|source| Error::Io {
+        source,
+        path: path.clone(),
+    })?;
+    if !canonical.starts_with(worktrees_dir) {
+        return Err(Error::UnsafeReftableWorktreeStorage {
+            path: canonical,
+            reason: "the reftable stack resolves outside the worktrees directory",
+        });
+    }
+    Ok(Some(canonical))
+}
+
+fn existing_reftable_storage(path: std::path::PathBuf) -> Result<Option<std::path::PathBuf>, Error> {
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => Ok(Some(path)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(Error::Io { source, path }),
+    }
+}
+
 fn load_config(
     config_path: std::path::PathBuf,
     buf: &mut Vec<u8>,
@@ -118,38 +281,58 @@ fn load_config(
     git_dir_trust: gix_sec::Trust,
     lossy: bool,
     lenient: bool,
-) -> Result<gix_config::File, Error> {
+) -> Result<(gix_config::File, ConfigAvailability), Error> {
     let metadata = gix_config::file::Metadata::from(source)
         .at(&config_path)
         .with(git_dir_trust);
     let mut file = match std::fs::File::open(&config_path) {
         Ok(f) => f,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(gix_config::File::new(metadata)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((
+                gix_config::File::new(metadata),
+                ConfigAvailability::Missing { path: config_path },
+            ));
+        }
         Err(err) => {
-            let err = Error::Io {
-                source: err,
-                path: config_path,
-            };
             if lenient {
-                gix_trace::warn!("ignoring: {err:#?}");
-                return Ok(gix_config::File::new(metadata));
+                gix_trace::warn!(
+                    "ignoring I/O error while reading configuration at '{}': {err:#?}",
+                    config_path.display()
+                );
+                return Ok((
+                    gix_config::File::new(metadata),
+                    ConfigAvailability::Unreadable {
+                        source: err,
+                        path: config_path,
+                    },
+                ));
             } else {
-                return Err(err);
+                return Err(Error::Io {
+                    source: err,
+                    path: config_path,
+                });
             }
         }
     };
 
     buf.clear();
+    let mut availability = ConfigAvailability::Available;
     if let Err(err) = std::io::copy(&mut file, buf) {
-        let err = Error::Io {
-            source: err,
-            path: config_path,
-        };
         if lenient {
-            gix_trace::warn!("ignoring: {err:#?}");
+            gix_trace::warn!(
+                "ignoring I/O error while reading configuration at '{}': {err:#?}",
+                config_path.display()
+            );
             buf.clear();
+            availability = ConfigAvailability::Unreadable {
+                source: err,
+                path: config_path,
+            };
         } else {
-            return Err(err);
+            return Err(Error::Io {
+                source: err,
+                path: config_path,
+            });
         }
     }
 
@@ -162,5 +345,5 @@ fn load_config(
         },
     )?;
 
-    Ok(config)
+    Ok((config, availability))
 }

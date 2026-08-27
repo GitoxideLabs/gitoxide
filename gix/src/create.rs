@@ -26,6 +26,8 @@ pub enum Error {
     Span(#[from] gix_config::parse::span::Error),
     #[error(transparent)]
     ConfigValue(#[from] gix_config::file::section::value::Error),
+    #[error("Could not initialize reftable reference storage")]
+    ReferenceStorage(#[from] gix_ref::store::BackendError),
 }
 
 /// The kind of repository to create.
@@ -35,6 +37,16 @@ pub enum Kind {
     WithWorktree,
     /// A bare repository without a worktree.
     Bare,
+}
+
+/// The reference-storage format to use for a newly created repository.
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
+pub enum ReferenceStorage {
+    /// Store references as loose files and in `packed-refs`.
+    #[default]
+    Files,
+    /// Store references in a reftable stack.
+    Reftable,
 }
 
 const TPL_INFO_EXCLUDE: &[u8] = include_bytes!("assets/init/info/exclude");
@@ -131,10 +143,14 @@ pub struct Options {
     /// If set, use these filesystem capabilities to populate the respective git-config fields.
     /// If `None`, the directory will be probed.
     pub fs_capabilities: Option<gix_fs::Capabilities>,
-    /// If set to `Some(Sha256)`, write `extensions.objectFormat=sha256`.
-    /// Otherwise, create a repository without an explicit object-format extension,
-    /// which is interpreted as legacy SHA-1.
+    /// Select the object hash for the new repository.
+    ///
+    /// SHA-256 is recorded in `extensions.objectFormat`; SHA-1 remains implicit.
     pub object_hash: Option<gix_hash::Kind>,
+    /// Select the reference-storage format for the new repository.
+    ///
+    /// The default remains the traditional files format.
+    pub reference_storage: ReferenceStorage,
 }
 
 impl Default for Options {
@@ -143,6 +159,7 @@ impl Default for Options {
             destination_must_be_empty: None,
             fs_capabilities: None,
             object_hash: default_object_hash(),
+            reference_storage: ReferenceStorage::Files,
         }
     }
 }
@@ -182,6 +199,7 @@ pub(crate) fn into_with_capabilities(
         fs_capabilities,
         destination_must_be_empty,
         object_hash,
+        reference_storage,
     }: Options,
 ) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities), Error> {
     let mut dot_git = directory.into();
@@ -247,12 +265,44 @@ pub(crate) fn into_with_capabilities(
 
     {
         let mut cursor = NewDir(&mut dot_git).at("refs")?;
-        create_dir(PathCursor(cursor.as_mut()).at("heads"))?;
-        create_dir(PathCursor(cursor.as_mut()).at("tags"))?;
+        match reference_storage {
+            ReferenceStorage::Files => {
+                create_dir(PathCursor(cursor.as_mut()).at("heads"))?;
+                create_dir(PathCursor(cursor.as_mut()).at("tags"))?;
+            }
+            ReferenceStorage::Reftable => {
+                write_file(
+                    b"this repository uses the reftable format\n",
+                    PathCursor(cursor.as_mut()).at("heads"),
+                )?;
+            }
+        }
     }
 
-    for (tpl, filename) in &[(TPL_HEAD, "HEAD"), (TPL_DESCRIPTION, "description")] {
+    let head_template = match reference_storage {
+        ReferenceStorage::Files => TPL_HEAD,
+        ReferenceStorage::Reftable => b"ref: refs/heads/.invalid\n",
+    };
+    for (tpl, filename) in &[(head_template, "HEAD"), (TPL_DESCRIPTION, "description")] {
         write_file(tpl, PathCursor(&mut dot_git).at(filename))?;
+    }
+
+    let selected_object_hash = object_hash.unwrap_or_else(default_object_hash_kind);
+    let uses_sha256 = {
+        #[cfg(feature = "sha256")]
+        {
+            selected_object_hash == gix_hash::Kind::Sha256
+        }
+        #[cfg(not(feature = "sha256"))]
+        {
+            false
+        }
+    };
+    if reference_storage == ReferenceStorage::Reftable {
+        let initial_head = "refs/heads/main"
+            .try_into()
+            .expect("the built-in initial branch is a valid full reference name");
+        gix_ref::Store::create_reftable(dot_git.clone(), selected_object_hash, initial_head)?;
     }
 
     let caps = {
@@ -275,16 +325,21 @@ pub(crate) fn into_with_capabilities(
             core.push("ignorecase", bool(caps.ignore_case))?;
             core.push("precomposeunicode", bool(caps.precompose_unicode))?;
 
-            match object_hash {
-                #[cfg(feature = "sha256")]
-                Some(gix_hash::Kind::Sha256) => {
-                    core.push("repositoryformatversion", "1")?;
+            let repository_format_version = if uses_sha256 || reference_storage == ReferenceStorage::Reftable {
+                "1"
+            } else {
+                "0"
+            };
+            core.push("repositoryformatversion", repository_format_version)?;
 
-                    let mut extensions = config.new_section("extensions", None).expect("valid section name");
+            if repository_format_version == "1" {
+                let mut extensions = config.new_section("extensions", None).expect("valid section name");
+                if uses_sha256 {
+                    #[cfg(feature = "sha256")]
                     extensions.push("objectformat", gix_hash::Kind::Sha256.to_string())?;
                 }
-                _ => {
-                    core.push("repositoryformatversion", "0")?;
+                if reference_storage == ReferenceStorage::Reftable {
+                    extensions.push("refstorage", "reftable")?;
                 }
             }
 
@@ -312,6 +367,21 @@ pub(crate) fn into_with_capabilities(
         .expect("by now the `dot_git` dir is valid as we have accessed it"),
         caps,
     ))
+}
+
+fn default_object_hash_kind() -> gix_hash::Kind {
+    #[cfg(feature = "sha1")]
+    {
+        gix_hash::Kind::Sha1
+    }
+    #[cfg(all(not(feature = "sha1"), feature = "sha256"))]
+    {
+        gix_hash::Kind::Sha256
+    }
+    #[cfg(all(not(feature = "sha1"), not(feature = "sha256")))]
+    {
+        unreachable!("hash support features are validated by gix-hash")
+    }
 }
 
 fn bool(v: bool) -> &'static str {

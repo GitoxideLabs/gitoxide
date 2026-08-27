@@ -27,6 +27,12 @@ pub struct PrepareFetch {
     config_overrides: Vec<BString>,
     /// A function to configure a remote prior to fetching a pack.
     configure_remote: Option<ConfigureRemoteFn>,
+    /// Whether an object-format handoff failed together with its rollback.
+    #[cfg(all(
+        feature = "sha256",
+        any(feature = "async-network-client-async-std", feature = "blocking-network-client")
+    ))]
+    retry_blocked_by_handoff_rollback: bool,
     /// A function to configure a connection before using it.
     #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
     configure_connection: Option<ConfigureConnectionFn>,
@@ -171,6 +177,11 @@ impl PrepareFetch {
             config_overrides: Vec::new(),
             remote_name: None,
             configure_remote: None,
+            #[cfg(all(
+                feature = "sha256",
+                any(feature = "async-network-client-async-std", feature = "blocking-network-client")
+            ))]
+            retry_blocked_by_handoff_rollback: false,
             #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
             configure_connection: None,
             shallow: remote::fetch::Shallow::NoChange,

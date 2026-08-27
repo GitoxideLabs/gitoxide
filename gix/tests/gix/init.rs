@@ -207,3 +207,117 @@ mod non_bare {
         Ok(())
     }
 }
+
+mod reftable {
+    fn assert_git(git_dir: &std::path::Path, args: &[&str], expected: &str) -> crate::Result {
+        let mut arguments = vec![std::ffi::OsString::from("--git-dir"), git_dir.as_os_str().to_owned()];
+        arguments.extend(args.iter().map(|arg| std::ffi::OsString::from(*arg)));
+        let output = gix_testtools::isolated_git_output_checked(None, arguments)?;
+        assert_eq!(
+            String::from_utf8(output.stdout)?.trim(),
+            expected,
+            "Git reports the expected value for {args:?}"
+        );
+        Ok(())
+    }
+
+    fn init_and_verify(kind: gix::create::Kind, object_hash: gix_hash::Kind) -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let destination = tmp.path().join(match kind {
+            gix::create::Kind::WithWorktree => "worktree",
+            gix::create::Kind::Bare => "bare.git",
+        });
+        let repo = gix::ThreadSafeRepository::init(
+            &destination,
+            kind,
+            gix::create::Options {
+                object_hash: Some(object_hash),
+                reference_storage: gix::create::ReferenceStorage::Reftable,
+                ..Default::default()
+            },
+        )?
+        .to_thread_local();
+
+        assert_eq!(
+            repo.object_hash(),
+            object_hash,
+            "initialization configures the requested object hash"
+        );
+        assert_eq!(
+            repo.head()?.referent_name().expect("symbolic HEAD"),
+            "refs/heads/main",
+            "initialization seeds the default symbolic branch in reftable"
+        );
+        let reference_storage = repo
+            .config_snapshot()
+            .string("extensions.refStorage")
+            .expect("written by reftable initialization");
+        assert_eq!(
+            reference_storage.as_slice(),
+            b"reftable",
+            "initialization records the authoritative reference storage"
+        );
+        assert!(
+            repo.git_dir().join("reftable/tables.list").is_file(),
+            "initialization publishes the seed reftable generation"
+        );
+        assert!(
+            repo.git_dir().join("refs/heads").is_file(),
+            "reftable initialization creates Git's required refs/heads marker file"
+        );
+        assert_eq!(
+            std::fs::read(repo.git_dir().join("HEAD"))?,
+            b"ref: refs/heads/.invalid\n",
+            "the compatibility HEAD must not be authoritative"
+        );
+
+        if !gix_testtools::should_skip_as_git_version_is_smaller_than(2, 45, 0) {
+            assert_git(repo.git_dir(), &["symbolic-ref", "HEAD"], "refs/heads/main")?;
+            assert_git(
+                repo.git_dir(),
+                &["rev-parse", "--show-object-format"],
+                match object_hash {
+                    #[cfg(feature = "sha1")]
+                    gix_hash::Kind::Sha1 => "sha1",
+                    #[cfg(feature = "sha256")]
+                    gix_hash::Kind::Sha256 => "sha256",
+                    _ => unreachable!("all enabled object hashes are covered"),
+                },
+            )?;
+            let mut arguments = vec![
+                std::ffi::OsString::from("--git-dir"),
+                repo.git_dir().as_os_str().to_owned(),
+            ];
+            arguments.extend(
+                ["symbolic-ref", "HEAD", "refs/heads/from-git"]
+                    .into_iter()
+                    .map(std::ffi::OsString::from),
+            );
+            gix_testtools::isolated_git_output_checked(None, arguments)?;
+            assert_eq!(
+                repo.head()?.referent_name().expect("Git keeps HEAD symbolic"),
+                "refs/heads/from-git",
+                "gix observes Git's update to the initialized reftable repository"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "sha1")]
+    #[test]
+    fn bare_and_non_bare_sha1_repositories_interoperate_with_git() -> crate::Result {
+        for kind in [gix::create::Kind::Bare, gix::create::Kind::WithWorktree] {
+            init_and_verify(kind, gix_hash::Kind::Sha1)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "sha256")]
+    #[test]
+    fn bare_and_non_bare_sha256_repositories_interoperate_with_git() -> crate::Result {
+        for kind in [gix::create::Kind::Bare, gix::create::Kind::WithWorktree] {
+            init_and_verify(kind, gix_hash::Kind::Sha256)?;
+        }
+        Ok(())
+    }
+}
