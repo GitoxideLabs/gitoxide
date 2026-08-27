@@ -123,6 +123,10 @@ where
                     &mut out,
                     &mut ctx,
                 )?;
+                ctx.filters
+                    .driver_state_mut()
+                    .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
+                    .map_err(crate::checkout::Error::FilterShutdownIo)?;
                 Ok(out)
             },
             chunk::Reduce {
@@ -145,6 +149,11 @@ where
         .expect("only symlinks are delayed here, they are never filtered (or delayed again)")
             as u64;
     }
+
+    ctx.filters
+        .driver_state_mut()
+        .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
+        .map_err(crate::checkout::Error::FilterShutdownIo)?;
 
     Ok(crate::checkout::Outcome {
         files_updated,

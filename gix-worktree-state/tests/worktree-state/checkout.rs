@@ -238,6 +238,21 @@ fn delayed_driver_process() -> crate::Result {
     Ok(())
 }
 
+#[test]
+fn filter_process_failure_during_shutdown_is_ignored() -> crate::Result {
+    let mut opts = opts_from_probe();
+    setup_filter_pipeline(opts.filters.options_mut());
+    opts.filters
+        .options_mut()
+        .drivers
+        .first_mut()
+        .expect("the filter driver was configured")
+        .process = Some((driver_exe() + " process fail-on-shutdown").into());
+
+    checkout_index_in_tmp_dir(opts, "make_mixed_without_submodules_and_symlinks", None)?;
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn delayed_driver_process_removes_obsolete_executable_bits() -> crate::Result {

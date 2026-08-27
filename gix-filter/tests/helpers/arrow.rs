@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match sub_command.as_str() {
         "process" => {
             let disallow_delay = next_arg.as_deref() == Some("disallow-delay");
+            let fail_on_shutdown = next_arg.as_deref() == Some("fail-on-shutdown");
             let mut srv = gix_filter::driver::process::Server::handshake(
                 stdin(),
                 stdout(),
@@ -173,6 +174,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     unknown => panic!("Unknown capability requested: {unknown}"),
                 }
+            }
+            if fail_on_shutdown {
+                return Err("failure requested after shutdown".into());
             }
         }
         // simple filters actually don't support streaming - they have to first read all input, then produce all output,

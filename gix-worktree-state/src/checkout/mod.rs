@@ -96,6 +96,8 @@ pub enum Error {
     FilterListDelayed(#[from] gix_filter::driver::delayed::list::Error),
     #[error(transparent)]
     FilterFetchDelayed(#[from] gix_filter::driver::delayed::fetch::Error),
+    #[error("Could not shut down filter processes")]
+    FilterShutdownIo(#[source] std::io::Error),
     #[error("The entry at path '{rela_path}' was listed as delayed by the filter process, but we never passed it")]
     FilterPathUnknown { rela_path: BString },
     #[error("The following paths were delayed and apparently forgotten to be processed by the filter driver: ")]

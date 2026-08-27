@@ -119,6 +119,11 @@ where
         &mut dlg,
     )
     .or_raise(|| message("Could not traverse tree"))?;
+    dlg.pipeline
+        .driver_state_mut()
+        .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
+        .or_raise(|| message("Could not shut down filter processes"))?;
+    drop(dlg);
 
     for entry in additional_entries {
         protocol::write_entry_header_and_path(
