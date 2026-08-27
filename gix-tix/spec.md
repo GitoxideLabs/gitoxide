@@ -975,11 +975,12 @@ space first; changes blocks adapt within the remaining history width.
 - All three operations leave worktree files untouched and cheaply rewrite linear
   descendants. Whole-commit edits reset the affected
   worktree's index to the rewritten commit; selected-path amend synchronizes only
-  its destination and renamed source. A directly amended commit already has its
-  final tree and unchanged parent, so it is signed immediately when configured
-  and is never pending. A zero-delta commit immediately adopts and is signed
-  against its rewritten parent tree whenever that parent is final; it remains
-  lazy only behind a pending parent. Other reparented descendants carry
+  its destination and renamed source. A directly amended or spilled non-review
+  commit already has its final tree and unchanged parent, so it is signed
+  immediately when configured and is never pending. A zero-delta commit
+  immediately adopts and is signed against its rewritten parent tree whenever
+  that parent is final; it remains lazy only behind a pending parent. Other
+  reparented descendants carry
   `tix-rebase-parent`, retaining the original parent needed for later replay.
   Pending forms use a grey commit marker so they remain distinct from unsigned
   blue. A final descendant whose effective parents did not change retains its
