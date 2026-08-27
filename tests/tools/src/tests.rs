@@ -65,6 +65,36 @@ fn configure_command_clears_external_config() {
 }
 
 #[test]
+fn isolated_git_helpers_preserve_paths_and_report_failures() {
+    let temp = tempfile::TempDir::new().expect("a temporary repository location can be created");
+    let output = isolated_git_output_checked(
+        None,
+        [OsStr::new("init"), OsStr::new("--quiet"), temp.path().as_os_str()],
+    )
+    .expect("the isolated helper can initialize a repository from OS-native arguments");
+    assert!(output.status.success(), "the checked helper returns successful output");
+
+    let output = isolated_git_output(Some(temp.path()), ["rev-parse", "--verify", "missing"])
+        .expect("the unchecked helper returns Git's unsuccessful output");
+    assert!(
+        !output.status.success(),
+        "the unchecked helper preserves an expected Git failure"
+    );
+
+    let error = isolated_git_output_checked(Some(temp.path()), ["rev-parse", "--verify", "missing"])
+        .expect_err("the checked helper turns an unsuccessful exit into an error");
+    let error = error.to_string();
+    assert!(
+        error.contains("rev-parse --verify missing"),
+        "the checked helper identifies the failed arguments: {error}"
+    );
+    assert!(
+        error.contains("stderr:"),
+        "the checked helper retains Git's diagnostics: {error}"
+    );
+}
+
+#[test]
 fn an_absolute_selected_git_is_preferred_in_path() {
     let temp = tempfile::TempDir::new().expect("can create temp dir");
     let git = temp.path().join("bin").join("git");

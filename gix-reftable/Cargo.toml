@@ -1,0 +1,40 @@
+lints.workspace = true
+
+[package]
+name = "gix-reftable"
+version = "0.1.0"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+documentation = "https://git-scm.com/docs/reftable"
+license = "MIT OR Apache-2.0"
+description = "Read and write Git reftable files"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2024"
+include = ["/src/**/*", "/LICENSE-*"]
+rust-version = "1.88"
+
+[lib]
+doctest = false
+
+[features]
+default = []
+## Enable support for SHA-1 reftables.
+sha1 = ["gix-hash/sha1"]
+## Enable support for SHA-256 reftables.
+sha256 = ["gix-hash/sha256"]
+
+[dependencies]
+gix-features = { version = "^0.49.1", path = "../gix-features", features = ["crc32"] }
+gix-hash = { version = "^0.26.2", path = "../gix-hash" }
+gix-zlib = { version = "^0.1.0", path = "../gix-zlib" }
+
+bstr = { version = "1.12.0", default-features = false, features = ["std"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+gix-reftable = { path = ".", features = ["sha1", "sha256"] }
+gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
+tempfile = "3.27.0"
+
+[package.metadata.docs.rs]
+features = ["sha1", "sha256"]

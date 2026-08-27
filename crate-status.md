@@ -1037,8 +1037,7 @@ See its [README.md](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/
       * [x] find single ref by name
       * [x] iterate refs with optional prefix
       * [x] handle unsorted packed refs and those without a header
-  * [ ] **[reftable][reftable-spec]**,
-    * see [here for a Go/C implementation][reftable-impl]
+  * [ ] **[reftable][reftable-spec]** backend, powered by `gix-reftable`
 * [x] API documentation
     * [ ] Some examples
 
@@ -1046,13 +1045,13 @@ See its [README.md](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/
 
 Provide a reftable backend for refs and reflogs as part of Git 3.0 compatibility.
 
+* [x] read, validate, seek, and deterministically write immutable version 1 and version 2 tables
 * [ ] read and write reftable stacks
 * [ ] transactions and reflogs
 * [ ] compaction and table management
 * [ ] backend selection and migration between `files` and `reftable`
 
-[reftable-spec]: https://github.com/eclipse/jgit/blob/master/Documentation/technical/reftable.md
-[reftable-impl]: https://github.com/google/reftable
+[reftable-spec]: https://github.com/git/git/blob/f78ce2f7b6df702f93d40b85d6bda92a3f65da79/Documentation/technical/reftable.adoc
 [reftable-v2]: https://github.com/google/reftable/blob/master/reftable-v2-proposal.md
 [quarantine]: https://github.com/git/git/blob/master/Documentation/git-receive-pack.txt#L223:L223
 

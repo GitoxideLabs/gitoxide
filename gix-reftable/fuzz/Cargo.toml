@@ -1,0 +1,28 @@
+[package]
+name = "gix-reftable-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.gix-reftable]
+path = ".."
+features = ["sha1", "sha256"]
+
+# Prevent this package from interfering with the parent workspace.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "table"
+path = "fuzz_targets/table.rs"
+test = false
+doc = false

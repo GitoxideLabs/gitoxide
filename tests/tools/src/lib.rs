@@ -1781,6 +1781,8 @@ fn is_sha1(kind: gix_hash::Kind) -> bool {
 ///
 /// Arguments may be split across multiple lines. Single and double quotes can be used to keep whitespace
 /// within an argument, for example `commit -m 'a message with spaces'`.
+///
+/// Use [`isolated_git_output()`] when arguments contain paths or other values which aren't necessarily UTF-8.
 pub fn git(current_dir: impl AsRef<Path>, arguments: &str) -> Result<String> {
     let args = split_git_arguments(arguments)?;
     let cwd = current_dir.as_ref();
@@ -1798,6 +1800,69 @@ pub fn git(current_dir: impl AsRef<Path>, arguments: &str) -> Result<String> {
         .into());
     }
     Ok(String::from_utf8(output.stdout)?)
+}
+
+/// Create a `git` command isolated from repository selection and host-level Git configuration.
+///
+/// If `repository` is present, it is passed to Git with `-C`. The returned command has piped stdout and stderr,
+/// while stdin remains available for the caller to configure before spawning it.
+pub fn isolated_git_command(repository: Option<&Path>) -> std::process::Command {
+    let mut command = std::process::Command::new(gix_path::env::exe_invocation());
+    if let Some(repository) = repository {
+        command.arg("-C").arg(repository);
+    }
+    command
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+        .env("GIT_TERMINAL_PROMPT", "false")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    command
+}
+
+/// Run `git` with byte-preserving arguments in an isolated environment and return its output regardless of status.
+pub fn isolated_git_output<I, S>(repository: Option<&Path>, arguments: I) -> Result<std::process::Output>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    Ok(isolated_git_command(repository).args(arguments).output()?)
+}
+
+/// Run [`isolated_git_output()`] and return an error containing the command's output if Git exits unsuccessfully.
+pub fn isolated_git_output_checked<I, S>(repository: Option<&Path>, arguments: I) -> Result<std::process::Output>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let arguments = arguments
+        .into_iter()
+        .map(|argument| argument.as_ref().to_owned())
+        .collect::<Vec<_>>();
+    let output = isolated_git_output(repository, &arguments)?;
+    if !output.status.success() {
+        let rendered_arguments = arguments
+            .iter()
+            .map(|argument| argument.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
+        return Err(format!(
+            "git {rendered_arguments} failed with {}\nstdout: {}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    Ok(output)
 }
 
 fn split_git_arguments(input: &str) -> Result<Vec<String>> {
