@@ -63,6 +63,32 @@ mod from_tree {
     }
 
     #[test]
+    fn filter_process_failure_during_shutdown_is_ignored() -> gix_testtools::Result {
+        let (_dir, head_tree, odb, mut cache) = basic()?;
+        let mut pipeline = mutating_pipeline(true);
+        *pipeline
+            .options_mut()
+            .drivers
+            .first_mut()
+            .expect("the filter driver was configured") = driver_with_process("fail-on-shutdown");
+        let mut stream =
+            gix_worktree_stream::from_tree(head_tree, odb.clone(), pipeline, move |rela_path, mode, attrs| {
+                cache
+                    .at_entry(rela_path, Some(mode.into()), &odb)
+                    .map(|entry| entry.matching_attributes(attrs))
+                    .map(|_| ())
+            });
+
+        while let Some(mut entry) = stream
+            .next_entry()
+            .expect("a filter failure after successful conversion is ignored")
+        {
+            std::io::copy(&mut entry, &mut std::io::sink())?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn will_provide_all_information_and_respect_export_ignore() -> gix_testtools::Result {
         let (dir, head_tree, odb, mut cache) = basic()?;
         let mut stream = gix_worktree_stream::from_tree(
@@ -278,7 +304,7 @@ mod from_tree {
         gix_filter::Pipeline::new(
             Default::default(),
             gix_filter::pipeline::Options {
-                drivers: if driver { vec![driver_with_process()] } else { vec![] },
+                drivers: if driver { vec![driver_with_process("")] } else { vec![] },
                 eol_config: gix_filter::eol::Configuration {
                     auto_crlf: gix_filter::eol::AutoCrlf::Enabled,
                     ..Default::default()
@@ -288,7 +314,7 @@ mod from_tree {
         )
     }
 
-    pub(crate) fn driver_with_process() -> gix_filter::Driver {
+    pub(crate) fn driver_with_process(extra_args: &str) -> gix_filter::Driver {
         let mut exe = DRIVER.to_string_lossy().into_owned();
         if cfg!(windows) {
             exe = exe.replace('\\', "/");
@@ -297,7 +323,7 @@ mod from_tree {
             name: "arrow".into(),
             clean: None,
             smudge: None,
-            process: Some((exe + " process").into()),
+            process: Some((exe + " process " + extra_args).into()),
             required: true,
         }
     }

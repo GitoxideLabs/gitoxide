@@ -14,6 +14,7 @@ mod baseline {
 mod shutdown {
     use std::time::Duration;
 
+    use bstr::ByteVec;
     use gix_filter::driver::{Operation, Process, shutdown::Mode};
 
     use crate::driver::apply::driver_with_process;
@@ -29,8 +30,7 @@ mod shutdown {
         }
     }
 
-    #[test]
-    fn ignore_when_waiting() -> crate::Result {
+    fn state_with_waiting_process() -> crate::Result<gix_filter::driver::State> {
         let mut state = gix_filter::driver::State::default();
         let driver = driver_with_process();
         let client = extract_client(state.maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?);
@@ -41,12 +41,68 @@ mod shutdown {
                 .is_success(),
             "this lets the process wait for a second using our hidden command"
         );
+        Ok(state)
+    }
+
+    #[test]
+    fn explicit_shutdown_waits_for_processes() -> crate::Result {
+        let mut state = state_with_waiting_process()?;
 
         let start = std::time::Instant::now();
-        assert_eq!(state.shutdown(Mode::Ignore)?.len(), 1, "we only launch one process");
+        let outcome = state.shutdown(Mode::WaitForProcesses)?.into_result()?;
+        assert_eq!(outcome.processes.len(), 1, "we only launch one process");
         assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "when ignoring processes, there should basically be no wait time"
+            start.elapsed() >= Duration::from_millis(500),
+            "explicit shutdown waits for the process to finish"
+        );
+
+        let driver = driver_with_process();
+        assert!(
+            state
+                .maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?
+                .is_some(),
+            "the same state can launch a new process after shutdown"
+        );
+        assert_eq!(
+            state.shutdown(Mode::WaitForProcesses)?.into_result()?.processes.len(),
+            1,
+            "the newly launched process is tracked"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unsuccessful_process_exit_can_be_turned_into_an_error() -> crate::Result {
+        let mut state = gix_filter::driver::State::default();
+        let mut driver = driver_with_process();
+        driver
+            .process
+            .as_mut()
+            .expect("process driver is configured")
+            .push_str(" fail-on-shutdown");
+        assert!(
+            state
+                .maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?
+                .is_some(),
+            "the process completes its handshake before failing during shutdown"
+        );
+
+        let outcome = state.shutdown(Mode::WaitForProcesses)?;
+        assert_eq!(outcome.processes.len(), 1, "we only launch one process");
+        let err = outcome.into_result().expect_err("the non-zero exit status is an error");
+        assert!(!err.status.success(), "the failed status is retained");
+        Ok(())
+    }
+
+    #[test]
+    fn drop_waits_for_processes() -> crate::Result {
+        let state = state_with_waiting_process()?;
+
+        let start = std::time::Instant::now();
+        drop(state);
+        assert!(
+            start.elapsed() >= Duration::from_millis(500),
+            "dropping state waits for the process to finish"
         );
         Ok(())
     }
@@ -325,7 +381,9 @@ pub(crate) mod apply {
                 "the clean filter reverses the smudge filter (and we call the right one)"
             );
         }
-        state.shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)?;
+        state
+            .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)?
+            .into_result()?;
         Ok(())
     }
 
@@ -392,7 +450,9 @@ pub(crate) mod apply {
         let paths = state.list_delayed_paths(&process_key)?;
         assert_eq!(paths.len(), 0, "delayed paths are consumed once fetched");
 
-        state.shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)?;
+        state
+            .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)?
+            .into_result()?;
         Ok(())
     }
 
