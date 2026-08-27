@@ -29,8 +29,7 @@ mod shutdown {
         }
     }
 
-    #[test]
-    fn ignore_when_waiting() -> crate::Result {
+    fn state_with_waiting_process() -> crate::Result<gix_filter::driver::State> {
         let mut state = gix_filter::driver::State::default();
         let driver = driver_with_process();
         let client = extract_client(state.maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?);
@@ -41,12 +40,35 @@ mod shutdown {
                 .is_success(),
             "this lets the process wait for a second using our hidden command"
         );
+        Ok(state)
+    }
+
+    #[test]
+    fn explicit_shutdown_waits_for_processes() -> crate::Result {
+        let state = state_with_waiting_process()?;
 
         let start = std::time::Instant::now();
-        assert_eq!(state.shutdown(Mode::Ignore)?.len(), 1, "we only launch one process");
+        assert_eq!(
+            state.shutdown(Mode::WaitForProcesses)?.len(),
+            1,
+            "we only launch one process"
+        );
         assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "when ignoring processes, there should basically be no wait time"
+            start.elapsed() >= Duration::from_millis(500),
+            "explicit shutdown waits for the process to finish"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn drop_waits_for_processes() -> crate::Result {
+        let state = state_with_waiting_process()?;
+
+        let start = std::time::Instant::now();
+        drop(state);
+        assert!(
+            start.elapsed() >= Duration::from_millis(500),
+            "dropping state waits for the process to finish"
         );
         Ok(())
     }

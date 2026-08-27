@@ -16,9 +16,9 @@ pub enum Mode {
 impl State {
     /// Handle long-running processes according to `mode`. If an error occurs, all remaining processes will be ignored automatically.
     /// Return a list of `(process, Option<status>)`
-    pub fn shutdown(self, mode: Mode) -> Result<Vec<(BString, Option<std::process::ExitStatus>)>, std::io::Error> {
+    pub fn shutdown(mut self, mode: Mode) -> Result<Vec<(BString, Option<std::process::ExitStatus>)>, std::io::Error> {
         let mut out = Vec::with_capacity(self.running.len());
-        for (cmd, client) in self.running {
+        for (cmd, client) in self.running.drain() {
             match mode {
                 Mode::WaitForProcesses => {
                     let mut child = client.into_child();

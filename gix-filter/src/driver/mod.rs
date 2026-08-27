@@ -60,16 +60,14 @@ impl Operation {
 ///
 /// ### Lifecycle
 ///
-/// Note that [`shutdown()`][State::shutdown()] must be called to finalize long-running processes.
-/// Failing to do so will naturally shut them down by terminating their pipes, but finishing explicitly
-/// allows to wait for processes as well.
+/// Call [`shutdown()`][State::shutdown()] to finalize long-running processes and observe their status.
+/// Dropping the state also closes their pipes and waits for them on a best-effort basis.
 #[derive(Default)]
 pub struct State {
     /// The list of currently running processes. These are preferred over simple clean-and-smudge programs.
     ///
-    /// Note that these processes are expected to shut-down once their stdin/stdout are dropped, so nothing else
-    /// needs to be done to clean them up after drop.
-    running: HashMap<BString, process::Client>,
+    /// These processes are expected to shut down once their stdin/stdout are dropped.
+    running: ProcessMap,
 
     /// The context to pass to spawned filter programs.
     pub context: gix_command::Context,
@@ -111,6 +109,32 @@ fn substitute_f_parameter(cmd: &BStr, path: &BStr) -> BString {
     }
     buf.push_str(&cmd[ofs..]);
     buf
+}
+
+/// Reaps all tracked filter processes on drop as a best-effort fallback to [`State::shutdown()`].
+#[derive(Default)]
+struct ProcessMap(HashMap<BString, process::Client>);
+
+impl std::ops::Deref for ProcessMap {
+    type Target = HashMap<BString, process::Client>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ProcessMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for ProcessMap {
+    fn drop(&mut self) {
+        for (_, client) in self.0.drain() {
+            let _ = client.into_child().wait();
+        }
+    }
 }
 
 #[cfg(test)]
