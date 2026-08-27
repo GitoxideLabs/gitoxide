@@ -373,7 +373,14 @@ fn mark_all_refs_in_repo(
     let _span = gix_trace::detail!("mark_all_refs");
     for local_ref in store.iter()?.all()? {
         let mut local_ref = local_ref?;
-        let id = local_ref.peel_to_id_packed(store, objects, store.cached_packed_buffer()?.as_ref().map(|b| &***b))?;
+        let id =
+            match local_ref.peel_to_id_packed(store, objects, store.cached_packed_buffer()?.as_ref().map(|b| &***b)) {
+                Ok(id) => id,
+                Err(gix_ref::peel::to_id::Error::FollowToObject(gix_ref::peel::to_object::Error::Follow(
+                    gix_ref::file::find::existing::Error::NotFound { .. },
+                ))) => continue,
+                Err(err) => return Err(err.into()),
+            };
         let mut is_complete = false;
         if let Some(commit) = graph
             .get_or_insert_commit(id, |md| {

@@ -388,6 +388,48 @@ mod blocking_and_async_io {
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
+    async fn fetch_ignores_dangling_symbolic_refs_during_negotiation() -> crate::Result {
+        let remote_dir = TempDir::new()?;
+        let remote_repo = init_repo(remote_dir.path())?;
+        let remote_main = commit_empty(&remote_repo, "remote-main")?;
+
+        let local_dir = TempDir::new()?;
+        let local_repo = init_repo(local_dir.path())?;
+        commit_empty(&local_repo, "local-main")?;
+        std::fs::write(
+            local_repo.common_dir().join("refs/heads").join("dangling-symbolic"),
+            b"ref: refs/heads/missing\n",
+        )?;
+
+        let daemon = spawn_git_daemon_if_async(remote_repo.workdir().expect("non-bare"))?;
+        let mut remote = into_daemon_remote_if_async(
+            local_repo
+                .remote_at(remote_repo.workdir().expect("non-bare"))?
+                .with_fetch_tags(fetch::Tags::None),
+            daemon.as_ref(),
+            None,
+        );
+        remote.replace_refspecs(Some("+HEAD:refs/remotes/origin/main"), Fetch)?;
+
+        remote
+            .connect(Fetch)
+            .await?
+            .prepare_fetch(gix::progress::Discard, Default::default())
+            .await?
+            .receive(gix::progress::Discard, &AtomicBool::default())
+            .await?;
+
+        assert_eq!(
+            local_repo.find_reference("refs/remotes/origin/main")?.id(),
+            remote_main,
+            "fetch negotiation ignores the dangling symbolic ref and updates the requested ref"
+        );
+        Ok(())
+    }
+
+    #[bisync::bisync]
+    #[cfg_attr(feature = "blocking-network-client", test)]
+    #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn fetch_with_multi_round_negotiation() -> crate::Result {
         for (algorithm, expected_negotiation_rounds) in [
             (gix::negotiate::Algorithm::Consecutive, 4),
