@@ -7,7 +7,7 @@ fn blob_id(repo: &Repository, data: &[u8]) -> gix_hash::ObjectId {
 #[cfg(feature = "blame")]
 mod blame;
 mod branch;
-mod config;
+pub(crate) mod config;
 #[cfg(feature = "excludes")]
 mod excludes;
 #[cfg(feature = "attributes")]

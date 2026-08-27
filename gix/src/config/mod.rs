@@ -4,6 +4,8 @@ use gix_features::threading::OnceCell;
 use crate::{Repository, bstr::BString, repository::identity};
 
 pub(crate) mod cache;
+pub mod file_mut;
+
 mod snapshot;
 #[cfg(feature = "credentials")]
 pub use snapshot::credential_helpers;
@@ -13,6 +15,15 @@ pub mod overrides;
 
 pub mod tree;
 pub use tree::root::Tree;
+
+/// A locked, mutable physical configuration file.
+///
+/// Includes are not expanded. Dropping this value releases the lock and discards all changes;
+/// [`commit()`](Self::commit()) writes them atomically. The owning repository is not updated.
+pub struct FileTransaction {
+    pub(crate) lock: gix_lock::File,
+    pub(crate) config: gix_config::File,
+}
 
 /// A platform to access configuration values as read from disk.
 ///
@@ -29,8 +40,6 @@ pub struct Snapshot<'repo> {
 /// Note that these values won't update even if the underlying file(s) change.
 ///
 /// Use [`forget()`][Self::forget()] to not apply any of the changes.
-// TODO: make it possible to load snapshots with reloading via .config() and write mutated snapshots back to disk which should be the way
-//       to affect all instances of a repo, probably via `config_mut()` and `config_mut_at()`.
 pub struct SnapshotMut<'repo> {
     /// The owning repository.
     pub repo: Option<&'repo mut Repository>,

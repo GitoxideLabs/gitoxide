@@ -3,6 +3,67 @@ use serial_test::serial;
 
 #[test]
 #[serial]
+fn config_file_paths_use_the_cwd_captured_while_opening() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("make_config_repo.sh")?;
+    let elsewhere = gix_testtools::tempfile::tempdir()?;
+    let _cwd = gix_testtools::set_current_dir(fixture.path())?;
+    let mut repo = gix::open_opts(".", gix::open::Options::isolated())?;
+    std::env::set_current_dir(elsewhere.path())?;
+
+    let mut file = repo.config_file_mut(".git/config")?;
+    file.set_raw_value("physical.after-cwd-change", "written")?;
+    file.commit()?;
+    assert!(
+        !elsewhere.path().join(".git/config").exists(),
+        "the process's new working directory is not used"
+    );
+    repo.reload()?;
+    assert_eq!(
+        repo.config_snapshot()
+            .string("physical.after-cwd-change")
+            .expect("reloaded value"),
+        "written"
+    );
+    Ok(())
+}
+
+#[test]
+#[serial]
+#[cfg(target_os = "macos")]
+fn config_file_paths_follow_a_precomposed_opening_cwd() -> gix_testtools::Result {
+    let tmp = gix_testtools::tempfile::tempdir()?;
+    let decomposed = tmp.path().join("a\u{308}");
+    std::fs::create_dir(&decomposed)?;
+    let repo = gix::init(&decomposed)?;
+    let config_path = repo.git_dir().join("config");
+    let mut disk = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)?;
+    disk.set_raw_value("core.precomposeUnicode", "true")?;
+    std::fs::write(&config_path, disk.to_bstring())?;
+    drop(repo);
+
+    let _cwd = gix_testtools::set_current_dir(&decomposed)?;
+    let original_cwd = std::env::current_dir()?;
+    let repo = gix::open_opts(".", gix::open::Options::isolated())?;
+    assert_ne!(
+        repo.current_dir(),
+        original_cwd,
+        "core.precomposeUnicode must normalize the captured CWD before it becomes the base for relative config paths"
+    );
+    let mut file = repo.config_file_mut(".git/config")?;
+    file.set_raw_value("physical.precomposed", "written")?;
+    file.commit()?;
+
+    let disk = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)?;
+    assert_eq!(
+        disk.string("physical.precomposed").expect("written value"),
+        "written",
+        "the relative .git/config path must still reach the initialized repository after precomposing its stored CWD"
+    );
+    Ok(())
+}
+
+#[test]
+#[serial]
 fn relative_paths_use_the_cwd_captured_when_opening() -> gix_testtools::Result {
     let root = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?)?;
     let nested = root.join("some/very");

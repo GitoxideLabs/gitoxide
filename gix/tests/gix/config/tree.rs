@@ -487,6 +487,45 @@ mod core {
     }
 
     #[test]
+    fn shared_repository() -> crate::Result {
+        for (value, expected) in [
+            (None, 0o660),
+            (Some("umask"), 0),
+            (Some("false"), 0),
+            (Some("0"), 0),
+            (Some("group"), 0o660),
+            (Some("true"), 0o660),
+            (Some("1"), 0o660),
+            (Some("all"), 0o664),
+            (Some("world"), 0o664),
+            (Some("everybody"), 0o664),
+            (Some("2"), 0o664),
+            (Some("0640"), -0o640),
+        ] {
+            assert_eq!(
+                Core::SHARED_REPOSITORY.try_into_shared_repository(value)?,
+                expected,
+                "value {value:?}"
+            );
+            if let Some(value) = value {
+                assert!(Core::SHARED_REPOSITORY.validate(value.into()).is_ok());
+            }
+        }
+
+        for value in ["0400", "invalid"] {
+            assert_eq!(
+                Core::SHARED_REPOSITORY
+                    .try_into_shared_repository(Some(value))
+                    .unwrap_err()
+                    .to_string(),
+                format!("The key \"core.sharedRepository={value}\" was invalid")
+            );
+            assert!(Core::SHARED_REPOSITORY.validate(value.into()).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn timeouts() -> crate::Result {
         assert_eq!(
             Core::FILES_REF_LOCK_TIMEOUT.try_into_lock_timeout(Ok(Some(0)))?,

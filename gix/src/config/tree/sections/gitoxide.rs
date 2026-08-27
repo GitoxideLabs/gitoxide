@@ -168,6 +168,16 @@ mod subsections {
                 .with_environment_override("GIX_EXTERNAL_COMMAND_STDERR");
 
         /// The `gitoxide.core.refsNamespace` key.
+        ///
+        /// It selects the reference namespace used when opening or reloading a repository. Namespaces let multiple
+        /// logical repositories share the same object database without exposing or overwriting each other's branches
+        /// and tags. For example, in namespace `foo`, the logical reference `refs/heads/main` is read from and written
+        /// to `refs/namespaces/foo/refs/heads/main`, with the namespace hidden from returned reference names.
+        ///
+        /// Only reference access is scoped; the object database, configuration, and worktree remain shared. If unset,
+        /// references are accessed without a namespace. When repository-local environment variables are permitted,
+        /// `GIT_NAMESPACE` overrides this key and accepts the same syntax. Slash-separated values form nested
+        /// namespaces, so `foo/bar` expands to `refs/namespaces/foo/refs/namespaces/bar/`.
         pub const REFS_NAMESPACE: RefsNamespace =
             keys::Any::new_with_validate("refsNamespace", &Gitoxide::CORE, super::validate::RefsNamespace)
                 .with_environment_override("GIT_NAMESPACE");

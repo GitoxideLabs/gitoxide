@@ -1,6 +1,6 @@
 use gix::config::tree::{Branch, Core, Key, Pack, gitoxide};
 
-use crate::{named_repo, repo_rw};
+use crate::{named_repo, repo_rw, repo_rw_opts};
 
 #[cfg(feature = "credentials")]
 mod credential_helpers;
@@ -270,4 +270,189 @@ fn reload_discards_in_memory_only_changes() -> crate::Result {
     repo.reload()?;
     assert_eq!(repo.config_snapshot().integer("core.abbrev"), None);
     Ok(())
+}
+
+#[test]
+fn reload_rebuilds_includes_even_when_the_file_was_empty_or_missing() -> crate::Result {
+    let (mut repo, _tmp) = repo_rw_opts("make_config_repo.sh", options_with_includes())?;
+    let included_path = repo.workdir().expect("worktree repository").join("a.config");
+
+    std::fs::write(&included_path, b"# no sections yet\n")?;
+    repo.reload()?;
+    assert_eq!(
+        repo.config_snapshot()
+            .string("a.local-override")
+            .expect("root value remains"),
+        "base"
+    );
+
+    std::fs::write(&included_path, b"[fresh]\nvalue = populated\n")?;
+    repo.reload()?;
+    assert_eq!(
+        repo.config_snapshot().string("fresh.value").expect("new include value"),
+        "populated"
+    );
+
+    std::fs::remove_file(&included_path)?;
+    repo.reload()?;
+    assert!(
+        repo.config_snapshot().string("fresh.value").is_none(),
+        "a missing include contributes no values"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "index")]
+fn reload_preserves_the_reduced_trust_allocation_limit() -> crate::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("make_config_repo.sh")?;
+    let mut repo = gix::open_opts(
+        fixture.path(),
+        crate::util::restricted()
+            .with(gix_sec::Trust::Reduced)
+            .config_overrides(["gitoxide.objects.allocLimitIfReducedTrust=1"]),
+    )?;
+    assert!(repo.open_index().is_err(), "the opening fallback limits allocations");
+
+    repo.reload()?;
+    assert!(
+        repo.open_index().is_err(),
+        "reopening reapplies the reduced-trust allocation limit"
+    );
+    Ok(())
+}
+
+#[test]
+#[serial_test::serial]
+fn reload_reapplies_per_file_safe_directory_trust() -> crate::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("make_config_repo.sh")?;
+    let included_path = fixture.path().join("a.config");
+    let mut included = gix_config::File::from_path_no_includes(included_path.clone(), gix_config::Source::Local)?;
+    included.set_raw_value(Core::SSH_COMMAND, "trusted-ssh")?;
+    std::fs::write(&included_path, included.to_bstring())?;
+
+    let global_path = fixture.path().join("global.config");
+    let mut global = gix_config::File::new(gix_config::file::Metadata::from(gix_config::Source::User));
+    global.set_raw_value(
+        "safe.directory",
+        gix_path::into_bstr(&std::fs::canonicalize(&included_path)?).as_ref(),
+    )?;
+    std::fs::write(&global_path, global.to_bstring())?;
+    let _env = gix_testtools::Env::new().set("GIT_CONFIG_GLOBAL", global_path.display().to_string());
+    let mut permissions = gix::open::Permissions::isolated();
+    permissions.config.user = true;
+    permissions.config.includes = true;
+    permissions.env.git_prefix = gix_sec::Permission::Allow;
+    let mut repo = gix::open_opts(
+        fixture.path(),
+        gix::open::Options::isolated()
+            .permissions(permissions)
+            .with(gix_sec::Trust::Reduced),
+    )?;
+    assert_eq!(
+        repo.config_snapshot().trusted_program(Core::SSH_COMMAND),
+        Some("trusted-ssh".into())
+    );
+
+    repo.reload()?;
+    assert_eq!(
+        repo.config_snapshot().trusted_program(Core::SSH_COMMAND),
+        Some("trusted-ssh".into()),
+        "reopening repeats per-file trust promotion"
+    );
+    Ok(())
+}
+
+#[test]
+fn reload_resolves_onbranch_includes_from_unnamespaced_head() -> crate::Result {
+    use std::io::Write;
+
+    let (mut repo, _tmp) = repo_rw_opts("make_config_repo.sh", options_with_includes())?;
+    let current_branch = repo
+        .head_name()?
+        .expect("the fixture has a symbolic HEAD")
+        .shorten()
+        .to_string();
+    let config_path = repo.git_dir().join("config");
+    let worktree = repo.workdir().expect("worktree repository");
+    std::fs::write(worktree.join("current-branch.config"), b"[refresh]\nbranch = current\n")?;
+    std::fs::write(worktree.join("other-branch.config"), b"[refresh]\nbranch = other\n")?;
+
+    let mut disk = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)?;
+    disk.set_raw_value("gitoxide.core.refsNamespace", "config-refresh")?;
+    std::fs::write(&config_path, disk.to_bstring())?;
+    std::fs::OpenOptions::new().append(true).open(&config_path)?.write_all(
+        format!(
+            "\n[includeIf \"onbranch:{current_branch}\"]\n  path = ../current-branch.config\n\
+             [includeIf \"onbranch:config-refresh-other\"]\n  path = ../other-branch.config\n"
+        )
+        .as_bytes(),
+    )?;
+    repo.reload()?;
+    assert!(repo.namespace().is_some(), "the reopened repository uses a namespace");
+    assert_eq!(
+        repo.config_snapshot()
+            .string("refresh.branch")
+            .expect("current include"),
+        "current"
+    );
+
+    std::fs::write(repo.git_dir().join("HEAD"), b"ref: refs/heads/config-refresh-other\n")?;
+    repo.reload()?;
+    assert_eq!(
+        repo.config_snapshot().string("refresh.branch").expect("new include"),
+        "other",
+        "HEAD conditions are resolved without the configured reference namespace"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(all(feature = "sha1", feature = "sha256"))]
+fn reload_rebuilds_object_stores_for_a_new_object_format() -> crate::Result {
+    let (mut repo, _tmp) = repo_rw("make_config_repo.sh")?;
+    let new_object_hash = match repo.object_hash() {
+        gix::hash::Kind::Sha1 => gix::hash::Kind::Sha256,
+        gix::hash::Kind::Sha256 => gix::hash::Kind::Sha1,
+        _ => unreachable!("this test only enables SHA-1 and SHA-256"),
+    };
+    let config_path = repo.git_dir().join("config");
+    let mut disk = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)?;
+    disk.set_raw_value("core.repositoryFormatVersion", "1")?;
+    disk.set_raw_value("extensions.objectFormat", new_object_hash.to_string())?;
+    std::fs::write(config_path, disk.to_bstring())?;
+
+    repo.reload()?;
+    assert_eq!(repo.object_hash(), new_object_hash);
+    assert_eq!(repo.write_blob(b"new object format")?.kind(), new_object_hash);
+    Ok(())
+}
+
+#[test]
+fn reload_keeps_opening_overrides_and_discards_runtime_edits() -> crate::Result {
+    let options = options_with_includes().config_overrides(["refresh.open=from-options"]);
+    let (mut repo, _tmp) = repo_rw_opts("make_config_repo.sh", options)?;
+    repo.config_snapshot_mut()
+        .append_config(["refresh.runtime=from-api"], gix_config::Source::Api)?;
+    assert_eq!(
+        repo.config_snapshot().string("refresh.runtime").expect("runtime value"),
+        "from-api"
+    );
+
+    repo.reload()?;
+    assert_eq!(
+        repo.config_snapshot().string("refresh.open").expect("opening override"),
+        "from-options"
+    );
+    assert!(
+        repo.config_snapshot().string("refresh.runtime").is_none(),
+        "reload discards transient API sections"
+    );
+    Ok(())
+}
+
+pub(crate) fn options_with_includes() -> gix::open::Options {
+    let mut permissions = gix::open::Permissions::isolated();
+    permissions.config.includes = true;
+    gix::open::Options::isolated().permissions(permissions)
 }

@@ -36,6 +36,9 @@ impl Core {
     pub const FS_CACHE: keys::Boolean = keys::Boolean::new_boolean("fsCache", &config::Tree::CORE);
     /// The `core.ignoreCase` key.
     pub const IGNORE_CASE: keys::Boolean = keys::Boolean::new_boolean("ignoreCase", &config::Tree::CORE);
+    /// The `core.configLockTimeout` key.
+    pub const CONFIG_LOCK_TIMEOUT: keys::LockTimeout =
+        keys::LockTimeout::new_lock_timeout("configLockTimeout", &config::Tree::CORE);
     /// The `core.filesRefLockTimeout` key.
     pub const FILES_REF_LOCK_TIMEOUT: keys::LockTimeout =
         keys::LockTimeout::new_lock_timeout("filesRefLockTimeout", &config::Tree::CORE);
@@ -64,6 +67,9 @@ impl Core {
     /// The `core.repositoryFormatVersion` key.
     pub const REPOSITORY_FORMAT_VERSION: keys::UnsignedInteger =
         keys::UnsignedInteger::new_unsigned_integer("repositoryFormatVersion", &config::Tree::CORE);
+    /// The `core.sharedRepository` key.
+    pub const SHARED_REPOSITORY: SharedRepository =
+        SharedRepository::new_with_validate("sharedRepository", &config::Tree::CORE, validate::SharedRepository);
     /// The `core.symlinks` key.
     pub const SYMLINKS: keys::Boolean = keys::Boolean::new_boolean("symlinks", &config::Tree::CORE);
     /// The `core.trustCTime` key.
@@ -127,6 +133,7 @@ impl Section for Core {
             &Self::FILE_MODE,
             &Self::FS_CACHE,
             &Self::IGNORE_CASE,
+            &Self::CONFIG_LOCK_TIMEOUT,
             &Self::FILES_REF_LOCK_TIMEOUT,
             &Self::PACKED_REFS_TIMEOUT,
             &Self::MULTIPACK_INDEX,
@@ -134,6 +141,7 @@ impl Section for Core {
             &Self::LOG_ALL_REF_UPDATES,
             &Self::PRECOMPOSE_UNICODE,
             &Self::REPOSITORY_FORMAT_VERSION,
+            &Self::SHARED_REPOSITORY,
             &Self::SYMLINKS,
             &Self::TRUST_C_TIME,
             &Self::WORKTREE,
@@ -171,6 +179,9 @@ pub type LogAllRefUpdates = keys::Any<validate::LogAllRefUpdates>;
 
 /// The `core.disambiguate` key.
 pub type Disambiguate = keys::Any<validate::Disambiguate>;
+
+/// The `core.sharedRepository` key.
+pub type SharedRepository = keys::Any<validate::SharedRepository>;
 
 #[cfg(feature = "attributes")]
 mod filter {
@@ -310,6 +321,45 @@ mod filter {
 }
 #[cfg(feature = "attributes")]
 pub use filter::*;
+
+mod shared_repository {
+    use crate::{bstr::ByteSlice, config, config::tree::core::SharedRepository};
+
+    impl SharedRepository {
+        /// Parse `value` as Git's `core.sharedRepository` permission policy.
+        ///
+        /// `None` represents a bare key (without value) and is treated as boolean `true`, equivalent to `group`. The result uses Git's
+        /// compact encoding: `0` leaves permissions to the process umask, a positive mode ORs in permission bits after the
+        /// umask, and a negative mode replaces the permission bits.
+        pub fn try_into_shared_repository(
+            &'static self,
+            value: Option<impl gix_utils::AsBStr>,
+        ) -> Result<i32, config::key::GenericErrorWithValue> {
+            let Some(value) = value else { return Ok(0o660) };
+            let value = value.as_bstr();
+            match value.as_bytes() {
+                b"umask" => return Ok(0),
+                b"group" => return Ok(0o660),
+                b"all" | b"world" | b"everybody" => return Ok(0o664),
+                _ => {}
+            }
+
+            if let Some(mode) = value.to_str().ok().and_then(|value| u32::from_str_radix(value, 8).ok()) {
+                return match mode {
+                    0 => Ok(0),
+                    1 => Ok(0o660),
+                    2 => Ok(0o664),
+                    mode if mode & 0o600 == 0o600 => Ok(-((mode & 0o666) as i32)),
+                    _ => Err(config::key::GenericErrorWithValue::from_value(self, value.into())),
+                };
+            }
+
+            gix_config::Boolean::try_from(value)
+                .map(|value| if value.0 { 0o660 } else { 0 })
+                .map_err(|err| config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err))
+        }
+    }
+}
 
 #[cfg(feature = "revision")]
 mod disambiguate {
@@ -477,6 +527,15 @@ mod validate {
             // config::cache::util::parse_core_abbrev, so here we just use Kind::longest()
             // to allow the most permissive upper bound.
             super::Core::ABBREV.try_into_abbreviation(value, gix_hash::Kind::longest())?;
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct SharedRepository;
+    impl keys::Validate for SharedRepository {
+        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+            super::Core::SHARED_REPOSITORY.try_into_shared_repository(Some(value))?;
             Ok(())
         }
     }
