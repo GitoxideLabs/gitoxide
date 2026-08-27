@@ -609,10 +609,12 @@ fn check_safe_directories(
     safe_dirs: &[BString],
 ) -> Result<(), Error> {
     let mut is_safe = false;
-    let path_to_test = match gix_path::realpath_opts(path_to_test, current_dir, gix_path::realpath::MAX_SYMLINKS) {
-        Ok(p) => p,
-        Err(_) => path_to_test.to_owned(),
+    let realpath_or_original = |path: &std::path::Path| {
+        std::fs::canonicalize(path)
+            .or_else(|_| gix_path::realpath_opts(path, current_dir, gix_path::realpath::MAX_SYMLINKS))
+            .unwrap_or_else(|_| path.to_owned())
     };
+    let path_to_test = realpath_or_original(path_to_test);
     for safe_dir in safe_dirs {
         let safe_dir = safe_dir.as_bstr();
         if safe_dir == "*" {
@@ -638,10 +640,10 @@ fn check_safe_directories(
             }
             if safe_dir.ends_with("*") {
                 let safe_dir = safe_dir.parent().expect("* is last component");
-                if path_to_test.strip_prefix(safe_dir).is_ok() {
+                if path_to_test.strip_prefix(realpath_or_original(safe_dir)).is_ok() {
                     is_safe = true;
                 }
-            } else if safe_dir == path_to_test {
+            } else if realpath_or_original(&safe_dir) == path_to_test {
                 is_safe = true;
             }
         }
