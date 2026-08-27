@@ -1003,6 +1003,8 @@ space first; changes blocks adapt within the remaining history width.
   unmerged index from it. `Esc` discards the suspended operation; navigation and
   other read-only actions leave the choice armed, while repository-changing actions
   and refresh are blocked. Key-release events are not actions and leave it armed.
+  Once an `Esc` press cancels it, repeats from that press cannot return to or close
+  the worktrunk picker.
   Diagnostics warn when a conflict suspends the rebase and record whether it is
   accepted, discarded, or fails during checkout.
 - A checked-out unresolved index keeps `C` at `@`, overrides dirty `🫟`, and
@@ -1254,7 +1256,10 @@ space first; changes blocks adapt within the remaining history width.
   moves already-final refs, records the ours tree in the conflicting commit, and
   checks out the retained merge result with an unmerged index,
   and retains an in-memory continuation plan. Only `Esc` discards the preview
-  without writes. On continuation, `<enter>` stages paths that still have unresolved
+  without writes. Cancellation and failed materialization synchronously restore
+  the cached repository history before commit-message and changes panes resume
+  loading, so the next frame cannot reference discarded in-memory objects.
+  On continuation, `<enter>` stages paths that still have unresolved
   index entries, refuses to proceed if any unresolved stages remain, and amends the
   current conflicting commit from the complete staged index, including any additional
   staged changes. Unrelated unstaged changes remain untouched. Another conflict
