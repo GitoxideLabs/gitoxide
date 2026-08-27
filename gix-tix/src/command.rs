@@ -728,7 +728,7 @@ fn copy_insert(repository: gix::Repository, args: CopyInsert) -> Result<()> {
         OsString::from(target.to_string()),
     ];
     let graph = crate::edit::loaded_explicit_view_graph(&repository, &revisions, &[])?;
-    let plan = crate::edit::rebase::copy_insert_plan(&repository, &graph, source, target)?;
+    let plan = crate::edit::rebase::copy_insert_plan(&repository, &graph, source, target, false)?;
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
     match crate::edit::rebase::perform_plan(&repository, &graph, plan)? {

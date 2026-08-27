@@ -487,10 +487,12 @@ pub(crate) enum Effect {
         base: ObjectId,
         target: ObjectId,
         copy: bool,
+        target_is_read_only: bool,
     },
     PasteInsert {
         source: ObjectId,
         target: ObjectId,
+        target_is_read_only: bool,
     },
     StartReview {
         tip: ObjectId,
@@ -2121,11 +2123,10 @@ impl App {
             }
             Action::OpenDiff if self.insert_selection.is_some() => {
                 let (source, copy) = self.insert_selection.expect("insert target selection has a source");
-                let Some(target) = self
+                let Some((target, target_is_read_only)) = self
                     .selected
                     .filter(|index| self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
-                    .and_then(|index| self.rows.get(index))
-                    .map(|row| row.id)
+                    .and_then(|index| self.rows.get(index).map(|row| (row.id, self.is_row_hidden(index))))
                 else {
                     return Vec::new();
                 };
@@ -2135,16 +2136,16 @@ impl App {
                     base: source,
                     target,
                     copy,
+                    target_is_read_only,
                 }];
             }
             Action::OpenDiff if self.stack_insert_base.is_some() => {
                 let source = self.worktree_head.expect("stack insertion requires HEAD");
                 let base = self.stack_insert_base.expect("stack insertion has a base");
-                let Some(target) = self
+                let Some((target, target_is_read_only)) = self
                     .selected
                     .filter(|index| self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
-                    .and_then(|index| self.rows.get(index))
-                    .map(|row| row.id)
+                    .and_then(|index| self.rows.get(index).map(|row| (row.id, self.is_row_hidden(index))))
                 else {
                     return Vec::new();
                 };
@@ -2154,6 +2155,7 @@ impl App {
                     base,
                     target,
                     copy: false,
+                    target_is_read_only,
                 }];
             }
             Action::OpenDiff => {
@@ -2256,7 +2258,11 @@ impl App {
                 self.begin_insert_selection(true);
             }
             Action::PasteInsert { source, target } => {
-                return vec![Effect::PasteInsert { source, target }];
+                return vec![Effect::PasteInsert {
+                    source,
+                    target,
+                    target_is_read_only: self.hidden_rows.contains(&target),
+                }];
             }
             Action::MoveInsert if self.can_move_insert() => {
                 self.begin_insert_selection(false);
@@ -3051,6 +3057,9 @@ impl App {
                 .is_some_and(|row| Some(row.id) != self.squash_source)
                 && self.is_squash_target(index);
         }
+        if self.insert_selection.is_some() || self.stack_insert_base.is_some() {
+            return self.is_row_reachable(index);
+        }
         !self.is_row_hidden(index)
             || (self.review_tip.is_some()
                 && self
@@ -3224,10 +3233,9 @@ impl App {
             return None;
         }
         self.selected
-            .filter(|index| !self.is_row_hidden(*index))
-            .and_then(|index| self.rows.get(index))
-            .filter(|row| !self.known_merge_descendants.contains(&row.id))
-            .map(|row| row.id)
+            .and_then(|index| self.rows.get(index).map(|row| (index, row)))
+            .filter(|(index, row)| self.is_row_hidden(*index) || !self.known_merge_descendants.contains(&row.id))
+            .map(|(_, row)| row.id)
     }
 
     pub(crate) fn can_move_insert(&self) -> bool {
@@ -3262,11 +3270,12 @@ impl App {
         let Some(source) = self.all_rows.get(&source) else {
             return false;
         };
+        let target_is_read_only = self.is_row_hidden(index);
         self.rows.get(index).is_some_and(|target| {
             source.id != target.id
                 && (copy || source.parent_ids.first().copied() != Some(target.id))
-                && !self.is_row_hidden(index)
-                && !self.known_merge_descendants.contains(&target.id)
+                && (target_is_read_only || !self.known_merge_descendants.contains(&target.id))
+                && (copy || !target_is_read_only || !self.is_known_ancestor(source.id, target.id))
         })
     }
 
@@ -3334,13 +3343,17 @@ impl App {
         base_parent: ObjectId,
         stack: &HashSet<ObjectId>,
     ) -> bool {
-        !self.is_row_hidden(index)
-            && !stack.contains(&id)
+        let target_is_read_only = self.is_row_hidden(index);
+        !stack.contains(&id)
             && id != base_parent
-            && !self.known_merge_descendants.contains(&id)
-            && !stack
-                .iter()
-                .any(|ancestor| *ancestor != base && self.is_known_ancestor(*ancestor, id))
+            && if target_is_read_only {
+                !self.is_known_ancestor(base, id)
+            } else {
+                !self.known_merge_descendants.contains(&id)
+                    && !stack
+                        .iter()
+                        .any(|ancestor| *ancestor != base && self.is_known_ancestor(*ancestor, id))
+            }
     }
 
     pub(crate) fn can_review(&self) -> bool {
@@ -4603,6 +4616,11 @@ mod tests {
             Some(id(1)),
             "the empty view selects its hidden base"
         );
+        assert_eq!(
+            app.paste_insert_target(),
+            Some(id(1)),
+            "the checked-out base accepts a pasted first stack commit"
+        );
         app.set_new_commit_availability(Some(&Changes {
             has_tracked_changes: true,
             ..Changes::default()
@@ -5601,6 +5619,7 @@ mod tests {
                 base: id(3),
                 target: id(2),
                 copy: true,
+                target_is_read_only: false,
             }]
         );
 
@@ -5625,6 +5644,7 @@ mod tests {
                 base: id(5),
                 target: id(3),
                 copy: false,
+                target_is_read_only: false,
             }]
         );
 
@@ -5663,6 +5683,7 @@ mod tests {
                 base: id(3),
                 target: id(5),
                 copy: true,
+                target_is_read_only: false,
             }],
             "the selected source is copied onto the subsequently selected review HEAD"
         );
@@ -5682,14 +5703,60 @@ mod tests {
     }
 
     #[test]
-    fn paste_insert_uses_only_an_editable_history_selection() {
+    fn paste_insert_marks_a_hidden_boundary_as_read_only() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         complete(&mut app);
 
         assert_eq!(app.paste_insert_target(), Some(id(2)));
         app.hidden_rows.insert(id(2));
-        assert_eq!(app.paste_insert_target(), None, "a hidden boundary is not editable");
+        assert_eq!(app.paste_insert_target(), Some(id(2)));
+        assert_eq!(
+            app.update(Action::PasteInsert {
+                source: id(3),
+                target: id(2),
+            }),
+            vec![Effect::PasteInsert {
+                source: id(3),
+                target: id(2),
+                target_is_read_only: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn every_insert_mode_accepts_hidden_boundaries_as_read_only_targets() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        app.set_worktree_head(Some(id(5)), false);
+        app.hidden_rows.insert(id(2));
+        complete(&mut app);
+
+        for (action, base, copy) in [
+            (Action::CopyInsert, id(5), true),
+            (Action::MoveInsert, id(5), false),
+            (Action::StackInsert, id(4), false),
+        ] {
+            app.select_commit(base);
+            assert!(app.update(action).is_empty());
+            app.select_commit(id(2));
+            assert_eq!(
+                app.update(Action::OpenDiff),
+                vec![Effect::Insert {
+                    source: id(5),
+                    base,
+                    target: id(2),
+                    copy,
+                    target_is_read_only: true,
+                }]
+            );
+        }
     }
 
     #[test]
@@ -5741,6 +5808,7 @@ mod tests {
                 base: id(3),
                 target: id(1),
                 copy: false,
+                target_is_read_only: false,
             }]
         );
 
@@ -6606,6 +6674,7 @@ mod tests {
                 base: id(6),
                 target: id(2),
                 copy: true,
+                target_is_read_only: false,
             }]
         );
     }
