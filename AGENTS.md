@@ -58,7 +58,10 @@ uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns bel
 
 Follow "purposeful conventional commits" style:
 
-- Write commit messages in Markdown, and use the body to share everything known about what motivated the change, not merely what changed
+- Write commit messages in Markdown and assume readers view them with syntax highlighting.
+  - Enclose anything that occurs in code, as well as crate names and shell commands, in backticks.
+  - Use Markdown generously whenever markup helps readers understand or navigate the prose.
+  - Use the body to share everything known about what motivated the change, not merely what changed.
 - Use conventional commit prefixes ONLY if message should appear in changelog
 - Breaking changes MUST use `!` before the colon: `change!:`, `remove!:`, `rename!:`, or _scoped_ forms like `feat(gix-odb)!:`
 - Features/fixes visible to users: `feat:`, `fix:`
@@ -70,19 +73,6 @@ Follow "purposeful conventional commits" style:
   - `change!: rename Foo to Bar. (#123)`
   - `feat(gix-odb)!: add a new object lookup API`
   - `fix(gix-ref)!: reject invalid reference names`
-
-### Provisional Commits
-
-- Before changing tracked worktree files for a task, start from a clean
-  worktree and create an empty provisional commit authored as
-  `🚧WIP🚧 <wip@invalid>`. Give it the purposeful subject the completed change
-  is expected to use so an interrupted session remains identifiable; do not use
-  a `WIP:` prefix.
-- When the task is complete, stage the intended changes and amend that
-  provisional commit. Replace the WIP author with the responsible agent's own
-  name and email, and update the subject and descriptive body to match what was
-  actually completed. The final commit must contain the complete task and leave
-  the worktree clean; never leave the provisional author in finished history.
 
 ### Code Style
 
