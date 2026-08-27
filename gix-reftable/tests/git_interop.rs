@@ -106,7 +106,7 @@ fn create_migrated_repo(hash: &str, bulk_refs: usize) -> TestResult<tempfile::Te
         format!("git -C <repo> rev-parse HEAD\ngit -C <repo> update-ref --stdin # {bulk_refs} create commands\n")
     };
     std::fs::write(
-        temp.path().join("reftable-fixture.provenance"),
+        temp.path().join("reftable-fixture-generation.txt"),
         format!(
             "{git_version}git init --quiet --initial-branch=main --object-format={hash} <repo>\n\
              git -C <repo> -c user.name=Reftable Test -c user.email=reftable@example.com commit --quiet --allow-empty -m initial\n\
@@ -145,13 +145,13 @@ fn parse_git_table(hash: &str, expected_kind: Kind, expected_version: Version, b
     let commit_id = rev_parse(repo.path(), "HEAD")?;
     let tag_target_id = rev_parse(repo.path(), "refs/tags/v1")?;
     let tag_peeled_id = rev_parse(repo.path(), "refs/tags/v1^{}")?;
-    let provenance = std::fs::read_to_string(repo.path().join("reftable-fixture.provenance"))?;
+    let generation_record = std::fs::read_to_string(repo.path().join("reftable-fixture-generation.txt"))?;
     assert!(
-        provenance.starts_with("git version "),
+        generation_record.starts_with("git version "),
         "each generated fixture records the Git version"
     );
     assert!(
-        provenance.contains("refs migrate --ref-format=reftable"),
+        generation_record.contains("refs migrate --ref-format=reftable"),
         "each generated fixture records the command sequence"
     );
     let files = table_files(repo.path())?;
@@ -193,14 +193,20 @@ fn parse_git_table(hash: &str, expected_kind: Kind, expected_version: Version, b
         "Git's nonstandard symbolic reference retains its exact target: {symbolic:?}"
     );
     let tag = newest_ref(&tables, b"refs/tags/v1").expect("Git writes the annotated tag");
-    assert_eq!(
-        &tag.value,
-        &RefValue::Peeled {
-            target: tag_target_id,
-            peeled: tag_peeled_id,
-        },
-        "Git's annotated tag retains both the target and peeled object IDs"
-    );
+    match &tag.value {
+        RefValue::Direct(target) => assert_eq!(
+            target, &tag_target_id,
+            "a migrated tag without a persisted peel retains its exact target"
+        ),
+        RefValue::Peeled { target, peeled } => {
+            assert_eq!(target, &tag_target_id, "a migrated peeled tag retains its exact target");
+            assert_eq!(
+                peeled, &tag_peeled_id,
+                "a migrated peeled tag retains its exact peeled object ID"
+            );
+        }
+        value => panic!("Git writes an annotated tag as a direct or peeled reference, got {value:?}"),
+    }
     let deleted = newest_ref(&tables, b"refs/heads/deleted").expect("Git writes a deletion tombstone");
     assert_eq!(
         deleted.value,

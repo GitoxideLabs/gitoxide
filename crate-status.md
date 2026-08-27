@@ -173,7 +173,7 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [ ] receive-side hooks and [`reference-transaction`](https://git-scm.com/docs/githooks#_reference_transaction)
     * **refs**
         * [ ] run transaction hooks and handle special repository states like quarantine
-        * [ ] support for different backends like `files` and `reftable`
+        * [x] support for different backends like `files` and `reftable`
     * **main or linked worktree**
         * [ ] add files with `.gitignore` handling
         * [ ] checkout with conversions like clean + smudge as in `.gitattributes`
@@ -1049,7 +1049,10 @@ Provide a reftable backend for refs and reflogs as part of Git 3.0 compatibility
 * [x] atomically read and publish complete reftable stack generations
 * [x] lock-held additions and reflog records
 * [x] serialized full-stack compaction and bounded abandoned-table cleanup
-* [ ] backend selection and migration between `files` and `reftable`
+* [x] repository detection, selection, initialization, and clone support
+* [x] repository verification, cleanup, compaction, and reftable reflog expiry
+* [x] [bidirectional Git compatibility and robustness matrix](gix-reftable/COMPATIBILITY.md)
+* [ ] automatic migration between `files` and `reftable` (outside the initial support scope)
 
 [reftable-spec]: https://github.com/git/git/blob/f78ce2f7b6df702f93d40b85d6bda92a3f65da79/Documentation/technical/reftable.adoc
 [reftable-v2]: https://github.com/google/reftable/blob/master/reftable-v2-proposal.md

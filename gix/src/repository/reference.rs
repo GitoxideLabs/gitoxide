@@ -8,6 +8,29 @@ use crate::{Reference, bstr::BString, ext::ReferenceExt, reference};
 
 /// Obtain and alter references comfortably
 impl crate::Repository {
+    /// Verify physical reference storage visible to this repository.
+    ///
+    /// For reftable repositories, this validates the stack metadata and every record
+    /// in every listed table, including records hidden by newer updates, across
+    /// the common and all linked-worktree stacks.
+    pub fn verify_references(&self) -> Result<(), gix_ref::store::BackendError> {
+        self.refs.verify()
+    }
+
+    /// Optimize physical reference storage according to `options`.
+    ///
+    /// Reftable repositories compact the common stack and every linked-worktree
+    /// stack. Files repositories retain their existing layout; requesting reflog
+    /// expiry for them returns an error.
+    pub fn optimize_references(
+        &self,
+        options: reference::maintenance::Options,
+    ) -> Result<(), reference::maintenance::Error> {
+        let (_, aggregate_lock_fail) = self.config.lock_timeout()?;
+        self.refs.optimize(options, aggregate_lock_fail)?;
+        Ok(())
+    }
+
     /// Create a lightweight tag with given `name` (and without `refs/tags/` prefix) pointing to the given `target`, and return it as reference.
     ///
     /// It will be created with `constraint` which is most commonly to [only create it](PreviousValue::MustNotExist)

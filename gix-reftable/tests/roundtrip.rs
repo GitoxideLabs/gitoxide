@@ -274,6 +274,52 @@ fn object_lookup_with_a_mismatched_hash_kind_is_empty_even_for_long_index_keys()
 }
 
 #[test]
+fn rejects_reserved_object_abbreviation_widths() {
+    let refs = vec![RefRecord {
+        name: BString::from("refs/heads/main"),
+        update_index: 1,
+        value: RefValue::Direct(oid(7, Kind::Sha256)),
+    }];
+    let bytes = Writer::new(WriteOptions {
+        version: Version::V2,
+        object_hash: Kind::Sha256,
+        ..WriteOptions::default()
+    })
+    .write(&refs, &[])
+    .expect("the seed table contains an object section");
+    let footer_start = bytes.len() - 72;
+    let packed_range = footer_start + 36..footer_start + 44;
+    let packed_object_position = u64::from_be_bytes(
+        bytes[packed_range.clone()]
+            .try_into()
+            .expect("the v2 footer contains the packed object position"),
+    );
+    assert_ne!(
+        packed_object_position >> 5,
+        0,
+        "the regression fixture contains an object section"
+    );
+
+    for invalid_width in [0, 1] {
+        let mut corrupted = bytes.clone();
+        let invalid = (packed_object_position & !31) | invalid_width;
+        corrupted[packed_range.clone()].copy_from_slice(&invalid.to_be_bytes());
+        let crc = gix_features::hash::crc32(&corrupted[footer_start..corrupted.len() - 4]);
+        let crc_start = corrupted.len() - 4;
+        corrupted[crc_start..].copy_from_slice(&crc.to_be_bytes());
+
+        let error = Table::from_bytes(&corrupted, Limits::default())
+            .expect_err("an object section cannot use a reserved abbreviation width");
+        assert!(
+            error
+                .to_string()
+                .contains("object abbreviation length is outside 2..=31"),
+            "width {invalid_width} reports the object abbreviation invariant: {error}"
+        );
+    }
+}
+
+#[test]
 fn zero_position_object_records_trigger_the_specified_full_scan() {
     let object_id = oid(9, Kind::Sha1);
     let refs = (0..400)

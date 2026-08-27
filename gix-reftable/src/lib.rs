@@ -3,8 +3,8 @@
 //! The format contract is Git's published
 //! [`reftable` specification](https://github.com/git/git/blob/f78ce2f7b6df702f93d40b85d6bda92a3f65da79/Documentation/technical/reftable.adoc)
 //! at commit `f78ce2f7b6df702f93d40b85d6bda92a3f65da79`. This crate is an
-//! independent Rust implementation of that document. Git itself is used only
-//! as an executable compatibility oracle.
+//! independent Rust implementation of that document. Cross-implementation
+//! tests compare its behavior with Git.
 //!
 //! The immutable codec implements the specification's [Details], [File format]
 //! (including its header, ref, object, log, index, and footer subsections), and

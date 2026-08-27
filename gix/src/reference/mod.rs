@@ -16,6 +16,8 @@ mod errors;
 pub use errors::{edit, find, follow, head_commit, head_id, head_tree, head_tree_id, peel};
 
 pub mod log;
+/// Verification and physical maintenance of reference storage.
+pub mod maintenance;
 
 mod edits;
 pub use edits::{delete, set_target_id};
@@ -108,8 +110,8 @@ impl<'repo> Reference<'repo> {
     /// # Ok(()) }
     /// ```
     pub fn peel_to_id(&mut self) -> Result<Id<'repo>, peel::Error> {
-        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects)?;
-        Ok(Id::from_id(oid, self.repo))
+        let object_id = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects)?;
+        Ok(Id::from_id(object_id, self.repo))
     }
 
     /// Follow all symbolic targets and annotated tags through a stable reference snapshot.

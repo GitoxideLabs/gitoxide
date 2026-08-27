@@ -25,7 +25,7 @@ table.
 
 Fixtures are generated instead of checked in so the test records compatibility
 with the Git version actually used by CI. Every generated repository contains
-`reftable-fixture.provenance` at its root with `git --version` output and the
-ordered command sequence that produced it (including the number of commands
-fed to `git update-ref --stdin`). The test skips only when that Git cannot
-initialize a reftable repository at all.
+`reftable-fixture-generation.txt` at its root with `git --version` output and
+the ordered command sequence that produced it (including the number of
+commands fed to `git update-ref --stdin`). The test skips only when that Git
+cannot initialize a reftable repository at all.

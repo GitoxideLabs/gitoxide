@@ -9,11 +9,25 @@ license = "MIT OR Apache-2.0"
 description = "Read and write Git reftable files"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
-include = ["/src/**/*", "/LICENSE-*"]
+readme = "README.md"
+include = [
+    "/src/**/*",
+    "/benches/**/*",
+    "/COMPATIBILITY.md",
+    "/PERFORMANCE.md",
+    "/IMPLEMENTATION-SOURCES.md",
+    "/README.md",
+    "/LICENSE-*",
+]
 rust-version = "1.88"
 
 [lib]
 doctest = false
+
+[[bench]]
+name = "operations"
+harness = false
+path = "./benches/operations.rs"
 
 [features]
 default = []
@@ -32,6 +46,7 @@ bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 thiserror = "2.0.18"
 
 [dev-dependencies]
+criterion = "0.8.2"
 gix-reftable = { path = ".", features = ["sha1", "sha256"] }
 gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }

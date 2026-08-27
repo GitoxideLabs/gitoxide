@@ -87,6 +87,212 @@ fn try_find_reference_with_existing_ref_as_path_prefix_returns_none() -> crate::
     Ok(())
 }
 
+mod maintenance {
+    #[test]
+    fn files_storage_can_be_verified_and_default_optimization_is_nondestructive() -> crate::Result {
+        let (repo, _keep) = crate::basic_rw_repo()?;
+        let before = repo
+            .references()?
+            .all()?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(gix::Reference::detach)
+            .collect::<Vec<_>>();
+        repo.verify_references()?;
+        repo.optimize_references(Default::default())?;
+        let after = repo
+            .references()?
+            .all()?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(gix::Reference::detach)
+            .collect::<Vec<_>>();
+        assert_eq!(after, before, "files-backed behavior remains unchanged");
+
+        let err = repo
+            .optimize_references(gix::reference::maintenance::Options {
+                expire_reflogs_before: Some(u64::MAX),
+                ..Default::default()
+            })
+            .expect_err("files-backed reflog expiry must not be silently ignored");
+        assert_eq!(
+            err.to_string(),
+            "Could not expire reference logs",
+            "the top-level error identifies the unsupported operation"
+        );
+        assert!(
+            std::iter::successors(std::error::Error::source(&err), |source| source.source())
+                .any(|source| source.to_string().contains("not supported by the files backend")),
+            "the concrete files-backend limitation remains available through the error source chain"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn repository_maintenance_compacts_reftable_storage() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let repo = gix::ThreadSafeRepository::init(
+            tmp.path(),
+            gix::create::Kind::WithWorktree,
+            gix::create::Options {
+                reference_storage: gix::create::ReferenceStorage::Reftable,
+                ..Default::default()
+            },
+        )?
+        .to_thread_local();
+        let empty_tree_id = repo.object_hash().empty_tree();
+        repo.reference(
+            "refs/heads/topic",
+            empty_tree_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "create",
+        )?;
+        repo.reference(
+            "refs/heads/topic",
+            empty_tree_id,
+            gix::refs::transaction::PreviousValue::Any,
+            "same value",
+        )?;
+        let list_path = repo.git_dir().join("reftable/tables.list");
+        assert!(
+            std::fs::read_to_string(&list_path)?.lines().count() > 1,
+            "two reference updates produce multiple immutable stack members"
+        );
+
+        repo.verify_references()?;
+        repo.optimize_references(gix::reference::maintenance::Options {
+            expire_reflogs_before: Some(u64::MAX),
+            ..Default::default()
+        })?;
+        assert_eq!(
+            std::fs::read_to_string(&list_path)?.lines().count(),
+            1,
+            "repository maintenance compacts the stack to one member"
+        );
+        repo.verify_references()?;
+        Ok(())
+    }
+
+    #[test]
+    fn reftable_maintenance_uses_the_aggregate_lock_timeout() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let mut repo = gix::ThreadSafeRepository::init(
+            tmp.path(),
+            gix::create::Kind::Bare,
+            gix::create::Options {
+                reference_storage: gix::create::ReferenceStorage::Reftable,
+                ..Default::default()
+            },
+        )?
+        .to_thread_local();
+        let mut config = repo.config_snapshot_mut();
+        config.append_config(
+            ["core.filesRefLockTimeout=0", "core.packedRefsTimeout=1000"],
+            gix_config::Source::Api,
+        )?;
+        config.commit()?;
+
+        let list_path = repo.git_dir().join("reftable/tables.list");
+        let lock = gix_lock::File::acquire_to_update_resource(&list_path, gix_lock::acquire::Fail::Immediately, None)?;
+        let release_lock = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            drop(lock);
+        });
+
+        repo.optimize_references(Default::default())?;
+        release_lock.join().expect("the publication-lock holder exits normally");
+        Ok(())
+    }
+}
+
+mod reftable_bare_interop {
+    fn git_ok(cwd: &std::path::Path, args: &[&str]) -> crate::Result<std::process::Output> {
+        gix_testtools::isolated_git_output_checked(Some(cwd), args)
+    }
+
+    fn enabled_hashes() -> Vec<gix::hash::Kind> {
+        #[cfg(feature = "sha256")]
+        {
+            vec![gix::hash::Kind::Sha1, gix::hash::Kind::Sha256]
+        }
+        #[cfg(not(feature = "sha256"))]
+        {
+            vec![gix::hash::Kind::Sha1]
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn git_and_gix_created_bare_repositories_are_bidirectionally_writable() -> crate::Result {
+        if gix_testtools::should_skip_as_git_version_is_smaller_than(2, 45, 0) {
+            return Ok(());
+        }
+
+        let temp = gix_testtools::tempfile::TempDir::new()?;
+        for object_hash in enabled_hashes() {
+            let git_created_path = temp.path().join(format!("git-{object_hash}.git"));
+            let init = gix_testtools::isolated_git_command(None)
+                .current_dir(temp.path())
+                .args(["init", "--quiet", "--bare", "--ref-format=reftable"])
+                .arg(format!("--object-format={object_hash}"))
+                .arg(&git_created_path)
+                .output()?;
+            assert!(
+                init.status.success(),
+                "Git initializes a bare {object_hash} reftable repository: {}",
+                String::from_utf8_lossy(&init.stderr)
+            );
+            let git_created = gix::open_opts(&git_created_path, gix::open::Options::isolated())?;
+            let git_created_tree_id = git_created.write_object(gix::objs::Tree::empty())?;
+            git_created.reference(
+                "refs/tags/from-gix",
+                git_created_tree_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "write through gix",
+            )?;
+            let resolved = git_ok(&git_created_path, &["rev-parse", "refs/tags/from-gix"])?;
+            assert_eq!(
+                String::from_utf8(resolved.stdout)?.trim(),
+                git_created_tree_id.to_string(),
+                "Git reads a reference written by gix in a Git-created bare {object_hash} repository"
+            );
+
+            let gix_created_path = temp.path().join(format!("gix-{object_hash}.git"));
+            let gix_created = gix::ThreadSafeRepository::init(
+                &gix_created_path,
+                gix::create::Kind::Bare,
+                gix::create::Options {
+                    object_hash: Some(object_hash),
+                    reference_storage: gix::create::ReferenceStorage::Reftable,
+                    ..Default::default()
+                },
+            )?
+            .to_thread_local();
+            let gix_created_tree_id = gix_created.write_object(gix::objs::Tree::empty())?;
+            gix_created.reference(
+                "refs/tags/from-gix",
+                gix_created_tree_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "write through gix",
+            )?;
+            let object_id = gix_created_tree_id.to_string();
+            git_ok(&gix_created_path, &["update-ref", "refs/tags/from-git", &object_id])?;
+            assert_eq!(
+                gix_created.find_reference("refs/tags/from-git")?.target().try_id(),
+                Some(gix_created_tree_id.as_ref()),
+                "gix reads a reference written by Git in a gix-created bare {object_hash} repository"
+            );
+            let resolved = git_ok(&gix_created_path, &["rev-parse", "refs/tags/from-gix"])?;
+            assert_eq!(
+                String::from_utf8(resolved.stdout)?.trim(),
+                object_id,
+                "Git can continue reading gix-written refs after updating a gix-created bare {object_hash} repository"
+            );
+        }
+        Ok(())
+    }
+}
+
 mod iter_references {
     use crate::util::hex_to_id;
 

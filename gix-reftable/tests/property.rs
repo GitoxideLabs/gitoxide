@@ -52,35 +52,62 @@ fn records(kind: Kind) -> (Vec<RefRecord>, Vec<LogRecord>) {
 
 #[test]
 fn records_roundtrip_across_block_shapes() {
-    let (refs, logs) = records(Kind::Sha256);
-    for (block_size, restart_interval, align_blocks) in [(192, 1, false), (257, 7, true), (4096, 64, true)] {
-        let bytes = Writer::new(WriteOptions {
-            version: Version::V2,
-            object_hash: Kind::Sha256,
-            block_size,
-            restart_interval,
-            align_blocks,
-            include_object_index: true,
-            update_index_range: None,
-        })
-        .write(&refs, &logs)
-        .expect("generated records fit the selected block shape");
-        let table = Table::from_bytes(&bytes, Limits::default()).expect("the generated table validates");
-        assert_eq!(
-            table.refs().collect::<Vec<_>>(),
-            refs.iter().collect::<Vec<_>>(),
-            "reference records survive every generated block shape"
-        );
-        assert_eq!(
-            table.logs().collect::<Vec<_>>(),
-            logs.iter().collect::<Vec<_>>(),
-            "log records survive every generated block shape"
-        );
-        for record in &refs {
+    for (version, kind) in [
+        (Version::V1, Kind::Sha1),
+        (Version::V2, Kind::Sha1),
+        (Version::V2, Kind::Sha256),
+    ] {
+        let (refs, logs) = records(kind);
+        for (block_size, restart_interval, align_blocks, include_object_index) in [
+            (192, 1, false, true),
+            (193, 2, true, false),
+            (257, 7, true, true),
+            (511, 16, false, false),
+            (4096, 64, true, true),
+        ] {
+            let bytes = Writer::new(WriteOptions {
+                version,
+                object_hash: kind,
+                block_size,
+                restart_interval,
+                align_blocks,
+                include_object_index,
+                update_index_range: None,
+            })
+            .write(&refs, &logs)
+            .expect("generated records fit the selected block shape");
+            let table = Table::from_bytes(&bytes, Limits::default()).expect("the generated table validates");
             assert_eq!(
-                table.find_ref(record.name.as_slice()),
-                Some(record),
-                "indexed lookup agrees with full iteration"
+                table.header().version,
+                version,
+                "the selected version survives every block shape"
+            );
+            assert_eq!(
+                table.header().object_hash,
+                kind,
+                "the selected hash survives every block shape"
+            );
+            assert_eq!(
+                table.refs().collect::<Vec<_>>(),
+                refs.iter().collect::<Vec<_>>(),
+                "reference records survive every version, hash, and block shape"
+            );
+            assert_eq!(
+                table.logs().collect::<Vec<_>>(),
+                logs.iter().collect::<Vec<_>>(),
+                "log records survive every version, hash, and block shape"
+            );
+            for record in &refs {
+                assert_eq!(
+                    table.find_ref(record.name.as_slice()),
+                    Some(record),
+                    "exact lookup agrees with full iteration"
+                );
+            }
+            assert_eq!(
+                table.refs_for_object(oid(1, kind).as_ref()).collect::<Vec<_>>(),
+                vec![&refs[1]],
+                "object lookup agrees with the decoded records whether or not an object index is present"
             );
         }
     }

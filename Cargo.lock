@@ -2440,6 +2440,7 @@ name = "gix-reftable"
 version = "0.1.0"
 dependencies = [
  "bstr",
+ "criterion",
  "gix-features",
  "gix-hash",
  "gix-lock",

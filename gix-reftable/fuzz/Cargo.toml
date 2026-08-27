@@ -8,6 +8,7 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
+bstr = "1.12.0"
 gix-hash = { path = "../../gix-hash", features = ["sha1", "sha256"] }
 libfuzzer-sys = "0.4"
 tempfile = "3.27.0"
@@ -32,5 +33,11 @@ doc = false
 [[bin]]
 name = "stack_list"
 path = "fuzz_targets/stack_list.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "writer_roundtrip"
+path = "fuzz_targets/writer_roundtrip.rs"
 test = false
 doc = false
