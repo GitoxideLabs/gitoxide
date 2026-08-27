@@ -37,7 +37,7 @@ pub mod delete {
         #[error("Could not open a worktree repository")]
         OpenWorktreeRepo(#[source] crate::open::Error),
         #[error("Failed to follow a symbolic reference while inspecting worktrees")]
-        FollowSymref(#[source] gix_ref::file::find::existing::Error),
+        FollowSymref(#[source] gix_ref::store::find::existing::Error),
         #[error("Could not acquire the local configuration lock")]
         ConfigLock(#[source] gix_lock::acquire::Error),
         #[error("Could not read the local configuration")]

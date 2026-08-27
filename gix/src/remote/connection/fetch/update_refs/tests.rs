@@ -36,6 +36,11 @@ mod update {
         let dir = gix_testtools::scripted_fixture_read_only("make_remote_repos.sh").unwrap();
         gix::open_opts(dir.join(name), restricted()).unwrap()
     }
+    fn named_repo_rw(name: &str) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir)> {
+        let dir = gix_testtools::scripted_fixture_writable("make_remote_repos.sh")?;
+        let repo = gix::open_opts(dir.path().join(name), restricted())?;
+        Ok((repo, dir))
+    }
     fn repo_rw(name: &str) -> (gix::Repository, gix_testtools::tempfile::TempDir) {
         let dir = gix_testtools::scripted_fixture_writable_with_args_single_archive(
             "make_fetch_repos.sh",
@@ -405,6 +410,37 @@ mod update {
                 PreviousValue::MustExistAndMatch(Target::Symbolic("refs/heads/other".try_into().expect("valid"),)),
                 "action: change unborn ref",
             )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn corrupt_symbolic_referents_are_not_treated_as_unborn() -> Result {
+        let (repo, _keep) = named_repo_rw("unborn")?;
+        let (mappings, specs) = mapping_from_spec("HEAD:refs/heads/existing-unborn-symbolic", &repo);
+        std::fs::write(repo.git_dir().join("refs/heads/main"), "not-an-object-id\n")?;
+
+        let err = fetch::refs::update(
+            &repo,
+            prefixed("action"),
+            &mappings,
+            &specs,
+            &[],
+            fetch::Tags::None,
+            fetch::DryRun::Yes,
+            fetch::WritePackedRefs::Never,
+        )
+        .expect_err("a malformed symbolic referent must remain an access error");
+        assert!(
+            matches!(
+                err,
+                fetch::refs::update::Error::PeelToId(gix::reference::peel::Error::ToId(
+                    gix_ref::store::peel::to_id::Error::FollowToObject(gix_ref::store::peel::to_object::Error::Follow(
+                        gix_ref::store::find::existing::Error::Find(_)
+                    ))
+                ))
+            ),
+            "backend and parsing failures must not enter the unborn-reference path: {err:?}"
         );
         Ok(())
     }

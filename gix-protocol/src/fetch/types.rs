@@ -49,14 +49,14 @@ mod with_fetch {
         Objects: gix_object::Find + gix_object::FindHeader + gix_object::Exists,
         Alternates: FnOnce() -> Result<AlternatesOut, AlternatesErr>,
         AlternatesErr: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
-        AlternatesOut: Iterator<Item = (gix_ref::file::Store, Find)>,
+        AlternatesOut: Iterator<Item = (gix_ref::Store, Find)>,
         Find: gix_object::Find,
     {
         /// Access to the object database.
         /// *Note* that the `exists()` calls must not trigger a refresh of the ODB packs as plenty of them might fail, i.e. find on object.
         pub objects: &'a Objects,
         /// Access to the git references database.
-        pub refs: &'a gix_ref::file::Store,
+        pub refs: &'a gix_ref::Store,
         /// A function that returns an iterator over `(refs, objects)` for each alternate repository, to assure all known objects are added also according to their tips.
         pub alternates: Alternates,
         /// The implementation that performs the negotiation later, i.e. prepare wants and haves.

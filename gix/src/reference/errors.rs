@@ -8,9 +8,9 @@ pub mod edit {
     #[expect(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        FileTransactionPrepare(#[from] gix_ref::file::transaction::prepare::Error),
+        TransactionPrepare(#[from] gix_ref::store::transaction::prepare::Error),
         #[error(transparent)]
-        FileTransactionCommit(#[from] gix_ref::file::transaction::commit::Error),
+        TransactionCommit(#[from] gix_ref::store::transaction::commit::Error),
         #[error(transparent)]
         NameValidation(#[from] gix_validate::reference::name::Error),
         #[error(
@@ -30,9 +30,7 @@ pub mod peel {
     #[expect(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        ToId(#[from] gix_ref::peel::to_id::Error),
-        #[error(transparent)]
-        PackedRefsOpen(#[from] gix_ref::packed::buffer::open::Error),
+        ToId(#[from] gix_ref::store::peel::to_id::Error),
     }
 
     ///
@@ -42,9 +40,7 @@ pub mod peel {
         #[expect(missing_docs)]
         pub enum Error {
             #[error(transparent)]
-            FollowToObject(#[from] gix_ref::peel::to_object::Error),
-            #[error(transparent)]
-            PackedRefsOpen(#[from] gix_ref::packed::buffer::open::Error),
+            FollowToObject(#[from] gix_ref::store::peel::to_object::Error),
             #[error(transparent)]
             FindObject(#[from] crate::object::find::existing::Error),
             #[error(transparent)]
@@ -62,9 +58,7 @@ pub mod follow {
         #[expect(missing_docs)]
         pub enum Error {
             #[error(transparent)]
-            FollowToObject(#[from] gix_ref::peel::to_object::Error),
-            #[error(transparent)]
-            PackedRefsOpen(#[from] gix_ref::packed::buffer::open::Error),
+            FollowToObject(#[from] gix_ref::store::peel::to_object::Error),
         }
     }
 }
@@ -143,6 +137,6 @@ pub mod find {
     #[expect(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        Find(#[from] gix_ref::file::find::Error),
+        Find(#[from] gix_ref::store::find::Error),
     }
 }

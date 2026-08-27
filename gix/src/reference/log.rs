@@ -1,7 +1,7 @@
 //!
 #![allow(clippy::empty_docs)]
 use gix_object::commit::MessageRef;
-use gix_ref::file::ReferenceExt;
+use gix_ref::store::ReferenceExt;
 
 use crate::{
     Reference,
@@ -10,12 +10,21 @@ use crate::{
 
 impl Reference<'_> {
     /// Return a platform for obtaining iterators over reference logs.
-    pub fn log_iter(&self) -> gix_ref::file::log::iter::Platform<'_, '_> {
+    pub fn log_iter(&self) -> gix_ref::store::log::Platform<'_> {
         self.inner.log_iter(&self.repo.refs)
     }
 
     /// Return true if a reflog is present for this reference.
+    ///
+    /// This compatibility convenience returns `false` if the reference backend
+    /// cannot be accessed. Use [`Reference::try_log_exists()`] when the caller
+    /// must distinguish absence from an access or corruption error.
     pub fn log_exists(&self) -> bool {
+        self.try_log_exists().unwrap_or(false)
+    }
+
+    /// Return whether a reflog is present, preserving adapter access errors.
+    pub fn try_log_exists(&self) -> Result<bool, gix_ref::store::log::Error> {
         self.inner.log_exists(&self.repo.refs)
     }
 }

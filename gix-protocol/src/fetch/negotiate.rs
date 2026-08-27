@@ -9,7 +9,7 @@ use std::borrow::Cow;
 
 use gix_date::SecondsSinceUnixEpoch;
 use gix_negotiate::Flags;
-use gix_ref::file::ReferenceExt;
+use gix_ref::store::ReferenceExt;
 
 use crate::fetch::{RefMap, Shallow, Tags, refmap};
 
@@ -24,13 +24,13 @@ pub enum Error {
     #[error(transparent)]
     LookupCommitInGraph(#[from] gix_revwalk::graph::get_or_insert_default::Error),
     #[error(transparent)]
-    OpenPackedRefsBuffer(#[from] gix_ref::packed::buffer::open::Error),
-    #[error(transparent)]
     IO(#[from] std::io::Error),
+    #[error("Could not obtain a stable reference-store snapshot")]
+    InitRefSnapshot(#[from] gix_ref::store::snapshot::Error),
+    #[error("Could not iterate a reference")]
+    IterRef(#[from] gix_ref::store::iter::Error),
     #[error(transparent)]
-    InitRefIter(#[from] gix_ref::file::iter::loose_then_packed::Error),
-    #[error(transparent)]
-    PeelToId(#[from] gix_ref::peel::to_id::Error),
+    PeelToId(#[from] gix_ref::store::peel::to_id::Error),
     #[error(transparent)]
     AlternateRefsAndObjects(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
@@ -120,7 +120,7 @@ pub struct Round {
 #[expect(clippy::too_many_arguments)]
 pub fn mark_complete_and_common_ref<Out, F, E>(
     objects: &(impl gix_object::Find + gix_object::FindHeader + gix_object::Exists),
-    refs: &gix_ref::file::Store,
+    refs: &gix_ref::Store,
     alternates: impl FnOnce() -> Result<Out, E>,
     negotiator: &mut dyn gix_negotiate::Negotiator,
     graph: &mut gix_negotiate::Graph<'_, '_>,
@@ -130,7 +130,7 @@ pub fn mark_complete_and_common_ref<Out, F, E>(
 ) -> Result<Action, Error>
 where
     E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
-    Out: Iterator<Item = (gix_ref::file::Store, F)>,
+    Out: Iterator<Item = (gix_ref::Store, F)>,
     F: gix_object::Find,
 {
     let _span = gix_trace::detail!("mark_complete_and_common_ref", mappings = ref_map.mappings.len());
@@ -364,32 +364,35 @@ fn mark_recent_complete_commits(
 }
 
 fn mark_all_refs_in_repo(
-    store: &gix_ref::file::Store,
+    store: &gix_ref::Store,
     objects: &impl gix_object::Find,
     graph: &mut gix_negotiate::Graph<'_, '_>,
     queue: &mut Queue,
     mark: Flags,
 ) -> Result<(), Error> {
     let _span = gix_trace::detail!("mark_all_refs");
-    for local_ref in store.iter()?.all()? {
+    let references = store.iter()?;
+    let mut references = references.all()?;
+    while let Some(local_ref) = references.next() {
         let mut local_ref = local_ref?;
-        let id =
-            match local_ref.peel_to_id_packed(store, objects, store.cached_packed_buffer()?.as_ref().map(|b| &***b)) {
-                Ok(id) => id,
-                Err(gix_ref::peel::to_id::Error::FollowToObject(gix_ref::peel::to_object::Error::Follow(
-                    gix_ref::file::find::existing::Error::NotFound { .. },
-                ))) => continue,
-                Err(err) => return Err(err.into()),
-            };
+        let commit_id = match local_ref.peel_to_id_with_snapshot(references.snapshot(), objects) {
+            Ok(commit_id) => commit_id,
+            Err(gix_ref::store::peel::to_id::Error::FollowToObject(
+                gix_ref::store::peel::to_object::Error::Follow(gix_ref::store::find::existing::Error::NotFound {
+                    ..
+                }),
+            )) => continue,
+            Err(err) => return Err(err.into()),
+        };
         let mut is_complete = false;
         if let Some(commit) = graph
-            .get_or_insert_commit(id, |md| {
+            .get_or_insert_commit(commit_id, |md| {
                 is_complete = md.flags.contains(Flags::COMPLETE);
                 md.flags |= mark;
             })?
             .filter(|_| !is_complete)
         {
-            queue.insert(commit.commit_time, id);
+            queue.insert(commit.commit_time, commit_id);
         }
     }
     Ok(())

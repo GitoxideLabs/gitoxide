@@ -24,7 +24,7 @@ mod error {
         #[error("Could not peel symbolic local reference to its ID")]
         PeelToId(#[from] crate::reference::peel::Error),
         #[error("Failed to follow a symbolic reference to assure worktree isn't affected")]
-        FollowSymref(#[from] gix_ref::file::find::existing::Error),
+        FollowSymref(#[from] gix_ref::store::find::existing::Error),
         #[error(transparent)]
         FindObject(#[from] crate::object::find::Error),
     }

@@ -240,24 +240,32 @@ mod find {
 
 #[test]
 #[cfg(feature = "revision")]
-fn set_target_id() {
+fn set_target_id() -> crate::Result {
     use crate::repo_rw;
-    let (repo, _tmp) = repo_rw("make_basic_repo.sh").unwrap();
-    let mut head_ref = repo.head_ref().unwrap().expect("present");
-    let target_id = repo.rev_parse_single(":/c1").unwrap();
+    let (repo, _tmp) = repo_rw("make_basic_repo.sh")?;
+    let mut head_ref = repo.head_ref()?.expect("the fixture has a HEAD reference");
+    let target_id = repo.rev_parse_single(":/c1")?;
     let prev_id = head_ref.id();
     assert_ne!(prev_id, target_id, "we don't point to the target id yet");
-    head_ref.set_target_id(target_id, "reflog message").unwrap();
+    head_ref.set_target_id(target_id, "reflog message")?;
     assert_eq!(head_ref.id(), target_id, "the id was set and is observable right away");
 
-    head_ref.delete().unwrap();
-    assert!(
-        head_ref
-            .set_target_id(prev_id, "fails")
-            .unwrap_err()
-            .to_string()
-            .starts_with("Reference \"refs/heads/main\" was supposed to exist")
+    head_ref.delete()?;
+    let err = head_ref
+        .set_target_id(prev_id, "fails")
+        .expect_err("updating a deleted reference must fail its previous-value constraint");
+    assert_eq!(
+        err.to_string(),
+        "Could not prepare a reference transaction",
+        "the top-level error names the failed backend-neutral operation"
     );
+    assert!(
+        std::iter::successors(std::error::Error::source(&err), |source| source.source()).any(|source| source
+            .to_string()
+            .starts_with("Reference \"refs/heads/main\" was supposed to exist")),
+        "the concrete previous-value failure remains available through the error source chain"
+    );
+    Ok(())
 }
 
 mod remote;

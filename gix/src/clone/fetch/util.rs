@@ -184,9 +184,10 @@ pub fn update_head(
             })?;
             repo.refs
                 .transaction()
-                .packed_refs(gix_ref::file::transaction::PackedRefs::DeletionsAndNonSymbolicUpdates(
-                    Box::new(&repo.objects),
-                ))
+                .write_strategy(gix_ref::store::transaction::WriteStrategy::Compact {
+                    objects: Box::new(&repo.objects),
+                    remove_separate_source: false,
+                })
                 .prepare(
                     {
                         let mut edits = vec![RefEdit::update_with_log(

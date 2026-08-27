@@ -205,11 +205,13 @@ impl crate::Repository {
         }
     }
 
-    /// Returns `Some(true)` if the reference database [is untouched](gix_ref::file::Store::is_pristine()).
+    /// Returns `Some(true)` if the reference database [is untouched](gix_ref::Store::is_pristine()).
     /// This typically indicates that the repository is new and empty.
-    /// Return `None` if a defect in the database makes the answer uncertain.
+    /// Return `None` if there is no authoritative `HEAD` from which to determine the state.
+    ///
+    /// Backend access and validation failures are returned to the caller.
     #[doc(alias = "is_empty", alias = "git2")]
-    pub fn is_pristine(&self) -> Option<bool> {
+    pub fn is_pristine(&self) -> Result<Option<bool>, gix_ref::store::BackendError> {
         use gix_utils::AsBStr;
         let name = self
             .config

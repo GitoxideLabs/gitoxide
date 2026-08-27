@@ -741,11 +741,17 @@ mod commit {
         let empty_tree_id = repo.write_object(gix::objs::Tree::empty())?.detach();
         let err = repo
             .commit("HEAD", "initial", empty_tree_id, [empty_tree_id])
-            .unwrap_err();
+            .expect_err("an initial commit cannot claim an existing parent");
         assert_eq!(
             err.to_string(),
-            "Reference \"refs/heads/main\" was supposed to exist with value 4b825dc642cb6eb9a060e54bf8d69288fbee4904, but didn't.",
-            "cannot provide parent id in initial commit"
+            "Could not prepare a reference transaction",
+            "the top-level error names the failed backend-neutral operation"
+        );
+        assert!(
+            std::iter::successors(std::error::Error::source(&err), |source| source.source()).any(|source| source
+                .to_string()
+                .starts_with("Reference \"refs/heads/main\" was supposed to exist with value")),
+            "the initial-commit constraint failure remains available through the error source chain"
         );
         Ok(())
     }

@@ -2,29 +2,27 @@
 #![allow(clippy::empty_docs)]
 
 use gix_path::RelativePath;
-use gix_ref::file::ReferenceExt;
+use gix_ref::store::ReferenceExt;
 
 /// A platform to create iterators over references.
 #[must_use = "Iterators should be obtained from this iterator platform"]
 pub struct Platform<'r> {
-    pub(crate) platform: gix_ref::file::iter::Platform<'r>,
+    pub(crate) platform: gix_ref::store::iter::Platform<'r>,
     /// The owning repository.
     pub repo: &'r crate::Repository,
 }
 
 /// An iterator over references, with or without filter.
-pub struct Iter<'packed, 'repo> {
-    inner: gix_ref::file::iter::LooseThenPacked<'packed, 'repo>,
-    peel_with_packed: Option<gix_ref::file::packed::SharedBufferSnapshot>,
+pub struct Iter<'platform, 'repo> {
+    inner: gix_ref::store::iter::Iter<'platform>,
     peel: bool,
     repo: &'repo crate::Repository,
 }
 
-impl<'packed, 'repo> Iter<'packed, 'repo> {
-    fn new(repo: &'repo crate::Repository, platform: gix_ref::file::iter::LooseThenPacked<'packed, 'repo>) -> Self {
+impl<'platform, 'repo> Iter<'platform, 'repo> {
+    fn new(repo: &'repo crate::Repository, platform: gix_ref::store::iter::Iter<'platform>) -> Self {
         Iter {
             inner: platform,
-            peel_with_packed: None,
             peel: false,
             repo,
         }
@@ -94,10 +92,9 @@ impl Iter<'_, '_> {
     ///
     /// # Note
     ///
-    /// Doing this is necessary as the packed-refs buffer is already held by the iterator, disallowing the consumer of the iterator
-    /// to peel the returned references themselves.
-    pub fn peeled(mut self) -> Result<Self, gix_ref::packed::buffer::open::Error> {
-        self.peel_with_packed = self.repo.refs.cached_packed_buffer()?;
+    /// Peeling through the iterator reuses the same reference-store snapshot as
+    /// iteration, so related lookups observe one adapter-defined view.
+    pub fn peeled(mut self) -> Result<Self, gix_ref::store::snapshot::Error> {
         self.peel = true;
         Ok(self)
     }
@@ -107,20 +104,16 @@ impl<'r> Iterator for Iter<'_, 'r> {
     type Item = Result<crate::Reference<'r>, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|res| {
-            res.map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync + 'static>)
-                .and_then(|mut r| {
-                    if self.peel {
-                        let repo = &self.repo;
-                        r.peel_to_id_packed(&repo.refs, &repo.objects, self.peel_with_packed.as_ref().map(|p| &***p))
-                            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync + 'static>)
-                            .map(|_| r)
-                    } else {
-                        Ok(r)
-                    }
-                })
-                .map(|r| crate::Reference::from_ref(r, self.repo))
-        })
+        let mut reference = match self.inner.next()? {
+            Ok(reference) => reference,
+            Err(err) => return Some(Err(Box::new(err))),
+        };
+        if self.peel
+            && let Err(err) = reference.peel_to_id_with_snapshot(self.inner.snapshot(), &self.repo.objects)
+        {
+            return Some(Err(Box::new(err)));
+        }
+        Some(Ok(crate::Reference::from_ref(reference, self.repo)))
     }
 }
 
@@ -138,4 +131,4 @@ pub mod init {
 }
 
 /// The error returned by [references()][crate::Repository::references()].
-pub type Error = gix_ref::packed::buffer::open::Error;
+pub type Error = gix_ref::store::snapshot::Error;

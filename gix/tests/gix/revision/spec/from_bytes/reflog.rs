@@ -1,3 +1,5 @@
+use std::io::Write as _;
+
 use gix::{prelude::ObjectIdExt, revision::Spec};
 
 use crate::{
@@ -111,4 +113,35 @@ fn by_date() {
         spec,
         Spec::from_id(hex_to_id_sha1_only("9f9eac6bd1cd4b4cc6a494f044b28c985a22972b").attach(&repo))
     );
+}
+
+#[test]
+fn malformed_reflog_entries_are_not_reported_as_missing_queries() -> crate::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("make_rev_spec_parse_repos.sh")?;
+    let repository_path = fixture.path().join("complex_graph");
+    for log_path in [
+        repository_path.join(".git/logs/refs/heads/main"),
+        repository_path.join(".git/logs/HEAD"),
+    ] {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log_path)?
+            .write_all(b"not a reflog entry\n")?;
+    }
+    let repo = gix::open_opts(&repository_path, crate::restricted())?;
+
+    for spec in ["main@{0}", "main@{42 +0030}", "@{-1}"] {
+        let error =
+            parse_spec_no_baseline(spec, &repo).expect_err("malformed reflog entries must fail revision parsing");
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("read a reference log in reverse"),
+            "{spec} preserves the reflog decoding failure: {rendered}"
+        );
+        assert!(
+            !rendered.contains("out of range") && !rendered.contains("does not contain any entries"),
+            "{spec} does not disguise corruption as an absent query: {rendered}"
+        );
+    }
+    Ok(())
 }

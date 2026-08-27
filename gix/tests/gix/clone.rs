@@ -503,19 +503,10 @@ mod blocking_io {
             &out.ref_map.extra_refspecs.len() - 1,
             "mappings don't refer to non-existing implicit refspecs"
         );
-        let packed_refs = repo
-            .refs
-            .cached_packed_buffer()?
-            .expect("packed refs should be present");
         assert_eq!(
-            repo.refs.loose_iter()?.count(),
-            1,
-            "HEAD is the only remaining loose symbolic ref as born remote symrefs are stored peeled"
-        );
-        assert_eq!(
-            packed_refs.iter()?.count(),
+            repo.references()?.all()?.collect::<Result<Vec<_>, _>>()?.len(),
             15,
-            "all non-symbolic refs should be stored, if reachable from our refs"
+            "all non-symbolic refs reachable from our refspecs should be stored"
         );
         let sig = repo
             .head()?
@@ -525,7 +516,7 @@ mod blocking_io {
             .next()
             .expect("one line")?
             .signature
-            .to_owned()?;
+            .to_owned();
         assert_eq!(sig.name, "no name configured");
         assert_eq!(sig.email, "noEmailAvailable@example.com");
 
@@ -658,7 +649,7 @@ mod blocking_io {
         Ok(())
     }
 
-    fn assert_reflog(log: std::io::Result<Option<gix_ref::file::log::iter::Forward<'_>>>) {
+    fn assert_reflog(log: Result<Option<gix_ref::store::log::Iter<'_>>, gix_ref::store::log::Error>) {
         let lines = log
             .unwrap()
             .expect("log present")

@@ -366,8 +366,9 @@ impl crate::Repository {
     }
 
     fn apply_changed_values(&mut self) {
-        self.refs.write_reflog = util::reflog_or_default(self.config.reflog, self.workdir().is_some());
-        self.refs.namespace.clone_from(&self.config.refs_namespace);
+        self.refs
+            .set_write_reflog(util::reflog_or_default(self.config.reflog, self.workdir().is_some()));
+        self.refs.replace_namespace(self.config.refs_namespace.clone());
     }
 }
 

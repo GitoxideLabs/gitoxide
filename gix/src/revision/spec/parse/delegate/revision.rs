@@ -117,22 +117,25 @@ impl delegate::Revision for Delegate<'_> {
         };
 
         let mut platform = r.log_iter();
-        match platform.rev().ok().flatten() {
+        match platform.rev().or_erased()? {
             Some(mut it) => match query {
                 ReflogLookup::Date(date) => {
                     let mut last = None;
-                    let id_to_insert = match it
-                        .filter_map(Result::ok)
-                        .inspect(|d| {
-                            last = Some(if d.previous_oid.is_null() {
-                                d.new_oid
-                            } else {
-                                d.previous_oid
-                            });
-                        })
-                        .find(|l| l.signature.time.seconds <= date.seconds)
-                    {
-                        Some(closest_line) => closest_line.new_oid,
+                    let mut closest = None;
+                    for line in it.by_ref() {
+                        let line = line.or_erased()?;
+                        last = Some(if line.previous_oid.is_null() {
+                            line.new_oid
+                        } else {
+                            line.previous_oid
+                        });
+                        if line.signature.time.seconds <= date.seconds {
+                            closest = Some(line.new_oid);
+                            break;
+                        }
+                    }
+                    let id_to_insert = match closest {
+                        Some(closest_id) => closest_id,
                         None => match last {
                             None => return Err(message("Reflog does not contain any entries").raise_erased()),
                             Some(id) => id,
@@ -144,21 +147,34 @@ impl delegate::Revision for Delegate<'_> {
                     }
                     Ok(())
                 }
-                ReflogLookup::Entry(no) => match it.nth(no).and_then(Result::ok) {
-                    Some(line) => {
-                        let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
-                        if !objs.contains(&line.new_oid) {
-                            objs.push(line.new_oid);
+                ReflogLookup::Entry(no) => {
+                    let mut available = 0;
+                    let mut selected = None;
+                    for line in it.by_ref() {
+                        let line = line.or_erased()?;
+                        let index = available;
+                        available += 1;
+                        if index == no {
+                            selected = Some(line);
+                            break;
                         }
-                        Ok(())
                     }
-                    None => Err(message!(
-                        "Reference '{name}' has {available} ref-log entries and entry number {no} is out of range",
-                        name = r.name(),
-                        available = platform.rev().ok().flatten().map_or(0, Iterator::count)
-                    )
-                    .raise_erased()),
-                },
+                    match selected {
+                        Some(line) => {
+                            let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
+                            if !objs.contains(&line.new_oid) {
+                                objs.push(line.new_oid);
+                            }
+                            Ok(())
+                        }
+                        None => Err(message!(
+                            "Reference '{name}' has {available} ref-log entries and entry number {no} is out of range",
+                            name = r.name(),
+                            available = available
+                        )
+                        .raise_erased()),
+                    }
+                }
             },
             None => Err(message!(
                 "Reference {reference:?} does not have a reference log, cannot {action}",
@@ -174,31 +190,34 @@ impl delegate::Revision for Delegate<'_> {
 
     fn nth_checked_out_branch(&mut self, branch_no: usize) -> Result<(), Exn> {
         self.unset_disambiguate_call();
-        fn prior_checkouts_iter<'a>(
-            platform: &'a mut gix_ref::file::log::iter::Platform<'static, '_>,
-        ) -> Result<impl Iterator<Item = (BString, ObjectId)> + 'a, gix_error::Error> {
-            match platform.rev().ok().flatten() {
-                Some(log) => Ok(log.filter_map(Result::ok).filter_map(|line| {
-                    line.message
-                        .strip_prefix(b"checkout: moving from ")
-                        .and_then(|from_to| from_to.find(" to ").map(|pos| &from_to[..pos]))
-                        .map(|from_branch| (from_branch.into(), line.previous_oid))
-                })),
-                None => Err(message(
+        fn prior_checkouts(platform: &mut gix_ref::store::log::Platform<'_>) -> Result<Vec<(BString, ObjectId)>, Exn> {
+            let Some(log) = platform.rev().or_erased()? else {
+                return Err(message(
                     "Reference HEAD does not have a reference log, cannot search prior checked out branch",
                 )
-                .raise()
-                .into_error()),
+                .raise_erased());
+            };
+            let mut out = Vec::new();
+            for line in log {
+                let line = line.or_erased()?;
+                if let Some(from_branch) = line
+                    .message
+                    .strip_prefix(b"checkout: moving from ")
+                    .and_then(|from_to| from_to.find(" to ").map(|pos| &from_to[..pos]))
+                {
+                    out.push((from_branch.into(), line.previous_oid));
+                }
             }
+            Ok(out)
         }
 
         let head = match self.repo.head() {
             Ok(head) => head,
             Err(err) => return Err(err.raise_erased()),
         };
-        let ok = prior_checkouts_iter(&mut head.log_iter())
-            .map(|mut it| it.nth(branch_no.saturating_sub(1)))
-            .or_erased()?;
+        let prior_checkouts = prior_checkouts(&mut head.log_iter())?;
+        let available = prior_checkouts.len();
+        let ok = prior_checkouts.into_iter().nth(branch_no.saturating_sub(1));
         match ok {
             Some((ref_name, id)) => {
                 let id = match self.repo.find_reference(ref_name.as_bstr()) {
@@ -229,7 +248,6 @@ impl delegate::Revision for Delegate<'_> {
             }
             None => Err(message!(
                 "HEAD has {available} prior checkouts and checkout number {branch_no} is out of range",
-                available = prior_checkouts_iter(&mut head.log_iter()).map_or(0, Iterator::count)
             )
             .raise_erased()),
         }

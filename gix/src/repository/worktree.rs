@@ -12,7 +12,7 @@ pub(crate) enum CheckedOutBranchesError {
     #[error("Could not open a worktree repository")]
     OpenWorktreeRepo(#[from] crate::open::Error),
     #[error("Failed to follow a symbolic reference")]
-    FollowSymref(#[from] gix_ref::file::find::existing::Error),
+    FollowSymref(#[from] gix_ref::store::find::existing::Error),
 }
 
 /// Interact with individual worktrees and their information.

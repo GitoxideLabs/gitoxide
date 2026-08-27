@@ -259,7 +259,7 @@ where
 
 struct Negotiate<'a, 'b, 'c> {
     objects: &'a crate::OdbHandle,
-    refs: &'a gix_ref::file::Store,
+    refs: &'a gix_ref::Store,
     graph: &'a mut gix_negotiate::Graph<'b, 'c>,
     alternates: Vec<PathBuf>,
     ref_map: &'a gix_protocol::fetch::RefMap,

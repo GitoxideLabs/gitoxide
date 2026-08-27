@@ -90,7 +90,7 @@ mod non_bare {
         .into();
         assert_eq!(repo.head()?.referent_name().expect("name"), "refs/heads/special");
         assert_eq!(
-            repo.is_pristine(),
+            repo.is_pristine()?,
             Some(true),
             "the expected default ref uses the de-duplicated fully qualified branch name"
         );
