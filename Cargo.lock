@@ -2557,6 +2557,7 @@ dependencies = [
  "signal-hook 0.4.4",
  "signal-hook-registry",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

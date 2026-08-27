@@ -52,6 +52,9 @@ hp-hashmap = ["dep:dashmap"]
 [target.'cfg(not(windows))'.dependencies]
 libc = { version = "0.2.186", default-features = false }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.1", features = ["Win32_Storage_FileSystem"] }
+
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
