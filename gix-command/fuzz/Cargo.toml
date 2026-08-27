@@ -24,3 +24,9 @@ name = "prepare"
 path = "fuzz_targets/prepare.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "command_line"
+path = "fuzz_targets/command_line.rs"
+test = false
+doc = false

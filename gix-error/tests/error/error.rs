@@ -9,7 +9,7 @@ use std::error::Error as _;
 #[test]
 fn from_exn_error() {
     let err = Error::from(message("one").raise());
-    assert_eq!(err.to_string(), "one");
+    assert_eq!(err, "one");
     insta::assert_compact_debug_snapshot!(
         &err,
         "compact Debug includes the caller location of the root frame",
@@ -23,7 +23,7 @@ fn from_exn_error() {
 #[test]
 fn from_exn_error_tree() {
     let err = Error::from(new_tree_error().raise(message("topmost")));
-    assert_eq!(err.to_string(), "topmost");
+    assert_eq!(err, "topmost");
     insta::assert_compact_debug_snapshot!(&err, "compact Debug renders the complete tree with caller locations", @"
     topmost, at gix-error/tests/error/error.rs:25
     |
@@ -154,7 +154,7 @@ fn from_exn_error_tree() {
 #[test]
 fn from_any_error() {
     let err = Error::from_error(message("one"));
-    assert_eq!(err.to_string(), "one");
+    assert_eq!(err, "one");
     assert_eq!(debug_string(&err), r#"Message("one")"#);
     insta::assert_debug_snapshot!(err, @r#"
     Message(
@@ -169,7 +169,7 @@ fn from_any_error() {
 #[test]
 fn from_any_error_with_source() {
     let err = Error::from_error(ErrorWithSource("main", message("one")));
-    assert_eq!(err.to_string(), "main", "display is the error itself");
+    assert_eq!(err, "main", "display is the error itself");
     assert_eq!(debug_string(&err), r#"ErrorWithSource("main", Message("one"))"#);
     insta::assert_debug_snapshot!(err, @r#"
     ErrorWithSource(
@@ -409,4 +409,23 @@ fn not_found_is_discovered_in_well_known_errors() {
     assert!(Error::from_boxed(boxed).is_not_found());
 
     assert!(!Error::from(message("permission denied").raise()).is_not_found());
+}
+
+#[test]
+fn equality_with_strings_uses_the_root_errors_display() {
+    let exn = message("cause").raise().raise(message("failure"));
+    assert_eq!(exn, "failure");
+    assert_eq!(exn, String::from("failure"));
+    assert_eq!(&exn, "failure");
+    assert_ne!(exn, "cause", "children aren't compared");
+
+    let error = Error::from(exn);
+    assert_eq!(error, "failure");
+    assert_eq!(&error, "failure");
+    assert_eq!(error, String::from("failure"));
+    assert_ne!(error, "other");
+
+    let nested = Error::from(message("nested cause").raise().raise(message("nested root"))).raise_erased();
+    assert_eq!(nested, "nested root", "nested error boundaries are transparent");
+    assert_eq!(Error::from(nested), "nested root");
 }
