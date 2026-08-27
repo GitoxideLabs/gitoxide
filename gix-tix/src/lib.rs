@@ -1222,7 +1222,7 @@ fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> O
         KeyCode::Char('q' | 'Q') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
             Some(WorktrunkInput::Cancel { force: false })
         }
-        KeyCode::Esc => Some(WorktrunkInput::Cancel { force: false }),
+        KeyCode::Esc if key.kind == KeyEventKind::Press => Some(WorktrunkInput::Cancel { force: false }),
         KeyCode::Char('/') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
             Some(WorktrunkInput::StartSearch)
         }
@@ -1265,6 +1265,10 @@ fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> O
         }
         _ => None,
     }
+}
+
+fn worktrunk_owns_input(app: &App, picker_focused: bool, terminal_focused: bool) -> bool {
+    picker_focused && terminal_focused && app.worktrunk_history_root()
 }
 
 fn diagnostic_worktrunk_input(input: Option<WorktrunkInput>) -> Option<WorktrunkInput> {
@@ -2650,7 +2654,7 @@ fn event_loop(
             urgent = true;
             continue;
         }
-        if picker.is_some() && *picker_focused && focused {
+        if picker.is_some() && worktrunk_owns_input(&app, *picker_focused, focused) {
             let input = match &terminal_event {
                 TerminalEvent::Key(key) => {
                     let picker = picker.as_ref().expect("picker presence was checked");
@@ -2907,7 +2911,7 @@ fn event_loop(
                 &terminal_event,
                 TerminalEvent::Key(KeyEvent {
                     code: KeyCode::Esc,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    kind: KeyEventKind::Press,
                     ..
                 })
             )
@@ -9094,6 +9098,16 @@ mod tests {
             Some(WorktrunkInput::Cancel { force: false })
         );
         assert_eq!(
+            worktrunk_input(
+                KeyEvent::new_with_kind(KeyCode::Esc, KeyModifiers::NONE, KeyEventKind::Repeat),
+                1,
+                4,
+                2,
+            ),
+            None,
+            "an Escape repeat cannot quit the picker after its press closed a modal"
+        );
+        assert_eq!(
             worktrunk_input(key(KeyCode::Char('/')), 1, 4, 2),
             Some(WorktrunkInput::StartSearch)
         );
@@ -9145,6 +9159,22 @@ mod tests {
             ),
             None,
             "a repeated opener does not leak into the search query"
+        );
+    }
+
+    #[test]
+    fn history_modals_preempt_worktrunk_input() {
+        let mut app = App::new(1);
+        assert!(worktrunk_owns_input(&app, true, true));
+
+        app.arm_rebase_continuation();
+        assert!(
+            !worktrunk_owns_input(&app, true, true),
+            "a conflicted rebase receives Escape instead of the worktree picker quitting"
+        );
+        assert_eq!(
+            app_action(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &app),
+            Some(Action::Cancel)
         );
     }
 

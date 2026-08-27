@@ -1003,6 +1003,8 @@ space first; changes blocks adapt within the remaining history width.
   unmerged index from it. `Esc` discards the suspended operation; navigation and
   other read-only actions leave the choice armed, while repository-changing actions
   and refresh are blocked. Key-release events are not actions and leave it armed.
+  Once an `Esc` press cancels it, repeats from that press cannot return to or close
+  the worktrunk picker.
   Diagnostics warn when a conflict suspends the rebase and record whether it is
   accepted, discarded, or fails during checkout.
 - A checked-out unresolved index keeps `C` at `@`, overrides dirty `🫟`, and
