@@ -1349,6 +1349,12 @@ space first; changes blocks adapt within the remaining history width.
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
   forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
+- Copy-, move-, and stack-insert, including bracketed paste, accept displayed
+  hidden boundaries as read-only targets. An insertion may add a child there but
+  does not rewrite the hidden target or its existing descendants, and leaves
+  their refs unchanged. The sole target-ref exception is an attached current
+  `HEAD` branch, which advances to a newly copied child and remains attached. A
+  moved stack cannot use a read-only target that descends from that stack.
 - Copy-insert requires a non-root, single-parent selected source. `a y` limits
   navigation to valid insertion targets; Enter copies the source above the
   selected target and Escape cancels. `tix copy-insert C I` accepts any
@@ -1356,27 +1362,31 @@ space first; changes blocks adapt within the remaining history width.
   another occurrence of its change above the target without removing the source
   occurrence, including when the target is the source's current parent. A copy
   of an active review commit is ordinary and does not share its review resources.
-  The new copy becomes detached `HEAD`; the branch
-  checked out before the operation remains visible through the ordinary HEAD
-  pin. If the target is an ancestor of the source, that source occurrence is
-  retained in its original logical position while its branch follows the
-  necessary rewrite. Git notes are copied to the new occurrence. Copy-insert
-  uses the history-todo conflict and continuation rules.
+  When inserted away from the current `HEAD`, the new copy becomes detached
+  `HEAD`; the branch checked out before the operation remains visible through
+  the ordinary HEAD pin. At an ordinary visible current `HEAD`, only its attached
+  branch advances to the copy and remains attached; every other ref at the target
+  stays unchanged. If a visible target is an ancestor of the source, that source
+  occurrence is retained in its original logical position while its branch
+  follows the necessary rewrite. Git notes are copied to the new occurrence.
+  Copy-insert uses the history-todo conflict and continuation rules.
 - Bracketed paste in the history view trims surrounding whitespace and accepts
   one uniquely resolvable hexadecimal object-ID prefix. If that object is a
   commit, its change is copy-inserted above the commit at the cursor using the
-  same progress, conflict, checkout, and undo behavior as `a y`. Other text,
-  ambiguous or missing IDs, non-commit objects, and unavailable targets produce
-  an attention message without changing the repository.
+  same progress, conflict, checkout, and undo behavior as `a y`. Any selected
+  hidden boundary is a valid read-only target. Other text, ambiguous or missing
+  IDs, non-commit objects, and unavailable targets produce an attention message
+  without changing the repository.
 - Move-insert requires selecting a non-root, single-parent `HEAD`, then limits
   navigation to valid insertion targets; Enter applies and Escape cancels. It removes `HEAD` from
   its old position, reconnects its former children to its parent, inserts its
-  rewritten change above the selected target, and reparents every former direct
-  child of the target above it. The target may be an ancestor, descendant, or in
-  unrelated history; selecting `HEAD` or its current parent is a no-op. An
-  unchanged merge target is permitted, but any move that would rewrite a merge
-  is unavailable. Mutable refs, pins, Git notes, enrichments, review resources,
-  and attached or detached checkout state follow their rewritten commits.
+  rewritten change above the selected target, and for visible targets reparents
+  every former direct child of the target above it. A visible target may be an
+  ancestor, descendant, or in unrelated history; selecting `HEAD` or its current
+  parent is a no-op. An unchanged merge target is permitted, but any move that
+  would rewrite a merge is unavailable. Mutable refs, pins, Git notes,
+  enrichments, review resources, and attached or detached checkout state follow
+  their rewritten commits.
   Move-insert uses the history-todo conflict and continuation rules.
 - Stack-insert requires the selected commit to be an inclusive base in the linear
   ancestry of `HEAD`. It then limits navigation to eligible insertion targets;

@@ -4460,14 +4460,19 @@ fn event_loop(
                     }
                 }
                 effect @ (Effect::Insert { .. } | Effect::PasteInsert { .. }) => {
-                    let (source, base, target, copy, pasted) = match effect {
+                    let (source, base, target, copy, pasted, target_is_read_only) = match effect {
                         Effect::Insert {
                             source,
                             base,
                             target,
                             copy,
-                        } => (source, base, target, copy, false),
-                        Effect::PasteInsert { source, target } => (source, source, target, true, true),
+                            target_is_read_only,
+                        } => (source, base, target, copy, false, target_is_read_only),
+                        Effect::PasteInsert {
+                            source,
+                            target,
+                            target_is_read_only,
+                        } => (source, source, target, true, true, target_is_read_only),
                         _ => unreachable!("the match arm accepts only insertion effects"),
                     };
                     fill_repository.retain = false;
@@ -4491,11 +4496,18 @@ fn event_loop(
                                 .context("inserting commits requires a completed history graph")?
                         };
                         let plan = if copy {
-                            edit::rebase::copy_insert_plan(&repository, graph, source, target)?
+                            edit::rebase::copy_insert_plan(&repository, graph, source, target, target_is_read_only)?
                         } else if base == source {
-                            edit::rebase::move_insert_plan(&repository, graph, source, target)?
+                            edit::rebase::move_insert_plan(&repository, graph, source, target, target_is_read_only)?
                         } else {
-                            edit::rebase::stack_insert_plan(&repository, graph, base, source, target)?
+                            edit::rebase::stack_insert_plan(
+                                &repository,
+                                graph,
+                                base,
+                                source,
+                                target,
+                                target_is_read_only,
+                            )?
                         };
                         run_rebase_plan(terminal, repository.into_sync(), graph, plan)
                     })();
