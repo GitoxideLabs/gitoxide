@@ -139,6 +139,79 @@ mod acquire {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn lock_following_symlinks_writes_their_target() -> crate::Result {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir()?;
+        let target = dir.path().join("target");
+        let intermediate = dir.path().join("intermediate");
+        let resource = dir.path().join("resource");
+        symlink("target", &intermediate)?;
+        symlink("intermediate", &resource)?;
+
+        let mut file =
+            gix_lock::File::acquire_to_update_resource_following_symlinks(&resource, fail_immediately(), None)?;
+        assert_eq!(file.resource_path(), target);
+        file.write_all(b"new state")?;
+        file.commit()?;
+
+        assert!(resource.symlink_metadata()?.file_type().is_symlink());
+        assert!(intermediate.symlink_metadata()?.file_type().is_symlink());
+        assert_eq!(std::fs::read(target)?, b"new state");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn lock_permissions_can_be_adjusted_after_applying_the_umask() -> crate::Result {
+        use std::{cell::Cell, os::unix::fs::PermissionsExt};
+
+        let dir = tempfile::tempdir()?;
+        let resource = dir.path().join("resource");
+        let mode_before_adjustment = Cell::new(0);
+        let file = gix_lock::File::acquire_to_update_resource_following_symlinks_with_permissions(
+            &resource,
+            fail_immediately(),
+            None,
+            |mut permissions| {
+                let mode = permissions.mode();
+                mode_before_adjustment.set(mode);
+                permissions.set_mode(mode | 0o660);
+                permissions
+            },
+        )?;
+        assert_eq!(
+            file.lock_path().metadata()?.permissions().mode(),
+            mode_before_adjustment.get() | 0o660,
+            "the adjustment sees and changes the mode left by the umask"
+        );
+        file.commit()?;
+        assert_eq!(
+            resource.metadata()?.permissions().mode(),
+            mode_before_adjustment.get() | 0o660,
+            "the adjusted mode reaches the resource"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resource_path_does_not_parse_the_lock_file_name() -> crate::Result {
+        let dir = tempfile::tempdir()?;
+        let resource_dir = dir.path().join("resource");
+        std::fs::create_dir(&resource_dir)?;
+        let mut resource = resource_dir.into_os_string();
+        resource.push(std::path::MAIN_SEPARATOR.to_string());
+        let resource = std::path::PathBuf::from(resource);
+
+        let file = gix_lock::File::acquire_to_update_resource(&resource, fail_immediately(), None)?;
+        assert_eq!(file.resource_path(), resource);
+        let err = file.commit().expect_err("a file cannot replace a directory");
+        assert_eq!(err.instance.resource_path(), resource);
+        Ok(())
+    }
+
+    #[test]
     fn lock_non_existing_dir_fails() -> crate::Result {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("a").join("resource.ext");

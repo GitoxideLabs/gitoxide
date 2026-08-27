@@ -60,6 +60,7 @@ pub mod commit;
 pub struct File {
     inner: gix_tempfile::Handle<Writable>,
     lock_path: PathBuf,
+    resource_path: PathBuf,
 }
 
 /// Locks a resource to allow related resources to be updated using [files][File].
@@ -72,6 +73,7 @@ pub struct Marker {
     inner: gix_tempfile::Handle<Closed>,
     created_from_file: bool,
     lock_path: PathBuf,
+    resource_path: PathBuf,
 }
 
 ///
