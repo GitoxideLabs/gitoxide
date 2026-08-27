@@ -30,11 +30,27 @@ pub struct Table {
 impl Table {
     /// Parse and validate one immutable table from `data`.
     pub fn from_bytes(data: &[u8], limits: Limits) -> Result<Self, Error> {
-        Parser::new(data, limits)?.parse()
+        Self::from_bytes_with_ref_log_limit(data, limits, usize::MAX)
+    }
+
+    pub(crate) fn from_bytes_with_ref_log_limit(
+        data: &[u8],
+        limits: Limits,
+        max_ref_log_records: usize,
+    ) -> Result<Self, Error> {
+        Parser::new(data, limits, max_ref_log_records)?.parse()
     }
 
     /// Read, parse, and validate one immutable table from `path`.
     pub fn read(path: impl AsRef<Path>, limits: Limits) -> Result<Self, Error> {
+        Self::read_with_ref_log_limit(path, limits, usize::MAX)
+    }
+
+    pub(crate) fn read_with_ref_log_limit(
+        path: impl AsRef<Path>,
+        limits: Limits,
+        max_ref_log_records: usize,
+    ) -> Result<Self, Error> {
         let path = path.as_ref();
         let file = std::fs::File::open(path).map_err(|source| Error::Io {
             path: path.to_owned(),
@@ -65,7 +81,7 @@ impl Table {
                 path: path.to_owned(),
                 source,
             })?;
-        Table::from_bytes(&data, limits).map_err(|source| Error::Parse {
+        Table::from_bytes_with_ref_log_limit(&data, limits, max_ref_log_records).map_err(|source| Error::Parse {
             path: path.to_owned(),
             source: Box::new(source),
         })
@@ -303,6 +319,8 @@ struct Parser<'a> {
     header: Header,
     footer: Footer,
     records_seen: usize,
+    ref_log_records_seen: usize,
+    max_ref_log_records: usize,
     refs: Vec<RefRecord>,
     logs: Vec<LogRecord>,
     objects: Vec<ObjectRecord>,
@@ -311,7 +329,7 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(data: &'a [u8], limits: Limits) -> Result<Self, Error> {
+    fn new(data: &'a [u8], limits: Limits, max_ref_log_records: usize) -> Result<Self, Error> {
         if data.len() > limits.max_file_size {
             return Err(Error::Limit("file size"));
         }
@@ -323,6 +341,8 @@ impl<'a> Parser<'a> {
             header,
             footer,
             records_seen: 0,
+            ref_log_records_seen: 0,
+            max_ref_log_records,
             refs: Vec::new(),
             logs: Vec::new(),
             objects: Vec::new(),
@@ -525,7 +545,7 @@ impl<'a> Parser<'a> {
         let mut restart_idx = 0;
         let mut local_index_entries = Vec::new();
         while cursor.position < restart_start {
-            self.bump_record_count()?;
+            self.bump_record_count(kind)?;
             let record_offset = cursor.position;
             let at_restart = restarts.get(restart_idx).copied() == Some(record_offset);
             if restarts
@@ -1067,10 +1087,19 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn bump_record_count(&mut self) -> Result<(), Error> {
+    fn bump_record_count(&mut self, kind: BlockKind) -> Result<(), Error> {
         self.records_seen = self.records_seen.checked_add(1).ok_or(Error::Limit("record count"))?;
         if self.records_seen > self.limits.max_records {
             return Err(Error::Limit("record count"));
+        }
+        if matches!(kind, BlockKind::Ref | BlockKind::Log) {
+            self.ref_log_records_seen = self
+                .ref_log_records_seen
+                .checked_add(1)
+                .ok_or(Error::Limit("stack record count"))?;
+            if self.ref_log_records_seen > self.max_ref_log_records {
+                return Err(Error::Limit("stack record count"));
+            }
         }
         Ok(())
     }
@@ -1366,7 +1395,32 @@ fn read_u64(data: &[u8], offset: usize) -> Result<u64, Error> {
 
 #[cfg(test)]
 mod tests {
+    use bstr::BString;
+
     use super::*;
+
+    #[test]
+    fn a_stack_record_budget_is_applied_while_the_table_is_decoded() {
+        let record = RefRecord {
+            name: BString::from("refs/heads/main"),
+            update_index: 1,
+            value: RefValue::Direct(Kind::shortest().null()),
+        };
+        let bytes = crate::Writer::new(crate::WriteOptions {
+            object_hash: Kind::shortest(),
+            update_index_range: Some((1, 1)),
+            ..crate::WriteOptions::default()
+        })
+        .write(&[record], &[])
+        .expect("the test record encodes");
+
+        let error = Table::from_bytes_with_ref_log_limit(&bytes, Limits::default(), 0)
+            .expect_err("the remaining stack budget rejects the first record");
+        assert!(
+            matches!(error, Error::Limit(message) if message == "stack record count"),
+            "the aggregate limit is reported before retaining the record: {error:?}"
+        );
+    }
 
     #[test]
     fn object_position_count_is_bounded_by_remaining_data_before_allocation() {
@@ -1397,6 +1451,8 @@ mod tests {
                 log_index_position: 0,
             },
             records_seen: 0,
+            ref_log_records_seen: 0,
+            max_ref_log_records: usize::MAX,
             refs: Vec::new(),
             logs: Vec::new(),
             objects: Vec::new(),

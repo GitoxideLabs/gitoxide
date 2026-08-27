@@ -32,27 +32,25 @@ pub struct WriteOptions {
 #[cfg(any(feature = "sha1", feature = "sha256"))]
 impl Default for WriteOptions {
     fn default() -> Self {
+        WriteOptions::for_hash(Kind::shortest())
+    }
+}
+
+impl WriteOptions {
+    pub(crate) fn for_hash(object_hash: Kind) -> Self {
         WriteOptions {
-            version: default_version(),
-            object_hash: Kind::shortest(),
+            version: if object_hash.len_in_bytes() == 20 {
+                Version::V1
+            } else {
+                Version::V2
+            },
+            object_hash,
             block_size: 4096,
             restart_interval: 16,
             align_blocks: true,
             include_object_index: true,
             update_index_range: None,
         }
-    }
-}
-
-#[cfg(any(feature = "sha1", feature = "sha256"))]
-const fn default_version() -> Version {
-    #[cfg(feature = "sha1")]
-    {
-        Version::V1
-    }
-    #[cfg(all(not(feature = "sha1"), feature = "sha256"))]
-    {
-        Version::V2
     }
 }
 
@@ -287,7 +285,7 @@ impl Writer {
                 key: block.last_key.clone(),
                 value_type: 0,
                 value: encoded_varint(block.position),
-                objects: Vec::new(),
+                object_ids: Vec::new(),
             })
             .collect::<Vec<_>>();
         loop {
@@ -306,7 +304,7 @@ impl Writer {
                     key: block.last_key.clone(),
                     value_type: 0,
                     value: encoded_varint(block.position),
-                    objects: Vec::new(),
+                    object_ids: Vec::new(),
                 })
                 .collect();
         }
@@ -318,7 +316,7 @@ struct RawRecord {
     key: Vec<u8>,
     value_type: u8,
     value: Vec<u8>,
-    objects: Vec<ObjectId>,
+    object_ids: Vec<ObjectId>,
 }
 
 #[derive(Debug)]
@@ -350,7 +348,7 @@ fn encode_ref_record(record: &RefRecord, header: Header) -> Result<RawRecord, Er
         .checked_sub(header.min_update_index)
         .ok_or(Error::InvalidInput("reference update index is below the table minimum"))?;
     let mut value = encoded_varint(delta);
-    let (value_type, objects) = match &record.value {
+    let (value_type, object_ids) = match &record.value {
         RefValue::Deletion => (0, Vec::new()),
         RefValue::Direct(object_id) => {
             ensure_hash(*object_id, header.object_hash)?;
@@ -382,7 +380,7 @@ fn encode_ref_record(record: &RefRecord, header: Header) -> Result<RawRecord, Er
         key: record.name.to_vec(),
         value_type,
         value,
-        objects,
+        object_ids,
     })
 }
 
@@ -451,7 +449,7 @@ fn encode_log_record(record: &LogRecord, hash: Kind) -> Result<RawRecord, Error>
         key,
         value_type,
         value,
-        objects: Vec::new(),
+        object_ids: Vec::new(),
     })
 }
 
@@ -547,23 +545,26 @@ fn object_records(
     hash: Kind,
     block_size: usize,
 ) -> Result<(Vec<RawRecord>, u8), Error> {
-    let mut objects = BTreeMap::<ObjectId, Vec<u64>>::new();
+    let mut positions_by_object_id = BTreeMap::<ObjectId, Vec<u64>>::new();
     for block in blocks {
         for record in &refs[block.record_range.clone()] {
-            for object_id in &record.objects {
-                objects.entry(*object_id).or_default().push(block.position);
+            for object_id in &record.object_ids {
+                positions_by_object_id
+                    .entry(*object_id)
+                    .or_default()
+                    .push(block.position);
             }
         }
     }
-    for positions in objects.values_mut() {
+    for positions in positions_by_object_id.values_mut() {
         positions.sort_unstable();
         positions.dedup();
     }
-    if objects.is_empty() {
+    if positions_by_object_id.is_empty() {
         return Ok((Vec::new(), 0));
     }
     let Some(abbreviation_len) = (2..=31.min(hash.len_in_bytes())).find(|len| {
-        objects
+        positions_by_object_id
             .keys()
             .map(|object_id| &object_id.as_slice()[..*len])
             .collect::<Vec<_>>()
@@ -572,7 +573,7 @@ fn object_records(
     }) else {
         return Ok((Vec::new(), 0));
     };
-    let records = objects
+    let records = positions_by_object_id
         .into_iter()
         .map(|(object_id, positions)| {
             let mut value = Vec::new();
@@ -598,7 +599,7 @@ fn object_records(
                 key: object_id.as_slice()[..abbreviation_len].to_vec(),
                 value_type,
                 value,
-                objects: Vec::new(),
+                object_ids: Vec::new(),
             }
         })
         .collect();

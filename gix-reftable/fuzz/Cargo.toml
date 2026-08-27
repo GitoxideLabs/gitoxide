@@ -8,7 +8,9 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
+gix-hash = { path = "../../gix-hash", features = ["sha1", "sha256"] }
 libfuzzer-sys = "0.4"
+tempfile = "3.27.0"
 
 [dependencies.gix-reftable]
 path = ".."
@@ -24,5 +26,11 @@ debug = 1
 [[bin]]
 name = "table"
 path = "fuzz_targets/table.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "stack_list"
+path = "fuzz_targets/stack_list.rs"
 test = false
 doc = false

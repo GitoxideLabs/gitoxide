@@ -1046,9 +1046,9 @@ See its [README.md](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/
 Provide a reftable backend for refs and reflogs as part of Git 3.0 compatibility.
 
 * [x] read, validate, seek, and deterministically write immutable version 1 and version 2 tables
-* [ ] read and write reftable stacks
-* [ ] transactions and reflogs
-* [ ] compaction and table management
+* [x] atomically read and publish complete reftable stack generations
+* [x] lock-held additions and reflog records
+* [x] serialized full-stack compaction and bounded abandoned-table cleanup
 * [ ] backend selection and migration between `files` and `reftable`
 
 [reftable-spec]: https://github.com/git/git/blob/f78ce2f7b6df702f93d40b85d6bda92a3f65da79/Documentation/technical/reftable.adoc

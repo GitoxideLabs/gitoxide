@@ -2441,6 +2441,7 @@ dependencies = [
  "bstr",
  "gix-features",
  "gix-hash",
+ "gix-lock",
  "gix-reftable",
  "gix-testtools",
  "gix-zlib",

@@ -3,11 +3,15 @@ use std::{
     io::Write as _,
     path::{Path, PathBuf},
     process::Stdio,
+    time::Duration,
 };
 
 use bstr::BString;
 use gix_hash::{Kind, ObjectId};
-use gix_reftable::{Limits, LogRecord, LogValue, RefRecord, RefValue, Table, Version, WriteOptions, Writer};
+use gix_reftable::{
+    CompactOptions, Limits, LockOptions, LogRecord, LogValue, RefRecord, RefValue, SnapshotOptions, Stack, Table,
+    Version, WriteOptions, Writer,
+};
 
 type TestResult<T = ()> = gix_testtools::Result<T>;
 
@@ -364,5 +368,122 @@ fn git_reads_tables_written_by_this_crate() -> TestResult {
         .map_err(|err| format!("SHA-1 writer interoperability failed: {err}"))?;
     install_written_table("sha256", Kind::Sha256, Version::V2)
         .map_err(|err| format!("SHA-256 writer interoperability failed: {err}"))?;
+    Ok(())
+}
+
+#[test]
+fn git_reads_a_stack_updated_and_compacted_by_this_crate() -> TestResult {
+    if gix_testtools::should_skip_as_git_version_is_smaller_than(2, 46, 0) {
+        eprintln!("skipping because the installed Git cannot migrate repositories to reftable");
+        return Ok(());
+    }
+    let repo = create_migrated_repo("sha1", 0)?;
+    let commit_hex = git_ok(Some(repo.path()), ["rev-parse", "HEAD"])?;
+    let commit_id = ObjectId::from_hex(String::from_utf8(commit_hex.stdout)?.trim().as_bytes())?;
+    let stack = Stack::open(
+        repo.path().join(".git/reftable"),
+        Kind::Sha1,
+        SnapshotOptions::default(),
+        Limits::default(),
+    )?;
+    let addition = stack.begin_addition(LockOptions {
+        timeout: Duration::from_secs(2),
+    })?;
+    let update_index = addition.next_update_index();
+    addition.commit(
+        &[RefRecord {
+            name: BString::from("refs/heads/from-stack"),
+            update_index,
+            value: RefValue::Direct(commit_id),
+        }],
+        &[LogRecord {
+            ref_name: BString::from("refs/heads/from-stack"),
+            update_index,
+            value: LogValue::Update {
+                old_id: Kind::Sha1.null(),
+                new_id: commit_id,
+                name: BString::from("Stack Test"),
+                email: BString::from("stack@example.com"),
+                time: 1_700_000_001,
+                tz_offset: 0,
+                message: BString::from("stack addition"),
+            },
+        }],
+    )?;
+
+    let resolved = git_ok(Some(repo.path()), ["rev-parse", "refs/heads/from-stack"])?;
+    assert_eq!(
+        String::from_utf8(resolved.stdout)?.trim(),
+        commit_id.to_string(),
+        "Git resolves a reference published through a stack addition"
+    );
+    let reflog = git_ok(
+        Some(repo.path()),
+        ["reflog", "show", "--format=%gs", "refs/heads/from-stack"],
+    )?;
+    assert_eq!(
+        String::from_utf8(reflog.stdout)?.trim(),
+        "stack addition",
+        "Git reads the reflog published through a stack addition"
+    );
+
+    let empty_log = stack.begin_addition(LockOptions {
+        timeout: Duration::from_secs(2),
+    })?;
+    let empty_log_index = empty_log.next_update_index();
+    empty_log.commit(
+        &[],
+        &[LogRecord {
+            ref_name: BString::from("refs/heads/empty-log"),
+            update_index: empty_log_index,
+            value: LogValue::Placeholder,
+        }],
+    )?;
+    git_ok(Some(repo.path()), ["reflog", "exists", "refs/heads/empty-log"])?;
+
+    let compacted = stack.compact(
+        CompactOptions::default(),
+        LockOptions {
+            timeout: Duration::from_secs(2),
+        },
+    )?;
+    assert_eq!(
+        compacted.snapshot.members().len(),
+        1,
+        "compaction replaces the Git-readable stack with one member"
+    );
+    let resolved_after = git_ok(Some(repo.path()), ["rev-parse", "refs/heads/from-stack"])?;
+    assert_eq!(
+        String::from_utf8(resolved_after.stdout)?.trim(),
+        commit_id.to_string(),
+        "Git resolves the same reference after compaction"
+    );
+    git_ok(Some(repo.path()), ["fsck", "--no-reflogs"])?;
+    Ok(())
+}
+
+#[test]
+fn reads_git_log_tombstones_with_historical_keys() -> TestResult {
+    if gix_testtools::should_skip_as_git_version_is_smaller_than(2, 46, 0) {
+        eprintln!("skipping because the installed Git cannot migrate repositories to reftable");
+        return Ok(());
+    }
+    let repo = create_migrated_repo("sha1", 0)?;
+    git_ok(Some(repo.path()), ["reflog", "delete", "refs/heads/main@{0}"])?;
+    let stack = Stack::open(
+        repo.path().join(".git/reftable"),
+        Kind::Sha1,
+        SnapshotOptions::default(),
+        Limits::default(),
+    )?;
+    let snapshot = stack.snapshot()?;
+    assert!(
+        snapshot.logs_for(b"refs/heads/main").is_empty(),
+        "Git's newer tombstone hides the historical log key"
+    );
+    assert!(
+        snapshot.reflog_exists(b"refs/heads/main"),
+        "Git's placeholder preserves the empty reflog itself"
+    );
     Ok(())
 }

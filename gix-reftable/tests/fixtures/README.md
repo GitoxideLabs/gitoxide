@@ -18,6 +18,11 @@ header and 32-byte records. The reverse fixture replaces Git's generated stack
 with a deterministic table written by `gix-reftable`, then asks Git to resolve
 names, read reflogs, and perform an object-to-reference lookup.
 
+Stack-level cases also ask Git to consume an added and compacted Gitoxide stack.
+The empty-reflog case has Git delete its final entry, exercising the historical
+log tombstone plus all-zero existence marker that Git writes into a log-only
+table.
+
 Fixtures are generated instead of checked in so the test records compatibility
 with the Git version actually used by CI. Every generated repository contains
 `reftable-fixture.provenance` at its root with `git --version` output and the

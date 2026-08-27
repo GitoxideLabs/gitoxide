@@ -25,6 +25,7 @@ sha256 = ["gix-hash/sha256"]
 [dependencies]
 gix-features = { version = "^0.49.1", path = "../gix-features", features = ["crc32"] }
 gix-hash = { version = "^0.26.2", path = "../gix-hash" }
+gix-lock = { version = "^24.0.0", path = "../gix-lock" }
 gix-zlib = { version = "^0.1.0", path = "../gix-zlib" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
