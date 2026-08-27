@@ -1018,6 +1018,11 @@ fn pending_base(repository: &gix::Repository, selected: ObjectId) -> Result<Opti
 fn selected_pin(pins: &[history::Pin], selected: ObjectId) -> Option<history::Pin> {
     pins.iter()
         .filter(|pin| !pin.is_head() && !pin.is_review_return() && pin.id == selected)
+        .filter(|pin| {
+            pin.target
+                .try_name()
+                .is_none_or(|name| name.as_bstr().starts_with(b"refs/heads/"))
+        })
         .min_by(|a, b| {
             a.target
                 .try_name()
@@ -1841,6 +1846,48 @@ mod tests {
         );
         assert_eq!(repository.head_id()?, main);
         assert!(history::all_pins(&repository)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn ignores_non_branch_pins_created_from_the_ref_tree() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let selected = repository.rev_parse_single("main~2")?.detach();
+        repository.reference(
+            "refs/remotes/origin/old",
+            selected,
+            PreviousValue::MustNotExist,
+            "prepare remote ref-tree pin",
+        )?;
+        let pins = crate::ref_tree::pin_references(&repository, selected, &[history::DecorationKind::Remote])?;
+        let [retention_pin] = pins.as_slice() else {
+            return Err("the remote reference creates one pin".into());
+        };
+        let retention_pin = retention_pin.clone();
+        let graph = loaded_graph(&repository, &[])?;
+        drop(repository);
+
+        let notice = perform(&repository_path, false, selected, &graph, &[], &[], false)?
+            .complete()?
+            .context("time-travel changes HEAD")?;
+        assert!(
+            notice.contains("time-travelled"),
+            "the pin is not treated as a return: {notice}"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert!(
+            repository.head()?.is_detached(),
+            "the unsupported symbolic pin is ignored"
+        );
+        assert_eq!(repository.head_id()?, selected);
+        assert!(
+            history::all_pins(&repository)?
+                .iter()
+                .any(|pin| pin.name == retention_pin.name && pin.target == retention_pin.target),
+            "the ignored ref-tree pin remains"
+        );
         Ok(())
     }
 

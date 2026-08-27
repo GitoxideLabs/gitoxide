@@ -680,9 +680,10 @@ The Enter key is written as `<enter>` throughout.
   resource marker immediately after the hash and outside ordinary reference
   decorations. It remains visible when references are hidden, and internal pin
   names are omitted from history rows. `@` on a pinned
-  tip checks out its underlying branch, or its direct commit in detached mode,
-  then removes that one pin. Multiple matching pins prefer symbolic targets and
-  then lexical ref-name order.
+  tip uses a local-branch pin to attach or a direct pin to detach, then removes
+  that one pin. Symbolic pins for other reference namespaces are ignored and
+  retained. Multiple matching checkout pins prefer local branches and then
+  lexical ref-name order.
 - The HEAD pin instead marks its target branch as `★branch` in the local-branch
   style. It has no `📌`, is never selected as a return destination, and does not
   offer `unpin`; its branch keeps normal tracking-relation behavior.
