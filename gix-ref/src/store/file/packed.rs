@@ -96,7 +96,11 @@ pub(crate) mod modifiable {
         /// if they happen within one second otherwise.
         pub fn force_refresh_packed_buffer(&self) -> Result<(), packed::buffer::open::Error> {
             self.packed.force_refresh(|| {
-                let modified = self.packed_refs_path().metadata()?.modified()?;
+                let modified = match self.packed_refs_path().metadata() {
+                    Ok(metadata) => metadata.modified()?,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(err) => return Err(err.into()),
+                };
                 self.open_packed_buffer().map(|packed| Some(modified).zip(packed))
             })
         }

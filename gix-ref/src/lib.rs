@@ -58,7 +58,7 @@ pub mod store {
     ///
     pub mod init {
 
-        /// Options for use during [initialization](crate::file::Store::at).
+        /// Options for use during [initialization](crate::Store::at).
         #[derive(Debug, Copy, Clone, Default)]
         pub struct Options {
             /// How to write the ref-log.
@@ -83,43 +83,24 @@ pub mod store {
         Disable,
     }
 
-    /// A thread-local handle for interacting with a [`Store`][crate::Store] to find and iterate references.
-    #[derive(Clone)]
-    #[expect(
-        dead_code,
-        reason = "the general reference-store handle is scaffolding for planned ref-table support"
-    )]
-    pub(crate) struct Handle {
-        /// A way to access shared state with the requirement that interior mutability doesn't leak or is incorporated into error types
-        /// if it could. The latter can't happen if references to said internal aren't ever returned.
-        state: handle::State,
-    }
-
-    #[expect(
-        dead_code,
-        reason = "the general reference-store state is scaffolding for planned ref-table support"
-    )]
+    #[derive(Debug, Clone)]
     pub(crate) enum State {
-        Loose { store: file::Store },
+        Files { store: file::Store },
     }
 
     pub(crate) mod general;
 
-    ///
-    #[path = "general/handle/mod.rs"]
-    mod handle;
-    pub use handle::find;
+    pub use general::{BackendError, ReferenceExt, find, iter, log, maintenance, peel, snapshot, transaction};
 
     use crate::file;
 }
 
-/// The git reference store.
-/// TODO: Figure out if handles are needed at all, which depends on the ref-table implementation.
-#[expect(
-    dead_code,
-    reason = "callers still use file::Store directly while this general store awaits ref-table support"
-)]
-pub(crate) struct Store {
+/// An opaque Git reference store whose implementation is selected when it is created.
+///
+/// Its interface describes logical reference operations and deliberately hides the
+/// representation used by the built-in storage adapters.
+#[derive(Debug, Clone)]
+pub struct Store {
     inner: store::State,
 }
 
@@ -156,7 +137,7 @@ pub enum Kind {
     Object,
     /// A ref that points to another reference, adding a level of indirection.
     ///
-    /// It can be resolved to an id using the [`peel_to_id()`][`crate::file::ReferenceExt::peel_to_id()`] method.
+    /// It can be resolved to an id using the [`peel_to_id()`][`crate::store::ReferenceExt::peel_to_id()`] method.
     Symbolic,
 }
 
