@@ -185,6 +185,50 @@ fn the_authoritative_list_lock_excludes_another_writer() -> Result<(), Box<dyn E
 }
 
 #[test]
+fn a_locked_snapshot_keeps_its_members_stable_until_release() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let stack = Stack::create(
+        temp.path().join("reftable"),
+        Kind::Sha1,
+        SnapshotOptions::default(),
+        Limits::default(),
+    )?;
+    stack
+        .begin_addition(lock_options())?
+        .commit(&[direct("refs/heads/main", 1, 1)], &[])?;
+    stack
+        .begin_addition(lock_options())?
+        .commit(&[direct("refs/heads/main", 2, 2)], &[])?;
+
+    let locked = stack.lock_snapshot(lock_options())?;
+    let member_paths = locked
+        .snapshot()
+        .members()
+        .iter()
+        .map(|member| stack.directory().join(&member.file_name))
+        .collect::<Vec<_>>();
+    assert!(
+        stack.compact(CompactOptions::default(), lock_options()).is_err(),
+        "compaction cannot publish or remove members while the list lock is held"
+    );
+    assert!(
+        member_paths.iter().all(|path| path.is_file()),
+        "every member selected by the locked snapshot remains readable"
+    );
+    drop(locked);
+    assert_eq!(
+        stack
+            .compact(CompactOptions::default(), lock_options())?
+            .snapshot
+            .members()
+            .len(),
+        1,
+        "compaction proceeds after the protected inspection ends"
+    );
+    Ok(())
+}
+
+#[test]
 fn compaction_never_waits_for_member_locks_while_holding_the_list_lock() -> Result<(), Box<dyn Error>> {
     let temp = tempfile::tempdir()?;
     let stack = Stack::create(

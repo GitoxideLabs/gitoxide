@@ -51,6 +51,8 @@ fn commit(
 }
 
 fn exercise_backend_contract(mut store: gix_ref::Store) -> crate::Result {
+    use gix_ref::store::ReferenceExt as _;
+
     let first_id = crate::hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
     let second_id = crate::hex_to_id("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
     let absent_id = crate::hex_to_id("4c3f4cce493d7beb45012e478021b5f65295e5a3");
@@ -69,6 +71,12 @@ fn exercise_backend_contract(mut store: gix_ref::Store) -> crate::Result {
             ),
             edit(
                 "refs/heads/topic",
+                gix_ref::transaction::PreviousValue::MustNotExist,
+                gix_ref::Target::Object(first_id),
+                false,
+            ),
+            edit(
+                "refs/heads/topic-2",
                 gix_ref::transaction::PreviousValue::MustNotExist,
                 gix_ref::Target::Object(first_id),
                 false,
@@ -113,7 +121,7 @@ fn exercise_backend_contract(mut store: gix_ref::Store) -> crate::Result {
         .collect::<Vec<_>>();
     assert_eq!(
         names,
-        [alias_name, main_name, "refs/heads/topic"],
+        [alias_name, main_name, "refs/heads/topic", "refs/heads/topic-2"],
         "prefix iteration is complete and sorted"
     );
     let pseudo = store
@@ -209,6 +217,72 @@ fn exercise_backend_contract(mut store: gix_ref::Store) -> crate::Result {
     assert!(
         store.try_find(main_name)?.is_some(),
         "deleting a symbolic ref does not delete its target"
+    );
+
+    let conflict = store.transaction().prepare(
+        [edit(
+            "refs/heads/topic/child",
+            gix_ref::transaction::PreviousValue::MustNotExist,
+            gix_ref::Target::Object(second_id),
+            false,
+        )],
+        gix_lock::acquire::Fail::Immediately,
+        gix_lock::acquire::Fail::Immediately,
+    );
+    assert!(
+        conflict.is_err(),
+        "both adapters reject a child reference even when a sibling sorts between it and its parent"
+    );
+    drop(conflict);
+    assert!(
+        store.try_find("refs/heads/topic/child")?.is_none(),
+        "a rejected directory-file conflict publishes no child reference"
+    );
+    commit(&store, [delete("refs/heads/topic")])?;
+    commit(
+        &store,
+        [edit(
+            "refs/heads/topic/child",
+            gix_ref::transaction::PreviousValue::MustNotExist,
+            gix_ref::Target::Object(second_id),
+            false,
+        )],
+    )?;
+    assert!(
+        store.try_find("refs/heads/topic")?.is_none(),
+        "removing the conflict makes the parent absent"
+    );
+    assert_eq!(
+        store.find("refs/heads/topic/child")?.target.try_id(),
+        Some(second_id.as_ref()),
+        "both adapters can publish the child after removing the conflict"
+    );
+
+    let object_fixture = crate::scripted_fixture_read_only("make_packed_ref_repository.sh")?;
+    let object_git_dir = object_fixture.join(".git");
+    let object_store = gix_ref::Store::at(object_git_dir.clone(), crate::fixture_hash_kind());
+    let tag_id = object_store.find("dt1")?.target.into_id();
+    let peeled_id = object_store.find("main")?.target.into_id();
+    let objects = gix_odb::at(object_git_dir.join("objects"), crate::fixture_hash_kind())?;
+    commit(
+        &store,
+        [edit(
+            "refs/tags/contract-annotated",
+            gix_ref::transaction::PreviousValue::MustNotExist,
+            gix_ref::Target::Object(tag_id),
+            false,
+        )],
+    )?;
+    let mut annotated_tag = store.find("refs/tags/contract-annotated")?;
+    assert_eq!(
+        annotated_tag.peel_to_id(&store, &objects)?,
+        peeled_id,
+        "both adapters peel an annotated tag through the common snapshot contract"
+    );
+    assert_eq!(
+        annotated_tag.target.try_id(),
+        Some(peeled_id.as_ref()),
+        "common peeling updates the reference cursor to the peeled object ID"
     );
 
     let namespace = gix_ref::namespace::expand("tenant")?.to_owned();
@@ -318,6 +392,19 @@ fn files_adapter_force_refreshes_packed_refs_through_the_opaque_store() -> crate
         "an explicit refresh clears the cache after packed-refs is removed"
     );
     Ok(())
+}
+
+#[test]
+fn reftable_adapter_satisfies_the_backend_contract() -> crate::Result {
+    let fixture = gix_testtools::tempfile::TempDir::new()?;
+    let git_dir = fixture.path().to_owned();
+    gix_reftable::Stack::create(
+        git_dir.join("reftable"),
+        crate::fixture_hash_kind(),
+        Default::default(),
+        Default::default(),
+    )?;
+    exercise_backend_contract(gix_ref::Store::open_reftable(git_dir, crate::fixture_hash_kind())?)
 }
 
 #[test]

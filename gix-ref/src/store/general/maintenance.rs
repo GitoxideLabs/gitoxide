@@ -28,7 +28,10 @@ impl Default for Options {
 impl crate::Store {
     /// Verify reference storage visible to this store.
     ///
-    /// This validates physical storage and decodes every reference exposed by the backend.
+    /// This validates physical storage and decodes every reference. Reftable
+    /// verification additionally validates every listed table record, including
+    /// records hidden by newer updates, across the common and all linked-worktree
+    /// stacks.
     pub fn verify(&self) -> Result<(), store::BackendError> {
         match &self.inner {
             store::State::Files { store } => {
@@ -49,14 +52,21 @@ impl crate::Store {
                 }
                 Ok(())
             }
+            store::State::Reftable { store } => store
+                .verify()
+                .map_err(|err| store::BackendError::new("verify reftable reference storage", err)),
         }
     }
 
     /// Optimize physical reference storage and optionally expire old reflog entries.
     ///
-    /// The files backend keeps its existing layout. Requesting reflog expiry returns an error
-    /// instead of silently ignoring the request.
-    pub fn optimize(&self, options: Options, _lock_fail: gix_lock::acquire::Fail) -> Result<(), store::BackendError> {
+    /// Reftable stores compact and clean the common stack and every linked-worktree
+    /// stack in deterministic path order. Each stack is published atomically, but
+    /// an error in a later stack does not roll back stacks already optimized.
+    ///
+    /// Files stores keep their existing layout. Requesting reflog expiry for a
+    /// files store returns an error instead of silently ignoring the request.
+    pub fn optimize(&self, options: Options, lock_fail: gix_lock::acquire::Fail) -> Result<(), store::BackendError> {
         match &self.inner {
             store::State::Files { .. } => {
                 if options.expire_reflogs_before.is_some() {
@@ -67,6 +77,9 @@ impl crate::Store {
                 }
                 Ok(())
             }
+            store::State::Reftable { store } => store
+                .optimize(options, lock_fail)
+                .map_err(|err| store::BackendError::new("optimize reftable reference storage", err)),
         }
     }
 }

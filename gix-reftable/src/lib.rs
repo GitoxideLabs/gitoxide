@@ -40,7 +40,7 @@ mod write;
 pub use read::Table;
 pub use stack::{
     Cleanup, CleanupFailure, CompactOptions, CompactOutcome, Error as StackError, LockOptions, LockedAddition,
-    MemberInfo, Snapshot, SnapshotOptions, Stack, Verification,
+    LockedSnapshot, MemberInfo, Snapshot, SnapshotOptions, Stack, Verification,
 };
 pub use types::{
     Error, Header, Limits, LogRecord, LogRecordRef, LogValue, LogValueRef, RefRecord, RefRecordRef, RefValue,

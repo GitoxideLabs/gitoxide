@@ -26,6 +26,9 @@ impl crate::store::snapshot::Snapshot<'_> {
             crate::store::snapshot::State::Files { store, packed } => store
                 .try_find_packed(partial, packed.as_ref().map(|buffer| &***buffer))
                 .map_err(|err| Error::Backend(crate::store::BackendError::new("look up a reference", err))),
+            crate::store::snapshot::State::Reftable { snapshot } => snapshot
+                .try_find(partial)
+                .map_err(|err| Error::Backend(crate::store::BackendError::new("look up a reftable reference", err))),
         }
     }
 }
@@ -70,6 +73,10 @@ impl crate::Store {
             store::State::Files { store } => store
                 .try_find(partial)
                 .map_err(|err| Error::Backend(crate::store::BackendError::new("look up a reference", err))),
+            store::State::Reftable { store } => store
+                .snapshot()
+                .and_then(|snapshot| snapshot.try_find(partial))
+                .map_err(|err| Error::Backend(crate::store::BackendError::new("look up a reftable reference", err))),
         }
     }
 }

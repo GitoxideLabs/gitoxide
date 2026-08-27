@@ -266,6 +266,17 @@ pub struct LockedAddition {
     next_update_index: u64,
 }
 
+/// A stable stack generation protected by the authoritative list lock.
+///
+/// This session is intended for operations that must inspect the immutable
+/// member files named by a snapshot without racing publication or compaction.
+/// Dropping it releases the lock without changing the stack.
+#[derive(Debug)]
+pub struct LockedSnapshot {
+    snapshot: Snapshot,
+    _lock: gix_lock::File,
+}
+
 impl Stack {
     /// Open an existing stack rooted at `directory` without changing the filesystem.
     pub fn open(
@@ -369,15 +380,7 @@ impl Stack {
 
     /// Acquire the authoritative list lock and open the generation it protects.
     pub fn begin_addition(&self, options: LockOptions) -> Result<LockedAddition, Error> {
-        let list_path = self.list_path();
-        let lock =
-            gix_lock::File::acquire_to_update_resource(&list_path, options.timeout.into(), None).map_err(|source| {
-                Error::Lock {
-                    path: list_path,
-                    source,
-                }
-            })?;
-        let snapshot = self.snapshot()?;
+        let LockedSnapshot { snapshot, _lock: lock } = self.lock_snapshot(options)?;
         let next_update_index = snapshot.members.last().map_or(Ok(1), |member| {
             member
                 .header
@@ -391,6 +394,20 @@ impl Stack {
             lock,
             next_update_index,
         })
+    }
+
+    /// Acquire the authoritative list lock and open its stable generation without reserving an update index.
+    pub fn lock_snapshot(&self, options: LockOptions) -> Result<LockedSnapshot, Error> {
+        let list_path = self.list_path();
+        let lock =
+            gix_lock::File::acquire_to_update_resource(&list_path, options.timeout.into(), None).map_err(|source| {
+                Error::Lock {
+                    path: list_path,
+                    source,
+                }
+            })?;
+        let snapshot = self.snapshot()?;
+        Ok(LockedSnapshot { snapshot, _lock: lock })
     }
 
     /// Validate the list, every member, every index, and the merged logical view.
@@ -957,6 +974,13 @@ impl Stack {
             return Ok(staged);
         }
         Err(Error::InvalidInput("could not allocate a unique table filename"))
+    }
+}
+
+impl LockedSnapshot {
+    /// Return the stable generation protected for this session's lifetime.
+    pub fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
     }
 }
 

@@ -7,6 +7,7 @@ impl crate::Store {
     pub fn git_dir(&self) -> &Path {
         match &self.inner {
             store::State::Files { store } => store.git_dir(),
+            store::State::Reftable { store } => store.git_dir(),
         }
     }
 
@@ -14,6 +15,7 @@ impl crate::Store {
     pub fn common_dir(&self) -> Option<&Path> {
         match &self.inner {
             store::State::Files { store } => store.common_dir(),
+            store::State::Reftable { store } => store.common_dir(),
         }
     }
 
@@ -21,6 +23,7 @@ impl crate::Store {
     pub fn common_dir_resolved(&self) -> &Path {
         match &self.inner {
             store::State::Files { store } => store.common_dir_resolved(),
+            store::State::Reftable { store } => store.common_dir_resolved(),
         }
     }
 
@@ -28,6 +31,7 @@ impl crate::Store {
     pub fn namespace(&self) -> Option<&Namespace> {
         match &self.inner {
             store::State::Files { store } => store.namespace.as_ref(),
+            store::State::Reftable { store } => store.namespace.as_ref(),
         }
     }
 
@@ -35,6 +39,7 @@ impl crate::Store {
     pub fn replace_namespace(&mut self, namespace: Option<Namespace>) -> Option<Namespace> {
         match &mut self.inner {
             store::State::Files { store } => std::mem::replace(&mut store.namespace, namespace),
+            store::State::Reftable { store } => std::mem::replace(&mut store.namespace, namespace),
         }
     }
 
@@ -42,6 +47,7 @@ impl crate::Store {
     pub fn write_reflog(&self) -> WriteReflog {
         match &self.inner {
             store::State::Files { store } => store.write_reflog,
+            store::State::Reftable { store } => store.write_reflog,
         }
     }
 
@@ -49,6 +55,7 @@ impl crate::Store {
     pub fn set_write_reflog(&mut self, write_reflog: WriteReflog) -> WriteReflog {
         match &mut self.inner {
             store::State::Files { store } => std::mem::replace(&mut store.write_reflog, write_reflog),
+            store::State::Reftable { store } => std::mem::replace(&mut store.write_reflog, write_reflog),
         }
     }
 
@@ -56,12 +63,14 @@ impl crate::Store {
     /// backend by another process, such as `git gc` or `git pack-refs`, without depending on
     /// filesystem modification times.
     ///
-    /// The files backend refreshes its `packed-refs` buffer.
+    /// The files backend refreshes its `packed-refs` buffer. The reftable backend does nothing,
+    /// as each snapshot re-reads `tables.list` and validates its generation.
     pub fn force_refresh(&self) -> Result<(), store::BackendError> {
         match &self.inner {
             store::State::Files { store } => store
                 .force_refresh_packed_buffer()
                 .map_err(|err| store::BackendError::new("refresh reference storage", err)),
+            store::State::Reftable { .. } => Ok(()),
         }
     }
 
@@ -72,6 +81,31 @@ impl crate::Store {
     pub fn is_pristine(&self, default_ref: &FullNameRef) -> Result<Option<bool>, store::BackendError> {
         match &self.inner {
             store::State::Files { store } => Ok(store.is_pristine(default_ref)),
+            store::State::Reftable { store } => {
+                let snapshot = store
+                    .snapshot()
+                    .map_err(|err| store::BackendError::new("inspect pristine reftable state", err))?;
+                let head_name = "HEAD".try_into().expect("HEAD is a valid full reference name");
+                let Some(head) = snapshot.find_full(head_name).map_err(|err| {
+                    store::BackendError::new("find reftable HEAD while inspecting pristine state", err)
+                })?
+                else {
+                    return Ok(None);
+                };
+                if head.target.try_name() != Some(default_ref) {
+                    return Ok(Some(false));
+                }
+                let mut references = snapshot.all().into_iter();
+                match references.next() {
+                    Some(reference) => {
+                        reference.map_err(|err| {
+                            store::BackendError::new("inspect references in a pristine reftable state", err)
+                        })?;
+                        Ok(Some(false))
+                    }
+                    None => Ok(Some(true)),
+                }
+            }
         }
     }
 }

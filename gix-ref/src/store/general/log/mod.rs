@@ -44,6 +44,15 @@ impl crate::Store {
             store::State::Files { store } => Ok(store
                 .reflog_exists::<_, std::convert::Infallible>(name.as_ref())
                 .expect("a validated full reference name converts infallibly")),
+            store::State::Reftable { store } => {
+                let snapshot = store
+                    .snapshot()
+                    .map_err(|err| crate::store::BackendError::new("open a reftable reference-log snapshot", err))?;
+                let route = store.route(name.as_ref());
+                snapshot
+                    .reflog_exists(&route)
+                    .map_err(|err| crate::store::BackendError::new("find a reftable reference log", err).into())
+            }
         }
     }
 
@@ -78,6 +87,32 @@ impl Platform<'_> {
                         })
                     })),
                 })),
+            store::State::Reftable { store } => {
+                let snapshot = store
+                    .snapshot()
+                    .map_err(|err| crate::store::BackendError::new("open a reftable reference-log snapshot", err))?;
+                let route = store.route(self.name.as_ref());
+                if !snapshot
+                    .reflog_exists(&route)
+                    .map_err(|err| crate::store::BackendError::new("find a reftable reference log", err))?
+                {
+                    return Ok(None);
+                }
+                let mut lines = snapshot
+                    .reflog_lines(&route)
+                    .map_err(|err| crate::store::BackendError::new("read a reftable reference log", err))?;
+                lines.reverse();
+                Ok(Some(Iter {
+                    inner: Box::new(lines.into_iter().map(|line| {
+                        line.map_err(|err| {
+                            iter::Error(crate::store::BackendError::new(
+                                "decode a reftable reference-log entry",
+                                err,
+                            ))
+                        })
+                    })),
+                }))
+            }
         }
     }
 
@@ -96,6 +131,31 @@ impl Platform<'_> {
                         })
                     })),
                 })),
+            store::State::Reftable { store } => {
+                let snapshot = store
+                    .snapshot()
+                    .map_err(|err| crate::store::BackendError::new("open a reftable reference-log snapshot", err))?;
+                let route = store.route(self.name.as_ref());
+                if !snapshot
+                    .reflog_exists(&route)
+                    .map_err(|err| crate::store::BackendError::new("find a reftable reference log", err))?
+                {
+                    return Ok(None);
+                }
+                let lines = snapshot
+                    .reflog_lines(&route)
+                    .map_err(|err| crate::store::BackendError::new("read a reftable reference log", err))?;
+                Ok(Some(Iter {
+                    inner: Box::new(lines.into_iter().map(|line| {
+                        line.map_err(|err| {
+                            iter::Error(crate::store::BackendError::new(
+                                "decode a reftable reference-log entry",
+                                err,
+                            ))
+                        })
+                    })),
+                }))
+            }
         }
     }
 }

@@ -14,6 +14,8 @@
 //!     * one reference maps to a file on disk
 //!   * **packed**
 //!     * references are stored in a single human-readable file, along with their targets if they are symbolic.
+//! * **reftable**
+//!   * references and reflogs are stored in a crash-safe stack of immutable binary tables
 //!
 //! ## Feature Flags
 #![cfg_attr(
@@ -86,13 +88,14 @@ pub mod store {
     #[derive(Debug, Clone)]
     pub(crate) enum State {
         Files { store: file::Store },
+        Reftable { store: Box<reftable::Store> },
     }
 
     pub(crate) mod general;
 
     pub use general::{BackendError, ReferenceExt, find, iter, log, maintenance, peel, snapshot, transaction};
 
-    use crate::file;
+    use crate::{file, store_impl::reftable};
 }
 
 /// An opaque Git reference store whose implementation is selected when it is created.

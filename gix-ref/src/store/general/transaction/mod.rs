@@ -7,6 +7,7 @@ pub struct Transaction<'store> {
 
 enum State<'store> {
     Files(crate::file::Transaction<'store, 'store>),
+    Reftable(crate::store_impl::reftable::transaction::Transaction<'store>),
 }
 
 /// A backend-neutral hint for how an adapter should physically organize
@@ -31,6 +32,9 @@ impl crate::Store {
         Transaction {
             state: match &self.inner {
                 store::State::Files { store } => State::Files(store.transaction()),
+                store::State::Reftable { store } => {
+                    State::Reftable(crate::store_impl::reftable::transaction::Transaction::new(store))
+                }
             },
         }
     }
@@ -54,6 +58,7 @@ impl<'store> Transaction<'store> {
                         crate::file::transaction::PackedRefs::DeletionsAndNonSymbolicUpdates(objects)
                     }),
                 }),
+                State::Reftable(transaction) => State::Reftable(transaction.write_strategy(strategy)),
             },
         }
     }
@@ -77,11 +82,27 @@ impl<'store> Transaction<'store> {
                             prepare::Error(crate::store::BackendError::new("prepare a reference transaction", err))
                         })?,
                 ),
+                State::Reftable(transaction) => State::Reftable(
+                    transaction
+                        .prepare(edits, individual_lock_fail, aggregate_lock_fail)
+                        .map_err(|err| {
+                            prepare::Error(crate::store::BackendError::new(
+                                "prepare a reftable reference transaction",
+                                err,
+                            ))
+                        })?,
+                ),
             },
         })
     }
 
     /// Make a prepared transaction durable and return the edits with their observed previous values.
+    ///
+    /// A reftable transaction that spans common and per-worktree stacks locks
+    /// those stacks in deterministic path order, then publishes them in that
+    /// order. Each stack publication is atomic, but a later publication error
+    /// can leave earlier stacks committed; Git does not provide a cross-stack
+    /// atomicity primitive.
     pub fn commit<'a>(
         self,
         committer: impl Into<Option<gix_actor::SignatureRef<'a>>>,
@@ -91,6 +112,12 @@ impl<'store> Transaction<'store> {
             State::Files(transaction) => transaction
                 .commit(committer)
                 .map_err(|err| commit::Error(crate::store::BackendError::new("commit a reference transaction", err))),
+            State::Reftable(transaction) => transaction.commit(committer).map_err(|err| {
+                commit::Error(crate::store::BackendError::new(
+                    "commit a reftable reference transaction",
+                    err,
+                ))
+            }),
         }
     }
 
@@ -98,6 +125,7 @@ impl<'store> Transaction<'store> {
     pub fn rollback(self) -> Vec<RefEdit> {
         match self.state {
             State::Files(transaction) => transaction.rollback(),
+            State::Reftable(transaction) => transaction.rollback(),
         }
     }
 }

@@ -38,6 +38,7 @@ repo-snapshot = [
 sha1 = [
     "gix-hash/sha1",
     "gix-config?/sha1",
+    "gix-discover?/sha1",
     "gix-index?/sha1",
     "gix-object?/sha1",
     "gix-odb?/sha1",
@@ -48,6 +49,7 @@ sha1 = [
 sha256 = [
     "gix-hash/sha256",
     "gix-config?/sha256",
+    "gix-discover?/sha256",
     "gix-index?/sha256",
     "gix-object?/sha256",
     "gix-odb?/sha256",

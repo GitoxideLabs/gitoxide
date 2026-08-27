@@ -54,10 +54,10 @@ fetch = [
 ]
 
 #! ### Other
-## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
-sha1 = ["gix-hash/sha1"]
-## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
-sha256 = ["gix-hash/sha256"]
+## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
+sha1 = ["gix-hash/sha1", "gix-ref/sha1"]
+## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
+sha256 = ["gix-hash/sha256", "gix-ref/sha256"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "bstr/serde", "gix-transport/serde", "gix-hash/serde", "gix-shallow/serde"]
 

@@ -89,6 +89,7 @@ comfort = [
 ## Enable support for the SHA-1 hash throughout the `gix` stack.
 sha1 = [
     "gix-hash/sha1",
+    "gix-ref/sha1",
     "gix-pack/sha1",
     "gix-note?/sha1",
     "gix-worktree-stream?/sha1",
@@ -97,6 +98,7 @@ sha1 = [
 ## Enable support for the SHA-256 hash throughout the `gix` stack.
 sha256 = [
     "gix-hash/sha256",
+    "gix-ref/sha256",
     "gix-object/sha256",
     "gix-pack/sha256",
     "gix-note?/sha256",

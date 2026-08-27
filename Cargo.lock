@@ -2410,6 +2410,7 @@ dependencies = [
  "gix-object",
  "gix-odb",
  "gix-path",
+ "gix-reftable",
  "gix-tempfile",
  "gix-testtools",
  "gix-utils",

@@ -1037,7 +1037,7 @@ See its [README.md](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/
       * [x] find single ref by name
       * [x] iterate refs with optional prefix
       * [x] handle unsorted packed refs and those without a header
-  * [ ] **[reftable][reftable-spec]** backend, powered by `gix-reftable`
+  * [x] **[reftable][reftable-spec]** backend, powered by `gix-reftable`
 * [x] API documentation
     * [ ] Some examples
 
