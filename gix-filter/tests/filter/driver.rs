@@ -50,6 +50,70 @@ mod shutdown {
         );
         Ok(())
     }
+
+    /// A `State` that goes out of scope closes the input and output of each of its long-running
+    /// processes, which makes them exit, but it never waits for them. On Unix, a child that exited
+    /// without being waited for keeps its slot in the process table - see the [`crate::reap`] module.
+    #[cfg(unix)]
+    #[test]
+    fn a_dropped_state_does_not_reap_its_process_children() -> crate::Result {
+        let pid = {
+            let mut state = gix_filter::driver::State::default();
+            let driver = driver_with_process();
+            let client =
+                extract_client(state.maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?);
+            let pid = client.id();
+            assert_eq!(
+                crate::reap::observe(pid),
+                crate::reap::Child::Running,
+                "the filter is up and is a child of ours, which is what makes its fate observable at all"
+            );
+            pid
+        };
+
+        assert_eq!(
+            crate::reap::settle(pid),
+            crate::reap::Child::Unreaped,
+            "the filter exits once its pipes close, but nothing waits for it so it stays in the process table"
+        );
+        Ok(())
+    }
+
+    /// `gix-status` and `gix-worktree-state` clone their pipeline once per worker thread, and cloning a
+    /// `State` resets the set of running processes. Hence each clone launches, owns and abandons filter
+    /// processes of its own, which is what turns one leaked child per operation into `threads + 2` of them.
+    #[cfg(unix)]
+    #[test]
+    fn each_clone_of_a_state_owns_its_own_process_children() -> crate::Result {
+        let driver = driver_with_process();
+        let (original, clone) = {
+            let mut state = gix_filter::driver::State::default();
+            let original =
+                extract_client(state.maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?).id();
+
+            let mut cloned_state = state.clone();
+            let clone = extract_client(cloned_state.maybe_launch_process(
+                &driver,
+                Operation::Clean,
+                "does not matter".into(),
+            )?)
+            .id();
+            assert_ne!(
+                original, clone,
+                "the clone starts out with no running processes, so it launches a filter of its own for the same driver"
+            );
+            (original, clone)
+        };
+
+        for (pid, whose) in [(original, "original"), (clone, "clone")] {
+            assert_eq!(
+                crate::reap::settle(pid),
+                crate::reap::Child::Unreaped,
+                "the child of the {whose} was left in the process table"
+            );
+        }
+        Ok(())
+    }
 }
 
 pub(crate) mod apply {

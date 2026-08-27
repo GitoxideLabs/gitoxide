@@ -1967,6 +1967,7 @@ dependencies = [
  "gix-trace",
  "gix-utils",
  "gix-worktree",
+ "libc",
  "smallvec",
  "thiserror 2.0.18",
 ]

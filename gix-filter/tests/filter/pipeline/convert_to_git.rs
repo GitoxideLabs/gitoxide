@@ -112,6 +112,60 @@ fn only_driver_means_streaming_is_possible() -> gix_testtools::Result {
     Ok(())
 }
 
+/// The whole point of a `process` filter is that it stays alive for the next file, so the `Pipeline` is
+/// the only handle to it. That makes this the shape in which the defect reaches users: `gix` owns its
+/// pipelines privately - `Repository::status()` and checkout never hand one back - so nobody is in a
+/// position to call [`shutdown()`][gix_filter::driver::State::shutdown()] on what they launched.
+#[cfg(unix)]
+#[test]
+fn a_dropped_pipeline_does_not_reap_the_filter_it_launched() -> gix_testtools::Result {
+    let (mut cache, mut pipe) = pipeline("driver-only", || {
+        (
+            vec![driver_with_process()],
+            Vec::new(),
+            CrlfRoundTripCheck::Skip,
+            Default::default(),
+        )
+    })?;
+
+    let mut out = pipe.convert_to_git(
+        "➡a\n".as_bytes(),
+        Path::new("any.txt"),
+        &mut |path, attrs| {
+            cache
+                .at_entry(path, None, &gix_object::find::Never)
+                .expect("cannot fail")
+                .matching_attributes(attrs);
+        },
+        &mut no_object_in_index,
+    )?;
+    let mut buf = Vec::new();
+    out.read_to_end(&mut buf)?;
+    assert_eq!(
+        buf.as_bstr(),
+        "a\n",
+        "the `process` filter did its work, so it is definitely running"
+    );
+    drop(out);
+
+    let pid = match pipe.driver_state_mut().maybe_launch_process(
+        &driver_with_process(),
+        gix_filter::driver::Operation::Clean,
+        "any.txt".into(),
+    )? {
+        Some(gix_filter::driver::Process::MultiFile { client, .. }) => client.id(),
+        _ => unreachable!("the driver declares a `process` filter, which is still running"),
+    };
+    drop(pipe);
+
+    assert_eq!(
+        crate::reap::settle(pid),
+        crate::reap::Child::Unreaped,
+        "dropping the pipeline terminates its filter, but leaves it in the process table"
+    );
+    Ok(())
+}
+
 #[test]
 fn no_filter_means_reader_is_returned_unchanged() -> gix_testtools::Result {
     let (mut cache, mut pipe) = pipeline("no-filters", || {

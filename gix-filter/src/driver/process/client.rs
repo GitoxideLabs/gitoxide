@@ -292,6 +292,14 @@ impl Client {
     pub fn version(&self) -> usize {
         self.version
     }
+
+    /// Return the process id of the child process we are communicating with.
+    ///
+    /// This is enough to observe the child's lifetime, for instance to assert that it was waited for,
+    /// without taking ownership of it like [`into_child()`][Client::into_child()] does.
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
 }
 
 /// Lifecycle
