@@ -1222,7 +1222,7 @@ fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> O
         KeyCode::Char('q' | 'Q') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
             Some(WorktrunkInput::Cancel { force: false })
         }
-        KeyCode::Esc => Some(WorktrunkInput::Cancel { force: false }),
+        KeyCode::Esc if key.kind == KeyEventKind::Press => Some(WorktrunkInput::Cancel { force: false }),
         KeyCode::Char('/') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
             Some(WorktrunkInput::StartSearch)
         }
@@ -1265,6 +1265,10 @@ fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> O
         }
         _ => None,
     }
+}
+
+fn worktrunk_owns_input(app: &App, picker_focused: bool, terminal_focused: bool) -> bool {
+    picker_focused && terminal_focused && app.worktrunk_history_root()
 }
 
 fn diagnostic_worktrunk_input(input: Option<WorktrunkInput>) -> Option<WorktrunkInput> {
@@ -2650,7 +2654,7 @@ fn event_loop(
             urgent = true;
             continue;
         }
-        if picker.is_some() && *picker_focused && focused {
+        if picker.is_some() && worktrunk_owns_input(&app, *picker_focused, focused) {
             let input = match &terminal_event {
                 TerminalEvent::Key(key) => {
                     let picker = picker.as_ref().expect("picker presence was checked");
@@ -2907,7 +2911,7 @@ fn event_loop(
                 &terminal_event,
                 TerminalEvent::Key(KeyEvent {
                     code: KeyCode::Esc,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    kind: KeyEventKind::Press,
                     ..
                 })
             )
@@ -3423,7 +3427,7 @@ fn event_loop(
                     }
                     Err(err) => {
                         pending_todo_ref_changes.clear();
-                        app.clear_rebase_conflict();
+                        discard_todo_rebase_preview(&mut app, &ref_snapshot);
                         app.leave_error(format!("conflict checkout: {err:#}"));
                     }
                 }
@@ -3444,7 +3448,7 @@ fn event_loop(
                     "materialize rebase conflict",
                     &mut pending_todo_ref_changes,
                 );
-                app.clear_rebase_conflict();
+                discard_todo_rebase_preview(&mut app, &ref_snapshot);
                 if let Err(err) = recorded {
                     app.leave_attention(format!("cancelled rebase conflict; undo history: {err:#}"));
                 }
@@ -7365,6 +7369,20 @@ fn preview_todo_rebase_conflict(
     Ok(())
 }
 
+fn discard_todo_rebase_preview(app: &mut App, refs: &history::RefSnapshot) {
+    // An asynchronous refresh can draw the discarded preview before replacing its rows.
+    if let Some(rows) = app.start_refresh(
+        Vec::new().into(),
+        &refs.view_tips,
+        if app.show_hidden { &[] } else { &refs.hidden_tips },
+        false,
+    ) {
+        let (rows, graph, elapsed) = app::compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, elapsed);
+    }
+    app.clear_rebase_conflict();
+}
+
 enum RebaseWorkerEvent<T> {
     Progress(edit::rebase::Progress),
     Complete(Result<T>),
@@ -9094,6 +9112,16 @@ mod tests {
             Some(WorktrunkInput::Cancel { force: false })
         );
         assert_eq!(
+            worktrunk_input(
+                KeyEvent::new_with_kind(KeyCode::Esc, KeyModifiers::NONE, KeyEventKind::Repeat),
+                1,
+                4,
+                2,
+            ),
+            None,
+            "an Escape repeat cannot quit the picker after its press closed a modal"
+        );
+        assert_eq!(
             worktrunk_input(key(KeyCode::Char('/')), 1, 4, 2),
             Some(WorktrunkInput::StartSearch)
         );
@@ -9145,6 +9173,22 @@ mod tests {
             ),
             None,
             "a repeated opener does not leak into the search query"
+        );
+    }
+
+    #[test]
+    fn history_modals_preempt_worktrunk_input() {
+        let mut app = App::new(1);
+        assert!(worktrunk_owns_input(&app, true, true));
+
+        app.arm_rebase_continuation();
+        assert!(
+            !worktrunk_owns_input(&app, true, true),
+            "a conflicted rebase receives Escape instead of the worktree picker quitting"
+        );
+        assert_eq!(
+            app_action(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &app),
+            Some(Action::Cancel)
         );
     }
 
@@ -12637,41 +12681,61 @@ mod tests {
     }
 
     #[test]
-    fn todo_conflict_preview_selects_the_partial_result_in_memory() -> gix_testtools::Result {
+    fn todo_conflict_preview_restores_persisted_history_before_redrawing() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
         let repo = crate::test_repository::open_with(
             fixture.path(),
             ["user.name=preview author", "user.email=preview@example.com"],
         )?;
-        let graph = edit::loaded_graph(&repo)?;
-        let base = repo.rev_parse_single("HEAD~2")?.detach();
-        let middle = repo.rev_parse_single("HEAD~1")?.detach();
-        let tip = repo.head_id()?.detach();
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        let mut graph = HistoryGraph::default();
+        let history = graph.refresh(&repo, &[], &["HEAD~2".into()], false, &HashSet::new(), &authors)?;
+        let mut app = App::new(usize::MAX);
+        let rows = app
+            .start_refresh(
+                history.commits,
+                &history.refs.view_tips,
+                &history.refs.hidden_tips,
+                false,
+            )
+            .context("the initial history computes lanes")?;
+        let (rows, lanes, elapsed) = app::compute_lanes(rows);
+        app.finish_lane_computation(rows, lanes, elapsed);
+        let original_rows = app.rows.iter().map(|row| row.id).collect::<Vec<_>>();
+        let original_hidden = app.hidden_ids();
+        let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip_commit_id = repo.head_id()?.detach();
         let edit::rebase::PlanPerform::Conflict(conflict) = edit::rebase::perform_plan(
             &repo,
             &graph,
             edit::rebase::Plan {
-                base,
-                scope: vec![middle, tip],
+                base: base_commit_id,
+                scope: vec![middle_commit_id, tip_commit_id],
                 steps: vec![edit::rebase::PlanStep {
-                    parent: edit::rebase::PlanParent::Existing(base),
-                    commit: edit::rebase::PlanCommit::Pick(tip),
+                    parent: edit::rebase::PlanParent::Existing(base_commit_id),
+                    commit: edit::rebase::PlanCommit::Pick(tip_commit_id),
                     squash: Vec::new(),
                 }],
                 checkout: Some(edit::rebase::PlanCheckout {
                     target: edit::rebase::PlanParent::Step(0),
                     reference: None,
                 }),
-                expected_refs: edit::rebase::capture_refs(&repo, &[middle, tip], &[tip])?,
+                expected_refs: edit::rebase::capture_refs(&repo, &[middle_commit_id, tip_commit_id], &[tip_commit_id])?,
             },
         )?
         else {
             return Err("the reordered history should conflict".into());
         };
-        let authors =
-            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
-        let mut app = App::new(usize::MAX);
-        preview_todo_rebase_conflict(&mut app, &conflict, &authors, &[tip], &[])?;
+        preview_todo_rebase_conflict(
+            &mut app,
+            &conflict,
+            &authors,
+            &history.refs.view_tips,
+            &history.refs.hidden_tips,
+        )?;
         app.arm_rebase_conflict(conflict.commit());
         app.select_commit(conflict.commit());
 
@@ -12681,6 +12745,36 @@ mod tests {
                 .map(|row| row.id),
             Some(conflict.commit()),
             "the displayed conflict row is the prepared result, not its original source"
+        );
+        assert!(
+            repo.find_commit(conflict.commit()).is_err(),
+            "the preview commit exists only in the suspended rebase's object memory"
+        );
+        assert_eq!(
+            app_action(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &app),
+            Some(Action::Cancel),
+            "Escape discards the preview"
+        );
+        drop(conflict);
+        discard_todo_rebase_preview(&mut app, &history.refs);
+
+        let target = app
+            .selected_tree_diff_target()
+            .context("the restored selection has a diff")?;
+        load_changes_without_lines(&repo, target)
+            .context("the next frame can load changes before any async refresh")?;
+        load_commit_message(&repo, target.selected())
+            .context("the next frame can also populate the commit message pane")?;
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            original_rows,
+            "cancellation restores the real history synchronously"
+        );
+        assert_eq!(app.hidden_ids(), original_hidden, "the hidden boundary is restored");
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "discarding the preview leaves the repository unchanged"
         );
         Ok(())
     }
