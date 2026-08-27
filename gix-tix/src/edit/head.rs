@@ -157,10 +157,8 @@ fn perform_inner(
     let edit = rebase::Edit::Replace { target: head, commit };
     let signature = if review {
         rebase::Signature::Remove
-    } else if kind == Kind::Amend || pending {
-        rebase::Signature::RedoIfNeeded
     } else {
-        rebase::Signature::InvalidateExisting
+        rebase::Signature::RedoIfNeeded
     };
     let tree_mode = if review {
         rebase::Tree::LeaveAsIsAndMarkDescendants
@@ -823,6 +821,80 @@ mod tests {
         );
         assert_eq!(std::fs::read(fixture.path().join("tip"))?, b"tip\n");
         assert_eq!(git(fixture.path(), &["status", "--short"])?, b"?? tip\n");
+        Ok(())
+    }
+
+    #[test]
+    fn spilling_one_path_finalizes_a_signed_commit_and_allows_follow_up() -> gix_testtools::Result {
+        if !gix_testtools::signature::program_available("ssh-keygen") {
+            return Ok(());
+        }
+        let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        std::fs::write(fixture.path().join("other"), "other\n")?;
+        git(fixture.path(), &["add", "other"])?;
+        git(fixture.path(), &["commit", "--amend", "--no-edit"])?;
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            [
+                "user.name=editor".to_owned(),
+                "user.email=editor@example.com".to_owned(),
+                "commit.gpgSign=true".to_owned(),
+                "gpg.format=ssh".to_owned(),
+                format!("user.signingKey={}", key.display()),
+                format!(
+                    "gpg.ssh.allowedSignersFile={}",
+                    gix_testtools::signature::fixture("ssh-allowed-signers").display()
+                ),
+            ],
+        )?;
+        let old = repo.head_id()?.detach();
+        let signed = repo.find_commit(old)?.decode()?.sign(
+            repo.commit_signing_options_if_enabled()?
+                .expect("commit signing is configured"),
+        )?;
+        let signed = repo.write_object(&signed)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(signed, "prepare signed path spill")?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let selected = PathChange {
+            kind: ChangeKind::Added,
+            group: crate::ChangeGroup::Tree,
+            source: None,
+            path: "tip".into(),
+            lines: None,
+        };
+
+        let partially_spilled = perform(
+            repo.clone(),
+            &graph,
+            Kind::Spill,
+            Some((std::slice::from_ref(&selected), None)),
+        )?
+        .expect("the first path can be spilled");
+        let commit = repo.find_commit(partially_spilled)?;
+        assert!(
+            !super::super::rebase::is_pending(&commit.decode()?.into_owned()?),
+            "the directly spilled commit needs no later replay"
+        );
+        assert!(
+            commit
+                .verify_signature()?
+                .expect("the partially spilled commit is signed")
+                .is_valid(),
+            "the partially spilled commit receives a valid configured signature"
+        );
+        assert!(
+            commit.tree()?.lookup_entry(["other"])?.is_some(),
+            "the unselected addition remains committed"
+        );
+        drop(commit);
+
+        let graph = super::super::loaded_graph(&repo)?;
+        assert!(
+            perform(repo, &graph, Kind::Spill, None)?.is_some(),
+            "the finalized partial spill permits a follow-up edit"
+        );
         Ok(())
     }
 }
