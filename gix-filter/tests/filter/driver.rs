@@ -52,11 +52,11 @@ mod shutdown {
     }
 
     /// A `State` that goes out of scope closes the input and output of each of its long-running
-    /// processes, which makes them exit, but it never waits for them. On Unix, a child that exited
-    /// without being waited for keeps its slot in the process table - see the [`crate::reap`] module.
+    /// processes, which makes them exit, and then waits for them. On Unix, only a child that was waited
+    /// for releases its slot in the process table - see the [`crate::reap`] module.
     #[cfg(unix)]
     #[test]
-    fn a_dropped_state_does_not_reap_its_process_children() -> crate::Result {
+    fn a_dropped_state_reaps_its_process_children() -> crate::Result {
         let pid = {
             let mut state = gix_filter::driver::State::default();
             let driver = driver_with_process();
@@ -72,16 +72,35 @@ mod shutdown {
         };
 
         assert_eq!(
+            crate::reap::observe(pid),
+            crate::reap::Child::Reaped,
+            "dropping the state waited for the filter, so it is gone from the process table right away"
+        );
+        Ok(())
+    }
+
+    /// Waiting is what `Mode::Ignore` exists to avoid, so it is also the one way to still end up with a
+    /// child nobody waited for. Pinned here so the documented opt-out can't be lost by accident.
+    #[cfg(unix)]
+    #[test]
+    fn an_ignored_shutdown_leaves_its_process_children_unreaped() -> crate::Result {
+        let mut state = gix_filter::driver::State::default();
+        let driver = driver_with_process();
+        let pid = extract_client(state.maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?).id();
+
+        assert_eq!(state.shutdown(Mode::Ignore)?.len(), 1, "we only launch one process");
+        assert_eq!(
             crate::reap::settle(pid),
             crate::reap::Child::Unreaped,
-            "the filter exits once its pipes close, but nothing waits for it so it stays in the process table"
+            "the filter still exits as its pipes were closed, but this mode explicitly doesn't wait for it"
         );
         Ok(())
     }
 
     /// `gix-status` and `gix-worktree-state` clone their pipeline once per worker thread, and cloning a
-    /// `State` resets the set of running processes. Hence each clone launches, owns and abandons filter
-    /// processes of its own, which is what turns one leaked child per operation into `threads + 2` of them.
+    /// `State` resets the set of running processes. Hence each clone launches and owns filter processes of
+    /// its own, which is what used to turn one leaked child per operation into `threads + 2` of them, and
+    /// is why each clone has to reap what it started.
     #[cfg(unix)]
     #[test]
     fn each_clone_of_a_state_owns_its_own_process_children() -> crate::Result {
@@ -107,9 +126,9 @@ mod shutdown {
 
         for (pid, whose) in [(original, "original"), (clone, "clone")] {
             assert_eq!(
-                crate::reap::settle(pid),
-                crate::reap::Child::Unreaped,
-                "the child of the {whose} was left in the process table"
+                crate::reap::observe(pid),
+                crate::reap::Child::Reaped,
+                "the child of the {whose} was waited for by the state that launched it"
             );
         }
         Ok(())

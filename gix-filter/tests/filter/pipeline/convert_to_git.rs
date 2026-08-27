@@ -113,12 +113,13 @@ fn only_driver_means_streaming_is_possible() -> gix_testtools::Result {
 }
 
 /// The whole point of a `process` filter is that it stays alive for the next file, so the `Pipeline` is
-/// the only handle to it. That makes this the shape in which the defect reaches users: `gix` owns its
+/// the only handle to it. That makes this the shape in which the defect reached users: `gix` owns its
 /// pipelines privately - `Repository::status()` and checkout never hand one back - so nobody is in a
-/// position to call [`shutdown()`][gix_filter::driver::State::shutdown()] on what they launched.
+/// position to call [`shutdown()`][gix_filter::driver::State::shutdown()] on what they launched, and
+/// dropping the pipeline has to be enough.
 #[cfg(unix)]
 #[test]
-fn a_dropped_pipeline_does_not_reap_the_filter_it_launched() -> gix_testtools::Result {
+fn a_dropped_pipeline_reaps_the_filter_it_launched() -> gix_testtools::Result {
     let (mut cache, mut pipe) = pipeline("driver-only", || {
         (
             vec![driver_with_process()],
@@ -159,9 +160,9 @@ fn a_dropped_pipeline_does_not_reap_the_filter_it_launched() -> gix_testtools::R
     drop(pipe);
 
     assert_eq!(
-        crate::reap::settle(pid),
-        crate::reap::Child::Unreaped,
-        "dropping the pipeline terminates its filter, but leaves it in the process table"
+        crate::reap::observe(pid),
+        crate::reap::Child::Reaped,
+        "dropping the pipeline terminated its filter and waited for it"
     );
     Ok(())
 }
