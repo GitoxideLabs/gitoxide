@@ -222,8 +222,8 @@ impl Delegate<'_> {
     fn follow_refs_to_objects_if_needed_delay_errors(&mut self) {
         let repo = self.repo;
         for (r, obj) in self.refs.iter().zip(self.objs.iter_mut()) {
-            if let (Some(ref_), obj_opt @ None) = (r, obj) {
-                if let Some(id) = ref_.target.try_id().map(ToOwned::to_owned).or_else(|| {
+            if let (Some(ref_), obj_opt @ None) = (r, obj)
+                && let Some(id) = ref_.target.try_id().map(ToOwned::to_owned).or_else(|| {
                     match ref_.clone().attach(repo).peel_to_id() {
                         Err(err) => {
                             self.delayed_errors.push(
@@ -238,11 +238,11 @@ impl Delegate<'_> {
                         }
                         Ok(id) => Some(id.detach()),
                     }
-                }) {
-                    let objs = obj_opt.get_or_insert_with(Vec::new);
-                    if !objs.contains(&id) {
-                        objs.push(id);
-                    }
+                })
+            {
+                let objs = obj_opt.get_or_insert_with(Vec::new);
+                if !objs.contains(&id) {
+                    objs.push(id);
                 }
             }
         }

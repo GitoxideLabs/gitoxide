@@ -150,13 +150,12 @@ impl Default for Remote {
                 };
                 let mut req = req_builder.build()?;
                 let mut has_configure_request = false;
-                if let Some(ref mut request_options) = config.backend.as_ref().and_then(|backend| backend.lock().ok()) {
-                    if let Some(options) = request_options.downcast_mut::<super::Options>() {
-                        if let Some(configure_request) = &mut options.configure_request {
-                            has_configure_request = true;
-                            configure_request(&mut req)?;
-                        }
-                    }
+                if let Some(ref mut request_options) = config.backend.as_ref().and_then(|backend| backend.lock().ok())
+                    && let Some(options) = request_options.downcast_mut::<super::Options>()
+                    && let Some(configure_request) = &mut options.configure_request
+                {
+                    has_configure_request = true;
+                    configure_request(&mut req)?;
                 }
 
                 let follow = follow.get_or_insert(config.follow_redirects);
@@ -180,11 +179,11 @@ impl Default for Remote {
                     Err(err) => {
                         // `error_for_status()` preserves the final URL for HTTP error responses. Capture it here so
                         // authentication retries after redirected 401 responses use the redirected base URL.
-                        if let Some(actual_url) = err.url().map(reqwest::Url::as_str) {
-                            if actual_url != effective_url {
-                                let new_base_url = redirect::base_url(actual_url, &base_url, url.clone())?;
-                                *redirected_base_url_shared.lock() = Some(new_base_url);
-                            }
+                        if let Some(actual_url) = err.url().map(reqwest::Url::as_str)
+                            && actual_url != effective_url
+                        {
+                            let new_base_url = redirect::base_url(actual_url, &base_url, url.clone())?;
+                            *redirected_base_url_shared.lock() = Some(new_base_url);
                         }
                         let err = match err.status() {
                             Some(status) => {

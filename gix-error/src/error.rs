@@ -30,10 +30,10 @@ impl<'a> DisplaySource<'a> {
 impl std::fmt::Display for DisplaySource<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self.error, f)?;
-        if !f.alternate() {
-            if let Some(location) = self.location {
-                crate::write_location(f, location)?;
-            }
+        if !f.alternate()
+            && let Some(location) = self.location
+        {
+            crate::write_location(f, location)?;
         }
         Ok(())
     }

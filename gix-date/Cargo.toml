@@ -9,7 +9,7 @@ description = "A crate of the gitoxide project parsing dates the way git does"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 doctest = true

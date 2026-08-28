@@ -10,7 +10,7 @@ documentation = "https://github.com/git/git/blob/seen/Documentation/technical/ch
 license = "MIT OR Apache-2.0"
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 doctest = true

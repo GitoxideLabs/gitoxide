@@ -131,7 +131,7 @@ pub(crate) fn reverse_hex_to_hex(reverse_hex: &[u8], hex: &mut [u8]) -> Result<(
 }
 
 fn encode_reverse_hex<'a>(id: &oid, buf: &'a mut [u8]) -> &'a str {
-    for (byte, pair) in id.as_bytes().iter().zip(buf.chunks_exact_mut(2)) {
+    for (byte, pair) in id.as_bytes().iter().zip(buf.as_chunks_mut::<2>().0) {
         pair[0] = REVERSE_HEX[usize::from(byte >> 4)];
         pair[1] = REVERSE_HEX[usize::from(byte & 0x0f)];
     }

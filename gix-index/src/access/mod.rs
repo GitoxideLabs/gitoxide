@@ -411,12 +411,12 @@ impl State {
                 .walk_entry_stages(low_entry.path(self), low, Ordering::Less)
                 .unwrap_or(low);
         }
-        if let Some(high_entry) = self.entries.get(high) {
-            if high_entry.stage_raw() != 0 {
-                high = self
-                    .walk_entry_stages(high_entry.path(self), high, Ordering::Less)
-                    .unwrap_or(high);
-            }
+        if let Some(high_entry) = self.entries.get(high)
+            && high_entry.stage_raw() != 0
+        {
+            high = self
+                .walk_entry_stages(high_entry.path(self), high, Ordering::Less)
+                .unwrap_or(high);
         }
         (low != high).then_some(low..high)
     }

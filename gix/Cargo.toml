@@ -9,9 +9,9 @@ version = "0.87.1"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-# Rust 1.85 is required so hash-related dependencies can use Rust 2024 crates,
+# Rust 1.88 is required so hash-related dependencies can use Rust 2024 crates,
 # notably `sha2` 0.11 and `hashbrown` 0.17.
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 doctest = true

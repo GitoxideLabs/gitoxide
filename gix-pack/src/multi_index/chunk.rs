@@ -78,10 +78,10 @@ pub mod index_names {
                 })?
                 .to_owned();
 
-            if let Some(previous) = out.last() {
-                if previous >= &path {
-                    return Err(decode::Error::NotOrderedAlphabetically);
-                }
+            if let Some(previous) = out.last()
+                && previous >= &path
+            {
+                return Err(decode::Error::NotOrderedAlphabetically);
             }
             out.push(path);
 
@@ -157,8 +157,8 @@ pub mod fanout {
             return None;
         }
         let mut out = [0; 256];
-        for (c, f) in chunk.chunks_exact(4).zip(out.iter_mut()) {
-            *f = u32::from_be_bytes(c.try_into().unwrap());
+        for (c, f) in chunk.as_chunks::<4>().0.iter().zip(out.iter_mut()) {
+            *f = u32::from_be_bytes(*c);
         }
         out.into()
     }
@@ -284,7 +284,7 @@ pub mod large_offsets {
     }
     /// Returns true if the `offsets` range seems to be properly aligned for the data we expect.
     pub fn is_valid(offset: &Range<usize>) -> bool {
-        (offset.end - offset.start) % 8 == 0
+        (offset.end - offset.start).is_multiple_of(8)
     }
 
     pub(crate) fn write(

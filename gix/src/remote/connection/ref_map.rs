@@ -127,10 +127,10 @@ where
         }: Options,
     ) -> Result<fetch::RefMap, Error> {
         let _span = gix_trace::coarse!("remote::Connection::ref_map()");
-        if let Some(tag_spec) = self.remote.fetch_tags.to_refspec().map(|spec| spec.to_owned()) {
-            if !extra_refspecs.contains(&tag_spec) {
-                extra_refspecs.push(tag_spec);
-            }
+        if let Some(tag_spec) = self.remote.fetch_tags.to_refspec().map(|spec| spec.to_owned())
+            && !extra_refspecs.contains(&tag_spec)
+        {
+            extra_refspecs.push(tag_spec);
         }
         let mut credentials_storage;
         let url = self.transport.inner.to_url();

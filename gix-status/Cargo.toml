@@ -9,7 +9,7 @@ description = "A crate of the gitoxide project dealing with 'git status'-like fu
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>", "Pascal Kuthe <pascal.kuthe@semimod.de>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 doctest = false

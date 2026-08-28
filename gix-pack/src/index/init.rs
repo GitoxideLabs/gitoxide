@@ -101,7 +101,7 @@ fn read_fan(d: &[u8]) -> ([u32; FAN_LEN], usize) {
     assert!(d.len() >= FAN_LEN * N32_SIZE);
 
     let mut fan = [0; FAN_LEN];
-    for (c, f) in d.chunks_exact(N32_SIZE).zip(fan.iter_mut()) {
+    for (c, f) in d.as_chunks::<N32_SIZE>().0.iter().zip(fan.iter_mut()) {
         *f = crate::read_u32(c);
     }
     (fan, FAN_LEN * N32_SIZE)
@@ -154,7 +154,9 @@ fn validate_size(data: &[u8], kind: Version, num_objects: u32, hash_len: usize) 
                 });
             }
             let (large_offsets, max_large_offset_index) = data[offset32_start..offset32_end]
-                .chunks_exact(N32_SIZE)
+                .as_chunks::<N32_SIZE>()
+                .0
+                .iter()
                 .filter_map(|offset| {
                     let offset = crate::read_u32(offset);
                     (offset & (1 << 31) != 0).then_some((offset ^ (1 << 31)) as usize)

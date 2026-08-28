@@ -68,17 +68,17 @@ fn resolve_includes_recursive(
         let mut paths = None;
         if header_name == "include" && header.subsection_name.is_none() {
             paths = Some(gather_paths(section, id, backing));
-        } else if header_name == "includeIf" {
-            if let Some(condition) = &header.subsection_name {
-                let target_config_path = section.meta.path.as_deref();
-                if include_condition_match(
-                    condition.value_in(backing),
-                    target_config_path,
-                    search_config.unwrap_or(target_config),
-                    options.includes,
-                )? {
-                    paths = Some(gather_paths(section, id, backing));
-                }
+        } else if header_name == "includeIf"
+            && let Some(condition) = &header.subsection_name
+        {
+            let target_config_path = section.meta.path.as_deref();
+            if include_condition_match(
+                condition.value_in(backing),
+                target_config_path,
+                search_config.unwrap_or(target_config),
+                options.includes,
+            )? {
+                paths = Some(gather_paths(section, id, backing));
             }
         }
         if let Some(paths) = paths {

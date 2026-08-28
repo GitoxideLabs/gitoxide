@@ -166,10 +166,10 @@ pub(crate) mod function {
                             .and_then(|l| db.entry_by_location(l).map(|pe| (l, pe)))
                         {
                             Some((location, pack_entry)) => {
-                                if let Some((cached_pack_id, _)) = &pack_offsets_to_id {
-                                    if *cached_pack_id != location.pack_id {
-                                        pack_offsets_to_id = None;
-                                    }
+                                if let Some((cached_pack_id, _)) = &pack_offsets_to_id
+                                    && *cached_pack_id != location.pack_id
+                                {
+                                    pack_offsets_to_id = None;
                                 }
                                 let pack_range = counts_range_by_pack_id[counts_range_by_pack_id
                                     .binary_search_by_key(&location.pack_id, |e| e.0)

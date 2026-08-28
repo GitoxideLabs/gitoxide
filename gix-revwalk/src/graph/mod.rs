@@ -366,13 +366,13 @@ fn try_lookup<'graph, 'cache>(
     cache: Option<&'cache gix_commitgraph::Graph>,
     buf: &'graph mut Vec<u8>,
 ) -> Result<Option<LazyCommit<'graph, 'cache>>, gix_object::find::existing_iter::Error> {
-    if let Some(cache) = cache {
-        if let Some(pos) = cache.lookup(id) {
-            return Ok(Some(LazyCommit {
-                object_hash: id.kind(),
-                backing: Either::Right((cache, pos)),
-            }));
-        }
+    if let Some(cache) = cache
+        && let Some(pos) = cache.lookup(id)
+    {
+        return Ok(Some(LazyCommit {
+            object_hash: id.kind(),
+            backing: Either::Right((cache, pos)),
+        }));
     }
     Ok(
         match objects

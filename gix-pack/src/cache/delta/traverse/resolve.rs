@@ -549,15 +549,13 @@ where
 
     // This might be a leaf, while its base buffer now is also exclusively available,
     // and if so, keep the larger buffer.
-    if let Some(parent) = parent {
-        if let Ok(parent) = OwnShared::try_unwrap(parent) {
-            if reusable
-                .as_ref()
-                .is_none_or(|reusable| parent.bytes.capacity() > reusable.capacity())
-            {
-                reusable = Some(parent.bytes);
-            }
-        }
+    if let Some(parent) = parent
+        && let Ok(parent) = OwnShared::try_unwrap(parent)
+        && reusable
+            .as_ref()
+            .is_none_or(|reusable| parent.bytes.capacity() > reusable.capacity())
+    {
+        reusable = Some(parent.bytes);
     }
     if let Some(reusable) = reusable {
         *fully_resolved_delta_bytes = reusable;

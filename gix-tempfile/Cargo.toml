@@ -9,7 +9,7 @@ description = "A tempfile implementation with a global registry to assure cleanu
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*", "/README.md"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [[example]]
 name = "delete-tempfiles-on-sigterm"

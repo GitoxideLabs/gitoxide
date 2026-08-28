@@ -8,7 +8,7 @@ authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 publish = false
-rust-version = "1.85"
+rust-version = "1.88"
 
 [[bin]]
 name = "it"

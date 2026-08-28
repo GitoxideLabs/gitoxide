@@ -171,10 +171,10 @@ where
     fn try_read_trailer(&mut self) -> Result<Option<ObjectId>, input::Error> {
         Ok(if self.objects_left == 0 {
             let mut id = gix_hash::ObjectId::null(self.object_hash);
-            if let Err(err) = self.read.read_exact(id.as_mut_slice()) {
-                if self.mode != input::Mode::Restore {
-                    return Err(input::Error::Io(err.into()));
-                }
+            if let Err(err) = self.read.read_exact(id.as_mut_slice())
+                && self.mode != input::Mode::Restore
+            {
+                return Err(input::Error::Io(err.into()));
             }
 
             if let Some(hash) = self.hash.take() {

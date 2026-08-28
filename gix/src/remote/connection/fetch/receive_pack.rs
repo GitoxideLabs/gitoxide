@@ -230,12 +230,11 @@ where
             self.write_packed_refs,
         )?;
 
-        if let Some(bundle) = write_pack_bundle.as_mut() {
-            if !update_refs.edits.is_empty() || bundle.index.num_objects == 0 {
-                if let Some(path) = bundle.keep_path.take() {
-                    std::fs::remove_file(&path).map_err(|err| Error::RemovePackKeepFile { path, source: err })?;
-                }
-            }
+        if let Some(bundle) = write_pack_bundle.as_mut()
+            && (!update_refs.edits.is_empty() || bundle.index.num_objects == 0)
+            && let Some(path) = bundle.keep_path.take()
+        {
+            std::fs::remove_file(&path).map_err(|err| Error::RemovePackKeepFile { path, source: err })?;
         }
 
         let out = Outcome {

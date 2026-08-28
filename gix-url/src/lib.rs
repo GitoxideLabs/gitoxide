@@ -305,10 +305,10 @@ impl Url {
         path: BString,
         serialize_alternative_form: bool,
     ) -> Result<Self, parse::Error> {
-        if let Scheme::Helper(name) = &scheme {
-            if !parse::is_valid_remote_helper_name(name.as_bytes()) {
-                return Err(parse::Error::InvalidRemoteHelperName { name: name.clone() });
-            }
+        if let Scheme::Helper(name) = &scheme
+            && !parse::is_valid_remote_helper_name(name.as_bytes())
+        {
+            return Err(parse::Error::InvalidRemoteHelperName { name: name.clone() });
         }
         let is_http = matches!(scheme, Scheme::Http | Scheme::Https);
         let mut parsed = parse(
@@ -529,10 +529,10 @@ impl Url {
     /// public field mutation may return an error.
     pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
         if matches!(self.scheme, Scheme::Ext | Scheme::Helper(_)) {
-            if let Scheme::Helper(name) = &self.scheme {
-                if !parse::is_valid_remote_helper_name(name.as_bytes()) {
-                    return Err(std::io::Error::other("invalid remote-helper name"));
-                }
+            if let Scheme::Helper(name) = &self.scheme
+                && !parse::is_valid_remote_helper_name(name.as_bytes())
+            {
+                return Err(std::io::Error::other("invalid remote-helper name"));
             }
             if self.user.is_some() || self.password.is_some() || self.host.is_some() || self.port.is_some() {
                 return Err(std::io::Error::other(

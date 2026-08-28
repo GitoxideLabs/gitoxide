@@ -256,16 +256,15 @@ impl<'file> SectionRef<'file> {
                 _ => {}
             }
             event.write_to_in(self.backing, &mut out)?;
-            if let Event::ValueNotDone(_) = event {
-                if self
+            if let Event::ValueNotDone(_) = event
+                && self
                     .body_data()
                     .0
                     .get(idx + 1)
                     .filter(|e| matches!(e, Event::Newline(_)))
                     .is_none()
-                {
-                    out.write_all(nl)?;
-                }
+            {
+                out.write_all(nl)?;
             }
         }
         Ok(())

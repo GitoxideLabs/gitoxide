@@ -63,22 +63,22 @@ impl Algorithm {
                     .is_none_or(|commit| !commit.data.flags.contains(Flags::SEEN))
                 {
                     self.add_to_queue(id, Flags::SEEN, graph)?;
-                } else if matches!(ancestors, Ancestors::AllUnseen) || generation < 2 {
-                    if let Some(commit) = graph.get_or_insert_commit(id, |_| {})? {
-                        for parent_id in commit.parents.clone() {
-                            let mut prev_flags = Flags::default();
-                            if let Some(parent) = graph
-                                .get_or_insert_commit(parent_id, |data| {
-                                    prev_flags = data.flags;
-                                    data.flags |= Flags::COMMON;
-                                })?
-                                .filter(|_| !prev_flags.contains(Flags::COMMON))
-                            {
-                                if prev_flags.contains(Flags::SEEN) && !prev_flags.contains(Flags::POPPED) {
-                                    self.non_common_revs -= 1;
-                                }
-                                queue.insert(parent.commit_time, (parent_id, generation + 1));
+                } else if (matches!(ancestors, Ancestors::AllUnseen) || generation < 2)
+                    && let Some(commit) = graph.get_or_insert_commit(id, |_| {})?
+                {
+                    for parent_id in commit.parents.clone() {
+                        let mut prev_flags = Flags::default();
+                        if let Some(parent) = graph
+                            .get_or_insert_commit(parent_id, |data| {
+                                prev_flags = data.flags;
+                                data.flags |= Flags::COMMON;
+                            })?
+                            .filter(|_| !prev_flags.contains(Flags::COMMON))
+                        {
+                            if prev_flags.contains(Flags::SEEN) && !prev_flags.contains(Flags::POPPED) {
+                                self.non_common_revs -= 1;
                             }
+                            queue.insert(parent.commit_time, (parent_id, generation + 1));
                         }
                     }
                 }
@@ -127,15 +127,14 @@ impl Negotiator for Algorithm {
                 if graph
                     .get(&parent_id)
                     .is_none_or(|commit| !commit.data.flags.contains(Flags::SEEN))
+                    && let Err(err) = self.add_to_queue(parent_id, mark, graph)
                 {
-                    if let Err(err) = self.add_to_queue(parent_id, mark, graph) {
-                        return Some(Err(err));
-                    }
+                    return Some(Err(err));
                 }
-                if mark.contains(Flags::COMMON) {
-                    if let Err(err) = self.mark_common(parent_id, Mark::AncestorsOnly, Ancestors::AllUnseen, graph) {
-                        return Some(Err(err));
-                    }
+                if mark.contains(Flags::COMMON)
+                    && let Err(err) = self.mark_common(parent_id, Mark::AncestorsOnly, Ancestors::AllUnseen, graph)
+                {
+                    return Some(Err(err));
                 }
             }
 

@@ -222,10 +222,10 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             } else {
                 // Non-bracketed host: strip a single trailing colon
                 let colon_count = h.chars().filter(|&c| c == ':').take(2).count();
-                if colon_count == 1 {
-                    if let Some(inner) = h.strip_suffix(':') {
-                        h = inner.to_string();
-                    }
+                if colon_count == 1
+                    && let Some(inner) = h.strip_suffix(':')
+                {
+                    h = inner.to_string();
                 }
             }
             h

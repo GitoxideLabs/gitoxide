@@ -539,7 +539,9 @@ pub fn main() -> Result<()> {
                         add_paths: add_path,
                         prefix,
                         files: add_virtual_file
-                            .chunks_exact(2)
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
                             .map(|c| (c[0].clone(), c[1].clone()))
                             .collect(),
                         format: format.map(|f| match f {

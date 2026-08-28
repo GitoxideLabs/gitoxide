@@ -88,10 +88,10 @@ pub mod write {
                 }
             }
             if shallow_commits.is_empty() {
-                if let Err(err) = std::fs::remove_file(file.resource_path()) {
-                    if err.kind() != std::io::ErrorKind::NotFound {
-                        return Err(err.into());
-                    }
+                if let Err(err) = std::fs::remove_file(file.resource_path())
+                    && err.kind() != std::io::ErrorKind::NotFound
+                {
+                    return Err(err.into());
                 }
                 drop(file);
                 return Ok(());

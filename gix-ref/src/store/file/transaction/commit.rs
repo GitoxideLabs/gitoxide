@@ -92,24 +92,22 @@ impl Transaction<'_, '_> {
                         change.lock = lock;
                         continue;
                     }
-                    if update_ref {
-                        if let Some(Err(err)) = lock.map(gix_lock::Marker::commit) {
-                            // TODO: when Kind::IsADirectory becomes stable, use that.
-                            let err = if err.instance.resource_path().is_dir() {
-                                gix_tempfile::remove_dir::empty_depth_first(err.instance.resource_path())
-                                    .map_err(std::io::Error::other)
-                                    .and_then(|_| err.instance.commit().map_err(|err| err.error))
-                                    .err()
-                            } else {
-                                Some(err.error)
-                            };
+                    if update_ref && let Some(Err(err)) = lock.map(gix_lock::Marker::commit) {
+                        // TODO: when Kind::IsADirectory becomes stable, use that.
+                        let err = if err.instance.resource_path().is_dir() {
+                            gix_tempfile::remove_dir::empty_depth_first(err.instance.resource_path())
+                                .map_err(std::io::Error::other)
+                                .and_then(|_| err.instance.commit().map_err(|err| err.error))
+                                .err()
+                        } else {
+                            Some(err.error)
+                        };
 
-                            if let Some(err) = err {
-                                return Err(Error::LockCommit {
-                                    source: err,
-                                    full_name: change.name(),
-                                });
-                            }
+                        if let Some(err) = err {
+                            return Err(Error::LockCommit {
+                                source: err,
+                                full_name: change.name(),
+                            });
                         }
                     }
                 }
@@ -162,13 +160,13 @@ impl Transaction<'_, '_> {
             if take_lock_and_delete {
                 let lock = change.lock.take();
                 let reference_path = self.store.reference_path(change.update.name.as_ref());
-                if let Err(err) = std::fs::remove_file(reference_path) {
-                    if err.kind() != std::io::ErrorKind::NotFound {
-                        return Err(Error::DeleteReference {
-                            err,
-                            full_name: change.name(),
-                        });
-                    }
+                if let Err(err) = std::fs::remove_file(reference_path)
+                    && err.kind() != std::io::ErrorKind::NotFound
+                {
+                    return Err(Error::DeleteReference {
+                        err,
+                        full_name: change.name(),
+                    });
                 }
                 drop(lock);
             }

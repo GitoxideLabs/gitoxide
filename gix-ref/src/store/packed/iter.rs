@@ -36,11 +36,11 @@ impl<'a> Iterator for packed::Iter<'a> {
         match decode::reference(&mut self.cursor, self.object_hash) {
             Ok(reference) => {
                 self.current_line += 1;
-                if let Some(ref prefix) = self.prefix {
-                    if !reference.name.as_bstr().starts_with_str(prefix) {
-                        self.cursor = &[];
-                        return None;
-                    }
+                if let Some(ref prefix) = self.prefix
+                    && !reference.name.as_bstr().starts_with_str(prefix)
+                {
+                    self.cursor = &[];
+                    return None;
                 }
                 Some(Ok(reference))
             }

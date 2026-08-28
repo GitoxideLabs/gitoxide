@@ -104,18 +104,19 @@ pub(crate) fn update(
     ) {
         // `None` only if unborn.
         let remote_id = remote.as_id();
-        if matches!(dry_run, fetch::DryRun::No) && !remote_id.is_none_or(|id| repo.objects.exists(id)) {
-            if let Some(remote_id) = remote_id.filter(|id| !repo.objects.exists(id)) {
-                let update = if is_implicit_tag {
-                    Mode::ImplicitTagNotSentByRemote.into()
-                } else {
-                    // Assure the ODB is not to blame for the missing object.
-                    repo.try_find_object(remote_id)?;
-                    Mode::RejectedSourceObjectNotFound { id: remote_id.into() }.into()
-                };
-                updates.push(update);
-                continue;
-            }
+        if matches!(dry_run, fetch::DryRun::No)
+            && !remote_id.is_none_or(|id| repo.objects.exists(id))
+            && let Some(remote_id) = remote_id.filter(|id| !repo.objects.exists(id))
+        {
+            let update = if is_implicit_tag {
+                Mode::ImplicitTagNotSentByRemote.into()
+            } else {
+                // Assure the ODB is not to blame for the missing object.
+                repo.try_find_object(remote_id)?;
+                Mode::RejectedSourceObjectNotFound { id: remote_id.into() }.into()
+            };
+            updates.push(update);
+            continue;
         }
         let (mode, edit_index, type_change) = match local {
             Some(name) => {

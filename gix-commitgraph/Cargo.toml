@@ -10,7 +10,7 @@ description = "Read-only access to the git commitgraph file format"
 authors = ["Conor Davis <gitoxide@conor.fastmail.fm>", "Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 doctest = false

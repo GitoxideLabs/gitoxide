@@ -51,16 +51,16 @@ pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Res
     while let Some((parent_idx, dir)) = dirs.pop() {
         let dir_canonicalized = gix_path::realpath_opts(&dir, current_dir, MAX_SYMLINKS)?;
         if let Some(seen_idx) = seen.iter().position(|(seen_dir, _)| *seen_dir == dir_canonicalized) {
-            if let Some(parent_idx) = parent_idx {
-                if chain(&seen, parent_idx).any(|ancestor| ancestor == seen_idx) {
-                    let mut cycle: Vec<_> = chain(&seen, parent_idx)
-                        .take_while(|ancestor| *ancestor != seen_idx)
-                        .map(|idx| seen[idx].0.clone())
-                        .collect();
-                    cycle.push(seen[seen_idx].0.clone());
-                    cycle.reverse();
-                    return Err(Error::Cycle(cycle));
-                }
+            if let Some(parent_idx) = parent_idx
+                && chain(&seen, parent_idx).any(|ancestor| ancestor == seen_idx)
+            {
+                let mut cycle: Vec<_> = chain(&seen, parent_idx)
+                    .take_while(|ancestor| *ancestor != seen_idx)
+                    .map(|idx| seen[idx].0.clone())
+                    .collect();
+                cycle.push(seen[seen_idx].0.clone());
+                cycle.reverse();
+                return Err(Error::Cycle(cycle));
             }
             continue;
         }

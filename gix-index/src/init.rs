@@ -142,10 +142,10 @@ pub mod from_tree {
                 self.path.push(b'/');
             }
             self.path.push_str(name);
-            if self.invalid_path.is_none() {
-                if let Err(err) = gix_validate::path::component(name, None, self.validate) {
-                    self.invalid_path = Some((self.path.clone(), err));
-                }
+            if self.invalid_path.is_none()
+                && let Err(err) = gix_validate::path::component(name, None, self.validate)
+            {
+                self.invalid_path = Some((self.path.clone(), err));
             }
         }
 

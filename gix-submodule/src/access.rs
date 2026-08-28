@@ -180,13 +180,13 @@ impl File {
             None => return Ok(None),
         };
 
-        if let Update::Command(cmd) = &value {
-            if value_is_from_modules_file.unwrap_or_default() {
-                return Err(config::update::Error::CommandForbiddenInModulesConfiguration {
-                    submodule: name.to_owned(),
-                    actual: cmd.to_owned(),
-                });
-            }
+        if let Update::Command(cmd) = &value
+            && value_is_from_modules_file.unwrap_or_default()
+        {
+            return Err(config::update::Error::CommandForbiddenInModulesConfiguration {
+                submodule: name.to_owned(),
+                actual: cmd.to_owned(),
+            });
         }
         Ok(Some(value))
     }

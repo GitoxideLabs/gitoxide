@@ -417,10 +417,10 @@ impl<'a> ErrorNode<'a> {
         let error = self.error();
         let location = self.location();
         let mut children = Vec::new();
-        if !error.is::<crate::Error>() {
-            if let Some(error) = error.source() {
-                children.push(ErrorNode::Source { error, location });
-            }
+        if !error.is::<crate::Error>()
+            && let Some(error) = error.source()
+        {
+            children.push(ErrorNode::Source { error, location });
         }
         if let ErrorNode::Frame(frame) = self {
             children.extend(frame.children.iter().map(ErrorNode::Frame));
@@ -490,10 +490,10 @@ impl Frame {
 
         let root = ErrorNode::Frame(self);
         let children = root.children();
-        if children.iter().all(|child| child.children().is_empty()) {
-            if let Some(last) = children.last() {
-                return Some(*last);
-            }
+        if children.iter().all(|child| child.children().is_empty())
+            && let Some(last) = children.last()
+        {
+            return Some(*last);
         }
 
         let cause = walk(root, 0).2;
@@ -709,14 +709,14 @@ fn flatten_error_nodes(root: Frame) -> Vec<OwnedErrorNode> {
                 logical_parent,
             } => {
                 let error = ErrorHandle::new(unerase(error));
-                if !error.error().is::<crate::Error>() {
-                    if let Some(source) = error.source() {
-                        queue.push_back(Pending::Source {
-                            error: source,
-                            location,
-                            logical_parent: node_index,
-                        });
-                    }
+                if !error.error().is::<crate::Error>()
+                    && let Some(source) = error.source()
+                {
+                    queue.push_back(Pending::Source {
+                        error: source,
+                        location,
+                        logical_parent: node_index,
+                    });
                 }
                 queue.extend(children.into_iter().map(|frame| Pending::Frame {
                     frame,
@@ -733,14 +733,14 @@ fn flatten_error_nodes(root: Frame) -> Vec<OwnedErrorNode> {
                 location,
                 logical_parent,
             } => {
-                if !error.error().is::<crate::Error>() {
-                    if let Some(source) = error.source() {
-                        queue.push_back(Pending::Source {
-                            error: source,
-                            location,
-                            logical_parent: node_index,
-                        });
-                    }
+                if !error.error().is::<crate::Error>()
+                    && let Some(source) = error.source()
+                {
+                    queue.push_back(Pending::Source {
+                        error: source,
+                        location,
+                        logical_parent: node_index,
+                    });
                 }
                 out.push(OwnedErrorNode {
                     error,

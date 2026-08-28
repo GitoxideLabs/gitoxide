@@ -54,10 +54,14 @@ where
             .chunks_exact(self.hash_len)
             .take(self.num_objects as usize);
         let crcs = self.data[self.offset_crc32_v2()..]
-            .chunks_exact(N32_SIZE)
+            .as_chunks::<N32_SIZE>()
+            .0
+            .iter()
             .take(self.num_objects as usize);
         let offsets = self.data[self.offset_pack_offset_v2()..]
-            .chunks_exact(N32_SIZE)
+            .as_chunks::<N32_SIZE>()
+            .0
+            .iter()
             .take(self.num_objects as usize);
         assert_eq!(oids.len(), crcs.len());
         assert_eq!(crcs.len(), offsets.len());
@@ -170,7 +174,11 @@ where
             index::Version::V1 => self.iter().map(|e| e.pack_offset).collect(),
             index::Version::V2 => {
                 let offset32_start = &self.data[self.offset_pack_offset_v2()..];
-                let offsets32 = offset32_start.chunks_exact(N32_SIZE).take(self.num_objects as usize);
+                let offsets32 = offset32_start
+                    .as_chunks::<N32_SIZE>()
+                    .0
+                    .iter()
+                    .take(self.num_objects as usize);
                 assert_eq!(self.num_objects as usize, offsets32.len());
                 let pack_offset_64_start = self.offset_pack_offset64_v2();
                 offsets32

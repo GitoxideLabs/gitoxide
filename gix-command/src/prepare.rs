@@ -219,10 +219,10 @@ impl From<Prepare> for Command {
                     cmd.arg("-c");
                     if !prep.args.is_empty() {
                         if !gix_path::os_str_into_bstr(&prep.command).is_ok_and(|cmd| cmd.contains_str("$@")) {
-                            if prep.quote_command {
-                                if let Ok(command) = gix_path::os_str_into_bstr(&prep.command) {
-                                    prep.command = gix_path::from_bstring(gix_quote::single(command)).into();
-                                }
+                            if prep.quote_command
+                                && let Ok(command) = gix_path::os_str_into_bstr(&prep.command)
+                            {
+                                prep.command = gix_path::from_bstring(gix_quote::single(command)).into();
                             }
                             prep.command.push(r#" "$@""#);
                         } else {

@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 description = "Handle files specifying the shallow boundary"
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 doctest = true

@@ -158,14 +158,13 @@ mod with_io {
             // Echo the server's object format in every v2 command.
             // A stateless transport like HTTP sends each command as its own request, so without this,
             // the server assumes SHA1 and aborts any command against a SHA-256 repository.
-            if matches!(version, gix_transport::Protocol::V2) {
-                if let Some(object_format) = server_capabilities
+            if matches!(version, gix_transport::Protocol::V2)
+                && let Some(object_format) = server_capabilities
                     .capability("object-format")
                     .and_then(|c| c.value())
                     .and_then(|value| value.to_str().ok())
-                {
-                    features.push(("object-format", Some(object_format.to_owned())));
-                }
+            {
+                features.push(("object-format", Some(object_format.to_owned())));
             }
             features
         }
