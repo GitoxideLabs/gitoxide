@@ -5,3 +5,7 @@
 # `.config/git/config` files always live at the absolute path the test injects
 # into the environment for the current run.
 /make_config_repo.tar
+
+# The fixture records config values produced by the host's Git, so regenerate it instead of freezing that baseline, this time.
+/make_value_whitespace_baseline.tar
+/make_value_whitespace_baseline_sha256.tar

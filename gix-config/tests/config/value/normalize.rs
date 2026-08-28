@@ -30,6 +30,18 @@ fn empty_quotes_are_empty() {
 }
 
 #[test]
+fn unquoted_whitespace_after_empty_quotes_is_ignored() {
+    assert_eq!(&*normalize("\"\"  x"), "x");
+    assert_eq!(&*normalize("\"\"  \"x\""), "x");
+    assert_eq!(&*normalize("\" \"  x"), "   x", "quoted whitespace starts the value");
+    assert_eq!(
+        &*normalize(r#""  \tx""#),
+        "  \tx",
+        "quoted whitespace remains significant"
+    );
+}
+
+#[test]
 fn all_quoted_is_unquoted() {
     assert!(
         matches!(

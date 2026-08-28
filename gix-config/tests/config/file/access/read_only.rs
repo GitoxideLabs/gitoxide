@@ -1,4 +1,6 @@
-use bstr::BString;
+use std::fs;
+
+use bstr::{BString, ByteSlice};
 use gix_config::{
     Boolean, Color, File, Integer, color,
     file::{Metadata, init},
@@ -485,30 +487,32 @@ fn multi_line_value_with_empty_continuation_line() {
 }
 
 #[test]
-fn multi_line_value_starting_on_a_continuation_line_is_not_indented() {
-    for config in [
-        "[core]\n\tk = \\\n\tabc\n",
-        "[core]\n\tk = \\\n    abc\n",
-        "[core]\n\tk =\\\n\t\tabc\n",
-        "[core]\n\tk = \\\n\t\\\n\tabc\n",
-        "[core]\r\n\tk = \\\r\n\tabc\r\n",
-    ] {
-        let file = File::try_from(config).unwrap();
+fn multi_line_value_starting_on_a_continuation_line_is_not_indented() -> crate::Result {
+    let baseline = crate::scripted_fixture_read_only("make_value_whitespace_baseline.sh")?;
+    let baseline = fs::read(baseline.join("baseline.git"))?;
+    let baseline = baseline
+        .strip_suffix(b"\0")
+        .expect("Git's non-empty baseline must end in NUL");
+
+    let mut records = baseline.split(|byte| *byte == 0);
+    while let Some(description) = records.next() {
+        let description = std::str::from_utf8(description).expect("fixture descriptions must be valid UTF-8");
+        let config = records.next().expect("each description must be followed by a config");
+        let expected = records.next().expect("each config must be followed by Git's value");
+        let expected = BString::from(expected);
+        let file = File::try_from(config.as_bstr())?;
         assert_eq!(
-            file.raw_value("core.k").unwrap(),
-            bstring("abc"),
-            "Git reports `abc` for {config:?}: it discards whitespace for as long as the value it \
-             accumulated is empty, so the indentation of the line the value starts on is insignificant"
+            file.raw_value("core.k")?,
+            expected,
+            "gix-config must agree with Git for {description}: {config:?}"
+        );
+        assert_eq!(
+            file.to_bstring(),
+            config,
+            "semantic whitespace handling must preserve the original bytes for {description}: {config:?}"
         );
     }
-
-    let config = "[core]\n\tk = abc\\\n\tdef\n";
-    let file = File::try_from(config).unwrap();
-    assert_eq!(
-        file.raw_value("core.k").unwrap(),
-        bstring("abc\tdef"),
-        "…whereas indentation that follows actual content is part of the value, like any interior whitespace"
-    );
+    Ok(())
 }
 
 #[test]

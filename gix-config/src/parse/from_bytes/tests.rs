@@ -787,9 +787,10 @@ mod value_continuation {
 
     #[test]
     fn indentation_of_the_line_a_value_starts_on_is_insignificant() {
-        for (input, newline) in [
-            (&b"\\\n        world"[..], newline_event()),
-            (&b"\\\r\n        world"[..], newline_custom_event("\r\n")),
+        for (input, newline, whitespace) in [
+            (&b"\\\n        world"[..], newline_event(), "        "),
+            (&b"\\\r\n        world"[..], newline_custom_event("\r\n"), "        "),
+            (&b"\\\n\r \tworld"[..], newline_event(), "\r \t"),
         ] {
             let mut events = Vec::new();
             assert_eq!(value(input, &mut events).unwrap().0, b"");
@@ -798,11 +799,11 @@ mod value_continuation {
                 vec![
                     value_not_done_event(""),
                     newline,
-                    whitespace_event("        "),
+                    whitespace_event(whitespace),
                     value_done_event("world")
                 ],
-                "Git discards whitespace for as long as the value it accumulated is empty, \
-                 so a value that only starts after a continuation begins at `world`"
+                "Git discards its locale-independent whitespace for as long as the value it accumulated is empty, \
+                 so a value that only starts after a continuation begins at `world` for {input:?}"
             );
         }
     }
@@ -1151,16 +1152,28 @@ mod value {
     }
 
     #[test]
-    fn plain_value_runs_until_eof_and_trims_trailing_whitespace() {
-        let (remaining, events) = parse(b"hello  \t").unwrap();
-        assert_eq!(remaining, b"  \t");
+    fn trailing_git_whitespace_is_trimmed_but_other_ascii_whitespace_is_not() {
+        let (remaining, events) = parse(b"hello  \t\r").unwrap();
+        assert_eq!(remaining, b"  \t\r");
         assert_eq!(events, vec![value_event("hello")]);
+
+        let (remaining, events) = parse(b"hello\x0b\x0c").unwrap();
+        assert_eq!(remaining, b"");
+        assert_eq!(
+            events,
+            vec![value_event("hello\x0b\x0c")],
+            "Git treats vertical tab and form feed as value content, not whitespace"
+        );
     }
 
     #[test]
     fn newline_without_backslash_is_not_a_continuation() {
         let (remaining, events) = parse(b"config\n  value").unwrap();
         assert_eq!(remaining, b"\n  value");
+        assert_eq!(events, vec![value_event("config")]);
+
+        let (remaining, events) = parse(b"config\r\n  value").unwrap();
+        assert_eq!(remaining, b"\r\n  value");
         assert_eq!(events, vec![value_event("config")]);
     }
 

@@ -1,6 +1,9 @@
 use bstr::{BStr, ByteSlice};
 
-use crate::parse::{Comment, Error, Event, MaybeDecoded, Span, error::ParseNode, section};
+use crate::{
+    parse::{Comment, Error, Event, MaybeDecoded, Span, error::ParseNode, section},
+    value::is_git_whitespace,
+};
 
 type ParseResult<T> = Result<T, ()>;
 
@@ -293,9 +296,6 @@ fn config_value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) 
     if let Some(rest) = i.strip_prefix(b"=") {
         *i = rest;
         dispatch(Event::KeyValueSeparator);
-        if let Ok(whitespace) = take_spaces1(i) {
-            dispatch(Event::Whitespace(Span::new(backing, whitespace)));
-        }
         value(backing, i, dispatch)
     } else {
         dispatch(Event::Value(Span::default()));
@@ -309,11 +309,11 @@ fn config_value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) 
 /// Double quotes toggle quoted mode for comment handling. Supported escapes are
 /// backslash followed by `n`, `t`, `\`, `b`, `"`, LF, or CRLF. Line continuations
 /// emit [`Event::ValueNotDone`], the continuation newline, and finally [`Event::ValueDone`].
-/// As long as nothing was accumulated yet, the indentation of a continuation line is insignificant
-/// and emitted as [`Event::Whitespace`], just like the whitespace right after the `=`.
+/// At the start of each physical value chunk, Git whitespace is emitted as [`Event::Whitespace`]
+/// while the logical value is still empty and outside quotes.
 /// If the value ends with a trailing backslash at EOF, it is emitted as
 /// [`Event::ValueNotDone`] followed directly by an empty [`Event::ValueDone`].
-/// Otherwise a single [`Event::Value`] is emitted with trailing ASCII whitespace
+/// Otherwise a single [`Event::Value`] is emitted with trailing Git whitespace
 /// trimmed from the logical value.
 /// On success, `i` is advanced to the first unconsumed delimiter or EOF, and emitted spans refer to `backing`.
 fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> ParseResult<()> {
@@ -325,12 +325,26 @@ fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> Pars
     let mut is_in_quotes = false;
     // Set after a line continuation so the final chunk is emitted as `ValueDone`.
     let mut partial_value_found = false;
-    // Cleared once a continuation chunk contributed bytes, to know if leading whitespace is still insignificant.
+    // Cleared once parsing contributes a logical byte, to know if leading whitespace is still insignificant.
     let mut value_is_empty_so_far = true;
 
     while cursor < input.len() {
+        if value_is_empty_so_far && !is_in_quotes && cursor == value_start {
+            let mut remaining = &input[cursor..];
+            if let Ok(whitespace) = take_git_whitespace1(&mut remaining) {
+                dispatch(Event::Whitespace(Span::new(backing, whitespace)));
+                cursor += whitespace.len();
+                value_start = cursor;
+                continue;
+            }
+        }
+
         match input[cursor] {
             b'\n' => {
+                value_end = Some(cursor);
+                break;
+            }
+            b'\r' if input[cursor..].starts_with(b"\r\n") => {
                 value_end = Some(cursor);
                 break;
             }
@@ -361,35 +375,31 @@ fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> Pars
                     b'\n' => {
                         partial_value_found = true;
                         let value = input[value_start..escape_index].as_bstr();
-                        value_is_empty_so_far &= value.is_empty();
                         dispatch(Event::ValueNotDone(Span::new(backing, value)));
                         let nl_start = escape_index + 1;
                         let nl = input[nl_start..nl_start + consumed].as_bstr();
                         dispatch(Event::Newline(Span::new(backing, nl)));
                         cursor += 1;
-                        if value_is_empty_so_far {
-                            // Git keeps discarding whitespace for as long as the value it accumulated is empty,
-                            // so a value that only starts on a continuation line must not pick up that line's
-                            // indentation, just like it doesn't pick up the whitespace right after the `=`.
-                            let indent_len = input[cursor..]
-                                .iter()
-                                .take_while(|b| **b == b' ' || **b == b'\t')
-                                .count();
-                            if indent_len != 0 {
-                                let indent = input[cursor..cursor + indent_len].as_bstr();
-                                dispatch(Event::Whitespace(Span::new(backing, indent)));
-                                cursor += indent_len;
-                            }
-                        }
                         value_start = cursor;
                         value_end = None;
                     }
-                    b'n' | b't' | b'\\' | b'b' | b'"' => cursor += 1,
+                    b'n' | b't' | b'\\' | b'b' | b'"' => {
+                        // Every non-continuation escape contributes a byte to the logical value,
+                        // making whitespace after a later continuation significant.
+                        value_is_empty_so_far = false;
+                        cursor += 1;
+                    }
                     _ => return Err(()),
                 }
             }
             b'"' => {
                 is_in_quotes = !is_in_quotes;
+                cursor += 1;
+            }
+            b if !is_git_whitespace(b) || is_in_quotes => {
+                // Non-whitespace, and even whitespace inside quotes, is value content,
+                // making whitespace after a later continuation significant.
+                value_is_empty_so_far = false;
                 cursor += 1;
             }
             _ => cursor += 1,
@@ -414,7 +424,7 @@ fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> Pars
         .iter()
         .enumerate()
         .rev()
-        .find_map(|(idx, b)| (!b.is_ascii_whitespace()).then_some(value_start + idx + 1))
+        .find_map(|(idx, b)| (!is_git_whitespace(*b)).then_some(value_start + idx + 1))
         .unwrap_or(value_start);
     let value = input[value_start..value_end_no_trailing_whitespace].as_bstr();
     if partial_value_found {
@@ -424,6 +434,25 @@ fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> Pars
     }
     *i = &input[value_end_no_trailing_whitespace..];
     Ok(())
+}
+
+/// Parse one or more Git whitespace bytes without consuming LF or CRLF line endings.
+fn take_git_whitespace1<'i>(i: &mut &'i [u8]) -> ParseResult<&'i BStr> {
+    let input = *i;
+    let mut len = 0;
+    while len < input.len()
+        && input[len] != b'\n'
+        && !input[len..].starts_with(b"\r\n")
+        && is_git_whitespace(input[len])
+    {
+        len += 1;
+    }
+    if len == 0 {
+        return Err(());
+    }
+    let (whitespace, rest) = input.split_at(len);
+    *i = rest;
+    Ok(whitespace.as_bstr())
 }
 
 /// Parse one or more spaces or horizontal tabs.
