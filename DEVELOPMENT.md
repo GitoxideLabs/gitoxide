@@ -259,7 +259,7 @@ by humans.
 * **Porcelain CLI**
   * Use Clap for command-line parsing for the best quality CLI experience - it's for the user.
   * Journey tests.
-  * Support for `--quiet` and `--progress`.
+  * Support for `--quiet`; line progress is shown by default for long-running operations.
   * Verbose by default.
   * Examples can be turned into plumbing by adding journey tests and progress.
 
