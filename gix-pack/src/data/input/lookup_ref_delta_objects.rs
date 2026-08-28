@@ -182,7 +182,7 @@ where
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let (min, max) = self.inner.size_hint();
-        max.map_or_else(|| (min * 2, None), |max| (min, Some(max * 2)))
+        (min, max.map(|max| max.saturating_mul(2)))
     }
 }
 

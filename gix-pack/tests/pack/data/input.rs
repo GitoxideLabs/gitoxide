@@ -223,4 +223,29 @@ mod lookup_ref_delta_objects {
             assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
         }
     }
+
+    #[test]
+    fn size_hint_does_not_overflow() {
+        struct MaxSizeHint;
+
+        impl Iterator for MaxSizeHint {
+            type Item = Result<input::Entry, input::Error>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                None
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (usize::MAX, Some(usize::MAX))
+            }
+        }
+
+        let iter =
+            LookupRefDeltaObjectsIter::new(MaxSizeHint, gix_object::find::Never, gix_zlib::Compression::BEST_SPEED);
+        assert_eq!(
+            iter.size_hint(),
+            (usize::MAX, Some(usize::MAX)),
+            "doubling the upper bound must saturate"
+        );
+    }
 }

@@ -13,6 +13,8 @@ mod error {
         Interrupted,
         #[error(transparent)]
         OpenIndex(#[from] crate::index::init::Error),
+        #[error("Too many index entries to fit in memory")]
+        OutOfMemory,
     }
 }
 pub use error::Error;
@@ -118,7 +120,9 @@ pub(super) mod function {
                     .unwrap_or(SystemTime::UNIX_EPOCH);
                 let index = crate::index::File::at(index, object_hash)?;
 
-                entries.reserve(index.num_objects() as usize);
+                entries
+                    .try_reserve(index.num_objects() as usize)
+                    .map_err(|_| Error::OutOfMemory)?;
                 entries.extend(index.iter().map(|e| Entry {
                     id: e.oid,
                     pack_index: index_id as u32,
