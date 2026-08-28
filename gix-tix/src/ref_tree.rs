@@ -2479,7 +2479,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_pins_every_visible_reference_kind_but_not_synthetic_nodes() {
+    fn enter_and_p_pin_every_visible_reference_kind_but_not_synthetic_nodes() {
         let (graph, refs, mut decorations) = fixture();
         decorations.get_mut(&id(6)).expect("main is decorated").extend([
             Decoration {
@@ -2510,7 +2510,6 @@ mod tests {
             },
             "p retains every displayed reference namespace"
         );
-
         tree.selected = tree
             .overview
             .as_ref()
@@ -2519,6 +2518,11 @@ mod tests {
             tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
             Input::Handled,
             "fork-only nodes have no pin action"
+        );
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            Input::Handled,
+            "p on a synthetic node stays in the reference tree"
         );
     }
 
