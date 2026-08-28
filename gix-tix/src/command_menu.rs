@@ -269,8 +269,8 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
                 CommandId::NewEmptyCommit,
                 CommandGroup::Actions,
                 0,
-                "new-empty",
-                "an",
+                "N new-empty",
+                "aN",
                 true,
                 Action::NewEmptyCommit,
             );
@@ -302,8 +302,8 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
                 CommandId::Split,
                 CommandGroup::Actions,
                 0,
-                "split",
-                "ap",
+                "S split",
+                "aS",
                 true,
                 Action::Split,
             );
