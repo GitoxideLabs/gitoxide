@@ -84,8 +84,8 @@ pub(super) mod function {
     /// * `root_progress` is the top-level progress to stay informed about the progress of this potentially long-running
     ///   computation.
     /// * `object_hash` defines what kind of object hash we write into the index file.
-    /// * `alloc_limit_bytes` limits the maximum size of individual allocations while resolving pack entries to compute
-    ///   object ids. `None` means no limit is applied.
+    /// * `alloc_limit_bytes` limits the maximum size of individual allocations for the delta tree and while resolving pack
+    ///   entries to compute object ids. `None` means no limit is applied.
     /// * `pack_version` is the version of the underlying pack for which `entries` are read. It's used in case none of these objects are provided
     ///   to compute a pack-hash.
     ///
@@ -120,7 +120,7 @@ pub(super) mod function {
         let mut last_seen_trailer = None;
         let (anticipated_num_objects, upper_bound) = entries.size_hint();
         let worst_case_num_objects_after_thin_pack_resolution = upper_bound.unwrap_or(anticipated_num_objects);
-        let mut tree = Tree::with_capacity(worst_case_num_objects_after_thin_pack_resolution)?;
+        let mut tree = Tree::with_capacity(worst_case_num_objects_after_thin_pack_resolution, alloc_limit_bytes)?;
         let indexing_start = std::time::Instant::now();
 
         root_progress.init(Some(4), progress::steps());

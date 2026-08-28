@@ -256,11 +256,11 @@ mod version {
                 prevent_allocation,
                 pack_version,
             )
-            .expect_err("a zero allocation limit rejects the first non-empty decoded object");
+            .expect_err("a zero allocation limit rejects non-empty delta-tree storage");
 
             assert!(
-                crate::error_chain_contains_message(&err, "Entry too large to fit in memory"),
-                "index writing must forward the allocation limit into delta-tree traversal"
+                crate::error_chain_contains_message(&err, "The pack delta tree is too large to fit in memory"),
+                "index writing must apply the allocation limit to delta-tree storage"
             );
             Ok(())
         }

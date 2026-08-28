@@ -12,8 +12,8 @@ pub struct Options {
     pub iteration_mode: crate::data::input::Mode,
     /// The version of pack index to write, should be [`crate::index::Version::default()`]
     pub index_version: crate::index::Version,
-    /// If `Some`, rejects individual allocations above the given number of bytes while resolving streamed pack
-    /// entries into decoded object and delta result buffers to write the index.
+    /// If `Some`, rejects individual allocations above the given number of bytes while building the delta tree or resolving
+    /// streamed pack entries into decoded object and delta result buffers to write the index.
     /// `Some(0)` rejects all non-empty allocations.
     pub alloc_limit_bytes: Option<usize>,
     /// The compression level to use when deflating base objects that are added to the pack to complete a thin pack.

@@ -2,6 +2,8 @@
 #[derive(thiserror::Error, Debug)]
 #[allow(missing_docs)]
 pub enum Error {
+    #[error("The pack delta tree is too large to fit in memory")]
+    OutOfMemory,
     #[error(
         "Pack offsets must only increment. The previous pack offset was {last_pack_offset}, the current one is {pack_offset}"
     )]
@@ -11,6 +13,12 @@ pub enum Error {
         /// The invariant violating offset
         pack_offset: crate::data::Offset,
     },
+}
+
+impl From<std::collections::TryReserveError> for Error {
+    fn from(_: std::collections::TryReserveError) -> Self {
+        Error::OutOfMemory
+    }
 }
 ///
 /// A tree that allows one-time iteration over all nodes and their children, consuming it in the process,
