@@ -825,7 +825,6 @@ dependencies = [
  "crossterm_winapi",
  "derive_more",
  "document-features",
- "futures-core",
  "mio",
  "parking_lot",
  "rustix",
@@ -849,14 +848,8 @@ version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6ae462f0b868614980d59df41e217a77648de7ad7cf8b2a407155659896d889"
 dependencies = [
- "async-channel 2.5.0",
  "crossterm",
- "futures-channel",
- "futures-core",
- "futures-lite",
  "nu-ansi-term",
- "ratatui",
- "tui-react",
 ]
 
 [[package]]
@@ -4268,20 +4261,14 @@ version = "31.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "962200e2d7d551451297d9fdce85138374019ada198e30ea9ede38034e27604c"
 dependencies = [
- "async-io",
  "bytesize",
  "crosstermion",
- "futures-core",
- "futures-lite",
  "human_format",
  "is-terminal",
  "jiff",
  "log",
  "parking_lot",
- "ratatui",
  "signal-hook 0.4.4",
- "tui-react",
- "unicode-segmentation",
  "unicode-width",
 ]
 
@@ -5760,18 +5747,6 @@ dependencies = [
  "ratatui-core",
  "rstest",
  "tracing",
-]
-
-[[package]]
-name = "tui-react"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c07031f0f4eb182785a8621967da6c75b9b21cfc7dfaaac78400b9a12492e66"
-dependencies = [
- "log",
- "ratatui",
- "unicode-segmentation",
- "unicode-width",
 ]
 
 [[package]]
