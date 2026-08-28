@@ -51,11 +51,6 @@ pub struct Args {
     #[clap(long, conflicts_with("verbose"))]
     pub no_verbose: bool,
 
-    /// Bring up a terminal user interface displaying progress visually.
-    #[cfg(feature = "prodash-render-tui")]
-    #[clap(long, conflicts_with("verbose"))]
-    pub progress: bool,
-
     /// Don't default malformed configuration flags, but show an error instead. Ignore IO errors as well.
     ///
     /// Note that some subcommands use strict mode by default.
@@ -63,13 +58,6 @@ pub struct Args {
     //       for these.
     #[clap(long, short = 's')]
     pub strict: bool,
-
-    /// The progress TUI will stay up even though the work is already completed.
-    ///
-    /// Use this to be able to read progress messages or additional information visible in the TUI log pane.
-    #[cfg(feature = "prodash-render-tui")]
-    #[clap(long, conflicts_with("verbose"), requires("progress"))]
-    pub progress_keep_open: bool,
 
     /// Determine the format to use when outputting statistics.
     #[clap(
