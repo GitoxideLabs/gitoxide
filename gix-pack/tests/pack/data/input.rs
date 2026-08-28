@@ -182,6 +182,33 @@ mod lookup_ref_delta_objects {
     }
 
     #[test]
+    fn invalid_ofs_delta_base_distance_is_reported_after_base_insertion() {
+        for distance in [0, u64::MAX] {
+            let input = compute_offsets(vec![
+                entry(delta_ref(gix_hash::Kind::Sha1.null()), D_A),
+                entry(delta_ofs(distance), D_B),
+            ]);
+            let calls = AtomicUsize::default();
+            let db = FindData::new(D_D, &calls);
+
+            let result =
+                LookupRefDeltaObjectsIter::new(into_results_iter(input), &db, gix_zlib::Compression::BEST_SPEED)
+                    .collect::<Result<Vec<_>, _>>();
+
+            assert!(
+                matches!(
+                    result,
+                    Err(input::Error::InvalidBaseDistance {
+                        distance: actual,
+                        ..
+                    }) if actual == distance
+                ),
+                "zero and out-of-bounds base distances are rejected as corrupt pack data"
+            );
+        }
+    }
+
+    #[test]
     fn missing_bases_are_left_for_in_pack_resolution() {
         let input = compute_offsets(vec![
             entry(delta_ref(gix_hash::Kind::Sha1.null()), D_A),
