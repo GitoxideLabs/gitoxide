@@ -726,6 +726,7 @@ mod value_continuation {
 
     use crate::parse::tests::util::{
         OwnedEvent, newline_custom_event, newline_event, own_event, value_done_event, value_not_done_event,
+        whitespace_event,
     };
 
     pub fn value<'a>(input: &'a [u8], events: &mut Vec<OwnedEvent>) -> Result<(&'a [u8], ()), ()> {
@@ -781,6 +782,63 @@ mod value_continuation {
         assert!(
             value(b"hello\\\r\r\n        world", &mut events).is_err(),
             r"\r must be followed by \n"
+        );
+    }
+
+    #[test]
+    fn indentation_of_the_line_a_value_starts_on_is_insignificant() {
+        for (input, newline) in [
+            (&b"\\\n        world"[..], newline_event()),
+            (&b"\\\r\n        world"[..], newline_custom_event("\r\n")),
+        ] {
+            let mut events = Vec::new();
+            assert_eq!(value(input, &mut events).unwrap().0, b"");
+            assert_eq!(
+                events,
+                vec![
+                    value_not_done_event(""),
+                    newline,
+                    whitespace_event("        "),
+                    value_done_event("world")
+                ],
+                "Git discards whitespace for as long as the value it accumulated is empty, \
+                 so a value that only starts after a continuation begins at `world`"
+            );
+        }
+    }
+
+    #[test]
+    fn indentation_is_insignificant_until_the_value_has_content() {
+        let mut events = Vec::new();
+        assert_eq!(value(b"\\\n  \\\n  world", &mut events).unwrap().0, b"");
+        assert_eq!(
+            events,
+            vec![
+                value_not_done_event(""),
+                newline_event(),
+                whitespace_event("  "),
+                value_not_done_event(""),
+                newline_event(),
+                whitespace_event("  "),
+                value_done_event("world")
+            ],
+            "a continuation line that is entirely whitespace keeps the value empty, \
+             so the next line's indentation is insignificant as well"
+        );
+
+        let mut events = Vec::new();
+        assert_eq!(value(b"\\\n  hello\\\n  world", &mut events).unwrap().0, b"");
+        assert_eq!(
+            events,
+            vec![
+                value_not_done_event(""),
+                newline_event(),
+                whitespace_event("  "),
+                value_not_done_event("hello"),
+                newline_event(),
+                value_done_event("  world")
+            ],
+            "once the value has content, indentation is part of it, just like interior whitespace"
         );
     }
 

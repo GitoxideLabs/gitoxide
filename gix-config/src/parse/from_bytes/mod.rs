@@ -309,6 +309,8 @@ fn config_value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) 
 /// Double quotes toggle quoted mode for comment handling. Supported escapes are
 /// backslash followed by `n`, `t`, `\`, `b`, `"`, LF, or CRLF. Line continuations
 /// emit [`Event::ValueNotDone`], the continuation newline, and finally [`Event::ValueDone`].
+/// As long as nothing was accumulated yet, the indentation of a continuation line is insignificant
+/// and emitted as [`Event::Whitespace`], just like the whitespace right after the `=`.
 /// If the value ends with a trailing backslash at EOF, it is emitted as
 /// [`Event::ValueNotDone`] followed directly by an empty [`Event::ValueDone`].
 /// Otherwise a single [`Event::Value`] is emitted with trailing ASCII whitespace
@@ -323,6 +325,8 @@ fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> Pars
     let mut is_in_quotes = false;
     // Set after a line continuation so the final chunk is emitted as `ValueDone`.
     let mut partial_value_found = false;
+    // Cleared once a continuation chunk contributed bytes, to know if leading whitespace is still insignificant.
+    let mut value_is_empty_so_far = true;
 
     while cursor < input.len() {
         match input[cursor] {
@@ -357,11 +361,26 @@ fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> Pars
                     b'\n' => {
                         partial_value_found = true;
                         let value = input[value_start..escape_index].as_bstr();
+                        value_is_empty_so_far &= value.is_empty();
                         dispatch(Event::ValueNotDone(Span::new(backing, value)));
                         let nl_start = escape_index + 1;
                         let nl = input[nl_start..nl_start + consumed].as_bstr();
                         dispatch(Event::Newline(Span::new(backing, nl)));
                         cursor += 1;
+                        if value_is_empty_so_far {
+                            // Git keeps discarding whitespace for as long as the value it accumulated is empty,
+                            // so a value that only starts on a continuation line must not pick up that line's
+                            // indentation, just like it doesn't pick up the whitespace right after the `=`.
+                            let indent_len = input[cursor..]
+                                .iter()
+                                .take_while(|b| **b == b' ' || **b == b'\t')
+                                .count();
+                            if indent_len != 0 {
+                                let indent = input[cursor..cursor + indent_len].as_bstr();
+                                dispatch(Event::Whitespace(Span::new(backing, indent)));
+                                cursor += indent_len;
+                            }
+                        }
                         value_start = cursor;
                         value_end = None;
                     }

@@ -485,6 +485,33 @@ fn multi_line_value_with_empty_continuation_line() {
 }
 
 #[test]
+fn multi_line_value_starting_on_a_continuation_line_is_not_indented() {
+    for config in [
+        "[core]\n\tk = \\\n\tabc\n",
+        "[core]\n\tk = \\\n    abc\n",
+        "[core]\n\tk =\\\n\t\tabc\n",
+        "[core]\n\tk = \\\n\t\\\n\tabc\n",
+        "[core]\r\n\tk = \\\r\n\tabc\r\n",
+    ] {
+        let file = File::try_from(config).unwrap();
+        assert_eq!(
+            file.raw_value("core.k").unwrap(),
+            bstring("abc"),
+            "Git reports `abc` for {config:?}: it discards whitespace for as long as the value it \
+             accumulated is empty, so the indentation of the line the value starts on is insignificant"
+        );
+    }
+
+    let config = "[core]\n\tk = abc\\\n\tdef\n";
+    let file = File::try_from(config).unwrap();
+    assert_eq!(
+        file.raw_value("core.k").unwrap(),
+        bstring("abc\tdef"),
+        "…whereas indentation that follows actual content is part of the value, like any interior whitespace"
+    );
+}
+
+#[test]
 fn overrides_with_implicit_booleans_work_in_single_section() {
     let config = r#"
         [a]
