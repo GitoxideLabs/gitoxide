@@ -3680,10 +3680,10 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("split: {err:#}")),
                     }
                 }
-                edit @ (Effect::Amend(id) | Effect::Spill(id)) => {
+                Effect::Amend(id) | Effect::Spill(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
-                    let kind = if matches!(edit, Effect::Amend(_)) {
+                    let kind = if matches!(effect, Effect::Amend(_)) {
                         edit::head::Kind::Amend
                     } else {
                         edit::head::Kind::Spill
