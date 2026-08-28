@@ -4732,7 +4732,7 @@ mod tests {
         app.actions_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(
-            rendered_line(&terminal, 1).contains(" reword · new · new-empty · d forget · unpin "),
+            rendered_line(&terminal, 1).contains(" reword · new · N new-empty · d forget · unpin "),
             "the commit actions float above their prefix"
         );
         assert!(

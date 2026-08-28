@@ -604,8 +604,8 @@ The Enter key is written as `<enter>` throughout.
 ### Command menu
 
 - Bare `p` opens a centered command menu from the main history UI, including
-  while a changes block has focus. The ref-tree retains `p` for Pin, and `a p`
-  remains Split.
+  while a changes block has focus or the ref-tree is open. Pinning a ref-tree
+  selection remains available on `<enter>`.
 - The menu contains the currently available executable entries from the Actions,
   View, Enrich, and Information groups. Each entry retains its exact contextual
   identity, so Stash and Unstash, Review and Finish Review, and Pin and Unpin are
@@ -883,9 +883,9 @@ space first; changes blocks adapt within the remaining history width.
   changes are used. Untracked files never enter an implicit new commit and remain
   untracked. It is available only with a live worktree, after history completion,
   and when the selected parent has no known merge descendant.
-- `a n` creates an explicit empty commit which reuses the selected parent's tree,
-  or the empty tree for an unborn history. Existing index and worktree state is
-  preserved exactly. Both forms reject unresolved index conflicts.
+- `a Shift-N` creates an explicit empty commit which reuses the selected parent's
+  tree, or the empty tree for an unborn history. Existing index and worktree
+  state is preserved exactly. Both forms reject unresolved index conflicts.
 - A current worktree-changes cache controls which actions are advertised without
   opening a repository: tracked changes offer both `new` and `new-empty`, while a
   clean or untracked-only worktree offers only `new-empty`. If no current cache is
@@ -957,7 +957,7 @@ space first; changes blocks adapt within the remaining history width.
   rows exist for one path, the selected row determines the version. Unresolved
   indexes cannot be amended. Unrelated staged entries retain their index state.
   The CLI intentionally supports only whole-commit amending.
-- `a p` is offered at `@` only when both staged and unstaged changes exist. It
+- `a Shift-S` is offered at `@` only when both staged and unstaged changes exist. It
   amends the unstaged changes into the source commit, then creates a new upper
   commit from the staged delta using the standard Markdown editor buffer. Both
   deltas are three-way applied in memory before the editor opens, so overlapping
@@ -1304,10 +1304,10 @@ space first; changes blocks adapt within the remaining history width.
 ### Commit and action shortcuts
 
 - `a` toggles a two-line shortcut group with commit operations above general
-  actions. `a o` rewords, `a w` creates a rebased child, `a n` creates an empty
-  child, `a e` amends `@`, `a l` spills `@`, `a p` splits staged from unstaged
-  changes, and `a d` forgets a top commit when each action is
-  available. `a b` rebases an eligible hidden base,
+  actions. `a o` rewords, `a w` creates a rebased child, `a Shift-N` creates an
+  empty child, `a e` amends `@`, `a l` spills `@`, `a Shift-S` splits staged from
+  unstaged changes, and `a d` forgets a top commit when each action is available.
+  `a b` rebases an eligible hidden base,
   `a u` rebases it onto the newer hidden branch tip when available, `a r` starts
   or finishes a review, `a s` squashes the selected commit, `a z` stashes or
   restores changes at `@`, `a y` starts copy-insert from the selected commit,
@@ -1406,9 +1406,11 @@ space first; changes blocks adapt within the remaining history width.
 - The footer underlines `a` in `actions`; its expanded commit and action lines
   contain only the operations available for the current selection. An empty
   line says `no actions`.
-- The top-level `v`, `a`, `n`, and `?` keys are reserved for their groups.
-  Pressing one while another group is open switches directly to that group;
-  `? e` cycles the changes panes.
+- The top-level `p`, `v`, `a`, `n`, and `?` keys are reserved for the command
+  palette and their groups.
+  Pressing a group key while another group is open switches directly to that
+  group, and `p` opens the command palette from any group; `? e` cycles the
+  changes panes.
 - While the `v` group is open, `d`, `i`, `c`, `s`, `e`, `m`, `t`, `r`, and `h`
   control dates, IDs, entry selection, emails, names, mailmap, trailers,
   references, and hidden commits.

@@ -334,7 +334,7 @@ impl Tree {
             self.leave();
             return Input::Handled;
         }
-        if key.code == KeyCode::Enter || key.code == KeyCode::Char('p') && key.modifiers.is_empty() {
+        if key.code == KeyCode::Enter {
             return self
                 .selected_pin_target()
                 .map_or(Input::Handled, |(id, kinds)| Input::PinReferences { id, kinds });
@@ -2504,13 +2504,9 @@ mod tests {
         );
         assert_eq!(
             tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
-            Input::PinReferences {
-                id: id(6),
-                kinds: vec![DecorationKind::Local, DecorationKind::Remote, DecorationKind::Tag],
-            },
-            "p retains every displayed reference namespace"
+            Input::Handled,
+            "p remains available to the global command-menu opener"
         );
-
         tree.selected = tree
             .overview
             .as_ref()
