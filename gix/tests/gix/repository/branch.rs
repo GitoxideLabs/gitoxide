@@ -2,7 +2,7 @@ use std::io::Write;
 
 use gix::refs::{
     FullName, Target,
-    transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
+    transaction::{LogChange, PreviousValue, RefEdit, RefLog},
 };
 
 fn refname(value: &str) -> FullName {
@@ -20,19 +20,16 @@ fn deletes_a_batch_and_all_of_its_local_config_without_inspecting_commits() -> c
         PreviousValue::MustNotExist,
         "create test branch",
     )?;
-    repo.edit_reference(RefEdit {
-        change: Change::Update {
-            log: LogChange {
-                mode: RefLog::AndReference,
-                force_create_reflog: true,
-                message: "create broken symbolic test branch".into(),
-            },
-            expected: PreviousValue::MustNotExist,
-            new: Target::Symbolic(refname("refs/heads/missing-target")),
+    repo.edit_reference(RefEdit::update_with_log(
+        symbolic.clone(),
+        Target::Symbolic(refname("refs/heads/missing-target")),
+        PreviousValue::MustNotExist,
+        LogChange {
+            mode: RefLog::AndReference,
+            force_create_reflog: true,
+            message: "create broken symbolic test branch".into(),
         },
-        name: symbolic.clone(),
-        deref: false,
-    })?;
+    ))?;
 
     let included_path = repo.common_dir().join("included-config");
     std::fs::write(&included_path, b"[branch \"delete-direct\"]\n\tremote = elsewhere\n")?;

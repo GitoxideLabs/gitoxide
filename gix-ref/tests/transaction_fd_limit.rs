@@ -2,8 +2,8 @@
 
 use gix_lock::acquire::Fail;
 use gix_ref::{
-    Target, file,
-    transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
+    file,
+    transaction::{LogChange, PreviousValue, RefEdit, RefLog},
 };
 
 /// Preparing a transaction must retain only a `gix_lock::Marker` per edit, not an open file descriptor.
@@ -20,18 +20,17 @@ fn large_transactions_hold_a_constant_number_of_file_descriptors() -> gix_testto
     let dir = gix_testtools::tempfile::TempDir::new()?;
     let object_hash = gix_testtools::object_hash();
     let store = file::Store::at(dir.path().into(), object_hash);
-    let edits = (0..20).map(|i| RefEdit {
-        change: Change::Update {
-            log: LogChange {
+    let edits = (0..20).map(|i| {
+        RefEdit::update_with_log(
+            format!("refs/heads/fd-{i:02}").try_into().expect("valid ref name"),
+            object_hash.empty_blob(),
+            PreviousValue::MustNotExist,
+            LogChange {
                 mode: RefLog::AndReference,
                 force_create_reflog: true,
                 message: "log peeled".into(),
             },
-            expected: PreviousValue::MustNotExist,
-            new: Target::Object(object_hash.empty_blob()),
-        },
-        name: format!("refs/heads/fd-{i:02}").try_into().expect("valid ref name"),
-        deref: false,
+        )
     });
 
     let applied = store

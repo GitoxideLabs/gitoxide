@@ -2,7 +2,7 @@
 use gix_object::Exists;
 use gix_ref::{
     Target, TargetRef,
-    transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
+    transaction::{Change, PreviousValue, RefEdit},
 };
 
 use crate::{
@@ -268,21 +268,9 @@ pub(crate) fn update(
                     let anticipated_update_index = updates.len();
                     edit_indices_to_validate.push((anticipated_update_index, edit_index));
                 }
-                let edit = RefEdit {
-                    change: Change::Update {
-                        log: LogChange {
-                            mode: RefLog::AndReference,
-                            force_create_reflog: false,
-                            message: message.compose(reflog_message),
-                        },
-                        expected: previous_value,
-                        new,
-                    },
-                    name,
-                    // We must not deref symrefs or we will overwrite their destination, which might be checked out
-                    // and we don't check for that case.
-                    deref: false,
-                };
+                // We must not deref symrefs or we will overwrite their destination, which might be checked out
+                // and we don't check for that case.
+                let edit = RefEdit::update(name, new, previous_value, message.compose(reflog_message));
                 edits.push(edit);
                 (mode, Some(edit_index), type_change)
             }

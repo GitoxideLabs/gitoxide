@@ -51,7 +51,7 @@ pub mod set_target_id {
 
 ///
 pub mod delete {
-    use gix_ref::transaction::{Change, PreviousValue, RefEdit, RefLog};
+    use gix_ref::transaction::{PreviousValue, RefEdit};
 
     use crate::Reference;
 
@@ -60,14 +60,10 @@ pub mod delete {
         /// Note that this instance remains available in memory but probably shouldn't be used anymore.
         pub fn delete(&self) -> Result<(), crate::reference::edit::Error> {
             self.repo
-                .edit_reference(RefEdit {
-                    change: Change::Delete {
-                        expected: PreviousValue::MustExistAndMatch(self.inner.target.clone()),
-                        log: RefLog::AndReference,
-                    },
-                    name: self.inner.name.clone(),
-                    deref: false,
-                })
+                .edit_reference(RefEdit::delete(
+                    self.inner.name.clone(),
+                    PreviousValue::MustExistAndMatch(self.inner.target.clone()),
+                ))
                 .map(|_| ())
         }
     }

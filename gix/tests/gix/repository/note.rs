@@ -66,7 +66,7 @@ fn query_and_mutate_a_configured_notes_ref() -> crate::Result {
 fn mutations_follow_symbolic_references_to_their_direct_target() -> crate::Result {
     use gix::refs::{
         FullName, Target, TargetRef,
-        transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
+        transaction::{PreviousValue, RefEdit},
     };
 
     fn full_name(name: &str) -> FullName {
@@ -74,19 +74,12 @@ fn mutations_follow_symbolic_references_to_their_direct_target() -> crate::Resul
     }
 
     fn create_symbolic_ref(repo: &gix::Repository, name: &str, target: &str) -> crate::Result {
-        repo.edit_reference(RefEdit {
-            change: Change::Update {
-                log: LogChange {
-                    mode: RefLog::AndReference,
-                    force_create_reflog: false,
-                    message: "create symbolic notes reference".into(),
-                },
-                expected: PreviousValue::MustNotExist,
-                new: Target::Symbolic(full_name(target)),
-            },
-            name: full_name(name),
-            deref: false,
-        })?;
+        repo.edit_reference(RefEdit::update(
+            full_name(name),
+            Target::Symbolic(full_name(target)),
+            PreviousValue::MustNotExist,
+            "create symbolic notes reference",
+        ))?;
         Ok(())
     }
 

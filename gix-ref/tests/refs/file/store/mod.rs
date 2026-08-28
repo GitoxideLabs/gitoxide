@@ -4,7 +4,7 @@ use gix_ref::{
     Target,
     file::transaction::PackedRefs,
     store::WriteReflog,
-    transaction::{Change, LogChange, PreviousValue, RefEdit},
+    transaction::{PreviousValue, RefEdit},
 };
 
 use crate::file::{
@@ -119,15 +119,7 @@ fn precompose_unicode_journey() -> crate::Result {
             store_decomposed
                 .loose_iter()?
                 .filter_map(|r| r.ok().filter(|r| r.kind() == gix_ref::Kind::Object))
-                .map(|r| RefEdit {
-                    change: Change::Update {
-                        log: LogChange::default(),
-                        expected: PreviousValue::MustExistAndMatch(r.target.clone()),
-                        new: r.target,
-                    },
-                    name: r.name,
-                    deref: false,
-                }),
+                .map(|r| RefEdit::update(r.name, r.target.clone(), PreviousValue::MustExistAndMatch(r.target), "")),
             Fail::Immediately,
             Fail::Immediately,
         )?
@@ -180,15 +172,12 @@ fn precompose_unicode_journey() -> crate::Result {
         .transaction()
         .prepare(
             // A symref pointing to a decomposed name.
-            Some(RefEdit {
-                change: Change::Update {
-                    log: LogChange::default(),
-                    expected: PreviousValue::MustNotExist,
-                    new: Target::Symbolic(decomposed_ref.clone().try_into().expect("valid name")),
-                },
-                name: "HEAD".try_into().expect("valid name"),
-                deref: false,
-            }),
+            Some(RefEdit::update(
+                "HEAD".try_into().expect("valid name"),
+                Target::Symbolic(decomposed_ref.clone().try_into().expect("valid name")),
+                PreviousValue::MustNotExist,
+                "",
+            )),
             Fail::Immediately,
             Fail::Immediately,
         )?

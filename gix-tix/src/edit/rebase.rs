@@ -13,7 +13,7 @@ use gix::{
     prelude::ObjectIdExt,
     refs::{
         Category, Target,
-        transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
+        transaction::{LogChange, PreviousValue, RefEdit, RefLog},
     },
 };
 
@@ -3022,64 +3022,43 @@ fn update_refs(
             .context("an unborn HEAD must point to a branch")?
             .to_owned();
         let new = inserted.context("an unborn insertion must create a commit")?;
-        edits.push(RefEdit {
-            name: name.clone(),
-            deref: false,
-            change: Change::Update {
-                log: log_change(),
-                expected: PreviousValue::MustNotExist,
-                new: Target::Object(new),
-            },
-        });
-        rollback.push(RefEdit {
+        edits.push(RefEdit::update_with_log(
+            name.clone(),
+            new,
+            PreviousValue::MustNotExist,
+            log_change(),
+        ));
+        rollback.push(RefEdit::delete(
             name,
-            deref: false,
-            change: Change::Delete {
-                expected: PreviousValue::MustExistAndMatch(Target::Object(new)),
-                log: RefLog::AndReference,
-            },
-        });
+            PreviousValue::MustExistAndMatch(Target::Object(new)),
+        ));
     }
     let mut reserved = HashSet::new();
     for id in pins {
         let name = pin_name(repo, *id, &reserved)?;
         reserved.insert(name.clone());
-        edits.push(RefEdit {
-            name: name.clone(),
-            deref: false,
-            change: Change::Update {
-                log: log_change(),
-                expected: PreviousValue::MustNotExist,
-                new: Target::Object(*id),
-            },
-        });
-        rollback.push(RefEdit {
+        edits.push(RefEdit::update_with_log(
+            name.clone(),
+            *id,
+            PreviousValue::MustNotExist,
+            log_change(),
+        ));
+        rollback.push(RefEdit::delete(
             name,
-            deref: false,
-            change: Change::Delete {
-                expected: PreviousValue::MustExistAndMatch(Target::Object(*id)),
-                log: RefLog::AndReference,
-            },
-        });
+            PreviousValue::MustExistAndMatch(Target::Object(*id)),
+        ));
     }
     for (name, target) in delete_refs {
-        edits.push(RefEdit {
-            name: name.clone(),
-            deref: false,
-            change: Change::Delete {
-                expected: PreviousValue::MustExistAndMatch(target.clone()),
-                log: RefLog::AndReference,
-            },
-        });
-        rollback.push(RefEdit {
-            name: name.clone(),
-            deref: false,
-            change: Change::Update {
-                log: log_change(),
-                expected: PreviousValue::MustNotExist,
-                new: target.clone(),
-            },
-        });
+        edits.push(RefEdit::delete(
+            name.clone(),
+            PreviousValue::MustExistAndMatch(target.clone()),
+        ));
+        rollback.push(RefEdit::update_with_log(
+            name.clone(),
+            target.clone(),
+            PreviousValue::MustNotExist,
+            log_change(),
+        ));
     }
     if edits.is_empty() {
         return Ok(UpdatedRefs::default());
@@ -3149,26 +3128,16 @@ fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
 }
 
 fn ref_edit(name: gix::refs::FullName, old: Option<ObjectId>, new: Option<ObjectId>) -> RefEdit {
-    RefEdit {
-        name,
-        deref: false,
-        change: match (old, new) {
-            (Some(old), Some(new)) => Change::Update {
-                log: log_change(),
-                expected: PreviousValue::MustExistAndMatch(Target::Object(old)),
-                new: Target::Object(new),
-            },
-            (Some(old), None) => Change::Delete {
-                expected: PreviousValue::MustExistAndMatch(Target::Object(old)),
-                log: RefLog::AndReference,
-            },
-            (None, Some(new)) => Change::Update {
-                log: log_change(),
-                expected: PreviousValue::MustNotExist,
-                new: Target::Object(new),
-            },
-            (None, None) => unreachable!("unchanged absent refs are filtered before editing"),
-        },
+    match (old, new) {
+        (Some(old), Some(new)) => RefEdit::update_with_log(
+            name,
+            new,
+            PreviousValue::MustExistAndMatch(Target::Object(old)),
+            log_change(),
+        ),
+        (Some(old), None) => RefEdit::delete(name, PreviousValue::MustExistAndMatch(Target::Object(old))),
+        (None, Some(new)) => RefEdit::update_with_log(name, new, PreviousValue::MustNotExist, log_change()),
+        (None, None) => unreachable!("unchanged absent refs are filtered before editing"),
     }
 }
 

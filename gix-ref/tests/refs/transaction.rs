@@ -1,10 +1,74 @@
+mod refedit {
+    #[test]
+    fn constructors_apply_common_defaults() -> crate::Result {
+        use gix_ref::{
+            FullName, Target,
+            transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
+        };
+
+        let update_name: FullName = "refs/heads/update".try_into()?;
+        let new_id = crate::fixture_hash_kind().null();
+        assert_eq!(
+            RefEdit::update(
+                update_name.clone(),
+                new_id,
+                PreviousValue::MustNotExist,
+                "update message",
+            ),
+            RefEdit {
+                change: Change::Update {
+                    log: LogChange {
+                        message: "update message".into(),
+                        ..Default::default()
+                    },
+                    expected: PreviousValue::MustNotExist,
+                    new: Target::Object(new_id),
+                },
+                name: update_name,
+                deref: false,
+            },
+            "updates use standard reference-log handling without dereferencing"
+        );
+
+        let delete_name: FullName = "refs/heads/delete".try_into()?;
+        assert_eq!(
+            RefEdit::delete(delete_name.clone(), PreviousValue::MustExist),
+            RefEdit {
+                change: Change::Delete {
+                    expected: PreviousValue::MustExist,
+                    log: RefLog::AndReference,
+                },
+                name: delete_name,
+                deref: false,
+            },
+            "deletions remove the reference and its log without dereferencing"
+        );
+
+        let custom_name: FullName = "HEAD".try_into()?;
+        let custom_change = Change::Delete {
+            expected: PreviousValue::Any,
+            log: RefLog::Only,
+        };
+        assert_eq!(
+            RefEdit::new(custom_name.clone(), custom_change.clone()).with_deref(true),
+            RefEdit {
+                change: custom_change,
+                name: custom_name,
+                deref: true,
+            },
+            "general edits retain custom changes and configurable dereferencing"
+        );
+        Ok(())
+    }
+}
+
 mod refedit_ext {
     use std::{cell::RefCell, collections::BTreeMap};
 
     use gix_object::bstr::{BString, ByteSlice};
     use gix_ref::{
         PartialNameRef, Target,
-        transaction::{Change, PreviousValue, RefEdit, RefEditsExt, RefLog},
+        transaction::{PreviousValue, RefEdit, RefEditsExt},
     };
 
     #[derive(Default)]
@@ -31,14 +95,7 @@ mod refedit_ext {
     }
 
     fn named_edit(name: &str) -> RefEdit {
-        RefEdit {
-            change: Change::Delete {
-                expected: PreviousValue::Any,
-                log: RefLog::AndReference,
-            },
-            name: name.try_into().expect("valid name"),
-            deref: false,
-        }
+        RefEdit::delete(name.try_into().expect("valid name"), PreviousValue::Any)
     }
 
     #[test]
@@ -46,22 +103,8 @@ mod refedit_ext {
         let store = MockStore::with(Some(("HEAD", Target::Symbolic("refs/heads/main".try_into()?))));
 
         let mut edits = vec![
-            RefEdit {
-                change: Change::Delete {
-                    expected: PreviousValue::Any,
-                    log: RefLog::AndReference,
-                },
-                name: "HEAD".try_into()?,
-                deref: true,
-            },
-            RefEdit {
-                change: Change::Delete {
-                    expected: PreviousValue::Any,
-                    log: RefLog::AndReference,
-                },
-                name: "refs/heads/main".try_into()?,
-                deref: false,
-            },
+            RefEdit::delete("HEAD".try_into()?, PreviousValue::Any).with_deref(true),
+            RefEdit::delete("refs/heads/main".try_into()?, PreviousValue::Any),
         ];
 
         let err = edits
@@ -100,7 +143,7 @@ mod refedit_ext {
 
         use gix_ref::{
             PartialNameRef, Target,
-            transaction::{Change, LogChange, PreviousValue, RefEdit, RefEditsExt, RefLog},
+            transaction::{LogChange, PreviousValue, RefEdit, RefEditsExt, RefLog},
         };
 
         use crate::{hex_to_id, transaction::refedit_ext::MockStore};
@@ -116,30 +159,17 @@ mod refedit_ext {
                 Target::Object(gix_hash::Kind::Sha1.null()),
             )));
             let mut edits = vec![
-                RefEdit {
-                    change: Change::Delete {
-                        expected: PreviousValue::Any,
-                        log: RefLog::AndReference,
-                    },
-                    name: "SYMBOLIC_PROBABLY_BUT_DEREF_IS_FALSE_SO_IGNORED".try_into()?,
-                    deref: false,
-                },
-                RefEdit {
-                    change: Change::Delete {
-                        expected: PreviousValue::Any,
-                        log: RefLog::AndReference,
-                    },
-                    name: "refs/heads/anything-but-not-symbolic".try_into()?,
-                    deref: true,
-                },
-                RefEdit {
-                    change: Change::Delete {
-                        expected: PreviousValue::Any,
-                        log: RefLog::AndReference,
-                    },
-                    name: "refs/heads/does-not-exist-and-deref-is-ignored".try_into()?,
-                    deref: true,
-                },
+                RefEdit::delete(
+                    "SYMBOLIC_PROBABLY_BUT_DEREF_IS_FALSE_SO_IGNORED".try_into()?,
+                    PreviousValue::Any,
+                ),
+                RefEdit::delete("refs/heads/anything-but-not-symbolic".try_into()?, PreviousValue::Any)
+                    .with_deref(true),
+                RefEdit::delete(
+                    "refs/heads/does-not-exist-and-deref-is-ignored".try_into()?,
+                    PreviousValue::Any,
+                )
+                .with_deref(true),
             ];
 
             edits.extend_with_splits_of_symbolic_refs(&mut |n| store.find_existing(n), &mut |_, _| {
@@ -184,27 +214,18 @@ mod refedit_ext {
             }
 
             let mut edits = vec![
-                RefEdit {
-                    change: Change::Delete {
-                        expected: PreviousValue::Any,
-                        log: RefLog::AndReference,
+                RefEdit::delete("refs/heads/delete-symbolic-1".try_into()?, PreviousValue::Any).with_deref(true),
+                RefEdit::update_with_log(
+                    "refs/heads/update-symbolic-1".try_into()?,
+                    gix_hash::Kind::Sha1.null(),
+                    PreviousValue::MustNotExist,
+                    LogChange {
+                        mode: RefLog::AndReference,
+                        force_create_reflog: true,
+                        message: "the log message".into(),
                     },
-                    name: "refs/heads/delete-symbolic-1".try_into()?,
-                    deref: true,
-                },
-                RefEdit {
-                    change: Change::Update {
-                        expected: PreviousValue::MustNotExist,
-                        log: LogChange {
-                            mode: RefLog::AndReference,
-                            force_create_reflog: true,
-                            message: "the log message".into(),
-                        },
-                        new: Target::Object(gix_hash::Kind::Sha1.null()),
-                    },
-                    name: "refs/heads/update-symbolic-1".try_into()?,
-                    deref: true,
-                },
+                )
+                .with_deref(true),
             ];
 
             let store = Cycler::default();
@@ -258,23 +279,14 @@ mod refedit_ext {
                 l
             };
             let mut edits = vec![
-                RefEdit {
-                    change: Change::Delete {
-                        expected: PreviousValue::Any,
-                        log: RefLog::AndReference,
-                    },
-                    name: "refs/heads/delete-symbolic-1".try_into()?,
-                    deref: true,
-                },
-                RefEdit {
-                    change: Change::Update {
-                        expected: PreviousValue::MustNotExist,
-                        log: log.clone(),
-                        new: Target::Object(gix_hash::Kind::Sha1.null()),
-                    },
-                    name: "refs/heads/update-symbolic-1".try_into()?,
-                    deref: true,
-                },
+                RefEdit::delete("refs/heads/delete-symbolic-1".try_into()?, PreviousValue::Any).with_deref(true),
+                RefEdit::update_with_log(
+                    "refs/heads/update-symbolic-1".try_into()?,
+                    gix_hash::Kind::Sha1.null(),
+                    PreviousValue::MustNotExist,
+                    log.clone(),
+                )
+                .with_deref(true),
             ];
 
             let mut indices = Vec::new();
@@ -291,57 +303,35 @@ mod refedit_ext {
             assert_eq!(
                 edits,
                 vec![
-                    RefEdit {
-                        change: Change::Delete {
-                            expected: PreviousValue::Any,
-                            log: RefLog::Only,
-                        },
-                        name: "refs/heads/delete-symbolic-1".try_into()?,
-                        deref: false,
-                    },
-                    RefEdit {
-                        change: Change::Update {
-                            expected: PreviousValue::Any,
-                            log: log_only.clone(),
-                            new: Target::Object(gix_hash::Kind::Sha1.null()),
-                        },
-                        name: "refs/heads/update-symbolic-1".try_into()?,
-                        deref: false,
-                    },
-                    RefEdit {
-                        change: Change::Delete {
-                            expected: PreviousValue::Any,
-                            log: RefLog::Only,
-                        },
-                        name: "refs/heads/delete-symbolic-2".try_into()?,
-                        deref: false,
-                    },
-                    RefEdit {
-                        change: Change::Update {
-                            expected: PreviousValue::Any,
-                            log: log_only,
-                            new: Target::Object(gix_hash::Kind::Sha1.null()),
-                        },
-                        name: "refs/heads/update-symbolic-2".try_into()?,
-                        deref: false,
-                    },
-                    RefEdit {
-                        change: Change::Delete {
-                            expected: PreviousValue::Any,
-                            log: RefLog::AndReference,
-                        },
-                        name: "refs/heads/delete-symbolic-3".try_into()?,
-                        deref: false,
-                    },
-                    RefEdit {
-                        change: Change::Update {
-                            expected: PreviousValue::MustNotExist,
-                            log,
-                            new: Target::Object(gix_hash::Kind::Sha1.null()),
-                        },
-                        name: "refs/heads/update-symbolic-3".try_into()?,
-                        deref: false,
-                    },
+                    RefEdit::delete_with_log(
+                        "refs/heads/delete-symbolic-1".try_into()?,
+                        PreviousValue::Any,
+                        RefLog::Only,
+                    ),
+                    RefEdit::update_with_log(
+                        "refs/heads/update-symbolic-1".try_into()?,
+                        gix_hash::Kind::Sha1.null(),
+                        PreviousValue::Any,
+                        log_only.clone(),
+                    ),
+                    RefEdit::delete_with_log(
+                        "refs/heads/delete-symbolic-2".try_into()?,
+                        PreviousValue::Any,
+                        RefLog::Only,
+                    ),
+                    RefEdit::update_with_log(
+                        "refs/heads/update-symbolic-2".try_into()?,
+                        gix_hash::Kind::Sha1.null(),
+                        PreviousValue::Any,
+                        log_only,
+                    ),
+                    RefEdit::delete("refs/heads/delete-symbolic-3".try_into()?, PreviousValue::Any),
+                    RefEdit::update_with_log(
+                        "refs/heads/update-symbolic-3".try_into()?,
+                        gix_hash::Kind::Sha1.null(),
+                        PreviousValue::MustNotExist,
+                        log,
+                    ),
                 ]
             );
             Ok(())

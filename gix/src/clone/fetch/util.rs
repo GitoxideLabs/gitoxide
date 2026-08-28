@@ -130,10 +130,7 @@ pub fn update_head(
     ref_name: Option<&PartialName>,
     revision: Option<&gix_refspec::RefSpec>,
 ) -> Result<(), Error> {
-    use gix_ref::{
-        Target,
-        transaction::{PreviousValue, RefEdit},
-    };
+    use gix_ref::transaction::{PreviousValue, RefEdit};
     let revision_head_id = revision
         .map(|revision| -> Result<gix_hash::ObjectId, Error> {
             let mapping = find_revision(ref_map, revision)?;
@@ -192,25 +189,19 @@ pub fn update_head(
                 ))
                 .prepare(
                     {
-                        let mut edits = vec![RefEdit {
-                            change: gix_ref::transaction::Change::Update {
-                                log: reflog_message(),
-                                expected: PreviousValue::Any,
-                                new: Target::Symbolic(referent.clone()),
-                            },
-                            name: head.clone(),
-                            deref: false,
-                        }];
+                        let mut edits = vec![RefEdit::update_with_log(
+                            head.clone(),
+                            referent.clone(),
+                            PreviousValue::Any,
+                            reflog_message(),
+                        )];
                         if let Some(head_peeled_id) = head_peeled_id {
-                            edits.push(RefEdit {
-                                change: gix_ref::transaction::Change::Update {
-                                    log: reflog_message(),
-                                    expected: PreviousValue::Any,
-                                    new: Target::Object(head_peeled_id.to_owned()),
-                                },
-                                name: referent.clone(),
-                                deref: false,
-                            });
+                            edits.push(RefEdit::update_with_log(
+                                referent.clone(),
+                                head_peeled_id.to_owned(),
+                                PreviousValue::Any,
+                                reflog_message(),
+                            ));
                         }
                         edits
                     },
@@ -228,33 +219,25 @@ pub fn update_head(
             if let Some(head_peeled_id) = head_peeled_id {
                 let mut log = reflog_message();
                 log.mode = RefLog::Only;
-                repo.edit_reference(RefEdit {
-                    change: gix_ref::transaction::Change::Update {
-                        log,
-                        expected: PreviousValue::Any,
-                        new: Target::Object(head_peeled_id.to_owned()),
-                    },
-                    name: head,
-                    deref: false,
-                })?;
+                repo.edit_reference(RefEdit::update_with_log(
+                    head,
+                    head_peeled_id.to_owned(),
+                    PreviousValue::Any,
+                    log,
+                ))?;
             }
 
             setup_branch_config(repo, referent.as_ref(), head_peeled_id, remote_name)?;
         }
         None => {
-            repo.edit_reference(RefEdit {
-                change: gix_ref::transaction::Change::Update {
-                    log: reflog_message(),
-                    expected: PreviousValue::Any,
-                    new: Target::Object(
-                        head_peeled_id
-                            .expect("detached heads always point to something")
-                            .to_owned(),
-                    ),
-                },
-                name: head,
-                deref: false,
-            })?;
+            repo.edit_reference(RefEdit::update_with_log(
+                head,
+                head_peeled_id
+                    .expect("detached heads always point to something")
+                    .to_owned(),
+                PreviousValue::Any,
+                reflog_message(),
+            ))?;
         }
     }
     Ok(())

@@ -12,7 +12,7 @@ use gix::{
     bstr::ByteSlice,
     refs::{
         Target,
-        transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
+        transaction::{PreviousValue, RefEdit},
     },
 };
 
@@ -643,19 +643,7 @@ pub(crate) fn attach_reporting(
 }
 
 fn checked_ref_edit(name: gix::refs::FullName, old: Target, new: Target, message: &str) -> RefEdit {
-    RefEdit {
-        name,
-        deref: false,
-        change: Change::Update {
-            log: LogChange {
-                mode: RefLog::AndReference,
-                force_create_reflog: false,
-                message: message.into(),
-            },
-            expected: PreviousValue::MustExistAndMatch(old),
-            new,
-        },
-    }
+    RefEdit::update(name, new, PreviousValue::MustExistAndMatch(old), message)
 }
 
 fn cleanup_new_pins(
@@ -1050,19 +1038,7 @@ fn create_or_update_head_pin_reporting(
             PreviousValue::MustExistAndMatch(reference.target().into_owned())
         });
     let target = Target::Symbolic(branch.clone());
-    let edit = RefEdit {
-        change: Change::Update {
-            log: LogChange {
-                mode: RefLog::AndReference,
-                force_create_reflog: false,
-                message: "tix remember HEAD branch".into(),
-            },
-            expected,
-            new: target.clone(),
-        },
-        name: name.clone(),
-        deref: false,
-    };
+    let edit = RefEdit::update(name.clone(), target.clone(), expected, "tix remember HEAD branch");
     let applied = repository
         .edit_references([edit])
         .context("could not remember the branch HEAD was attached to")?;
@@ -1186,19 +1162,12 @@ pub(crate) fn create_pin_reporting(
             suffix_len = hex.len() + 1;
         }
     };
-    let edit = RefEdit {
-        change: Change::Update {
-            log: LogChange {
-                mode: RefLog::AndReference,
-                force_create_reflog: false,
-                message: reflog_message.into(),
-            },
-            expected: PreviousValue::MustNotExist,
-            new: target.clone(),
-        },
-        name: name.clone(),
-        deref: false,
-    };
+    let edit = RefEdit::update(
+        name.clone(),
+        target.clone(),
+        PreviousValue::MustNotExist,
+        reflog_message,
+    );
     let applied = repository.edit_references([edit]).context("could not create tix pin")?;
     let changes = super::undo::changes_from_edits(applied)?;
     Ok((history::Pin { name, target, id }, changes))
@@ -1271,14 +1240,7 @@ pub(crate) fn toggle_pin_reporting(
 }
 
 fn delete_pin_edit(pin: &history::Pin) -> RefEdit {
-    RefEdit {
-        change: Change::Delete {
-            expected: PreviousValue::MustExistAndMatch(pin.target.clone()),
-            log: RefLog::AndReference,
-        },
-        name: pin.name.clone(),
-        deref: false,
-    }
+    RefEdit::delete(pin.name.clone(), PreviousValue::MustExistAndMatch(pin.target.clone()))
 }
 
 fn delete_deferred_refs(
@@ -1293,14 +1255,7 @@ fn delete_deferred_refs(
         .context("could not reopen repository to finish reference deletions")?;
     let edits: Vec<_> = refs
         .iter()
-        .map(|(name, old)| RefEdit {
-            name: name.clone(),
-            deref: false,
-            change: Change::Delete {
-                expected: PreviousValue::MustExistAndMatch(Target::Object(*old)),
-                log: RefLog::AndReference,
-            },
-        })
+        .map(|(name, old)| RefEdit::delete(name.clone(), PreviousValue::MustExistAndMatch(Target::Object(*old))))
         .collect();
     let applied = repository
         .edit_references(edits)
@@ -1333,19 +1288,12 @@ fn checkout_reference(
     checkout_detached(workdir, selected)?;
     open_repository(repository_path, bare, false)
         .context("could not reopen repository to attach HEAD")?
-        .edit_reference(RefEdit {
-            name: "HEAD".try_into().expect("valid reference name"),
-            deref: false,
-            change: Change::Update {
-                log: LogChange {
-                    mode: RefLog::AndReference,
-                    force_create_reflog: false,
-                    message: "tix attach HEAD".into(),
-                },
-                expected: PreviousValue::MustExistAndMatch(Target::Object(selected)),
-                new: Target::Symbolic(name.clone()),
-            },
-        })
+        .edit_reference(RefEdit::update(
+            "HEAD".try_into().expect("valid reference name"),
+            name.clone(),
+            PreviousValue::MustExistAndMatch(Target::Object(selected)),
+            "tix attach HEAD",
+        ))
         .context("could not attach HEAD to the selected reference")?;
     Ok(())
 }
