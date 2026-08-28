@@ -1490,6 +1490,8 @@ space first; changes blocks adapt within the remaining history width.
 - One fill repository may be shared by commit, tree, worktree, and metadata loads
   during continuous key-repeat or mouse navigation. It is dropped after the
   75 ms idle boundary.
+- Terminal growth loads metadata for every newly visible history row before that
+  frame is painted; unloaded placeholder dates or titles are never shown.
 - Traversal and incremental refresh workers may use a bounded object cache and
   must drop their repository when finished. Lane and verification workers exist
   only for active work. Line-diff workers may remain for ten seconds after their

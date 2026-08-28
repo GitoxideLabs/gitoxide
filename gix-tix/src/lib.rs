@@ -4751,7 +4751,12 @@ fn event_loop(
                                 },
                                 |id| {
                                     app.select_commit_for_time_travel(id);
-                                    let render_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
+                                    let area = resized_terminal_area(terminal)
+                                        .context("could not resize the terminal before drawing")?;
+                                    let history_area = picker
+                                        .as_ref()
+                                        .map_or(area, |picker| worktrunk::areas(area, picker.display_row_count())[1]);
+                                    let render_rows = history_area.height.saturating_sub(1) as usize;
                                     load_visible_history_metadata(&repository, &mut app, &authors, render_rows)?;
                                     let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
                                     let tree = tree_changes.as_ref().map(|(_, changes)| changes);
@@ -4759,27 +4764,29 @@ fn event_loop(
                                         .as_ref()
                                         .filter(|(marker, _)| *marker == WORKTREE_STATUS_CURRENT)
                                         .map(|(_, changes)| changes);
+                                    {
+                                        let mut frame = terminal.get_frame();
+                                        let area = frame.area();
+                                        let [list, history] =
+                                            picker.as_ref().map_or([Rect::default(), area], |picker| {
+                                                worktrunk::areas(area, picker.display_row_count())
+                                            });
+                                        if let Some(picker) = picker.as_deref_mut() {
+                                            worktrunk::draw(&mut frame, list, picker, *picker_focused);
+                                        }
+                                        ui::draw_with_worktree(
+                                            &mut frame,
+                                            history,
+                                            &mut app,
+                                            &decorations,
+                                            &mailmap,
+                                            message,
+                                            tree,
+                                            worktree,
+                                        );
+                                    }
                                     terminal
-                                        .draw(|frame| {
-                                            let area = frame.area();
-                                            let [list, history] =
-                                                picker.as_ref().map_or([Rect::default(), area], |picker| {
-                                                    worktrunk::areas(area, picker.display_row_count())
-                                                });
-                                            if let Some(picker) = picker.as_deref_mut() {
-                                                worktrunk::draw(frame, list, picker, *picker_focused);
-                                            }
-                                            ui::draw_with_worktree(
-                                                frame,
-                                                history,
-                                                &mut app,
-                                                &decorations,
-                                                &mailmap,
-                                                message,
-                                                tree,
-                                                worktree,
-                                            );
-                                        })
+                                        .apply_buffer_with_cursor(None)
                                         .context("could not draw time-travel animation")?;
                                     Ok(())
                                 },
@@ -6276,6 +6283,13 @@ fn load_visible_history_metadata(
     Ok(())
 }
 
+fn resized_terminal_area<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+) -> std::result::Result<Rect, B::Error> {
+    terminal.autoresize()?;
+    Ok(terminal.get_frame().area())
+}
+
 #[expect(clippy::too_many_arguments, reason = "drawing needs the complete view state")]
 fn draw(
     terminal: &mut ratatui::DefaultTerminal,
@@ -6299,16 +6313,13 @@ fn draw(
     picker: Option<&mut worktrunk::Worktrees>,
     picker_focused: bool,
 ) -> Result<()> {
-    let frame_area = terminal.get_frame().area();
+    let frame_area = resized_terminal_area(terminal).context("could not resize the terminal before drawing")?;
     let history_area = picker.as_ref().map_or(frame_area, |picker| {
         worktrunk::areas(frame_area, picker.display_row_count())[1]
     });
     let render_rows = history_area.height.saturating_sub(1) as usize;
     if !history_is_ready_to_draw(app.state, app.rows.len()) {
         if let Some(picker) = picker {
-            terminal
-                .autoresize()
-                .context("could not resize the terminal before drawing")?;
             let mut frame = terminal.get_frame();
             let area = frame.area();
             let [list, history] = worktrunk::areas(area, picker.display_row_count());
@@ -6322,9 +6333,6 @@ fn draw(
         return Ok(());
     }
     if ref_tree.is_active() {
-        terminal
-            .autoresize()
-            .context("could not resize the terminal before drawing")?;
         {
             let mut frame = terminal.get_frame();
             let area = frame.area();
@@ -6585,9 +6593,6 @@ fn draw(
         .as_ref()
         .filter(|(marker, _)| *marker == WORKTREE_STATUS_CURRENT)
         .map(|(_, changes)| changes);
-    terminal
-        .autoresize()
-        .context("could not resize the terminal before drawing")?;
     let cursor = {
         let mut frame = terminal.get_frame();
         let area = frame.area();
@@ -12000,6 +12005,20 @@ mod tests {
             Some(FRAME_INTERVAL.saturating_sub(Duration::from_millis(10))),
             "the earlier frame deadline takes precedence over repeat-idle restoration"
         );
+    }
+
+    #[test]
+    fn terminal_resize_is_applied_before_visible_rows_are_selected() -> gix_testtools::Result {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 2))?;
+        terminal.backend_mut().resize(80, 20);
+
+        assert_eq!(terminal.get_frame().area().height, 2, "the cached frame is still short");
+        assert_eq!(
+            resized_terminal_area(&mut terminal)?.height,
+            20,
+            "the metadata pass sees every row that the next frame can draw"
+        );
+        Ok(())
     }
 
     #[test]
