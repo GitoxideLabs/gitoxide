@@ -1,4 +1,6 @@
-use bstr::BString;
+use std::fs;
+
+use bstr::{BString, ByteSlice};
 use gix_config::{
     Boolean, Color, File, Integer, color,
     file::{Metadata, init},
@@ -482,6 +484,35 @@ fn multi_line_value_with_empty_continuation_line() {
         bstring("abc\tk = def"),
         "Git reports one value, `abc\tk = def`, for {config:?}, as the next line continues the first value"
     );
+}
+
+#[test]
+fn multi_line_value_starting_on_a_continuation_line_is_not_indented() -> crate::Result {
+    let baseline = crate::scripted_fixture_read_only("make_value_whitespace_baseline.sh")?;
+    let baseline = fs::read(baseline.join("baseline.git"))?;
+    let baseline = baseline
+        .strip_suffix(b"\0")
+        .expect("Git's non-empty baseline must end in NUL");
+
+    let mut records = baseline.split(|byte| *byte == 0);
+    while let Some(description) = records.next() {
+        let description = std::str::from_utf8(description).expect("fixture descriptions must be valid UTF-8");
+        let config = records.next().expect("each description must be followed by a config");
+        let expected = records.next().expect("each config must be followed by Git's value");
+        let expected = BString::from(expected);
+        let file = File::try_from(config.as_bstr())?;
+        assert_eq!(
+            file.raw_value("core.k")?,
+            expected,
+            "gix-config must agree with Git for {description}: {config:?}"
+        );
+        assert_eq!(
+            file.to_bstring(),
+            config,
+            "semantic whitespace handling must preserve the original bytes for {description}: {config:?}"
+        );
+    }
+    Ok(())
 }
 
 #[test]
