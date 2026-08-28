@@ -2921,6 +2921,19 @@ fn event_loop(
             urgent = true;
             continue;
         }
+        if focused
+            && !diagnostic_input
+            && !app.entry_selection_active()
+            && !app.topological_navigation_active()
+            && opens_command_menu(&terminal_event, command_picker.is_open(), ref_tree.is_active())
+        {
+            let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
+            command_picker.open(&command_picker_items(&commands));
+            app.close_shortcut_groups();
+            dirty = true;
+            urgent = true;
+            continue;
+        }
         if ref_tree.is_active() {
             let force_quit = matches!(
                 &terminal_event,
@@ -3120,19 +3133,6 @@ fn event_loop(
                 }
                 _ => {}
             }
-        }
-        if focused
-            && !diagnostic_input
-            && !app.entry_selection_active()
-            && !app.topological_navigation_active()
-            && opens_command_menu(&terminal_event, app.actions_expanded, command_picker.is_open())
-        {
-            let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
-            command_picker.open(&command_picker_items(&commands));
-            app.close_shortcut_groups();
-            dirty = true;
-            urgent = true;
-            continue;
         }
         let command_action = if focused && command_picker.is_open() && !diagnostic_input {
             let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
@@ -8616,9 +8616,9 @@ fn command_picker_items(commands: &[MenuCommand]) -> Vec<MenuItem<'_, CommandId>
         .collect()
 }
 
-fn opens_command_menu(event: &TerminalEvent, actions_expanded: bool, command_menu_open: bool) -> bool {
-    !actions_expanded
-        && !command_menu_open
+fn opens_command_menu(event: &TerminalEvent, command_menu_open: bool, ref_tree_active: bool) -> bool {
+    !command_menu_open
+        && !ref_tree_active
         && matches!(
             event,
             TerminalEvent::Key(KeyEvent {
@@ -8982,6 +8982,7 @@ fn action_with_shortcut_groups(
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('a') => Some(Action::ToggleActions),
+        KeyCode::Char('n') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleEnrich),
         KeyCode::Char('?') => Some(Action::ToggleInformation),
         KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleInformation),
         KeyCode::Char('b') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -8996,6 +8997,8 @@ fn action_with_shortcut_groups(
         }
         KeyCode::Char('u') if !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Undo),
         KeyCode::Char('r') if actions_expanded => Some(Action::Review),
+        KeyCode::Char('S') if actions_expanded => Some(Action::Split),
+        KeyCode::Char('s') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Split),
         KeyCode::Char('s') if actions_expanded => Some(Action::Squash),
         KeyCode::Char('y') if actions_expanded => Some(Action::CopyInsert),
         KeyCode::Char('m') if actions_expanded => Some(Action::MoveInsert),
@@ -9011,15 +9014,16 @@ fn action_with_shortcut_groups(
         KeyCode::Char('z') if actions_expanded => Some(Action::Stash),
         KeyCode::Char('o') if actions_expanded => Some(Action::Reword),
         KeyCode::Char('w') if actions_expanded => Some(Action::NewCommit),
-        KeyCode::Char('n') if actions_expanded => Some(Action::NewEmptyCommit),
+        KeyCode::Char('N') if actions_expanded => Some(Action::NewEmptyCommit),
+        KeyCode::Char('n') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => {
+            Some(Action::NewEmptyCommit)
+        }
         KeyCode::Char('e') if actions_expanded => Some(Action::Amend),
         KeyCode::Char('l') if actions_expanded => Some(Action::Spill),
         KeyCode::Char('P') if actions_expanded => Some(Action::Push),
         KeyCode::Char('p') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Push),
-        KeyCode::Char('p') if actions_expanded && !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Split),
         KeyCode::Char('d') if actions_expanded => Some(Action::Forget),
         KeyCode::Char('i') if actions_expanded => Some(Action::TogglePin),
-        KeyCode::Char('n') => Some(Action::ToggleEnrich),
         KeyCode::Char('P') => Some(Action::CycleChangesParent),
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
@@ -9451,7 +9455,7 @@ mod tests {
     }
 
     #[test]
-    fn command_menu_opener_does_not_steal_prefixed_or_shifted_p() {
+    fn command_menu_opener_accepts_only_an_unmodified_history_press_while_closed() {
         assert!(opens_command_menu(
             &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
             false,
@@ -9462,11 +9466,14 @@ mod tests {
             true,
             false,
         ));
-        assert!(!opens_command_menu(
-            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
-            false,
-            true,
-        ));
+        assert!(
+            !opens_command_menu(
+                &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+                false,
+                true,
+            ),
+            "the reference tree handles its documented pin shortcut"
+        );
         assert!(!opens_command_menu(
             &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT)),
             false,
@@ -11393,6 +11400,7 @@ mod tests {
             for (key, expected) in [
                 ('v', Action::ToggleHistoryDisplay),
                 ('a', Action::ToggleActions),
+                ('n', Action::ToggleEnrich),
                 ('?', Action::ToggleInformation),
             ] {
                 assert_eq!(
@@ -11409,18 +11417,14 @@ mod tests {
             }
             assert_eq!(
                 action_with_shortcut_groups(
-                    KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+                    KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
                     history,
                     actions,
                     enrich,
                     information,
                 ),
-                Some(if actions {
-                    Action::NewEmptyCommit
-                } else {
-                    Action::ToggleEnrich
-                }),
-                "the actions shortcut takes priority over the enrich prefix"
+                None,
+                "p remains available to the command-menu opener regardless of the active menu"
             );
         }
         assert_eq!(
@@ -11437,10 +11441,8 @@ mod tests {
         for (key, expected) in [
             ('o', Action::Reword),
             ('w', Action::NewCommit),
-            ('n', Action::NewEmptyCommit),
             ('e', Action::Amend),
             ('l', Action::Spill),
-            ('p', Action::Split),
             ('d', Action::Forget),
             ('i', Action::TogglePin),
         ] {
@@ -11454,6 +11456,24 @@ mod tests {
                 ),
                 Some(expected),
                 "{key} is available on the commit line after the actions prefix"
+            );
+        }
+        for (key, expected) in [
+            (
+                KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE),
+                Action::NewEmptyCommit,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::SHIFT),
+                Action::NewEmptyCommit,
+            ),
+            (KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE), Action::Split),
+            (KeyEvent::new(KeyCode::Char('s'), KeyModifiers::SHIFT), Action::Split),
+        ] {
+            assert_eq!(
+                action_with_shortcut_groups(key, false, true, false, false),
+                Some(expected),
+                "shifted action shortcuts remain available without shadowing top-level prefixes"
             );
         }
         for (key, expected) in [
