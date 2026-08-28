@@ -76,7 +76,7 @@ pub enum Version {
     V2,
     /// A pack data version accepted by Git and recognized by `gix-pack` readers.
     ///
-    /// Git does not generate this version, and `gix-pack` writers currently reject it.
+    /// Git does not generate this version.
     /// Entries are decoded with the same layout as [`V2`](Version::V2); the difference
     /// visible to this crate is the version number stored in the pack header.
     V3,

@@ -59,10 +59,6 @@ pub(crate) mod function {
     where
         Find: crate::Find + Send + Clone + 'static,
     {
-        assert!(
-            matches!(version, crate::data::Version::V2),
-            "currently we can only write version 2"
-        );
         let (chunk_size, thread_limit, _) =
             parallel::optimize_chunk_size_and_thread_limit(chunk_size, Some(counts.len()), thread_limit, None);
         {

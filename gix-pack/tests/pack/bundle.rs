@@ -168,7 +168,7 @@ mod write_to_directory {
                 &[b"A".as_slice(), b"B".as_slice()][..],
                 &[b"A".as_slice(), b"B".as_slice(), b"C".as_slice()][..],
             ] {
-                let pack_data = ref_delta_pack(object_hash, objects)?;
+                let pack_data = ref_delta_pack(object_hash, objects, pack::data::Version::V2)?;
                 for lookup in [None, Some(gix_object::find::Never)] {
                     let dir = TempDir::new()?;
                     let mut input = Cursor::new(pack_data.clone());
@@ -215,6 +215,34 @@ mod write_to_directory {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn version_3_with_thin_pack_lookup() -> Result<(), Box<dyn std::error::Error>> {
+        let object_hash = gix_hash::Kind::Sha1;
+        let pack_data = ref_delta_pack(
+            object_hash,
+            &[b"A".as_slice(), b"B".as_slice()],
+            pack::data::Version::V3,
+        )?;
+        let outcome = pack::Bundle::write_to_directory(
+            &mut Cursor::new(pack_data),
+            Some(TempDir::new()?.as_ref()),
+            &mut progress::Discard,
+            &AtomicBool::new(false),
+            Some(gix_object::find::Never),
+            object_hash,
+            pack::bundle::write::Options {
+                iteration_mode: pack::data::input::Mode::Verify,
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(
+            outcome.pack_version,
+            pack::data::Version::V3,
+            "the rewritten pack preserves its supported input version"
+        );
         Ok(())
     }
 
@@ -329,8 +357,9 @@ mod write_to_directory {
     fn ref_delta_pack(
         object_hash: gix_hash::Kind,
         objects: &[&'static [u8]],
+        version: pack::data::Version,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        let mut pack_data = pack::data::header::encode(pack::data::Version::V2, objects.len() as u32).to_vec();
+        let mut pack_data = pack::data::header::encode(version, objects.len() as u32).to_vec();
         for pair in objects.windows(2).rev() {
             let (base, resolved) = (pair[0], pair[1]);
             let base_id = gix_object::compute_hash(object_hash, gix_object::Kind::Blob, base)?;
