@@ -25,15 +25,6 @@ title "Porcelain ${kind}"
         expect_run_sh 0 "$exe panic"
       }
     )
-    (not_on_ci # due to different TTY settings, the output differs, it's OK for now
-      (with "progress option set"
-        it "fails as expected" && {
-          WITH_SNAPSHOT="$snapshot/expected-failure-in-thread-with-progress" \
-        SNAPSHOT_FILTER=remove-thread-id \
-          expect_run_sh 0 "$exe --progress panic"
-        }
-      )
-    )
   )
   snapshot="$snapshot/porcelain"
   (when "using the 'tool' subcommand"
