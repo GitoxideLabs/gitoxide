@@ -105,9 +105,19 @@ impl<T> Tree<T> {
                         })?;
                 }
                 OfsDelta { base_distance } => {
-                    let base_pack_offset = pack_offset
-                        .checked_sub(base_distance)
-                        .expect("in bound distance for deltas");
+                    let Some(base_pack_offset) =
+                        crate::data::entry::Header::verified_base_pack_offset(pack_offset, base_distance)
+                    else {
+                        return Err(Error::Io {
+                            source: io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!(
+                                    "OFS_DELTA base distance {base_distance} is invalid for pack offset {pack_offset}"
+                                ),
+                            ),
+                            message: "invalid OFS_DELTA base distance",
+                        });
+                    };
                     tree.add_child(base_pack_offset, pack_offset, data)?;
                 }
             }
