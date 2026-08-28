@@ -1,4 +1,4 @@
-#[cfg(any(feature = "prodash-render-line", feature = "prodash-render-tui"))]
+#[cfg(feature = "prodash-render-line")]
 pub const DEFAULT_FRAME_RATE: f32 = 6.0;
 
 pub type ProgressRange = std::ops::RangeInclusive<prodash::progress::key::Level>;
@@ -35,7 +35,7 @@ impl LogCreator {
     }
 }
 
-#[cfg(not(any(feature = "prodash-render-tui", feature = "prodash-render-line")))]
+#[cfg(not(feature = "prodash-render-line"))]
 fn progress_tree() -> LogCreator {
     LogCreator
 }
@@ -49,13 +49,9 @@ pub mod pretty {
 
     use crate::shared::ProgressRange;
 
-    #[cfg(feature = "small")]
     pub fn prepare_and_run<T>(
         name: &str,
-        _trace: u8,
         verbose: bool,
-        progress: bool,
-        #[cfg_attr(not(feature = "prodash-render-tui"), allow(unused_variables))] progress_keep_open: bool,
         range: impl Into<Option<ProgressRange>>,
         run: impl FnOnce(
             progress::DoOrDiscard<prodash::tree::Item>,
@@ -65,34 +61,27 @@ pub mod pretty {
     ) -> Result<T> {
         crate::shared::init_env_logger();
 
-        match (verbose, progress) {
-            (false, false) => {
-                let stdout = stdout();
-                let mut stdout_lock = stdout.lock();
-                let stderr = stderr();
-                let mut stderr_lock = stderr.lock();
-                gix::trace::coarse!("run")
-                    .into_scope(|| run(progress::DoOrDiscard::from(None), &mut stdout_lock, &mut stderr_lock))
-            }
-            (true, false) => {
-                let progress = crate::shared::progress_tree();
-                let sub_progress = progress.add_child(name);
-
-                use crate::shared::{self, STANDARD_RANGE};
-                let handle = shared::setup_line_renderer_range(&progress, range.into().unwrap_or(STANDARD_RANGE));
-
-                let mut out = Vec::<u8>::new();
-                let res = gix::trace::coarse!("run")
-                    .into_scope(|| run(progress::DoOrDiscard::from(Some(sub_progress)), &mut out, &mut stderr()));
-                handle.shutdown_and_wait();
-                std::io::Write::write_all(&mut stdout(), &out)?;
-                res
-            }
-            #[cfg(not(feature = "prodash-render-tui"))]
-            (_, true) => {
-                unreachable!("BUG: This branch can't be run without a TUI built-in")
-            }
+        if !verbose {
+            let stdout = stdout();
+            let mut stdout_lock = stdout.lock();
+            return gix::trace::coarse!("run")
+                .into_scope(|| run(progress::DoOrDiscard::from(None), &mut stdout_lock, &mut stderr()));
         }
+
+        let progress = crate::shared::progress_tree();
+        let sub_progress = progress.add_child(name);
+
+        use crate::shared::{self, STANDARD_RANGE};
+        let handle = shared::setup_line_renderer_range(&progress, range.into().unwrap_or(STANDARD_RANGE));
+
+        let mut out = Vec::<u8>::new();
+        let mut err = Vec::<u8>::new();
+        let res = gix::trace::coarse!("run")
+            .into_scope(|| run(progress::DoOrDiscard::from(Some(sub_progress)), &mut out, &mut err));
+        handle.shutdown_and_wait();
+        std::io::Write::write_all(&mut stdout(), &out)?;
+        std::io::Write::write_all(&mut stderr(), &err)?;
+        res
     }
 
     #[cfg(feature = "tracing")]
@@ -213,121 +202,6 @@ pub mod pretty {
     pub(crate) fn init_tracing(trace: u8) -> anyhow::Result<TraceGuard> {
         anyhow::ensure!(trace == 0, "tracing support is not compiled in");
         Ok(TraceGuard(None))
-    }
-
-    #[cfg(not(feature = "small"))]
-    pub fn prepare_and_run<T: Send + 'static>(
-        name: &str,
-        _trace: u8,
-        verbose: bool,
-        progress: bool,
-        #[cfg_attr(not(feature = "prodash-render-tui"), allow(unused_variables))] progress_keep_open: bool,
-        range: impl Into<Option<ProgressRange>>,
-        run: impl FnOnce(
-            progress::DoOrDiscard<prodash::tree::Item>,
-            &mut dyn std::io::Write,
-            &mut dyn std::io::Write,
-        ) -> Result<T>
-        + Send
-        + 'static,
-    ) -> Result<T> {
-        crate::shared::init_env_logger();
-
-        match (verbose, progress) {
-            (false, false) => {
-                let stdout = stdout();
-                let mut stdout_lock = stdout.lock();
-                gix::trace::coarse!("run")
-                    .into_scope(|| run(progress::DoOrDiscard::from(None), &mut stdout_lock, &mut stderr()))
-            }
-            (true, false) => {
-                use crate::shared::{self, STANDARD_RANGE};
-                let progress = shared::progress_tree();
-                let sub_progress = progress.add_child(name);
-
-                let handle = shared::setup_line_renderer_range(&progress, range.into().unwrap_or(STANDARD_RANGE));
-
-                let mut out = Vec::<u8>::new();
-                let mut err = Vec::<u8>::new();
-
-                let res = gix::trace::coarse!("run")
-                    .into_scope(|| run(progress::DoOrDiscard::from(Some(sub_progress)), &mut out, &mut err));
-
-                handle.shutdown_and_wait();
-                std::io::Write::write_all(&mut stdout(), &out)?;
-                std::io::Write::write_all(&mut stderr(), &err)?;
-                res
-            }
-            #[cfg(not(feature = "prodash-render-tui"))]
-            (_, true) => {
-                unreachable!("BUG: This branch can't be run without a TUI built-in")
-            }
-            #[cfg(feature = "prodash-render-tui")]
-            (_, true) => {
-                use std::io::Write;
-
-                use crate::shared;
-
-                enum Event<T> {
-                    UiDone,
-                    ComputationDone(Result<T>, Vec<u8>),
-                }
-                let progress = prodash::tree::Root::new();
-                let sub_progress = progress.add_child(name);
-
-                let render_tui = prodash::render::tui(
-                    stdout(),
-                    std::sync::Arc::downgrade(&progress),
-                    prodash::render::tui::Options {
-                        title: "gitoxide".into(),
-                        frames_per_second: shared::DEFAULT_FRAME_RATE,
-                        stop_if_progress_missing: !progress_keep_open,
-                        throughput: true,
-                        ..Default::default()
-                    },
-                )
-                .expect("tui to come up without io error");
-                let (tx, rx) = std::sync::mpsc::sync_channel::<Event<T>>(1);
-                let ui_handle = std::thread::spawn({
-                    let tx = tx.clone();
-                    move || {
-                        futures_lite::future::block_on(render_tui);
-                        tx.send(Event::UiDone).ok();
-                    }
-                });
-                let thread = std::thread::spawn({
-                    let name = name.to_owned();
-                    move || {
-                        // We might have something interesting to show, which would be hidden by the alternate screen if there is a progress TUI
-                        // We know that the printing happens at the end, so this is fine.
-                        let mut out = Vec::new();
-                        let res = gix::trace::coarse!("run", name = name).into_scope(|| {
-                            run(progress::DoOrDiscard::from(Some(sub_progress)), &mut out, &mut stderr())
-                        });
-                        tx.send(Event::ComputationDone(res, out)).ok();
-                    }
-                });
-                loop {
-                    match rx.recv() {
-                        Ok(Event::UiDone) => {
-                            // We don't know why the UI is done, usually it's the user aborting.
-                            // We need the computation to stop as well so let's wait for that to happen
-                            gix::interrupt::trigger();
-                            continue;
-                        }
-                        Ok(Event::ComputationDone(res, out)) => {
-                            ui_handle.join().ok();
-                            stdout().write_all(&out)?;
-                            break res;
-                        }
-                        Err(_err) => match thread.join() {
-                            Ok(()) => unreachable!("BUG: We shouldn't fail to receive unless the thread has panicked"),
-                            Err(panic) => std::panic::resume_unwind(panic),
-                        },
-                    }
-                }
-            }
-        }
     }
 
     #[cfg(all(test, feature = "tracing"))]
