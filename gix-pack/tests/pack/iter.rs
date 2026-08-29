@@ -103,6 +103,30 @@ mod new_from_header {
     }
 
     #[test]
+    fn version_3_is_accepted() -> Result<(), Box<dyn std::error::Error>> {
+        let mut data = fs::read(fixture_path(SMALL_PACK))?;
+        data[4..8].copy_from_slice(&3u32.to_be_bytes());
+
+        let iter = pack::data::input::BytesToEntriesIter::new_from_header(
+            std::io::BufReader::new(data.as_slice()),
+            Mode::AsIs,
+            EntryDataMode::Ignore,
+            gix_hash::Kind::Sha1,
+        )?;
+        assert_eq!(
+            iter.version(),
+            pack::data::Version::V3,
+            "Git accepts pack version 3 with the version 2 entry layout"
+        );
+        assert_eq!(
+            iter.collect::<Result<Vec<_>, _>>()?.len(),
+            42,
+            "all entries should be readable"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn restore_missing_trailer() -> Result<(), Box<dyn std::error::Error>> {
         let pack = fs::read(fixture_path(SMALL_PACK))?;
         let mut iter = pack::data::input::BytesToEntriesIter::new_from_header(

@@ -51,10 +51,6 @@ where
     ///
     /// The input chunks are expected to be sorted already. You can use the [`InOrderIter`][gix_features::parallel::InOrderIter] to assure
     /// this happens on the fly holding entire chunks in memory as long as needed for them to be dispensed in order.
-    ///
-    /// # Panics
-    ///
-    /// Not all combinations of `object_hash` and `version` are supported currently triggering assertion errors.
     pub fn new(
         input: I,
         output: W,
@@ -62,10 +58,6 @@ where
         version: crate::data::Version,
         object_hash: gix_hash::Kind,
     ) -> Self {
-        assert!(
-            matches!(version, crate::data::Version::V2),
-            "currently only pack version 2 can be written",
-        );
         FromEntriesIter {
             input,
             output: gix_hash::io::Write::new(output, object_hash),

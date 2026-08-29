@@ -55,11 +55,6 @@ where
         read.read_exact(&mut header_data).map_err(gix_hash::io::Error::from)?;
 
         let (version, num_objects) = crate::data::header::decode(&header_data)?;
-        assert_eq!(
-            version,
-            crate::data::Version::V2,
-            "let's stop here if we see undocumented pack formats"
-        );
         Ok(BytesToEntriesIter {
             read,
             decompressor: Decompress::new(),

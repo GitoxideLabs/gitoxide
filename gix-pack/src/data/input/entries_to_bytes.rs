@@ -34,15 +34,7 @@ where
     /// `output` writer, resembling a pack of `version`. The amount of entries will be dynamically determined and
     /// the pack is completed once the last entry was written.
     /// `object_hash` is the kind of hash to use for the pack checksum and maybe other places, depending on the version.
-    ///
-    /// # Panics
-    ///
-    /// Only [Version::V2](crate::data::Version::V2) is allowed for `version.
     pub fn new(input: I, output: W, version: crate::data::Version, object_hash: gix_hash::Kind) -> Self {
-        assert!(
-            matches!(version, crate::data::Version::V2),
-            "currently only pack version 2 can be written",
-        );
         EntriesToBytesIter {
             input: input.peekable(),
             output,
