@@ -374,7 +374,7 @@ impl Platform {
                 let amended = if args.index {
                     crate::edit::head::amend_index_reporting(repository, &graph)?
                 } else {
-                    crate::edit::head::perform_reporting(repository, &graph, crate::edit::head::Kind::Amend)?
+                    crate::edit::head::amend_reporting(repository, &graph)?
                 };
                 match amended {
                     Some(outcome) => {

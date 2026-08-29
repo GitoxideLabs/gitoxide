@@ -939,6 +939,9 @@ space first; changes blocks adapt within the remaining history width.
   staged index content when present and reports `nothing to amend` when the
   index matches `HEAD`, even if tracked worktree changes exist. This option does
   not alter the history-view amend action.
+- Command-line `tix amend` finalizes a resolved conflict materialized at a pending
+  `HEAD`. Unresolved index conflicts and pending commits below `HEAD` remain
+  rejected.
 - Command-line edits use the same default HEAD, applicable pin, review tips, and
   inferred hidden base as the history view. Unrelated refs do not broaden their
   descendant rewrite scope, while mutable refs pointing into that scope are
