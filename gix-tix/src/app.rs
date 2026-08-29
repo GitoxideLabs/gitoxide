@@ -641,7 +641,6 @@ pub(crate) struct App {
     active_branch: Option<BString>,
     #[cfg(feature = "blocking-network-client")]
     fetch_remote: Option<BString>,
-    background_task: Option<String>,
     background_progress: Option<BackgroundProgress>,
     worktree_head_has_descendants: bool,
     worktree_head_unborn: bool,
@@ -757,7 +756,6 @@ impl App {
             active_branch: None,
             #[cfg(feature = "blocking-network-client")]
             fetch_remote: None,
-            background_task: None,
             background_progress: None,
             worktree_head_has_descendants: false,
             worktree_head_unborn: false,
@@ -988,7 +986,7 @@ impl App {
     fn can_start_background_task(&self) -> bool {
         self.state == State::Complete
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self.background_task.is_none()
+            && self.background_progress.is_none()
     }
 
     pub(crate) fn can_push(&self) -> bool {
@@ -1001,18 +999,9 @@ impl App {
     }
 
     pub(crate) fn start_background_task(&mut self, label: impl Into<String>) {
-        debug_assert!(self.background_task.is_none(), "only one background task may run");
-        self.background_task = Some(label.into());
-        self.background_progress = None;
-    }
-
-    pub(crate) fn start_background_task_with_progress(&mut self, label: impl Into<String>) {
-        self.start_background_task(label);
+        debug_assert!(self.background_progress.is_none(), "only one background task may run");
         self.background_progress = Some(BackgroundProgress {
-            text: self
-                .background_task
-                .clone()
-                .expect("the background task was just started"),
+            text: label.into(),
             completed: 0,
             total: 100,
         });
@@ -1041,12 +1030,7 @@ impl App {
     }
 
     pub(crate) fn finish_background_task(&mut self) {
-        self.background_task = None;
         self.background_progress = None;
-    }
-
-    pub(crate) fn background_task(&self) -> Option<&str> {
-        self.background_task.as_deref()
     }
 
     pub(crate) fn background_progress(&self) -> Option<&BackgroundProgress> {
@@ -2401,7 +2385,7 @@ impl App {
                 self.clear_reachability_selection();
             }
             Action::Cancel | Action::Quit if self.changes_focus.is_some() => self.focus_history(),
-            Action::Quit if self.background_task.is_some() => {
+            Action::Quit if self.background_progress.is_some() => {
                 self.leave_attention("background task is still running; use Ctrl-C to quit");
             }
             Action::Cancel if self.state == State::Loading => {
@@ -7858,7 +7842,7 @@ mod tests {
     #[test]
     fn background_progress_is_monotonic() {
         let mut app = App::new(1);
-        app.start_background_task_with_progress("fetching origin…");
+        app.start_background_task("fetching origin…");
 
         assert!(app.update_background_progress("counting".into(), 40, 100));
         assert!(!app.update_background_progress("indexing".into(), 25, 100));

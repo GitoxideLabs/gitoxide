@@ -1335,10 +1335,10 @@ space first; changes blocks adapt within the remaining history width.
   prompting.
 - Push, fetch, and picker worktree removal share one user background-task slot.
   Ordinary foreground actions remain available during push and fetch; worktree
-  removal blocks exit and worktree switching until deletion finishes. Push keeps
-  its yellow footer label. Fetch reserves one progress row directly above the
-  footer, with completed work in dark gray and the remaining status background
-  unchanged; notices and prefix popups stay above it. Its monotonic phases
+  removal blocks exit and worktree switching until deletion finishes. Every task
+  uses the background row directly above the footer, with completed work in dark
+  gray and the remaining status background unchanged; notices and prefix popups
+  stay above it. Fetch's monotonic phases
   allocate 0–5% to setup, 5–10% to connection and authentication, 10–15% to refs
   and negotiation, 15–30% to remote enumeration, counting, and compression,
   30–75% to pack receipt and indexing, 75–90% to delta resolution, and 90–95%
