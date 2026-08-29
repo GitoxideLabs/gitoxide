@@ -10,17 +10,21 @@ use crate::{
 ///
 /// There is no notion of a default user like in git, and instead failing to provide a user
 /// is fatal. That way, we enforce correctness and force application developers to take care
-/// of this issue which can be done in various ways, for instance by setting
-/// `gitoxide.committer.nameFallback` and similar.
+/// of this issue. Use [`Repository::committer_or_set_fallback()`][crate::Repository::committer_or_set_fallback]
+/// to install an application fallback without overriding an already configured user identity.
+/// Setting `gitoxide.committer.nameFallback` and similar directly makes these values take
+/// precedence over `user.name` and `user.email`.
 impl crate::Repository {
     /// Return the committer as configured by this repository, which is determined by…
     ///
     /// * …the git configuration `committer.name|email`…
-    /// * …the `GIT_COMMITTER_(NAME|EMAIL|DATE)` environment variables…
+    /// * …the `gitoxide.committer.(name|email)Fallback` configuration, which also receives the
+    ///   `GIT_COMMITTER_(NAME|EMAIL)` environment variables…
     /// * …the configuration for `user.name|email` as fallback…
     ///
-    /// …and in that order, or `None` if no committer name or email was configured, or `Some(Err(…))`
-    /// if the committer date could not be parsed.
+    /// …and in that order, with name and email resolved independently. `GIT_COMMITTER_DATE` controls the time separately.
+    /// Returns `None` if no committer name or email was configured, or `Some(Err(…))` if the committer date could not be
+    /// parsed.
     ///
     /// # Note
     ///
@@ -41,24 +45,36 @@ impl crate::Repository {
         .into()
     }
 
-    /// Return the committer or its fallback just like [`committer()`](Self::committer()), but if *not* set generate a
-    /// possibly arbitrary fallback and configure it in memory on this instance. That fallback is then returned and future
-    /// calls to [`committer()`](Self::committer()) will return it as well.
-    pub fn committer_or_set_generic_fallback(
+    /// Return the configured committer, or install `name` and `email` as fallback in memory on this instance if no complete
+    /// committer can be resolved. The fallback is then returned and future calls to [`committer()`](Self::committer()) will
+    /// return it as well.
+    ///
+    /// Unlike setting `gitoxide.committer.(name|email)Fallback` unconditionally, this preserves a committer resolved from
+    /// `user.name` and `user.email`. If either part of the committer is missing, both fallback values are installed;
+    /// explicitly configured `committer.name` or `committer.email` values still take precedence individually.
+    pub fn committer_or_set_fallback(
         &mut self,
+        name: impl gix_utils::AsBStr,
+        email: impl gix_utils::AsBStr,
     ) -> Result<gix_actor::SignatureRef<'_>, config::commit_signature::Error> {
         if self.committer().is_none() {
             let mut config = gix_config::File::new(gix_config::file::Metadata::api());
-            config
-                .set_raw_value(gitoxide::Committer::NAME_FALLBACK, "no name configured")
-                .expect("works - statically known");
-            config
-                .set_raw_value(gitoxide::Committer::EMAIL_FALLBACK, "noEmailAvailable@example.com")
-                .expect("works - statically known");
+            config.set_raw_value(gitoxide::Committer::NAME_FALLBACK, name)?;
+            config.set_raw_value(gitoxide::Committer::EMAIL_FALLBACK, email)?;
             let mut repo_config = self.config_snapshot_mut();
             repo_config.append(config)?;
         }
         Ok(self.committer().expect("committer was just set")?)
+    }
+
+    /// Return the configured committer or install a generic fallback in memory on this instance.
+    ///
+    /// This is equivalent to calling [`committer_or_set_fallback()`](Self::committer_or_set_fallback()) with
+    /// `no name configured <noEmailAvailable@example.com>`.
+    pub fn committer_or_set_generic_fallback(
+        &mut self,
+    ) -> Result<gix_actor::SignatureRef<'_>, config::commit_signature::Error> {
+        self.committer_or_set_fallback("no name configured", "noEmailAvailable@example.com")
     }
 
     /// Return the author as configured by this repository, which is determined by…

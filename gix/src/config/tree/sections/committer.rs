@@ -4,10 +4,10 @@ use crate::{
 };
 
 impl Committer {
-    /// The `committer.name` key.
+    /// The `committer.name` key, followed by `gitoxide.committer.nameFallback` and then `user.name` when resolving a committer.
     pub const NAME: keys::Any =
         keys::Any::new("name", &config::Tree::COMMITTER).with_fallback(&gitoxide::Committer::NAME_FALLBACK);
-    /// The `committer.email` key.
+    /// The `committer.email` key, followed by `gitoxide.committer.emailFallback` and then `user.email` when resolving a committer.
     pub const EMAIL: keys::Any =
         keys::Any::new("email", &config::Tree::COMMITTER).with_fallback(&gitoxide::Committer::EMAIL_FALLBACK);
 }

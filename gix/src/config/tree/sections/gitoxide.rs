@@ -520,9 +520,16 @@ mod subsections {
 
     impl Committer {
         /// The `gitoxide.committer.nameFallback` key.
+        ///
+        /// It is tried after `committer.name`, but before `user.name`. Use
+        /// [`Repository::committer_or_set_fallback()`][crate::Repository::committer_or_set_fallback] instead of configuring
+        /// it unconditionally when the value should only be used if no complete committer identity is available.
         pub const NAME_FALLBACK: keys::Any =
             keys::Any::new("nameFallback", &Gitoxide::COMMITTER).with_environment_override("GIT_COMMITTER_NAME");
         /// The `gitoxide.committer.emailFallback` key.
+        ///
+        /// It is tried after `committer.email`, but before `user.email`. See [`NAME_FALLBACK`](Self::NAME_FALLBACK) for how
+        /// to install a last-resort fallback without overriding a complete user identity.
         pub const EMAIL_FALLBACK: keys::Any =
             keys::Any::new("emailFallback", &Gitoxide::COMMITTER).with_environment_override("GIT_COMMITTER_EMAIL");
     }
