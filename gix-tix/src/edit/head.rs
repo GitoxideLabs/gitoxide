@@ -41,12 +41,19 @@ pub(crate) fn perform_with_changes(
     perform_inner(repo, graph, kind, selected_paths, false, pending_checkout, report)
 }
 
-pub(crate) fn perform_reporting(
+pub(crate) fn amend_reporting(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
-    kind: Kind,
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, kind, None, false, rebase::PendingCheckout::Reject, |_| {})
+    perform_inner(
+        repo,
+        graph,
+        Kind::Amend,
+        None,
+        false,
+        rebase::PendingCheckout::FinalizeEditedHead,
+        |_| {},
+    )
 }
 
 #[tracing::instrument(skip_all)]
@@ -480,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_amend_rejects_a_pending_head_outside_conflict_resolution() -> gix_testtools::Result {
+    fn non_resolving_amend_rejects_a_pending_head() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let old = repo.head_id()?.detach();
@@ -495,7 +502,7 @@ mod tests {
         let graph = super::super::loaded_graph(&repo)?;
 
         let err = match perform(repo, &graph, Kind::Amend, None) {
-            Ok(_) => return Err("an ordinary amend must not resolve an arbitrary pending HEAD".into()),
+            Ok(_) => return Err("a non-resolving amend must not resolve an arbitrary pending HEAD".into()),
             Err(err) => err,
         };
         assert!(err.to_string().contains("time-travel to HEAD"), "{err:#}");
@@ -525,7 +532,7 @@ mod tests {
         let before = gix_testtools::repository::snapshot(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
 
-        let err = match perform(repo, &graph, Kind::Amend, None) {
+        let err = match amend_reporting(repo, &graph) {
             Ok(_) => return Err("amend must not preserve pending checkout ancestry".into()),
             Err(err) => err,
         };

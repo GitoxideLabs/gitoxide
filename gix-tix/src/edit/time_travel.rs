@@ -2428,6 +2428,23 @@ mod tests {
             .and_then(Perform::complete)
             .expect_err("time-travel is disabled until the index conflict is resolved");
         assert!(format!("{err:#}").contains("unresolved index conflicts"));
+
+        drop(conflict_commit);
+        drop(index);
+        drop(repository);
+        std::fs::write(fixture.path().join("file"), "resolved\n")?;
+        git(fixture.path(), &["add", "file"])?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_view_graph(&repository)?;
+        let amended = super::super::head::amend_reporting(repository, &graph)?
+            .context("tix amend resolves the materialized conflict")?
+            .selected
+            .context("amending the conflict selects its replacement")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert!(
+            !super::super::rebase::is_pending(&repository.find_commit(amended)?.decode()?.into_owned()?),
+            "amending a resolved conflict finalizes its pending rebase"
+        );
         Ok(())
     }
 
