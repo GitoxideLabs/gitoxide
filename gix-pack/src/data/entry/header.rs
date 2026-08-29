@@ -32,12 +32,12 @@ pub enum Header {
 }
 
 impl Header {
-    /// Subtract `distance` from `pack_offset` safely without the chance for overflow or no-ops if `distance` is 0.
+    /// Subtract `distance` from `pack_offset` safely, returning only offsets beyond the 12-byte pack header.
     pub fn verified_base_pack_offset(pack_offset: data::Offset, distance: u64) -> Option<data::Offset> {
         if distance == 0 {
             return None;
         }
-        pack_offset.checked_sub(distance)
+        pack_offset.checked_sub(distance).filter(|offset| *offset >= 12)
     }
     /// Convert the header's object kind into [`gix_object::Kind`] if possible
     pub fn as_kind(&self) -> Option<gix_object::Kind> {
@@ -145,5 +145,17 @@ mod tests {
         let mut buf = [0u8; 10];
         let buf = leb64_encode(u64::MAX, &mut buf);
         assert_eq!(buf.len(), 10, "10 bytes should be used when 64bits are encoded");
+    }
+
+    #[test]
+    fn verified_base_pack_offset_rejects_the_pack_header() {
+        assert_eq!(Header::verified_base_pack_offset(13, 1), Some(12));
+        for (pack_offset, distance) in [(13, 0), (12, 1), (12, 12), (12, 13)] {
+            assert_eq!(
+                Header::verified_base_pack_offset(pack_offset, distance),
+                None,
+                "offset {pack_offset} and distance {distance} cannot point to a pack entry"
+            );
+        }
     }
 }
