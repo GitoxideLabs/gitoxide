@@ -2823,7 +2823,7 @@ fn event_loop(
                                 active_worktree_preview = None;
                                 filesystem_responses.cancel_pending_worktree("worktree-removal");
                                 app.clear_notice();
-                                app.start_background_task_with_progress(format!("removing {label}…"));
+                                app.start_background_task(format!("removing {label}…"));
                                 background_task =
                                     Some(start_remove_worktree_worker(common_dir.clone(), path, label, force));
                             }
@@ -5002,7 +5002,7 @@ fn event_loop(
                 #[cfg(feature = "blocking-network-client")]
                 Effect::Fetch(remote) => {
                     let label = format!("fetching {remote}…");
-                    app.start_background_task_with_progress(label);
+                    app.start_background_task(label);
                     background_task = Some(start_fetch_worker(repository_path.clone(), repository_is_bare, remote));
                 }
                 Effect::VerifySignatures(ids) => {
@@ -10096,7 +10096,7 @@ mod tests {
         app.start_background_task("running");
         assert!(report_background_task(&mut app, Ok(BackgroundCompletion::Success("done".into()))).0);
         assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Success));
-        assert!(app.background_task().is_none());
+        assert!(app.background_progress().is_none());
 
         app.start_background_task("running");
         assert!(report_background_task(&mut app, Ok(BackgroundCompletion::Attention("partly done".into()))).0);
@@ -10105,7 +10105,7 @@ mod tests {
         app.start_background_task("running");
         assert!(!report_background_task(&mut app, Err(anyhow::anyhow!("failed"))).0);
         assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Error));
-        assert!(app.background_task().is_none());
+        assert!(app.background_progress().is_none());
 
         app.start_background_task("running");
         let (succeeded, retry) = report_background_task(
@@ -10125,7 +10125,7 @@ mod tests {
                 text: PUSH_RETRY_PROMPT.into(),
             })
         );
-        assert!(app.background_task().is_none());
+        assert!(app.background_progress().is_none());
     }
 
     #[test]
