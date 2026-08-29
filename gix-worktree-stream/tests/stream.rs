@@ -7,6 +7,41 @@ fn hex_to_id(hex_sha1: &str, hex_sha256: &str) -> gix_hash::ObjectId {
     }
 }
 
+#[test]
+fn impossible_path_allocation_preserves_its_source() {
+    let mut input = Vec::new();
+    input.extend_from_slice(&usize::MAX.to_le_bytes());
+    input.extend_from_slice(&0usize.to_le_bytes());
+    input.extend_from_slice(&[0, 0]);
+    input.extend_from_slice(&[0; 20]);
+
+    let err = gix_worktree_stream::Stream::from_read(std::io::Cursor::new(input))
+        .next_entry()
+        .expect_err("the declared path length cannot be allocated")
+        .into_error();
+    let io_err = err
+        .downcast_any_ref::<std::io::Error>()
+        .expect("the I/O error is retained");
+    assert_eq!(io_err.kind(), std::io::ErrorKind::OutOfMemory);
+    assert!(
+        io_err
+            .get_ref()
+            .expect("the allocation error is retained")
+            .is::<std::collections::TryReserveError>(),
+        "the allocation error is retained"
+    );
+    assert_eq!(
+        err.classify()
+            .map(|classification| classification.class())
+            .collect::<Vec<_>>(),
+        [gix_error::Class::ResourceExhaustion(
+            gix_error::ResourceExhaustionKind::AllocationFailure
+        )]
+    );
+    assert!(!err.is_corrupted());
+    assert!(!err.can_retry());
+}
+
 mod from_tree {
     use std::{
         convert::Infallible,
