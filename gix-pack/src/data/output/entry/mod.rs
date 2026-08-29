@@ -89,10 +89,14 @@ impl output::Entry {
             Tag => Some(output::entry::Kind::Base(gix_object::Kind::Tag)),
             OfsDelta { base_distance } => {
                 let pack_location = count.entry_pack_location.as_ref().expect("packed");
-                let base_offset = pack_location
-                    .pack_offset
-                    .checked_sub(base_distance)
-                    .expect("pack-offset - distance is firmly within the pack");
+                let Some(base_offset) =
+                    crate::data::entry::Header::verified_base_pack_offset(pack_location.pack_offset, base_distance)
+                else {
+                    return Some(Err(crate::data::entry::decode::Error::Corrupt {
+                        message: "an ofs-delta base distance pointing before pack start",
+                    }
+                    .into()));
+                };
                 potential_bases
                     .binary_search_by(|e| {
                         e.entry_pack_location

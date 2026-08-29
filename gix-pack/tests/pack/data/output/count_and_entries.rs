@@ -16,6 +16,46 @@ use crate::{
 };
 
 #[test]
+fn invalid_ofs_delta_base_distance_is_an_error() -> crate::Result {
+    let first_entry_offset = gix_pack::data::header::SIZE as gix_pack::data::Offset;
+    for base_distance in [first_entry_offset, u64::MAX] {
+        let mut data = Vec::new();
+        gix_pack::data::entry::Header::OfsDelta { base_distance }.write_to(0, &mut data)?;
+        let count = output::Count::from_data(
+            object_hash().null(),
+            Some(gix_pack::data::entry::Location {
+                pack_id: 0,
+                entry_size: data.len(),
+                pack_offset: first_entry_offset,
+            }),
+        );
+
+        let result = output::Entry::from_pack_entry(
+            gix_pack::find::Entry {
+                data,
+                version: gix_pack::data::Version::V2,
+            },
+            &count,
+            &[],
+            0,
+            None::<fn(u32, u64) -> Option<gix_hash::ObjectId>>,
+            gix_pack::data::Version::V2,
+        );
+
+        assert!(
+            matches!(
+                result,
+                Some(Err(entry::Error::EntryType(
+                    gix_pack::data::entry::decode::Error::Corrupt { .. }
+                )))
+            ),
+            "an invalid packed delta is reported as corrupt"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn traversals() -> crate::Result {
     #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
     struct Count {

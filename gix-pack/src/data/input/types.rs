@@ -13,6 +13,8 @@ pub enum Error {
     IncompletePack { actual: u64, expected: u64 },
     #[error("The object {object_id} could not be decoded or wasn't found")]
     NotFound { object_id: gix_hash::ObjectId },
+    #[error("The OFS_DELTA base distance {distance} is invalid for pack offset {pack_offset}")]
+    InvalidBaseDistance { pack_offset: u64, distance: u64 },
 }
 
 /// Iteration Mode

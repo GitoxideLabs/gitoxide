@@ -130,10 +130,14 @@ where
                         if let Header::OfsDelta { base_distance } = entry.header {
                             // We have to find the new distance based on the previous distance to the base, using the absolute
                             // pack offset computed from it as stored in `base_pack_offset`.
-                            let base_pack_offset = entry
-                                .pack_offset
-                                .checked_sub(base_distance)
-                                .expect("distance to be in range of pack");
+                            let Some(base_pack_offset) =
+                                Header::verified_base_pack_offset(entry.pack_offset, base_distance)
+                            else {
+                                return Some(Err(input::Error::InvalidBaseDistance {
+                                    pack_offset: entry.pack_offset,
+                                    distance: base_distance,
+                                }));
+                            };
                             match self
                                 .inserted_entry_length_at_offset
                                 .binary_search_by_key(&base_pack_offset, |c| c.pack_offset)
