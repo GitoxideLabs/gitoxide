@@ -1,15 +1,15 @@
 use crate::{
     config,
-    config::tree::{Author, Key, Section, gitoxide, keys},
+    config::tree::{Author, Key, Section, keys},
 };
 
 impl Author {
-    /// The `author.name` key.
+    /// The `author.name` key, overridden by `GIT_AUTHOR_NAME` when resolving an author.
     pub const NAME: keys::Any =
-        keys::Any::new("name", &config::Tree::AUTHOR).with_fallback(&gitoxide::Author::NAME_FALLBACK);
-    /// The `author.email` key.
+        keys::Any::new("name", &config::Tree::AUTHOR).with_environment_override("GIT_AUTHOR_NAME");
+    /// The `author.email` key, overridden by `GIT_AUTHOR_EMAIL` when resolving an author.
     pub const EMAIL: keys::Any =
-        keys::Any::new("email", &config::Tree::AUTHOR).with_fallback(&gitoxide::Author::EMAIL_FALLBACK);
+        keys::Any::new("email", &config::Tree::AUTHOR).with_environment_override("GIT_AUTHOR_EMAIL");
 }
 
 impl Section for Author {

@@ -333,12 +333,10 @@ mod subsections {
     pub struct Author;
 
     impl Author {
-        /// The `gitoxide.author.nameFallback` key.
-        pub const NAME_FALLBACK: keys::Any =
-            keys::Any::new("nameFallback", &Gitoxide::AUTHOR).with_environment_override("GIT_AUTHOR_NAME");
-        /// The `gitoxide.author.emailFallback` key.
-        pub const EMAIL_FALLBACK: keys::Any =
-            keys::Any::new("emailFallback", &Gitoxide::AUTHOR).with_environment_override("GIT_AUTHOR_EMAIL");
+        /// The `gitoxide.author.nameFallback` key, used after `author.name` and `user.name`.
+        pub const NAME_FALLBACK: keys::Any = keys::Any::new("nameFallback", &Gitoxide::AUTHOR);
+        /// The `gitoxide.author.emailFallback` key, used after `author.email` and `user.email`.
+        pub const EMAIL_FALLBACK: keys::Any = keys::Any::new("emailFallback", &Gitoxide::AUTHOR);
     }
 
     impl Section for Author {
@@ -360,7 +358,9 @@ mod subsections {
     pub struct User;
 
     impl User {
-        /// The `gitoxide.user.emailFallback` key.
+        /// The `gitoxide.user.emailFallback` key, populated from `EMAIL`.
+        ///
+        /// It is tried after `user.email` and before author- or committer-specific fallbacks.
         pub const EMAIL_FALLBACK: keys::Any =
             keys::Any::new("emailFallback", &Gitoxide::USER).with_environment_override("EMAIL");
     }
@@ -521,17 +521,12 @@ mod subsections {
     impl Committer {
         /// The `gitoxide.committer.nameFallback` key.
         ///
-        /// It is tried after `committer.name`, but before `user.name`. Use
-        /// [`Repository::committer_or_set_fallback()`][crate::Repository::committer_or_set_fallback] instead of configuring
-        /// it unconditionally when the value should only be used if no complete committer identity is available.
-        pub const NAME_FALLBACK: keys::Any =
-            keys::Any::new("nameFallback", &Gitoxide::COMMITTER).with_environment_override("GIT_COMMITTER_NAME");
+        /// It is tried after `committer.name` and `user.name`.
+        pub const NAME_FALLBACK: keys::Any = keys::Any::new("nameFallback", &Gitoxide::COMMITTER);
         /// The `gitoxide.committer.emailFallback` key.
         ///
-        /// It is tried after `committer.email`, but before `user.email`. See [`NAME_FALLBACK`](Self::NAME_FALLBACK) for how
-        /// to install a last-resort fallback without overriding a complete user identity.
-        pub const EMAIL_FALLBACK: keys::Any =
-            keys::Any::new("emailFallback", &Gitoxide::COMMITTER).with_environment_override("GIT_COMMITTER_EMAIL");
+        /// It is tried after `committer.email` and `user.email`.
+        pub const EMAIL_FALLBACK: keys::Any = keys::Any::new("emailFallback", &Gitoxide::COMMITTER);
     }
 
     impl Section for Committer {

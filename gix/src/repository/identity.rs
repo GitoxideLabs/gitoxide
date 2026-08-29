@@ -12,15 +12,14 @@ use crate::{
 /// is fatal. That way, we enforce correctness and force application developers to take care
 /// of this issue. Use [`Repository::committer_or_set_fallback()`][crate::Repository::committer_or_set_fallback]
 /// to install an application fallback without overriding an already configured user identity.
-/// Setting `gitoxide.committer.nameFallback` and similar directly makes these values take
-/// precedence over `user.name` and `user.email`.
 impl crate::Repository {
     /// Return the committer as configured by this repository, which is determined by…
     ///
+    /// * …the `GIT_COMMITTER_(NAME|EMAIL)` environment variables…
     /// * …the git configuration `committer.name|email`…
-    /// * …the `gitoxide.committer.(name|email)Fallback` configuration, which also receives the
-    ///   `GIT_COMMITTER_(NAME|EMAIL)` environment variables…
     /// * …the configuration for `user.name|email` as fallback…
+    /// * …the `EMAIL` environment variable as an email-only fallback…
+    /// * …the `gitoxide.committer.(name|email)Fallback` configuration as a last resort…
     ///
     /// …and in that order, with name and email resolved independently. `GIT_COMMITTER_DATE` controls the time separately.
     /// Returns `None` if no committer name or email was configured, or `Some(Err(…))` if the committer date could not be
@@ -33,12 +32,19 @@ impl crate::Repository {
         let p = self.config.personas();
 
         Ok(gix_actor::SignatureRef {
-            name: p.committer.name.as_ref().or(p.user.name.as_ref()).map(AsRef::as_ref)?,
+            name: p
+                .committer
+                .name
+                .as_ref()
+                .or(p.user.name.as_ref())
+                .or(p.committer_fallback.name.as_ref())
+                .map(AsRef::as_ref)?,
             email: p
                 .committer
                 .email
                 .as_ref()
                 .or(p.user.email.as_ref())
+                .or(p.committer_fallback.email.as_ref())
                 .map(AsRef::as_ref)?,
             time: p.committer.time.as_ref().map(AsRef::as_ref)?,
         })
@@ -49,9 +55,8 @@ impl crate::Repository {
     /// committer can be resolved. The fallback is then returned and future calls to [`committer()`](Self::committer()) will
     /// return it as well.
     ///
-    /// Unlike setting `gitoxide.committer.(name|email)Fallback` unconditionally, this preserves a committer resolved from
-    /// `user.name` and `user.email`. If either part of the committer is missing, both fallback values are installed;
-    /// explicitly configured `committer.name` or `committer.email` values still take precedence individually.
+    /// If either part of the committer is missing, both fallback values are installed. Environment, `committer.*`, and
+    /// `user.*` values still take precedence individually.
     pub fn committer_or_set_fallback(
         &mut self,
         name: impl gix_utils::AsBStr,
@@ -79,11 +84,14 @@ impl crate::Repository {
 
     /// Return the author as configured by this repository, which is determined by…
     ///
+    /// * …the `GIT_AUTHOR_(NAME|EMAIL)` environment variables…
     /// * …the git configuration `author.name|email`…
-    /// * …the `GIT_AUTHOR_(NAME|EMAIL|DATE)` environment variables…
     /// * …the configuration for `user.name|email` as fallback…
+    /// * …the `EMAIL` environment variable as an email-only fallback…
+    /// * …the `gitoxide.author.(name|email)Fallback` configuration as a last resort…
     ///
-    /// …and in that order, or `None` if there was nothing configured.
+    /// …and in that order, with name and email resolved independently. `GIT_AUTHOR_DATE` controls the time separately.
+    /// Returns `None` if there was nothing configured.
     ///
     /// # Note
     ///
@@ -92,8 +100,20 @@ impl crate::Repository {
         let p = self.config.personas();
 
         Ok(gix_actor::SignatureRef {
-            name: p.author.name.as_ref().or(p.user.name.as_ref()).map(AsRef::as_ref)?,
-            email: p.author.email.as_ref().or(p.user.email.as_ref()).map(AsRef::as_ref)?,
+            name: p
+                .author
+                .name
+                .as_ref()
+                .or(p.user.name.as_ref())
+                .or(p.author_fallback.name.as_ref())
+                .map(AsRef::as_ref)?,
+            email: p
+                .author
+                .email
+                .as_ref()
+                .or(p.user.email.as_ref())
+                .or(p.author_fallback.email.as_ref())
+                .map(AsRef::as_ref)?,
             time: p.author.time.as_ref().map(AsRef::as_ref)?,
         })
         .into()
@@ -111,33 +131,13 @@ pub(crate) struct Entity {
 pub(crate) struct Personas {
     user: Entity,
     committer: Entity,
+    committer_fallback: Entity,
     author: Entity,
+    author_fallback: Entity,
 }
 
 impl Personas {
     pub fn from_config_and_env(config: &gix_config::File) -> Self {
-        fn entity_in_section(
-            config: &gix_config::File,
-            name_key: &keys::Any,
-            email_key: &keys::Any,
-            fallback: Option<(&keys::Any, &keys::Any)>,
-        ) -> (Option<BString>, Option<BString>) {
-            let fallback = fallback.and_then(|(name_key, email_key)| {
-                debug_assert_eq!(name_key.section.name(), email_key.section.name());
-                config
-                    .section("gitoxide", Some(name_key.section.name().into()))
-                    .ok()
-                    .map(|section| (section, name_key, email_key))
-            });
-            (
-                config
-                    .string(name_key)
-                    .or_else(|| fallback.as_ref().and_then(|(s, name_key, _)| s.value(name_key.name))),
-                config
-                    .string(email_key)
-                    .or_else(|| fallback.as_ref().and_then(|(s, _, email_key)| s.value(email_key.name))),
-            )
-        }
         let parse_date = |key: &str, date: &keys::Any| -> Option<String> {
             debug_assert_eq!(
                 key,
@@ -156,35 +156,36 @@ impl Personas {
                 .map(|time| time.format_or_unix(gix_date::time::Format::Raw))
         };
 
-        let fallback = (
-            &gitoxide::Committer::NAME_FALLBACK,
-            &gitoxide::Committer::EMAIL_FALLBACK,
-        );
-        let (committer_name, committer_email) =
-            entity_in_section(config, &Committer::NAME, &Committer::EMAIL, Some(fallback));
-        let fallback = (&gitoxide::Author::NAME_FALLBACK, &gitoxide::Author::EMAIL_FALLBACK);
-        let (author_name, author_email) = entity_in_section(config, &Author::NAME, &Author::EMAIL, Some(fallback));
-        let (user_name, mut user_email) = entity_in_section(config, &User::NAME, &User::EMAIL, None);
-
         let committer_date = parse_date("gitoxide.commit.committerDate", &gitoxide::Commit::COMMITTER_DATE);
         let author_date = parse_date("gitoxide.commit.authorDate", &gitoxide::Commit::AUTHOR_DATE);
 
-        user_email = user_email.or_else(|| config.string(gitoxide::User::EMAIL_FALLBACK));
         Personas {
             user: Entity {
-                name: user_name,
-                email: user_email,
+                name: config.string(User::NAME),
+                email: config
+                    .string(User::EMAIL)
+                    .or_else(|| config.string(gitoxide::User::EMAIL_FALLBACK)),
                 time: None,
             },
             committer: Entity {
-                name: committer_name,
-                email: committer_email,
+                name: config.string(Committer::NAME),
+                email: config.string(Committer::EMAIL),
                 time: committer_date,
             },
+            committer_fallback: Entity {
+                name: config.string(gitoxide::Committer::NAME_FALLBACK),
+                email: config.string(gitoxide::Committer::EMAIL_FALLBACK),
+                time: None,
+            },
             author: Entity {
-                name: author_name,
-                email: author_email,
+                name: config.string(Author::NAME),
+                email: config.string(Author::EMAIL),
                 time: author_date,
+            },
+            author_fallback: Entity {
+                name: config.string(gitoxide::Author::NAME_FALLBACK),
+                email: config.string(gitoxide::Author::EMAIL_FALLBACK),
+                time: None,
             },
         }
     }

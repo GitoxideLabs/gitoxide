@@ -34,6 +34,8 @@ pub enum Link {
     /// The environment variable of the given name will override the value of this key.
     EnvironmentOverride(&'static str),
     /// This config key is used as fallback if this key isn't set.
+    ///
+    /// This is descriptive metadata; configuration accessors don't follow it automatically.
     FallbackKey(&'static dyn Key),
 }
 
