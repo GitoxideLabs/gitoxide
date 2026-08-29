@@ -132,6 +132,7 @@ fn prepare_inner(
     reword::write_headers(
         &mut document,
         &author,
+        None,
         &committer,
         &crate::enrich::Enrichment {
             todo,
