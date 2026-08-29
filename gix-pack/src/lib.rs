@@ -99,11 +99,25 @@ fn read_u64(b: &[u8]) -> u64 {
 
 fn exact_vec<T>(capacity: usize) -> Vec<T> {
     let mut v = Vec::new();
-    v.reserve_exact(capacity);
+    _ = v.try_reserve_exact(capacity);
     v
 }
 
 #[inline]
 fn fan_is_monotonically_increasing(fan: &[u32]) -> bool {
     !fan.windows(2).any(|window| window[0] > window[1])
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn exact_capacity_is_only_an_optimization() {
+        let result = std::panic::catch_unwind(|| super::exact_vec::<u8>(usize::MAX));
+        assert!(result.is_ok(), "failure to preallocate an optimization must not panic");
+        assert_eq!(
+            result.expect("preallocation does not panic").capacity(),
+            0,
+            "a failed preallocation leaves the vector empty"
+        );
+    }
 }

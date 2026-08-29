@@ -62,7 +62,7 @@ impl<T> Tree<T> {
                 progress.init(Some(num_objects), progress::count("objects"));
             })
             .unwrap_or_default();
-        let mut tree = Tree::with_capacity(anticipated_num_objects)?;
+        let mut tree = Tree::with_capacity(anticipated_num_objects, None)?;
 
         {
             // safety check - assure ourselves it's a pack we can handle

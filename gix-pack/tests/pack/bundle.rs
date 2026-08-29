@@ -304,10 +304,10 @@ mod write_to_directory {
                 compression: gix_zlib::Compression::BEST_SPEED,
             },
         )
-        .expect_err("a zero allocation limit rejects the first non-empty decoded object");
+        .expect_err("a zero allocation limit rejects non-empty delta-tree storage");
 
         assert!(
-            error_chain_contains_message(&err, "Entry too large to fit in memory"),
+            error_chain_contains_message(&err, "The pack delta tree is too large to fit in memory"),
             "bundle writing must forward its allocation limit to index writing"
         );
         Ok(())

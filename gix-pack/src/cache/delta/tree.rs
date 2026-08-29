@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use super::{Error, Tree, traverse};
-use crate::exact_vec;
 
 /// Maps each referenced base object ID to indices in `Tree::child_items` of ref-deltas waiting for it.
 pub(super) type RefDeltaChildren = BTreeMap<gix_hash::ObjectId, Vec<u32>>;
@@ -48,10 +47,22 @@ pub(super) enum NodeKind {
 
 impl<T> Tree<T> {
     /// Instantiate a empty tree capable of storing `num_objects` amounts of items.
-    pub(crate) fn with_capacity(num_objects: usize) -> Result<Self, Error> {
+    pub(crate) fn with_capacity(num_objects: usize, alloc_limit_bytes: Option<usize>) -> Result<Self, Error> {
+        let capacity = num_objects / 2;
+        let allocation_bytes = capacity
+            .checked_mul(std::mem::size_of::<Item<T>>())
+            .ok_or(Error::OutOfMemory)?;
+        if alloc_limit_bytes.is_some_and(|limit| allocation_bytes > limit) {
+            return Err(Error::OutOfMemory);
+        }
+
+        let mut root_items = Vec::new();
+        root_items.try_reserve_exact(capacity)?;
+        let mut child_items = Vec::new();
+        child_items.try_reserve_exact(capacity)?;
         Ok(Tree {
-            root_items: exact_vec(num_objects / 2),
-            child_items: exact_vec(num_objects / 2),
+            root_items,
+            child_items,
             last_seen: None,
             future_child_offsets: Vec::new(),
             ref_child_indices: BTreeMap::new(),
@@ -200,6 +211,22 @@ impl<T> Tree<T> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn allocation_failure_is_reported() {
+        let result = super::Tree::<()>::with_capacity(usize::MAX, None);
+        assert!(
+            matches!(result, Err(super::Error::OutOfMemory)),
+            "an impossible attacker-controlled capacity must return an allocation error"
+        );
+        assert!(
+            matches!(
+                super::Tree::<()>::with_capacity(2, Some(0)),
+                Err(super::Error::OutOfMemory)
+            ),
+            "the configured allocation limit must apply to delta-tree storage"
+        );
+    }
+
     mod from_offsets_in_pack {
         use std::sync::atomic::AtomicBool;
 
