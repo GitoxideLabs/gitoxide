@@ -4,6 +4,7 @@ use gix::bstr::{BString, ByteSlice};
 use super::rebase;
 
 const AUTHOR: &[u8] = b"Author: ";
+const CONFIGURED_AUTHOR: &[u8] = b"ConfiguredAuthor: ";
 const AUTHOR_DATE: &[u8] = b"AuthorDate: ";
 const COMMITTER: &[u8] = b"Committer: ";
 const COMMITTER_DATE: &[u8] = b"CommitterDate: ";
@@ -96,6 +97,13 @@ pub(crate) fn document_with_author(
     if let Some(author) = author {
         commit.author = actor(author, commit.author.time, "author")?;
     }
+    let configured_author = repo
+        .author()
+        .transpose()
+        .context("could not resolve the Git author")?
+        .map(|author| author.to_owned().context("could not own the Git author"))
+        .transpose()?
+        .filter(|author| author.name != commit.author.name || author.email != commit.author.email);
     let committer = repo
         .committer()
         .context("no Git committer is configured")?
@@ -105,7 +113,13 @@ pub(crate) fn document_with_author(
     let enrichment = crate::enrich::load(&mut crate::enrich::open(repo)?, crate::change_id::for_commit(repo, id)?)?;
 
     let mut out = Vec::new();
-    write_headers(&mut out, &commit.author, &committer, &enrichment)?;
+    write_headers(
+        &mut out,
+        &commit.author,
+        configured_author.as_ref(),
+        &committer,
+        &enrichment,
+    )?;
     out.push(b'\n');
     out.extend_from_slice(&commit.message);
     if !out.ends_with(b"\n") {
@@ -302,10 +316,15 @@ fn apply_commit_conflict_with_enrichment(
 pub(super) fn write_headers(
     out: &mut Vec<u8>,
     author: &gix::actor::Signature,
+    configured_author: Option<&gix::actor::Signature>,
     committer: &gix::actor::Signature,
     enrichment: &crate::enrich::Enrichment,
 ) -> Result<()> {
     write_actor(out, AUTHOR, author);
+    if let Some(author) = configured_author {
+        out.extend_from_slice(DEFAULT_COMMENT_CHAR);
+        write_actor(out, CONFIGURED_AUTHOR, author);
+    }
     write_date(out, AUTHOR_DATE, author.time)?;
     write_actor(out, COMMITTER, committer);
     write_date(out, COMMITTER_DATE, committer.time)?;
@@ -349,9 +368,33 @@ fn write_date(out: &mut Vec<u8>, label: &[u8], time: gix::date::Time) -> Result<
 }
 
 pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
-    let mut parts = input.splitn(6, |byte| *byte == b'\n');
-    let author = header(parts.next(), AUTHOR)?;
-    let author_time = date(header(parts.next(), AUTHOR_DATE)?, "author")?;
+    let has_configured_author = input
+        .splitn(3, |byte| *byte == b'\n')
+        .nth(1)
+        .map(trim_cr)
+        .is_some_and(|line| {
+            line.starts_with(CONFIGURED_AUTHOR)
+                || line
+                    .strip_prefix(DEFAULT_COMMENT_CHAR)
+                    .is_some_and(|line| line.starts_with(CONFIGURED_AUTHOR))
+        });
+    let mut parts = input.splitn(6 + usize::from(has_configured_author), |byte| *byte == b'\n');
+    let mut author = header(parts.next(), AUTHOR)?;
+    let mut line = parts.next();
+    if line
+        .map(trim_cr)
+        .and_then(|line| line.strip_prefix(DEFAULT_COMMENT_CHAR))
+        .is_some_and(|line| line.starts_with(CONFIGURED_AUTHOR))
+    {
+        line = parts.next();
+    } else if line
+        .map(trim_cr)
+        .is_some_and(|line| line.starts_with(CONFIGURED_AUTHOR))
+    {
+        author = header(line, CONFIGURED_AUTHOR)?;
+        line = parts.next();
+    }
+    let author_time = date(header(line, AUTHOR_DATE)?, "author")?;
     let committer = header(parts.next(), COMMITTER)?;
     let committer_time = date(header(parts.next(), COMMITTER_DATE)?, "committer")?;
     let comment_char = header(parts.next(), COMMENT_CHAR)?;
@@ -493,6 +536,47 @@ mod tests {
         assert_eq!(
             edit.message, b"title\n\nbody\n",
             "the message is preserved byte-for-byte"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn offers_a_different_configured_author_for_selection() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        let repository = crate::test_repository::open(fixture)?;
+        let topic = repository.find_reference("refs/heads/topic")?.id().detach();
+        let (_, topic_document) = document(&repository, topic)?;
+        let offered = b"Author: Codex <Codex@OpenAI.com>\n\
+                        ;ConfiguredAuthor: author <author@example.com>\n\
+                        AuthorDate: ";
+        assert!(
+            topic_document.windows(offered.len()).any(|window| window == offered),
+            "a differing configured author is offered directly below the commit author"
+        );
+
+        let original = parse(&topic_document)?;
+        let selected = topic_document.replacen(b";ConfiguredAuthor: ", b"ConfiguredAuthor: ", 1);
+        let configured = parse(&selected)?;
+        assert_eq!(
+            original.author, b"Codex <Codex@OpenAI.com>",
+            "the commented configured author does not override the commit author"
+        );
+        assert_eq!(
+            configured.author, b"author <author@example.com>",
+            "uncommenting the configured author makes it authoritative"
+        );
+        assert_eq!(
+            configured.author_time, original.author_time,
+            "selecting the configured identity retains the commit's author date"
+        );
+
+        let main = repository.find_reference("refs/heads/main")?.id().detach();
+        let (_, main_document) = document(&repository, main)?;
+        assert!(
+            !main_document
+                .windows(CONFIGURED_AUTHOR.len())
+                .any(|window| window == CONFIGURED_AUTHOR),
+            "a matching configured author is not repeated"
         );
         Ok(())
     }

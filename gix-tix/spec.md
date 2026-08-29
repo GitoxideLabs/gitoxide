@@ -845,7 +845,9 @@ space first; changes blocks adapt within the remaining history width.
   `AuthorDate`, `Committer`, `CommitterDate`, `CommentChar`, and the complete
   message in a temporary `.md` file for syntax highlighting. Author identity and
   time are retained; the committer fields show the repository's configured
-  current committer.
+  current committer. When Git's configured author differs from `Author`, a
+  commented `ConfiguredAuthor` directly below it can be uncommented to override
+  `Author` while retaining `AuthorDate`.
 - `CommentChar` is a non-empty single-line byte prefix, defaults to `;`, and is
   recognized only at column zero. Parsing removes those lines and applies
   Git-style whitespace cleanup.
