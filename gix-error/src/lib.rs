@@ -372,12 +372,14 @@ mod test;
 pub use test::{TestError, TestResult};
 
 mod error;
-pub use error::{DisplaySource, can_retry};
+pub use error::{Class, Classification, DisplaySource, can_retry, can_retry_lenient};
 
 /// Various kinds of concrete errors that implement [`std::error::Error`].
 mod concrete;
 pub use concrete::chain::ChainedError;
-pub use concrete::classify::{CorruptionError, NotFoundError, RetryableError};
+pub use concrete::classify::{
+    CorruptionError, NotFoundError, ResourceExhaustionError, ResourceExhaustionKind, RetryableError,
+};
 pub use concrete::message::{Message, message};
 pub use concrete::validate::ValidationError;
 

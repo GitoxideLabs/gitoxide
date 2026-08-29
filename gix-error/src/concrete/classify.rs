@@ -3,6 +3,48 @@ use std::fmt::{Display, Formatter};
 
 use crate::Message;
 
+/// The kind of resource exhaustion which prevented an operation from completing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ResourceExhaustionKind {
+    /// An application-configured allocation limit was exceeded.
+    AllocationLimit,
+    /// An allocation size could not be represented or memory could not be reserved.
+    AllocationFailure,
+}
+
+/// An error caused by exhausting a finite resource.
+#[derive(Debug)]
+pub struct ResourceExhaustionError {
+    /// The kind of resource exhaustion.
+    pub kind: ResourceExhaustionKind,
+    /// The error message.
+    pub message: Cow<'static, str>,
+}
+
+impl ResourceExhaustionError {
+    /// Create a new instance with `kind` that displays the given `message`.
+    pub fn new(kind: ResourceExhaustionKind, message: impl Into<Cow<'static, str>>) -> Self {
+        ResourceExhaustionError {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    /// Return the kind of resource exhaustion.
+    pub fn kind(&self) -> ResourceExhaustionKind {
+        self.kind
+    }
+}
+
+impl Display for ResourceExhaustionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message.as_ref())
+    }
+}
+
+impl std::error::Error for ResourceExhaustionError {}
+
 /// An error caused by malformed or internally inconsistent data.
 #[derive(Debug)]
 pub struct CorruptionError {

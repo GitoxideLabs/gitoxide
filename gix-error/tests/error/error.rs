@@ -27,29 +27,29 @@ fn from_exn_error_tree() {
     insta::assert_compact_debug_snapshot!(&err, "compact Debug renders the complete tree with caller locations", @"
     topmost, at gix-error/tests/error/error.rs:25
     |
-    └─ E6, at gix-error/tests/error/main.rs:25
+    └─ E6, at gix-error/tests/error/main.rs:26
         |
-        └─ E5, at gix-error/tests/error/main.rs:17
+        └─ E5, at gix-error/tests/error/main.rs:18
         |   |
-        |   └─ E3, at gix-error/tests/error/main.rs:9
+        |   └─ E3, at gix-error/tests/error/main.rs:10
         |   |   |
-        |   |   └─ E1, at gix-error/tests/error/main.rs:8
+        |   |   └─ E1, at gix-error/tests/error/main.rs:9
         |   |
-        |   └─ E10, at gix-error/tests/error/main.rs:12
+        |   └─ E10, at gix-error/tests/error/main.rs:13
         |   |   |
-        |   |   └─ E9, at gix-error/tests/error/main.rs:11
+        |   |   └─ E9, at gix-error/tests/error/main.rs:12
         |   |
-        |   └─ E12, at gix-error/tests/error/main.rs:15
+        |   └─ E12, at gix-error/tests/error/main.rs:16
         |       |
-        |       └─ E11, at gix-error/tests/error/main.rs:14
+        |       └─ E11, at gix-error/tests/error/main.rs:15
         |
-        └─ E4, at gix-error/tests/error/main.rs:20
+        └─ E4, at gix-error/tests/error/main.rs:21
         |   |
-        |   └─ E2, at gix-error/tests/error/main.rs:19
+        |   └─ E2, at gix-error/tests/error/main.rs:20
         |
-        └─ E8, at gix-error/tests/error/main.rs:23
+        └─ E8, at gix-error/tests/error/main.rs:24
             |
-            └─ E7, at gix-error/tests/error/main.rs:22
+            └─ E7, at gix-error/tests/error/main.rs:23
     ");
     insta::assert_debug_snapshot!(err, "pretty Debug renders the complete tree without caller locations", @r"
     topmost
@@ -104,18 +104,18 @@ fn from_exn_error_tree() {
         @r#"
     [
         "topmost, at gix-error/tests/error/error.rs:25",
-        "E6, at gix-error/tests/error/main.rs:25",
-        "E5, at gix-error/tests/error/main.rs:17",
-        "E4, at gix-error/tests/error/main.rs:20",
-        "E8, at gix-error/tests/error/main.rs:23",
-        "E3, at gix-error/tests/error/main.rs:9",
-        "E10, at gix-error/tests/error/main.rs:12",
-        "E12, at gix-error/tests/error/main.rs:15",
-        "E2, at gix-error/tests/error/main.rs:19",
-        "E7, at gix-error/tests/error/main.rs:22",
-        "E1, at gix-error/tests/error/main.rs:8",
-        "E9, at gix-error/tests/error/main.rs:11",
-        "E11, at gix-error/tests/error/main.rs:14",
+        "E6, at gix-error/tests/error/main.rs:26",
+        "E5, at gix-error/tests/error/main.rs:18",
+        "E4, at gix-error/tests/error/main.rs:21",
+        "E8, at gix-error/tests/error/main.rs:24",
+        "E3, at gix-error/tests/error/main.rs:10",
+        "E10, at gix-error/tests/error/main.rs:13",
+        "E12, at gix-error/tests/error/main.rs:16",
+        "E2, at gix-error/tests/error/main.rs:20",
+        "E7, at gix-error/tests/error/main.rs:23",
+        "E1, at gix-error/tests/error/main.rs:9",
+        "E9, at gix-error/tests/error/main.rs:12",
+        "E11, at gix-error/tests/error/main.rs:15",
     ]
     "#
     );

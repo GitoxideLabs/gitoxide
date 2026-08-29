@@ -1,3 +1,4 @@
+mod classification;
 mod error;
 mod exn;
 
