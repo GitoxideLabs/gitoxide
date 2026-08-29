@@ -6,6 +6,8 @@ use std::{
 
 use gix_pack::data;
 
+const FIRST_ENTRY_OFFSET: data::Offset = data::header::SIZE as data::Offset;
+
 #[test]
 fn artifact_inputs_can_be_opened_without_panicking() {
     for path in crate::fuzz_artifact_paths("data_file") {
@@ -45,7 +47,7 @@ fn oversized_pack_entry_header_is_reported_without_panicking() {
         gix_hash::Kind::Sha1,
     )
     .expect("pack header is syntactically valid");
-    let result = catch_unwind(AssertUnwindSafe(|| file.entry(12)));
+    let result = catch_unwind(AssertUnwindSafe(|| file.entry(FIRST_ENTRY_OFFSET)));
 
     assert!(
         result
@@ -76,10 +78,14 @@ fn non_canonical_pack_entry_header_is_accepted() {
     )
     .expect("pack header is syntactically valid");
     let entry = file
-        .entry(12)
+        .entry(FIRST_ENTRY_OFFSET)
         .expect("git-compatible non-canonical entry header is accepted");
     assert_eq!(entry.header_size(), 2, "the actual header size is retained");
-    assert_eq!(entry.pack_offset(), 12, "the entry start remains recoverable");
+    assert_eq!(
+        entry.pack_offset(),
+        FIRST_ENTRY_OFFSET,
+        "the entry start remains recoverable"
+    );
 
     let mut out = Vec::new();
     let outcome = file
@@ -111,7 +117,7 @@ fn oversized_declared_object_size_is_reported_without_panicking() {
     let file = data::File::from_data(bytes.as_slice(), PathBuf::from("fuzzed-oom.pack"), gix_hash::Kind::Sha1)
         .expect("pack header is syntactically valid")
         .with_alloc_limit_bytes(Some(4_000_000));
-    let entry = file.entry(12).expect("entry metadata is parseable");
+    let entry = file.entry(FIRST_ENTRY_OFFSET).expect("entry metadata is parseable");
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         file.decode_entry(
@@ -157,7 +163,7 @@ fn declared_object_size_over_alloc_limit_bytes_is_reported_as_out_of_memory() {
     )
     .expect("pack header is syntactically valid")
     .with_alloc_limit_bytes(Some(64));
-    let entry = file.entry(12).expect("entry metadata is parseable");
+    let entry = file.entry(FIRST_ENTRY_OFFSET).expect("entry metadata is parseable");
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         file.decode_entry(
@@ -194,7 +200,7 @@ fn runaway_delta_allocation_is_rejected_with_fuzz_alloc_limit() {
     .expect("pack header is syntactically valid")
     .with_alloc_limit_bytes(Some(64 * 1024 * 1024));
     let len = bytes.len() as u64;
-    let mut offsets = vec![0, 12.min(len - 1), (len - 1) / 2];
+    let mut offsets = vec![0, FIRST_ENTRY_OFFSET.min(len - 1), (len - 1) / 2];
     let mut first_eight = [0u8; 8];
     first_eight.copy_from_slice(&bytes[..8]);
     offsets.push(u64::from_le_bytes(first_eight) % len);
@@ -248,7 +254,7 @@ fn invalid_ofs_delta_base_distance_is_reported_without_panicking() {
     )
     .expect("pack header is syntactically valid")
     .with_alloc_limit_bytes(Some(8 * 1024 * 1024));
-    let entry = file.entry(12).expect("entry metadata is parseable");
+    let entry = file.entry(FIRST_ENTRY_OFFSET).expect("entry metadata is parseable");
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         file.decode_entry(
@@ -296,7 +302,7 @@ fn out_of_bounds_entry_data_offset_is_reported_without_panicking() {
     .expect("pack header is syntactically valid")
     .with_alloc_limit_bytes(Some(8 * 1024 * 1024));
     let len = data.len() as u64;
-    let mut offsets = vec![0, 12.min(len - 1), (len - 1) / 2];
+    let mut offsets = vec![0, FIRST_ENTRY_OFFSET.min(len - 1), (len - 1) / 2];
     let mut first_eight = [0u8; 8];
     first_eight.copy_from_slice(&data[..8]);
     offsets.push(u64::from_le_bytes(first_eight) % len);
@@ -354,7 +360,7 @@ fn malformed_delta_instruction_relocation_is_reported_without_panicking() {
     .with_alloc_limit_bytes(Some(8 * 1024 * 1024));
 
     let len = data.len() as u64;
-    let mut offsets = vec![0, 12.min(len - 1), (len - 1) / 2];
+    let mut offsets = vec![0, FIRST_ENTRY_OFFSET.min(len - 1), (len - 1) / 2];
     let mut first_eight = [0u8; 8];
     first_eight.copy_from_slice(&data[..8]);
     offsets.push(u64::from_le_bytes(first_eight) % len);
@@ -415,7 +421,7 @@ fn runaway_delta_chain_is_reported_without_panicking() {
     .with_alloc_limit_bytes(Some(8 * 1024 * 1024));
 
     let len = data.len() as u64;
-    let mut offsets = vec![0, 12.min(len - 1), (len - 1) / 2];
+    let mut offsets = vec![0, FIRST_ENTRY_OFFSET.min(len - 1), (len - 1) / 2];
     let mut first_eight = [0u8; 8];
     first_eight.copy_from_slice(&data[..8]);
     offsets.push(u64::from_le_bytes(first_eight) % len);
@@ -466,7 +472,7 @@ fn overlong_delta_header_size_is_reported_without_panicking() {
     .with_alloc_limit_bytes(Some(8 * 1024 * 1024));
 
     let len = data.len() as u64;
-    let mut offsets = vec![0, 12.min(len - 1), (len - 1) / 2];
+    let mut offsets = vec![0, FIRST_ENTRY_OFFSET.min(len - 1), (len - 1) / 2];
     let mut first_eight = [0u8; 8];
     first_eight.copy_from_slice(&data[..8]);
     offsets.push(u64::from_le_bytes(first_eight) % len);
@@ -526,7 +532,7 @@ fn short_delta_application_is_reported_without_panicking() {
 
     let delta_pack_offset = bytes.len() as u64;
     data::entry::Header::OfsDelta {
-        base_distance: delta_pack_offset - 12,
+        base_distance: delta_pack_offset - FIRST_ENTRY_OFFSET,
     }
     .write_to(delta_payload.len() as u64, &mut bytes)
     .expect("header write succeeds");

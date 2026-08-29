@@ -2,8 +2,11 @@ use crate::data;
 
 pub(crate) const N32_SIZE: usize = std::mem::size_of::<u32>();
 
+/// The number of bytes in a pack file header.
+pub const SIZE: usize = b"PACK".len() + N32_SIZE * 2;
+
 /// Parses the first 12 bytes of a pack file, returning the pack version as well as the number of objects contained in the pack.
-pub fn decode(data: &[u8; 12]) -> Result<(data::Version, u32), decode::Error> {
+pub fn decode(data: &[u8; SIZE]) -> Result<(data::Version, u32), decode::Error> {
     let mut ofs = 0;
     if &data[ofs..ofs + b"PACK".len()] != b"PACK" {
         return Err(decode::Error::Corrupt("Pack data type not recognized".into()));
@@ -21,9 +24,9 @@ pub fn decode(data: &[u8; 12]) -> Result<(data::Version, u32), decode::Error> {
 }
 
 /// Write a pack data header at `version` with `num_objects` and return a buffer.
-pub fn encode(version: data::Version, num_objects: u32) -> [u8; 12] {
+pub fn encode(version: data::Version, num_objects: u32) -> [u8; SIZE] {
     use crate::data::Version::*;
-    let mut buf = [0u8; 12];
+    let mut buf = [0u8; SIZE];
     buf[..4].copy_from_slice(b"PACK");
     buf[4..8].copy_from_slice(
         &match version {

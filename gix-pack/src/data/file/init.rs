@@ -34,17 +34,19 @@ where
     /// This constructor leaves allocation limiting disabled, allowing allocations of any size dictated by pack data.
     /// Call [`File::with_alloc_limit_bytes()`][crate::data::File::with_alloc_limit_bytes()] before decoding entries from untrusted input.
     pub fn from_data(data: T, path: PathBuf, object_hash: gix_hash::Kind) -> Result<Self, data::header::decode::Error> {
-        use crate::data::header::N32_SIZE;
         let hash_len = object_hash.len_in_bytes();
         let pack_len = data.len();
         let id = gix_features::hash::crc32(path.as_os_str().to_string_lossy().as_bytes());
-        if pack_len < N32_SIZE * 3 + hash_len {
+        if pack_len < data::header::SIZE + hash_len {
             return Err(data::header::decode::Error::Corrupt(format!(
                 "Pack data of size {pack_len} is too small for even an empty pack with shortest hash"
             )));
         }
-        let (kind, num_objects) =
-            data::header::decode(&data[..12].try_into().expect("enough data after previous check"))?;
+        let (kind, num_objects) = data::header::decode(
+            &data[..data::header::SIZE]
+                .try_into()
+                .expect("enough data after previous check"),
+        )?;
         Ok(Self {
             data,
             path,

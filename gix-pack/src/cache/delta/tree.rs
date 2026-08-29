@@ -225,15 +225,19 @@ mod tests {
 
         #[test]
         fn invalid_ofs_delta_base_distance_is_reported() -> Result<(), Box<dyn std::error::Error>> {
+            let first_entry_offset = pack::data::header::SIZE as pack::data::Offset;
             let pack_file = gix_testtools::tempfile::NamedTempFile::new()?;
             let mut pack_data = pack::data::header::encode(pack::data::Version::V2, 1).to_vec();
-            pack::data::entry::Header::OfsDelta { base_distance: 12 + 1 }.write_to(0, &mut pack_data)?;
+            pack::data::entry::Header::OfsDelta {
+                base_distance: first_entry_offset + 1,
+            }
+            .write_to(0, &mut pack_data)?;
             std::fs::write(pack_file.path(), pack_data)?;
 
             let result = crate::cache::delta::Tree::from_offsets_in_pack(
                 pack_file.path(),
                 std::iter::once(()),
-                &|_| 12,
+                &|_| first_entry_offset,
                 &|_| None,
                 &mut gix_features::progress::Discard,
                 &AtomicBool::new(false),

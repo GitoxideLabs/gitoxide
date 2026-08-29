@@ -32,12 +32,14 @@ pub enum Header {
 }
 
 impl Header {
-    /// Subtract `distance` from `pack_offset` safely, returning only offsets beyond the 12-byte pack header.
+    /// Subtract `distance` from `pack_offset` safely, returning only offsets beyond the pack header.
     pub fn verified_base_pack_offset(pack_offset: data::Offset, distance: u64) -> Option<data::Offset> {
         if distance == 0 {
             return None;
         }
-        pack_offset.checked_sub(distance).filter(|offset| *offset >= 12)
+        pack_offset
+            .checked_sub(distance)
+            .filter(|offset| *offset >= data::header::SIZE as data::Offset)
     }
     /// Convert the header's object kind into [`gix_object::Kind`] if possible
     pub fn as_kind(&self) -> Option<gix_object::Kind> {
@@ -149,8 +151,17 @@ mod tests {
 
     #[test]
     fn verified_base_pack_offset_rejects_the_pack_header() {
-        assert_eq!(Header::verified_base_pack_offset(13, 1), Some(12));
-        for (pack_offset, distance) in [(13, 0), (12, 1), (12, 12), (12, 13)] {
+        let first_entry_offset = data::header::SIZE as data::Offset;
+        assert_eq!(
+            Header::verified_base_pack_offset(first_entry_offset + 1, 1),
+            Some(first_entry_offset)
+        );
+        for (pack_offset, distance) in [
+            (first_entry_offset + 1, 0),
+            (first_entry_offset, 1),
+            (first_entry_offset, first_entry_offset),
+            (first_entry_offset, first_entry_offset + 1),
+        ] {
             assert_eq!(
                 Header::verified_base_pack_offset(pack_offset, distance),
                 None,

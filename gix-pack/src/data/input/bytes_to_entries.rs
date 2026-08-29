@@ -51,7 +51,7 @@ where
         compressed: input::EntryDataMode,
         object_hash: gix_hash::Kind,
     ) -> Result<BytesToEntriesIter<BR>, input::Error> {
-        let mut header_data = [0u8; 12];
+        let mut header_data = [0u8; crate::data::header::SIZE];
         read.read_exact(&mut header_data).map_err(gix_hash::io::Error::from)?;
 
         let (version, num_objects) = crate::data::header::decode(&header_data)?;
@@ -59,7 +59,7 @@ where
             read,
             decompressor: Decompress::new(),
             compressed,
-            offset: 12,
+            offset: crate::data::header::SIZE as u64,
             had_error: false,
             version,
             objects_left: num_objects,

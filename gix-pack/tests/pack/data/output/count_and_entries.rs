@@ -17,7 +17,8 @@ use crate::{
 
 #[test]
 fn invalid_ofs_delta_base_distance_is_an_error() -> crate::Result {
-    for base_distance in [12, u64::MAX] {
+    let first_entry_offset = gix_pack::data::header::SIZE as gix_pack::data::Offset;
+    for base_distance in [first_entry_offset, u64::MAX] {
         let mut data = Vec::new();
         gix_pack::data::entry::Header::OfsDelta { base_distance }.write_to(0, &mut data)?;
         let count = output::Count::from_data(
@@ -25,7 +26,7 @@ fn invalid_ofs_delta_base_distance_is_an_error() -> crate::Result {
             Some(gix_pack::data::entry::Location {
                 pack_id: 0,
                 entry_size: data.len(),
-                pack_offset: 12,
+                pack_offset: first_entry_offset,
             }),
         );
 
