@@ -37,7 +37,8 @@ without trading responsiveness for metadata that is not visible.
   promotes it immediately, and `Escape` cancels the search and restores its
   starting selection.
   `Tab` focuses history and `Escape` returns from root history to the list.
-  `Enter` selects the worktree and promotes it to a normal full-screen history.
+  `Enter` selects the worktree and promotes it to a normal full-screen history
+  with the same inferred hidden revisions as its preview.
   `d` twice removes a clean selected linked worktree; `D` twice removes it while
   discarding changes. A different key cancels the confirmation, and `Escape`
   cancels it without closing the picker. The launch and main worktrees cannot be
@@ -211,7 +212,9 @@ without trading responsiveness for metadata that is not visible.
   deduplicated; stale, direct, ambiguous, unmappable, missing, and non-commit
   results are ignored. At least one explicit or inferred hidden revision is
   required by commands that need a hidden boundary. `--no-auto-hide` disables
-  inference. The interactive history retains its explicit-only behavior.
+  inference. A directly launched interactive history retains its explicit-only
+  behavior; one promoted from worktrunk retains the preview's inferred hidden
+  revisions.
 - `tix rebase apply [FILE]` applies such a plan from a file, or from standard
   input when `FILE` is omitted or `-`. Removing its state comment or emptying the
   document cancels successfully; malformed or unsupported state is an error.
