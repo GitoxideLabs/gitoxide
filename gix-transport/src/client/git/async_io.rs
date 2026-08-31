@@ -91,7 +91,7 @@ where
                     &self.state.path,
                     self.state.virtual_host.as_ref(),
                     extra_parameters,
-                ))
+                )?)
                 .await?;
             line_writer.flush().await?;
         }
