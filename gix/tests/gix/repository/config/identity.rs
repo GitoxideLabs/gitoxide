@@ -1,10 +1,88 @@
 use std::path::Path;
 
 use gix_sec::Permission;
-use gix_testtools::Env;
+use gix_testtools::{Env, tempfile};
 use serial_test::serial;
 
 use crate::{named_repo, util::named_subrepo_opts};
+
+#[test]
+fn custom_committer_fallback_is_only_installed_if_needed() -> crate::Result {
+    let tmp = tempfile::tempdir()?;
+    let repo = gix::init_bare(tmp.path())?;
+    let git_dir = repo.git_dir().to_owned();
+    drop(repo);
+
+    let mut repo = gix::open_opts(
+        &git_dir,
+        gix::open::Options::isolated().config_overrides(["user.name=Configured User", "user.email=user@example.com"]),
+    )?;
+    let committer = repo.committer_or_set_fallback("Fallback", "fallback@example.com")?;
+    assert_eq!(committer.name, "Configured User", "configured user name must win");
+    assert_eq!(committer.email, "user@example.com", "configured user email must win");
+    assert_eq!(
+        repo.config_snapshot()
+            .string(gix::config::tree::gitoxide::Committer::NAME_FALLBACK),
+        None,
+        "no fallback should be installed when a complete committer resolves"
+    );
+
+    let mut repo = gix::open_opts(git_dir, gix::open::Options::isolated())?;
+    assert!(repo.committer().is_none(), "the isolated repository has no identity");
+    let committer = repo.committer_or_set_fallback("Fallback", "fallback@example.com")?;
+    assert_eq!(committer.name, "Fallback", "the supplied fallback name is used");
+    assert_eq!(
+        committer.email, "fallback@example.com",
+        "the supplied fallback email is used"
+    );
+    let committer = repo.committer().transpose()?.expect("the fallback remains installed");
+    assert_eq!(committer.name, "Fallback", "future lookups use the fallback name");
+    assert_eq!(
+        committer.email, "fallback@example.com",
+        "future lookups use the fallback email"
+    );
+    Ok(())
+}
+
+#[test]
+fn configured_identity_fallbacks_follow_user_identity() -> crate::Result {
+    let tmp = tempfile::tempdir()?;
+    let repo = gix::init_bare(tmp.path())?;
+    let repo = gix::open_opts(
+        repo.git_dir(),
+        gix::open::Options::isolated().config_overrides([
+            "user.name=Configured User",
+            "user.email=user@example.com",
+            "gitoxide.committer.nameFallback=Fallback",
+            "gitoxide.committer.emailFallback=fallback@example.com",
+            "gitoxide.author.nameFallback=Fallback Author",
+            "gitoxide.author.emailFallback=fallback-author@example.com",
+        ]),
+    )?;
+
+    let committer = repo
+        .committer()
+        .transpose()?
+        .expect("the user identity supplies a committer");
+    assert_eq!(
+        committer.name, "Configured User",
+        "user.name precedes the committer fallback"
+    );
+    assert_eq!(
+        committer.email, "user@example.com",
+        "user.email precedes the committer fallback"
+    );
+    let author = repo
+        .author()
+        .transpose()?
+        .expect("the user identity supplies an author");
+    assert_eq!(author.name, "Configured User", "user.name precedes the author fallback");
+    assert_eq!(
+        author.email, "user@example.com",
+        "user.email precedes the author fallback"
+    );
+    Ok(())
+}
 
 #[test]
 #[serial]
@@ -38,8 +116,8 @@ fn author_and_committer_and_fallback() -> crate::Result {
             .set("GIT_AUTHOR_NAME", "author")
             .set("GIT_AUTHOR_EMAIL", "author@email")
             .set("GIT_AUTHOR_DATE", "Thu, 1 Aug 2022 12:45:06 +0800")
-            .set("GIT_COMMITTER_NAME", "committer-overrider-unused")
-            .set("GIT_COMMITTER_EMAIL", "committer-override-unused@email")
+            .set("GIT_COMMITTER_NAME", "committer override")
+            .set("GIT_COMMITTER_EMAIL", "committer-override@email")
             .set("GIT_COMMITTER_DATE", "Thu, 1 Aug 2022 12:45:06 -0200")
             .set("EMAIL", "general@email-unused")
             .set("GIT_CONFIG_COUNT", "1")
@@ -62,8 +140,8 @@ fn author_and_committer_and_fallback() -> crate::Result {
         assert_eq!(
             repo.committer().expect("present")?,
             gix_actor::SignatureRef {
-                name: "committer".into(),
-                email: "committer@email".into(),
+                name: "committer override".into(),
+                email: "committer-override@email".into(),
                 time: "1659365106 -0200",
             }
         );

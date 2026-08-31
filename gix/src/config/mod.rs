@@ -475,6 +475,8 @@ pub mod commit_signature {
         #[error(transparent)]
         Time(#[from] super::time::Error),
         #[error(transparent)]
+        SetValue(#[from] gix_config::file::set_raw_value::Error),
+        #[error(transparent)]
         Span(#[from] gix_config::parse::span::Error),
     }
 }

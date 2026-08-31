@@ -71,7 +71,9 @@ impl<T: Validate> Any<T> {
         self
     }
 
-    /// Set a link to another key which serves as fallback to provide a value if this key is not set.
+    /// Record another key as fallback if this key is not set.
+    ///
+    /// This is descriptive metadata; consumers must apply the fallback during value resolution.
     pub const fn with_fallback(mut self, key: &'static dyn Key) -> Self {
         self.link = Some(Link::FallbackKey(key));
         self
