@@ -989,7 +989,7 @@ pub(crate) fn pick_worktree(
     repository: gix::ThreadSafeRepository,
     picker: &mut worktrunk::Worktrees,
     quit_on_finish: Option<String>,
-) -> Result<Option<PathBuf>> {
+) -> Result<Option<(PathBuf, Vec<OsString>)>> {
     let repository = repository.to_thread_local();
     let (hide, unavailable) = history::available_hidden_revisions(&repository, &[], true)?;
     for (revision, err) in unavailable {
@@ -1003,13 +1003,13 @@ pub(crate) fn pick_worktree(
         Vec::new(),
         Options {
             quit_on_finish,
-            hide,
+            hide: hide.clone(),
             ..Options::default()
         },
         Some(picker),
     )? {
         UiExit::Quit(_) => Ok(None),
-        UiExit::Promote(path) => Ok(Some(path)),
+        UiExit::Promote(path) => Ok(Some((path, hide))),
     }
 }
 
