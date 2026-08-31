@@ -100,7 +100,7 @@ pub(crate) fn run(
 }
 
 fn emit_handoff(path: &std::path::Path) -> anyhow::Result<()> {
-    if !super::write_shell_handoff(path, false)? {
+    if !super::write_shell_handoff(path)? {
         println!("{}", path.display());
     }
     Ok(())

@@ -860,7 +860,7 @@ pub(crate) fn run(
             gix::progress::Discard,
             &AtomicBool::default(),
         )?;
-        if !write_shell_handoff(&selected, false)? {
+        if !write_shell_handoff(&selected)? {
             println!("{}", selected.display());
         }
         return Ok(());
@@ -869,12 +869,10 @@ pub(crate) fn run(
     let mut worktrees = Worktrees::start(&repository)?;
     anyhow::ensure!(!worktrees.rows().is_empty(), "this repository has no worktrees");
     let selected = crate::pick_worktree(repository.into_sync(), &mut worktrees, quit_on_finish)?;
-    let Some(selected) = selected else {
+    let Some((selected, hide)) = selected else {
         return Ok(());
     };
-    if write_shell_handoff(&selected, true)? {
-        return Ok(());
-    }
+    write_shell_handoff(&selected)?;
     drop(worktrees);
     std::env::set_current_dir(&selected).with_context(|| format!("could not enter worktree {}", selected.display()))?;
     crate::run_without_logging(
@@ -882,7 +880,10 @@ pub(crate) fn run(
             .with_context(|| format!("could not open worktree {}", selected.display()))?
             .into_sync(),
         Vec::new(),
-        crate::Options::default(),
+        crate::Options {
+            hide,
+            ..crate::Options::default()
+        },
     )
 }
 
@@ -915,7 +916,7 @@ pub(crate) fn show(repository: &gix::Repository, mut out: impl Write) -> Result<
     write_table(&worktrees, &mut out)
 }
 
-fn write_shell_handoff(path: &Path, fullscreen: bool) -> Result<bool> {
+fn write_shell_handoff(path: &Path) -> Result<bool> {
     let Some(cd_file) = std::env::var_os(shell::CD_FILE_ENV) else {
         return Ok(false);
     };
@@ -928,10 +929,6 @@ fn write_shell_handoff(path: &Path, fullscreen: bool) -> Result<bool> {
             Path::new(&cd_file).display()
         )
     })?;
-    if fullscreen && let Some(marker) = std::env::var_os(shell::FULLSCREEN_FILE_ENV) {
-        std::fs::write(&marker, b"1")
-            .with_context(|| format!("could not write fullscreen marker to {}", Path::new(&marker).display()))?;
-    }
     Ok(true)
 }
 
