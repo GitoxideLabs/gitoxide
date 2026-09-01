@@ -3,6 +3,7 @@
 # assure line feeds don't interfere with our working copy hash
 *.sh text eol=lf
 justfile text eol=lf
+/tests/tools/src/signature/fixtures/ssh-* text eol=lf
 
 # have GitHub include fixture-making scripts when it counts code
 **/tests/fixtures/**/*.sh -linguist-vendored

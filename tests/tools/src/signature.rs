@@ -8,6 +8,7 @@
 //! These public test identities provide no security and must never be used outside tests.
 
 use std::{
+    ffi::OsStr,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -58,7 +59,7 @@ fn msys_path(path: &str) -> String {
 }
 
 /// Return whether signing `program` can be launched.
-pub fn program_available(program: &str) -> bool {
+pub fn program_available(program: impl AsRef<OsStr>) -> bool {
     Command::new(program)
         .arg("--version")
         .stdout(Stdio::null())

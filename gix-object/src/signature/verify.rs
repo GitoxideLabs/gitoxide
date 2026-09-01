@@ -305,7 +305,9 @@ impl SignedData<'_> {
             .map_err(|err| Error::CommitTime(Box::new(err)))?;
         let verify_time = format!("-Overify-time={verify_time}");
         let mut signature_file = signature_file(signature)?;
-        let signature_path = signature_path(&mut signature_file)?;
+        let signature_path = super::ssh_path_argument(&signature_path(&mut signature_file)?);
+        let allowed_signers = super::ssh_path_argument(&allowed_signers);
+        let revocation_file = revocation_file.map(|path| super::ssh_path_argument(&path));
         // defensive, as we rely on English when parsing output.
         environment.extend([("LANG".into(), "C".into()), ("LC_ALL".into(), "C".into())]);
         let common = (
