@@ -31,10 +31,24 @@ mod message {
         path: &[u8],
         virtual_host: Option<&(String, Option<u16>)>,
         extra_parameters: &[(&str, Option<&str>)],
-    ) -> BString {
+    ) -> std::io::Result<BString> {
+        let path = gix_url::expand_path::for_shell(path.into());
+        let is_forbidden = |byte| matches!(byte, b'\0' | b'\n');
+        if path.iter().copied().any(is_forbidden) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "git daemon repository paths must not contain NUL or LF",
+            ));
+        }
+        if virtual_host.is_some_and(|(host, _)| host.bytes().any(is_forbidden)) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "git daemon virtual hosts must not contain NUL or LF",
+            ));
+        }
+
         let mut out = bstr::BString::from(service.as_str());
         out.push(b' ');
-        let path = gix_url::expand_path::for_shell(path.into());
         out.extend_from_slice(&path);
         out.push(0);
         if let Some((host, port)) = virtual_host {
@@ -71,7 +85,7 @@ mod message {
                 out.push(0);
             }
         }
-        out
+        Ok(out)
     }
     #[cfg(test)]
     mod tests {
@@ -80,14 +94,16 @@ mod message {
         #[test]
         fn version_1_without_host_and_version() {
             assert_eq!(
-                git::message::connect(Service::UploadPack, Protocol::V1, b"hello/world", None, &[]),
+                git::message::connect(Service::UploadPack, Protocol::V1, b"hello/world", None, &[])
+                    .expect("the request is valid"),
                 "git-upload-pack hello/world\0"
             );
         }
         #[test]
         fn version_2_without_host_and_version() {
             assert_eq!(
-                git::message::connect(Service::UploadPack, Protocol::V2, br"hello\world", None, &[]),
+                git::message::connect(Service::UploadPack, Protocol::V2, br"hello\world", None, &[])
+                    .expect("the request is valid"),
                 "git-upload-pack hello\\world\0\0version=2\0"
             );
         }
@@ -100,7 +116,8 @@ mod message {
                     b"/path/project.git",
                     None,
                     &[("key", Some("value")), ("value-only", None)]
-                ),
+                )
+                .expect("the request is valid"),
                 "git-upload-pack /path/project.git\0\0version=2\0key=value\0value-only\0"
             );
         }
@@ -113,7 +130,8 @@ mod message {
                     br"hello\world",
                     Some(&("host".into(), None)),
                     &[]
-                ),
+                )
+                .expect("the request is valid"),
                 "git-upload-pack hello\\world\0host=host\0"
             );
         }
@@ -126,7 +144,8 @@ mod message {
                     br"hello\world",
                     Some(&("host".into(), None)),
                     &[("key", Some("value")), ("value-only", None)]
-                ),
+                )
+                .expect("the request is valid"),
                 "git-upload-pack hello\\world\0host=host\0\0key=value\0value-only\0"
             );
         }
@@ -139,7 +158,8 @@ mod message {
                     br"hello\world",
                     Some(&("host".into(), Some(404))),
                     &[]
-                ),
+                )
+                .expect("the request is valid"),
                 "git-upload-pack hello\\world\0host=host:404\0"
             );
         }
@@ -153,9 +173,25 @@ mod message {
                     b"--upload-pack=attack",
                     Some(&("--proxy=other-attack".into(), Some(404))),
                     &[]
-                ),
+                )
+                .expect("the request is valid"),
                 "git-upload-pack --upload-pack=attack\0host=--proxy=other-attack:404\0",
                 "we explicitly allow possible `-arg` arguments to be passed to the git daemon - the remote must protect against exploitation, we don't want to prevent legitimate cases"
+            );
+        }
+
+        #[test]
+        fn carriage_returns_are_allowed_like_in_git() {
+            assert_eq!(
+                git::message::connect(
+                    Service::UploadPack,
+                    Protocol::V1,
+                    b"hello\rworld",
+                    Some(&("ho\rst".into(), None)),
+                    &[]
+                )
+                .expect("carriage returns are allowed like in Git"),
+                "git-upload-pack hello\rworld\0host=ho\rst\0"
             );
         }
     }

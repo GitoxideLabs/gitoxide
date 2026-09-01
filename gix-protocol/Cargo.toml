@@ -75,7 +75,7 @@ required-features = ["async-client"]
 gix-features = { version = "^0.49.1", path = "../gix-features", features = [
     "progress",
 ] }
-gix-transport = { version = "^0.59.1", path = "../gix-transport" }
+gix-transport = { version = "^0.59.2", path = "../gix-transport" }
 gix-hash = { version = "^0.26.2", path = "../gix-hash" }
 gix-shallow = { version = "^0.13.0", path = "../gix-shallow" }
 gix-date = { version = "^0.16.0", path = "../gix-date" }

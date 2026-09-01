@@ -5,13 +5,96 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.1 (2026-09-01)
+
+### Bug Fixes
+
+ - <csr-id-460d2f13bfd7766ebbe47df67404b709b0071545/> safely split commands and ignore shebang options
+   <!-- agent -->
+   Command preparation previously rejected every first word containing an equals
+   sign, so valid environment prefixes required a shell while executable names
+   such as tool=name could be misinterpreted as assignment-only commands. Its UTF-8
+   conversion also made the direct-versus-shell decision depend on encoding.
+   
+   Git for Windows uses only the interpreter path from a shebang. Parsing the
+   suffix as shell words invented incompatible semantics and could let executable
+   contents supply additional interpreter options.
+   
+   This provides two major fixes:
+   
+   - Replace shell-words with a public byte-oriented command-line parser that
+     recognizes only valid leading assignment words, applies them to the child
+     environment, and preserves non-UTF-8 programs, arguments, and values during safe
+     direct execution.
+   - Ignore all shebang options like Git for Windows, preventing executable data
+     from altering the interpreter invocation.
+   
+   Reuse the parser in `gix-diff` and cover its full byte-input domain with focused
+   unit tests and a dedicated fuzz target.
+   
+   Store the required command in Outcome::command, reserve Outcome::args for
+   actual arguments, and reject command lines that produce no executable. Command
+   preparation can now consume the parser result directly without another emptiness
+   check or first-element extraction.
+   
+   The command-line parser is consumed primarily by process-launch code, yet it
+   returned byte strings that every caller had to convert before constructing
+   `std::process::Command`.
+   
+   Return OsString for the required command and its arguments so callers can use
+   them directly while preserving arbitrary Unix bytes. Reject values that the host
+   cannot represent instead of risking a conversion panic; environment assignments
+   remain byte-oriented for parsing.
+   
+   Manual argument splitting moved leading assignments into the process environment
+   and spawned the parsed program directly. On Windows, Rust's lookup can fall
+   outside the assigned PATH and cannot launch extensionless scripts through their
+   shebang.
+   
+   Keep assignment-prefixed commands on the shell path on Windows while retaining
+   manual splitting for other commands and platforms.
+ - <csr-id-7025e808048759f1cc8e58f2ffdfa7c746e89c48/> invoke existing absolute paths directly
+   <!-- agent -->
+   Shell detection treated metacharacters in every command as evidence that a
+   shell was needed. This caused resolved executable paths, notably Git for Windows
+   programs under Program Files, to be parsed as command text and split at spaces.
+   
+   Recognize existing absolute files as already-resolved programs and bypass shell
+   detection for them.
+   
+   Requiring an absolute path avoids promoting a relative path that happens to name
+   a file in the repository to a program and accidentally executing it.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 5 commits contributed to the release over the course of 9 calendar days.
+ - 10 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2944 from GitoxideLabs/error-conversion-review ([`e3a6fa1`](https://github.com/GitoxideLabs/gitoxide/commit/e3a6fa1516481ec69ab00cddcca081ecdc52b4ca))
+    - Safely split commands and ignore shebang options ([`460d2f1`](https://github.com/GitoxideLabs/gitoxide/commit/460d2f13bfd7766ebbe47df67404b709b0071545))
+    - Merge pull request #2942 from GitoxideLabs/error-conversion-review ([`a1d5a55`](https://github.com/GitoxideLabs/gitoxide/commit/a1d5a5520d597bdc33c1cf84c1d061b5bc1e382e))
+    - Invoke existing absolute paths directly ([`7025e80`](https://github.com/GitoxideLabs/gitoxide/commit/7025e808048759f1cc8e58f2ffdfa7c746e89c48))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
 ## 0.10.0 (2026-08-22)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 4 commits contributed to the release over the course of 19 calendar days.
+ - 5 commits contributed to the release over the course of 19 calendar days.
  - 19 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -29,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-error v0.3.0, gix-date v0.16.0, gix-actor v0.42.0, gix-validate v0.11.4, gix-path v0.12.5, gix-utils v0.3.6, gix-quote v0.8.0, gix-command v0.10.0, gix-features v0.49.1, gix-hash v0.26.1, gix-fs v0.22.1, gix-object v0.64.0, gix-glob v0.27.1, gix-attributes v0.35.0, gix-filter v0.34.0, gix-chunk v0.8.0, gix-commitgraph v0.39.0, gix-revwalk v0.35.0, gix-traverse v0.61.0, gix-worktree-stream v0.36.0, gix-archive v0.36.0, gix-bitmap v0.4.0, gix-index v0.55.0, gix-pathspec v0.20.0, gix-ignore v0.22.1, gix-worktree v0.56.0, gix-imara-diff v0.2.5, gix-diff v0.67.0, gix-blame v0.17.0, gix-ref v0.67.0, gix-config v0.60.0, gix-prompt v0.17.0, gix-url v0.38.0, gix-credentials v0.40.0, gix-discover v0.55.0, gix-dir v0.29.0, gix-mailmap v0.34.0, gix-revision v0.49.0, gix-merge v0.20.0, gix-negotiate v0.35.0, gix-note v0.1.0, gix-pack v0.74.0, gix-odb v0.84.0, gix-refspec v0.45.0, gix-transport v0.59.0, gix-protocol v0.65.0, gix-status v0.34.0, gix-submodule v0.34.0, gix-worktree-state v0.34.0, gix v0.87.0, gix-fsck v0.25.0, gitoxide-core v0.61.0, gix-tix v0.2.0, gitoxide v0.57.0 ([`d2af4ed`](https://github.com/GitoxideLabs/gitoxide/commit/d2af4ed5532ea660fbd643e48d8925cd88de5ee0))
     - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
     - Merge pull request #2930 from GitoxideLabs/gix-notes ([`7424676`](https://github.com/GitoxideLabs/gitoxide/commit/7424676f86cd3f5a67c53f8db6baf0803e937d4a))
     - Thanks clippy ([`5c8d935`](https://github.com/GitoxideLabs/gitoxide/commit/5c8d9351dcab6c59c456787db7a40d38b5b5c5c0))

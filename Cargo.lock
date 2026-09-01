@@ -1745,7 +1745,7 @@ dependencies = [
 
 [[package]]
 name = "gix-command"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "bstr",
  "gix-path",
@@ -1915,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "gix-error"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "bstr",
@@ -2309,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "gix-path"
-version = "0.12.5"
+version = "0.12.6"
 dependencies = [
  "bstr",
  "gix-trace",
@@ -2622,7 +2622,7 @@ dependencies = [
 
 [[package]]
 name = "gix-transport"
-version = "0.59.1"
+version = "0.59.2"
 dependencies = [
  "async-std",
  "async-trait",

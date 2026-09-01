@@ -5,13 +5,158 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.2 (2026-09-01)
+
+### New Features
+
+ - <csr-id-870c191a6d3e87c8806205e64b4446266c381844/> add ergonomic test errors and string comparisons
+   <!-- agent -->
+   Test functions only require Debug for their error type, so TestError can accept
+   both standard errors and Exn without relying on a boxed error as the public
+   result type. Direct, asymmetric comparisons with string slices and owned strings
+   keep assertions concise while retaining Display semantics.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 8 calendar days.
+ - 9 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2944 from GitoxideLabs/error-conversion-review ([`e3a6fa1`](https://github.com/GitoxideLabs/gitoxide/commit/e3a6fa1516481ec69ab00cddcca081ecdc52b4ca))
+    - Add ergonomic test errors and string comparisons ([`870c191`](https://github.com/GitoxideLabs/gitoxide/commit/870c191a6d3e87c8806205e64b4446266c381844))
+    - Merge pull request #2932 from GitoxideLabs/fundamental-types-comp ([`6704303`](https://github.com/GitoxideLabs/gitoxide/commit/6704303ed5ef3403b129e2b6cc4a9214432ffd03))
+</details>
+
+## 0.3.1 (2026-08-23)
+
+### New Features
+
+ - <csr-id-6b8edbba8ad382d218359baa6641256eee8c4809/> add BoxedResultExt for boxed errors
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release.
+ - 1 day passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.3.1, gix-hash v0.26.2, gix-object v0.64.1, gix-ref v0.67.1, gix-packetline v0.22.1, gix-pack v0.74.1, gix-testtools v0.20.0 ([`e52fe9d`](https://github.com/GitoxideLabs/gitoxide/commit/e52fe9d03e82437a25bdfb1098e7046ec7e1b558))
+    - Add BoxedResultExt for boxed errors ([`6b8edbb`](https://github.com/GitoxideLabs/gitoxide/commit/6b8edbba8ad382d218359baa6641256eee8c4809))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.3.0 (2026-08-22)
+
+### New Features (BREAKING)
+
+ - <csr-id-1af3e724c305862975bab35a6c9c263abb5d894b/> preserve and classify typed error sources
+   <!-- agent -->
+   Error classification and probable-cause selection need to inspect the complete
+   error graph without turning native sources into strings or behaving differently
+   across tree and auto-chain modes.
+   
+   Add CorruptionError, NotFoundError, and RetryableError together with Error
+   classification helpers and support for boxed standard errors. Classification
+   follows native source chains and nested gix errors while retaining concrete
+   types for downcasting.
+   
+   Keep native sources owned by their original errors and traverse them lazily
+   alongside explicit frames. Add breadth-first error iteration with optional
+   captured locations, direct stored-error access, and downcasting across the
+   complete graph.
+   
+   Preserve probable-cause identity and logical parent relationships while
+   flattening exception trees into ChainedError. This lets auto-chain mode
+   reconstruct the same traversal order without duplicating nested compatibility
+   source chains.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 4 commits contributed to the release over the course of 38 calendar days.
+ - 38 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2930 from GitoxideLabs/gix-notes ([`7424676`](https://github.com/GitoxideLabs/gitoxide/commit/7424676f86cd3f5a67c53f8db6baf0803e937d4a))
+    - Preserve and classify typed error sources ([`1af3e72`](https://github.com/GitoxideLabs/gitoxide/commit/1af3e724c305862975bab35a6c9c263abb5d894b))
+    - Merge pull request #2714 from GitoxideLabs/fix-credentials-parsing ([`cf3053a`](https://github.com/GitoxideLabs/gitoxide/commit/cf3053a3c18e2de788cdaa9f41b5bd343bdc0091))
+</details>
+
+## 0.2.5 (2026-07-15)
+
+### Bug Fixes
+
+ - <csr-id-ccd5bd412eeaf3fa9537a021d647f818d4a27833/> keep erased errors visible to source-iteration and downcasting
+   Since 499402c941, erasing an Exn wraps its error in the Untyped marker so that
+   the typed accessors of Exn<Untyped> keep working. However, the marker also hid
+   the original error from everything that walks the error afterwards: frames now
+   yielded the marker, which cannot be downcast to the original type, and whose
+   empty Error implementation cut off the source chain below it.
+   
+   This broke gix diff file, whose fallback for treating a revspec as a path on
+   disk downcasts the sources() of a failed rev-parse to find the ref-not-found
+   error - it would now fail with "couldn't parse revision" instead.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 5 commits contributed to the release.
+ - 50 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 1 unique issue was worked on: [#2694](https://github.com/GitoxideLabs/gitoxide/issues/2694)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#2694](https://github.com/GitoxideLabs/gitoxide/issues/2694)**
+    - Keep erased errors visible to source-iteration and downcasting ([`ccd5bd4`](https://github.com/GitoxideLabs/gitoxide/commit/ccd5bd412eeaf3fa9537a021d647f818d4a27833))
+ * **Uncategorized**
+    - Release gix-path v0.12.2, gix-error v0.2.5, gix-utils v0.3.4, gix-date v0.15.6, gix-url v0.36.2, gix-credentials v0.38.2 ([`27aec47`](https://github.com/GitoxideLabs/gitoxide/commit/27aec474c113cc885d44631b329454dc1ad0fed2))
+    - Merge pull request #2702 from ameyypawar/fix/2694-exn-source-chain ([`e9c973d`](https://github.com/GitoxideLabs/gitoxide/commit/e9c973d9476bef293bec89cd683cb60b02a85e52))
+    - Review ([`dc1fdc3`](https://github.com/GitoxideLabs/gitoxide/commit/dc1fdc3de8a9fb1266c2b5b01a1456bd177e7646))
+    - Merge pull request #2618 from GitoxideLabs/report ([`f7d4f33`](https://github.com/GitoxideLabs/gitoxide/commit/f7d4f33b58503996ae90497b69ce4c3a757982ac))
+</details>
+
 ## 0.2.4 (2026-05-26)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 4 commits contributed to the release over the course of 28 calendar days.
+ - 5 commits contributed to the release over the course of 28 calendar days.
  - 28 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +168,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-error v0.2.4, gix-date v0.15.4, gix-actor v0.41.1, gix-trace v0.1.20, gix-validate v0.11.2, gix-path v0.12.1, gix-utils v0.3.3, gix-features v0.48.1, gix-hash v0.25.1, gix-hashtable v0.15.1, gix-object v0.61.0, gix-glob v0.26.1, gix-quote v0.7.2, gix-attributes v0.33.1, gix-command v0.9.1, gix-packetline v0.21.4, gix-filter v0.31.0, gix-fs v0.21.2, gix-chunk v0.7.2, gix-commitgraph v0.37.1, gix-revwalk v0.32.0, gix-traverse v0.58.0, gix-worktree-stream v0.33.0, gix-archive v0.33.0, gix-bitmap v0.3.2, gix-tempfile v23.0.1, gix-lock v23.0.1, gix-index v0.52.0, gix-config-value v0.18.1, gix-pathspec v0.18.1, gix-ignore v0.21.1, gix-worktree v0.53.0, gix-imara-diff v0.2.2, gix-diff v0.64.0, gix-blame v0.14.0, gix-ref v0.64.0, gix-sec v0.14.1, gix-config v0.57.0, gix-prompt v0.15.1, gix-url v0.36.1, gix-credentials v0.38.1, gix-discover v0.52.0, gix-dir v0.26.0, gix-mailmap v0.33.1, gix-revision v0.46.0, gix-merge v0.17.0, gix-negotiate v0.32.0, gix-pack v0.71.0, gix-odb v0.81.0, gix-refspec v0.42.0, gix-shallow v0.12.1, gix-transport v0.57.1, gix-protocol v0.62.0, gix-status v0.31.0, gix-submodule v0.31.0, gix-worktree-state v0.31.0, gix v0.84.0, gix-fsck v0.22.0, gitoxide-core v0.58.0, gitoxide v0.54.0, safety bump 27 crates ([`10c58bb`](https://github.com/GitoxideLabs/gitoxide/commit/10c58bb56597d9335611da121aac21f9b09b6e5b))
     - Merge pull request #2568 from GitoxideLabs/dependabot/cargo/cargo-56d6b174d8 ([`ab2fee1`](https://github.com/GitoxideLabs/gitoxide/commit/ab2fee14651202fcb7b3d8178932090c73492014))
     - Update crates to Rust 2024 edition ([`2cb17b2`](https://github.com/GitoxideLabs/gitoxide/commit/2cb17b2e7f6009693a55af907614f705a29d8c29))
     - Raise MSRV for hash dependency updates ([`3675a8d`](https://github.com/GitoxideLabs/gitoxide/commit/3675a8d61b17845a783bc27912a3f52ac273a4af))
@@ -41,7 +187,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 4 commits contributed to the release over the course of 2 calendar days.
- - 3 days passed between releases.
+ - 4 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 1 unique issue was worked on: [#2491](https://github.com/GitoxideLabs/gitoxide/issues/2491)
 
@@ -92,6 +238,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 4 commits contributed to the release.
+ - 28 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -110,7 +257,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.2.0 (2026-02-22)
 
-### Other
+### Documentation
 
  - <csr-id-fdf321b9b9c7ca1e762ed3b7ddbe149e55e2e4bb/> add `From<Message>` for `ValidationError` guide.
    This allows to more conveniently create validation errors.
@@ -147,7 +294,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.1.0 (2026-02-10)
 
-### Other
+### Documentation
 
  - <csr-id-9007e1b6b8b4b444c1159a2dc9a01242da6ee818/> improve documentation to be more vibe-friendly
 

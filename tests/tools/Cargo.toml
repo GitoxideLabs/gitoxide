@@ -62,7 +62,7 @@ xz = ["dep:xz2"]
 [dependencies]
 gix-hash = { version = "^0.26.2", path = "../../gix-hash" }
 gix-lock = { version = "^24.0.0", path = "../../gix-lock" }
-gix-path = { version = "^0.12.5", path = "../../gix-path" }
+gix-path = { version = "^0.12.6", path = "../../gix-path" }
 gix-config = { version = "^0.60.0", path = "../../gix-config", optional = true, default-features = false }
 gix-discover = { version = "^0.55.0", path = "../../gix-discover", optional = true }
 gix-index = { version = "^0.55.0", path = "../../gix-index", optional = true, default-features = false }

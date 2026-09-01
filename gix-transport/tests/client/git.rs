@@ -1,6 +1,6 @@
 #[cfg(feature = "blocking-client")]
 use std::io::{BufRead, Write};
-use std::{ops::Deref, sync::Arc};
+use std::{error::Error, ops::Deref, sync::Arc};
 
 use bstr::ByteSlice;
 #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
@@ -150,6 +150,59 @@ async fn handshake_v1_and_request() -> crate::Result {
             .as_bstr(),
         "it sends the correct request"
     );
+    Ok(())
+}
+
+#[crate::bisync::bisync]
+#[cfg_attr(feature = "blocking-client", test)]
+#[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
+async fn git_daemon_request_rejects_nul_and_lf() -> crate::Result {
+    for (control, name) in [(b'\0', "NUL"), (b'\n', "newline")] {
+        let mut invalid_path = b"/foo.git".to_vec();
+        invalid_path.push(control);
+        let mut invalid_host = b"example.org".to_vec();
+        invalid_host.push(control);
+        let cases: [(bstr::BString, String, &str, &str); 2] = [
+            (
+                invalid_path.into(),
+                "example.org".into(),
+                "path",
+                "git daemon repository paths must not contain NUL or LF",
+            ),
+            (
+                "/foo.git".into(),
+                String::from_utf8(invalid_host).expect("the test host remains UTF-8"),
+                "host",
+                "git daemon virtual hosts must not contain NUL or LF",
+            ),
+        ];
+
+        for (path, host, component, expected_error) in cases {
+            let mut out = Vec::new();
+            let server_response = fixture_bytes("v1/clone.response");
+            let mut connection = Connection::new(
+                server_response.as_slice(),
+                &mut out,
+                Protocol::V1,
+                path,
+                Some((host, None)),
+                git::ConnectMode::Daemon,
+                false,
+            );
+            let error = connection
+                .handshake(Service::UploadPack, &[])
+                .await
+                .err()
+                .expect("an invalid request must fail");
+            assert_eq!(
+                error.source().expect("the validation error is preserved").to_string(),
+                expected_error,
+                "a {name} in the {component} must prevent the request"
+            );
+            drop(connection);
+            assert!(out.is_empty(), "an invalid request must not be written");
+        }
+    }
     Ok(())
 }
 
