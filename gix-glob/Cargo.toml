@@ -24,7 +24,7 @@ path = "./benches/wildmatch.rs"
 serde = ["dep:serde", "bstr/serde", "bitflags/serde"]
 
 [dependencies]
-gix-path = { version = "^0.12.5", path = "../gix-path" }
+gix-path = { version = "^0.12.6", path = "../gix-path" }
 gix-features = { version = "^0.49.1", path = "../gix-features" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 bitflags = "2"

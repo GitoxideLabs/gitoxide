@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.12.6 (2026-09-01)
+
+### New Features
+
+ - <csr-id-a085dfb85b3eebf7c7555930e7ddd8eedbd3ae9d/> locate programs bundled with Git via `env::installation_program()`
+   <!-- agent -->
+   Expose `env::installation_program()` so callers can find tools distributed
+   with Git without knowing where a particular installation stores them. This is
+   especially needed on Git for Windows, where programs such as Vim live in bin or
+   usr/bin rather than the directory reported by git --exec-path, and may not be
+   available through PATH.
+   
+   Reuse the existing Git for Windows root discovery and accept only bare program
+   names so lookup cannot escape the known installation directories.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 9 calendar days.
+ - 10 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2942 from GitoxideLabs/error-conversion-review ([`a1d5a55`](https://github.com/GitoxideLabs/gitoxide/commit/a1d5a5520d597bdc33c1cf84c1d061b5bc1e382e))
+    - Locate programs bundled with Git via `env::installation_program()` ([`a085dfb`](https://github.com/GitoxideLabs/gitoxide/commit/a085dfb85b3eebf7c7555930e7ddd8eedbd3ae9d))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.12.5 (2026-08-22)
+
+### Bug Fixes
+
+ - <csr-id-80e2787c410185ca4f7dbaee8a102efbc02c3d66/> in `path::normalize...()` skip current-directory components before resolving parent components.
+   Previously, paths like `./../foo` would yield `foo` as they consumed `.`, instead of yielding `None`
+   or consuming a portion of the CWD.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 7 commits contributed to the release over the course of 19 calendar days.
+ - 19 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2905 from GitoxideLabs/various-improvements ([`f3bbfad`](https://github.com/GitoxideLabs/gitoxide/commit/f3bbfadd4b4f1d72c85c62eb3d7ae337c922f945))
+    - Remove gix-testtools to avoid cycle ([`a62774f`](https://github.com/GitoxideLabs/gitoxide/commit/a62774f76f05b552ccf37e8ead03a7f37f37f908))
+    - Adapt to changes in `gix-testtools` ([`0cbe539`](https://github.com/GitoxideLabs/gitoxide/commit/0cbe53971687fb3b1959925aa9d8dc89deb5b474))
+    - Merge pull request #2870 from shuvamk/fix/revspec-relative-paths ([`5510bce`](https://github.com/GitoxideLabs/gitoxide/commit/5510bce7bf18dc91043fcfa2d4bfe58654cb283d))
+    - In `path::normalize...()` skip current-directory components before resolving parent components. ([`80e2787`](https://github.com/GitoxideLabs/gitoxide/commit/80e2787c410185ca4f7dbaee8a102efbc02c3d66))
+    - Merge pull request #2867 from GitoxideLabs/fix-url-authority-parsing ([`cc3ee80`](https://github.com/GitoxideLabs/gitoxide/commit/cc3ee8060ad7a32ee8d2eb9139854be7f7561b70))
+</details>
+
 ## 0.12.4 (2026-08-03)
 
 ### Chore
@@ -21,7 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 6 commits contributed to the release over the course of 11 calendar days.
+ - 7 commits contributed to the release over the course of 11 calendar days.
  - 11 days passed between releases.
  - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -33,6 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-path v0.12.4, gix-command v0.9.2, gix-config-value v0.19.1, gix-url v0.37.1, gix-credentials v0.39.1, gix-transport v0.58.1 ([`ab4fcb0`](https://github.com/GitoxideLabs/gitoxide/commit/ab4fcb0364ec4d01115595198f383b1ad9c29808))
     - Merge pull request #2841 from danielcadev/codex/fix-bare-git-work-tree-override ([`da71d06`](https://github.com/GitoxideLabs/gitoxide/commit/da71d065180674d6b45cd293fb576cba3ba0a238))
     - Add `normalize_saturating()` ([`6560a5a`](https://github.com/GitoxideLabs/gitoxide/commit/6560a5a871738979edc134d396fb53f67b7cb824))
     - Merge pull request #2820 from GitoxideLabs/agent/fix-windows-shell-posix-mode ([`5a88ee7`](https://github.com/GitoxideLabs/gitoxide/commit/5a88ee740f6e81db550d75b9b94875d0cb71ed37))

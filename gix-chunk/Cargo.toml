@@ -17,4 +17,4 @@ doctest = true
 test = false
 
 [dependencies]
-gix-error = { version = "^0.3.0", path = "../gix-error" }
+gix-error = { version = "^0.3.2", path = "../gix-error" }
