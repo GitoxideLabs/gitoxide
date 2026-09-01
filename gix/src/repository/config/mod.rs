@@ -24,7 +24,28 @@ impl crate::Repository {
         config::Snapshot { repo: self }
     }
 
-    /// Return the editor selected by Git's precedence rules.
+    /// Lock and open `path` as one physical configuration file without expanding its includes.
+    ///
+    /// Relative paths are resolved against the current directory captured when this repository was opened. Dropping the
+    /// returned transaction releases the lock and discards its changes. Committing it only updates the file; call
+    /// [`reload()`](Self::reload()) explicitly to rebuild this repository from the changed configuration.
+    pub fn config_file_mut(
+        &self,
+        path: impl Into<std::path::PathBuf>,
+    ) -> Result<config::FileTransaction, config::file_mut::Error> {
+        let path = path.into();
+        let path = if path.is_absolute() {
+            path
+        } else {
+            self.current_dir().join(path)
+        };
+        let lock_mode = self.config.config_lock_timeout()?;
+        let shared_repository_permissions =
+            config::file_mut::shared_repository_permissions(&self.config.resolved, self.filter_config_section())?;
+        config::FileTransaction::open(path, self.git_dir_trust(), lock_mode, shared_repository_permissions)
+    }
+
+    /// Return the editor program selected by Git's precedence rules.
     ///
     /// `GIT_EDITOR` takes precedence over `core.editor`. If the terminal isn't dumb, `VISUAL` is considered next,
     /// followed by `EDITOR`. If none are set, a bundled `vi` (or its `vim` implementation) is returned when available

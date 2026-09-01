@@ -1,15 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::{DOT_LOCK_SUFFIX, File, Marker};
-
-fn strip_lock_suffix(lock_path: &Path) -> PathBuf {
-    let ext = lock_path
-        .extension()
-        .expect("at least our own extension")
-        .to_str()
-        .expect("no illegal UTF8 in extension");
-    lock_path.with_extension(ext.split_at(ext.len().saturating_sub(DOT_LOCK_SUFFIX.len())).0)
-}
+use crate::{File, Marker};
 
 impl File {
     /// Obtain a mutable reference to the write handle and call `f(out)` with it.
@@ -23,6 +14,7 @@ impl File {
             inner: self.inner.close()?,
             created_from_file: true,
             lock_path: self.lock_path,
+            resource_path: self.resource_path,
         })
     }
 
@@ -33,7 +25,7 @@ impl File {
 
     /// Return the path at which the locked resource resides
     pub fn resource_path(&self) -> PathBuf {
-        strip_lock_suffix(&self.lock_path)
+        self.resource_path.clone()
     }
 }
 
@@ -73,6 +65,6 @@ impl Marker {
 
     /// Return the path at which the locked resource resides
     pub fn resource_path(&self) -> PathBuf {
-        strip_lock_suffix(&self.lock_path)
+        self.resource_path.clone()
     }
 }

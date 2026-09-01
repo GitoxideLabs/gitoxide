@@ -1,4 +1,4 @@
-mod config_snapshot;
+pub(crate) mod config_snapshot;
 #[cfg(feature = "command")]
 mod editor;
 mod identity;

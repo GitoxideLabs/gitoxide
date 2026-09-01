@@ -127,6 +127,36 @@ mod at_path {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn persistence_replaces_readonly_files_and_retains_the_tempfiles_permissions() -> crate::Result {
+        let dir = tempfile::tempdir()?;
+        let tempfile_path = dir.path().join("file.lock");
+        let destination = dir.path().join("file");
+        std::fs::write(&destination, b"old")?;
+        let mut destination_permissions = std::fs::metadata(&destination)?.permissions();
+        destination_permissions.set_readonly(true);
+        std::fs::set_permissions(&destination, destination_permissions)?;
+
+        let mut handle = gix_tempfile::writable_at(&tempfile_path, ContainingDirectory::Exists, AutoRemove::Tempfile)?;
+        handle.with_mut(|file| {
+            file.write_all(b"new")?;
+            let mut permissions = file.as_file().metadata()?.permissions();
+            permissions.set_readonly(true);
+            file.as_file().set_permissions(permissions)
+        })??;
+
+        drop(handle.persist(&destination)?);
+        assert_eq!(std::fs::read(&destination)?, b"new", "the destination was replaced");
+        let mut permissions = std::fs::metadata(&destination)?.permissions();
+        let is_readonly = permissions.readonly();
+        #[expect(clippy::permissions_set_readonly_false, reason = "this test only runs on Windows")]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&destination, permissions)?;
+        assert!(is_readonly, "the persisted tempfile retained its read-only permission");
+        Ok(())
+    }
+
+    #[test]
     fn it_can_create_the_containing_directory_and_remove_it_on_drop() -> crate::Result {
         let dir = tempfile::tempdir()?;
         let first_dir = "dir";

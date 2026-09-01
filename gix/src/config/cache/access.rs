@@ -252,6 +252,16 @@ impl Cache {
         Ok((out[0], out[1]))
     }
 
+    pub(crate) fn config_lock_timeout(&self) -> Result<gix_lock::acquire::Fail, config::lock_timeout::Error> {
+        Core::CONFIG_LOCK_TIMEOUT
+            .try_into_lock_timeout(
+                self.resolved
+                    .integer_filter(Core::CONFIG_LOCK_TIMEOUT, &mut self.filter_config_section.clone()),
+            )
+            .with_leniency(self.lenient_config)
+            .map(|value| value.unwrap_or_else(|| Fail::from(Duration::from_millis(1000))))
+    }
+
     /// The path to the user-level excludes file to ignore certain files in the worktree.
     #[cfg(feature = "excludes")]
     pub(crate) fn excludes_file(&self) -> Result<Option<PathBuf>, gix_config::path::interpolate::Error> {
