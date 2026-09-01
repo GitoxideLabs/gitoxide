@@ -74,20 +74,7 @@ pub(crate) fn signing_options(repo: &crate::Repository) -> Result<Options, optio
         .string(Gpg::FORMAT)
         .unwrap_or_else(|| Gpg::FORMAT.default_value_or_panic().into());
     let format = parse_format(format.trim()).ok_or(Error::UnsupportedFormat(format))?;
-    let program = match format {
-        Format::OpenPgp => match config.trusted_path(gpg::OpenPgp::PROGRAM)? {
-            Some(program) => program.into_os_string(),
-            None => config
-                .trusted_path(Gpg::PROGRAM)?
-                .map_or_else(|| default_program(&gpg::OpenPgp::PROGRAM), PathBuf::into_os_string),
-        },
-        Format::X509 => config
-            .trusted_path(gpg::X509::PROGRAM)?
-            .map_or_else(|| default_program(&gpg::X509::PROGRAM), PathBuf::into_os_string),
-        Format::Ssh => config
-            .trusted_path(gpg::Ssh::PROGRAM)?
-            .map_or_else(|| default_program(&gpg::Ssh::PROGRAM), PathBuf::into_os_string),
-    };
+    let program = super::signature_program(&config, format)?;
     let signing_key = match config
         .plumbing()
         .string_filter(User::SIGNING_KEY, &mut repo.filter_config_section())
@@ -120,12 +107,6 @@ pub(crate) fn signing_options_if_enabled(repo: &crate::Repository) -> Result<Opt
         .may_sign_commits()?
         .then(|| signing_options(repo))
         .transpose()
-}
-
-fn default_program(key: &crate::config::tree::keys::Program) -> OsString {
-    gix_path::from_bstr(key.default_value_or_panic())
-        .into_owned()
-        .into_os_string()
 }
 
 fn parse_format(value: &[u8]) -> Option<Format> {

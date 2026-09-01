@@ -214,6 +214,39 @@ mod signature {
     }
 
     #[test]
+    fn expands_verification_program_paths() -> crate::Result {
+        let home = gix::path::env::home_dir().expect("the test environment has a home directory");
+        let mut permissions = gix::open::Permissions::isolated();
+        permissions.env.home = gix::sec::Permission::Allow;
+        let options = gix::open::Options::isolated()
+            .permissions(permissions)
+            .config_overrides([gpg::OpenPgp::PROGRAM.validated_assignment_fmt(&"~/bin/missing-gpg")?]);
+        let repo = crate::util::repo_opts("make_basic_repo.sh", options)?
+            .to_thread_local()
+            .with_object_memory();
+        let mut commit = repo.head_commit()?.decode()?.into_owned()?;
+        let signature_field = gix_object::commit::signature_field_name(commit.tree.kind());
+        commit
+            .extra_headers
+            .push((signature_field.into(), "-----BEGIN PGP SIGNATURE-----\n".into()));
+        let id = repo.write_object(&commit)?;
+        let err = repo
+            .find_commit(id)?
+            .verify_signature()
+            .expect_err("the configured verifier does not exist");
+        let gix::commit::verify::Error::Verify(gix_object::signature::verify::Error::Spawn { program, .. }) = err
+        else {
+            panic!("expected a verifier spawn failure, got {err:?}");
+        };
+        assert_eq!(
+            program,
+            home.join("bin/missing-gpg"),
+            "the configured verifier path is expanded relative to home"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn resolves_signing_options_only_when_enabled() -> crate::Result {
         let disabled = gix::open_opts(
             gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?,

@@ -10,6 +10,30 @@ pub mod sign;
 #[cfg(feature = "command")]
 pub mod verify;
 
+#[cfg(feature = "command")]
+fn signature_program(
+    config: &crate::config::Snapshot<'_>,
+    format: gix_object::signature::Format,
+) -> Result<std::ffi::OsString, gix_config::path::interpolate::Error> {
+    use crate::config::tree::{Gpg, Key, gpg};
+    use gix_object::signature::Format;
+
+    let (program, default) = match format {
+        Format::OpenPgp => (
+            match config.trusted_path(gpg::OpenPgp::PROGRAM)? {
+                Some(program) => Some(program),
+                None => config.trusted_path(Gpg::PROGRAM)?,
+            },
+            &gpg::OpenPgp::PROGRAM,
+        ),
+        Format::X509 => (config.trusted_path(gpg::X509::PROGRAM)?, &gpg::X509::PROGRAM),
+        Format::Ssh => (config.trusted_path(gpg::Ssh::PROGRAM)?, &gpg::Ssh::PROGRAM),
+    };
+    Ok(program
+        .unwrap_or_else(|| gix_path::from_bstr(default.default_value_or_panic()).into_owned())
+        .into_os_string())
+}
+
 /// An empty array of a type usable with the `gix::easy` API to help declaring no parents should be used
 pub const NO_PARENT_IDS: [gix_hash::ObjectId; 0] = [];
 

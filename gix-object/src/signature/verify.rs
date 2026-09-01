@@ -17,7 +17,7 @@ use super::Format;
 pub enum Options {
     /// Verify an OpenPGP signature.
     OpenPgp {
-        /// The external verification program or command.
+        /// The external verification program.
         program: OsString,
         /// Additional arguments passed before Git's fixed arguments.
         ///
@@ -30,7 +30,7 @@ pub enum Options {
     },
     /// Verify an X.509 signature.
     X509 {
-        /// The external verification program or command.
+        /// The external verification program.
         program: OsString,
         /// Additional arguments passed before Git's fixed arguments, useful for selecting an alternate key store or
         /// configuring a wrapper around the verifier.
@@ -42,7 +42,7 @@ pub enum Options {
     },
     /// Verify an SSH signature.
     Ssh {
-        /// The external verification program or command.
+        /// The external verification program.
         program: OsString,
         /// Additional arguments passed before Git's fixed arguments, useful for selecting an alternate key store or
         /// configuring a wrapper around the verifier.
@@ -437,9 +437,7 @@ fn prepare(
     environment: &[(OsString, OsString)],
 ) -> gix_command::Prepare {
     environment.iter().fold(
-        gix_command::prepare(program)
-            .command_may_be_shell_script()
-            .args(arguments),
+        gix_command::prepare(program).args(arguments),
         |command, (key, value)| command.env(key, value),
     )
 }
@@ -686,8 +684,12 @@ mod tests {
         let outcome = signed.verify(
             BStr::new(b"-----BEGIN SSH SIGNATURE-----\n"),
             Options::Ssh {
-                program: r#"if [ "$2" = find-principals ]; then printf 'fixture\n'; else printf 'Good "git" signature for fixture with ED25519 key SHA256:fixture\n'; exit 1; fi # "$@""#.into(),
-                program_arguments: Vec::new(),
+                program: gix_testtools::bash_program().into(),
+                program_arguments: vec![
+                    "-c".into(),
+                    r#"if [ "$2" = find-principals ]; then printf 'fixture\n'; else printf 'Good "git" signature for fixture with ED25519 key SHA256:fixture\n'; exit 1; fi"#.into(),
+                    "bash".into(),
+                ],
                 environment: Vec::new(),
                 allowed_signers: "unused".into(),
                 revocation_file: None,
@@ -698,6 +700,23 @@ mod tests {
         assert_eq!(outcome.status, Status::Good, "the verifier's text is retained");
         assert!(!outcome.is_valid(), "a failed verifier cannot produce a valid outcome");
         Ok(())
+    }
+
+    #[test]
+    fn programs_with_spaces_are_invoked_directly() {
+        let program = OsStr::new("a directory/verifier");
+        let command: std::process::Command = prepare(program, ["argument with spaces".into()], &[]).into();
+
+        assert_eq!(
+            command.get_program(),
+            program,
+            "a verifier pathname is passed directly instead of being interpreted by a shell"
+        );
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [OsStr::new("argument with spaces")],
+            "verifier arguments remain separate from the program pathname"
+        );
     }
 
     #[test]

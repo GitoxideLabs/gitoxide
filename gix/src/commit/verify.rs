@@ -1,6 +1,6 @@
-use std::{ffi::OsString, path::PathBuf};
+use std::path::PathBuf;
 
-use crate::config::tree::{Gpg, Key, gpg};
+use crate::config::tree::{Gpg, gpg};
 
 pub use gix_object::signature::{
     Format,
@@ -36,20 +36,16 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, Erro
         .transpose()?
         .unwrap_or_default();
     let format = Format::from_signature(&signature).ok_or(gix_object::signature::verify::Error::UnsupportedFormat)?;
+    let program = super::signature_program(&config, format)?;
     let options = match format {
         Format::OpenPgp => gix_object::signature::verify::Options::OpenPgp {
-            program: config
-                .trusted_program(gpg::OpenPgp::PROGRAM)
-                .or_else(|| config.trusted_program(Gpg::PROGRAM))
-                .unwrap_or_else(|| default_program(&gpg::OpenPgp::PROGRAM)),
+            program,
             program_arguments: Vec::new(),
             environment: Vec::new(),
             minimum_trust,
         },
         Format::X509 => gix_object::signature::verify::Options::X509 {
-            program: config
-                .trusted_program(gpg::X509::PROGRAM)
-                .unwrap_or_else(|| default_program(&gpg::X509::PROGRAM)),
+            program,
             program_arguments: Vec::new(),
             environment: Vec::new(),
             minimum_trust,
@@ -62,9 +58,7 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, Erro
                 .trusted_path(gpg::Ssh::REVOCATION_FILE)?
                 .filter(|path| path.exists());
             gix_object::signature::verify::Options::Ssh {
-                program: config
-                    .trusted_program(gpg::Ssh::PROGRAM)
-                    .unwrap_or_else(|| default_program(&gpg::Ssh::PROGRAM)),
+                program,
                 program_arguments: Vec::new(),
                 environment: Vec::new(),
                 allowed_signers: resolve_relative_to_repository(commit.repo, allowed_signers),
@@ -75,12 +69,6 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, Erro
         }
     };
     signed_data.verify(&signature, options).map(Some).map_err(Into::into)
-}
-
-fn default_program(key: &crate::config::tree::keys::Program) -> OsString {
-    gix_path::from_bstr(key.default_value_or_panic())
-        .into_owned()
-        .into_os_string()
 }
 
 fn resolve_relative_to_repository(repo: &crate::Repository, path: PathBuf) -> PathBuf {
