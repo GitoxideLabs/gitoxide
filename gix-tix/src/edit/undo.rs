@@ -179,14 +179,10 @@ pub(crate) fn clear(repo: &gix::Repository) -> Result<()> {
         else {
             continue;
         };
-        edits.push(RefEdit {
-            name: reference.name().to_owned(),
-            deref: false,
-            change: Change::Delete {
-                expected: PreviousValue::MustExistAndMatch(reference.target().into_owned()),
-                log: RefLog::AndReference,
-            },
-        });
+        edits.push(RefEdit::delete(
+            reference.name().to_owned(),
+            PreviousValue::MustExistAndMatch(reference.target().into_owned()),
+        ));
     }
     if edits.is_empty() {
         return Ok(());
@@ -542,25 +538,18 @@ fn checked_edit(change: &RefChange) -> Result<RefEdit> {
             log: log_change(),
         },
     };
-    Ok(RefEdit {
-        name: change.name.clone(),
-        deref: false,
-        change: tx_change,
-    })
+    Ok(RefEdit::new(change.name.clone(), tx_change))
 }
 
 fn queue_update(name: &str, old: Option<ObjectId>, new: ObjectId) -> Result<RefEdit> {
-    Ok(RefEdit {
-        name: name.try_into().context("the undo queue reference name is invalid")?,
-        deref: false,
-        change: Change::Update {
-            expected: old.map_or(PreviousValue::MustNotExist, |id| {
-                PreviousValue::MustExistAndMatch(Target::Object(id))
-            }),
-            new: Target::Object(new),
-            log: log_change(),
-        },
-    })
+    Ok(RefEdit::update_with_log(
+        name.try_into().context("the undo queue reference name is invalid")?,
+        new,
+        old.map_or(PreviousValue::MustNotExist, |id| {
+            PreviousValue::MustExistAndMatch(Target::Object(id))
+        }),
+        log_change(),
+    ))
 }
 
 fn log_change() -> LogChange {

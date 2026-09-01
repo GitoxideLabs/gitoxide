@@ -30,10 +30,10 @@ impl<'a> DisplaySource<'a> {
 impl std::fmt::Display for DisplaySource<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self.error, f)?;
-        if !f.alternate() {
-            if let Some(location) = self.location {
-                crate::write_location(f, location)?;
-            }
+        if !f.alternate()
+            && let Some(location) = self.location
+        {
+            crate::write_location(f, location)?;
         }
         Ok(())
     }
@@ -44,6 +44,106 @@ impl crate::Error {
     pub fn downcast_any_ref<T: std::error::Error + 'static>(&self) -> Option<&T> {
         self.iter_errors().find_map(|error| error.downcast_ref())
     }
+
+    /// Return all known classifications in the same logical breadth-first order as [`Self::iter_errors()`].
+    ///
+    /// Unknown errors are omitted. Classifications aren't deduplicated because distinct errors may independently have
+    /// the same meaning. Each item retains the classified error for downcasting and origin inspection.
+    pub fn classify(&self) -> impl Iterator<Item = Classification<'_>> + '_ {
+        self.iter_errors().filter_map(classify_one)
+    }
+}
+
+/// The semantic class of an error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Class {
+    /// Function or method input was invalid.
+    Validation,
+    /// Stored or streamed data was malformed or internally inconsistent.
+    Corruption,
+    /// A requested resource does not exist.
+    NotFound,
+    /// Retrying the operation may succeed.
+    Retryable,
+    /// A finite resource was exhausted.
+    ResourceExhaustion(crate::ResourceExhaustionKind),
+    /// An I/O failure not normalized to another semantic class.
+    Io(std::io::ErrorKind),
+}
+
+/// A semantic class together with the concrete error which established it.
+#[derive(Clone, Copy, Debug)]
+pub struct Classification<'a> {
+    class: Class,
+    error: &'a (dyn std::error::Error + 'static),
+}
+
+impl<'a> Classification<'a> {
+    /// Return the semantic class.
+    pub fn class(&self) -> Class {
+        self.class
+    }
+
+    /// Return the concrete error which established the classification.
+    pub fn error(&self) -> &'a (dyn std::error::Error + 'static) {
+        self.error
+    }
+
+    /// Return the original I/O error kind, if the underlying error is an [`std::io::Error`].
+    pub fn io_kind(&self) -> Option<std::io::ErrorKind> {
+        self.error.downcast_ref::<std::io::Error>().map(std::io::Error::kind)
+    }
+}
+
+fn classify_one<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<Classification<'a>> {
+    let class = if error.is::<crate::ValidationError>() {
+        Class::Validation
+    } else if error.is::<crate::CorruptionError>() {
+        Class::Corruption
+    } else if error.is::<crate::NotFoundError>() {
+        Class::NotFound
+    } else if error.is::<crate::RetryableError>() {
+        Class::Retryable
+    } else if let Some(error) = error.downcast_ref::<crate::ResourceExhaustionError>() {
+        Class::ResourceExhaustion(error.kind())
+    } else if error.is::<std::collections::TryReserveError>() {
+        Class::ResourceExhaustion(crate::ResourceExhaustionKind::AllocationFailure)
+    } else {
+        let error = error.downcast_ref::<std::io::Error>()?;
+        match error.kind() {
+            std::io::ErrorKind::NotFound => Class::NotFound,
+            std::io::ErrorKind::OutOfMemory => {
+                Class::ResourceExhaustion(crate::ResourceExhaustionKind::AllocationFailure)
+            }
+            kind => Class::Io(kind),
+        }
+    };
+    Some(Classification { class, error })
+}
+
+fn class_can_retry(class: Class) -> bool {
+    matches!(
+        class,
+        Class::Retryable | Class::Io(std::io::ErrorKind::Interrupted | std::io::ErrorKind::TimedOut)
+    )
+}
+
+fn classification_can_retry_lenient(classification: Classification<'_>) -> bool {
+    class_can_retry(classification.class())
+        || classification.io_kind().is_some_and(|kind| {
+            use std::io::ErrorKind::*;
+            matches!(
+                kind,
+                UnexpectedEof
+                    | OutOfMemory
+                    | BrokenPipe
+                    | AddrInUse
+                    | ConnectionAborted
+                    | ConnectionReset
+                    | ConnectionRefused
+            )
+        })
 }
 
 #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
@@ -109,28 +209,43 @@ mod _impl {
         /// Return `true` if any stored error, or an error in its [`source()`](std::error::Error::source) chain, is:
         ///
         /// * explicitly marked with [`RetryableError`](crate::RetryableError), or
-        /// * an [`std::io::Error`] with kind `Interrupted`, `UnexpectedEof`, `OutOfMemory`, `TimedOut`, `BrokenPipe`,
-        ///   `AddrInUse`, `ConnectionAborted`, `ConnectionReset`, or `ConnectionRefused`.
+        /// * an [`std::io::Error`] with kind `Interrupted` or `TimedOut`.
         ///
         /// Nested [`Error`] values are inspected recursively. `false` only means that no known retryable error was
         /// found; it does not guarantee that retrying cannot succeed.
         pub fn can_retry(&self) -> bool {
-            self.iter_errors().any(super::is_retryable)
+            self.classify()
+                .any(|classification| super::class_can_retry(classification.class()))
+        }
+
+        /// Return `true` if any stored error, or an error in its [`source()`](std::error::Error::source) chain, is:
+        ///
+        /// * explicitly marked with [`RetryableError`](crate::RetryableError), or
+        /// * an [`std::io::Error`] with kind `Interrupted`, `UnexpectedEof`, `OutOfMemory`, `TimedOut`, `BrokenPipe`,
+        ///   `AddrInUse`, `ConnectionAborted`, `ConnectionReset`, or `ConnectionRefused`.
+        ///
+        /// This applies a more lenient policy than [`Self::can_retry`]. Nested [`Error`] values are inspected recursively.
+        /// `false` only means that no known retryable error was found; it does not guarantee that retrying cannot succeed.
+        pub fn can_retry_lenient(&self) -> bool {
+            self.classify().any(super::classification_can_retry_lenient)
         }
 
         /// Return `true` if malformed or internally inconsistent data caused the failure.
         pub fn is_corrupted(&self) -> bool {
-            self.iter_errors().any(super::is_corrupted)
+            self.classify()
+                .any(|classification| classification.class() == crate::Class::Corruption)
         }
 
         /// Return `true` if a requested resource was not found.
         pub fn is_not_found(&self) -> bool {
-            self.iter_errors().any(super::is_not_found)
+            self.classify()
+                .any(|classification| classification.class() == crate::Class::NotFound)
         }
 
         /// Return `true` if invalid input caused the failure.
         pub fn is_validation(&self) -> bool {
-            self.iter_errors().any(super::is_validation)
+            self.classify()
+                .any(|classification| classification.class() == crate::Class::Validation)
         }
     }
 
@@ -332,28 +447,43 @@ mod _impl {
         /// Return `true` if any stored error, or an error in its [`source()`](std::error::Error::source) chain, is:
         ///
         /// * explicitly marked with [`RetryableError`](crate::RetryableError), or
-        /// * an [`std::io::Error`] with kind `Interrupted`, `UnexpectedEof`, `OutOfMemory`, `TimedOut`, `BrokenPipe`,
-        ///   `AddrInUse`, `ConnectionAborted`, `ConnectionReset`, or `ConnectionRefused`.
+        /// * an [`std::io::Error`] with kind `Interrupted` or `TimedOut`.
         ///
         /// Nested [`Error`] values are inspected recursively. `false` only means that no known retryable error was
         /// found; it does not guarantee that retrying cannot succeed.
         pub fn can_retry(&self) -> bool {
-            self.iter_errors().any(super::is_retryable)
+            self.classify()
+                .any(|classification| super::class_can_retry(classification.class()))
+        }
+
+        /// Return `true` if any stored error, or an error in its [`source()`](std::error::Error::source) chain, is:
+        ///
+        /// * explicitly marked with [`RetryableError`](crate::RetryableError), or
+        /// * an [`std::io::Error`] with kind `Interrupted`, `UnexpectedEof`, `OutOfMemory`, `TimedOut`, `BrokenPipe`,
+        ///   `AddrInUse`, `ConnectionAborted`, `ConnectionReset`, or `ConnectionRefused`.
+        ///
+        /// This applies a more lenient policy than [`Self::can_retry`]. Nested [`Error`] values are inspected recursively.
+        /// `false` only means that no known retryable error was found; it does not guarantee that retrying cannot succeed.
+        pub fn can_retry_lenient(&self) -> bool {
+            self.classify().any(super::classification_can_retry_lenient)
         }
 
         /// Return `true` if malformed or internally inconsistent data caused the failure.
         pub fn is_corrupted(&self) -> bool {
-            self.iter_errors().any(super::is_corrupted)
+            self.classify()
+                .any(|classification| classification.class() == crate::Class::Corruption)
         }
 
         /// Return `true` if a requested resource was not found.
         pub fn is_not_found(&self) -> bool {
-            self.iter_errors().any(super::is_not_found)
+            self.classify()
+                .any(|classification| classification.class() == crate::Class::NotFound)
         }
 
         /// Return `true` if invalid input caused the failure.
         pub fn is_validation(&self) -> bool {
-            self.iter_errors().any(super::is_validation)
+            self.classify()
+                .any(|classification| classification.class() == crate::Class::Validation)
         }
     }
 
@@ -405,66 +535,31 @@ mod _impl {
 }
 
 /// Return `true` if `err` or any error in its [`source()`](std::error::Error::source) chain is explicitly marked with
-/// [`RetryableError`](crate::RetryableError), or is an [`std::io::Error`] whose kind is `Interrupted`, `UnexpectedEof`,
-/// `OutOfMemory`, `TimedOut`, `BrokenPipe`, `AddrInUse`, `ConnectionAborted`, `ConnectionReset`, or `ConnectionRefused`.
+/// [`RetryableError`](crate::RetryableError), or is an [`std::io::Error`] whose kind is `Interrupted` or `TimedOut`.
 ///
 /// Nested [`crate::Error`] values are inspected recursively. `false` only means that no known retryable error was found; it
 /// does not guarantee that retrying cannot succeed.
 pub fn can_retry(err: &(dyn std::error::Error + 'static)) -> bool {
-    is_retryable(err)
-}
-
-fn is_retryable(err: &(dyn std::error::Error + 'static)) -> bool {
     error_chain(err).any(|err| {
         if let Some(err) = err.downcast_ref::<crate::Error>() {
             return err.can_retry();
         }
-        if err.is::<crate::RetryableError>() {
-            return true;
+        classify_one(err).is_some_and(|classification| class_can_retry(classification.class()))
+    })
+}
+
+/// Return `true` if `err` or any error in its [`source()`](std::error::Error::source) chain is explicitly marked with
+/// [`RetryableError`](crate::RetryableError), or is an [`std::io::Error`] whose kind is `Interrupted`, `UnexpectedEof`,
+/// `OutOfMemory`, `TimedOut`, `BrokenPipe`, `AddrInUse`, `ConnectionAborted`, `ConnectionReset`, or `ConnectionRefused`.
+///
+/// This applies a more lenient policy than [`can_retry`]. Nested [`crate::Error`] values are inspected recursively.
+/// `false` only means that no known retryable error was found; it does not guarantee that retrying cannot succeed.
+pub fn can_retry_lenient(err: &(dyn std::error::Error + 'static)) -> bool {
+    error_chain(err).any(|err| {
+        if let Some(err) = err.downcast_ref::<crate::Error>() {
+            return err.can_retry_lenient();
         }
-        let Some(err) = err.downcast_ref::<std::io::Error>() else {
-            return false;
-        };
-        use std::io::ErrorKind::*;
-        matches!(
-            err.kind(),
-            Interrupted
-                | UnexpectedEof
-                | OutOfMemory
-                | TimedOut
-                | BrokenPipe
-                | AddrInUse
-                | ConnectionAborted
-                | ConnectionReset
-                | ConnectionRefused
-        )
-    })
-}
-
-fn is_corrupted(err: &(dyn std::error::Error + 'static)) -> bool {
-    error_chain(err).any(|err| {
-        err.downcast_ref::<crate::Error>()
-            .is_some_and(crate::Error::is_corrupted)
-            || err.is::<crate::CorruptionError>()
-    })
-}
-
-fn is_not_found(err: &(dyn std::error::Error + 'static)) -> bool {
-    error_chain(err).any(|err| {
-        err.downcast_ref::<crate::Error>()
-            .is_some_and(crate::Error::is_not_found)
-            || err.is::<crate::NotFoundError>()
-            || err
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
-    })
-}
-
-fn is_validation(err: &(dyn std::error::Error + 'static)) -> bool {
-    error_chain(err).any(|err| {
-        err.downcast_ref::<crate::Error>()
-            .is_some_and(crate::Error::is_validation)
-            || err.is::<crate::ValidationError>()
+        classify_one(err).is_some_and(classification_can_retry_lenient)
     })
 }
 

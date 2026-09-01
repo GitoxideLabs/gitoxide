@@ -218,14 +218,14 @@ impl Stack {
                 self.current_is_directory = parent_is_directory;
                 return Err(err);
             }
-            if self.current_is_directory {
-                if let Err(err) = delegate.push_directory(self) {
-                    self.current.pop();
-                    self.current_relative.pop();
-                    self.valid_components -= 1;
-                    self.current_is_directory = parent_is_directory;
-                    return Err(err);
-                }
+            if self.current_is_directory
+                && let Err(err) = delegate.push_directory(self)
+            {
+                self.current.pop();
+                self.current_relative.pop();
+                self.valid_components -= 1;
+                self.current_is_directory = parent_is_directory;
+                return Err(err);
             }
         }
         Ok(())

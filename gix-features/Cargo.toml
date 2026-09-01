@@ -8,7 +8,7 @@ version = "0.49.1"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 include = ["/src/**/*", "/LICENSE-*"]
 
 [lib]

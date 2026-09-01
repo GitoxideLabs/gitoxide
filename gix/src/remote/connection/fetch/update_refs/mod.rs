@@ -2,7 +2,7 @@
 use gix_object::Exists;
 use gix_ref::{
     Target, TargetRef,
-    transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
+    transaction::{Change, PreviousValue, RefEdit},
 };
 
 use crate::{
@@ -104,18 +104,19 @@ pub(crate) fn update(
     ) {
         // `None` only if unborn.
         let remote_id = remote.as_id();
-        if matches!(dry_run, fetch::DryRun::No) && !remote_id.is_none_or(|id| repo.objects.exists(id)) {
-            if let Some(remote_id) = remote_id.filter(|id| !repo.objects.exists(id)) {
-                let update = if is_implicit_tag {
-                    Mode::ImplicitTagNotSentByRemote.into()
-                } else {
-                    // Assure the ODB is not to blame for the missing object.
-                    repo.try_find_object(remote_id)?;
-                    Mode::RejectedSourceObjectNotFound { id: remote_id.into() }.into()
-                };
-                updates.push(update);
-                continue;
-            }
+        if matches!(dry_run, fetch::DryRun::No)
+            && !remote_id.is_none_or(|id| repo.objects.exists(id))
+            && let Some(remote_id) = remote_id.filter(|id| !repo.objects.exists(id))
+        {
+            let update = if is_implicit_tag {
+                Mode::ImplicitTagNotSentByRemote.into()
+            } else {
+                // Assure the ODB is not to blame for the missing object.
+                repo.try_find_object(remote_id)?;
+                Mode::RejectedSourceObjectNotFound { id: remote_id.into() }.into()
+            };
+            updates.push(update);
+            continue;
         }
         let (mode, edit_index, type_change) = match local {
             Some(name) => {
@@ -268,21 +269,9 @@ pub(crate) fn update(
                     let anticipated_update_index = updates.len();
                     edit_indices_to_validate.push((anticipated_update_index, edit_index));
                 }
-                let edit = RefEdit {
-                    change: Change::Update {
-                        log: LogChange {
-                            mode: RefLog::AndReference,
-                            force_create_reflog: false,
-                            message: message.compose(reflog_message),
-                        },
-                        expected: previous_value,
-                        new,
-                    },
-                    name,
-                    // We must not deref symrefs or we will overwrite their destination, which might be checked out
-                    // and we don't check for that case.
-                    deref: false,
-                };
+                // We must not deref symrefs or we will overwrite their destination, which might be checked out
+                // and we don't check for that case.
+                let edit = RefEdit::update(name, new, previous_value, message.compose(reflog_message));
                 edits.push(edit);
                 (mode, Some(edit_index), type_change)
             }

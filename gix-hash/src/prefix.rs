@@ -144,7 +144,7 @@ impl Prefix {
         let kind = crate::Kind::from_hex_len(hex_len).expect("hex-len is already checked");
         let mut bytes = ObjectId::null(kind);
         let dst = &mut bytes.as_mut_slice()[..hex_len.div_ceil(2)];
-        let decode_result = if hex_len % 2 == 0 {
+        let decode_result = if hex_len.is_multiple_of(2) {
             faster_hex::hex_decode(value.as_bytes(), dst)
         } else {
             let mut hex = crate::Kind::hex_buf();

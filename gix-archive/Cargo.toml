@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 description = "archive generation from of a worktree stream"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 include = ["/src/**/*", "/LICENSE-*"]
 
 [lib]

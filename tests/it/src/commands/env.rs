@@ -6,6 +6,7 @@ pub(super) mod function {
         Ok(())
     }
 
+    #[allow(clippy::unnecessary_debug_formatting, reason = "preserve non-UTF-8 bytes")]
     fn repr(text: &std::ffi::OsStr) -> String {
         text.to_str()
             .filter(|s| !s.chars().any(|c| c == '"' || c == '\n'))

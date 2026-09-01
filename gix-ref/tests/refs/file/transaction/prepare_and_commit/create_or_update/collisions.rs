@@ -3,7 +3,7 @@ use gix_lock::acquire::Fail;
 use gix_ref::{
     Target,
     file::transaction::PackedRefs,
-    transaction::{Change, LogChange, PreviousValue, RefEdit},
+    transaction::{PreviousValue, RefEdit},
 };
 
 use crate::{
@@ -140,26 +140,20 @@ fn conflicting_creation_into_packed_refs() -> crate::Result {
         ))
         .prepare(
             [
-                RefEdit {
-                    change: Change::Update {
-                        log: LogChange::default(),
-                        expected: PreviousValue::Any,
-                        new: Target::Object(null),
-                    },
-                    name: "refs/a".try_into().expect("valid"),
-                    deref: false,
-                },
-                RefEdit {
-                    change: Change::Update {
-                        log: LogChange::default(),
-                        expected: PreviousValue::MustExistAndMatch(Target::Object(hex_to_id(
-                            "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
-                        ))),
-                        new: Target::Object(null),
-                    },
-                    name: "refs/A".try_into().expect("valid"),
-                    deref: false,
-                },
+                RefEdit::update(
+                    "refs/a".try_into().expect("valid"),
+                    Target::Object(null),
+                    PreviousValue::Any,
+                    "",
+                ),
+                RefEdit::update(
+                    "refs/A".try_into().expect("valid"),
+                    Target::Object(null),
+                    PreviousValue::MustExistAndMatch(Target::Object(hex_to_id(
+                        "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+                    ))),
+                    "",
+                ),
             ],
             Fail::Immediately,
             Fail::Immediately,
@@ -206,15 +200,12 @@ fn conflicting_creation_into_packed_refs() -> crate::Result {
     store
         .transaction()
         .prepare(
-            [RefEdit {
-                change: Change::Update {
-                    log: LogChange::default(),
-                    expected: PreviousValue::Any,
-                    new: Target::Symbolic("refs/heads/does-not-matter".try_into().expect("valid")),
-                },
-                name: "refs/a".try_into().expect("valid"),
-                deref: false,
-            }],
+            [RefEdit::update(
+                "refs/a".try_into().expect("valid"),
+                Target::Symbolic("refs/heads/does-not-matter".try_into().expect("valid")),
+                PreviousValue::Any,
+                "",
+            )],
             Fail::Immediately,
             Fail::Immediately,
         )?

@@ -56,7 +56,7 @@ mod update {
     }
     use gix_ref::{
         Target, TargetRef,
-        transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
+        transaction::{Change, PreviousValue, RefEdit},
     };
 
     use crate::{
@@ -315,21 +315,12 @@ mod update {
         assert_eq!(out.edits.len(), 1, "we are OK with updating unborn refs");
         assert_eq!(
             out.edits[0],
-            RefEdit {
-                change: Change::Update {
-                    log: LogChange {
-                        mode: RefLog::AndReference,
-                        force_create_reflog: false,
-                        message: "action: change unborn ref".into(),
-                    },
-                    expected: PreviousValue::MustExistAndMatch(Target::Symbolic(
-                        "refs/heads/main".try_into().expect("valid"),
-                    )),
-                    new: Target::Symbolic("refs/heads/main".try_into().expect("valid")),
-                },
-                name: "refs/heads/existing-unborn-symbolic".try_into().expect("valid"),
-                deref: false,
-            }
+            RefEdit::update(
+                "refs/heads/existing-unborn-symbolic".try_into().expect("valid"),
+                Target::Symbolic("refs/heads/main".try_into().expect("valid")),
+                PreviousValue::MustExistAndMatch(Target::Symbolic("refs/heads/main".try_into().expect("valid"),)),
+                "action: change unborn ref",
+            )
         );
 
         let (mappings, specs) = mapping_from_spec("HEAD:refs/heads/existing-unborn-symbolic-other", &repo);
@@ -359,21 +350,12 @@ mod update {
         );
         assert_eq!(
             out.edits[0],
-            RefEdit {
-                change: Change::Update {
-                    log: LogChange {
-                        mode: RefLog::AndReference,
-                        force_create_reflog: false,
-                        message: "action: change unborn ref".into(),
-                    },
-                    expected: PreviousValue::MustExistAndMatch(Target::Symbolic(
-                        "refs/heads/other".try_into().expect("valid"),
-                    )),
-                    new: Target::Symbolic("refs/heads/main".try_into().expect("valid")),
-                },
-                name: "refs/heads/existing-unborn-symbolic-other".try_into().expect("valid"),
-                deref: false,
-            }
+            RefEdit::update(
+                "refs/heads/existing-unborn-symbolic-other".try_into().expect("valid"),
+                Target::Symbolic("refs/heads/main".try_into().expect("valid")),
+                PreviousValue::MustExistAndMatch(Target::Symbolic("refs/heads/other".try_into().expect("valid"),)),
+                "action: change unborn ref",
+            )
         );
         Ok(())
     }
@@ -407,19 +389,12 @@ mod update {
         let target = Target::Object(peeled_id(&remote_repo, "refs/heads/symbolic"));
         assert_eq!(
             out.edits[0],
-            RefEdit {
-                change: Change::Update {
-                    log: LogChange {
-                        mode: RefLog::AndReference,
-                        force_create_reflog: false,
-                        message: "action: storing head".into(),
-                    },
-                    expected: PreviousValue::ExistingMustMatch(target.clone()),
-                    new: target,
-                },
-                name: "refs/heads/new".try_into().expect("valid"),
-                deref: false,
-            },
+            RefEdit::update(
+                "refs/heads/new".try_into().expect("valid"),
+                target.clone(),
+                PreviousValue::ExistingMustMatch(target),
+                "action: storing head",
+            ),
             "we create local-refs whose targets aren't present yet, even though the remote knows them.\
              This leaves the caller with assuring all refs are mentioned in mappings."
         );
@@ -501,19 +476,12 @@ mod update {
                     type_change: None,
                     edit_index: Some(0),
                 },
-                Some(RefEdit {
-                    change: Change::Update {
-                        log: LogChange {
-                            mode: RefLog::AndReference,
-                            force_create_reflog: false,
-                            message: "action: storing head".into(),
-                        },
-                        expected: PreviousValue::ExistingMustMatch(Target::Object(main_id)),
-                        new: Target::Object(main_id),
-                    },
-                    name: "refs/heads/HEAD".try_into().expect("valid"),
-                    deref: false,
-                }),
+                Some(RefEdit::update(
+                    "refs/heads/HEAD".try_into().expect("valid"),
+                    main_id,
+                    PreviousValue::ExistingMustMatch(Target::Object(main_id)),
+                    "action: storing head",
+                )),
             ),
             (
                 // attempt to overwrite checked out branch fails
@@ -537,21 +505,12 @@ mod update {
                     type_change: Some(TypeChange::SymbolicToDirect),
                     edit_index: Some(0),
                 },
-                Some(RefEdit {
-                    change: Change::Update {
-                        log: LogChange {
-                            mode: RefLog::AndReference,
-                            force_create_reflog: false,
-                            message: "action: no update will be performed".into(),
-                        },
-                        expected: PreviousValue::MustExistAndMatch(Target::Symbolic(
-                            "refs/heads/main".try_into().expect("valid"),
-                        )),
-                        new: Target::Object(main_id),
-                    },
-                    name: "refs/heads/symbolic".try_into().expect("valid"),
-                    deref: false,
-                }),
+                Some(RefEdit::update(
+                    "refs/heads/symbolic".try_into().expect("valid"),
+                    main_id,
+                    PreviousValue::MustExistAndMatch(Target::Symbolic("refs/heads/main".try_into().expect("valid"))),
+                    "action: no update will be performed",
+                )),
             ),
             (
                 // unmapped symbolic refs are peeled, so the direct ref remains direct
@@ -562,19 +521,12 @@ mod update {
                     type_change: None,
                     edit_index: Some(0),
                 },
-                Some(RefEdit {
-                    change: Change::Update {
-                        log: LogChange {
-                            mode: RefLog::AndReference,
-                            force_create_reflog: false,
-                            message: "action: no update will be performed".into(),
-                        },
-                        expected: PreviousValue::MustExistAndMatch(Target::Object(main_id)),
-                        new: Target::Object(main_id),
-                    },
-                    name: "refs/remotes/origin/a".try_into().expect("valid"),
-                    deref: false,
-                }),
+                Some(RefEdit::update(
+                    "refs/remotes/origin/a".try_into().expect("valid"),
+                    main_id,
+                    PreviousValue::MustExistAndMatch(Target::Object(main_id)),
+                    "action: no update will be performed",
+                )),
             ),
             (
                 // symbolic refs with unmapped targets are peeled, even if source and destination names match
@@ -585,21 +537,12 @@ mod update {
                     type_change: Some(TypeChange::SymbolicToDirect),
                     edit_index: Some(0),
                 },
-                Some(RefEdit {
-                    change: Change::Update {
-                        log: LogChange {
-                            mode: RefLog::AndReference,
-                            force_create_reflog: false,
-                            message: "action: no update will be performed".into(),
-                        },
-                        expected: PreviousValue::MustExistAndMatch(Target::Symbolic(
-                            "refs/heads/main".try_into().expect("valid"),
-                        )),
-                        new: Target::Object(main_id),
-                    },
-                    name: "refs/heads/symbolic".try_into().expect("valid"),
-                    deref: false,
-                }),
+                Some(RefEdit::update(
+                    "refs/heads/symbolic".try_into().expect("valid"),
+                    main_id,
+                    PreviousValue::MustExistAndMatch(Target::Symbolic("refs/heads/main".try_into().expect("valid"))),
+                    "action: no update will be performed",
+                )),
             ),
         ] {
             let (mappings, specs) = mapping_from_spec(&format!("{source}:{destination}"), &repo);

@@ -178,12 +178,12 @@ fn split_time_and_offset(input: &str) -> (&str, &str) {
     }
 
     // Also handle space-separated offset
-    if let Some(space_pos) = input.rfind(' ') {
-        if space_pos > 5 {
-            let potential_offset = input[space_pos + 1..].trim();
-            if potential_offset.starts_with('+') || potential_offset.starts_with('-') || potential_offset == "Z" {
-                return (&input[..space_pos], potential_offset);
-            }
+    if let Some(space_pos) = input.rfind(' ')
+        && space_pos > 5
+    {
+        let potential_offset = input[space_pos + 1..].trim();
+        if potential_offset.starts_with('+') || potential_offset.starts_with('-') || potential_offset == "Z" {
+            return (&input[..space_pos], potential_offset);
         }
     }
 

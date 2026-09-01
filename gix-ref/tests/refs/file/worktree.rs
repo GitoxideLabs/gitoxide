@@ -237,31 +237,20 @@ mod writable {
             let edits = t
                 .prepare(
                     vec![
-                        RefEdit {
-                            change: change_with_id(new_id_main),
-                            name: "main-worktree/refs/heads/new".try_into()?,
-                            deref: false,
-                        },
-                        RefEdit {
-                            change: change_with_id(new_id_linked),
-                            name: "worktrees/w1/refs/worktree/private".try_into()?,
-                            deref: false,
-                        },
-                        RefEdit {
-                            change: change_with_id(new_id_linked),
-                            name: "worktrees/w1/refs/bisect/good".try_into()?,
-                            deref: false,
-                        },
-                        RefEdit {
-                            change: change_with_id(new_id_main),
-                            name: "refs/bisect/good".try_into()?,
-                            deref: false,
-                        },
-                        RefEdit {
-                            change: change_with_id(new_id_linked),
-                            name: "worktrees/w1/refs/heads/shared".try_into()?,
-                            deref: false,
-                        },
+                        RefEdit::new("main-worktree/refs/heads/new".try_into()?, change_with_id(new_id_main)),
+                        RefEdit::new(
+                            "worktrees/w1/refs/worktree/private".try_into()?,
+                            change_with_id(new_id_linked),
+                        ),
+                        RefEdit::new(
+                            "worktrees/w1/refs/bisect/good".try_into()?,
+                            change_with_id(new_id_linked),
+                        ),
+                        RefEdit::new("refs/bisect/good".try_into()?, change_with_id(new_id_main)),
+                        RefEdit::new(
+                            "worktrees/w1/refs/heads/shared".try_into()?,
+                            change_with_id(new_id_linked),
+                        ),
                     ],
                     Fail::Immediately,
                     Fail::Immediately,
@@ -434,16 +423,8 @@ mod writable {
                 matches!(
                     store.transaction().prepare(
                         vec![
-                            RefEdit {
-                                change: change_with_id(new_id_main),
-                                name: "main-worktree/refs/heads/foo".try_into()?,
-                                deref: false,
-                            },
-                            RefEdit {
-                                change: change_with_id(new_id_main),
-                                name: "refs/heads/foo".try_into()?,
-                                deref: false,
-                            },
+                            RefEdit::new("main-worktree/refs/heads/foo".try_into()?, change_with_id(new_id_main),),
+                            RefEdit::new("refs/heads/foo".try_into()?, change_with_id(new_id_main),),
                         ],
                         Fail::Immediately,
                         Fail::Immediately,
@@ -456,16 +437,11 @@ mod writable {
             assert!(matches!(
                 store.transaction().prepare(
                     vec![
-                        RefEdit {
-                            change: change_with_id(new_id_main),
-                            name: "refs/heads/new-shared".try_into()?,
-                            deref: false,
-                        },
-                        RefEdit {
-                            change: change_with_id(new_id_main),
-                            name: "worktrees/w1/refs/heads/new-shared".try_into()?,
-                            deref: false,
-                        },
+                        RefEdit::new("refs/heads/new-shared".try_into()?, change_with_id(new_id_main),),
+                        RefEdit::new(
+                            "worktrees/w1/refs/heads/new-shared".try_into()?,
+                            change_with_id(new_id_main),
+                        ),
                     ],
                     Fail::Immediately,
                     Fail::Immediately,
@@ -501,16 +477,8 @@ mod writable {
                     matches!(
                         store.transaction().prepare(
                             vec![
-                                RefEdit {
-                                    change: change_with_id(new_id),
-                                    name: conflicting_name.try_into()?,
-                                    deref: false,
-                                },
-                                RefEdit {
-                                    change: change_with_id(new_id),
-                                    name: "refs/heads/shared".try_into()?,
-                                    deref: false,
-                                },
+                                RefEdit::new(conflicting_name.try_into()?, change_with_id(new_id),),
+                                RefEdit::new("refs/heads/shared".try_into()?, change_with_id(new_id),),
                             ],
                             Fail::Immediately,
                             Fail::Immediately,
@@ -529,31 +497,14 @@ mod writable {
             let edits = t
                 .prepare(
                     vec![
-                        RefEdit {
-                            change: change_with_id(new_id_main),
-                            name: "main-worktree/refs/heads/new".try_into()?,
-                            deref: false,
-                        },
-                        RefEdit {
-                            change: change_with_id(new_id_main),
-                            name: "main-worktree/refs/bisect/good".try_into()?,
-                            deref: false,
-                        },
-                        RefEdit {
-                            change: change_with_id(new_id),
-                            name: "refs/bisect/good".try_into()?,
-                            deref: false,
-                        },
-                        RefEdit {
-                            change: change_with_id(new_id),
-                            name: "refs/worktree/private".try_into()?,
-                            deref: false,
-                        },
-                        RefEdit {
-                            change: change_with_id(new_id),
-                            name: "refs/heads/shared".try_into()?,
-                            deref: false,
-                        },
+                        RefEdit::new("main-worktree/refs/heads/new".try_into()?, change_with_id(new_id_main)),
+                        RefEdit::new(
+                            "main-worktree/refs/bisect/good".try_into()?,
+                            change_with_id(new_id_main),
+                        ),
+                        RefEdit::new("refs/bisect/good".try_into()?, change_with_id(new_id)),
+                        RefEdit::new("refs/worktree/private".try_into()?, change_with_id(new_id)),
+                        RefEdit::new("refs/heads/shared".try_into()?, change_with_id(new_id)),
                     ],
                     Fail::Immediately,
                     Fail::Immediately,

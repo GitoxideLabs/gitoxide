@@ -73,15 +73,12 @@ fn reference_with_equally_named_empty_or_non_empty_directory_already_in_place_ca
         let edits = store
             .transaction()
             .prepare(
-                Some(RefEdit {
-                    change: Change::Update {
-                        log: LogChange::default(),
-                        expected: PreviousValue::MustNotExist,
-                        new: Target::Symbolic("refs/heads/main".try_into().unwrap()),
-                    },
-                    name: "HEAD".try_into()?,
-                    deref: false,
-                }),
+                Some(RefEdit::update(
+                    "HEAD".try_into()?,
+                    Target::Symbolic("refs/heads/main".try_into().unwrap()),
+                    PreviousValue::MustNotExist,
+                    "",
+                )),
                 Fail::Immediately,
                 Fail::Immediately,
             )?
@@ -113,15 +110,12 @@ fn reference_with_old_value_must_exist_when_creating_it() -> crate::Result {
 
     let new_target = Target::Object(crate::fixture_hash_kind().null());
     let res = store.transaction().prepare(
-        Some(RefEdit {
-            change: Change::Update {
-                log: LogChange::default(),
-                new: new_target.clone(),
-                expected: PreviousValue::MustExist,
-            },
-            name: "HEAD".try_into()?,
-            deref: false,
-        }),
+        Some(RefEdit::update(
+            "HEAD".try_into()?,
+            new_target.clone(),
+            PreviousValue::MustExist,
+            "",
+        )),
         Fail::Immediately,
         Fail::Immediately,
     );
@@ -143,17 +137,12 @@ fn reference_with_explicit_value_must_match_the_value_on_update() -> crate::Resu
     let target = head.target;
 
     let res = store.transaction().prepare(
-        Some(RefEdit {
-            change: Change::Update {
-                log: LogChange::default(),
-                new: Target::Object(crate::fixture_hash_kind().null()),
-                expected: PreviousValue::MustExistAndMatch(Target::Object(hex_to_id(
-                    "28ce6a8b26aa170e1de65536fe8abe1832bd3242",
-                ))),
-            },
-            name: "HEAD".try_into()?,
-            deref: false,
-        }),
+        Some(RefEdit::update(
+            "HEAD".try_into()?,
+            Target::Object(crate::fixture_hash_kind().null()),
+            PreviousValue::MustExistAndMatch(Target::Object(hex_to_id("28ce6a8b26aa170e1de65536fe8abe1832bd3242"))),
+            "",
+        )),
         Fail::Immediately,
         Fail::Immediately,
     );
@@ -175,15 +164,12 @@ fn the_existing_must_match_constraint_allow_non_existing_references_to_be_create
     let edits = store
         .transaction()
         .prepare(
-            Some(RefEdit {
-                change: Change::Update {
-                    log: LogChange::default(),
-                    new: Target::Object(crate::fixture_hash_kind().null()),
-                    expected: expected.clone(),
-                },
-                name: "refs/heads/new".try_into()?,
-                deref: false,
-            }),
+            Some(RefEdit::update(
+                "refs/heads/new".try_into()?,
+                Target::Object(crate::fixture_hash_kind().null()),
+                expected.clone(),
+                "",
+            )),
             Fail::Immediately,
             Fail::Immediately,
         )?
@@ -191,15 +177,14 @@ fn the_existing_must_match_constraint_allow_non_existing_references_to_be_create
 
     assert_eq!(
         edits,
-        vec![RefEdit {
-            change: Change::Update {
+        vec![RefEdit::new(
+            "refs/heads/new".try_into()?,
+            Change::Update {
                 log: LogChange::default(),
                 new: Target::Object(crate::fixture_hash_kind().null()),
                 expected,
             },
-            name: "refs/heads/new".try_into()?,
-            deref: false,
-        }]
+        )]
     );
     Ok(())
 }
@@ -212,17 +197,12 @@ fn the_existing_must_match_constraint_requires_existing_references_to_have_the_g
     let target = head.target;
 
     let res = store.transaction().prepare(
-        Some(RefEdit {
-            change: Change::Update {
-                log: LogChange::default(),
-                new: Target::Object(crate::fixture_hash_kind().null()),
-                expected: PreviousValue::ExistingMustMatch(Target::Object(hex_to_id(
-                    "28ce6a8b26aa170e1de65536fe8abe1832bd3242",
-                ))),
-            },
-            name: "HEAD".try_into()?,
-            deref: false,
-        }),
+        Some(RefEdit::update(
+            "HEAD".try_into()?,
+            Target::Object(crate::fixture_hash_kind().null()),
+            PreviousValue::ExistingMustMatch(Target::Object(hex_to_id("28ce6a8b26aa170e1de65536fe8abe1832bd3242"))),
+            "",
+        )),
         Fail::Immediately,
         Fail::Immediately,
     );
@@ -283,15 +263,12 @@ fn reference_with_must_exist_constraint_must_exist_already_with_any_value() -> c
     let edits = store
         .transaction()
         .prepare(
-            Some(RefEdit {
-                change: Change::Update {
-                    log: LogChange::default(),
-                    new: new_target.clone(),
-                    expected: PreviousValue::MustExist,
-                },
-                name: "HEAD".try_into()?,
-                deref: false,
-            }),
+            Some(RefEdit::update(
+                "HEAD".try_into()?,
+                new_target.clone(),
+                PreviousValue::MustExist,
+                "",
+            )),
             Fail::Immediately,
             Fail::Immediately,
         )?
@@ -299,15 +276,12 @@ fn reference_with_must_exist_constraint_must_exist_already_with_any_value() -> c
 
     assert_eq!(
         edits,
-        vec![RefEdit {
-            change: Change::Update {
-                log: LogChange::default(),
-                new: new_target,
-                expected: PreviousValue::MustExistAndMatch(target)
-            },
-            name: "HEAD".try_into()?,
-            deref: false,
-        }]
+        vec![RefEdit::update(
+            "HEAD".try_into()?,
+            new_target,
+            PreviousValue::MustExistAndMatch(target),
+            "",
+        )]
     );
 
     assert_eq!(
@@ -329,15 +303,12 @@ fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_m
     let edits = store
         .transaction()
         .prepare(
-            Some(RefEdit {
-                change: Change::Update {
-                    log: LogChange::default(),
-                    new: target.clone(),
-                    expected: PreviousValue::MustNotExist,
-                },
-                name: "HEAD".try_into()?,
-                deref: false,
-            }),
+            Some(RefEdit::update(
+                "HEAD".try_into()?,
+                target.clone(),
+                PreviousValue::MustNotExist,
+                "",
+            )),
             Fail::Immediately,
             Fail::Immediately,
         )?
@@ -345,15 +316,12 @@ fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_m
 
     assert_eq!(
         edits,
-        vec![RefEdit {
-            change: Change::Update {
-                log: LogChange::default(),
-                new: target.clone(),
-                expected: PreviousValue::MustExistAndMatch(target)
-            },
-            name: "HEAD".try_into()?,
-            deref: false,
-        }]
+        vec![RefEdit::update(
+            "HEAD".try_into()?,
+            target.clone(),
+            PreviousValue::MustExistAndMatch(target),
+            "",
+        )]
     );
 
     assert_eq!(
@@ -406,15 +374,14 @@ fn symbolic_reference_writes_reflog_if_previous_value_is_set() -> crate::Result 
     let edits = store
         .transaction()
         .prepare(
-            Some(RefEdit {
-                change: Change::Update {
+            Some(RefEdit::new(
+                "refs/heads/symbolic".try_into()?,
+                Change::Update {
                     log,
                     new: new_head_value,
                     expected: PreviousValue::ExistingMustMatch(Target::Object(new_oid)),
                 },
-                name: "refs/heads/symbolic".try_into()?,
-                deref: false,
-            }),
+            )),
             Fail::Immediately,
             Fail::Immediately,
         )?
@@ -452,15 +419,12 @@ fn windows_device_name_is_illegal_with_enabled_windows_protections() -> crate::R
         let err = store
             .transaction()
             .prepare(
-                Some(RefEdit {
-                    change: Change::Update {
-                        log: log_ignored.clone(),
-                        new: new.clone(),
-                        expected: PreviousValue::Any,
-                    },
-                    name: invalid_name.try_into()?,
-                    deref: false,
-                }),
+                Some(RefEdit::update_with_log(
+                    invalid_name.try_into()?,
+                    new.clone(),
+                    PreviousValue::Any,
+                    log_ignored.clone(),
+                )),
                 Fail::Immediately,
                 Fail::Immediately,
             )
@@ -477,15 +441,14 @@ fn windows_device_name_is_illegal_with_enabled_windows_protections() -> crate::R
     {
         store.prohibit_windows_device_names = false;
         let _prepared_transaction = store.transaction().prepare(
-            Some(RefEdit {
-                change: Change::Update {
+            Some(RefEdit::new(
+                "refs/heads/CON".try_into()?,
+                Change::Update {
                     log: log_ignored.clone(),
                     new,
                     expected: PreviousValue::Any,
                 },
-                name: "refs/heads/CON".try_into()?,
-                deref: false,
-            }),
+            )),
             Fail::Immediately,
             Fail::Immediately,
         )?;
@@ -516,19 +479,12 @@ fn windows_device_name_check_runs_before_lock_acquisition() -> crate::Result {
     let err = store
         .transaction()
         .prepare(
-            Some(RefEdit {
-                change: Change::Update {
-                    log: LogChange {
-                        mode: RefLog::AndReference,
-                        force_create_reflog: false,
-                        message: "ignored".into(),
-                    },
-                    new: Target::Object(hex_to_id("28ce6a8b26aa170e1de65536fe8abe1832bd3242")),
-                    expected: PreviousValue::Any,
-                },
-                name: "refs/heads/CON".try_into()?,
-                deref: false,
-            }),
+            Some(RefEdit::update(
+                "refs/heads/CON".try_into()?,
+                Target::Object(hex_to_id("28ce6a8b26aa170e1de65536fe8abe1832bd3242")),
+                PreviousValue::Any,
+                "ignored",
+            )),
             Fail::Immediately,
             Fail::Immediately,
         )
@@ -553,15 +509,15 @@ fn lock_failure_on_symbolic_referent_is_reported_for_the_symbolic_ref() -> crate
     let err = store
         .transaction()
         .prepare(
-            Some(RefEdit {
-                change: Change::Update {
-                    log: LogChange::default(),
-                    new: Target::Object(hex_to_id("28ce6a8b26aa170e1de65536fe8abe1832bd3242")),
-                    expected: PreviousValue::Any,
-                },
-                name: "HEAD".try_into()?,
-                deref: true,
-            }),
+            Some(
+                RefEdit::update(
+                    "HEAD".try_into()?,
+                    Target::Object(hex_to_id("28ce6a8b26aa170e1de65536fe8abe1832bd3242")),
+                    PreviousValue::Any,
+                    "",
+                )
+                .with_deref(true),
+            ),
             Fail::Immediately,
             Fail::Immediately,
         )
@@ -594,30 +550,24 @@ fn symbolic_head_missing_referent_then_update_referent() -> crate::Result {
         let edits = store
             .transaction()
             .prepare(
-                Some(RefEdit {
-                    change: Change::Update {
-                        log: log_ignored.clone(),
-                        new: new_head_value.clone(),
-                        expected: PreviousValue::MustNotExist,
-                    },
-                    name: "HEAD".try_into()?,
-                    deref: false,
-                }),
+                Some(RefEdit::update_with_log(
+                    "HEAD".try_into()?,
+                    new_head_value.clone(),
+                    PreviousValue::MustNotExist,
+                    log_ignored.clone(),
+                )),
                 Fail::Immediately,
                 Fail::Immediately,
             )?
             .commit(committer().to_ref(&mut buf))?;
         assert_eq!(
             edits,
-            vec![RefEdit {
-                change: Change::Update {
-                    log: log_ignored.clone(),
-                    new: new_head_value.clone(),
-                    expected: PreviousValue::MustNotExist,
-                },
-                name: "HEAD".try_into()?,
-                deref: false,
-            }],
+            vec![RefEdit::update_with_log(
+                "HEAD".try_into()?,
+                new_head_value.clone(),
+                PreviousValue::MustNotExist,
+                log_ignored.clone(),
+            )],
             "no split was performed"
         );
 
@@ -646,15 +596,10 @@ fn symbolic_head_missing_referent_then_update_referent() -> crate::Result {
         let edits = store
             .transaction()
             .prepare(
-                Some(RefEdit {
-                    change: Change::Update {
-                        log: log.clone(),
-                        new: new.clone(),
-                        expected: PreviousValue::Any,
-                    },
-                    name: "HEAD".try_into()?,
-                    deref: true,
-                }),
+                Some(
+                    RefEdit::update_with_log("HEAD".try_into()?, new.clone(), PreviousValue::Any, log.clone())
+                        .with_deref(true),
+                ),
                 Fail::Immediately,
                 Fail::Immediately,
             )?
@@ -663,28 +608,18 @@ fn symbolic_head_missing_referent_then_update_referent() -> crate::Result {
         assert_eq!(
             edits,
             vec![
-                RefEdit {
-                    change: Change::Update {
-                        log: {
-                            let mut l = log.clone();
-                            l.mode = RefLog::Only;
-                            l
-                        },
-                        new: new.clone(),
-                        expected: PreviousValue::MustExistAndMatch(new_head_value.clone()),
+                RefEdit::update_with_log(
+                    "HEAD".try_into()?,
+                    new.clone(),
+                    PreviousValue::MustExistAndMatch(new_head_value.clone()),
+                    {
+                        let mut l = log.clone();
+                        l.mode = RefLog::Only;
+                        l
                     },
-                    name: "HEAD".try_into()?,
-                    deref: false,
-                },
-                RefEdit {
-                    change: Change::Update {
-                        log,
-                        new: new.clone(),
-                        expected: PreviousValue::Any, // there is no previous value, so we can't put `MustExistAndMatch` here.
-                    },
-                    name: referent.try_into()?,
-                    deref: false,
-                }
+                ),
+                // There is no previous value, so we can't put `MustExistAndMatch` here.
+                RefEdit::update_with_log(referent.try_into()?, new.clone(), PreviousValue::Any, log)
             ]
         );
 
@@ -740,19 +675,12 @@ fn write_reference_to_which_head_points_to_does_not_update_heads_reflog_even_tho
     let edits = store
         .transaction()
         .prepare(
-            Some(RefEdit {
-                change: Change::Update {
-                    log: LogChange {
-                        mode: RefLog::AndReference,
-                        force_create_reflog: false,
-                        message: "".into(),
-                    },
-                    expected: PreviousValue::MustExist,
-                    new: Target::Object(new_id),
-                },
-                name: referent.as_bstr().try_into()?,
-                deref: false,
-            }),
+            Some(RefEdit::update(
+                referent.as_bstr().try_into()?,
+                Target::Object(new_id),
+                PreviousValue::MustExist,
+                "",
+            )),
             Fail::Immediately,
             Fail::Immediately,
         )?
@@ -761,21 +689,12 @@ fn write_reference_to_which_head_points_to_does_not_update_heads_reflog_even_tho
     assert_eq!(edits.len(), 1, "HEAD wasn't update");
     assert_eq!(
         edits,
-        vec![RefEdit {
-            change: Change::Update {
-                log: LogChange {
-                    mode: RefLog::AndReference,
-                    force_create_reflog: false,
-                    message: "".into(),
-                },
-                expected: PreviousValue::MustExistAndMatch(Target::Object(hex_to_id(
-                    "02a7a22d90d7c02fb494ed25551850b868e634f0"
-                ))),
-                new: Target::Object(new_id),
-            },
-            name: referent.as_bstr().try_into()?,
-            deref: false,
-        }]
+        vec![RefEdit::update(
+            referent.as_bstr().try_into()?,
+            Target::Object(new_id),
+            PreviousValue::MustExistAndMatch(Target::Object(hex_to_id("02a7a22d90d7c02fb494ed25551850b868e634f0"))),
+            "",
+        )]
     );
     assert_eq!(
         reflog_lines(&store, "HEAD")?,
@@ -806,19 +725,12 @@ fn packed_refs_are_looked_up_when_checking_existing_values() -> crate::Result {
     let edits = store
         .transaction()
         .prepare(
-            Some(RefEdit {
-                change: Change::Update {
-                    log: LogChange {
-                        mode: RefLog::AndReference,
-                        force_create_reflog: false,
-                        message: "for pack".into(),
-                    },
-                    expected: PreviousValue::MustExistAndMatch(Target::Object(old_id)),
-                    new: Target::Object(new_id),
-                },
-                name: "refs/heads/main".try_into()?,
-                deref: false,
-            }),
+            Some(RefEdit::update(
+                "refs/heads/main".try_into()?,
+                Target::Object(new_id),
+                PreviousValue::MustExistAndMatch(Target::Object(old_id)),
+                "for pack",
+            )),
             Fail::Immediately,
             Fail::Immediately,
         )?
@@ -867,15 +779,7 @@ fn packed_refs_creation_with_packed_refs_mode_prune_removes_original_loose_refs(
             store
                 .loose_iter()?
                 .filter_map(|r| r.ok().filter(|r| r.kind() == gix_ref::Kind::Object))
-                .map(|r| RefEdit {
-                    change: Change::Update {
-                        log: LogChange::default(),
-                        expected: PreviousValue::MustExistAndMatch(r.target.clone()),
-                        new: r.target,
-                    },
-                    name: r.name,
-                    deref: false,
-                }),
+                .map(|r| RefEdit::update(r.name, r.target.clone(), PreviousValue::MustExistAndMatch(r.target), "")),
             Fail::Immediately,
             Fail::Immediately,
         )?
@@ -918,15 +822,10 @@ fn packed_refs_creation_with_packed_refs_mode_leave_keeps_original_loose_refs() 
     let previous_reflog_entries = branch.log_iter(&store).all()?.expect("log").count();
     let previous_packed_refs = packed.iter()?.filter_map(Result::ok).count();
 
-    let edits = store.loose_iter()?.map(|r| r.expect("valid ref")).map(|r| RefEdit {
-        change: Change::Update {
-            log: LogChange::default(),
-            expected: PreviousValue::MustExistAndMatch(r.target.clone()),
-            new: r.target,
-        },
-        name: r.name,
-        deref: false,
-    });
+    let edits = store
+        .loose_iter()?
+        .map(|r| r.expect("valid ref"))
+        .map(|r| RefEdit::update(r.name, r.target.clone(), PreviousValue::MustExistAndMatch(r.target), ""));
 
     let edits = store
         .transaction()
@@ -977,14 +876,10 @@ fn packed_refs_deletion_in_deletions_and_updates_mode() -> crate::Result {
         .transaction()
         .packed_refs(PackedRefs::DeletionsAndNonSymbolicUpdates(Box::new(odb)))
         .prepare(
-            Some(RefEdit {
-                change: Change::Delete {
-                    expected: PreviousValue::MustExistAndMatch(Target::Object(old_id)),
-                    log: RefLog::AndReference,
-                },
-                name: "refs/heads/d1".try_into()?,
-                deref: false,
-            }),
+            Some(RefEdit::delete(
+                "refs/heads/d1".try_into()?,
+                PreviousValue::MustExistAndMatch(Target::Object(old_id)),
+            )),
             Fail::Immediately,
             Fail::Immediately,
         )?

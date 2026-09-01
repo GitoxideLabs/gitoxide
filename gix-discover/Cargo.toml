@@ -9,7 +9,7 @@ description = "Discover git repositories and check if a directory is a git repos
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 doctest = true

@@ -160,29 +160,29 @@ impl Cascade {
             }
         }
 
-        if prompt.mode != gix_prompt::Mode::Disable {
-            if let Some(ctx) = action.context_mut() {
-                ctx.url = url;
-                if ctx.username.is_none() {
-                    let message = ctx.to_prompt("Username");
-                    prompt.mode = gix_prompt::Mode::Visible;
-                    ctx.username = gix_prompt::ask(&message, &prompt)
-                        .map_err(|err| protocol::Error::Prompt {
-                            prompt: message,
-                            source: err,
-                        })?
-                        .into();
-                }
-                if ctx.password.is_none() {
-                    let message = ctx.to_prompt("Password");
-                    prompt.mode = gix_prompt::Mode::Hidden;
-                    ctx.password = gix_prompt::ask(&message, &prompt)
-                        .map_err(|err| protocol::Error::Prompt {
-                            prompt: message,
-                            source: err,
-                        })?
-                        .into();
-                }
+        if prompt.mode != gix_prompt::Mode::Disable
+            && let Some(ctx) = action.context_mut()
+        {
+            ctx.url = url;
+            if ctx.username.is_none() {
+                let message = ctx.to_prompt("Username");
+                prompt.mode = gix_prompt::Mode::Visible;
+                ctx.username = gix_prompt::ask(&message, &prompt)
+                    .map_err(|err| protocol::Error::Prompt {
+                        prompt: message,
+                        source: err,
+                    })?
+                    .into();
+            }
+            if ctx.password.is_none() {
+                let message = ctx.to_prompt("Password");
+                prompt.mode = gix_prompt::Mode::Hidden;
+                ctx.password = gix_prompt::ask(&message, &prompt)
+                    .map_err(|err| protocol::Error::Prompt {
+                        prompt: message,
+                        source: err,
+                    })?
+                    .into();
             }
         }
 

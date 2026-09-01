@@ -96,12 +96,12 @@ pub(crate) fn summary(message: &BStr) -> Cow<'_, BStr> {
             let mut out = BString::default();
             let mut previous_pos = None;
             loop {
-                if let Some(previous_pos) = previous_pos {
-                    if previous_pos + 1 == pos {
-                        let len_after_trim = out.trim_end().len();
-                        out.resize(len_after_trim, 0);
-                        break out.into();
-                    }
+                if let Some(previous_pos) = previous_pos
+                    && previous_pos + 1 == pos
+                {
+                    let len_after_trim = out.trim_end().len();
+                    out.resize(len_after_trim, 0);
+                    break out.into();
                 }
                 let message_to_newline = &message[previous_pos.map_or(0, |p| p + 1)..pos];
 

@@ -140,14 +140,14 @@ pub fn file(
         let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
         let commit_time = commit.commit_time()?;
 
-        if let Some(since) = options.since {
-            if commit_time < since.seconds {
-                if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) {
-                    break 'outer;
-                }
-
-                continue;
+        if let Some(since) = options.since
+            && commit_time < since.seconds
+        {
+            if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) {
+                break 'outer;
             }
+
+            continue;
         }
 
         let parent_ids: ParentIds = collect_parents(commit, &odb, cache.as_ref(), &mut buf2)?;
@@ -371,33 +371,31 @@ pub fn file(
                         }
                     }
 
-                    if has_blame_been_passed {
-                        if let Some(ref mut blame_path) = blame_path {
-                            let blame_path_entry = BlamePathEntry {
-                                source_file_path: current_file_path.clone(),
-                                previous_source_file_path: Some(source_location.clone()),
-                                commit_id: suspect,
-                                blob_id: id,
-                                previous_blob_id: source_id,
-                                parent_index: index,
-                            };
-                            blame_path.push(blame_path_entry);
-                        }
+                    if has_blame_been_passed && let Some(ref mut blame_path) = blame_path {
+                        let blame_path_entry = BlamePathEntry {
+                            source_file_path: current_file_path.clone(),
+                            previous_source_file_path: Some(source_location.clone()),
+                            commit_id: suspect,
+                            blob_id: id,
+                            previous_blob_id: source_id,
+                            parent_index: index,
+                        };
+                        blame_path.push(blame_path_entry);
                     }
                 }
             }
         }
 
         hunks_to_blame.retain_mut(|unblamed_hunk| {
-            if unblamed_hunk.suspects.len() == 1 {
-                if let Some(entry) = BlameEntry::from_unblamed_hunk(unblamed_hunk, suspect) {
-                    // At this point, we have copied blame for every hunk to a parent. Hunks
-                    // that have only `suspect` left in `suspects` have not passed blame to any
-                    // parent, and so they can be converted to a `BlameEntry` and moved to
-                    // `out`.
-                    out.push(entry);
-                    return false;
-                }
+            if unblamed_hunk.suspects.len() == 1
+                && let Some(entry) = BlameEntry::from_unblamed_hunk(unblamed_hunk, suspect)
+            {
+                // At this point, we have copied blame for every hunk to a parent. Hunks
+                // that have only `suspect` left in `suspects` have not passed blame to any
+                // parent, and so they can be converted to a `BlameEntry` and moved to
+                // `out`.
+                out.push(entry);
+                return false;
             }
             unblamed_hunk.remove_blame(suspect);
             true

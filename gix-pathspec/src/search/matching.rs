@@ -216,13 +216,13 @@ impl Search {
             let mut is_match = pattern.always_matches();
             if !is_match {
                 let plen = relative_path.len();
-                if leading && rightmost_idx > plen {
-                    if let Some(idx) = pattern.path[..plen]
+                if leading
+                    && rightmost_idx > plen
+                    && let Some(idx) = pattern.path[..plen]
                         .rfind_byte(b'/')
                         .or_else(|| pattern.path[plen..].find_byte(b'/').map(|idx| idx + plen))
-                    {
-                        rightmost_idx = idx;
-                    }
+                {
+                    rightmost_idx = idx;
                 }
                 if let Some(relative_path) = relative_path.get(..rightmost_idx) {
                     let pattern_path = pattern.path[..rightmost_idx].as_bstr();

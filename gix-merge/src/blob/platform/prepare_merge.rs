@@ -68,15 +68,14 @@ impl Platform {
                 self.find_driver_by_name(name)
             }
         };
-        if let attributes::StateRef::Value(value) = marker_size_attr.assignment.state {
-            if let Some(value) = u8::from_str(value.as_bstr().to_str_lossy().as_ref())
+        if let attributes::StateRef::Value(value) = marker_size_attr.assignment.state
+            && let Some(value) = u8::from_str(value.as_bstr().to_str_lossy().as_ref())
                 .ok()
                 .and_then(NonZeroU8::new)
-            {
-                match &mut options.text.conflict {
-                    Conflict::Keep { marker_size, .. } => *marker_size = value,
-                    Conflict::ResolveWithOurs | Conflict::ResolveWithTheirs | Conflict::ResolveWithUnion => {}
-                }
+        {
+            match &mut options.text.conflict {
+                Conflict::Keep { marker_size, .. } => *marker_size = value,
+                Conflict::ResolveWithOurs | Conflict::ResolveWithTheirs | Conflict::ResolveWithUnion => {}
             }
         }
         if let Some(recursive_driver_name) = match driver {

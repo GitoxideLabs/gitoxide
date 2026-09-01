@@ -52,12 +52,11 @@ impl crate::Repository {
     pub fn reload(&mut self) -> Result<&mut Self, crate::open::Error> {
         let mut git_dir = self.git_dir().to_owned();
         let options = self.options.clone().open_path_as_is(true);
-        if git_dir.is_relative() {
-            if let Some((prev_cwd, cwd)) = options.current_dir.as_ref().zip(std::env::current_dir().ok()) {
-                if *prev_cwd != cwd {
-                    git_dir = prev_cwd.join(git_dir);
-                }
-            }
+        if git_dir.is_relative()
+            && let Some((prev_cwd, cwd)) = options.current_dir.as_ref().zip(std::env::current_dir().ok())
+            && *prev_cwd != cwd
+        {
+            git_dir = prev_cwd.join(git_dir);
         }
         *self = crate::ThreadSafeRepository::open_opts(git_dir, options)?.to_thread_local();
         Ok(self)

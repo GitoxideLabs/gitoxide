@@ -133,15 +133,15 @@ where
     let mut conflicts = Vec::new();
     let mut failed_on_first_conflict = false;
     let mut should_fail_on_conflict = |mut conflict: Conflict| -> bool {
-        if resolve_tree_conflicts.is_some() {
-            if let Err(failure) = conflict.resolution {
-                conflict.resolution = Ok(Resolution::Forced(failure));
-            }
+        if resolve_tree_conflicts.is_some()
+            && let Err(failure) = conflict.resolution
+        {
+            conflict.resolution = Ok(Resolution::Forced(failure));
         }
-        if let Some(how) = options.fail_on_conflict {
-            if conflict.resolution.is_err() || conflict.is_unresolved(how) {
-                failed_on_first_conflict = true;
-            }
+        if let Some(how) = options.fail_on_conflict
+            && (conflict.resolution.is_err() || conflict.is_unresolved(how))
+        {
+            failed_on_first_conflict = true;
         }
         conflicts.push(conflict);
         failed_on_first_conflict
@@ -1662,8 +1662,8 @@ where
                                     }
                                 };
 
-                                if let Some(resolution) = resolution {
-                                    if should_fail_on_conflict(Conflict::with_resolution(
+                                if let Some(resolution) = resolution
+                                    && should_fail_on_conflict(Conflict::with_resolution(
                                         Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
                                             merged_blob: ContentMerge {
                                                 resolution,
@@ -1688,9 +1688,9 @@ where
                                                 ConflictIndexEntryPathHint::RenamedOrTheirs,
                                             ),
                                         ],
-                                    )) {
-                                        break 'outer;
-                                    }
+                                    ))
+                                {
+                                    break 'outer;
                                 }
                                 if let Some(addition) = our_addition {
                                     push_deferred((addition, Some(theirs_idx)), our_changes);
@@ -1884,8 +1884,8 @@ where
                                     editor.remove(toc(source_location))?;
                                     pick_mut(side, our_tree, their_tree).remove_change(source_location.as_bstr());
 
-                                    if let Some(resolution) = resolution {
-                                        if should_fail_on_conflict(Conflict::with_resolution(
+                                    if let Some(resolution) = resolution
+                                        && should_fail_on_conflict(Conflict::with_resolution(
                                             Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
                                                 merged_blob: ContentMerge {
                                                     resolution,
@@ -1894,9 +1894,9 @@ where
                                             },
                                             (ours, theirs, Original, outer_side),
                                             [None, index_entry(our_mode, our_id), index_entry(their_mode, their_id)],
-                                        )) {
-                                            break 'outer;
-                                        }
+                                        ))
+                                    {
+                                        break 'outer;
                                     }
 
                                     // Because this constellation can only be found by the lookup tree, there is

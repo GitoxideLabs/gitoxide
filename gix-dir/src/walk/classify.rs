@@ -163,8 +163,8 @@ pub fn path(
                 ctx.pathspec_attributes,
             )
             .map(Into::into);
-        if for_deletion.is_some() {
-            if let Some(excluded) = ctx
+        if for_deletion.is_some()
+            && let Some(excluded) = ctx
                 .excludes
                 .as_mut()
                 .map_or(Ok(None), |stack| {
@@ -178,9 +178,8 @@ pub fn path(
                 })
                 .map_err(Error::ExcludesAccess)?
                 .filter(|_| filename_start_idx > 0)
-            {
-                out.status = entry::Status::Ignored(excluded);
-            }
+        {
+            out.status = entry::Status::Ignored(excluded);
         }
         out.property = entry::Property::DotGit.into();
         return Ok(out);

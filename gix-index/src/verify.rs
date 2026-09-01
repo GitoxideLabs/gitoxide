@@ -42,16 +42,16 @@ impl State {
         let _span = gix_features::trace::coarse!("gix_index::File::verify_entries()");
         let mut previous = None::<&crate::Entry>;
         for (idx, entry) in self.entries.iter().enumerate() {
-            if let Some(prev) = previous {
-                if prev.cmp(entry, self) != Ordering::Less {
-                    return Err(entries::Error::OutOfOrder {
-                        current_index: idx,
-                        current_path: entry.path(self).into(),
-                        current_stage: entry.flags.stage() as u8,
-                        previous_path: prev.path(self).into(),
-                        previous_stage: prev.flags.stage() as u8,
-                    });
-                }
+            if let Some(prev) = previous
+                && prev.cmp(entry, self) != Ordering::Less
+            {
+                return Err(entries::Error::OutOfOrder {
+                    current_index: idx,
+                    current_path: entry.path(self).into(),
+                    current_stage: entry.flags.stage() as u8,
+                    previous_path: prev.path(self).into(),
+                    previous_stage: prev.flags.stage() as u8,
+                });
             }
             previous = Some(entry);
         }

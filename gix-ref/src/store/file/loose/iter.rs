@@ -62,15 +62,15 @@ impl Iterator for SortedLoosePaths {
                     else {
                         continue;
                     };
-                    if let Some(prefix) = &self.prefix {
-                        if !full_name.starts_with(prefix) {
-                            continue;
-                        }
+                    if let Some(prefix) = &self.prefix
+                        && !full_name.starts_with(prefix)
+                    {
+                        continue;
                     }
-                    if let Some(suffix) = &self.suffix {
-                        if !full_name.ends_with(suffix) {
-                            continue;
-                        }
+                    if let Some(suffix) = &self.suffix
+                        && !full_name.ends_with(suffix)
+                    {
+                        continue;
                     }
                     if gix_validate::reference::name_partial(full_name.as_bstr()).is_ok() {
                         let name = FullName(full_name);

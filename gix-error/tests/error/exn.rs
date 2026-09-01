@@ -359,29 +359,29 @@ fn error_tree() {
         └─ E7
     ");
     insta::assert_compact_debug_snapshot!(&err, "tree errors retain caller locations", @"
-    E6, at gix-error/tests/error/main.rs:25
+    E6, at gix-error/tests/error/main.rs:26
     |
-    └─ E5, at gix-error/tests/error/main.rs:17
+    └─ E5, at gix-error/tests/error/main.rs:18
     |   |
-    |   └─ E3, at gix-error/tests/error/main.rs:9
+    |   └─ E3, at gix-error/tests/error/main.rs:10
     |   |   |
-    |   |   └─ E1, at gix-error/tests/error/main.rs:8
+    |   |   └─ E1, at gix-error/tests/error/main.rs:9
     |   |
-    |   └─ E10, at gix-error/tests/error/main.rs:12
+    |   └─ E10, at gix-error/tests/error/main.rs:13
     |   |   |
-    |   |   └─ E9, at gix-error/tests/error/main.rs:11
+    |   |   └─ E9, at gix-error/tests/error/main.rs:12
     |   |
-    |   └─ E12, at gix-error/tests/error/main.rs:15
+    |   └─ E12, at gix-error/tests/error/main.rs:16
     |       |
-    |       └─ E11, at gix-error/tests/error/main.rs:14
+    |       └─ E11, at gix-error/tests/error/main.rs:15
     |
-    └─ E4, at gix-error/tests/error/main.rs:20
+    └─ E4, at gix-error/tests/error/main.rs:21
     |   |
-    |   └─ E2, at gix-error/tests/error/main.rs:19
+    |   └─ E2, at gix-error/tests/error/main.rs:20
     |
-    └─ E8, at gix-error/tests/error/main.rs:23
+    └─ E8, at gix-error/tests/error/main.rs:24
         |
-        └─ E7, at gix-error/tests/error/main.rs:22
+        └─ E7, at gix-error/tests/error/main.rs:23
     ");
     insta::assert_debug_snapshot!(err.frame().iter_frames().map(ToString::to_string).collect::<Vec<_>>(), "frame iteration is breadth-first", @r#"
     [

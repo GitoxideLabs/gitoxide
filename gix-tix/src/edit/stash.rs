@@ -11,7 +11,7 @@ use gix::{
     bstr::{BStr, ByteSlice},
     refs::{
         Target,
-        transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
+        transaction::{PreviousValue, RefEdit},
     },
 };
 
@@ -108,30 +108,11 @@ pub(super) fn rewrite_edits(
 }
 
 fn create_edit(name: gix::refs::FullName, target: Target) -> RefEdit {
-    RefEdit {
-        change: Change::Update {
-            log: LogChange {
-                mode: RefLog::AndReference,
-                force_create_reflog: false,
-                message: "tix commit stash rewrite".into(),
-            },
-            expected: PreviousValue::MustNotExist,
-            new: target,
-        },
-        name,
-        deref: false,
-    }
+    RefEdit::update(name, target, PreviousValue::MustNotExist, "tix commit stash rewrite")
 }
 
 fn delete_edit(name: gix::refs::FullName, target: Target) -> RefEdit {
-    RefEdit {
-        change: Change::Delete {
-            expected: PreviousValue::MustExistAndMatch(target),
-            log: RefLog::AndReference,
-        },
-        name,
-        deref: false,
-    }
+    RefEdit::delete(name, PreviousValue::MustExistAndMatch(target))
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -249,19 +230,12 @@ pub(super) fn save(
         anyhow::bail!("git stash push did not create a new stash");
     }
     let target = Target::Object(id);
-    if let Err(err) = repo.edit_references([RefEdit {
-        change: Change::Update {
-            log: LogChange {
-                mode: RefLog::AndReference,
-                force_create_reflog: false,
-                message: reflog_message.into(),
-            },
-            expected: PreviousValue::MustNotExist,
-            new: target.clone(),
-        },
-        name: name.clone(),
-        deref: false,
-    }]) {
+    if let Err(err) = repo.edit_references([RefEdit::update(
+        name.clone(),
+        target.clone(),
+        PreviousValue::MustNotExist,
+        reflog_message,
+    )]) {
         drop(repo);
         let restore = Command::new("git")
             .arg("-C")
@@ -337,14 +311,10 @@ pub(super) fn apply(repository_path: &Path, bare: bool, workdir: &Path, stash: S
         .arg(stash.name.as_bstr().to_str_lossy().as_ref())
         .output()
         .context("could not launch git stash apply")?;
-    let deletion = repo.edit_references([RefEdit {
-        change: Change::Delete {
-            expected: PreviousValue::MustExistAndMatch(stash.target),
-            log: RefLog::AndReference,
-        },
-        name: stash.name.clone(),
-        deref: false,
-    }]);
+    let deletion = repo.edit_references([RefEdit::delete(
+        stash.name.clone(),
+        PreviousValue::MustExistAndMatch(stash.target),
+    )]);
     let mut notice = if output.status.success() {
         format!("restored {}", stash.name.shorten())
     } else {

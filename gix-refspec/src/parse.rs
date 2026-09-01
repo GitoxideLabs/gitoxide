@@ -114,10 +114,10 @@ pub(crate) mod function {
             }
         };
 
-        if let Some(spec) = src.as_mut() {
-            if *spec == "@" {
-                *spec = "HEAD".into();
-            }
+        if let Some(spec) = src.as_mut()
+            && *spec == "@"
+        {
+            *spec = "HEAD".into();
         }
         let (src, src_had_pattern) = validated(src, operation == Operation::Push && dst.is_some())?;
         let (dst, dst_had_pattern) = validated(dst, false)?;

@@ -11,7 +11,7 @@ edition = "2024"
 keywords = ["git-config", "git", "config", "gitoxide"]
 categories = ["config", "parser-implementations"]
 include = ["/src/**/*", "/LICENSE-*", "/README.md"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.

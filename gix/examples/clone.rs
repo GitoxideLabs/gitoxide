@@ -21,7 +21,7 @@ fn main() -> anyhow::Result<()> {
     println!("Url: {:?}", url.to_bstring());
     let mut prepare_clone = gix::prepare_clone(url, &dst)?;
 
-    println!("Cloning {repo_url:?} into {dst:?}...");
+    println!("Cloning {} into {}...", repo_url.display(), dst.display());
     let (mut prepare_checkout, _) =
         prepare_clone.fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?;
 

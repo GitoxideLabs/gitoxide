@@ -370,12 +370,11 @@ pub fn new() -> Worker {
                 handle.cainfo(ca_info)?;
             }
 
-            if let Some(ref mut curl_options) = backend.as_ref().and_then(|backend| backend.lock().ok()) {
-                if let Some(opts) = curl_options.downcast_mut::<super::Options>() {
-                    if let Some(enabled) = opts.schannel_check_revoke {
-                        handle.ssl_options(curl::easy::SslOpt::new().no_revoke(!enabled))?;
-                    }
-                }
+            if let Some(ref mut curl_options) = backend.as_ref().and_then(|backend| backend.lock().ok())
+                && let Some(opts) = curl_options.downcast_mut::<super::Options>()
+                && let Some(enabled) = opts.schannel_check_revoke
+            {
+                handle.ssl_options(curl::easy::SslOpt::new().no_revoke(!enabled))?;
             }
 
             if let Some(ssl_version) = ssl_version {
@@ -531,10 +530,9 @@ pub fn new() -> Worker {
                     (Some(header), mut data) => {
                         if let Err(TrySendError::Disconnected(err) | TrySendError::Full(err)) =
                             header.channel.try_send(err)
+                            && let Some(body) = data.take()
                         {
-                            if let Some(body) = data.take() {
-                                body.channel.try_send(err).ok();
-                            }
+                            body.channel.try_send(err).ok();
                         }
                     }
                     (None, Some(body)) => {

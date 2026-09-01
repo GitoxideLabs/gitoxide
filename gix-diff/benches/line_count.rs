@@ -41,7 +41,7 @@ impl Iterator for BenchmarkTokenizer {
 
             self.current += 1;
 
-            if self.current % self.skip_every == 0 {
+            if self.current.is_multiple_of(self.skip_every) {
                 self.current += 1;
             }
 
@@ -146,12 +146,12 @@ fn push_function(buf: &mut String, idx: usize, with_extra_logging: bool) {
     writeln!(buf, "    let mut value = {idx};").unwrap();
     buf.push_str("    if value % 3 == 0 {\n");
     buf.push_str("        println!(\"triple: {}\", value);\n");
-    if with_extra_logging && idx % 3 == 0 {
+    if with_extra_logging && idx.is_multiple_of(3) {
         buf.push_str("        println!(\"slider: {}\", value + 1);\n");
     }
     buf.push_str("    } else {\n");
     buf.push_str("        println!(\"plain: {}\", value);\n");
-    if with_extra_logging && idx % 5 == 0 {
+    if with_extra_logging && idx.is_multiple_of(5) {
         buf.push_str("        println!(\"trace: {}\", value.saturating_sub(1));\n");
     }
     buf.push_str("    }\n");

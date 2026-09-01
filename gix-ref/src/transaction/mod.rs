@@ -121,6 +121,71 @@ pub struct RefEdit {
     pub deref: bool,
 }
 
+/// Lifecycle
+impl RefEdit {
+    /// Create an edit that applies `change` to `name` without dereferencing symbolic references.
+    pub fn new(name: FullName, change: Change) -> Self {
+        RefEdit {
+            change,
+            name,
+            deref: false,
+        }
+    }
+
+    /// Create an update that sets `name` to `new` if its current state satisfies `expected`, recording
+    /// `reflog_message` with standard reference-log handling and without dereferencing symbolic references.
+    pub fn update(
+        name: FullName,
+        new: impl Into<Target>,
+        expected: PreviousValue,
+        reflog_message: impl Into<BString>,
+    ) -> Self {
+        RefEdit::update_with_log(
+            name,
+            new,
+            expected,
+            LogChange {
+                message: reflog_message.into(),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Create an update that sets `name` to `new` if its current state satisfies `expected`, using `log` to configure
+    /// reference-log handling and without dereferencing symbolic references.
+    pub fn update_with_log(name: FullName, new: impl Into<Target>, expected: PreviousValue, log: LogChange) -> Self {
+        RefEdit::new(
+            name,
+            Change::Update {
+                log,
+                expected,
+                new: new.into(),
+            },
+        )
+    }
+
+    /// Create a deletion of `name` and its reference log if its current state satisfies `expected`, without
+    /// dereferencing symbolic references.
+    pub fn delete(name: FullName, expected: PreviousValue) -> Self {
+        RefEdit::delete_with_log(name, expected, RefLog::AndReference)
+    }
+
+    /// Create a deletion of `name` if its current state satisfies `expected`, using `log` to configure reference-log
+    /// handling and without dereferencing symbolic references.
+    pub fn delete_with_log(name: FullName, expected: PreviousValue, log: RefLog) -> Self {
+        RefEdit::new(name, Change::Delete { expected, log })
+    }
+}
+
+/// Builders
+impl RefEdit {
+    /// Set whether symbolic references are dereferenced before applying the edit.
+    pub fn with_deref(mut self, deref: bool) -> Self {
+        self.deref = deref;
+        self
+    }
+}
+
 /// The way to deal with the Reflog in deletions.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
 pub enum RefLog {

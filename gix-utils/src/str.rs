@@ -20,13 +20,12 @@ pub fn precompose(s: Cow<'_, str>) -> Cow<'_, str> {
     /// Returns `true` if `ch` was composed into the starter, or `false` if it was appended unchanged.
     fn push(out: &mut Vec<char>, starter: &mut Option<usize>, max_class: &mut u8, ch: char) -> bool {
         let class = char::canonical_combining_class(ch);
-        if let Some(starter) = *starter {
-            if *max_class == 0 || *max_class < class {
-                if let Some(composed) = char::compose(out[starter], ch) {
-                    out[starter] = composed;
-                    return true;
-                }
-            }
+        if let Some(starter) = *starter
+            && (*max_class == 0 || *max_class < class)
+            && let Some(composed) = char::compose(out[starter], ch)
+        {
+            out[starter] = composed;
+            return true;
         }
         if class == 0 {
             *starter = Some(out.len());

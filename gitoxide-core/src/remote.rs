@@ -14,7 +14,7 @@ use gix::{
     protocol::{self, handshake::Ref, transport},
     refs::{
         Target,
-        transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
+        transaction::{PreviousValue, RefEdit},
     },
 };
 
@@ -167,17 +167,10 @@ fn ref_to_edit(ref_: &Ref) -> Result<RefEdit, gix::refs::name::Error> {
         Ref::Peeled { full_ref_name, tag, .. } => (full_ref_name, Target::Object(*tag)),
         Ref::Direct { full_ref_name, object } => (full_ref_name, Target::Object(*object)),
     };
-    Ok(RefEdit {
-        change: Change::Update {
-            log: LogChange {
-                mode: RefLog::AndReference,
-                force_create_reflog: false,
-                message: "remote refs".into(),
-            },
-            expected: PreviousValue::Any,
-            new: target,
-        },
-        name: name.as_bstr().try_into()?,
-        deref: false,
-    })
+    Ok(RefEdit::update(
+        name.as_bstr().try_into()?,
+        target,
+        PreviousValue::Any,
+        "remote refs",
+    ))
 }

@@ -367,14 +367,12 @@ pub fn relativize_with_prefix<'a>(relative_path: &'a Path, prefix: &Path) -> Cow
     let mut rpc = relative_path.components().peekable();
     let mut equal_thus_far = true;
     for pcomp in prefix.components() {
-        if equal_thus_far {
-            if let (Component::Normal(pname), Some(Component::Normal(rpname))) = (pcomp, rpc.peek()) {
-                if &pname == rpname {
-                    rpc.next();
-                    continue;
-                } else {
-                    equal_thus_far = false;
-                }
+        if equal_thus_far && let (Component::Normal(pname), Some(Component::Normal(rpname))) = (pcomp, rpc.peek()) {
+            if &pname == rpname {
+                rpc.next();
+                continue;
+            } else {
+                equal_thus_far = false;
             }
         }
         buf.push(Component::ParentDir);

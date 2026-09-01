@@ -198,25 +198,25 @@ impl ThreadSafeRepository {
 
         if repo_config.precompose_unicode {
             git_dir = gix_utils::str::precompose_path(git_dir.into()).into_owned();
-            if let Some(common_dir) = common_dir.as_mut() {
-                if let Cow::Owned(precomposed) = gix_utils::str::precompose_path((&*common_dir).into()) {
-                    *common_dir = precomposed;
-                }
+            if let Some(common_dir) = common_dir.as_mut()
+                && let Cow::Owned(precomposed) = gix_utils::str::precompose_path((&*common_dir).into())
+            {
+                *common_dir = precomposed;
             }
-            if let Some(worktree_dir) = worktree_dir.as_mut() {
-                if let Cow::Owned(precomposed) = gix_utils::str::precompose_path((&*worktree_dir).into()) {
-                    *worktree_dir = precomposed;
-                }
+            if let Some(worktree_dir) = worktree_dir.as_mut()
+                && let Cow::Owned(precomposed) = gix_utils::str::precompose_path((&*worktree_dir).into())
+            {
+                *worktree_dir = precomposed;
             }
         }
         let common_dir_ref = common_dir.as_deref().unwrap_or(&git_dir);
 
         let current_dir = {
             let current_dir_ref = current_dir.as_mut().expect("BUG: current_dir must be set by caller");
-            if repo_config.precompose_unicode {
-                if let Cow::Owned(precomposed) = gix_utils::str::precompose_path((&*current_dir_ref).into()) {
-                    *current_dir_ref = precomposed;
-                }
+            if repo_config.precompose_unicode
+                && let Cow::Owned(precomposed) = gix_utils::str::precompose_path((&*current_dir_ref).into())
+            {
+                *current_dir_ref = precomposed;
             }
             current_dir_ref.as_path()
         };

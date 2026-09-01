@@ -96,16 +96,14 @@ where
                         let stopped_at = delimiters.iter().find(|l| **l == line).copied();
                         buf.clear();
                         return (true, stopped_at, None);
-                    } else if fail_on_err_lines {
-                        if let Some(err) = line.check_error() {
-                            let err = err.0.as_bstr().to_owned();
-                            buf.clear();
-                            return (
-                                true,
-                                None,
-                                Some(Err(io::Error::other(crate::read::Error { message: err }))),
-                            );
-                        }
+                    } else if fail_on_err_lines && let Some(err) = line.check_error() {
+                        let err = err.0.as_bstr().to_owned();
+                        buf.clear();
+                        return (
+                            true,
+                            None,
+                            Some(Err(io::Error::other(crate::read::Error { message: err }))),
+                        );
                     }
                     let len = line.as_slice().map_or(U16_HEX_BYTES, |s| s.len() + U16_HEX_BYTES);
                     if buf_resize {

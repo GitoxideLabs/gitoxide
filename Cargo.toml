@@ -8,9 +8,8 @@ authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 version = "0.58.0"
-# Rust 1.85 is required so hash-related dependencies can use Rust 2024 crates,
-# notably `sha2` 0.11 and `hashbrown` 0.17.
-rust-version = "1.85"
+# Rust 1.88 is required by `dua-core` 3.3, used for worktree removal.
+rust-version = "1.88"
 default-run = "gix"
 include = ["/src/**/*", "/build.rs", "/LICENSE-*", "/README.md"]
 resolver = "2"

@@ -177,23 +177,23 @@ impl file::Store {
 
         match content_buf {
             None => {
-                if let Some(packed) = packed {
-                    if let Some(full_name) = packed::find::transform_full_name_for_lookup(full_name) {
-                        let full_name_backing;
-                        let full_name = match &self.namespace {
-                            Some(namespace) => {
-                                full_name_backing = namespace.to_owned().into_namespaced_name(full_name);
-                                full_name_backing.as_ref()
-                            }
-                            None => full_name,
-                        };
-                        if let Some(packed_ref) = packed.try_find_full_name(full_name)? {
-                            let mut res: Reference = packed_ref.into();
-                            if let Some(namespace) = &self.namespace {
-                                res.strip_namespace(namespace);
-                            }
-                            return Ok(Some(res));
+                if let Some(packed) = packed
+                    && let Some(full_name) = packed::find::transform_full_name_for_lookup(full_name)
+                {
+                    let full_name_backing;
+                    let full_name = match &self.namespace {
+                        Some(namespace) => {
+                            full_name_backing = namespace.to_owned().into_namespaced_name(full_name);
+                            full_name_backing.as_ref()
                         }
+                        None => full_name,
+                    };
+                    if let Some(packed_ref) = packed.try_find_full_name(full_name)? {
+                        let mut res: Reference = packed_ref.into();
+                        if let Some(namespace) = &self.namespace {
+                            res.strip_namespace(namespace);
+                        }
+                        return Ok(Some(res));
                     }
                 }
                 Ok(None)

@@ -69,14 +69,14 @@ impl Tree {
                 entries = entries
                     .checked_add(child.num_entries.unwrap_or(0))
                     .ok_or(Error::EntriesCountOverflow)?;
-                if let Some(prev) = prev {
-                    if prev.name.cmp(&child.name) != Ordering::Less {
-                        return Err(Error::OutOfOrder {
-                            parent_id,
-                            previous_path: prev.name.as_bstr().into(),
-                            current_path: child.name.as_bstr().into(),
-                        });
-                    }
+                if let Some(prev) = prev
+                    && prev.name.cmp(&child.name) != Ordering::Less
+                {
+                    return Err(Error::OutOfOrder {
+                        parent_id,
+                        previous_path: prev.name.as_bstr().into(),
+                        current_path: child.name.as_bstr().into(),
+                    });
                 }
                 prev = Some(child);
             }
@@ -106,13 +106,13 @@ impl Tree {
                 // This is actually needed here as it's a mut ref, which isn't copy. We do a re-borrow here.
                 let actual_num_entries =
                     verify_recursive(child.id, &child.children, object_buf.as_deref_mut(), objects)?;
-                if let Some((actual, num_entries)) = actual_num_entries.zip(child.num_entries) {
-                    if actual > num_entries {
-                        return Err(Error::EntriesCount {
-                            actual,
-                            expected: num_entries,
-                        });
-                    }
+                if let Some((actual, num_entries)) = actual_num_entries.zip(child.num_entries)
+                    && actual > num_entries
+                {
+                    return Err(Error::EntriesCount {
+                        actual,
+                        expected: num_entries,
+                    });
                 }
             }
             Ok(entries.into())
@@ -127,13 +127,13 @@ impl Tree {
 
         let mut buf = Vec::new();
         let declared_entries = verify_recursive(self.id, &self.children, use_objects.then_some(&mut buf), &objects)?;
-        if let Some((actual, num_entries)) = declared_entries.zip(self.num_entries) {
-            if actual > num_entries {
-                return Err(Error::EntriesCount {
-                    actual,
-                    expected: num_entries,
-                });
-            }
+        if let Some((actual, num_entries)) = declared_entries.zip(self.num_entries)
+            && actual > num_entries
+        {
+            return Err(Error::EntriesCount {
+                actual,
+                expected: num_entries,
+            });
         }
 
         Ok(())
@@ -144,14 +144,14 @@ impl Tree {
     /// This is a cheap heuristic: it doesn't prove each cached subtree count matches its actual path range,
     /// but no TREE node can describe more entries than the entire index contains.
     pub(crate) fn verify_entries_count(&self, num_index_entries: usize) -> Result<(), Error> {
-        if let Some(actual) = self.num_entries {
-            if actual as usize > num_index_entries {
-                return Err(Error::EntriesCountExceedsIndex {
-                    name: self.name.as_bstr().into(),
-                    actual,
-                    expected: num_index_entries,
-                });
-            }
+        if let Some(actual) = self.num_entries
+            && actual as usize > num_index_entries
+        {
+            return Err(Error::EntriesCountExceedsIndex {
+                name: self.name.as_bstr().into(),
+                actual,
+                expected: num_index_entries,
+            });
         }
 
         for child in &self.children {

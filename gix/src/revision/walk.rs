@@ -234,10 +234,10 @@ impl Platform<'_> {
         for id in ids.into_iter() {
             let id = id.into();
             if !self.boundary.contains(&id) {
-                if let Some(time) = self.repo.find_commit(id).ok().and_then(|c| c.time().ok()) {
-                    if cutoff.is_none() || cutoff > Some(time.seconds) {
-                        cutoff = time.seconds.into();
-                    }
+                if let Some(time) = self.repo.find_commit(id).ok().and_then(|c| c.time().ok())
+                    && (cutoff.is_none() || cutoff > Some(time.seconds))
+                {
+                    cutoff = time.seconds.into();
                 }
                 self.boundary.push(id);
             }
@@ -308,11 +308,11 @@ impl<'repo> Platform<'repo> {
                                     grafted_parents_to_skip.remove(idx);
                                     return false;
                                 }
-                                if commits.binary_search(&id).is_ok() {
-                                    if let Ok(commit) = repo.objects.find_commit_iter(&id, &mut buf) {
-                                        grafted_parents_to_skip.extend(commit.parent_ids());
-                                        grafted_parents_to_skip.sort();
-                                    }
+                                if commits.binary_search(&id).is_ok()
+                                    && let Ok(commit) = repo.objects.find_commit_iter(&id, &mut buf)
+                                {
+                                    grafted_parents_to_skip.extend(commit.parent_ids());
+                                    grafted_parents_to_skip.sort();
                                 }
                                 true
                             }

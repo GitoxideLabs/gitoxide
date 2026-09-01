@@ -1,6 +1,6 @@
 use gix_ref::{
     Category, FullName,
-    transaction::{Change, PreviousValue, RefEdit, RefLog},
+    transaction::{PreviousValue, RefEdit},
 };
 
 /// Delete local branches.
@@ -104,14 +104,7 @@ impl crate::Repository {
 
         let edits: Vec<_> = names
             .iter()
-            .map(|name| RefEdit {
-                change: Change::Delete {
-                    expected: PreviousValue::Any,
-                    log: RefLog::AndReference,
-                },
-                name: name.clone(),
-                deref: false,
-            })
+            .map(|name| RefEdit::delete(name.clone(), PreviousValue::Any))
             .collect();
 
         let config_path = self.common_dir().join("config");

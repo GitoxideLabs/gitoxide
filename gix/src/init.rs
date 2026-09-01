@@ -2,7 +2,7 @@
 use std::path::Path;
 
 use gix_ref::{
-    Category, FullName, Target,
+    Category, FullName,
     store::WriteReflog,
     transaction::{PreviousValue, RefEdit},
 };
@@ -98,15 +98,12 @@ impl ThreadSafeRepository {
             let mut repo = repo.to_thread_local();
             let prev_write_reflog = repo.refs.write_reflog;
             repo.refs.write_reflog = WriteReflog::Disable;
-            repo.edit_reference(RefEdit {
-                change: gix_ref::transaction::Change::Update {
-                    log: Default::default(),
-                    expected: PreviousValue::Any,
-                    new: Target::Symbolic(sym_ref),
-                },
-                name: "HEAD".try_into().expect("valid"),
-                deref: false,
-            })?;
+            repo.edit_reference(RefEdit::update(
+                "HEAD".try_into().expect("valid"),
+                sym_ref,
+                PreviousValue::Any,
+                "",
+            ))?;
             repo.refs.write_reflog = prev_write_reflog;
         }
 

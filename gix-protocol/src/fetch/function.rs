@@ -164,10 +164,10 @@ where
             }
             drop(reader);
 
-            if let Some(shallow_lock) = shallow_lock {
-                if !previous_response.shallow_updates().is_empty() {
-                    gix_shallow::write(shallow_lock, shallow_commits, previous_response.shallow_updates())?;
-                }
+            if let Some(shallow_lock) = shallow_lock
+                && !previous_response.shallow_updates().is_empty()
+            {
+                gix_shallow::write(shallow_lock, shallow_commits, previous_response.shallow_updates())?;
             }
             Ok(Some(Outcome {
                 last_response: previous_response,

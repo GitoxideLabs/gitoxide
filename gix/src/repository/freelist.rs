@@ -56,10 +56,10 @@ impl crate::Repository {
     /// it to be reclaimed.
     #[inline]
     pub(crate) fn reuse_buffer(&self, data: &mut Vec<u8>) {
-        if data.capacity() > 0 {
-            if let Some(bufs) = self.bufs.as_ref() {
-                bufs.borrow_mut().push(std::mem::take(data));
-            }
+        if data.capacity() > 0
+            && let Some(bufs) = self.bufs.as_ref()
+        {
+            bufs.borrow_mut().push(std::mem::take(data));
         }
     }
 }

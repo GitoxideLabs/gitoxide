@@ -82,14 +82,7 @@ where
                             } => {
                                 let current_mode = *mode;
                                 *mode = RefLog::Only;
-                                RefEdit {
-                                    change: Change::Delete {
-                                        expected: previous.clone(),
-                                        log: current_mode,
-                                    },
-                                    name: referent,
-                                    deref: true,
-                                }
+                                RefEdit::delete_with_log(referent, previous.clone(), current_mode).with_deref(true)
                             }
                             Change::Update { log, expected, new } => {
                                 let current = std::mem::replace(
@@ -101,15 +94,7 @@ where
                                     },
                                 );
                                 let next = std::mem::replace(expected, PreviousValue::Any);
-                                RefEdit {
-                                    change: Change::Update {
-                                        expected: next,
-                                        new: new.clone(),
-                                        log: current,
-                                    },
-                                    name: referent,
-                                    deref: true,
-                                }
+                                RefEdit::update_with_log(referent, new.clone(), next, current).with_deref(true)
                             }
                         },
                     ));

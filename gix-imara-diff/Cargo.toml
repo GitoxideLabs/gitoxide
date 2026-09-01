@@ -6,7 +6,7 @@ name = "gix-imara-diff"
 version = "0.2.5"
 edition = "2024"
 authors = ["pascalkuthe <pascalkuthe@pm.me>", "Sebastian Thiel <sebastian.thiel@icloud.com>"]
-rust-version = "1.85"
+rust-version = "1.88"
 license = "Apache-2.0"
 
 description = "A high performance library for computing diffs, maintained as a modified copy of upstream imara-diff for gitoxide."

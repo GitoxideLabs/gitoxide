@@ -9,7 +9,7 @@ description = "A crate of the gitoxide project to provide common errors and erro
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [features]
 ## The [`Exn`](crate::Exn) type converts to [`anyhow::Error`] natively so `?` can be used directly.

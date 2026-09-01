@@ -327,12 +327,14 @@ fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> Pars
     let mut value_is_empty_so_far = true;
 
     loop {
-        if value_is_empty_so_far && !is_in_quotes && remaining.len() == value_start.len() {
-            if let Ok(whitespace) = take_git_whitespace1(&mut remaining) {
-                dispatch(Event::Whitespace(Span::new(backing, whitespace)));
-                value_start = remaining;
-                continue;
-            }
+        if value_is_empty_so_far
+            && !is_in_quotes
+            && remaining.len() == value_start.len()
+            && let Ok(whitespace) = take_git_whitespace1(&mut remaining)
+        {
+            dispatch(Event::Whitespace(Span::new(backing, whitespace)));
+            value_start = remaining;
+            continue;
         }
 
         let Some((&byte, rest)) = remaining.split_first() else {

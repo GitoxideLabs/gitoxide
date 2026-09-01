@@ -9,7 +9,7 @@ description = "Calculate differences between various git objects"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [features]
 default = ["blob", "index"]

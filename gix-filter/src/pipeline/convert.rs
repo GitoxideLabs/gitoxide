@@ -128,23 +128,23 @@ impl Pipeline {
             },
         )?;
 
-        if let Some(driver) = driver {
-            if let Some(mut read) = self.processes.apply(
+        if let Some(driver) = driver
+            && let Some(mut read) = self.processes.apply(
                 driver,
                 &mut src,
                 driver::Operation::Clean,
                 self.context.with_path(bstr_rela_path.as_ref()),
-            )? {
-                if !apply_ident_filter && encoding.is_none() && !would_convert_eol {
-                    // Note that this is not typically a benefit in terms of saving memory as most filters
-                    // aren't expected to make the output file larger. It's more about who is waiting for the filter's
-                    // output to arrive, which won't be us now. For `git-lfs` it definitely won't matter though.
-                    return Ok(ToGitOutcome::Process(read));
-                }
-                self.bufs.clear();
-                read.read_to_end(&mut self.bufs.src)?;
-                in_src_buffer = true;
+            )?
+        {
+            if !apply_ident_filter && encoding.is_none() && !would_convert_eol {
+                // Note that this is not typically a benefit in terms of saving memory as most filters
+                // aren't expected to make the output file larger. It's more about who is waiting for the filter's
+                // output to arrive, which won't be us now. For `git-lfs` it definitely won't matter though.
+                return Ok(ToGitOutcome::Process(read));
             }
+            self.bufs.clear();
+            read.read_to_end(&mut self.bufs.src)?;
+            in_src_buffer = true;
         }
         if !in_src_buffer && (apply_ident_filter || encoding.is_some() || would_convert_eol) {
             self.bufs.clear();

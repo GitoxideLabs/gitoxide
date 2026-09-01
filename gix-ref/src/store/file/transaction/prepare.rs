@@ -302,18 +302,17 @@ impl Transaction<'_, '_> {
                     Some(n) => n,
                     None => continue,
                 };
-                if let Some(ref mut num_updates) = maybe_updates_for_packed_refs {
-                    if let Change::Update {
+                if let Some(ref mut num_updates) = maybe_updates_for_packed_refs
+                    && let Change::Update {
                         new: Target::Object(_), ..
                     } = edit.update.change
-                    {
-                        edits_for_packed_transaction.push(RefEdit {
-                            name,
-                            ..edit.update.clone()
-                        });
-                        *num_updates += 1;
-                        continue;
-                    }
+                {
+                    edits_for_packed_transaction.push(RefEdit {
+                        name,
+                        ..edit.update.clone()
+                    });
+                    *num_updates += 1;
+                    continue;
                 }
                 match edit.update.change {
                     Change::Update {
