@@ -63,6 +63,14 @@ impl File {
     /// If `boundary_directory` is given, non-existing directories will be created automatically and removed in the case of
     /// a rollback. Otherwise the containing directory is expected to exist, even though the resource doesn't have to.
     ///
+    /// If `resolve_resource` is set, it is called before each lock attempt and its returned path becomes both the lock
+    /// target and the eventual commit target. With `None`, `at_path` is used unchanged. [`resolve_symlink()`] provides the
+    /// resolver used by Git-style callers that must update a symlink's target instead of replacing the link itself.
+    ///
+    /// If `adjust_permissions` is set, it receives the newly created lock file's permissions after the process umask was
+    /// applied. The returned permissions are set on the lock file and ultimately reach the committed resource. With
+    /// `None`, no permission metadata is read or rewritten.
+    ///
     /// Note that permissions will be set to `0o666`, which usually results in `0o644` after passing a default umask, on Unix systems.
     ///
     /// ### Warning of potential resource leak
@@ -70,12 +78,48 @@ impl File {
     /// Please note that the underlying file will remain if destructors don't run, as is the case when interrupting the application.
     /// This results in the resource being locked permanently unless the lock file is removed by other means.
     /// See [the crate documentation](crate) for more information.
+    pub fn acquire(
+        at_path: impl AsRef<Path>,
+        mode: Fail,
+        boundary_directory: Option<PathBuf>,
+        resolve_resource: Option<&dyn Fn(&Path) -> PathBuf>,
+        adjust_permissions: Option<&dyn Fn(std::fs::Permissions) -> std::fs::Permissions>,
+    ) -> Result<File, Error> {
+        let resolve_resource = resolve_resource.unwrap_or(&keep_resource);
+        let (resource_path, lock_path, handle) = lock_with_mode(
+            at_path.as_ref(),
+            mode,
+            boundary_directory,
+            resolve_resource,
+            &|p, d, c| {
+                if let Some(permissions) = default_permissions() {
+                    gix_tempfile::writable_at_with_permissions(p, d, c, permissions)
+                } else {
+                    gix_tempfile::writable_at(p, d, c)
+                }
+            },
+        )?;
+        let mut lock = File {
+            inner: handle,
+            lock_path,
+            resource_path,
+        };
+        if let Some(adjust_permissions) = adjust_permissions {
+            lock.with_mut(|file| {
+                let permissions = adjust_permissions(file.metadata()?.permissions());
+                file.set_permissions(permissions)
+            })?;
+        }
+        Ok(lock)
+    }
+
+    /// Like [`acquire()`](Self::acquire) without resolving the resource or adjusting the post-umask permissions.
     pub fn acquire_to_update_resource(
         at_path: impl AsRef<Path>,
         mode: Fail,
         boundary_directory: Option<PathBuf>,
     ) -> Result<File, Error> {
-        Self::acquire_to_update_resource_inner(at_path.as_ref(), mode, boundary_directory, &keep_resource)
+        Self::acquire(at_path, mode, boundary_directory, None, None)
     }
 
     /// Like [`acquire_to_update_resource()`](File::acquire_to_update_resource), but allows to set filesystem permissions using `make_permissions`.
@@ -106,7 +150,7 @@ impl File {
         mode: Fail,
         boundary_directory: Option<PathBuf>,
     ) -> Result<File, Error> {
-        Self::acquire_to_update_resource_inner(at_path.as_ref(), mode, boundary_directory, &resolve_symlink)
+        Self::acquire(at_path, mode, boundary_directory, Some(&resolve_symlink), None)
     }
 
     /// Like [`acquire_to_update_resource_following_symlinks()`](File::acquire_to_update_resource_following_symlinks),
@@ -117,33 +161,13 @@ impl File {
         boundary_directory: Option<PathBuf>,
         adjust_permissions: impl Fn(std::fs::Permissions) -> std::fs::Permissions,
     ) -> Result<File, Error> {
-        let mut lock = Self::acquire_to_update_resource_following_symlinks(at_path, mode, boundary_directory)?;
-        lock.with_mut(|file| {
-            let permissions = adjust_permissions(file.metadata()?.permissions());
-            file.set_permissions(permissions)
-        })?;
-        Ok(lock)
-    }
-
-    fn acquire_to_update_resource_inner(
-        at_path: &Path,
-        mode: Fail,
-        boundary_directory: Option<PathBuf>,
-        resolve_resource: &dyn Fn(&Path) -> PathBuf,
-    ) -> Result<File, Error> {
-        let (resource_path, lock_path, handle) =
-            lock_with_mode(at_path, mode, boundary_directory, resolve_resource, &|p, d, c| {
-                if let Some(permissions) = default_permissions() {
-                    gix_tempfile::writable_at_with_permissions(p, d, c, permissions)
-                } else {
-                    gix_tempfile::writable_at(p, d, c)
-                }
-            })?;
-        Ok(File {
-            inner: handle,
-            lock_path,
-            resource_path,
-        })
+        Self::acquire(
+            at_path,
+            mode,
+            boundary_directory,
+            Some(&resolve_symlink),
+            Some(&adjust_permissions),
+        )
     }
 }
 
@@ -220,7 +244,11 @@ fn dir_cleanup(boundary: Option<PathBuf>) -> (ContainingDirectory, AutoRemove) {
     }
 }
 
-fn resolve_symlink(path: &Path) -> PathBuf {
+/// Resolve up to five consecutive symbolic links at `path`, returning the last target reached.
+///
+/// Relative link targets are resolved against the directory containing their link. If `path` isn't a symbolic link, or
+/// if a link can't be read, the current path is returned unchanged.
+pub fn resolve_symlink(path: &Path) -> PathBuf {
     let mut path = path.to_owned();
     for _ in 0..5 {
         let Ok(destination) = std::fs::read_link(&path) else {

@@ -170,17 +170,13 @@ mod acquire {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("resource");
         let mode_before_adjustment = Cell::new(0);
-        let file = gix_lock::File::acquire_to_update_resource_following_symlinks_with_permissions(
-            &resource,
-            fail_immediately(),
-            None,
-            |mut permissions| {
-                let mode = permissions.mode();
-                mode_before_adjustment.set(mode);
-                permissions.set_mode(mode | 0o660);
-                permissions
-            },
-        )?;
+        let adjust_permissions = |mut permissions: std::fs::Permissions| {
+            let mode = permissions.mode();
+            mode_before_adjustment.set(mode);
+            permissions.set_mode(mode | 0o660);
+            permissions
+        };
+        let file = gix_lock::File::acquire(&resource, fail_immediately(), None, None, Some(&adjust_permissions))?;
         assert_eq!(
             file.lock_path().metadata()?.permissions().mode(),
             mode_before_adjustment.get() | 0o660,
