@@ -854,10 +854,14 @@ space first; changes blocks adapt within the remaining history width.
 - `CommentChar` is a non-empty single-line byte prefix, defaults to `;`, and is
   recognized only at column zero. Parsing removes those lines and applies
   Git-style whitespace cleanup.
-- Missing `Assisted-by: GPT 5.6` and
-  `Co-authored-by: GPT 5.6 <codex@openai.com>` trailers are offered as commented
-  opt-ins. A case-insensitive existing trailer key suppresses its suggestion,
-  regardless of value.
+- Missing `Assisted-by` and `Co-authored-by` trailers are offered as adjacent
+  `;`-prefixed opt-ins. Their values come from `tix.trailer.assistedBy` and
+  `tix.trailer.coAuthoredBy`, defaulting to `GPT 5.6` and
+  `GPT 5.6 <codex@openai.com>` respectively. Following comments identify the
+  winning configuration file, a non-file override source, or the key that can
+  replace a default. Configured values must be non-empty and single-line. A
+  case-insensitive existing trailer key suppresses its suggestion, regardless
+  of value.
 - An unchanged editor document is a no-op. Otherwise tix recreates the commit,
   signs it when commit-signing configuration is enabled, and rewrites every
   linear descendant with unchanged trees and corrected parentage. Descendants
