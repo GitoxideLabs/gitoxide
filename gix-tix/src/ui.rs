@@ -1090,10 +1090,17 @@ pub(crate) fn draw_with_worktree(
                 content.x
             }
             .min(body.right());
-            frame.buffer_mut().set_style(
+            let buffer = frame.buffer_mut();
+            buffer.set_style(
                 Rect::new(body.x, y, end.saturating_sub(body.x), 1),
                 Style::default().add_modifier(Modifier::REVERSED),
             );
+            for x in body.x..end {
+                let cell = &mut buffer[(x, y)];
+                if cell.fg == Color::Black && cell.bg == Color::Yellow {
+                    cell.modifier.remove(Modifier::REVERSED);
+                }
+            }
         }
         if row.is_review && head && title_offset > horizontal_offset {
             let end = content
@@ -3553,6 +3560,21 @@ mod tests {
         assert!(
             (0..80).any(|x| row[(x, 0)].symbol() == "t" && row[(x, 0)].modifier.contains(Modifier::ITALIC)),
             "the Markdown title is italicized"
+        );
+        let head = Decorations::from([(
+            id,
+            vec![Decoration {
+                name: "HEAD".into(),
+                kind: DecorationKind::Head,
+            }],
+        )]);
+        terminal.draw(|frame| draw(frame, &mut app, &head))?;
+        let note = &terminal.backend().buffer()[(title_x, 0)];
+        assert_eq!(note.fg, Color::Black);
+        assert_eq!(note.bg, Color::Yellow, "HEAD keeps the note background visible");
+        assert!(
+            !note.modifier.contains(Modifier::REVERSED),
+            "HEAD selection does not reverse the note"
         );
         app.enrich_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
