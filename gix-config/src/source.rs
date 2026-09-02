@@ -86,7 +86,7 @@ impl Source {
                 } else {
                     env_var("GIT_CONFIG_SYSTEM")
                         .map(Into::into)
-                        .or_else(|| gix_path::env::system_prefix().map(|p| p.join("etc/gitconfig")))
+                        .or_else(|| gix_path::env::system_config().map(Into::into))
                 }
             }
             Git => match env_var("GIT_CONFIG_GLOBAL") {

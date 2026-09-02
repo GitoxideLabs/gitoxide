@@ -31,6 +31,17 @@ pub fn installation_config_prefix() -> Option<&'static Path> {
     installation_config().map(git::config_to_base_path)
 }
 
+/// Return the location of the system-wide Git configuration file.
+///
+/// On Windows this shares the single Git invocation used by [`installation_config()`].
+pub fn system_config() -> Option<&'static Path> {
+    if cfg!(windows) {
+        git::system_config_path().and_then(|p| crate::try_from_byte_slice(p).ok())
+    } else {
+        Some(Path::new("/etc/gitconfig"))
+    }
+}
+
 /// Return the shell that Git would use, the shell to execute commands from.
 ///
 /// On Windows, this is the full path to `sh.exe` bundled with Git for Windows if we can find it.
@@ -249,6 +260,15 @@ where
         Some(_) => None, // Multiple plausible candidates, so don't use the `EXEPATH` optimization.
         None => Some(path),
     }
+}
+
+/// Return Git's conventional system configuration path below `prefix`.
+///
+/// Git for Windows defaults to `etc/gitconfig` relative to its runtime prefix, while on Unix
+/// [`system_prefix()`] is `/`, yielding the conventional `/etc/gitconfig`. This is only a fallback
+/// when Git itself reports no origin, so custom build-time paths and environment overrides still win.
+fn config_path_from_system_prefix(prefix: &Path) -> PathBuf {
+    prefix.join("etc/gitconfig")
 }
 
 /// Returns the platform dependent system prefix or `None` if it cannot be found (right now only on Windows).
