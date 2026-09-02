@@ -11,14 +11,26 @@ use crate::env::git::EXE_NAME;
 mod auxiliary;
 mod git;
 
-/// Return the location at which installation specific git configuration file can be found, or `None`
-/// if the binary could not be executed or its results could not be parsed.
+/// Return the unoverridden location at which an installation-specific Git configuration file can be found, or
+/// `None` if the binary could not be executed or its results could not be parsed.
+///
+/// The Git query ignores `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`; callers must apply these
+/// variables according to their own environment-access policy.
 ///
 /// ### Performance
 ///
 /// This invokes the git binary which is slow on windows.
 pub fn installation_config() -> Option<&'static Path> {
     git::install_config_path().and_then(|p| crate::try_from_byte_slice(p).ok())
+}
+
+/// Return whether [`installation_config()`] was reported with system scope by Git.
+///
+/// `GIT_CONFIG_SYSTEM` replaces system-scoped installation configuration, but not installation
+/// configuration reported with another scope, such as Apple Git's `unknown` scope.
+/// Returns `false` if no installation path was found or Git was too old to report scopes.
+pub fn installation_config_is_system() -> bool {
+    git::install_config_is_system()
 }
 
 /// Return the location at which git installation specific configuration files are located, or `None` if the binary
@@ -31,9 +43,10 @@ pub fn installation_config_prefix() -> Option<&'static Path> {
     installation_config().map(git::config_to_base_path)
 }
 
-/// Return the location of the system-wide Git configuration file.
+/// Return the unoverridden location of the system-wide Git configuration file.
 ///
 /// On Windows this shares the single Git invocation used by [`installation_config()`].
+/// The caller is responsible for applying `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`.
 pub fn system_config() -> Option<&'static Path> {
     if cfg!(windows) {
         git::system_config_path().and_then(|p| crate::try_from_byte_slice(p).ok())

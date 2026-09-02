@@ -61,7 +61,7 @@ impl Source {
     pub fn storage_location(self, env_var: &mut dyn FnMut(&str) -> Option<OsString>) -> Option<PathBuf> {
         use Source::*;
         match self {
-            GitInstallation => {
+            GitInstallation | System => {
                 if env_var("GIT_CONFIG_NOSYSTEM")
                     .map(crate::Boolean::try_from)
                     .transpose()
@@ -71,22 +71,20 @@ impl Source {
                 {
                     None
                 } else {
-                    gix_path::env::installation_config().map(Into::into)
-                }
-            }
-            System => {
-                if env_var("GIT_CONFIG_NOSYSTEM")
-                    .map(crate::Boolean::try_from)
-                    .transpose()
-                    .ok()
-                    .flatten()
-                    .is_some_and(|b| b.0)
-                {
-                    None
-                } else {
-                    env_var("GIT_CONFIG_SYSTEM")
-                        .map(Into::into)
-                        .or_else(|| gix_path::env::system_config().map(Into::into))
+                    let is_system_scoped = match self {
+                        GitInstallation => gix_path::env::installation_config_is_system(),
+                        System => true,
+                        _ => unreachable!("matched installation or system source"),
+                    };
+                    let system_override = is_system_scoped.then(|| env_var("GIT_CONFIG_SYSTEM")).flatten();
+                    if let Some(path) = system_override {
+                        return Some(path.into());
+                    }
+                    match self {
+                        GitInstallation => gix_path::env::installation_config().map(Into::into),
+                        System => gix_path::env::system_config().map(Into::into),
+                        _ => unreachable!("matched installation or system source"),
+                    }
                 }
             }
             Git => match env_var("GIT_CONFIG_GLOBAL") {

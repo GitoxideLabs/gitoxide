@@ -101,6 +101,7 @@ pub(super) const EXE_NAME: &str = "git";
 #[derive(Debug, Default, Eq, PartialEq)]
 struct ConfigPaths {
     installation: Option<BString>,
+    installation_is_system: bool,
     system: Option<BString>,
 }
 
@@ -118,17 +119,11 @@ static GIT_CONFIG_PATHS: LazyLock<ConfigPaths> = LazyLock::new(|| {
             crate::os_string_into_bstring(super::config_path_from_system_prefix(&system_prefix).into()).ok();
         return ConfigPaths {
             installation: installation_config,
+            installation_is_system: true,
             system: system_config,
         };
     }
-    let paths = config_paths_from_executable();
-    #[cfg(windows)]
-    if std::env::var_os("GIT_CONFIG_SYSTEM").is_some() || std::env::var_os("GIT_CONFIG_NOSYSTEM").is_some() {
-        // The caller decides whether these overrides are permitted. Don't expose a path obtained
-        // through ambient configuration when its environment accessor may intentionally hide it.
-        return ConfigPaths { system: None, ..paths };
-    }
-    paths
+    config_paths_from_executable()
 });
 
 // There are a number of ways to refer to the null device on Windows, but they are not all equally
@@ -172,9 +167,11 @@ fn config_paths_from_executable_at(executable: PathBuf) -> std::io::Result<Confi
         });
     }
 
-    let (installation, system) = config_paths_from_config_with_origin(output.stdout.as_slice().into());
+    let (installation, installation_is_system, system) =
+        config_paths_from_config_with_origin(output.stdout.as_slice().into());
     Ok(ConfigPaths {
         installation: installation.map(ToOwned::to_owned),
+        installation_is_system,
         system: system.map(ToOwned::to_owned),
     })
 }
@@ -205,7 +202,7 @@ fn git_cmd(executable: PathBuf, show_scope: bool) -> Command {
     // file under `/Library` or `/Applications` is shown as an "unknown" scope but takes precedence
     // over the system scope. Although `GIT_CONFIG_NOSYSTEM` suppresses this scope along with the
     // system scope, passing `--system` selects only the system scope and not this "unknown" scope.
-    cmd.args(["config", "-lz", "--show-origin"]);
+    cmd.args(["config", "-lz", "--show-origin", "--no-includes"]);
     if show_scope {
         cmd.arg("--show-scope");
     }
@@ -216,6 +213,12 @@ fn git_cmd(executable: PathBuf, show_scope: bool) -> Command {
         .env_remove("GIT_OBJECT_DIRECTORY")
         .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
         .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_CONFIG_SYSTEM")
+        .env_remove("GIT_CONFIG_NOSYSTEM")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        // Discover stable, unoverridden paths; callers apply the configuration environment they permit.
+        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
         .env("GIT_DIR", NULL_DEVICE) // Avoid getting local-scope config.
         .env("GIT_WORK_TREE", NULL_DEVICE) // Avoid confusion when debugging.
         .stdin(Stdio::null())
@@ -231,23 +234,29 @@ fn first_file_from_config_with_origin(source: &BStr) -> Option<&BStr> {
 
 /// Parse NUL-separated scope, origin, and key records produced by `git config --show-scope --show-origin`.
 ///
-/// The first file-backed origin is the installation path. The system path is the first system-scoped
-/// origin distinct from it, or the installation path itself when no distinct system origin follows.
+/// The first file-backed origin is the installation path, and the second return value indicates
+/// whether it had system scope. The system path is the first system-scoped origin distinct from
+/// the installation path, or the installation path itself when no distinct system origin follows.
 /// Non-file origins and incomplete records are ignored.
-fn config_paths_from_config_with_origin(source: &BStr) -> (Option<&BStr>, Option<&BStr>) {
+fn config_paths_from_config_with_origin(source: &BStr) -> (Option<&BStr>, bool, Option<&BStr>) {
     let mut fields = source.split(|byte| *byte == 0);
     let mut installation = None;
+    let mut installation_is_system = false;
     let mut system = None;
     while let (Some(scope), Some(origin), Some(_key)) = (fields.next(), fields.next(), fields.next()) {
         let Some(path) = origin.strip_prefix(b"file:").map(ByteSlice::as_bstr) else {
             continue;
         };
+        let is_installation = installation.is_none();
         let installation_path = *installation.get_or_insert(path);
+        if is_installation {
+            installation_is_system = scope == b"system";
+        }
         if scope == b"system" && system.is_none_or(|current| current == installation_path) {
             system = Some(path);
         }
     }
-    (installation, system)
+    (installation, installation_is_system, system)
 }
 
 /// Try to find the file that contains Git configuration coming with the Git installation.
@@ -258,6 +267,10 @@ fn config_paths_from_config_with_origin(source: &BStr) -> (Option<&BStr>, Option
 pub(super) fn install_config_path() -> Option<&'static BStr> {
     let _span = gix_trace::detail!("gix_path::git::install_config_path()");
     GIT_CONFIG_PATHS.installation.as_ref().map(AsRef::as_ref)
+}
+
+pub(super) fn install_config_is_system() -> bool {
+    GIT_CONFIG_PATHS.installation_is_system
 }
 
 pub(super) fn system_config_path() -> Option<&'static BStr> {

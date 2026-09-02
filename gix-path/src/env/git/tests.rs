@@ -897,10 +897,7 @@ mod exe_info {
             .map(crate::from_bstring)
             .expect("It is present in the test environment (nonempty config)");
 
-        assert!(
-            path.is_absolute(),
-            "It is absolute (unless overridden such as with GIT_CONFIG_SYSTEM)"
-        );
+        assert!(path.is_absolute(), "Git reports an absolute installation path");
         assert!(
             path.exists(),
             "It should exist on disk, since `git config` just found an entry there"
@@ -979,102 +976,26 @@ mod exe_info {
 
     #[test]
     #[serial]
-    #[cfg(not(target_os = "macos"))] // Assumes no higher "unknown" scope. The `nosystem` case works.
-    fn never_from_local_scope() {
+    fn configuration_query_ignores_ambient_config_and_local_repo() {
+        let expected = config_paths_from_executable();
         let repo = local_config_repo();
-
-        let _cwd = CurrentDir::set(repo.path()).expect("can change to repo dir");
-        let _env = Env::new()
-            .set("GIT_CONFIG_SYSTEM", NULL_DEVICE)
-            .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
-
-        let maybe_path = exe_info();
-        assert_eq!(
-            maybe_path, None,
-            "Should find no config path if the config would be local (empty system config)"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn never_from_local_scope_nosystem() {
-        let repo = local_config_repo();
-
+        let config_path = repo.path().join(".git").join("config");
         let _cwd = CurrentDir::set(repo.path()).expect("can change to repo dir");
         let _env = Env::new()
             .set("GIT_CONFIG_NOSYSTEM", "1")
-            .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+            .set("GIT_CONFIG_SYSTEM", &config_path)
+            .set("GIT_CONFIG_GLOBAL", &config_path)
+            .set("GIT_CONFIG", &config_path)
+            .set("GIT_CONFIG_COUNT", "1")
+            .set("GIT_CONFIG_KEY_0", "include.path")
+            .set("GIT_CONFIG_VALUE_0", &config_path)
+            .set("GIT_CONFIG_PARAMETERS", "invalid");
 
-        let maybe_path = exe_info();
         assert_eq!(
-            maybe_path, None,
-            "Should find no config path if the config would be local (suppressed system config)"
+            config_paths_from_executable(),
+            expected,
+            "configuration discovery is independent of ambient overrides and repository-local configuration"
         );
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(not(target_os = "macos"))] // Assumes no higher "unknown" scope. The `nosystem` case works.
-    fn never_from_local_scope_even_if_temp_is_here() {
-        let repo = local_config_repo();
-        let repo_path = repo.path().canonicalize().expect("repo path is valid and exists");
-
-        let _cwd = CurrentDir::set(&repo_path).expect("can change to repo dir");
-        let _env = set_temp_env_vars(&repo_path)
-            .set("GIT_CONFIG_SYSTEM", NULL_DEVICE)
-            .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
-
-        let maybe_path = exe_info();
-        assert_eq!(
-            maybe_path, None,
-            "Should find no config path if the config would be local even in a `/tmp`-like dir (empty system config)"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn never_from_local_scope_even_if_temp_is_here_nosystem() {
-        let repo = local_config_repo();
-        let repo_path = repo.path().canonicalize().expect("repo path is valid and exists");
-
-        let _cwd = CurrentDir::set(&repo_path).expect("can change to repo dir");
-        let _env = set_temp_env_vars(&repo_path)
-            .set("GIT_CONFIG_NOSYSTEM", "1")
-            .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
-
-        let maybe_path = exe_info();
-        assert_eq!(
-            maybe_path, None,
-            "Should find no config path if the config would be local even in a `/tmp`-like dir (suppressed system config)"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn never_from_git_config_env_var() {
-        let repo = local_config_repo();
-
-        // Get an absolute path to a config file that is non-UNC if possible so any Git accepts it.
-        let config_path = std::env::current_dir()
-            .expect("got CWD")
-            .join(repo.path())
-            .join(".git")
-            .join("config")
-            .to_str()
-            .expect("valid UTF-8")
-            .to_owned();
-
-        let _env = Env::new()
-            .set("GIT_CONFIG_NOSYSTEM", "1")
-            .set("GIT_CONFIG_GLOBAL", NULL_DEVICE)
-            .set("GIT_CONFIG", config_path);
-
-        let paths = config_paths_from_executable();
-        assert_eq!(
-            paths.installation, None,
-            "Should find no installation path from GIT_CONFIG"
-        );
-        assert_eq!(paths.system, None, "Should find no system path from GIT_CONFIG");
     }
 
     #[test]
@@ -1092,13 +1013,19 @@ printf 'unknown\000file:/installation/gitconfig\000core.one\000system\000file:/s
             paths,
             ConfigPaths {
                 installation: Some("/installation/gitconfig".into()),
+                installation_is_system: false,
                 system: Some("/system/gitconfig".into()),
             }
         );
+        let invocations = invocations(&executable);
         assert_eq!(
-            invocations(&executable).len(),
+            invocations.len(),
             1,
             "a successful scoped query obtains both paths in one invocation"
+        );
+        assert!(
+            invocations[0].contains("--no-includes"),
+            "included files must not be mistaken for top-level configuration paths"
         );
     }
 
@@ -1152,21 +1079,31 @@ printf 'file:/legacy/gitconfig\000core.one\000'
                 macos,
                 (
                     Some("/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig"),
+                    false,
                     None,
                 ),
             ),
             (
                 win_msys,
-                (Some("C:/git-sdk-64/etc/gitconfig"), Some("C:/git-sdk-64/etc/gitconfig")),
+                (
+                    Some("C:/git-sdk-64/etc/gitconfig"),
+                    true,
+                    Some("C:/git-sdk-64/etc/gitconfig"),
+                ),
             ),
             (
                 win_msys_old,
-                (Some(r"C:\ProgramData/Git/config"), Some(r"C:\ProgramData/Git/config")),
+                (
+                    Some(r"C:\ProgramData/Git/config"),
+                    true,
+                    Some(r"C:\ProgramData/Git/config"),
+                ),
             ),
             (
                 win_cmd,
                 (
                     Some("C:/Program Files/Git/etc/gitconfig"),
+                    true,
                     Some("C:/Program Files/Git/etc/gitconfig"),
                 ),
             ),
@@ -1174,18 +1111,20 @@ printf 'file:/legacy/gitconfig\000core.one\000'
                 win_cmd_with_system,
                 (
                     Some("C:/Program Files/Git/etc/gitconfig"),
+                    true,
                     Some("C:/ProgramData/Git/config"),
                 ),
             ),
-            (linux, (Some("/home/parallels/.gitconfig"), None)),
-            (bogus, (None, None)),
-            (empty, (None, None)),
+            (linux, (Some("/home/parallels/.gitconfig"), false, None)),
+            (bogus, (None, false, None)),
+            (empty, (None, false, None)),
         ] {
             let actual = crate::env::git::config_paths_from_config_with_origin(source.into());
             assert_eq!(
                 (
                     actual.0.map(|path| path.to_str().expect("test paths are UTF-8")),
-                    actual.1.map(|path| path.to_str().expect("test paths are UTF-8")),
+                    actual.1,
+                    actual.2.map(|path| path.to_str().expect("test paths are UTF-8")),
                 ),
                 expected
             );

@@ -17,11 +17,11 @@ fn git_config_no_system() {
     assert!(
         Source::GitInstallation
             .storage_location(&mut |name| {
-                assert_eq!(
-                    name, "GIT_CONFIG_NOSYSTEM",
-                    "it only checks this var, and if set, nothing else"
-                );
-                Some("false".into())
+                match name {
+                    "GIT_CONFIG_NOSYSTEM" => Some("false".into()),
+                    "GIT_CONFIG_SYSTEM" => None,
+                    _ => unreachable!("known set"),
+                }
             })
             .is_some(),
         "it treats the variable as boolean"
@@ -63,6 +63,22 @@ fn git_config_system() {
             .expect("set"),
         Path::new("alternative"),
         "we respect the system config variable for overrides"
+    );
+
+    let default_installation = gix_path::env::installation_config().map(ToOwned::to_owned);
+    let overridden_installation = Source::GitInstallation.storage_location(&mut |name| match name {
+        "GIT_CONFIG_NOSYSTEM" => None,
+        "GIT_CONFIG_SYSTEM" => Some("alternative".into()),
+        unexpected => unreachable!("unexpected env var: {unexpected}"),
+    });
+    assert_eq!(
+        overridden_installation,
+        if gix_path::env::installation_config_is_system() {
+            Some("alternative".into())
+        } else {
+            default_installation
+        },
+        "the override replaces system-scoped installation configuration but preserves other scopes"
     );
 }
 
