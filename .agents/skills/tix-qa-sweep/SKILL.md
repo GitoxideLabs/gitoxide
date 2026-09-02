@@ -34,7 +34,7 @@ For each recorded change ID:
 
 1. Run `tix travel <change-id>` directly and verify that `HEAD` is the intended change.
 2. From the repository root, run `<temp-dir>/ci-check-local.sh <mode-flag>` with the selected `--fast` or `--thorough` flag.
-3. When it passes, continue to the next change ID without amending.
+3. When it passes, run `tix enrich tree checks-pass` for the checked-out change, require it to succeed, then continue to the next change ID without amending.
 4. If `cargo fmt --all -- --check` fails, run `cargo fmt --all`, stage and amend all resulting formatting changes with signing disabled, require a clean worktree, and rerun the selected profile. Formatting changes are always wanted and do not need the repair loop.
 5. For any other failure, use the repair loop below and rerun the selected profile until it passes.
 
