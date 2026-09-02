@@ -191,8 +191,9 @@ without trading responsiveness for metadata that is not visible.
   picker bindings and wait for each selected preview, and the final frame waits
   for every worktree's status and graph metadata.
 - `--no-alt-screen` runs the interactive UI in a full-height inline viewport on
-  the normal screen, retaining its frame and panic output for diagnostics. Input
-  handling otherwise matches the default interactive mode.
+  the normal screen for debugging only, retaining its frame and panic output.
+  Use `tix show` for one-off queries. Input handling otherwise matches the
+  default interactive mode.
 - `tix rebase todo [-x HIDDEN...] [--no-auto-hide]
   [--onto REV | --update-base] [TIP...]`
   writes a self-contained Markdown history-rebase plan to stdout. Visible tips
@@ -230,7 +231,8 @@ without trading responsiveness for metadata that is not visible.
   revisions are errors. An unavailable hidden revision emits a warning and is
   ignored when another hidden revision resolves; if none resolve, startup fails.
 - The interactive UI owns the alternate screen by default. `--no-alt-screen`
-  instead draws interactively on the normal screen. Raw mode, focus reporting,
+  instead draws interactively on the normal screen for debugging; `tix show` is
+  the non-interactive command for one-off queries. Raw mode, focus reporting,
   mouse capture, and enhanced keyboard reporting are restored on every exit path.
   Shutdown leaves the alternate screen without clearing it or writing afterward.
   `--quit-on-finish` draws without input reporting on the normal screen.
