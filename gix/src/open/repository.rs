@@ -103,7 +103,7 @@ impl ThreadSafeRepository {
             options.git_dir_trust = gix_sec::Trust::from_path_ownership(&git_dir)?.into();
         }
         options.current_dir = Some(cwd);
-        ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, options)
+        ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, options, None)
     }
 
     /// Try to open a git repository in `fallback_directory` (can be worktree or `.git` directory) only if there is no override
@@ -154,13 +154,14 @@ impl ThreadSafeRepository {
         let mut options = trust_map.into_value_by_level(git_dir_trust);
         options.git_dir_trust = git_dir_trust.into();
         options.current_dir = Some(cwd);
-        ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, options)
+        ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, options, None)
     }
 
     pub(crate) fn open_from_paths(
         mut git_dir: PathBuf,
         mut worktree_dir: Option<PathBuf>,
         mut options: Options,
+        known_common_dir: Option<PathBuf>,
     ) -> Result<Self, Error> {
         let _span = gix_trace::detail!("open_from_paths()");
         options.open_path_as_is = false;
@@ -185,9 +186,12 @@ impl ThreadSafeRepository {
         } = options;
         let git_dir_trust = git_dir_trust.as_mut().expect("trust must be determined by now");
 
-        let mut common_dir = gix_discover::path::from_plain_file(git_dir.join("commondir").as_ref())
-            .transpose()?
-            .map(|cd| git_dir.join(cd));
+        let mut common_dir = match known_common_dir {
+            Some(common_dir) => Some(common_dir),
+            None => gix_discover::path::from_plain_file(git_dir.join("commondir").as_ref())
+                .transpose()?
+                .map(|cd| git_dir.join(cd)),
+        };
         let repo_config = config::cache::StageOne::new(
             common_dir.as_deref().unwrap_or(&git_dir),
             git_dir.as_ref(),

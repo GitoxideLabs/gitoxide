@@ -76,7 +76,7 @@ impl ThreadSafeRepository {
         open_options.git_dir_trust = Some(gix_sec::Trust::Full);
         // The repo will use `core.precomposeUnicode` to adjust the value as needed.
         open_options.current_dir = gix_fs::current_dir(false)?.into();
-        let repo = ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, open_options)?;
+        let repo = ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, open_options, None)?;
 
         let branch_name = repo
             .config

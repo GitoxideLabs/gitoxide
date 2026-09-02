@@ -439,6 +439,11 @@ fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
         assert_eq!(proxy_lock_reason, expected.locked);
         let proxy_is_locked = actual.is_locked();
         assert_eq!(proxy_is_locked, proxy_lock_reason.is_some());
+        assert_eq!(
+            actual.is_prunable(),
+            expected.prunable.is_some(),
+            "prunability matches `git worktree list --porcelain`"
+        );
         // TODO: check id of expected worktree, but need access to .gitdir from worktree base
         let proxy_id = actual.id().to_owned();
         assert_eq!(
@@ -485,15 +490,15 @@ fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
         let proxy_by_id = repo
             .worktree_proxy_by_id(actual.id())
             .expect("can get the proxy from a linked repo as well");
-        assert_ne!(
+        assert_eq!(
             proxy_by_id.git_dir(),
             actual.git_dir(),
-            "The git directories might not look the same…"
+            "The git directories are the same"
         );
         assert_eq!(
             gix_path::realpath(proxy_by_id.git_dir()).ok(),
             gix_path::realpath(actual.git_dir()).ok(),
-            "…but they are the same effectively"
+            "the git directories are effectively the same"
         );
     }
 }

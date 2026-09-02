@@ -263,6 +263,55 @@ mod update {
     }
 
     #[test]
+    fn incomplete_linked_worktrees_without_a_head_are_ignored() -> Result {
+        let (repo, _tmp) = repo_rw("two-origins");
+        let git_dir = repo.common_dir().join("worktrees/incomplete");
+        std::fs::create_dir_all(&git_dir)?;
+        std::fs::write(git_dir.join("gitdir"), b"missing/.git\n")?;
+
+        let (mappings, specs) = mapping_from_spec("refs/heads/main:refs/remotes/origin/incomplete", &repo);
+        let update = || {
+            fetch::refs::update(
+                &repo,
+                prefixed("action"),
+                &mappings,
+                &specs,
+                &[],
+                fetch::Tags::None,
+                fetch::DryRun::Yes,
+                fetch::WritePackedRefs::Never,
+            )
+        };
+        let expected = vec![fetch::refs::Update {
+            mode: fetch::refs::update::Mode::New,
+            type_change: None,
+            edit_index: Some(0),
+        }];
+
+        assert_eq!(
+            update()?.updates,
+            expected,
+            "the incomplete worktree contributes no checked-out branch"
+        );
+
+        std::fs::write(git_dir.join("locked"), b"still in use\n")?;
+        assert_eq!(
+            update()?.updates,
+            expected,
+            "locking does not make an unreadable head protect a branch"
+        );
+
+        std::fs::remove_file(git_dir.join("locked"))?;
+        std::fs::write(git_dir.join("commondir"), b"missing\n")?;
+        assert_eq!(
+            update()?.updates,
+            expected,
+            "the parent repository supplies the authoritative common directory"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn unborn_remote_branches_can_be_created_locally_if_they_are_new() -> Result {
         let repo = named_repo("unborn");
         let (mappings, specs) = mapping_from_spec("HEAD:refs/remotes/origin/HEAD", &repo);
