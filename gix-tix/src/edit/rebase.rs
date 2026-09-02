@@ -2295,16 +2295,23 @@ fn note_rewrite_edits(
         }
         None => (ObjectId::empty_tree(repo.object_hash()), None),
     };
-    let mut root = original_root;
+    let mut source_state = gix::note::plumbing::State::new(original_root, repo)
+        .map_err(gix::Exn::into_error)
+        .context("could not initialize the source Git notes tree")?;
+    let mut destination_state = gix::note::plumbing::State::new(original_root, repo)
+        .map_err(gix::Exn::into_error)
+        .context("could not initialize the destination Git notes tree")?;
     for &(old, new) in rewrites {
-        let Some(source) = gix::note::plumbing::get(original_root, &old, repo)
+        let Some(source) = source_state
+            .get(&old, repo)
             .map_err(gix::Exn::into_error)
             .context("could not find a Git note to copy")?
         else {
             continue;
         };
         let source = repo.find_blob(source).context("could not read a Git note to copy")?;
-        let destination = gix::note::plumbing::get(root, &new, repo)
+        let destination = destination_state
+            .get(&new, repo)
             .map_err(gix::Exn::into_error)
             .context("could not inspect the successor Git note")?;
         let data = match destination {
@@ -2320,11 +2327,12 @@ fn note_rewrite_edits(
             None => source.data.clone(),
         };
         let note = repo.write_blob(data)?.detach();
-        root = gix::note::plumbing::replace(root, new, note, repo)
+        destination_state
+            .replace(new, note, repo)
             .map_err(gix::Exn::into_error)
-            .context("could not copy a Git note onto its successor")?
-            .tree;
+            .context("could not copy a Git note onto its successor")?;
     }
+    let root = destination_state.root_tree_id();
     if root == original_root {
         return Ok(empty());
     }
@@ -2363,7 +2371,11 @@ fn enrichment_edits(
         None => (ObjectId::empty_tree(repo.object_hash()), None),
     };
     let note = repo.write_blob(data)?.detach();
-    let tree = gix::note::plumbing::replace(root, object, note, repo)
+    let mut state = gix::note::plumbing::State::new(root, repo)
+        .map_err(gix::Exn::into_error)
+        .context("could not initialize the tix enrichment tree")?;
+    let tree = state
+        .replace(object, note, repo)
         .map_err(gix::Exn::into_error)
         .context("could not prepare the tix enrichment")?
         .tree;
