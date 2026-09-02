@@ -42,7 +42,7 @@ impl ThreadSafeRepository {
         options.git_dir_trust = trust.into();
         // Note that we will adjust the `current_dir` later so it matches the value of `core.precomposeUnicode`.
         options.current_dir = Some(gix_fs::current_dir(false).map_err(upwards::Error::CurrentDir)?);
-        Self::open_from_paths(git_dir, worktree_dir, options).map_err(Into::into)
+        Self::open_from_paths(git_dir, worktree_dir, options, None).map_err(Into::into)
     }
 
     /// Try to open a git repository directly from the environment.
