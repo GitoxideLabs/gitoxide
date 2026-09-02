@@ -35,6 +35,8 @@ impl Cache {
         filter_config_section: fn(&gix_config::file::Metadata) -> bool,
         git_install_dir: Option<&std::path::Path>,
         home: Option<&std::path::Path>,
+        git_installation_config_path: Option<&std::path::Path>,
+        system_config_path: Option<&std::path::Path>,
         environment: open::permissions::Environment,
         attributes: open::permissions::Attributes,
         config_permissions: open::permissions::Config,
@@ -50,6 +52,8 @@ impl Cache {
             branch_name,
             git_install_dir,
             home,
+            git_installation_config_path,
+            system_config_path,
             environment,
             config_permissions,
             lossy,
@@ -215,6 +219,8 @@ pub(crate) fn load(
     branch_name: Option<&gix_ref::FullNameRef>,
     git_install_dir: Option<&std::path::Path>,
     home: Option<&std::path::Path>,
+    git_installation_config_path: Option<&std::path::Path>,
+    system_config_path: Option<&std::path::Path>,
     environment @ open::permissions::Environment {
         git_prefix,
         other,
@@ -251,6 +257,10 @@ pub(crate) fn load(
         ..util::base_options(lossy, lenient)
     };
     let git_prefix = &git_prefix;
+    let mut source_env = Cache::make_source_env(environment);
+    let no_system_config = source_env("GIT_CONFIG_NOSYSTEM")
+        .and_then(|value| gix_config::Boolean::try_from(value).ok())
+        .is_some_and(|value| value.0);
     let mut metas = [
         gix_config::source::Kind::GitInstallation,
         gix_config::source::Kind::System,
@@ -260,15 +270,20 @@ pub(crate) fn load(
     .flat_map(|kind| kind.sources())
     .filter_map(|source| {
         match source {
-            gix_config::Source::GitInstallation if !use_installation => return None,
-            gix_config::Source::System if !use_system => return None,
+            gix_config::Source::GitInstallation if !use_installation || no_system_config => return None,
+            gix_config::Source::System if !use_system || no_system_config => return None,
             gix_config::Source::Git if !use_git => return None,
             gix_config::Source::User if !use_user => return None,
             _ => {}
         }
-        source
-            .storage_location(&mut Cache::make_source_env(environment))
-            .map(|p| (source, p))
+        match source {
+            gix_config::Source::GitInstallation => git_installation_config_path,
+            gix_config::Source::System => system_config_path,
+            _ => None,
+        }
+        .map(ToOwned::to_owned)
+        .or_else(|| source.storage_location(&mut source_env))
+        .map(|p| (source, p))
     })
     .map(|(source, path)| gix_config::file::Metadata {
         path: Some(path),
