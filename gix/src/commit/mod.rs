@@ -30,7 +30,14 @@ fn signature_program(
         Format::Ssh => (config.trusted_path(gpg::Ssh::PROGRAM)?, &gpg::Ssh::PROGRAM),
     };
     Ok(program
-        .unwrap_or_else(|| gix_path::from_bstr(default.default_value_or_panic()).into_owned())
+        .unwrap_or_else(|| {
+            let default = gix_path::from_bstr(default.default_value_or_panic()).into_owned();
+            #[cfg(windows)]
+            if let Some(program) = default.to_str().and_then(gix_path::env::installation_program) {
+                return program;
+            }
+            default
+        })
         .into_os_string())
 }
 

@@ -166,6 +166,7 @@ fn sign_ssh(payload: &[u8], options: &Options) -> Result<BString, Error> {
         // Unlike literal keys, resolved key paths can be passed directly to `ssh-keygen -f`.
         None => (options.signing_key.clone(), false),
     };
+    let key = super::ssh_path_argument(std::path::Path::new(&key));
     let mut payload_file = secure_temporary_file()?;
     write_temporary(&mut payload_file, payload)?;
     let payload_path = temporary_path(&mut payload_file)?;
@@ -177,7 +178,7 @@ fn sign_ssh(payload: &[u8], options: &Options) -> Result<BString, Error> {
         command = command.arg("-U");
     }
     let output = command
-        .arg(&payload_path)
+        .arg(super::ssh_path_argument(&payload_path))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

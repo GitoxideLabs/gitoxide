@@ -136,7 +136,18 @@ mod tests {
     ///
     /// Tests are expected to run with a full Git for Windows installation (not MinGit).
     const SHOULD_FIND: &[&str] = &[
-        "sh", "bash", "dash", "diff", "tar", "less", "sed", "awk", "perl", "cygpath",
+        "sh",
+        "bash",
+        "dash",
+        "diff",
+        "tar",
+        "less",
+        "sed",
+        "awk",
+        "perl",
+        "cygpath",
+        "gpg",
+        "ssh-keygen",
     ];
 
     /// Shouldn't find anything nonexistent, or only in PATH or in `bin`s we don't mean to search.

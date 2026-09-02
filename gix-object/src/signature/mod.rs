@@ -11,6 +11,12 @@ pub mod sign;
 #[cfg(feature = "signature")]
 pub mod verify;
 
+#[cfg(feature = "signature")]
+fn ssh_path_argument(path: &std::path::Path) -> std::path::PathBuf {
+    // The mixed `C:/…` form works with native Windows and Git for Windows' MSYS OpenSSH.
+    gix_path::from_bstring(gix_path::to_unix_separators_on_windows(gix_path::into_bstr(path)).into_owned())
+}
+
 /// A borrowed armored signature and its detected format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SignatureRef<'a> {
