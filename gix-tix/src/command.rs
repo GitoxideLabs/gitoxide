@@ -19,7 +19,7 @@ mod travel;
 /// Arguments and commands shared by the standalone `tix` binary and `gix tix`.
 #[derive(Debug, clap::Args)]
 pub struct Platform {
-    /// Draw on the normal screen so panic output remains visible.
+    /// Debug the interactive UI on the normal screen; use `tix show` for one-off queries.
     #[arg(long)]
     no_alt_screen: bool,
     /// Exit after the final frame, optionally replaying read-only INPUTS first.
@@ -1121,6 +1121,11 @@ mod tests {
             "positional revisions remain visible tips"
         );
         assert!(cli.platform.command.is_none(), "omitting a command launches the TUI");
+        let help = Cli::command().render_help().to_string();
+        assert!(
+            help.contains("Debug the interactive UI") && help.contains("use `tix show` for one-off queries"),
+            "top-level help reserves no-alt-screen for debugging and directs one-off queries to show"
+        );
 
         let cli = Cli::try_parse_from(["tix", "--quit-on-finish=jjjl"]).expect("diagnostic inputs parse");
         assert_eq!(cli.platform.quit_on_finish.as_deref(), Some("jjjl"));
