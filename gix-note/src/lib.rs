@@ -3,8 +3,7 @@
 #![deny(missing_docs)]
 
 use gix_error::{CorruptionError, ErrorExt, ResultExt, ValidationError, message};
-use gix_hash::{ObjectId, Prefix, oid};
-use gix_hashtable::{HashMap, HashSet};
+use gix_hash::{ObjectId, oid};
 use gix_object::{
     Find, FindExt, Tree, Write,
     bstr::{BStr, BString, ByteSlice},
@@ -71,10 +70,12 @@ pub fn get(root_tree_id: ObjectId, annotated_object_id: &oid, objects: &impl Fin
 /// tree and any previous note.
 ///
 /// The notes tree is rewritten with the same progressive fanout heuristic as
-/// Git while retaining entries that are not notes. `note` is expected to
-/// reference a blob, but its actual object kind is not verified; the mapping is
-/// always written as a blob-mode tree entry. For repeated edits, `objects`
-/// should have a built-in object cache to accelerate tree retrieval.
+/// Git while retaining entries that are not notes. Untouched fanout subtrees
+/// are kept by object ID and loaded only when the edit or a fanout change needs
+/// their contents. `note` is expected to reference a blob, but its actual object
+/// kind is not verified; the mapping is always written as a blob-mode tree
+/// entry. For repeated edits, `objects` should have a built-in object cache to
+/// accelerate tree retrieval.
 pub fn replace(
     root_tree_id: ObjectId,
     annotated_object_id: ObjectId,
@@ -115,93 +116,294 @@ fn edit(
     note_blob_id: Option<ObjectId>,
     objects: &(impl Find + Write),
 ) -> Result<Edit, Error> {
-    let mut notes = HashMap::default();
+    let hash = root_tree_id.kind();
+    let mut root = InternalNode::default();
     let mut non_notes = Vec::new();
-    let mut existing_fanout = HashSet::default();
-    collect(
-        root_tree_id,
-        BString::default(),
-        Vec::new(),
+    load_subtree(
+        Subtree {
+            prefix: ObjectId::null(hash),
+            prefix_len: 0,
+            path: Vec::new(),
+            tree_id: root_tree_id,
+        },
+        &mut root,
+        0,
         objects,
-        &mut notes,
         &mut non_notes,
-        &mut existing_fanout,
     )?;
-    let previous_note_blob_id = match note_blob_id {
-        Some(note_blob_id) => notes.insert(annotated_object_id, note_blob_id),
-        None => notes.remove(&annotated_object_id),
-    };
+    let previous_note_blob_id = root.remove(&annotated_object_id, 0, objects, &mut non_notes)?;
     if note_blob_id.is_none() && previous_note_blob_id.is_none() {
         return Ok(Edit {
             tree: root_tree_id,
             previous: previous_note_blob_id,
         });
     }
-    let root_tree_id = write(notes, non_notes, existing_fanout, root_tree_id.kind(), objects)?;
+    if let Some(note_blob_id) = note_blob_id {
+        root.insert(
+            Node::Note(Note {
+                annotated_object_id,
+                note_blob_id,
+            }),
+            0,
+            objects,
+            &mut non_notes,
+        )?;
+    }
+    let root_tree_id = write(root, non_notes, hash, objects)?;
     Ok(Edit {
         tree: root_tree_id,
         previous: previous_note_blob_id,
     })
 }
 
-#[derive(Clone)]
-struct NonNote {
+struct TreeEntry {
     path: Vec<BString>,
     mode: EntryMode,
     object_id: ObjectId,
 }
 
-fn collect(
+#[derive(Default)]
+struct InternalNode {
+    children: [Option<Box<Node>>; 16],
+}
+
+enum Node {
+    Internal(InternalNode),
+    Note(Note),
+    Subtree(Subtree),
+}
+
+#[derive(Clone, Copy)]
+struct Note {
+    annotated_object_id: ObjectId,
+    note_blob_id: ObjectId,
+}
+
+// An unopened on-disk fanout directory. Keeping it opaque is what makes edits path-local.
+#[derive(Clone)]
+struct Subtree {
+    prefix: ObjectId,
+    prefix_len: usize,
+    path: Vec<BString>,
     tree_id: ObjectId,
-    hex_prefix: BString,
-    path_prefix: Vec<BString>,
+}
+
+impl Node {
+    fn key(&self) -> &oid {
+        match self {
+            Node::Note(note) => &note.annotated_object_id,
+            Node::Subtree(subtree) => &subtree.prefix,
+            Node::Internal(_) => unreachable!("internal nodes have no object ID key"),
+        }
+    }
+}
+
+impl Subtree {
+    fn contains(&self, id: &oid) -> bool {
+        self.prefix.as_bytes()[..self.prefix_len] == id.as_bytes()[..self.prefix_len]
+    }
+}
+
+impl InternalNode {
+    fn insert(
+        &mut self,
+        entry: Node,
+        nibble: usize,
+        objects: &impl Find,
+        non_notes: &mut Vec<TreeEntry>,
+    ) -> Result<(), Error> {
+        if self.load_matching_subtree(entry.key(), nibble, objects, non_notes)? {
+            return self.insert(entry, nibble, objects, non_notes);
+        }
+
+        let index = nibble_at(entry.key(), nibble);
+        let Some(existing) = self.children[index].take() else {
+            self.children[index] = Some(Box::new(entry));
+            return Ok(());
+        };
+
+        match *existing {
+            Node::Internal(mut child) => {
+                let result = child.insert(entry, nibble + 1, objects, non_notes);
+                self.children[index] = Some(Box::new(Node::Internal(child)));
+                result
+            }
+            Node::Note(note) => {
+                if matches!(&entry, Node::Note(incoming) if incoming.annotated_object_id == note.annotated_object_id) {
+                    return Err(CorruptionError::from(format!(
+                        "Multiple notes map to object {}",
+                        note.annotated_object_id
+                    ))
+                    .raise_erased());
+                }
+                if let Node::Subtree(subtree) = &entry
+                    && subtree.contains(&note.annotated_object_id)
+                {
+                    self.children[index] = Some(Box::new(Node::Note(note)));
+                    return load_subtree(subtree.clone(), self, nibble, objects, non_notes);
+                }
+                self.insert_collision(Node::Note(note), entry, index, nibble, objects, non_notes)
+            }
+            Node::Subtree(subtree) => {
+                if subtree.contains(entry.key()) {
+                    load_subtree(subtree, self, nibble, objects, non_notes)?;
+                    self.insert(entry, nibble, objects, non_notes)
+                } else {
+                    self.insert_collision(Node::Subtree(subtree), entry, index, nibble, objects, non_notes)
+                }
+            }
+        }
+    }
+
+    fn insert_collision(
+        &mut self,
+        existing: Node,
+        entry: Node,
+        index: usize,
+        nibble: usize,
+        objects: &impl Find,
+        non_notes: &mut Vec<TreeEntry>,
+    ) -> Result<(), Error> {
+        let mut child = InternalNode::default();
+        child.insert(existing, nibble + 1, objects, non_notes)?;
+        child.insert(entry, nibble + 1, objects, non_notes)?;
+        self.children[index] = Some(Box::new(Node::Internal(child)));
+        Ok(())
+    }
+
+    fn remove(
+        &mut self,
+        annotated_object_id: &oid,
+        nibble: usize,
+        objects: &impl Find,
+        non_notes: &mut Vec<TreeEntry>,
+    ) -> Result<Option<ObjectId>, Error> {
+        if self.load_matching_subtree(annotated_object_id, nibble, objects, non_notes)? {
+            return self.remove(annotated_object_id, nibble, objects, non_notes);
+        }
+
+        let index = nibble_at(annotated_object_id, nibble);
+        let Some(existing) = self.children[index].take() else {
+            return Ok(None);
+        };
+        match *existing {
+            Node::Internal(mut child) => {
+                let previous = child.remove(annotated_object_id, nibble + 1, objects, non_notes)?;
+                self.children[index] = if previous.is_some() {
+                    child.after_removal()
+                } else {
+                    Some(Box::new(Node::Internal(child)))
+                };
+                Ok(previous)
+            }
+            Node::Note(note) if note.annotated_object_id == annotated_object_id => Ok(Some(note.note_blob_id)),
+            Node::Note(note) => {
+                self.children[index] = Some(Box::new(Node::Note(note)));
+                Ok(None)
+            }
+            Node::Subtree(subtree) if subtree.contains(annotated_object_id) => {
+                load_subtree(subtree, self, nibble, objects, non_notes)?;
+                self.remove(annotated_object_id, nibble, objects, non_notes)
+            }
+            Node::Subtree(subtree) => {
+                self.children[index] = Some(Box::new(Node::Subtree(subtree)));
+                Ok(None)
+            }
+        }
+    }
+
+    fn load_matching_subtree(
+        &mut self,
+        key: &oid,
+        nibble: usize,
+        objects: &impl Find,
+        non_notes: &mut Vec<TreeEntry>,
+    ) -> Result<bool, Error> {
+        let is_match = self.children[0]
+            .as_deref()
+            .is_some_and(|node| matches!(node, Node::Subtree(subtree) if subtree.contains(key)));
+        if !is_match {
+            return Ok(false);
+        }
+        let Node::Subtree(subtree) = *self.children[0].take().expect("the matching subtree is present") else {
+            unreachable!("the matching node was checked to be a subtree")
+        };
+        load_subtree(subtree, self, nibble, objects, non_notes)?;
+        Ok(true)
+    }
+
+    fn after_removal(mut self) -> Option<Box<Node>> {
+        let mut occupied = self.children.iter().enumerate().filter(|(_, child)| child.is_some());
+        let (only_index, _) = occupied.next()?;
+        if occupied.next().is_none()
+            && self.children[only_index]
+                .as_deref()
+                .is_some_and(|node| matches!(node, Node::Note(_)))
+        {
+            return self.children[only_index].take();
+        }
+        Some(Box::new(Node::Internal(self)))
+    }
+}
+
+fn load_subtree(
+    subtree: Subtree,
+    node: &mut InternalNode,
+    nibble: usize,
     objects: &impl Find,
-    notes: &mut HashMap<ObjectId, ObjectId>,
-    non_notes: &mut Vec<NonNote>,
-    existing_fanout: &mut HashSet<FanoutPrefix>,
+    non_notes: &mut Vec<TreeEntry>,
 ) -> Result<(), Error> {
     let mut buf = Vec::new();
     let tree = objects
-        .find_tree(&tree_id, &mut buf)
-        .or_raise_erased(|| message!("Could not load notes tree {tree_id}"))?;
-    let hex_len = tree_id.kind().len_in_hex();
+        .find_tree(&subtree.tree_id, &mut buf)
+        .or_raise_erased(|| message!("Could not load notes tree {}", subtree.tree_id))?;
+    let hex_len = subtree.tree_id.kind().len_in_hex();
+    let prefix_hex_len = subtree.prefix_len * 2;
+    let mut prefix_hex = gix_hash::Kind::hex_buf();
+    prefix_hex.fill(b'0');
+    let _ = subtree.prefix.hex_to_buf(&mut prefix_hex);
     for entry in tree.entries {
-        let mut path = path_prefix.clone();
-        path.push(entry.filename.to_owned());
-        if entry.mode.is_blob() && entry.filename.len() + hex_prefix.len() == hex_len {
-            let mut hex = hex_prefix.clone();
-            hex.extend_from_slice(entry.filename);
-            if let Ok(annotated_object_id) = ObjectId::from_hex(&hex) {
-                for offset in 0..hex_prefix.len() / 2 {
-                    existing_fanout.insert(FanoutPrefix(annotated_object_id.to_prefix(0..offset)));
-                }
-                if notes.insert(annotated_object_id, entry.oid.to_owned()).is_some() {
-                    return Err(
-                        CorruptionError::from(format!("Multiple notes map to object {annotated_object_id}"))
-                            .raise_erased(),
-                    );
-                }
+        if entry.mode.is_blob() && entry.filename.len() + prefix_hex_len == hex_len {
+            let mut hex = prefix_hex;
+            hex[prefix_hex_len..hex_len].copy_from_slice(entry.filename);
+            if let Ok(annotated_object_id) = ObjectId::from_hex(&hex[..hex_len]) {
+                node.insert(
+                    Node::Note(Note {
+                        annotated_object_id,
+                        note_blob_id: entry.oid.to_owned(),
+                    }),
+                    nibble,
+                    objects,
+                    non_notes,
+                )?;
                 continue;
             }
         }
         if entry.mode.is_tree()
             && entry.filename.len() == 2
-            && hex_prefix.len() + 2 < hex_len
+            && prefix_hex_len + 2 < hex_len
             && entry.filename.iter().all(u8::is_ascii_hexdigit)
         {
-            let mut prefix = hex_prefix.clone();
-            prefix.extend_from_slice(entry.filename);
-            collect(
-                entry.oid.to_owned(),
-                prefix,
-                path,
+            let mut path = subtree.path.clone();
+            path.push(entry.filename.to_owned());
+            let mut hex = prefix_hex;
+            hex[prefix_hex_len..prefix_hex_len + 2].copy_from_slice(entry.filename);
+            let prefix = ObjectId::from_hex(&hex[..hex_len]).expect("validated hex produces an object ID");
+            node.insert(
+                Node::Subtree(Subtree {
+                    prefix,
+                    prefix_len: subtree.prefix_len + 1,
+                    path,
+                    tree_id: entry.oid.to_owned(),
+                }),
+                nibble,
                 objects,
-                notes,
                 non_notes,
-                existing_fanout,
             )?;
         } else {
-            non_notes.push(NonNote {
+            let mut path = subtree.path.clone();
+            path.push(entry.filename.to_owned());
+            non_notes.push(TreeEntry {
                 path,
                 mode: entry.mode,
                 object_id: entry.oid.to_owned(),
@@ -212,31 +414,22 @@ fn collect(
 }
 
 fn write(
-    notes: HashMap<ObjectId, ObjectId>,
-    non_notes: Vec<NonNote>,
-    existing_fanout: HashSet<FanoutPrefix>,
+    mut root: InternalNode,
+    mut non_notes: Vec<TreeEntry>,
     hash: gix_hash::Kind,
     objects: &(impl Find + Write),
 ) -> Result<ObjectId, Error> {
-    // A notes path contains the full hexadecimal ID plus one slash for each byte consumed as a fanout directory.
-    // At least one byte remains for the leaf name, so allowing one slash per hash byte is a simple one-byte overestimate.
-    const NOTE_PATH_BUFFER_SIZE: usize =
-        gix_hash::Kind::longest().len_in_hex() + gix_hash::Kind::longest().len_in_bytes();
-
+    let mut notes = Vec::new();
+    collect_for_write(&mut root, 0, 0, objects, &mut non_notes, &mut notes)?;
     let mut editor = Editor::new(Tree { entries: Vec::new() }, objects, hash);
     for entry in non_notes {
         editor
             .upsert(entry.path.iter(), entry.mode.kind(), entry.object_id)
             .or_raise_erased(|| message("Could not restore a non-note tree entry"))?;
     }
-
-    let bucket_counts = fanout_bucket_counts(notes.keys());
-    let mut path_buf = [0u8; NOTE_PATH_BUFFER_SIZE];
-    for (annotated_object_id, note_blob_id) in notes {
-        let fanout = fanout(&annotated_object_id, &bucket_counts, &existing_fanout);
-        let path = note_path(&annotated_object_id, fanout, &mut path_buf);
+    for entry in notes {
         editor
-            .upsert(path.split_str("/"), EntryKind::Blob, note_blob_id)
+            .upsert(entry.path.iter(), entry.mode.kind(), entry.object_id)
             .or_raise_erased(|| message("Could not add a note tree entry"))?;
     }
     editor
@@ -244,62 +437,79 @@ fn write(
         .or_raise_erased(|| message("Could not write the notes tree"))
 }
 
-/// Return the next-nibble note counts for every possible two-hex-digit fanout prefix.
-///
-/// `ids` yields the annotated object IDs that will become note-tree entry names; the IDs of their note blobs do not
-/// affect fanout.
-///
-/// The returned map associates each possible byte-aligned hexadecimal prefix with 16 counters, one for each possible value
-/// of the following nibble. Counts saturate at two because Git creates the next fanout level only when all 16 slots at a
-/// candidate level represent internal nodes, which requires at least two distinct notes per slot.
-fn fanout_bucket_counts<'a>(ids: impl Iterator<Item = &'a ObjectId>) -> HashMap<FanoutPrefix, [u8; 16]> {
-    let mut out = HashMap::default();
-    for id in ids {
-        for offset in 0..id.as_bytes().len().saturating_sub(1) {
-            let counts = out.entry(FanoutPrefix(id.to_prefix(0..offset))).or_insert([0u8; 16]);
-            let nibble = id.as_bytes()[offset] >> 4;
-            let index = usize::from(nibble);
-            counts[index] = counts[index].saturating_add(1).min(2);
+fn collect_for_write(
+    node: &mut InternalNode,
+    nibble: usize,
+    fanout: usize,
+    objects: &impl Find,
+    non_notes: &mut Vec<TreeEntry>,
+    notes: &mut Vec<TreeEntry>,
+) -> Result<(), Error> {
+    let fanout = if nibble.is_multiple_of(2)
+        && nibble <= 2 * fanout
+        && node
+            .children
+            .iter()
+            .all(|child| matches!(child.as_deref(), Some(Node::Internal(_) | Node::Subtree(_))))
+    {
+        fanout + 1
+    } else {
+        fanout
+    };
+
+    for index in 0..node.children.len() {
+        while let Some(entry) = node.children[index].take() {
+            match *entry {
+                Node::Internal(mut child) => {
+                    collect_for_write(&mut child, nibble + 1, fanout, objects, non_notes, notes)?;
+                    node.children[index] = Some(Box::new(Node::Internal(child)));
+                    break;
+                }
+                Node::Note(note) => {
+                    notes.push(TreeEntry {
+                        path: note_path_components(&note.annotated_object_id, fanout),
+                        mode: EntryKind::Blob.into(),
+                        object_id: note.note_blob_id,
+                    });
+                    node.children[index] = Some(Box::new(Node::Note(note)));
+                    break;
+                }
+                Node::Subtree(subtree) if nibble < 2 * fanout => {
+                    notes.push(TreeEntry {
+                        path: subtree.path.clone(),
+                        mode: EntryKind::Tree.into(),
+                        object_id: subtree.tree_id,
+                    });
+                    node.children[index] = Some(Box::new(Node::Subtree(subtree)));
+                    break;
+                }
+                Node::Subtree(subtree) => {
+                    load_subtree(subtree, node, nibble, objects, non_notes)?;
+                }
+            }
         }
     }
-    out
+    Ok(())
 }
 
-/// Determine how many leading bytes of `id` become two-hex-digit fanout directories.
-///
-/// `bucket_counts` describes the populated next-nibble buckets below every prefix. `existing_fanout` identifies prefixes
-/// that were already directories before the edit. Git creates a level only once every bucket contains at least two notes,
-/// but retains an existing level while every bucket remains occupied; this hysteresis avoids tree churn around the creation
-/// threshold. The returned number is both the fanout depth and the byte offset at which the remaining hexadecimal ID becomes
-/// the note's leaf name.
-fn fanout(id: &oid, bucket_counts: &HashMap<FanoutPrefix, [u8; 16]>, existing_fanout: &HashSet<FanoutPrefix>) -> usize {
-    let mut fanout = 0;
-    while fanout < id.as_bytes().len().saturating_sub(1) {
-        let prefix = FanoutPrefix(id.to_prefix(0..fanout));
-        let should_fanout = bucket_counts.get(&prefix).is_some_and(|counts| {
-            counts.iter().all(|count| *count == 2)
-                || (existing_fanout.contains(&prefix) && counts.iter().all(|count| *count >= 1))
-        });
-        if !should_fanout {
-            break;
-        }
-        fanout += 1;
-    }
-    fanout
+fn nibble_at(id: &oid, nibble: usize) -> usize {
+    let byte = id.as_bytes()[nibble / 2];
+    usize::from(if nibble.is_multiple_of(2) {
+        byte >> 4
+    } else {
+        byte & 0x0f
+    })
 }
 
-/// A prefix key whose hash is compatible with `gix_hashtable`'s object-ID-specialized hasher.
-///
-/// Equality includes the prefix length through [`Prefix`], while hashing writes only its zero-padded object-ID bytes.
-/// Different lengths can therefore collide when their significant bytes are all zero, but equality still distinguishes
-/// them and avoids requiring a separate hash table for each prefix depth.
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct FanoutPrefix(Prefix);
+fn note_path_components(id: &oid, fanout: usize) -> Vec<BString> {
+    // A notes path contains the full hexadecimal ID plus one slash for each byte consumed as a fanout directory.
+    // At least one byte remains for the leaf name, so allowing one slash per hash byte is a simple one-byte overestimate.
+    const NOTE_PATH_BUFFER_SIZE: usize =
+        gix_hash::Kind::longest().len_in_hex() + gix_hash::Kind::longest().len_in_bytes();
 
-impl std::hash::Hash for FanoutPrefix {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::hash::Hash::hash(self.0.as_oid(), state);
-    }
+    let mut path_buf = [0u8; NOTE_PATH_BUFFER_SIZE];
+    let path = note_path(id, fanout, &mut path_buf);
+    path.split_str("/").map(BString::from).collect()
 }
 
 /// Write the notes-tree path for `id` with `fanout` leading bytes represented as directory components.
