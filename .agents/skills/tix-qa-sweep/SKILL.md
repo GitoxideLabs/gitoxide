@@ -12,7 +12,7 @@ Repair every visible non-base commit without squashing, reordering, or skipping 
 Before running repository commands, determine which profile the user wants:
 
 - **Fast** runs formatting checks, `cargo machete`, Clippy, and `cargo deny`.
-- **Thorough** runs the complete local QA script, including the fast checks, tests, documentation tests, journey tests, worktree checks, check enrichment, and cleanup.
+- **Thorough** runs the complete local QA script, including the fast checks, tests, documentation tests, journey tests, worktree checks, check enrichment, and target-size monitoring.
 
 If the request explicitly says fast or thorough, infer the corresponding profile. Otherwise, use a questionnaire when available to ask the user to choose **Fast** or **Thorough**. If no questionnaire is available, ask for the choice in chat and do not start the sweep until the user answers. Do not infer a profile from a generic request to validate or sweep.
 
@@ -28,13 +28,13 @@ Use `--fast` or `--thorough`, respectively, for every copied-script invocation i
 
 ## Sweep
 
-Visit the recorded change IDs once in oldest-first order. A fast sweep keeps Cargo's build cache between change IDs; a successful thorough check cleans before moving to the next change ID.
+Visit the recorded change IDs once in oldest-first order. Keep Cargo's build cache between change IDs and monitor its size during a thorough sweep. In this workspace, expect a warm `target/` to settle around 70 GB. The thorough script reports its size with `dua` after each successful check; do not infer it from APFS free-space reporting or delete it automatically. If it grows materially beyond that expectation, stop and report the measured size.
 
 For each recorded change ID:
 
 1. Run `tix travel <change-id>` directly and verify that `HEAD` is the intended change.
 2. From the repository root, run `<temp-dir>/ci-check-local.sh <mode-flag>` with the selected `--fast` or `--thorough` flag.
-3. When it passes, run `tix enrich tree checks-pass` for the checked-out change, require it to succeed, then continue to the next change ID without amending.
+3. When it passes, run `tix enrich tree checks-pass` for a fast sweep; the thorough script already records that enrichment. Require enrichment to succeed, then continue to the next change ID without amending.
 4. If `cargo fmt --all -- --check` fails, run `cargo fmt --all`, stage and amend all resulting formatting changes with signing disabled, require a clean worktree, and rerun the selected profile. Formatting changes are always wanted and do not need the repair loop.
 5. For any other failure, use the repair loop below and rerun the selected profile until it passes.
 
