@@ -368,6 +368,9 @@ without trading responsiveness for metadata that is not visible.
 - Attribution keys with identical displayed actor lists are grouped, for example
   `Co, A: [GPT 5.6]`.
 - Actors whose email ends in `@users.noreply.github.com` are italicized.
+- Actors matching Git's configured author are bold bright cyan, distinct from
+  other actors' regular green. Both identities are resolved through the mailmap
+  before comparing names and emails, including when raw names are displayed.
 - Full-actor mode shows author emails and attribution actors but hides the commit
   title. Classified agent emails remain hidden.
 - A commit message containing `--- agent` or `<!-- agent -->` receives a bright

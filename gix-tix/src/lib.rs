@@ -1367,12 +1367,13 @@ fn event_loop(
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (mut view_repository, recovered_at_startup) = open_history_repository(&mut repository_path, &common_dir)?;
     view_repository.object_cache_size(None);
-    let (mut repository_is_bare, mut mailmap, mut ref_snapshot, mut worktree_head_unborn) = {
+    let (mut repository_is_bare, mut mailmap, mut ref_snapshot, mut worktree_head_unborn, configured_author) = {
         let bare = view_repository.workdir().is_none();
         let mailmap = view_repository.open_mailmap();
         let refs = history::snapshot(&view_repository, &revisions, &hide, false)?;
         let unborn = !bare && view_repository.head()?.is_unborn();
-        (bare, mailmap, refs, unborn)
+        let configured_author = configured_author_identity(&view_repository);
+        (bare, mailmap, refs, unborn, configured_author)
     };
     if recovered_at_startup {
         repository = view_repository.into_sync();
@@ -1405,6 +1406,7 @@ fn event_loop(
     );
 
     let mut app = App::new(1);
+    app.set_configured_author(configured_author);
     app.set_view_tips(&ref_snapshot.view_tips);
     app.set_worktree_head_unborn(worktree_head_unborn);
     app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
@@ -1527,6 +1529,7 @@ fn event_loop(
         {
             recovered.object_cache_size(None);
             mailmap = recovered.open_mailmap();
+            app.set_configured_author(configured_author_identity(&recovered));
             fill_repository.path.clone_from(&repository_path);
             fill_repository.bare = true;
             fill_repository.retain = false;
@@ -1948,6 +1951,7 @@ fn event_loop(
                         let next_repository_path = next_repository.git_dir().to_owned();
                         let next_repository_is_bare = next_repository.workdir().is_none();
                         let next_mailmap = next_repository.open_mailmap();
+                        let next_configured_author = configured_author_identity(&next_repository);
                         let next_head_unborn = !next_repository_is_bare && next_repository.head()?.is_unborn();
                         drop(next_repository);
                         std::env::set_current_dir(&preview.path)
@@ -1979,6 +1983,7 @@ fn event_loop(
                         app.worktree_changes.error = None;
                         app.set_worktree_conflicted(false);
                         app.set_worktree_changes_available(!repository_is_bare);
+                        app.set_configured_author(next_configured_author);
                         app.set_view_tips(&ref_snapshot.view_tips);
                         app.set_worktree_head_unborn(worktree_head_unborn);
                         app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
@@ -2416,6 +2421,15 @@ fn event_loop(
                 Err(_err) if worktree_repository_is_gone(&repository_path) => continue,
                 Err(err) => return Err(err).context("could not inspect changed references"),
             };
+            match open_repository(&repository_path, repository_is_bare, false) {
+                Ok(configured_repository) => {
+                    app.set_configured_author(configured_author_identity(&configured_repository));
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "could not refresh configured Git author");
+                    app.set_configured_author(None);
+                }
+            }
             let next = history::snapshot(&repository, &revisions, &hide, false)?;
             let hidden_changed = next.hidden != ref_snapshot.hidden;
             let worktree_tips_changed = ref_tree.is_active() && next.worktrees != ref_snapshot.worktrees;
@@ -2797,6 +2811,7 @@ fn event_loop(
                                 let common_repository = recover_common_repository(&common_dir)
                                     .context("could not leave the worktree before removing it")?;
                                 mailmap = common_repository.open_mailmap();
+                                app.set_configured_author(configured_author_identity(&common_repository));
                                 repository_path.clone_from(&common_dir);
                                 repository_is_bare = true;
                                 fill_repository.path.clone_from(&common_dir);
@@ -6645,6 +6660,17 @@ fn open_repository(repository_path: &Path, bare: bool, isolated: bool) -> Result
         options
     };
     Ok(gix::open_opts(repository_path, options)?)
+}
+
+fn configured_author_identity(repository: &gix::Repository) -> Option<gix::actor::Identity> {
+    match repository.author() {
+        Some(Ok(author)) => Some(author.actor().trim().to_owned()),
+        Some(Err(err)) => {
+            tracing::warn!(error = %err, "could not resolve configured Git author");
+            None
+        }
+        None => None,
+    }
 }
 
 fn open_history_repository(repository_path: &mut PathBuf, common_dir: &Path) -> Result<(gix::Repository, bool)> {
