@@ -94,15 +94,18 @@ fn bases_match_git() {
 
     assert_eq!(decimal("0x10"), Some(16), "0x is hexadecimal");
     assert_eq!(decimal("0X1F"), Some(31), "the prefix is case insensitive");
+    assert_eq!(decimal("+0x10"), Some(16), "a positive sign precedes the prefix");
     assert_eq!(decimal("-0x10"), Some(-16), "a sign precedes the prefix");
     assert_eq!(decimal("010"), Some(8), "a leading zero is octal, not decimal");
+    assert_eq!(decimal("+010"), Some(8), "octal values may have a positive sign");
+    assert_eq!(decimal("-010"), Some(-8), "octal values may have a negative sign");
     assert_eq!(decimal("00"), Some(0), "a second zero is an octal digit");
     assert_eq!(decimal("0"), Some(0), "a lone zero stays decimal");
 
     assert_eq!(
         decimal("0x10k"),
         Some(16 * 1024),
-        "a suffix applies to a hexadecimal value"
+        "a suffix applies to a hexadecimal value…"
     );
     assert_eq!(decimal("0x10K"), Some(16 * 1024), "…in either case");
     assert_eq!(decimal("010k"), Some(8 * 1024), "…and to an octal one");
@@ -112,13 +115,21 @@ fn bases_match_git() {
         Some(i64::MAX),
         "the whole range is available in hexadecimal"
     );
+    assert!(
+        Integer::try_from("0x8000000000000000").is_err(),
+        "one above i64::MAX is rejected"
+    );
     // `git_parse_signed()` bounds values at `-max - 1` since git 2.50; up to 2.49 the
     // bound was `-max`, which rejected this value. `main` already accepted it in
     // decimal form, so only the hexadecimal spelling is new here.
     assert_eq!(
-        decimal("-9223372036854775808"),
+        decimal("-0x8000000000000000"),
         Some(i64::MIN),
-        "including the value whose magnitude does not fit"
+        "including the value whose magnitude Git before 2.50 rejected"
+    );
+    assert!(
+        Integer::try_from("-0x8000000000000001").is_err(),
+        "one below i64::MIN is rejected"
     );
 
     for invalid in ["08", "09", "0x", "0xg", "0o17"] {
@@ -126,6 +137,20 @@ fn bases_match_git() {
             Integer::try_from(invalid).is_err(),
             "`{invalid}` is rejected by git too"
         );
+    }
+
+    for prefix in ["0", "0x", "0X"] {
+        for outer_sign in ["", "+", "-"] {
+            for inner_sign in ["+", "-"] {
+                for suffix in ["", "k"] {
+                    let invalid = format!("{outer_sign}{prefix}{inner_sign}1{suffix}");
+                    assert!(
+                        Integer::try_from(invalid.as_str()).is_err(),
+                        "`{invalid}` is rejected because a sign is only valid before the prefix"
+                    );
+                }
+            }
+        }
     }
 
     // `0b101` is deliberately absent above. glibc 2.38 taught `strtoimax()` the C2x
