@@ -1,0 +1,53 @@
+[package]
+name = "gix-odb-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[package.metadata.cargo-machete]
+ignored = [
+    # Used by the source-included shared ODB fixture module.
+    "filetime",
+    "gix-features",
+    "gix-testtools",
+    "tar",
+]
+
+[dependencies]
+filetime = "0.2.29"
+libfuzzer-sys = "0.4"
+tar = { version = "0.4.46", default-features = false }
+
+[dependencies.gix-features]
+path = "../../gix-features"
+features = ["progress"]
+
+[dependencies.gix-hash]
+path = "../../gix-hash"
+features = ["sha1", "sha256"]
+
+[dependencies.gix-object]
+path = "../../gix-object"
+
+[dependencies.gix-odb]
+path = ".."
+features = ["sha1", "test-support"]
+
+[dependencies.gix-testtools]
+path = "../../tests/tools"
+default-features = false
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "dynamic_store"
+path = "fuzz_targets/dynamic_store.rs"
+test = false
+doc = false

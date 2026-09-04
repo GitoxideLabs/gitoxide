@@ -193,6 +193,7 @@ where
                         repo.object_hash(),
                         write_pack_options,
                     )?;
+                    repo.objects.store_ref().mark_disk_state_stale();
                     may_read_to_end = true;
                     Some(res)
                 } else {

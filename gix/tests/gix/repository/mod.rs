@@ -145,9 +145,7 @@ mod dirwalk {
 #[test]
 fn size_in_memory() {
     let actual_size = std::mem::size_of::<Repository>();
-    // The selected index path adds one `PathBuf` to the repository.
-    // Network-client features add protocol permission caching to `Repository::config`,
-    // which grows the type by one more cached cell.
+    // The selected index path, network-client features, and object refresh policy add cached repository state.
     let limit = 1500;
     assert!(
         actual_size <= limit,
