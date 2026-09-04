@@ -871,7 +871,8 @@ space first; changes blocks adapt within the remaining history width.
   signs it when commit-signing configuration is enabled, and rewrites every
   linear descendant with unchanged trees and corrected parentage. Descendants
   whose parent changed retain that original parent for cherry-pick replay during
-  time travel; the edited commit itself needs no replay marker.
+  time travel. Rewording an already-pending commit retains its recorded parent;
+  an edited commit whose tree and parent are already final needs no replay marker.
   Mutable refs follow every rewritten commit; tags and remote-tracking refs remain
   unchanged.
 - Every commit object actually rewritten by an edit receives the repository's
