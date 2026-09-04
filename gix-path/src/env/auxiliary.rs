@@ -55,9 +55,8 @@ const MSYS_USR_VARIANTS: &[&str] = &["mingw64", "mingw32", "clangarm64", "clang6
 /// Currently this is used only for finding the path to an `sh.exe` associated with Git. This is
 /// separate from `installation_config()` and `installation_config_prefix()` in `gix_path::env`.
 /// This is *not* suitable for finding the highest-scoped configuration file, because that could be
-/// installed in an unusual place, or customized via `GIT_CONFIG_SYSTEM` or `GIT_CONFIG_NOSYSTEM`,
-/// all of which `installation_config()` should reflect. Likewise, `installation_config_prefix()`
-/// has strong uses, such as to find a directory inside `ProgramData` containing configuration.
+/// installed in an unusual place. Likewise, `installation_config_prefix()` has strong uses, such
+/// as to find a directory inside `ProgramData` containing configuration.
 /// But it is possible that some marginal uses of `installation_config_prefix()`, if they do not
 /// really relate to configuration, could be replaced with `git_for_windows_root()` in the future.
 fn git_for_windows_root() -> Option<&'static Path> {

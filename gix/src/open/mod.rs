@@ -35,6 +35,8 @@ pub struct Options {
     pub(crate) bail_if_untrusted: bool,
     pub(crate) api_config_overrides: Vec<BString>,
     pub(crate) cli_config_overrides: Vec<BString>,
+    pub(crate) git_installation_config_path: Option<Box<std::path::Path>>,
+    pub(crate) system_config_path: Option<Box<std::path::Path>>,
     /// Whether repository-local environment variables like `GIT_WORK_TREE` and `GIT_INDEX_FILE` may be applied.
     /// This is disabled when reusing these options to enter another repository.
     pub(crate) use_repository_local_environment: bool,

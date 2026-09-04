@@ -740,6 +740,7 @@ mod locations {
 }
 
 mod exe_info {
+    use bstr::ByteSlice;
     use std::{
         ffi::{OsStr, OsString},
         path::{Path, PathBuf},
@@ -748,10 +749,40 @@ mod exe_info {
 
     use serial_test::serial;
 
+    #[cfg(unix)]
+    use crate::env::git::{ConfigPaths, config_paths_from_executable_at};
     use crate::env::{
-        git::{NULL_DEVICE, exe_info},
+        git::{NULL_DEVICE, config_paths_from_executable},
         tests::CurrentDir,
     };
+
+    fn exe_info() -> Option<bstr::BString> {
+        config_paths_from_executable().installation
+    }
+
+    #[cfg(unix)]
+    fn fake_git(script: &str) -> (tempfile::TempDir, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tempdir = tempfile::tempdir().expect("can create fake Git directory");
+        let executable = tempdir.path().join("git");
+        std::fs::write(&executable, script).expect("can write fake Git");
+        let mut permissions = std::fs::metadata(&executable)
+            .expect("fake Git has metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).expect("can make fake Git executable");
+        (tempdir, executable)
+    }
+
+    #[cfg(unix)]
+    fn invocations(executable: &Path) -> Vec<String> {
+        std::fs::read_to_string(executable.with_extension("log"))
+            .expect("invocation log exists")
+            .lines()
+            .map(ToOwned::to_owned)
+            .collect()
+    }
 
     /// This is a copy from the respective type in `gix-testtools` - deduplicate if it can ever be a dependency again.
     struct Env(Vec<(OsString, Option<OsString>)>);
@@ -866,10 +897,7 @@ mod exe_info {
             .map(crate::from_bstring)
             .expect("It is present in the test environment (nonempty config)");
 
-        assert!(
-            path.is_absolute(),
-            "It is absolute (unless overridden such as with GIT_CONFIG_SYSTEM)"
-        );
+        assert!(path.is_absolute(), "Git reports an absolute installation path");
         assert!(
             path.exists(),
             "It should exist on disk, since `git config` just found an entry there"
@@ -948,129 +976,157 @@ mod exe_info {
 
     #[test]
     #[serial]
-    #[cfg(not(target_os = "macos"))] // Assumes no higher "unknown" scope. The `nosystem` case works.
-    fn never_from_local_scope() {
+    fn configuration_query_ignores_ambient_config_and_local_repo() {
+        let expected = config_paths_from_executable();
         let repo = local_config_repo();
-
-        let _cwd = CurrentDir::set(repo.path()).expect("can change to repo dir");
-        let _env = Env::new()
-            .set("GIT_CONFIG_SYSTEM", NULL_DEVICE)
-            .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
-
-        let maybe_path = exe_info();
-        assert_eq!(
-            maybe_path, None,
-            "Should find no config path if the config would be local (empty system config)"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn never_from_local_scope_nosystem() {
-        let repo = local_config_repo();
-
+        let config_path = repo.path().join(".git").join("config");
         let _cwd = CurrentDir::set(repo.path()).expect("can change to repo dir");
         let _env = Env::new()
             .set("GIT_CONFIG_NOSYSTEM", "1")
-            .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+            .set("GIT_CONFIG_SYSTEM", &config_path)
+            .set("GIT_CONFIG_GLOBAL", &config_path)
+            .set("GIT_CONFIG", &config_path)
+            .set("GIT_CONFIG_COUNT", "1")
+            .set("GIT_CONFIG_KEY_0", "include.path")
+            .set("GIT_CONFIG_VALUE_0", &config_path)
+            .set("GIT_CONFIG_PARAMETERS", "invalid");
 
-        let maybe_path = exe_info();
         assert_eq!(
-            maybe_path, None,
-            "Should find no config path if the config would be local (suppressed system config)"
+            config_paths_from_executable(),
+            expected,
+            "configuration discovery is independent of ambient overrides and repository-local configuration"
         );
     }
 
     #[test]
-    #[serial]
-    #[cfg(not(target_os = "macos"))] // Assumes no higher "unknown" scope. The `nosystem` case works.
-    fn never_from_local_scope_even_if_temp_is_here() {
-        let repo = local_config_repo();
-        let repo_path = repo.path().canonicalize().expect("repo path is valid and exists");
+    #[cfg(unix)]
+    fn one_scoped_query_finds_both_config_paths() {
+        let (_tempdir, executable) = fake_git(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "${0}.log"
+printf 'unknown\000file:/installation/gitconfig\000core.one\000system\000file:/system/gitconfig\000core.two\000'
+"#,
+        );
 
-        let _cwd = CurrentDir::set(&repo_path).expect("can change to repo dir");
-        let _env = set_temp_env_vars(&repo_path)
-            .set("GIT_CONFIG_SYSTEM", NULL_DEVICE)
-            .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
-
-        let maybe_path = exe_info();
+        let paths = config_paths_from_executable_at(executable.clone()).expect("fake Git can be queried");
         assert_eq!(
-            maybe_path, None,
-            "Should find no config path if the config would be local even in a `/tmp`-like dir (empty system config)"
+            paths,
+            ConfigPaths {
+                installation: Some("/installation/gitconfig".into()),
+                installation_is_system: false,
+                system: Some("/system/gitconfig".into()),
+            }
+        );
+        let invocations = invocations(&executable);
+        assert_eq!(
+            invocations.len(),
+            1,
+            "a successful scoped query obtains both paths in one invocation"
+        );
+        assert!(
+            invocations[0].contains("--no-includes"),
+            "included files must not be mistaken for top-level configuration paths"
         );
     }
 
     #[test]
-    #[serial]
-    fn never_from_local_scope_even_if_temp_is_here_nosystem() {
-        let repo = local_config_repo();
-        let repo_path = repo.path().canonicalize().expect("repo path is valid and exists");
+    #[cfg(unix)]
+    fn retries_without_scope_for_old_git() {
+        let (_tempdir, executable) = fake_git(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "${0}.log"
+case " $* " in
+  *" --show-scope "*) exit 129 ;;
+esac
+printf 'file:/legacy/gitconfig\000core.one\000'
+"#,
+        );
 
-        let _cwd = CurrentDir::set(&repo_path).expect("can change to repo dir");
-        let _env = set_temp_env_vars(&repo_path)
-            .set("GIT_CONFIG_NOSYSTEM", "1")
-            .set("GIT_CONFIG_GLOBAL", NULL_DEVICE);
-
-        let maybe_path = exe_info();
+        let paths = config_paths_from_executable_at(executable.clone()).expect("fake Git can be queried");
         assert_eq!(
-            maybe_path, None,
-            "Should find no config path if the config would be local even in a `/tmp`-like dir (suppressed system config)"
+            paths,
+            ConfigPaths {
+                installation: Some("/legacy/gitconfig".into()),
+                ..Default::default()
+            },
+            "the legacy query preserves installation-config discovery"
+        );
+        let invocations = invocations(&executable);
+        assert_eq!(invocations.len(), 2, "old Git is retried once");
+        assert!(
+            invocations.first().is_some_and(|line| line.contains("--show-scope")),
+            "the first query requests scopes"
+        );
+        assert!(
+            invocations.get(1).is_some_and(|line| !line.contains("--show-scope")),
+            "the fallback query omits unsupported scope reporting"
         );
     }
 
     #[test]
-    #[serial]
-    fn never_from_git_config_env_var() {
-        let repo = local_config_repo();
-
-        // Get an absolute path to a config file that is non-UNC if possible so any Git accepts it.
-        let config_path = std::env::current_dir()
-            .expect("got CWD")
-            .join(repo.path())
-            .join(".git")
-            .join("config")
-            .to_str()
-            .expect("valid UTF-8")
-            .to_owned();
-
-        let _env = Env::new()
-            .set("GIT_CONFIG_NOSYSTEM", "1")
-            .set("GIT_CONFIG_GLOBAL", NULL_DEVICE)
-            .set("GIT_CONFIG", config_path);
-
-        let maybe_path = exe_info();
-        assert_eq!(
-            maybe_path, None,
-            "Should find no config path from GIT_CONFIG (even if nonempty)"
-        );
-    }
-
-    #[test]
-    fn first_file_from_config_with_origin() {
-        let macos = "file:/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig\0credential.helper\0file:/Users/byron/.gitconfig\0push.default\0";
-        let win_msys =
-            "file:C:/git-sdk-64/etc/gitconfig\0core.symlinks\0file:C:/git-sdk-64/etc/gitconfig\0core.autocrlf\0";
-        let win_cmd = "file:C:/Program Files/Git/etc/gitconfig\0diff.astextplain.textconv\0file:C:/Program Files/Git/etc/gitconfig\0filter.lfs.clean\0";
-        let win_msys_old = "file:C:\\ProgramData/Git/config\0diff.astextplain.textconv\0file:C:\\ProgramData/Git/config\0filter.lfs.clean\0";
-        let linux = "file:/home/parallels/.gitconfig\0core.excludesfile\0";
+    fn config_paths_from_config_with_origin() {
+        let macos = "unknown\0file:/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig\0credential.helper\0global\0file:/Users/byron/.gitconfig\0push.default\0";
+        let win_msys = "system\0file:C:/git-sdk-64/etc/gitconfig\0core.symlinks\0system\0file:C:/git-sdk-64/etc/gitconfig\0core.autocrlf\0";
+        let win_cmd = "system\0file:C:/Program Files/Git/etc/gitconfig\0diff.astextplain.textconv\0system\0file:C:/Program Files/Git/etc/gitconfig\0filter.lfs.clean\0";
+        let win_cmd_with_system = "system\0file:C:/Program Files/Git/etc/gitconfig\0diff.astextplain.textconv\0system\0file:C:/ProgramData/Git/config\0core.autocrlf\0";
+        let win_msys_old = "system\0file:C:\\ProgramData/Git/config\0diff.astextplain.textconv\0system\0file:C:\\ProgramData/Git/config\0filter.lfs.clean\0";
+        let linux = "global\0file:/home/parallels/.gitconfig\0core.excludesfile\0";
         let bogus = "something unexpected";
         let empty = "";
 
         for (source, expected) in [
             (
                 macos,
-                Some("/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig"),
+                (
+                    Some("/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig"),
+                    false,
+                    None,
+                ),
             ),
-            (win_msys, Some("C:/git-sdk-64/etc/gitconfig")),
-            (win_msys_old, Some(r"C:\ProgramData/Git/config")),
-            (win_cmd, Some("C:/Program Files/Git/etc/gitconfig")),
-            (linux, Some("/home/parallels/.gitconfig")),
-            (bogus, None),
-            (empty, None),
+            (
+                win_msys,
+                (
+                    Some("C:/git-sdk-64/etc/gitconfig"),
+                    true,
+                    Some("C:/git-sdk-64/etc/gitconfig"),
+                ),
+            ),
+            (
+                win_msys_old,
+                (
+                    Some(r"C:\ProgramData/Git/config"),
+                    true,
+                    Some(r"C:\ProgramData/Git/config"),
+                ),
+            ),
+            (
+                win_cmd,
+                (
+                    Some("C:/Program Files/Git/etc/gitconfig"),
+                    true,
+                    Some("C:/Program Files/Git/etc/gitconfig"),
+                ),
+            ),
+            (
+                win_cmd_with_system,
+                (
+                    Some("C:/Program Files/Git/etc/gitconfig"),
+                    true,
+                    Some("C:/ProgramData/Git/config"),
+                ),
+            ),
+            (linux, (Some("/home/parallels/.gitconfig"), false, None)),
+            (bogus, (None, false, None)),
+            (empty, (None, false, None)),
         ] {
+            let actual = crate::env::git::config_paths_from_config_with_origin(source.into());
             assert_eq!(
-                crate::env::git::first_file_from_config_with_origin(source.into()),
-                expected.map(Into::into)
+                (
+                    actual.0.map(|path| path.to_str().expect("test paths are UTF-8")),
+                    actual.1,
+                    actual.2.map(|path| path.to_str().expect("test paths are UTF-8")),
+                ),
+                expected
             );
         }
     }

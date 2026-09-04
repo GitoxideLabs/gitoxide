@@ -444,6 +444,8 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
         None,
         git_install_dir.as_deref(),
         home.as_deref(),
+        options.git_installation_config_path.as_deref(),
+        options.system_config_path.as_deref(),
         environment,
         options.permissions.config,
         options.lossy_config,

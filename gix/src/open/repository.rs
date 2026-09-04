@@ -181,6 +181,8 @@ impl ThreadSafeRepository {
                 },
             ref api_config_overrides,
             ref cli_config_overrides,
+            ref git_installation_config_path,
+            ref system_config_path,
             use_repository_local_environment,
             ref mut current_dir,
         } = options;
@@ -255,6 +257,8 @@ impl ThreadSafeRepository {
             filter_config_section,
             git_install_dir.as_deref(),
             home.as_deref(),
+            git_installation_config_path.as_deref(),
+            system_config_path.as_deref(),
             *env,
             attributes,
             config,
