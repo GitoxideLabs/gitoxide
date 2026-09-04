@@ -82,3 +82,46 @@ fn as_decimal() {
     assert_eq!(decimal(&format!("{}g", i64::MAX)), None, "overflow results in None");
     assert_eq!(decimal(&format!("{}g", i64::MIN)), None, "underflow results in None");
 }
+
+/// git hands config integers to `strtoimax()` with a base of `0`, so a `0x` prefix is
+/// hexadecimal and a leading `0` is octal. Verified against `git config --type=int`
+/// with git 2.50.1; the expectations below are that command's output.
+#[test]
+fn bases_match_git() {
+    fn decimal(input: &str) -> Option<i64> {
+        Integer::try_from(input).ok().and_then(|int| int.to_decimal())
+    }
+
+    assert_eq!(decimal("0x10"), Some(16), "0x is hexadecimal");
+    assert_eq!(decimal("0X1F"), Some(31), "the prefix is case insensitive");
+    assert_eq!(decimal("-0x10"), Some(-16), "a sign precedes the prefix");
+    assert_eq!(decimal("010"), Some(8), "a leading zero is octal, not decimal");
+    assert_eq!(decimal("00"), Some(0), "a second zero is an octal digit");
+    assert_eq!(decimal("0"), Some(0), "a lone zero stays decimal");
+
+    assert_eq!(
+        decimal("0x10k"),
+        Some(16 * 1024),
+        "a suffix applies to a hexadecimal value"
+    );
+    assert_eq!(decimal("0x10K"), Some(16 * 1024), "…in either case");
+    assert_eq!(decimal("010k"), Some(8 * 1024), "…and to an octal one");
+
+    assert_eq!(
+        decimal("0x7fffffffffffffff"),
+        Some(i64::MAX),
+        "the whole range is available in hexadecimal"
+    );
+    assert_eq!(
+        decimal("-9223372036854775808"),
+        Some(i64::MIN),
+        "including the value whose magnitude does not fit"
+    );
+
+    for invalid in ["08", "09", "0x", "0xg", "0b101", "0o17"] {
+        assert!(
+            Integer::try_from(invalid).is_err(),
+            "`{invalid}` is rejected by git too"
+        );
+    }
+}
