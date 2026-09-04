@@ -141,11 +141,12 @@ pub(super) fn collect(
 /// the opposite-side change which caused the deferral; that candidate is ignored on retry so
 /// the same pair cannot defer or resolve each other again.
 ///
-/// Identical changes need no conflict resolution. For a deletion, applying `theirs` removes
-/// the same base entry our deletion would remove. An identical rewrite additionally creates
-/// the same destination. Marking our deletion or rewrite applied records that one editor
-/// update represents both sides and prevents a later scheduling pass from removing the shared
-/// source after descendant entries have been added there.
+/// Changes with identical tree effects need no conflict resolution. Relations and rewrite diff
+/// statistics are local bookkeeping from two independent diff operations and don't affect the
+/// result. For a deletion, applying `theirs` removes the same base entry our deletion would
+/// remove. An identical rewrite additionally creates the same destination. Marking our deletion
+/// or rewrite applied records that one editor update represents both sides and prevents a later
+/// scheduling pass from removing the shared source after descendant entries have been added there.
 ///
 /// Applied deletions are otherwise ignored because their indexed path remains available for
 /// structural lookup even though the entry itself has already been removed from the editor.
@@ -175,7 +176,7 @@ pub(super) fn matching(
             .is_none_or(|(ours_idx, ignore_idx)| ours_idx != ignore_idx)
             && ours.change_idx().is_none_or(|ours_idx| {
                 let ours = &mut our_changes[ours_idx];
-                if ours.inner == *theirs {
+                if same_effect(&ours.inner, theirs) {
                     // Applying `theirs` also consumes an identical source removal, which must not
                     // run again after descendants have been added.
                     if matches!(theirs, Change::Deletion { .. } | Change::Rewrite { .. }) {
@@ -187,6 +188,18 @@ pub(super) fn matching(
                 }
             })
     })
+}
+
+fn same_effect(ours: &Change, theirs: &Change) -> bool {
+    std::mem::discriminant(ours) == std::mem::discriminant(theirs)
+        && ours.source_location() == theirs.source_location()
+        && ours.source_entry_mode_and_id() == theirs.source_entry_mode_and_id()
+        && ours.location() == theirs.location()
+        && ours.entry_mode_and_id() == theirs.entry_mode_and_id()
+        && match (ours, theirs) {
+            (Change::Rewrite { copy: ours, .. }, Change::Rewrite { copy: theirs, .. }) => ours == theirs,
+            _ => true,
+        }
 }
 
 /// Turn a path-index match, `candidate`, from our side into a concrete change pair for the resolution matrix.
