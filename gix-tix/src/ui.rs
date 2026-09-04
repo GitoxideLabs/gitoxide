@@ -707,6 +707,7 @@ pub(crate) fn draw_with_worktree(
                         date_mode,
                         id_mode,
                         change_id: app.change_id(row.id),
+                        configured_author: app.configured_author(),
                         show_author_name,
                         show_emails: app.show_emails && !compact_history,
                         show_trailers,
@@ -2473,6 +2474,7 @@ struct MetadataOptions<'a> {
     date_mode: DateMode,
     id_mode: IdMode,
     change_id: gix::hash::ChangeId,
+    configured_author: Option<&'a gix::actor::Identity>,
     show_author_name: bool,
     show_emails: bool,
     show_trailers: bool,
@@ -2537,6 +2539,7 @@ fn metadata_columns<'a>(
         date_mode,
         id_mode,
         change_id,
+        configured_author,
         show_author_name,
         show_emails,
         show_trailers,
@@ -2661,13 +2664,9 @@ fn metadata_columns<'a>(
     let mut attribution_spans = Vec::new();
     if show_author_name {
         let author = author_label(row.author, mailmap, use_mailmap, show_emails && !row.author.is_bot());
-        let mut author_style = if copy_feedback == Some(CopyKind::Author) {
-            Style::default()
-        } else {
-            color(Color::Green)
-        };
-        if row.author.is_github_noreply() {
-            author_style = author_style.add_modifier(Modifier::ITALIC);
+        let mut author_style = actor_style(row.author, configured_author, mailmap);
+        if copy_feedback == Some(CopyKind::Author) {
+            author_style = author_style.fg(Color::Reset);
         }
         author_spans.push(Span::styled(
             if row.author.is_bot() {
@@ -2699,11 +2698,7 @@ fn metadata_columns<'a>(
                                 author_label(actor.author, mailmap, use_mailmap, show_emails && !actor.is_agent());
                             if actor.is_agent() { format!("[{name}]") } else { name }
                         };
-                        let style = if actor.author.is_github_noreply() {
-                            color(Color::Green).add_modifier(Modifier::ITALIC)
-                        } else {
-                            color(Color::Green)
-                        };
+                        let style = actor_style(actor.author, configured_author, mailmap);
                         (name, style)
                     })
                     .collect();
@@ -2797,6 +2792,7 @@ pub(crate) fn plain_history_metadata(
             date_mode: app.date_mode,
             id_mode: app.effective_id_mode(),
             change_id: app.change_id(row.id),
+            configured_author: app.configured_author(),
             show_author_name: app.name_mode != NameMode::None,
             show_emails: app.show_emails,
             show_trailers: app.name_mode == NameMode::All && app.show_trailers,
@@ -2829,6 +2825,7 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
             date_mode: app.date_mode,
             id_mode: IdMode::Off,
             change_id: row.id.into(),
+            configured_author: app.configured_author(),
             show_author_name: app.name_mode != crate::app::NameMode::None,
             show_emails: app.show_emails,
             show_trailers: app.name_mode == crate::app::NameMode::All && app.show_trailers,
@@ -2867,22 +2864,58 @@ fn author_label(
     use_mailmap: bool,
     show_email: bool,
 ) -> String {
-    let resolved = use_mailmap
-        .then(|| {
-            mailmap.try_resolve_ref(gix::actor::SignatureRef {
-                name: author.name,
-                email: author.email,
-                time: "",
-            })
-        })
-        .flatten();
-    let name = resolved.as_ref().and_then(|actor| actor.name).unwrap_or(author.name);
-    if show_email {
-        let email = resolved.as_ref().and_then(|actor| actor.email).unwrap_or(author.email);
-        format!("{} <{}>", name.to_str_lossy(), email.to_str_lossy())
+    let identity = gix::actor::IdentityRef {
+        name: author.name,
+        email: author.email,
+    };
+    let identity = if use_mailmap {
+        mapped_identity(identity, mailmap)
     } else {
-        name.to_str_lossy().into_owned()
+        identity
+    };
+    if show_email {
+        format!("{} <{}>", identity.name.to_str_lossy(), identity.email.to_str_lossy())
+    } else {
+        identity.name.to_str_lossy().into_owned()
     }
+}
+
+fn mapped_identity<'a>(
+    identity: gix::actor::IdentityRef<'a>,
+    mailmap: &'a gix::mailmap::Snapshot,
+) -> gix::actor::IdentityRef<'a> {
+    mailmap
+        .try_resolve_ref(gix::actor::SignatureRef {
+            name: identity.name,
+            email: identity.email,
+            time: "",
+        })
+        .map_or(identity, |resolved| gix::actor::IdentityRef {
+            name: resolved.name.unwrap_or(identity.name),
+            email: resolved.email.unwrap_or(identity.email),
+        })
+}
+
+fn actor_style(
+    author: &crate::app::Author,
+    configured_author: Option<&gix::actor::Identity>,
+    mailmap: &gix::mailmap::Snapshot,
+) -> Style {
+    let identity = gix::actor::IdentityRef {
+        name: author.name,
+        email: author.email,
+    };
+    let mut style = if configured_author
+        .is_some_and(|configured| mapped_identity(configured.to_ref(), mailmap) == mapped_identity(identity, mailmap))
+    {
+        color(Color::LightCyan).add_modifier(Modifier::BOLD)
+    } else {
+        color(Color::Green)
+    };
+    if author.is_github_noreply() {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
+    style
 }
 
 pub(crate) fn decoration_style(kind: DecorationKind) -> Style {
@@ -4156,6 +4189,10 @@ mod tests {
     fn renders_grouped_attributions_and_bot_names() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
         app.id_mode = IdMode::Commit;
+        app.set_configured_author(Some(gix::actor::Identity {
+            name: "Mapped Human".into(),
+            email: "mapped@example.com".into(),
+        }));
         app.extend_commits(LoadedCommits {
             rows: vec![Commit {
                 id: gix::ObjectId::Sha1([1; 20]),
@@ -4239,7 +4276,13 @@ mod tests {
             buffer[(marker_x, 0)].modifier.contains(Modifier::DIM),
             "attribution markers are dimmed"
         );
-        assert_eq!(style_at("Human"), Color::Green, "human trailer actors are green");
+        assert_eq!(
+            style_at("Mapped Human"),
+            Color::LightCyan,
+            "a trailer matching the configured identity through mailmap gets a distinct color"
+        );
+        let human_x = row.find("Mapped Human").expect("the mapped trailer is visible") as u16;
+        assert!(buffer[(human_x, 0)].modifier.contains(Modifier::BOLD));
         assert_eq!(style_at("[Claude]"), Color::Green, "bot co-authors use agent styling");
         assert!(
             rendered_line(&terminal, 1).contains("trailers"),
@@ -5210,10 +5253,86 @@ mod tests {
     }
 
     #[test]
+    fn configured_identity_and_mailmap_aliases_stand_out_from_other_authors() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let actors = [
+            author(b"Human", b"human@example.com"),
+            author(b"Former Human", b"human@example.com"),
+            author(b"Former Human", b"old@example.com"),
+            author(b"Human", b"other@example.com"),
+            author(b"Codex", b"codex@openai.com"),
+        ];
+        let mailmap = gix::mailmap::Snapshot::from_bytes(
+            b"Human <human@example.com> Former Human <human@example.com>\n\
+              Human <human@example.com> <old@example.com>\n",
+        );
+        let mut app = App::new(actors.len());
+        app.extend_commits(
+            actors
+                .iter()
+                .enumerate()
+                .map(|(index, author)| Commit {
+                    id: gix::ObjectId::Sha1([index as u8 + 1; 20]),
+                    parent_ids: Default::default(),
+                    author_time: gix::date::Time::default(),
+                    committer_time: gix::date::Time::default(),
+                    author,
+                    attributions: 0..0,
+                    title: "subject".into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    is_review: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        app.selected = None;
+        let mut terminal = Terminal::new(TestBackend::new(100, 6))?;
+        for configured in &actors[..3] {
+            app.set_configured_author(Some(gix::actor::Identity {
+                name: configured.name.to_owned(),
+                email: configured.email.to_owned(),
+            }));
+            for use_mailmap in [true, false] {
+                app.use_mailmap = use_mailmap;
+                terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None, None))?;
+                for (index, actor) in actors.iter().enumerate() {
+                    let matches = index < 3;
+                    let label = if matches && use_mailmap {
+                        "Human"
+                    } else {
+                        actor.name.to_str().expect("fixture names are ASCII")
+                    };
+                    let row = rendered_line(&terminal, index as u16);
+                    let x = row[..row.find(label).expect("the author is visible")].chars().count() as u16;
+                    let cell = &terminal.backend().buffer()[(x, index as u16)];
+                    assert_eq!(
+                        cell.fg,
+                        if matches { Color::LightCyan } else { Color::Green },
+                        "canonical identity matches have a distinct hue, independent of mailmap display"
+                    );
+                    assert_eq!(
+                        cell.modifier.contains(Modifier::BOLD),
+                        matches,
+                        "weight distinguishes the configured identity even with similar terminal palette colors"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn removes_the_copied_fields_color_from_only_the_selected_row_for_one_frame()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(2);
         app.id_mode = IdMode::Commit;
+        let configured_author = author(b"author", b"author@example.com");
+        let other_author = author(b"other", b"other@example.com");
+        app.set_configured_author(Some(gix::actor::Identity {
+            name: configured_author.name.to_owned(),
+            email: configured_author.email.to_owned(),
+        }));
         app.extend_commits(
             (1..=2)
                 .map(|n| Commit {
@@ -5221,7 +5340,7 @@ mod tests {
                     parent_ids: Default::default(),
                     author_time: gix::date::Time::default(),
                     committer_time: gix::date::Time::default(),
-                    author: author(b"author", b"author@example.com"),
+                    author: if n == 1 { configured_author } else { other_author },
                     attributions: 0..0,
                     title: format!("subject {n}").into(),
                     metadata_loaded: true,
@@ -5265,7 +5384,7 @@ mod tests {
             .find("author")
             .expect("the selected author is visible") as u16;
         let other_author = rendered_line(&terminal, 1)
-            .find("author")
+            .find("other")
             .expect("the other author is visible") as u16;
         assert_eq!(
             terminal.backend().buffer()[(selected_author, 0)].fg,
@@ -5281,8 +5400,13 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(
             terminal.backend().buffer()[(selected_author, 0)].fg,
-            Color::Green,
-            "the author color returns on the next frame"
+            Color::LightCyan,
+            "the configured author color returns on the next frame"
+        );
+        assert!(
+            terminal.backend().buffer()[(selected_author, 0)]
+                .modifier
+                .contains(Modifier::BOLD)
         );
         Ok(())
     }
@@ -7758,6 +7882,7 @@ mod tests {
                 date_mode: DateMode::Committer,
                 id_mode: IdMode::Commit,
                 change_id: row.id.into(),
+                configured_author: None,
                 show_author_name: true,
                 show_emails: false,
                 show_trailers: true,
@@ -7868,6 +7993,7 @@ mod tests {
                 date_mode: DateMode::None,
                 id_mode: app.effective_id_mode(),
                 change_id: app.change_id(id),
+                configured_author: None,
                 show_author_name: false,
                 show_emails: false,
                 show_trailers: false,
