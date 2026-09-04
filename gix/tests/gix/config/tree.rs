@@ -1,3 +1,8 @@
+fn config_value_error(message: &'static str, input: &'static str) -> gix_config::value::Error {
+    use gix_error::ErrorExt;
+    gix_error::ValidationError::new_with_input(message, input).raise()
+}
+
 mod keys {
     use gix::config::tree::{Key, Section};
     use gix_object::bstr::{BStr, ByteSlice};
@@ -102,23 +107,22 @@ mod keys {
         }
 
         for invalid in [-1, -100] {
-            assert_eq!(
-                gix::config::tree::Core::DELTA_BASE_CACHE_LIMIT
-                    .validate(invalid.to_string().as_str().into())
-                    .unwrap_err()
-                    .to_string(),
-                "cannot use sign for unsigned integer"
-            );
+            let err = gix::config::tree::Core::DELTA_BASE_CACHE_LIMIT
+                .validate(invalid.to_string().as_str().into())
+                .expect_err("negative values are not unsigned");
+            assert_eq!(err.probable_cause().to_string(), "cannot use sign for unsigned integer");
+            assert!(err.is_validation());
         }
 
         let out_of_bounds = ((i64::MAX as u64) + 1).to_string();
+        let err = gix::config::tree::Core::DELTA_BASE_CACHE_LIMIT
+            .validate(out_of_bounds.as_bytes().into())
+            .expect_err("the value is larger than the config integer range");
         assert_eq!(
-            gix::config::tree::Core::DELTA_BASE_CACHE_LIMIT
-                .validate(out_of_bounds.as_bytes().into())
-                .unwrap_err()
-                .to_string(),
-            "Could not decode '9223372036854775808': Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G"
+            err.probable_cause().to_string(),
+            "Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G: \"9223372036854775808\""
         );
+        assert!(err.is_validation());
     }
 }
 
@@ -358,19 +362,19 @@ mod diff {
         );
         assert!(Diff::RENAMES.validate("0".into()).is_ok());
         assert_eq!(
-            Diff::RENAMES.try_into_renames(Err(gix_config::value::Error::new("err", "copy")))?,
+            Diff::RENAMES.try_into_renames(Err(crate::config::tree::config_value_error("err", "copy")))?,
             Some(Tracking::RenamesAndCopies)
         );
         assert!(Diff::RENAMES.validate("copy".into()).is_ok());
         assert_eq!(
-            Diff::RENAMES.try_into_renames(Err(gix_config::value::Error::new("err", "copies")))?,
+            Diff::RENAMES.try_into_renames(Err(crate::config::tree::config_value_error("err", "copies")))?,
             Some(Tracking::RenamesAndCopies)
         );
         assert!(Diff::RENAMES.validate("copies".into()).is_ok());
 
         assert_eq!(
             Diff::RENAMES
-                .try_into_renames(Err(gix_config::value::Error::new("err", "foo")))
+                .try_into_renames(Err(crate::config::tree::config_value_error("err", "foo")))
                 .unwrap_err()
                 .to_string(),
             "The value of key \"diff.renames=foo\" was invalid"
@@ -545,7 +549,7 @@ mod core {
         assert!(Core::FILES_REF_LOCK_TIMEOUT.validate("2500".into()).is_ok());
         assert_eq!(
             Core::FILES_REF_LOCK_TIMEOUT
-                .try_into_lock_timeout(Err(gix_config::value::Error::new("err", "bogus")))
+                .try_into_lock_timeout(Err(crate::config::tree::config_value_error("err", "bogus")))
                 .unwrap_err()
                 .to_string(),
             "The timeout at key \"core.filesRefLockTimeout\" was invalid"
@@ -603,7 +607,12 @@ mod core {
                 .to_string(),
             "The key \"core.logAllRefUpdates=invalid\" was invalid"
         );
-        assert!(Core::LOG_ALL_REF_UPDATES.validate("invalid".into()).is_err());
+        assert!(
+            Core::LOG_ALL_REF_UPDATES
+                .validate("invalid".into())
+                .expect_err("the value is neither a boolean nor 'always'")
+                .is_validation()
+        );
         Ok(())
     }
 
@@ -918,10 +927,11 @@ mod protocol {
             assert!(Protocol::VERSION.validate(valid.to_string().as_str().into()).is_ok());
         }
 
-        assert_eq!(
-            Protocol::VERSION.validate("5".into()).unwrap_err().to_string(),
-            "protocol version 5 is unknown"
-        );
+        let err = Protocol::VERSION
+            .validate("5".into())
+            .expect_err("protocol version 5 is unsupported");
+        assert_eq!(err.probable_cause().to_string(), "protocol version 5 is unknown");
+        assert!(err.is_validation());
 
         #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
         {
@@ -1190,7 +1200,9 @@ mod http {
 
         assert_eq!(
             Http::FOLLOW_REDIRECTS
-                .try_into_follow_redirects("something", || Err(gix_config::value::Error::new("invalid", "value")))
+                .try_into_follow_redirects("something", || {
+                    Err(crate::config::tree::config_value_error("invalid", "value"))
+                })
                 .unwrap_err()
                 .to_string(),
             "The key \"http.followRedirects=something\" was invalid",

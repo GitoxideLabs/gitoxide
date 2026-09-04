@@ -36,7 +36,9 @@ mod workers {
                 Ok(Some(v)) if v < 0 => Ok(Some(0)),
                 Ok(Some(v)) => Ok(Some(v.try_into().expect("positive i64 can always be usize on 64 bit"))),
                 Ok(None) => Ok(None),
-                Err(err) => Err(crate::config::key::Error::from(&super::Checkout::WORKERS).with_source(err)),
+                Err(err) => {
+                    Err(crate::config::key::Error::from(&super::Checkout::WORKERS).with_source(err.into_error()))
+                }
             }
         }
     }
@@ -45,18 +47,22 @@ mod workers {
 ///
 pub mod validate {
     use crate::{bstr::BStr, config::tree::keys};
+    use gix_error::{ErrorExt, ResultExt, ValidationError};
 
     pub struct Workers;
     impl keys::Validate for Workers {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Checkout::WORKERS.try_from_workers(
-                gix_config::Integer::try_from(value)
-                    .and_then(|i| {
-                        i.to_decimal()
-                            .ok_or_else(|| gix_config::value::Error::new("Integer overflow", value.to_owned()))
-                    })
-                    .map(Some),
-            )?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Checkout::WORKERS
+                .try_from_workers(
+                    gix_config::Integer::try_from(value)
+                        .and_then(|i| {
+                            i.to_decimal().ok_or_else(|| {
+                                ValidationError::new_with_input("Integer overflow", value.to_owned()).raise()
+                            })
+                        })
+                        .map(Some),
+                )
+                .or_erased()?;
             Ok(())
         }
     }

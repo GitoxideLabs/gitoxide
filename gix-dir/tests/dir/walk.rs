@@ -36,10 +36,7 @@ fn root_is_fifo() {
         )
     })
     .unwrap_err();
-    assert!(
-        matches!(err, gix_dir::walk::Error::WorktreeRootIsFile { .. }),
-        "roots simply need to be directories to work"
-    );
+    assert!(err.is_validation(), "roots simply need to be directories to work");
 }
 
 #[test]
@@ -204,8 +201,9 @@ fn root_may_not_lead_through_symlinks() -> crate::Result {
             Default::default(),
         )
         .unwrap_err();
+        assert!(err.is_validation(), "symlinks in the traversal root are invalid");
         assert!(
-            matches!(err, walk::Error::SymlinkInRoot { component_index, .. } if component_index == expected),
+            err.to_string().contains(&format!("component {expected}")),
             "{name} should have component {expected}"
         );
     }
@@ -320,7 +318,7 @@ fn should_interrupt_works_even_in_empty_directories() {
         },
     )
     .unwrap_err();
-    assert!(matches!(err, gix_dir::walk::Error::Interrupted));
+    assert_eq!(err.to_string(), "Interrupted");
 }
 
 #[test]
@@ -3354,7 +3352,7 @@ fn root_that_is_untracked_file_is_returned() -> crate::Result {
 fn top_level_root_that_is_a_file() {
     let root = fixture("just-a-file");
     let err = try_collect(&root, None, |keep, ctx| walk(&root, ctx, options(), keep)).unwrap_err();
-    assert!(matches!(err, walk::Error::WorktreeRootIsFile { .. }));
+    assert!(err.is_validation());
 }
 
 #[test]

@@ -412,7 +412,10 @@ impl file::Store {
             }
             Some(namespace) => {
                 let prefix = namespace.to_owned().into_namespaced_prefix(prefix);
-                let prefix = prefix.as_bstr().try_into().map_err(std::io::Error::other)?;
+                let prefix = prefix
+                    .as_bstr()
+                    .try_into()
+                    .map_err(|err: gix_path::relative_path::Error| std::io::Error::other(err.into_error()))?;
                 let git_dir_info = IterInfo::from_prefix(self.git_dir(), prefix, self.precompose_unicode)?;
                 let common_dir_info = self
                     .common_dir()
@@ -460,20 +463,57 @@ mod error {
     use crate::store_impl::file;
 
     /// The error returned by the [`LooseThenPacked`][super::LooseThenPacked] iterator.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The file system could not be traversed")]
-        Traversal(#[source] io::Error),
-        #[error("The ref file {path:?} could not be read in full")]
-        ReadFileContents { source: io::Error, path: PathBuf },
-        #[error("The reference at \"{relative_path}\" could not be instantiated")]
+        Traversal(io::Error),
+        ReadFileContents {
+            source: io::Error,
+            path: PathBuf,
+        },
         ReferenceCreation {
             source: file::loose::reference::decode::Error,
             relative_path: PathBuf,
         },
-        #[error("Invalid reference in line {line_number}: {invalid_line:?}")]
-        PackedReference { invalid_line: BString, line_number: usize },
+        PackedReference {
+            invalid_line: BString,
+            line_number: usize,
+        },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Traversal(_) => f.write_str("The file system could not be traversed"),
+                #[allow(clippy::unnecessary_debug_formatting)]
+                // `{:?}` of a `Path` is what `thiserror` generated; keep the rendered text identical.
+                Error::ReadFileContents { path, .. } => {
+                    write!(f, "The ref file {path:?} could not be read in full")
+                }
+                Error::ReferenceCreation { relative_path, .. } => {
+                    write!(
+                        f,
+                        "The reference at \"{}\" could not be instantiated",
+                        relative_path.display()
+                    )
+                }
+                Error::PackedReference {
+                    invalid_line,
+                    line_number,
+                } => write!(f, "Invalid reference in line {line_number}: {invalid_line:?}"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Traversal(err) => Some(err),
+                Error::ReadFileContents { source, .. } => Some(source),
+                Error::ReferenceCreation { source, .. } => Some(source),
+                Error::PackedReference { .. } => None,
+            }
+        }
     }
 }
 pub use error::Error;

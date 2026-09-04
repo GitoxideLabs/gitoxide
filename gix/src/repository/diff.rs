@@ -1,3 +1,4 @@
+use gix_error::ResultExt;
 use gix_object::TreeRefIter;
 
 use crate::{
@@ -23,7 +24,7 @@ impl Repository {
         worktree_roots: gix_diff::blob::pipeline::WorktreeRoots,
     ) -> Result<gix_diff::blob::Platform, diff_resource_cache::Error> {
         let index = self.index_or_load_from_head_or_empty()?;
-        Ok(crate::diff::resource_cache(
+        crate::diff::resource_cache(
             self,
             mode,
             self.attributes_only(
@@ -33,10 +34,11 @@ impl Repository {
                 } else {
                     gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping
                 },
-            )?
+            )
+            .or_raise(|| gix_error::message("Could not obtain resource cache for diffing"))?
             .inner,
             worktree_roots,
-        )?)
+        )
     }
 
     /// Produce the changes that would need to be applied to `old_tree` to create `new_tree`.
@@ -69,12 +71,13 @@ impl Repository {
             &mut cache,
             &mut Default::default(),
             &self.objects,
-            |change| -> Result<_, std::convert::Infallible> {
+            |change| -> Result<_, gix_error::Exn> {
                 out.push(change.into_owned());
                 Ok(std::ops::ControlFlow::Continue(()))
             },
             opts,
-        )?;
+        )
+        .or_erased()?;
         Ok(out)
     }
 

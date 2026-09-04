@@ -1,6 +1,7 @@
 use std::{borrow::Cow, path::PathBuf};
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, ValidationError};
 
 use crate::Path;
 
@@ -30,22 +31,7 @@ pub mod interpolate {
     }
 
     /// The error returned by [`Path::interpolate()`][crate::Path::interpolate()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("{} is missing", .what)]
-        Missing { what: &'static str },
-        #[error("Ill-formed UTF-8 in {}", .what)]
-        Utf8Conversion {
-            what: &'static str,
-            #[source]
-            err: gix_path::Utf8Error,
-        },
-        #[error("Ill-formed UTF-8 in username")]
-        UsernameConversion(#[from] std::str::Utf8Error),
-        #[error("User interpolation is not available on this platform")]
-        UserInterpolationUnsupported,
-    }
+    pub type Error = gix_error::Exn;
 
     /// Obtain the home directory for the given user `name` or return `None` if the user wasn't found
     /// or any other error occurred.
@@ -168,36 +154,33 @@ impl Path {
         }: interpolate::Context<'_>,
     ) -> Result<PathBuf, interpolate::Error> {
         if self.is_empty() {
-            return Err(interpolate::Error::Missing { what: "path" });
+            return Err(NotFoundError::new("path is missing").raise_erased());
         }
 
         const PREFIX: &[u8] = b"%(prefix)/";
         const USER_HOME: &[u8] = b"~/";
         if self.starts_with(PREFIX) {
-            let git_install_dir = git_install_dir.ok_or(interpolate::Error::Missing {
-                what: "git install dir",
-            })?;
+            let git_install_dir =
+                git_install_dir.ok_or_raise_erased(|| NotFoundError::new("git install dir is missing"))?;
             let (_prefix, path_without_trailing_slash) = self.split_at(PREFIX.len());
             let path_without_trailing_slash =
-                gix_path::try_from_bstring(path_without_trailing_slash).map_err(|err| {
-                    interpolate::Error::Utf8Conversion {
-                        what: "path past %(prefix)",
-                        err,
-                    }
+                gix_path::try_from_bstring(path_without_trailing_slash).or_raise_erased(|| {
+                    ValidationError::new_with_input(
+                        "Ill-formed UTF-8 in path past %(prefix)",
+                        path_without_trailing_slash,
+                    )
                 })?;
             Ok(git_install_dir.join(path_without_trailing_slash))
         } else if self.starts_with(USER_HOME) {
-            let home_path = home_dir.ok_or(interpolate::Error::Missing { what: "home dir" })?;
+            let home_path = home_dir.ok_or_raise_erased(|| NotFoundError::new("home dir is missing"))?;
             let (_prefix, val) = self.split_at(USER_HOME.len());
-            let val = gix_path::try_from_byte_slice(val).map_err(|err| interpolate::Error::Utf8Conversion {
-                what: "path past ~/",
-                err,
-            })?;
+            let val = gix_path::try_from_byte_slice(val)
+                .or_raise_erased(|| ValidationError::new_with_input("Ill-formed UTF-8 in path past ~/", val))?;
             Ok(home_path.join(val))
         } else if self.starts_with(b"~") && self.contains(&b'/') {
-            self.interpolate_user(home_for_user.ok_or(interpolate::Error::Missing {
-                what: "home for user lookup",
-            })?)
+            self.interpolate_user(
+                home_for_user.ok_or_raise_erased(|| NotFoundError::new("home for user lookup is missing"))?,
+            )
         } else {
             Ok(gix_path::from_bstr(self.value.as_bstr()).into_owned())
         }
@@ -205,7 +188,7 @@ impl Path {
 
     #[cfg(any(target_os = "windows", target_os = "android"))]
     fn interpolate_user(self, _home_for_user: fn(&str) -> Option<PathBuf>) -> Result<PathBuf, interpolate::Error> {
-        Err(interpolate::Error::UserInterpolationUnsupported)
+        Err(gix_error::message("User interpolation is not available on this platform").raise_erased())
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
@@ -214,16 +197,17 @@ impl Path {
         let i = val
             .iter()
             .position(|&e| e == b'/')
-            .ok_or(interpolate::Error::Missing { what: "/" })?;
+            .ok_or_raise_erased(|| NotFoundError::new("/ is missing"))?;
         let (username, path_with_leading_slash) = val.split_at(i);
-        let username = std::str::from_utf8(username)?;
-        let home = home_for_user(username).ok_or(interpolate::Error::Missing { what: "pwd user info" })?;
-        let path_past_user_prefix =
-            gix_path::try_from_byte_slice(&path_with_leading_slash["/".len()..]).map_err(|err| {
-                interpolate::Error::Utf8Conversion {
-                    what: "path past ~user/",
-                    err,
-                }
+        let username = std::str::from_utf8(username)
+            .or_raise_erased(|| ValidationError::new_with_input("Ill-formed UTF-8 in username", username))?;
+        let home = home_for_user(username).ok_or_raise_erased(|| NotFoundError::new("pwd user info is missing"))?;
+        let path_past_user_prefix = gix_path::try_from_byte_slice(&path_with_leading_slash["/".len()..])
+            .or_raise_erased(|| {
+                ValidationError::new_with_input(
+                    "Ill-formed UTF-8 in path past ~user/",
+                    &path_with_leading_slash["/".len()..],
+                )
             })?;
         Ok(home.join(path_past_user_prefix))
     }

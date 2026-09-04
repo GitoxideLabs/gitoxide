@@ -4,8 +4,7 @@ use gix_protocol::handshake;
 use gix_transport::Protocol;
 
 use crate::fetch::{
-    _impl::FetchConnection, CloneDelegate, CloneRefInWantDelegate, Error, LsRemoteDelegate, helper_unused, oid,
-    transport,
+    _impl::FetchConnection, CloneDelegate, CloneRefInWantDelegate, LsRemoteDelegate, helper_unused, oid, transport,
 };
 
 #[crate::bisync::bisync]
@@ -51,13 +50,11 @@ async fn clone_abort_prep() -> crate::Result {
         .as_bytes()
         .as_bstr()
     );
-    match err {
-        Error::Io(err) => {
-            assert_eq!(err.kind(), std::io::ErrorKind::Other);
-            assert_eq!(err.get_ref().expect("other error").to_string(), "hello world");
-        }
-        _ => panic!("should not have another error here"),
-    }
+    let err = err
+        .downcast_any_ref::<std::io::Error>()
+        .expect("delegate I/O error is retained");
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    assert_eq!(err.get_ref().expect("other error").to_string(), "hello world");
     Ok(())
 }
 
@@ -150,13 +147,11 @@ async fn ls_remote_abort_in_prep_ls_refs() -> crate::Result {
         transport.into_inner().1.as_bstr(),
         b"0044git-upload-pack does/not/matter\x00\x00version=2\x00value-only\x00key=value\x000000".as_bstr()
     );
-    match err {
-        Error::Io(err) => {
-            assert_eq!(err.kind(), std::io::ErrorKind::Other);
-            assert_eq!(err.get_ref().expect("other error").to_string(), "hello world");
-        }
-        err => panic!("should not have another error here, got: {err}"),
-    }
+    let err = err
+        .downcast_any_ref::<std::io::Error>()
+        .expect("delegate I/O error is retained");
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    assert_eq!(err.get_ref().expect("other error").to_string(), "hello world");
     Ok(())
 }
 

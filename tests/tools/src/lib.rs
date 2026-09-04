@@ -45,27 +45,33 @@ pub mod repository;
 
 const ARCHIVE_DIR_NAME: &str = "generated-archives";
 
+/// The error returned by test functions.
+pub use gix_error::TestError as Error;
+
 /// A result type to allow using the try operator `?` in unit tests.
 ///
 /// Use it like so:
 ///
 /// ```no_run
-/// use gix_testtools::Result;
+/// use gix_testtools::TestResult;
 ///
 /// #[test]
-/// fn this() -> Result {
+/// fn this() -> TestResult {
 ///     let x: usize = "42".parse()?;
 ///     Ok(())
 ///
 /// }
 /// ```
+pub use gix_error::TestResult;
+
+/// A result type for reusable test helpers.
 pub type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// A result type for post-processing closures in `*_with_post` fixture functions.
 ///
 /// The closure can return any value `T`, which will be returned alongside the fixture path.
 /// This is useful for computing values based on the fixture contents.
-pub type PostResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+pub type PostResult<T = ()> = Result<T>;
 
 /// Build `example` from `package` and copy the executable to this test process' temporary target directory.
 ///

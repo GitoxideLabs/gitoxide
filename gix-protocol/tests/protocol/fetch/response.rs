@@ -167,7 +167,8 @@ mod v1 {
         #[cfg_attr(feature = "blocking-client", test)]
         #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
         async fn all() -> crate::Result {
-            let (caps, _) = Capabilities::from_bytes(&b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0multi_ack thin-pack filter side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0"[..])?;
+            let (caps, _) = Capabilities::from_bytes(&b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0multi_ack thin-pack filter side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0"[..])
+                ?;
             let mut args = fetch::Arguments::new(
                 Protocol::V1,
                 Command::Fetch.default_features(Protocol::V1, &caps),
@@ -380,12 +381,13 @@ mod v2 {
             let mut sidebands = provider.as_read_without_sidebands();
             match fetch::Response::from_line_reader(Protocol::V2, &mut sidebands, true, true).await {
                 Ok(_) => panic!("need error response"),
-                Err(err) => match err {
-                    fetch::response::Error::UploadPack(err) => {
-                        assert_eq!(err.message, "segmentation fault\n");
-                    }
-                    err => panic!("we expect upload pack errors, got {err:#?}"),
-                },
+                Err(err) => {
+                    let err = err.into_error();
+                    let packetline_err = err
+                        .downcast_any_ref::<gix_transport::packetline::read::Error>()
+                        .unwrap_or_else(|| panic!("the remote ERR packet is retained in the error chain: {err:#?}"));
+                    assert_eq!(packetline_err.message, "segmentation fault\n");
+                }
             }
         }
 
@@ -427,7 +429,8 @@ mod v2 {
         #[cfg_attr(feature = "blocking-client", test)]
         #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
         async fn all() -> crate::Result {
-            let (caps, _) = Capabilities::from_bytes(&b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0multi_ack thin-pack filter side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0"[..])?;
+            let (caps, _) = Capabilities::from_bytes(&b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0multi_ack thin-pack filter side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0"[..])
+                ?;
             let mut args = fetch::Arguments::new(
                 Protocol::V2,
                 Command::Fetch.default_features(Protocol::V1, &caps),

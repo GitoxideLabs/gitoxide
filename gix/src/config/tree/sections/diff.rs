@@ -148,7 +148,7 @@ mod binary {
                                 .map(|b| b.0)
                                 .map_err(|err| {
                                     crate::config::key::GenericErrorWithValue::from_value(self, value.into())
-                                        .with_source(err)
+                                        .with_source(err.into_error())
                                 })?,
                         )
                     }
@@ -184,10 +184,15 @@ mod renames {
                 Ok(Some(false)) => Some(Tracking::Disabled),
                 Ok(None) => None,
                 Err(err) => {
-                    let value = &err.input;
+                    let value = err
+                        .error()
+                        .input
+                        .as_ref()
+                        .expect("gix-config-value validation errors retain their input")
+                        .clone();
                     match value.as_bytes() {
                         b"copy" | b"copies" => Some(Tracking::RenamesAndCopies),
-                        _ => return Err(GenericError::from_value(self, value.clone()).with_source(err)),
+                        _ => return Err(GenericError::from_value(self, value).with_source(err.into_error())),
                     }
                 }
             })
@@ -196,6 +201,8 @@ mod renames {
 }
 
 pub(super) mod validate {
+    use gix_error::{ErrorExt, ResultExt, message};
+
     use crate::{
         bstr::BStr,
         config::tree::{Diff, keys},
@@ -204,9 +211,9 @@ pub(super) mod validate {
     #[derive(Copy, Clone)]
     pub struct Ignore;
     impl keys::Validate for Ignore {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
             gix_submodule::config::Ignore::try_from(value)
-                .map_err(|()| format!("Value '{value}' is not a valid submodule 'ignore' value"))?;
+                .map_err(|()| message!("Value '{value}' is not a valid submodule 'ignore' value").raise_erased())?;
             Ok(())
         }
     }
@@ -214,8 +221,8 @@ pub(super) mod validate {
     #[derive(Copy, Clone)]
     pub struct Algorithm;
     impl keys::Validate for Algorithm {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            Diff::ALGORITHM.try_into_algorithm(value)?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            Diff::ALGORITHM.try_into_algorithm(value).or_erased()?;
             Ok(())
         }
     }
@@ -223,9 +230,9 @@ pub(super) mod validate {
     #[derive(Copy, Clone)]
     pub struct Renames;
     impl keys::Validate for Renames {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
             let boolean = gix_config::Boolean::try_from(value).map(|b| Some(b.0));
-            Diff::RENAMES.try_into_renames(boolean)?;
+            Diff::RENAMES.try_into_renames(boolean).or_erased()?;
             Ok(())
         }
     }
@@ -233,8 +240,8 @@ pub(super) mod validate {
     #[derive(Copy, Clone)]
     pub struct Binary;
     impl keys::Validate for Binary {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            Diff::DRIVER_BINARY.try_into_binary(Some(value))?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            Diff::DRIVER_BINARY.try_into_binary(Some(value)).or_erased()?;
             Ok(())
         }
     }

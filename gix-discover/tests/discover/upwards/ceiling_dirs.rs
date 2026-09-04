@@ -67,7 +67,7 @@ fn discovery_fails_if_we_require_a_matching_ceiling_dir_but_are_standing_on_it()
     .unwrap_err();
 
     assert!(
-        matches!(err, gix_discover::upwards::Error::NoMatchingCeilingDir),
+        err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
         "since standing on the ceiling dir doesn't match it, we get exactly the semantically correct error"
     );
     Ok(())
@@ -86,10 +86,8 @@ fn ceiling_dir_limits_are_respected_and_prevent_discovery() -> crate::Result {
         },
     )
     .expect_err("ceiling dir prevents discovery as it ends on level too early, and they are also absolutized");
-    assert!(matches!(
-        err,
-        gix_discover::upwards::Error::NoGitRepositoryWithinCeiling { ceiling_height: 5, .. }
-    ));
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.to_string().contains("ceiling height of 5"));
 
     Ok(())
 }
@@ -129,10 +127,8 @@ fn more_restrictive_ceiling_dirs_overrule_less_restrictive_ones() -> crate::Resu
         },
     )
     .expect_err("more restrictive ceiling dirs overrule less restrictive ones");
-    assert!(matches!(
-        err,
-        gix_discover::upwards::Error::NoGitRepositoryWithinCeiling { ceiling_height: 5, .. }
-    ));
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.to_string().contains("ceiling height of 5"));
 
     Ok(())
 }
@@ -172,8 +168,9 @@ fn no_matching_ceiling_dirs_errors_by_default() -> crate::Result {
         },
     );
 
+    let err = res.expect_err("an unrelated ceiling directory cannot match");
     assert!(
-        matches!(res, Err(gix_discover::upwards::Error::NoMatchingCeilingDir)),
+        err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
         "the canonicalized ceiling dir doesn't have the same root as the git dir candidate, and can never match."
     );
     Ok(())
@@ -223,7 +220,7 @@ fn ceiling_dirs_limit_the_physical_symlink_target() -> crate::Result {
     .expect_err("the physical ceiling prevents discovery of the repository above it");
 
     assert!(
-        matches!(err, gix_discover::upwards::Error::NoGitRepositoryWithinCeiling { .. }),
+        err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
         "the symlink target matches the ceiling before traversal reaches the repository"
     );
     Ok(())

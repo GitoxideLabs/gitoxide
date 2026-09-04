@@ -29,7 +29,9 @@ mod index_version {
             &'static self,
             value: Result<Option<i64>, gix_config::value::Error>,
         ) -> Result<Option<gix_pack::index::Version>, config::key::GenericError> {
-            let Some(value) = value.map_err(|err| config::key::GenericError::from(self).with_source(err))? else {
+            let Some(value) =
+                value.map_err(|err| config::key::GenericError::from(self).with_source(err.into_error()))?
+            else {
                 return Ok(None);
             };
             Ok(Some(match value {
@@ -53,19 +55,22 @@ impl Section for Pack {
 
 mod validate {
     use crate::{bstr::BStr, config::tree::keys};
+    use gix_error::{ErrorExt, ResultExt, ValidationError};
 
     #[derive(Clone, Copy)]
     pub struct IndexVersion;
     impl keys::Validate for IndexVersion {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Pack::INDEX_VERSION.try_into_index_version(
-                gix_config::Integer::try_from(value)
-                    .and_then(|int| {
-                        int.to_decimal()
-                            .ok_or_else(|| gix_config::value::Error::new("integer out of range", value))
-                    })
-                    .map(Some),
-            )?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Pack::INDEX_VERSION
+                .try_into_index_version(
+                    gix_config::Integer::try_from(value)
+                        .and_then(|int| {
+                            int.to_decimal()
+                                .ok_or_else(|| ValidationError::new_with_input("integer out of range", value).raise())
+                        })
+                        .map(Some),
+                )
+                .or_erased()?;
             Ok(())
         }
     }

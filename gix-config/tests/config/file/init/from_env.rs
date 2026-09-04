@@ -2,7 +2,7 @@ use std::fs;
 
 use gix_config::{
     File,
-    file::{includes, init, init::from_env},
+    file::{includes, init},
 };
 use gix_testtools::{Env, tempfile::tempdir};
 use serial_test::serial;
@@ -29,7 +29,10 @@ fn empty_with_zero_count() {
 fn parse_error_with_invalid_count() {
     let _env = Env::new().set("GIT_CONFIG_COUNT", "invalid");
     let err = File::from_env(Default::default()).unwrap_err();
-    assert!(matches!(err, from_env::Error::InvalidConfigCount { .. }));
+    let err = err
+        .downcast_any_ref::<gix_error::ValidationError>()
+        .expect("invalid counts are validation errors");
+    assert_eq!(err.message, "GIT_CONFIG_COUNT was not a positive integer");
 }
 
 #[test]
@@ -87,10 +90,13 @@ fn error_on_relative_paths_in_include_paths() {
         .strict(),
         ..Default::default()
     });
-    assert!(matches!(
-        res,
-        Err(from_env::Error::Includes(includes::Error::MissingConfigPath))
-    ));
+    let err = res.expect_err("relative includes without a configuration path must fail");
+    assert_eq!(
+        err.downcast_any_ref::<gix_error::NotFoundError>()
+            .expect("the missing configuration path is retained")
+            .message,
+        "Include paths from environment variables must not be relative as no config file path exists as root"
+    );
 }
 
 #[test]

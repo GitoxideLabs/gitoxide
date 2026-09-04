@@ -9,16 +9,39 @@ enum MaybeUnsafeState {
 }
 
 /// The error returned by [`Reference::try_from_path()`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("{content:?} could not be parsed")]
-    Parse { content: BString },
-    #[error("The path {path:?} to a symbolic reference within a ref file is invalid")]
+    Parse {
+        content: BString,
+    },
     RefnameValidation {
         source: gix_validate::reference::name::Error,
         path: BString,
     },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Parse { content } => write!(f, "{content:?} could not be parsed"),
+            Error::RefnameValidation { path, .. } => {
+                write!(
+                    f,
+                    "The path {path:?} to a symbolic reference within a ref file is invalid"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Parse { .. } => None,
+            Error::RefnameValidation { source, .. } => Some(source),
+        }
+    }
 }
 
 impl TryFrom<MaybeUnsafeState> for Target {

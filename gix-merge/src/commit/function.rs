@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use gix_error::{ErrorExt, ResultExt, message};
 use gix_object::FindExt;
 
 use crate::{
@@ -53,7 +54,8 @@ pub fn commit<'objects>(
     abbreviate_hash: &mut dyn FnMut(&gix_hash::oid) -> String,
     options: Options,
 ) -> Result<super::Outcome<'objects>, Error> {
-    let merge_bases = gix_revision::merge_base(our_commit, &[their_commit], graph)?;
+    let merge_bases = gix_revision::merge_base(our_commit, &[their_commit], graph)
+        .or_raise(|| message("Failed to obtain the merge base between the two commits to be merged"))?;
     let mut virtual_merge_bases = Vec::new();
     let mut state = gix_diff::tree::State::default();
     let mut commit_to_tree =
@@ -61,12 +63,14 @@ pub fn commit<'objects>(
 
     let (merge_base_tree_id, ancestor_name): (_, Cow<'_, str>) = match merge_bases.clone() {
         Some(base_commit) if base_commit.len() == 1 => (
-            commit_to_tree(*base_commit.first())?,
+            commit_to_tree(*base_commit.first())
+                .or_raise(|| message("Could not find ancestor, our or their commit to extract tree from"))?,
             abbreviate_hash(base_commit.first()).into(),
         ),
         Some(base_commits) => {
             let virtual_base_tree = if options.use_first_merge_base {
-                commit_to_tree(*base_commits.first())?
+                commit_to_tree(*base_commits.first())
+                    .or_raise(|| message("Could not find ancestor, our or their commit to extract tree from"))?
             } else {
                 let mut base_commits: Vec<_> = base_commits.into();
                 let first = base_commits.pop().expect("at least two");
@@ -81,7 +85,8 @@ pub fn commit<'objects>(
                     objects,
                     abbreviate_hash,
                     options.tree_merge.clone(),
-                )?;
+                )
+                .or_raise(|| message("Could not create virtual merge base"))?;
                 virtual_merge_bases = Vec::from(out.virtual_merge_bases);
                 out.tree_id
             };
@@ -91,10 +96,7 @@ pub fn commit<'objects>(
             if options.allow_missing_merge_base {
                 (gix_hash::ObjectId::empty_tree(our_commit.kind()), "empty tree".into())
             } else {
-                return Err(Error::NoMergeBase {
-                    our_commit_id: our_commit,
-                    their_commit_id: their_commit,
-                });
+                return Err(message!("No common ancestor between {our_commit} and {their_commit}").raise());
             }
         }
     };
@@ -104,8 +106,14 @@ pub fn commit<'objects>(
         labels.ancestor = Some(ancestor_name.as_ref().into());
     }
 
-    let our_tree_id = objects.find_commit(&our_commit, &mut state.buf1)?.tree();
-    let their_tree_id = objects.find_commit(&their_commit, &mut state.buf1)?.tree();
+    let our_tree_id = objects
+        .find_commit(&our_commit, &mut state.buf1)
+        .or_raise(|| message("Could not find ancestor, our or their commit to extract tree from"))?
+        .tree();
+    let their_tree_id = objects
+        .find_commit(&their_commit, &mut state.buf1)
+        .or_raise(|| message("Could not find ancestor, our or their commit to extract tree from"))?
+        .tree();
 
     let outcome = crate::tree(
         &merge_base_tree_id,
@@ -118,7 +126,8 @@ pub fn commit<'objects>(
         diff_resource_cache,
         blob_merge,
         options.tree_merge,
-    )?;
+    )
+    .or_raise(|| message("Could not merge trees"))?;
 
     Ok(super::Outcome {
         tree_merge: outcome,

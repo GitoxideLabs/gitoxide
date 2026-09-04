@@ -1,5 +1,6 @@
 use std::ops::Deref;
 
+use gix_error::ResultExt;
 use gix_hash::oid;
 
 use super::find::Error;
@@ -79,7 +80,13 @@ where
                             })
                         }) {
                             Ok(header) => Ok(header.into()),
-                            Err(gix_pack::data::decode::Error::DeltaBaseUnresolved(base_id)) => {
+                            Err(err) => {
+                                let Some(base_id) = err
+                                    .downcast_any_ref::<gix_pack::data::decode::DeltaBaseUnresolved>()
+                                    .map(|err| err.0)
+                                else {
+                                    return Err(err.into());
+                                };
                                 // Only with multi-pack indices it's allowed to jump to refer to other packs within this
                                 // multi-pack. Otherwise this would constitute a thin pack which is only allowed in transit.
                                 // However, if we somehow end up with that, we will resolve it safely, even though we could
@@ -149,7 +156,6 @@ where
                                 })
                                 .map(Into::into)
                             }
-                            Err(err) => Err(err),
                         }?;
 
                         if idx != 0 {
@@ -185,7 +191,6 @@ where
     fn try_header(&self, id: &oid) -> Result<Option<Header>, gix_object::find::Error> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
-        self.try_header_inner(id, &mut inflate, &mut snapshot, None)
-            .map_err(|err| Box::new(err) as _)
+        self.try_header_inner(id, &mut inflate, &mut snapshot, None).or_erased()
     }
 }

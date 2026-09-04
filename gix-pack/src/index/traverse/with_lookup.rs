@@ -68,7 +68,7 @@ where
     /// waste while decoding objects.
     ///
     /// For more details, see the documentation on the [`traverse()`][index::File::traverse()] method.
-    pub fn traverse_with_lookup<C, Processor, E, F, D>(
+    pub fn traverse_with_lookup<C, Processor, F, D>(
         &self,
         mut processor: Processor,
         pack: &data::File<D>,
@@ -79,11 +79,11 @@ where
             check,
             make_pack_lookup_cache,
         }: Options<F>,
-    ) -> Result<Outcome, Error<E>>
+    ) -> Result<Outcome, Error>
     where
         C: crate::cache::DecodeEntry,
-        E: std::error::Error + Send + Sync + 'static,
-        Processor: FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result<(), E> + Send + Clone,
+        Processor:
+            FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result<(), gix_error::Exn> + Send + Clone,
         F: Fn() -> C + Send + Clone,
         D: crate::FileData + Send + Sync,
     {
@@ -144,7 +144,7 @@ where
                     state_per_thread,
                     move |entries: &[index::Entry],
                           (cache, buf, inflate, progress)|
-                          -> Result<Vec<data::decode::entry::Outcome>, Error<_>> {
+                          -> Result<Vec<data::decode::entry::Outcome>, Error> {
                         progress.init(
                             Some(entries.len()),
                             gix_features::progress::count_with_decimals("objects", 2),
@@ -163,13 +163,7 @@ where
                                 &mut processor,
                             );
                             progress.inc();
-                            let stat = match result {
-                                Err(err @ Error::PackDecode { .. }) if !check.fatal_decode_error() => {
-                                    progress.info(format!("Ignoring decode error: {err}"));
-                                    continue;
-                                }
-                                res => res,
-                            }?;
+                            let Some(stat) = result? else { continue };
                             stats.push(stat);
                             if should_interrupt.load(Ordering::Relaxed) {
                                 break;
@@ -177,7 +171,7 @@ where
                         }
                         Ok(stats)
                     },
-                    Reducer::from_progress(reduce_progress, pack.data_len(), check, should_interrupt),
+                    Reducer::from_progress(reduce_progress, pack.data_len(), should_interrupt),
                 )
             },
         );

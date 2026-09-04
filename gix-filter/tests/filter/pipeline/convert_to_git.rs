@@ -145,10 +145,10 @@ fn no_filter_means_reader_is_returned_unchanged() -> gix_testtools::Result {
     Ok(())
 }
 
-fn no_call(_buf: &mut Vec<u8>) -> Result<Option<()>, Box<dyn std::error::Error + Send + Sync>> {
+fn no_call(_buf: &mut Vec<u8>) -> Result<Option<()>, gix_object::find::Error> {
     unreachable!("index function will not be called")
 }
 
-fn no_object_in_index(_buf: &mut Vec<u8>) -> Result<Option<()>, Box<dyn std::error::Error + Send + Sync>> {
+fn no_object_in_index(_buf: &mut Vec<u8>) -> Result<Option<()>, gix_object::find::Error> {
     Ok(None)
 }

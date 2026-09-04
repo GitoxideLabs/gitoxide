@@ -138,22 +138,26 @@ mod validate {
         bstr::BStr,
         config::tree::{Gpg, keys},
     };
+    #[cfg(not(feature = "command"))]
+    use gix_error::ErrorExt;
+    #[cfg(feature = "command")]
+    use gix_error::ResultExt;
 
     #[derive(Copy, Clone)]
     pub struct MinTrustLevel;
 
     impl keys::Validate for MinTrustLevel {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
             #[cfg(feature = "command")]
             {
-                Gpg::MIN_TRUST_LEVEL.try_into_trust_level(value)?;
+                Gpg::MIN_TRUST_LEVEL.try_into_trust_level(value).or_erased()?;
                 Ok(())
             }
             #[cfg(not(feature = "command"))]
             {
                 let err: crate::config::key::GenericErrorWithValue =
                     crate::config::key::GenericErrorWithValue::from_value(&Gpg::MIN_TRUST_LEVEL, value.into());
-                Err(Box::new(err))
+                Err(err.raise_erased())
             }
         }
     }

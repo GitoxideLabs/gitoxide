@@ -181,10 +181,10 @@ pub mod streaming_peek_iter {
             .expect("a decode error instead of EOF")
             .expect("no IO error expected")
             .expect_err("decode should fail for oversized lengths");
-        assert!(matches!(
-            err,
-            gix_packetline::decode::Error::DataLengthLimitExceeded { length_in_bytes: 65535 }
-        ));
+        assert_eq!(
+            err.to_string(),
+            "The data received claims to be larger than the maximum allowed size: got 65535, exceeds 65516"
+        );
         Ok(())
     }
 

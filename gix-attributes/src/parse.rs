@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use bstr::{BStr, ByteSlice};
+use gix_error::{ErrorExt, ResultExt, ValidationError};
 
 use crate::{AssignmentRef, Name, NameRef, StateRef, name};
 
@@ -14,21 +15,8 @@ pub enum Kind {
     Macro(Name),
 }
 
-mod error {
-    use bstr::BString;
-    /// The error returned by [`parse::Lines`][crate::parse::Lines].
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(r"Line {line_number} has a negative pattern, for literal characters use \!: {line}")]
-        PatternNegation { line_number: usize, line: BString },
-        #[error("Attribute in line {line_number} has an invalid name: {attribute}")]
-        AttributeName { line_number: usize, attribute: BString },
-        #[error("Macro in line {line_number} has an invalid name: {macro_name}")]
-        MacroName { line_number: usize, macro_name: BString },
-    }
-}
-pub use error::Error;
+/// The error returned by [`parse::Lines`][crate::parse::Lines].
+pub type Error = gix_error::Exn<ValidationError>;
 
 /// An iterator over attribute assignments, parsed line by line.
 pub struct Lines<'a> {
@@ -68,7 +56,7 @@ fn check_attr(attr: &BStr) -> Result<NameRef<'_>, name::Error> {
     NameRef::try_from(attr).and_then(|name| {
         (!name.as_str().starts_with("builtin_"))
             .then_some(name)
-            .ok_or_else(|| name::Error { attribute: attr.into() })
+            .ok_or_else(|| name::Error::new_with_input("Attribute name uses the reserved 'builtin_' prefix", attr))
     })
 }
 
@@ -134,18 +122,16 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<Result<(Kind, Iter<'_>,
 
     let kind_res = match line.strip_prefix(b"[attr]").filter(|name| !name.is_empty()) {
         Some(macro_name) => check_attr(macro_name.into())
-            .map_err(|err| Error::MacroName {
-                line_number,
-                macro_name: err.attribute,
-            })
+            .or_raise(|| ValidationError::new(format!("Macro in line {line_number} has an invalid name")))
             .map(|name| Kind::Macro(name.to_owned())),
         None => {
             let pattern = gix_glob::Pattern::from_bytes(line.as_ref())?;
             if pattern.mode.contains(gix_glob::pattern::Mode::NEGATIVE) {
-                Err(Error::PatternNegation {
-                    line: line.into_owned(),
-                    line_number,
-                })
+                Err(ValidationError::new_with_input(
+                    format!(r"Line {line_number} has a negative pattern, for literal characters use \!"),
+                    line.as_ref(),
+                )
+                .raise())
             } else {
                 Ok(Kind::Pattern(pattern))
             }

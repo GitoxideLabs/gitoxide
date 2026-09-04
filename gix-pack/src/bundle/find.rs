@@ -1,3 +1,5 @@
+use gix_error::ResultExt;
+
 impl crate::Bundle {
     /// Find an object with the given [`ObjectId`](gix_hash::ObjectId) and place its data into `out`.
     /// `inflate` is used to decompress objects, and will be reset before first use, but not after the last use.
@@ -35,7 +37,7 @@ impl crate::Bundle {
         cache: &mut dyn crate::cache::DecodeEntry,
     ) -> Result<(gix_object::Data<'a>, crate::data::entry::Location), crate::data::decode::Error> {
         let ofs = self.index.pack_offset_at_index(idx);
-        let pack_entry = self.pack.entry(ofs)?;
+        let pack_entry = self.pack.entry(ofs).or_erased()?;
         let header_size = pack_entry.header_size();
         self.pack
             .decode_entry(

@@ -3,15 +3,8 @@ use encoding_rs::Encoding;
 
 ///
 pub mod for_label {
-    use bstr::BString;
-
     /// The error returned by [for_label()][super::for_label()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("An encoding named '{name}' is not known")]
-        Unknown { name: BString },
-    }
+    pub type Error = gix_error::ValidationError;
 }
 
 /// Try to produce a new `Encoding` for `label` or report an error if it is not known.
@@ -26,6 +19,7 @@ pub fn for_label<'a>(label: impl Into<&'a BStr>) -> Result<&'static Encoding, fo
     if label == "latin-1" {
         label = "ISO-8859-1".into();
     }
-    let enc = Encoding::for_label(label.as_ref()).ok_or_else(|| for_label::Error::Unknown { name: label.into() })?;
+    let enc = Encoding::for_label(label.as_ref())
+        .ok_or_else(|| gix_error::ValidationError::new(format!("An encoding named '{label}' is not known")))?;
     Ok(enc)
 }

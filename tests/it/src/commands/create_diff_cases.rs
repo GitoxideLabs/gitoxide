@@ -79,10 +79,18 @@ mkdir -p assets
             let dst_old_blob = assets.join(format!("{old_blob_id}.blob"));
             let dst_new_blob = assets.join(format!("{new_blob_id}.blob"));
             if !dry_run {
-                let old_blob = repo.objects.find_blob(&old_blob_id, &mut buf)?.data;
+                let old_blob = repo
+                    .objects
+                    .find_blob(&old_blob_id, &mut buf)
+                    .map_err(gix::Exn::into_error)?
+                    .data;
                 std::fs::write(dst_old_blob, old_blob)?;
 
-                let new_blob = repo.objects.find_blob(&new_blob_id, &mut buf)?.data;
+                let new_blob = repo
+                    .objects
+                    .find_blob(&new_blob_id, &mut buf)
+                    .map_err(gix::Exn::into_error)?
+                    .data;
                 std::fs::write(dst_new_blob, new_blob)?;
             }
 

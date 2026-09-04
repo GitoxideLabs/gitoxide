@@ -60,6 +60,7 @@ sha256 = [
 xz = ["dep:xz2"]
 
 [dependencies]
+gix-error = { version = "^0.3.1", path = "../../gix-error" }
 gix-hash = { version = "^0.26.2", path = "../../gix-hash" }
 gix-lock = { version = "^24.0.0", path = "../../gix-lock" }
 gix-path = { version = "^0.12.6", path = "../../gix-path" }

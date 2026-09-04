@@ -2,22 +2,8 @@ use std::time::SystemTime;
 
 use crate::multi_index;
 
-mod error {
-    /// The error returned by [`crate::multi_index::write_from_index_paths()`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Io(#[from] gix_hash::io::Error),
-        #[error("Interrupted")]
-        Interrupted,
-        #[error(transparent)]
-        OpenIndex(#[from] crate::index::init::Error),
-        #[error("Too many index entries to fit in memory")]
-        OutOfMemory,
-    }
-}
-pub use error::Error;
+/// The error returned by [`crate::multi_index::write_from_index_paths()`].
+pub type Error = gix_error::Exn;
 
 /// An entry suitable for sorting and writing
 pub(crate) struct Entry {
@@ -77,6 +63,7 @@ pub(super) mod function {
         time::{Instant, SystemTime},
     };
 
+    use gix_error::{ErrorExt, ResourceExhaustionError, ResourceExhaustionKind, ResultExt, RetryableError, message};
     use gix_features::progress::{Count, DynNestedProgress, Progress};
 
     use crate::{MMap, multi_index};
@@ -120,9 +107,12 @@ pub(super) mod function {
                     .unwrap_or(SystemTime::UNIX_EPOCH);
                 let index = crate::index::File::at(index, object_hash)?;
 
-                entries
-                    .try_reserve(index.num_objects() as usize)
-                    .map_err(|_| Error::OutOfMemory)?;
+                entries.try_reserve(index.num_objects() as usize).or_raise_erased(|| {
+                    ResourceExhaustionError::new(
+                        ResourceExhaustionKind::AllocationFailure,
+                        "Too many index entries to fit in memory",
+                    )
+                })?;
                 entries.extend(index.iter().map(|e| Entry {
                     id: e.oid,
                     pack_index: index_id as u32,
@@ -131,7 +121,7 @@ pub(super) mod function {
                 }));
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(Error::Interrupted);
+                    return Err(RetryableError::new(message("Interrupted")).raise_erased());
                 }
             }
             progress.show_throughput(start);
@@ -148,7 +138,7 @@ pub(super) mod function {
             progress.inc_by(entries.len());
             progress.show_throughput(start);
             if should_interrupt.load(Ordering::Relaxed) {
-                return Err(Error::Interrupted);
+                return Err(RetryableError::new(message("Interrupted")).raise_erased());
             }
             entries
         };
@@ -194,7 +184,7 @@ pub(super) mod function {
             index_paths_sorted.len() as u32,
             object_hash,
         )
-        .map_err(gix_hash::io::Error::from)?;
+        .map_err(gix_hash::io::from_std_io)?;
 
         {
             progress.set_name("Writing chunks".into());
@@ -202,7 +192,7 @@ pub(super) mod function {
 
             let mut chunk_write = cf
                 .into_write(&mut out, bytes_written)
-                .map_err(gix_hash::io::Error::from)?;
+                .map_err(gix_hash::io::from_std_io)?;
             while let Some(chunk_to_write) = chunk_write.next_chunk() {
                 match chunk_to_write {
                     multi_index::chunk::index_names::ID => {
@@ -220,20 +210,20 @@ pub(super) mod function {
                     ),
                     unknown => unreachable!("BUG: forgot to implement chunk {:?}", std::str::from_utf8(&unknown)),
                 }
-                .map_err(gix_hash::io::Error::from)?;
+                .map_err(gix_hash::io::from_std_io)?;
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(Error::Interrupted);
+                    return Err(RetryableError::new(message("Interrupted")).raise_erased());
                 }
             }
         }
 
         // write trailing checksum
-        let multi_index_checksum = out.inner.hash.try_finalize().map_err(gix_hash::io::Error::from)?;
+        let multi_index_checksum = out.inner.hash.try_finalize().map_err(gix_hash::io::from_hasher)?;
         out.inner
             .inner
             .write_all(multi_index_checksum.as_slice())
-            .map_err(gix_hash::io::Error::from)?;
+            .map_err(gix_hash::io::from_std_io)?;
         out.progress.show_throughput(write_start);
 
         Ok(Outcome { multi_index_checksum })

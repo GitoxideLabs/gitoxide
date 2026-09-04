@@ -369,6 +369,7 @@ impl PersistedConflict {
             .context("could not check out the conflicting merge result")?;
         if let Err(err) = index
             .write(gix::index::write::Options::default())
+            .map_err(gix::Exn::into_error)
             .context("could not write the conflicting index")
         {
             return match super::forget::apply_tree_transition(workdir, self.merged_tree, ours_tree) {
@@ -407,7 +408,7 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[O
     for reference in repo.references()?.all()? {
         let reference = match reference {
             Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) if is_missing_ref(&err) => continue,
             Err(err) => anyhow::bail!("could not inspect a reference before editing: {err}"),
         };
         if matches!(
@@ -2518,6 +2519,7 @@ fn reset_index_paths(repo: &gix::Repository, id: ObjectId, paths: &[BString]) ->
     index.remove_tree();
     index
         .write(gix::index::write::Options::default())
+        .map_err(gix::Exn::into_error)
         .context("could not update selected index paths")
 }
 
@@ -2828,7 +2830,10 @@ fn write_commit_timed(
     commit = match (signature, signing) {
         (Signature::RedoIfNeeded, Some(options)) => {
             let started = Instant::now();
-            let signed = commit.sign(options).context("could not sign rebased commit")?;
+            let signed = commit
+                .sign(options)
+                .map_err(gix::Exn::into_error)
+                .context("could not sign rebased commit")?;
             signing_time = Some(started.elapsed());
             signed
         }
@@ -2971,7 +2976,7 @@ fn update_refs(
         for reference in repo.references()?.all()? {
             let reference = match reference {
                 Ok(reference) => reference,
-                Err(err) if is_missing_ref(&*err) => continue,
+                Err(err) if is_missing_ref(&err) => continue,
                 Err(err) => anyhow::bail!("could not inspect a reference before rebasing: {err}"),
             };
             if matches!(

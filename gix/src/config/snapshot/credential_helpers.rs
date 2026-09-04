@@ -1,25 +1,7 @@
-pub use error::Error;
-
 use crate::config::Snapshot;
 
-mod error {
-    use crate::bstr::BString;
-
-    /// The error returned by [`Snapshot::credential_helpers()`][super::Snapshot::credential_helpers()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not parse 'useHttpPath' key in section {section}")]
-        InvalidUseHttpPath {
-            section: BString,
-            source: gix_config::value::Error,
-        },
-        #[error("core.askpass could not be read")]
-        CoreAskpass(#[from] gix_config::path::interpolate::Error),
-        #[error(transparent)]
-        BooleanConfig(#[from] crate::config::boolean::Error),
-    }
-}
+/// The error returned by [`Snapshot::credential_helpers()`][Snapshot::credential_helpers()].
+pub type Error = gix_error::Error;
 
 impl Snapshot<'_> {
     /// Returns the configuration for all git-credential helpers from trusted configuration that apply
@@ -49,6 +31,8 @@ impl Snapshot<'_> {
 }
 
 pub(super) mod function {
+    use gix_error::ResultExt;
+
     use crate::{
         bstr::{ByteSlice, ByteVec},
         config::{
@@ -168,9 +152,11 @@ pub(super) mod function {
                         .value(use_http_path_key.name)
                         .map(|val| {
                             gix_config::Boolean::try_from(val)
-                                .map_err(|err| Error::InvalidUseHttpPath {
-                                    source: err,
-                                    section: section.header().to_bstring(),
+                                .map_err(|err| {
+                                    gix_error::Error::from(err.raise(gix_error::ValidationError::new(format!(
+                                        "Could not parse 'useHttpPath' key in section {}",
+                                        section.header().to_bstring()
+                                    ))))
                                 })
                                 .map(|b| b.0)
                         })
@@ -203,7 +189,8 @@ pub(super) mod function {
                 is_lenient_config,
                 environment,
             )
-            .ignore_empty()?,
+            .ignore_empty()
+            .or_raise(|| gix_error::message("core.askpass could not be read"))?,
             mode: Credentials::TERMINAL_PROMPT
                 .enrich_error(config.boolean(Credentials::TERMINAL_PROMPT))
                 .with_leniency(is_lenient_config)?
@@ -277,15 +264,15 @@ pub(super) mod function {
     }
 
     trait IgnoreEmptyPath {
-        fn ignore_empty(self) -> Self;
+        fn ignore_empty(self) -> Result<Option<std::path::PathBuf>, gix_error::Error>;
     }
 
     impl IgnoreEmptyPath for Result<Option<std::path::PathBuf>, gix_config::path::interpolate::Error> {
-        fn ignore_empty(self) -> Self {
+        fn ignore_empty(self) -> Result<Option<std::path::PathBuf>, gix_error::Error> {
             match self {
                 Ok(maybe_path) => Ok(maybe_path),
-                Err(gix_config::path::interpolate::Error::Missing { .. }) => Ok(None),
-                Err(err) => Err(err),
+                Err(err) if err.downcast_any_ref::<gix_error::NotFoundError>().is_some() => Ok(None),
+                Err(err) => Err(err.into_error()),
             }
         }
     }

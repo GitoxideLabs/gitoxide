@@ -9,17 +9,8 @@ use crate::bstr::BString;
 
 ///
 pub mod single {
-    use crate::bstr::BString;
-
     /// The error returned by [`crate::Repository::rev_parse_single()`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Parse(#[from] gix_error::Error),
-        #[error("revspec {spec:?} did not resolve to a single object")]
-        RangedRev { spec: BString },
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///

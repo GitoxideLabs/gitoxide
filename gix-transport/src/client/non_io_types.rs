@@ -48,45 +48,7 @@ pub(crate) mod connect {
     /// The error used in `connect()`.
     ///
     /// (Both blocking and async I/O use the same error type.)
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Url(#[from] gix_url::parse::Error),
-        #[error("The git repository path could not be converted to UTF8")]
-        PathConversion(#[from] bstr::Utf8Error),
-        #[error("connection failed")]
-        Connection(#[from] Box<dyn std::error::Error + Send + Sync>),
-        #[error("The url {url:?} contains information that would not be used by the {scheme} protocol")]
-        UnsupportedUrlTokens {
-            url: bstr::BString,
-            scheme: gix_url::Scheme,
-        },
-        #[error("The '{0}' protocol is currently unsupported")]
-        UnsupportedScheme(gix_url::Scheme),
-        #[cfg(not(any(feature = "http-client-curl", feature = "http-client-reqwest")))]
-        #[error("'{0}' is not compiled in. Compile with the 'http-client-curl' or 'http-client-reqwest' cargo feature")]
-        CompiledWithoutHttp(gix_url::Scheme),
-    }
-
-    // TODO: maybe fix this workaround: want `IsSpuriousError`  in `Connection(…)`
-    impl crate::IsSpuriousError for Error {
-        fn is_spurious(&self) -> bool {
-            match self {
-                Error::Connection(err) => {
-                    #[cfg(feature = "blocking-client")]
-                    if let Some(err) = err.downcast_ref::<crate::client::git::blocking_io::connect::Error>() {
-                        return err.is_spurious();
-                    }
-                    if let Some(err) = err.downcast_ref::<crate::client::Error>() {
-                        return err.is_spurious();
-                    }
-                    false
-                }
-                _ => false,
-            }
-        }
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 }
 
 mod error {
@@ -94,14 +56,12 @@ mod error {
 
     use bstr::BString;
 
-    #[cfg(feature = "http-client")]
-    use crate::client::blocking_io::http;
     #[cfg(feature = "blocking-client")]
     use crate::client::blocking_io::ssh;
     use crate::client::capabilities;
 
     #[cfg(feature = "http-client")]
-    type HttpError = http::Error;
+    type HttpError = gix_error::Error;
     #[cfg(feature = "blocking-client")]
     type SshInvocationError = ssh::invocation::Error;
     #[cfg(not(feature = "http-client"))]
@@ -110,50 +70,174 @@ mod error {
     type SshInvocationError = std::convert::Infallible;
 
     /// The error used in most methods of the [`client`][crate::client] module
-    #[derive(thiserror::Error, Debug)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("A request was performed without performing the handshake first")]
         MissingHandshake,
-        #[error("An IO error occurred when talking to the server")]
-        Io(#[from] std::io::Error),
-        #[error("Capabilities could not be parsed")]
-        Capabilities {
-            #[from]
-            err: capabilities::Error,
-        },
-        #[error("A packet line could not be decoded")]
-        LineDecode {
-            #[from]
-            err: gix_packetline::decode::Error,
-        },
-        #[error("A {0} line was expected, but there was none")]
+        Io(std::io::Error),
+        Capabilities { err: gix_error::Error },
+        LineDecode { err: gix_packetline::decode::Error },
         ExpectedLine(&'static str),
-        #[error("Expected a data line, but got a delimiter")]
         ExpectedDataLine,
-        #[error("The transport layer does not support authentication")]
         AuthenticationUnsupported,
-        #[error("The transport layer refuses to use a given identity: {0}")]
         AuthenticationRefused(&'static str),
-        #[error("The protocol version indicated by {:?} is unsupported", {0})]
         UnsupportedProtocolVersion(BString),
-        #[error("Failed to invoke program {command:?}")]
         InvokeProgram { source: std::io::Error, command: OsString },
-        #[error(transparent)]
-        Http(#[from] HttpError),
-        #[error(transparent)]
+        Http(HttpError),
         SshInvocation(SshInvocationError),
-        #[error("The repository path '{path}' could be mistaken for a command-line argument")]
         AmbiguousPath { path: BString },
     }
 
-    impl crate::IsSpuriousError for Error {
-        fn is_spurious(&self) -> bool {
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                Error::Io(err) => err.is_spurious(),
-                Error::Http(err) => err.is_spurious(),
+                Error::MissingHandshake => {
+                    f.write_str("A request was performed without performing the handshake first")
+                }
+                Error::Io(_) => f.write_str("An IO error occurred when talking to the server"),
+                Error::Capabilities { .. } => f.write_str("Capabilities could not be parsed"),
+                Error::LineDecode { .. } => f.write_str("A packet line could not be decoded"),
+                Error::ExpectedLine(line) => write!(f, "A {line} line was expected, but there was none"),
+                Error::ExpectedDataLine => f.write_str("Expected a data line, but got a delimiter"),
+                Error::AuthenticationUnsupported => f.write_str("The transport layer does not support authentication"),
+                Error::AuthenticationRefused(reason) => {
+                    write!(f, "The transport layer refuses to use a given identity: {reason}")
+                }
+                Error::UnsupportedProtocolVersion(version) => {
+                    write!(f, "The protocol version indicated by {version:?} is unsupported")
+                }
+                Error::InvokeProgram { command, .. } => write!(f, "Failed to invoke program {}", command.display()),
+                Error::Http(err) => std::fmt::Display::fmt(err, f),
+                Error::SshInvocation(err) => std::fmt::Display::fmt(err, f),
+                Error::AmbiguousPath { path } => {
+                    write!(
+                        f,
+                        "The repository path '{path}' could be mistaken for a command-line argument"
+                    )
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => Some(err),
+                Error::LineDecode { err } => Some(err),
+                Error::InvokeProgram { source, .. } => Some(source),
+                Error::Capabilities { err } => Some(err),
+                Error::Http(err) => Some(err),
+                Error::SshInvocation(err) => err.source(),
+                _ => None,
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<capabilities::Error> for Error {
+        fn from(err: capabilities::Error) -> Self {
+            Error::Capabilities { err: err.into_error() }
+        }
+    }
+
+    impl From<gix_packetline::decode::Error> for Error {
+        fn from(err: gix_packetline::decode::Error) -> Self {
+            Error::LineDecode { err }
+        }
+    }
+
+    impl Error {
+        /// Return `true` if retrying the failed transport operation might succeed.
+        pub fn can_retry(&self) -> bool {
+            match self {
+                Error::Io(err) => io_can_retry(err),
+                #[cfg(feature = "http-client")]
+                Error::Http(err) => {
+                    err.can_retry()
+                        || err
+                            .iter_errors()
+                            .filter_map(|err| err.downcast_ref::<std::io::Error>())
+                            .any(io_can_retry)
+                }
                 _ => false,
             }
+        }
+    }
+
+    fn io_can_retry(err: &std::io::Error) -> bool {
+        gix_error::can_retry(err)
+            || matches!(
+                err.kind(),
+                std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::AddrInUse
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionRefused
+            )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[cfg(feature = "http-client")]
+        use gix_error::{ErrorExt, RetryableError, message};
+
+        #[test]
+        fn io_retry_policy() {
+            for kind in [
+                std::io::ErrorKind::Interrupted,
+                std::io::ErrorKind::UnexpectedEof,
+                std::io::ErrorKind::TimedOut,
+                std::io::ErrorKind::BrokenPipe,
+                std::io::ErrorKind::AddrInUse,
+                std::io::ErrorKind::ConnectionAborted,
+                std::io::ErrorKind::ConnectionReset,
+                std::io::ErrorKind::ConnectionRefused,
+            ] {
+                assert!(super::Error::Io(kind.into()).can_retry(), "{kind:?} is retryable");
+            }
+            for kind in [std::io::ErrorKind::OutOfMemory, std::io::ErrorKind::PermissionDenied] {
+                assert!(!super::Error::Io(kind.into()).can_retry(), "{kind:?} is permanent");
+            }
+        }
+
+        #[cfg(feature = "http-client")]
+        #[test]
+        fn http_keeps_retryable_sources() {
+            let err = super::Error::Http(
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "retry me")
+                    .and_raise(message("HTTP failed"))
+                    .into_error(),
+            );
+
+            assert!(err.can_retry());
+            let source = std::error::Error::source(&err)
+                .and_then(|err| err.downcast_ref::<gix_error::Error>())
+                .expect("HTTP errors retain their gix-error wrapper");
+            assert!(
+                source
+                    .iter_errors()
+                    .any(<dyn std::error::Error + 'static>::is::<std::io::Error>)
+            );
+
+            let explicit = super::Error::Http(
+                RetryableError::new(message("retry me"))
+                    .and_raise(message("HTTP failed"))
+                    .into_error(),
+            );
+            assert!(explicit.can_retry());
+
+            let out_of_memory = super::Error::Http(
+                std::io::Error::from(std::io::ErrorKind::OutOfMemory)
+                    .and_raise(message("HTTP failed"))
+                    .into_error(),
+            );
+            assert!(!out_of_memory.can_retry());
         }
     }
 }

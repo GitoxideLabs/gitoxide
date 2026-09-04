@@ -18,9 +18,10 @@ use unix::imp;
 #[cfg(not(unix))]
 mod imp {
     use crate::{Error, Options};
+    use gix_error::{ErrorExt, message};
 
     pub(crate) fn ask(_prompt: &str, _opts: &Options) -> Result<String, Error> {
-        Err(Error::UnsupportedPlatform)
+        Err(message("The current platform has no implementation for prompting in the terminal").raise())
     }
 }
 

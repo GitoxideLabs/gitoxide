@@ -9,7 +9,7 @@ use gix_filter::driver::process;
 /// Visible marker used to demonstrate clean/smudge round trips in filter-driver tests.
 static PREFIX: &str = "➡";
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut args = std::env::args();
     let sub_command = args.nth(1).ok_or("Need sub-command")?;
     let next_arg = args.next(); // possibly %f
@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "process" => {
             let disallow_delay = next_arg.as_deref() == Some("disallow-delay");
             let fail_on_shutdown = next_arg.as_deref() == Some("fail-on-shutdown");
+            let forget_delayed = next_arg.as_deref() == Some("forget-delayed");
             let mut srv = gix_filter::driver::process::Server::handshake(
                 stdin(),
                 stdout(),
@@ -145,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut out = request.as_write();
                             let mut last_cmd = None;
                             let mut buf = Vec::<u8>::new();
-                            for (cmd, path, _) in &delayed {
+                            for (cmd, path, _) in delayed.iter().skip(usize::from(forget_delayed)) {
                                 if last_cmd.get_or_insert(*cmd) != cmd {
                                     panic!("the API doesn't support mixing cmds as paths might not be unique anymore")
                                 }

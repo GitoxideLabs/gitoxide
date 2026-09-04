@@ -19,7 +19,7 @@ mod invoke_outcome_to_helper_result {
             action,
         )
         .unwrap_err();
-        assert!(matches!(err, protocol::Error::IdentityMissing { .. }));
+        assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
     }
 
     #[test]
@@ -36,7 +36,10 @@ mod invoke_outcome_to_helper_result {
             action,
         )
         .unwrap_err();
-        assert!(matches!(err, protocol::Error::Quit));
+        assert_eq!(
+            err.to_string(),
+            "The handler asked to stop trying to obtain credentials"
+        );
     }
 }
 

@@ -138,7 +138,8 @@ fn mode_to_byte(m: gix_object::tree::EntryMode) -> u8 {
 
 fn clear_and_set_len(buf: &mut Vec<u8>, len: usize) -> io::Result<()> {
     buf.clear();
-    buf.try_reserve(len).map_err(|_| ErrorKind::OutOfMemory)?;
+    buf.try_reserve(len)
+        .map_err(|err| io::Error::new(ErrorKind::OutOfMemory, err))?;
     buf.resize(len, 0);
     Ok(())
 }

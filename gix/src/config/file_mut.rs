@@ -5,41 +5,12 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use gix_error::{ErrorExt, ResultExt, message};
+
 use super::FileTransaction;
 
 /// The error produced when opening or committing a [`FileTransaction`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    LockTimeout(#[from] super::lock_timeout::Error),
-    #[error(transparent)]
-    InvalidSharedRepository(#[from] crate::config::key::GenericErrorWithValue),
-    #[error("Could not acquire the lock for the configuration file")]
-    AcquireLock(#[from] gix_lock::acquire::Error),
-    #[error("Could not read metadata of the configuration file at {path:?}")]
-    Metadata {
-        source: std::io::Error,
-        path: std::path::PathBuf,
-    },
-    #[error("Could not read the configuration file at {path:?}")]
-    Read {
-        source: std::io::Error,
-        path: std::path::PathBuf,
-    },
-    #[error("Could not parse the configuration file at {path:?}")]
-    Parse {
-        source: gix_config::file::init::Error,
-        path: std::path::PathBuf,
-    },
-    #[error("Could not write the configuration file at {path:?}")]
-    Write {
-        source: std::io::Error,
-        path: std::path::PathBuf,
-    },
-    #[error("Could not commit the configuration file lock")]
-    CommitLock(#[from] gix_lock::commit::Error<gix_lock::File>),
-}
+pub type Error = gix_error::Error;
 
 impl FileTransaction {
     pub(crate) fn open(
@@ -58,42 +29,36 @@ impl FileTransaction {
             None,
             Some(&gix_lock::acquire::resolve_symlink),
             adjust_permissions,
-        )?;
+        )
+        .or_raise(|| message("Could not acquire the lock for the configuration file"))?;
         let source = gix_config::Source::Local;
         let path = lock.resource_path();
         let config = match std::fs::File::open(&path) {
             Ok(mut file) => {
                 let permissions = file
                     .metadata()
-                    .map_err(|source| Error::Metadata {
-                        source,
-                        path: path.clone(),
-                    })?
+                    .or_raise(|| message!("Could not read metadata of the configuration file at {path:?}"))?
                     .permissions();
                 lock.with_mut(|file| file.set_permissions(permissions))
-                    .map_err(|source| Error::Write {
-                        source,
-                        path: path.clone(),
-                    })?;
+                    .or_raise(|| message!("Could not write the configuration file at {path:?}"))?;
                 let mut bytes = Vec::new();
-                file.read_to_end(&mut bytes).map_err(|source| Error::Read {
-                    source,
-                    path: path.clone(),
-                })?;
+                file.read_to_end(&mut bytes)
+                    .or_raise(|| message!("Could not read the configuration file at {path:?}"))?;
                 gix_config::File::from_bytes_no_includes(
                     &bytes,
                     gix_config::file::Metadata::from(source).at(path.clone()).with(trust),
                     Default::default(),
                 )
-                .map_err(|source| Error::Parse {
-                    source,
-                    path: path.clone(),
-                })?
+                .or_raise(|| message!("Could not parse the configuration file at {path:?}"))?
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 gix_config::File::new(gix_config::file::Metadata::from(source).at(path).with(trust))
             }
-            Err(source) => return Err(Error::Read { source, path }),
+            Err(err) => {
+                return Err(err
+                    .and_raise(message!("Could not read the configuration file at {path:?}"))
+                    .into());
+            }
         };
         Ok(FileTransaction { lock, config })
     }
@@ -103,8 +68,10 @@ impl FileTransaction {
         let path = self.lock.resource_path();
         self.config
             .write_to(&mut self.lock)
-            .map_err(|source| Error::Write { source, path })?;
-        self.lock.commit()?;
+            .or_raise(|| message!("Could not write the configuration file at {path:?}"))?;
+        self.lock
+            .commit()
+            .or_raise(|| message("Could not commit the configuration file lock"))?;
         Ok(())
     }
 }

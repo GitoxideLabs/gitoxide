@@ -18,7 +18,7 @@ impl PrepareFetch {
     /// Otherwise, a clone is configured to be complete and fetches all tags, not only those reachable from all branches.
     pub fn configure_remote(
         mut self,
-        f: impl FnMut(crate::Remote<'_>) -> Result<crate::Remote<'_>, Box<dyn std::error::Error + Send + Sync>> + 'static,
+        f: impl FnMut(crate::Remote<'_>) -> Result<crate::Remote<'_>, gix_error::Exn> + 'static,
     ) -> Self {
         self.configure_remote = Some(Box::new(f));
         self

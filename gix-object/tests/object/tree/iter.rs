@@ -158,7 +158,7 @@ mod lookup_entry {
             let root_tree = odb.find_tree_iter(&root_tree_id, &mut buf)?;
 
             let mut buf = Vec::new();
-            root_tree.lookup_entry_by_path(&odb, &mut buf, path)
+            Ok(root_tree.lookup_entry_by_path(&odb, &mut buf, path)?)
         }
     }
 }

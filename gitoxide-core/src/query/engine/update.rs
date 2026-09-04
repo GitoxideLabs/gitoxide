@@ -317,7 +317,7 @@ pub fn update(
                                                         });
                                                     }
                                                 }
-                                                Ok::<_, Infallible>(std::ops::ControlFlow::Continue(()))
+                                                Ok::<_, gix::Exn>(std::ops::ControlFlow::Continue(()))
                                             })?;
                                         out_chunk.push(CommitDiffStats {
                                             id: commit,
@@ -441,7 +441,7 @@ pub fn update(
                         break;
                     }
                 }
-                Err(gix::traverse::commit::simple::Error::Find { .. }) => {
+                Err(traverse_err) if traverse_err.downcast_any_ref::<gix::error::NotFoundError>().is_some() => {
                     writeln!(err, "shallow repository - commit history is truncated").ok();
                     break;
                 }

@@ -38,12 +38,15 @@ pub fn read(rd: &mut impl BufRead, state: &mut Decompress, mut dst: &mut [u8]) -
             Ok(Status::Ok | Status::BufError) => unreachable!("Definitely a bug somewhere"),
             // Keep the underlying zlib error so callers can tell a checksum mismatch
             // (`incorrect data check`) apart from genuine stream corruption.
+            Err(err) if err.downcast_any_ref::<gix_error::ResourceExhaustionError>().is_some() => {
+                return Err(io::Error::other(err.into_error()));
+            }
             Err(err) => {
                 let cause = state.error_message().map_or_else(|| err.to_string(), String::from);
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("corrupt deflate stream: {cause}"),
-                ));
+                let err = err.raise(gix_error::CorruptionError::new(format!(
+                    "corrupt deflate stream: {cause}"
+                )));
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, err.into_error()));
             }
         }
     }

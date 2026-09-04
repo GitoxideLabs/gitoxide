@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use gix_error::OptionExt;
+
 use crate::{
     Entry, Version,
     decode::{self, header},
@@ -111,7 +113,7 @@ pub fn chunk<'a>(
             has_delta_paths,
             prev_path,
         )
-        .ok_or(decode::Error::Entry { index: idx })?;
+        .ok_or_raise_erased(|| gix_error::CorruptionError::new(format!("Could not parse entry at index {idx}")))?;
 
         data = remaining;
         is_sparse |= entry.mode.is_sparse();

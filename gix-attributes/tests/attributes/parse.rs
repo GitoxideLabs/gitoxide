@@ -1,5 +1,6 @@
-use bstr::BString;
+use bstr::{BString, ByteSlice};
 use gix_attributes::{StateRef, parse, state::ValueRef};
+use gix_error::{ResultExt, ValidationError};
 use gix_glob::pattern::Mode;
 use gix_testtools::fixture_bytes;
 
@@ -94,15 +95,15 @@ fn exclamation_marks_must_be_escaped_or_error_unlike_gitignore() {
         line(r"\!hello"),
         (pattern(r"!hello", Mode::NO_SUB_DIR, None), vec![], 1)
     );
-    assert!(matches!(
+    assert!(has_validation_message(
         try_line(r"!hello"),
-        Err(parse::Error::PatternNegation { line_number: 1, .. })
+        r"Line 1 has a negative pattern, for literal characters use \!"
     ));
     assert!(lenient_lines(r#"!hello"#).is_empty());
     assert!(
-        matches!(
+        has_validation_message(
             try_line(r#""!hello""#),
-            Err(parse::Error::PatternNegation { line_number: 1, .. }),
+            r"Line 1 has a negative pattern, for literal characters use \!"
         ),
         "even in quotes they trigger…"
     );
@@ -195,46 +196,61 @@ fn the_macro_prefix_without_a_name_is_a_pattern() {
 
 #[test]
 fn custom_macros_must_be_valid_attribute_names() {
-    assert!(matches!(
+    assert!(has_validation_message(
         try_line(r"[attr]-prefixdash"),
-        Err(parse::Error::MacroName { line_number: 1, .. })
+        "Macro in line 1 has an invalid name"
     ));
     assert!(lenient_lines(r"[attr]-prefixdash").is_empty());
-    assert!(matches!(
+    assert!(has_validation_message(
         try_line(r"[attr]!exclamation"),
-        Err(parse::Error::MacroName { line_number: 1, .. })
+        "Macro in line 1 has an invalid name"
     ));
-    assert!(matches!(
+    assert!(has_validation_message(
         try_line(r"[attr]assignment=value"),
-        Err(parse::Error::MacroName { line_number: 1, .. })
+        "Macro in line 1 has an invalid name"
     ));
-    assert!(matches!(
+    assert!(has_validation_message(
         try_line(r"[attr]你好"),
-        Err(parse::Error::MacroName { line_number: 1, .. })
+        "Macro in line 1 has an invalid name"
     ));
     assert!(lenient_lines(r"[attr]你好").is_empty());
 }
 
 #[test]
+fn invalid_names_retain_line_context_and_the_validation_cause() {
+    for (input, context) in [
+        ("p 你好", "Attribute in line 1 has an invalid name"),
+        ("[attr]你好", "Macro in line 1 has an invalid name"),
+    ] {
+        let err = try_line(input).unwrap_err();
+        assert_eq!(err, context);
+        let cause = err
+            .iter()
+            .skip(1)
+            .find_map(|frame| frame.error().downcast_ref::<ValidationError>())
+            .expect("invalid names remain a typed validation cause");
+        assert_eq!(cause.message, "Attribute has non-ascii characters or starts with '-'");
+        assert_eq!(
+            cause.input.as_ref().map(|input| input.as_bstr()),
+            Some("你好".as_bytes().as_bstr())
+        );
+    }
+}
+
+#[test]
 fn attribute_names_must_not_begin_with_dash_and_must_be_ascii_only() {
-    assert!(matches!(
+    assert!(has_validation_message(
         try_line(r"p !-a"),
-        Err(parse::Error::AttributeName { line_number: 1, .. })
+        "Attribute in line 1 has an invalid name"
     ));
     assert!(lenient_lines(r"p !-a").is_empty());
     assert!(
-        matches!(
-            try_line(r#"p !!a"#),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
-        ),
+        has_validation_message(try_line(r#"p !!a"#), "Attribute in line 1 has an invalid name"),
         "exclamation marks aren't allowed either"
     );
     assert!(lenient_lines(r#"p !!a"#).is_empty());
     assert!(
-        matches!(
-            try_line(r#"p 你好"#),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
-        ),
+        has_validation_message(try_line(r#"p 你好"#), "Attribute in line 1 has an invalid name"),
         "nor is utf-8 encoded characters - gitoxide could consider to relax this when established"
     );
     assert!(lenient_lines(r#"p 你好"#).is_empty());
@@ -243,31 +259,19 @@ fn attribute_names_must_not_begin_with_dash_and_must_be_ascii_only() {
 #[test]
 fn attribute_names_must_not_be_empty() {
     assert!(
-        matches!(
-            try_line(r"p text =lf"),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
-        ),
+        has_validation_message(try_line(r"p text =lf"), "Attribute in line 1 has an invalid name"),
         "a blank in front of the equals sign leaves the assignment without a name"
     );
     assert!(
-        matches!(
-            try_line(r"p ="),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
-        ),
+        has_validation_message(try_line(r"p ="), "Attribute in line 1 has an invalid name"),
         "an assignment that is nothing but an equals sign has no name either"
     );
     assert!(
-        matches!(
-            try_line(r"p -"),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
-        ),
+        has_validation_message(try_line(r"p -"), "Attribute in line 1 has an invalid name"),
         "prefixes need a name to apply to"
     );
     assert!(
-        matches!(
-            try_line(r"p !"),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
-        ),
+        has_validation_message(try_line(r"p !"), "Attribute in line 1 has an invalid name"),
         "the unspecified prefix needs one as well"
     );
     assert!(
@@ -279,24 +283,24 @@ fn attribute_names_must_not_be_empty() {
 #[test]
 fn attribute_names_must_not_use_the_reserved_builtin_prefix() {
     assert!(
-        matches!(
+        has_validation_message(
             try_line(r"p builtin_objectmode"),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
+            "Attribute in line 1 has an invalid name"
         ),
         "Git reserves 'builtin_' for built-in attributes and drops lines that assign to it"
     );
     assert!(lenient_lines(r"p builtin_objectmode").is_empty());
     assert!(
-        matches!(
+        has_validation_message(
             try_line(r"p -builtin_objectmode"),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
+            "Attribute in line 1 has an invalid name"
         ),
         "the prefix is checked after '-' and '!' are stripped, just like in `parse_attr()`"
     );
     assert!(
-        matches!(
+        has_validation_message(
             try_line(r"[attr]builtin_macro -text"),
-            Err(parse::Error::MacroName { line_number: 1, .. })
+            "Macro in line 1 has an invalid name"
         ),
         "macro names are checked against the reserved namespace as well"
     );
@@ -358,31 +362,22 @@ fn only_ascii_blanks_separate_attributes() {
         "a non-breaking space belongs to the value it appears in"
     );
     assert!(
-        matches!(
+        has_validation_message(
             try_line("p text\u{a0}eol=lf"),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
+            "Attribute in line 1 has an invalid name"
         ),
         "in a name it makes the whole name invalid"
     );
     assert!(
-        matches!(
-            try_line("p a\u{b}b"),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
-        ),
+        has_validation_message(try_line("p a\u{b}b"), "Attribute in line 1 has an invalid name"),
         "a vertical tab is part of the name, not a separator"
     );
     assert!(
-        matches!(
-            try_line("p a\u{c}b"),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
-        ),
+        has_validation_message(try_line("p a\u{c}b"), "Attribute in line 1 has an invalid name"),
         "a form feed is part of the name, not a separator"
     );
     assert!(
-        matches!(
-            try_line("p a\u{2028}b"),
-            Err(parse::Error::AttributeName { line_number: 1, .. })
-        ),
+        has_validation_message(try_line("p a\u{2028}b"), "Attribute in line 1 has an invalid name"),
         "vertical tabs, form feeds and unicode line separators aren't blanks either"
     );
 }
@@ -488,6 +483,10 @@ fn pattern(name: &str, flags: gix_glob::pattern::Mode, first_wildcard_pos: Optio
     })
 }
 
+fn has_validation_message<T>(result: Result<T, parse::Error>, expected: &str) -> bool {
+    result.is_err_and(|err| err.message == expected)
+}
+
 fn try_line(input: &str) -> Result<ExpandedAttribute<'_>, parse::Error> {
     let mut lines = gix_attributes::parse(input.as_bytes());
     let res = expand(lines.next().unwrap())?;
@@ -528,9 +527,6 @@ fn expand(
     let attrs = attrs
         .map(|r| r.map(|attr| (attr.name.as_str().into(), attr.state)))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| parse::Error::AttributeName {
-            attribute: e.attribute,
-            line_number: line_no,
-        })?;
+        .or_raise(|| ValidationError::new(format!("Attribute in line {line_no} has an invalid name")))?;
     Ok((pattern, attrs, line_no))
 }
