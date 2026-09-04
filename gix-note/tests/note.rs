@@ -1,4 +1,8 @@
-use std::collections::BTreeSet;
+use std::{
+    cell::Cell,
+    collections::BTreeSet,
+    io::{self, Read},
+};
 
 use gix_hash::{Kind, ObjectId, oid};
 use gix_object::{
@@ -8,6 +12,115 @@ use gix_object::{
 };
 
 type ObjectDb = gix_odb::memory::Proxy<gix_object::find::Never>;
+
+mod one_shot {
+    use super::*;
+
+    pub fn get(
+        root_tree_id: ObjectId,
+        annotated_object_id: &oid,
+        objects: &impl gix_object::Find,
+    ) -> Result<Option<ObjectId>, gix_note::Error> {
+        let mut state = gix_note::State::new(root_tree_id, objects)?;
+        state.get(annotated_object_id, objects)
+    }
+
+    pub fn replace(
+        root_tree_id: ObjectId,
+        annotated_object_id: ObjectId,
+        note_blob_id: ObjectId,
+        objects: &(impl gix_object::Find + Write),
+    ) -> Result<gix_note::Edit, gix_note::Error> {
+        let mut state = gix_note::State::new(root_tree_id, objects)?;
+        state.replace(annotated_object_id, note_blob_id, objects)
+    }
+
+    pub fn remove(
+        root_tree_id: ObjectId,
+        annotated_object_id: ObjectId,
+        objects: &(impl gix_object::Find + Write),
+    ) -> Result<gix_note::Edit, gix_note::Error> {
+        let mut state = gix_note::State::new(root_tree_id, objects)?;
+        state.remove(annotated_object_id, objects)
+    }
+}
+
+struct CountingObjectDb {
+    inner: ObjectDb,
+    reads: Cell<usize>,
+    writes: Cell<usize>,
+    fail_next_read: Cell<bool>,
+    fail_next_write: Cell<bool>,
+}
+
+impl CountingObjectDb {
+    fn new(kind: Kind) -> Self {
+        Self {
+            inner: ObjectDb::new(gix_object::find::Never, kind),
+            reads: Cell::new(0),
+            writes: Cell::new(0),
+            fail_next_read: Cell::new(false),
+            fail_next_write: Cell::new(false),
+        }
+    }
+
+    fn maybe_fail_write(&self) -> Result<(), gix_object::write::Error> {
+        if self.fail_next_write.replace(false) {
+            return Err(io::Error::other("injected write failure").into());
+        }
+        Ok(())
+    }
+}
+
+impl gix_object::Find for CountingObjectDb {
+    fn try_find<'a>(
+        &self,
+        id: &gix_hash::oid,
+        buffer: &'a mut Vec<u8>,
+    ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+        self.reads.set(self.reads.get() + 1);
+        if self.fail_next_read.replace(false) {
+            return Err(io::Error::other("injected read failure").into());
+        }
+        self.inner.try_find(id, buffer)
+    }
+}
+
+impl gix_object::Write for CountingObjectDb {
+    fn write_buf_with_known_id(
+        &self,
+        kind: gix_object::Kind,
+        from: &[u8],
+        id: ObjectId,
+    ) -> Result<ObjectId, gix_object::write::Error> {
+        self.writes.set(self.writes.get() + 1);
+        self.maybe_fail_write()?;
+        self.inner.write_buf_with_known_id(kind, from, id)
+    }
+
+    fn write_stream(
+        &self,
+        kind: gix_object::Kind,
+        size: u64,
+        from: &mut dyn Read,
+    ) -> Result<ObjectId, gix_object::write::Error> {
+        self.writes.set(self.writes.get() + 1);
+        self.maybe_fail_write()?;
+        self.inner.write_stream(kind, size, from)
+    }
+
+    fn write_stream_with_known_id(
+        &self,
+        kind: gix_object::Kind,
+        size: u64,
+        from: &mut dyn Read,
+        id: ObjectId,
+    ) -> Result<ObjectId, gix_object::write::Error> {
+        self.writes.set(self.writes.get() + 1);
+        self.maybe_fail_write()?;
+        self.inner.write_stream_with_known_id(kind, size, from, id)
+    }
+}
 
 #[test]
 fn reads_notes_without_fanout() -> gix_testtools::Result {
@@ -29,6 +142,174 @@ fn reads_notes_with_three_fanout_levels() -> gix_testtools::Result {
     assert_note_at_fanout(3)
 }
 
+#[test]
+fn replacing_a_note_does_not_read_untouched_fanout_subtrees() -> gix_testtools::Result {
+    let kind = gix_testtools::object_hash();
+    let objects = CountingObjectDb::new(kind);
+    let note = objects.write_buf(gix_object::Kind::Blob, b"note")?;
+    let replacement = objects.write_buf(gix_object::Kind::Blob, b"replacement")?;
+    let mut annotated = Vec::new();
+    let mut root_entries = Vec::new();
+    for high_nibble in b"0123456789abcdef" {
+        for low_nibble in b"01" {
+            let object = object_id_with_nibbles(kind, &[(0, *high_nibble), (1, *low_nibble)])?;
+            let hex = object.to_hex().to_string();
+            let subtree = objects.write(&Tree {
+                entries: vec![Entry {
+                    mode: EntryKind::Blob.into(),
+                    filename: hex[2..].into(),
+                    oid: note,
+                }],
+            })?;
+            annotated.push(object);
+            root_entries.push(Entry {
+                mode: EntryKind::Tree.into(),
+                filename: hex[..2].into(),
+                oid: subtree,
+            });
+        }
+    }
+    let root = objects.write(&Tree {
+        entries: root_entries.clone(),
+    })?;
+    let target_hex = annotated[0].to_hex().to_string();
+    let replacement_subtree = objects.write(&Tree {
+        entries: vec![Entry {
+            mode: EntryKind::Blob.into(),
+            filename: target_hex[2..].into(),
+            oid: replacement,
+        }],
+    })?;
+    root_entries[0].oid = replacement_subtree;
+    let expected_root = objects.write(&Tree { entries: root_entries })?;
+    objects.writes.set(0);
+
+    let outcome = one_shot::replace(root, annotated[0], replacement, &objects)?;
+    assert_eq!(outcome.previous, Some(note), "replacement returns the previous note");
+    assert_eq!(
+        outcome.tree, expected_root,
+        "the rewritten tree matches a path-local edit"
+    );
+    assert_eq!(
+        objects.reads.get(),
+        2,
+        "only the root and the changed fanout subtree are read"
+    );
+    assert_eq!(
+        objects.writes.get(),
+        2,
+        "only the changed fanout subtree and root are written"
+    );
+    assert_eq!(
+        one_shot::get(outcome.tree, &annotated[0], &objects)?,
+        Some(replacement),
+        "the replacement is visible"
+    );
+    Ok(())
+}
+
+#[test]
+fn state_reuses_materialized_trees_across_operations() -> gix_testtools::Result {
+    let kind = gix_testtools::object_hash();
+    let objects = CountingObjectDb::new(kind);
+    let annotated = gix_object::compute_hash(kind, gix_object::Kind::Blob, b"annotated")?;
+    let note = objects.write_buf(gix_object::Kind::Blob, b"note")?;
+    let replacement = objects.write_buf(gix_object::Kind::Blob, b"replacement")?;
+    let root = notes_tree(&objects, &annotated, note, 2)?;
+    objects.reads.set(0);
+
+    let mut state = gix_note::State::new(root, &objects)?;
+    assert_eq!(objects.reads.get(), 1, "initialization reads only the root tree");
+    assert_eq!(state.get(&annotated, &objects)?, Some(note), "the note is found");
+    let reads_after_first_lookup = objects.reads.get();
+    assert_eq!(reads_after_first_lookup, 3, "the first lookup reads both fanout trees");
+    assert_eq!(state.get(&annotated, &objects)?, Some(note), "the cached note is found");
+    assert_eq!(
+        objects.reads.get(),
+        reads_after_first_lookup,
+        "a repeated lookup reuses the materialized trees"
+    );
+
+    let edit = state.replace(annotated, replacement, &objects)?;
+    assert_eq!(edit.previous, Some(note), "replacement returns the cached note");
+    assert_eq!(
+        objects.reads.get(),
+        reads_after_first_lookup,
+        "replacement reuses the materialized trees"
+    );
+    assert_eq!(
+        state.get(&annotated, &objects)?,
+        Some(replacement),
+        "the state contains the replacement"
+    );
+    assert_eq!(
+        objects.reads.get(),
+        reads_after_first_lookup,
+        "looking up the replacement needs no tree reads"
+    );
+    let edit = state.replace(annotated, note, &objects)?;
+    assert_eq!(
+        edit.previous,
+        Some(replacement),
+        "a second edit sees the cached replacement"
+    );
+    assert_eq!(
+        objects.reads.get(),
+        reads_after_first_lookup,
+        "writing the state retains its materialized trees"
+    );
+    let edit = state.remove(annotated, &objects)?;
+    assert_eq!(edit.previous, Some(note), "removal sees the cached note");
+    assert_eq!(state.get(&annotated, &objects)?, None, "the cached note is removed");
+    assert_eq!(
+        objects.reads.get(),
+        reads_after_first_lookup,
+        "removal and its subsequent lookup need no tree reads"
+    );
+    Ok(())
+}
+
+#[test]
+fn state_recovers_after_failed_operations() -> gix_testtools::Result {
+    let kind = gix_testtools::object_hash();
+    let objects = CountingObjectDb::new(kind);
+    let annotated = gix_object::compute_hash(kind, gix_object::Kind::Blob, b"annotated")?;
+    let note = objects.write_buf(gix_object::Kind::Blob, b"note")?;
+    let replacement = objects.write_buf(gix_object::Kind::Blob, b"replacement")?;
+    let root = notes_tree(&objects, &annotated, note, 2)?;
+    let mut state = gix_note::State::new(root, &objects)?;
+
+    objects.fail_next_read.set(true);
+    state
+        .get(&annotated, &objects)
+        .expect_err("the injected subtree read fails");
+    assert_eq!(state.root_tree_id(), root, "a failed lookup retains the current root");
+    assert_eq!(
+        state.get(&annotated, &objects)?,
+        Some(note),
+        "the state reloads from its root after a failed lookup"
+    );
+
+    objects.fail_next_write.set(true);
+    state
+        .replace(annotated, replacement, &objects)
+        .expect_err("the injected tree write fails");
+    assert_eq!(state.root_tree_id(), root, "a failed edit retains the current root");
+    assert_eq!(
+        state.get(&annotated, &objects)?,
+        Some(note),
+        "the state reloads the pre-edit note after a failed edit"
+    );
+    let edit = state.replace(annotated, replacement, &objects)?;
+    assert_eq!(edit.previous, Some(note), "the recovered state can be edited");
+    assert_eq!(
+        state.root_tree_id(),
+        edit.tree,
+        "a successful edit advances the recovered state"
+    );
+    Ok(())
+}
+
 fn assert_note_at_fanout(fanout: usize) -> gix_testtools::Result {
     let kind = gix_testtools::object_hash();
     let objects = ObjectDb::new(gix_object::find::Never, kind);
@@ -37,14 +318,14 @@ fn assert_note_at_fanout(fanout: usize) -> gix_testtools::Result {
     let root = notes_tree(&objects, &annotated, note, fanout)?;
 
     assert_eq!(
-        gix_note::get(root, &annotated, &objects)?,
+        one_shot::get(root, &annotated, &objects)?,
         Some(note),
         "the note is found with {fanout} fanout levels"
     );
     Ok(())
 }
 
-fn notes_tree(objects: &ObjectDb, annotated: &oid, note: ObjectId, fanout: usize) -> gix_testtools::Result<ObjectId> {
+fn notes_tree(objects: &impl Write, annotated: &oid, note: ObjectId, fanout: usize) -> gix_testtools::Result<ObjectId> {
     let hex = annotated.to_hex().to_string();
     let mut tree = objects.write(&Tree {
         entries: vec![Entry {
@@ -81,7 +362,7 @@ fn ignores_entries_that_are_not_notes() -> gix_testtools::Result {
     })?;
 
     assert_eq!(
-        gix_note::get(root, &annotated, &objects)?,
+        one_shot::get(root, &annotated, &objects)?,
         None,
         "the canonical empty-tree ID in a tree-mode entry at the full object-ID path is not a blob note"
     );
@@ -105,7 +386,7 @@ fn mutations_rebalance_when_each_nibble_bucket_has_multiple_notes_and_preserve_n
     for nibble in b"0123456789abcdef" {
         let object = object_id_with_nibble(kind, 0, *nibble)?;
         annotated.push(object);
-        let outcome = gix_note::replace(root, object, note, &objects)?;
+        let outcome = one_shot::replace(root, object, note, &objects)?;
         assert_eq!(outcome.previous, None, "each distinct object receives a new note");
         root = outcome.tree;
     }
@@ -126,7 +407,7 @@ fn mutations_rebalance_when_each_nibble_bucket_has_multiple_notes_and_preserve_n
     for nibble in b"0123456789abcde" {
         let object = object_id_with_nibbles(kind, &[(0, *nibble), (2, b'1')])?;
         annotated.push(object);
-        let outcome = gix_note::replace(root, object, note, &objects)?;
+        let outcome = one_shot::replace(root, object, note, &objects)?;
         assert_eq!(outcome.previous, None, "each bucket receives a second note");
         root = outcome.tree;
     }
@@ -141,7 +422,7 @@ fn mutations_rebalance_when_each_nibble_bucket_has_multiple_notes_and_preserve_n
     let last = object_id_with_nibbles(kind, &[(0, b'f'), (2, b'1')])?;
     annotated.push(last);
 
-    let outcome = gix_note::replace(root, last, note, &objects)?;
+    let outcome = one_shot::replace(root, last, note, &objects)?;
     assert_eq!(outcome.previous, None, "the final bucket receives its second note");
     root = outcome.tree;
 
@@ -161,24 +442,24 @@ fn mutations_rebalance_when_each_nibble_bucket_has_multiple_notes_and_preserve_n
 
     for object in &annotated {
         assert_eq!(
-            gix_note::get(root, object, &objects)?,
+            one_shot::get(root, object, &objects)?,
             Some(note),
             "every note remains readable after fanout"
         );
     }
 
     let replacement = objects.write_buf(gix_object::Kind::Blob, b"replacement")?;
-    let outcome = gix_note::replace(root, annotated[0], replacement, &objects)?;
+    let outcome = one_shot::replace(root, annotated[0], replacement, &objects)?;
     assert_eq!(outcome.previous, Some(note), "replacement returns the previous note");
     assert_eq!(
-        gix_note::get(outcome.tree, &annotated[0], &objects)?,
+        one_shot::get(outcome.tree, &annotated[0], &objects)?,
         Some(replacement),
         "replacement is visible through lookup"
     );
-    let outcome = gix_note::remove(outcome.tree, annotated[0], &objects)?;
+    let outcome = one_shot::remove(outcome.tree, annotated[0], &objects)?;
     assert_eq!(outcome.previous, Some(replacement), "removal returns the removed note");
     assert_eq!(
-        gix_note::get(outcome.tree, &annotated[0], &objects)?,
+        one_shot::get(outcome.tree, &annotated[0], &objects)?,
         None,
         "the removed mapping is no longer visible"
     );
@@ -186,11 +467,11 @@ fn mutations_rebalance_when_each_nibble_bucket_has_multiple_notes_and_preserve_n
     let tree = objects.find_tree(&outcome.tree, &mut buf)?;
     assert_eq!(
         tree.entries.iter().filter(|entry| entry.mode.is_tree()).count(),
-        16,
-        "Git's fanout hysteresis retains the existing level while every leading-nibble bucket remains occupied"
+        0,
+        "Git collapses fanout when the edited bucket materializes as a single note"
     );
 
-    let outcome = gix_note::remove(outcome.tree, annotated[16], &objects)?;
+    let outcome = one_shot::remove(outcome.tree, annotated[16], &objects)?;
     assert_eq!(outcome.previous, Some(note), "the second removal empties the bucket");
     let mut buf = Vec::new();
     let tree = objects.find_tree(&outcome.tree, &mut buf)?;
@@ -251,12 +532,12 @@ fn mutation_fanout_matches_git_at_bucket_count_boundaries() -> gix_testtools::Re
                 );
                 if operation == "add" {
                     additions += 1;
-                    let outcome = gix_note::replace(root, annotated_object_id, note, &objects)?;
+                    let outcome = one_shot::replace(root, annotated_object_id, note, &objects)?;
                     assert_eq!(outcome.previous, None, "baseline additions introduce distinct notes");
                     root = outcome.tree;
                 } else {
                     removals += 1;
-                    let outcome = gix_note::remove(root, annotated_object_id, &objects)?;
+                    let outcome = one_shot::remove(root, annotated_object_id, &objects)?;
                     assert_eq!(outcome.previous, Some(note), "baseline removals remove the shared note");
                     root = outcome.tree;
                 }
@@ -306,40 +587,40 @@ fn edit_lifecycle_handles_empty_trees_replacements_and_no_op_removals() -> gix_t
     })?;
 
     assert_eq!(
-        gix_note::get(root, &annotated, &objects)?,
+        one_shot::get(root, &annotated, &objects)?,
         None,
         "an empty notes tree has no mapping"
     );
-    let absent = gix_note::remove(root, annotated, &objects)?;
+    let absent = one_shot::remove(root, annotated, &objects)?;
     assert_eq!(absent.previous, None, "removing an absent mapping has no previous note");
     assert_eq!(
         absent.tree, root,
         "removing an absent mapping leaves the root unchanged"
     );
 
-    let added = gix_note::replace(root, annotated, tree_note, &objects)?;
+    let added = one_shot::replace(root, annotated, tree_note, &objects)?;
     assert_eq!(added.previous, None, "adding the first mapping has no previous note");
     assert_eq!(
-        gix_note::get(added.tree, &annotated, &objects)?,
+        one_shot::get(added.tree, &annotated, &objects)?,
         Some(tree_note),
         "lookup returns a note even when its object is actually a tree"
     );
     assert_note_layout(&objects, added.tree, &annotated, 0, tree_note)?;
 
     let replacement = objects.write_buf(gix_object::Kind::Blob, b"replacement")?;
-    let replaced = gix_note::replace(added.tree, annotated, replacement, &objects)?;
+    let replaced = one_shot::replace(added.tree, annotated, replacement, &objects)?;
     assert_eq!(
         replaced.previous,
         Some(tree_note),
         "replacement returns the tree-valued note"
     );
     assert_eq!(
-        gix_note::get(replaced.tree, &annotated, &objects)?,
+        one_shot::get(replaced.tree, &annotated, &objects)?,
         Some(replacement),
         "lookup observes the replacement"
     );
 
-    let removed = gix_note::remove(replaced.tree, annotated, &objects)?;
+    let removed = one_shot::remove(replaced.tree, annotated, &objects)?;
     assert_eq!(
         removed.previous,
         Some(replacement),
@@ -350,7 +631,7 @@ fn edit_lifecycle_handles_empty_trees_replacements_and_no_op_removals() -> gix_t
         kind.empty_tree(),
         "removing the last note produces the empty tree"
     );
-    let absent = gix_note::remove(removed.tree, annotated, &objects)?;
+    let absent = one_shot::remove(removed.tree, annotated, &objects)?;
     assert_eq!(absent.previous, None, "a repeated removal is a no-op");
     assert_eq!(absent.tree, removed.tree, "a repeated removal retains the empty root");
     Ok(())
@@ -377,7 +658,7 @@ fn mutations_create_and_collapse_mixed_deep_fanout() -> gix_testtools::Result {
         annotated.insert(object_id_with_nibbles(kind, &[(4, *nibble), (6, b'1')])?);
     }
     for object in &annotated {
-        let outcome = gix_note::replace(root, *object, note, &objects)?;
+        let outcome = one_shot::replace(root, *object, note, &objects)?;
         assert_eq!(outcome.previous, None, "every generated object is unique");
         root = outcome.tree;
     }
@@ -393,29 +674,28 @@ fn mutations_create_and_collapse_mixed_deep_fanout() -> gix_testtools::Result {
     assert_note_layout(&objects, root, &last_in_level_three, 3, note)?;
     for object in &annotated {
         assert_eq!(
-            gix_note::get(root, object, &objects)?,
+            one_shot::get(root, object, &objects)?,
             Some(note),
             "mixed fanout depths remain readable"
         );
     }
 
-    let outcome = gix_note::remove(root, last_in_level_three, &objects)?;
+    let outcome = one_shot::remove(root, last_in_level_three, &objects)?;
     assert_eq!(outcome.previous, Some(note), "deep removal returns its note");
     assert_eq!(
-        gix_note::get(outcome.tree, &last_in_level_three, &objects)?,
+        one_shot::get(outcome.tree, &last_in_level_three, &objects)?,
         None,
         "the deep mapping is removed"
     );
-    assert_note_layout(&objects, outcome.tree, &three_levels, 3, note)?;
+    assert_note_layout(&objects, outcome.tree, &three_levels, 2, note)?;
 
-    let outcome = gix_note::remove(outcome.tree, three_levels, &objects)?;
+    let outcome = one_shot::remove(outcome.tree, three_levels, &objects)?;
     assert_eq!(
         outcome.previous,
         Some(note),
         "the second deep removal empties its bucket"
     );
-    // Existing fanout survives while every deepest nibble bucket remains occupied. Emptying one bucket collapses the
-    // level, moving the notes in all surviving buckets from three-level paths to two-level paths.
+    // Loading the edited subtree exposes its single remaining note, so Git's lazy heuristic collapses the deepest level.
     assert_note_layout(&objects, outcome.tree, &surviving_after_collapse, 2, note)?;
     assert_note_layout(&objects, outcome.tree, &two_levels, 2, note)?;
     assert_note_layout(&objects, outcome.tree, &one_level, 1, note)?;
@@ -445,14 +725,14 @@ fn mutations_preserve_non_notes_at_root_and_below_hex_trees() -> gix_testtools::
                 oid: kind.empty_tree(),
             },
             Entry {
+                mode: EntryKind::Tree.into(),
+                filename: "CD".into(),
+                oid: nested,
+            },
+            Entry {
                 mode: EntryKind::BlobExecutable.into(),
                 filename: "ab".into(),
                 oid: payload,
-            },
-            Entry {
-                mode: EntryKind::Tree.into(),
-                filename: "cd".into(),
-                oid: nested,
             },
             Entry {
                 mode: EntryKind::Blob.into(),
@@ -468,10 +748,10 @@ fn mutations_preserve_non_notes_at_root_and_below_hex_trees() -> gix_testtools::
     })?;
     let annotated = gix_object::compute_hash(kind, gix_object::Kind::Blob, b"new")?;
     let note = objects.write_buf(gix_object::Kind::Blob, b"note")?;
-    let outcome = gix_note::replace(root, annotated, note, &objects)?;
+    let outcome = one_shot::replace(root, annotated, note, &objects)?;
 
     assert_entry_at_path(&objects, outcome.tree, &["ab"], EntryKind::BlobExecutable, payload)?;
-    assert_entry_at_path(&objects, outcome.tree, &["cd", "README"], EntryKind::Blob, payload)?;
+    assert_entry_at_path(&objects, outcome.tree, &["CD", "README"], EntryKind::Blob, payload)?;
     assert_entry_at_path(
         &objects,
         outcome.tree,
@@ -488,7 +768,7 @@ fn mutations_preserve_non_notes_at_root_and_below_hex_trees() -> gix_testtools::
     )?;
     assert_entry_at_path(&objects, outcome.tree, &["zz"], EntryKind::Tree, nested)?;
     assert_eq!(
-        gix_note::get(outcome.tree, &annotated, &objects)?,
+        one_shot::get(outcome.tree, &annotated, &objects)?,
         Some(note),
         "the new note coexists with all preserved entries"
     );
@@ -496,14 +776,14 @@ fn mutations_preserve_non_notes_at_root_and_below_hex_trees() -> gix_testtools::
 }
 
 #[test]
-fn mutations_reject_mixed_hash_kinds_before_reading_objects() -> gix_testtools::Result {
+fn mutations_reject_mixed_hash_kinds() -> gix_testtools::Result {
     let objects = ObjectDb::new(gix_object::find::Never, Kind::Sha1);
     let root = objects.write(&Tree { entries: Vec::new() })?;
     let sha1 = ObjectId::null(Kind::Sha1);
     let sha256 = ObjectId::null(Kind::Sha256);
 
     let err =
-        gix_note::replace(root, sha256, sha1, &objects).expect_err("the annotated object has the wrong hash kind");
+        one_shot::replace(root, sha256, sha1, &objects).expect_err("the annotated object has the wrong hash kind");
     let err = err.into_error();
     assert!(
         err.is_validation(),
@@ -514,7 +794,7 @@ fn mutations_reject_mixed_hash_kinds_before_reading_objects() -> gix_testtools::
         "Notes, annotated objects, and their root tree must use the same hash kind",
         "replace reports an annotated-object hash mismatch"
     );
-    let err = gix_note::replace(root, sha1, sha256, &objects).expect_err("the note has the wrong hash kind");
+    let err = one_shot::replace(root, sha1, sha256, &objects).expect_err("the note has the wrong hash kind");
     let err = err.into_error();
     assert!(err.is_validation(), "a note hash mismatch is a validation error");
     assert_eq!(
@@ -522,7 +802,7 @@ fn mutations_reject_mixed_hash_kinds_before_reading_objects() -> gix_testtools::
         "Notes, annotated objects, and their root tree must use the same hash kind",
         "replace reports a note hash mismatch"
     );
-    let err = gix_note::remove(root, sha256, &objects).expect_err("the annotated object has the wrong hash kind");
+    let err = one_shot::remove(root, sha256, &objects).expect_err("the annotated object has the wrong hash kind");
     let err = err.into_error();
     assert!(
         err.is_validation(),
@@ -545,15 +825,15 @@ fn edits_support_sha256_notes_trees() -> gix_testtools::Result {
     let annotated = gix_object::compute_hash(kind, gix_object::Kind::Blob, b"annotated")?;
     let note = objects.write_buf(gix_object::Kind::Blob, b"note")?;
 
-    let added = gix_note::replace(root, annotated, note, &objects)?;
+    let added = one_shot::replace(root, annotated, note, &objects)?;
     assert_eq!(added.previous, None, "the SHA-256 mapping is new");
     assert_eq!(added.tree.kind(), kind, "the rewritten root retains its hash kind");
     assert_eq!(
-        gix_note::get(added.tree, &annotated, &objects)?,
+        one_shot::get(added.tree, &annotated, &objects)?,
         Some(note),
         "SHA-256 notes can be read after insertion"
     );
-    let removed = gix_note::remove(added.tree, annotated, &objects)?;
+    let removed = one_shot::remove(added.tree, annotated, &objects)?;
     assert_eq!(removed.previous, Some(note), "SHA-256 removal returns the note");
     assert_eq!(
         removed.tree,
@@ -594,7 +874,7 @@ fn mutations_reject_duplicate_mappings_across_layouts() -> gix_testtools::Result
     })?;
     let other = gix_object::compute_hash(kind, gix_object::Kind::Blob, b"other")?;
 
-    let err = gix_note::replace(root, other, flat_note, &objects)
+    let err = one_shot::replace(root, other, flat_note, &objects)
         .expect_err("ambiguous existing mappings cannot be rewritten losslessly");
     let err = err.into_error();
     assert!(err.is_corrupted(), "duplicate mappings indicate a corrupt notes tree");

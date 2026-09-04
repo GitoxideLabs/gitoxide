@@ -210,6 +210,19 @@ impl<T> gix_object::Write for Proxy<T>
 where
     T: gix_object::Write,
 {
+    fn write(&self, object: &dyn gix_object::WriteTo) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
+        let Some(map) = self.memory.as_ref() else {
+            return self.inner.write(object);
+        };
+
+        let mut buf = Vec::with_capacity(2048);
+        object.write_to(&mut buf)?;
+        let kind = object.kind();
+        let id = gix_object::compute_hash(self.object_hash, kind, &buf)?;
+        map.borrow_mut().entry(id).or_insert((kind, buf));
+        Ok(id)
+    }
+
     fn write_stream(
         &self,
         kind: gix_object::Kind,
@@ -224,7 +237,7 @@ where
         from.read_to_end(&mut buf)?;
 
         let id = gix_object::compute_hash(self.object_hash, kind, &buf)?;
-        map.borrow_mut().insert(id, (kind, buf));
+        map.borrow_mut().entry(id).or_insert((kind, buf));
         Ok(id)
     }
 
@@ -238,7 +251,7 @@ where
             return self.inner.write_buf_with_known_id(kind, from, id);
         };
 
-        map.borrow_mut().insert(id, (kind, from.to_owned()));
+        map.borrow_mut().entry(id).or_insert_with(|| (kind, from.to_owned()));
         Ok(id)
     }
 
@@ -256,7 +269,7 @@ where
         let mut buf = Vec::new();
         from.read_to_end(&mut buf)?;
 
-        map.borrow_mut().insert(id, (kind, buf));
+        map.borrow_mut().entry(id).or_insert((kind, buf));
         Ok(id)
     }
 }

@@ -25,10 +25,15 @@ pub struct Note<'platform, 'repo> {
 
 /// Cached access to one or more notes references.
 pub struct Platform<'repo> {
-    // TODO(ST): make this owned once there is a cache, so it's easier to use reliably.
     pub(crate) repo: &'repo Repository,
     pub(crate) default_ref: Option<FullName>,
+    // Selected references in lookup order. Each caches its resolved notes-tree ID until a successful local edit
+    // invalidates all resolutions. The selection lives until `with_refs()` replaces it or the platform is dropped.
     roots: Vec<Root>,
+    // Lazily materialized notes trees, searched by their current root tree ID rather than aligned with `roots`.
+    // Multiple roots resolving to the same tree share one state. States survive root invalidation and selection changes
+    // for the platform's lifetime; a successful edit advances its state so the re-resolved root finds it again.
+    states: Vec<gix_note::State>,
     commit_message: Option<String>,
 }
 
@@ -66,6 +71,7 @@ impl<'repo> Platform<'repo> {
             repo,
             default_ref,
             roots: refs.into_iter().map(Root::new).collect(),
+            states: Vec::new(),
             commit_message: None,
         })
     }
@@ -130,16 +136,19 @@ impl<'repo> Platform<'repo> {
     ) -> Result<Vec<Note<'platform, 'repo>>, crate::Error> {
         let annotated_object_id = object.into();
         let mut out = Vec::new();
-        for selected in &mut self.roots {
-            let Some(root_tree_id) = selected.tree_id(self.repo)? else {
+        let repo = self.repo;
+        let (roots, states) = (&mut self.roots, &mut self.states);
+        for selected in roots {
+            let Some(root_tree_id) = selected.tree_id(repo)? else {
                 continue;
             };
-            if let Some(note_blob_id) = gix_note::get(root_tree_id, &annotated_object_id, &self.repo)
+            let state = state_for(states, root_tree_id, repo)?;
+            if let Some(note_blob_id) = state
+                .get(&annotated_object_id, repo)
                 .or_raise(|| message!("Could not find notes for {annotated_object_id}"))?
             {
                 let reference = selected.reference.as_ref();
-                let blob = self
-                    .repo
+                let blob = repo
                     .find_blob(note_blob_id)
                     .or_raise(|| message!("Could not load note {note_blob_id} from {reference}"))?;
                 out.push(Note { reference, blob });
@@ -194,8 +203,11 @@ impl<'repo> Platform<'repo> {
             .write_blob(data.as_ref())
             .or_raise(|| message("Could not write note blob"))?
             .detach();
-        let edit = gix_note::replace(root_tree_id, annotated_object_id, note_blob_id, &self.repo)
-            .or_raise(|| message!("Could not replace note for {annotated_object_id}"))?;
+        let edit = {
+            let state = state_for(&mut self.states, root_tree_id, self.repo)?;
+            state.replace(annotated_object_id, note_blob_id, self.repo)
+        }
+        .or_raise(|| message!("Could not replace note for {annotated_object_id}"))?;
         self.commit_edit(
             update_ref.as_ref(),
             parent_commit_id,
@@ -233,8 +245,11 @@ impl<'repo> Platform<'repo> {
             update_ref,
         } = self.lookup_edit_root(notes_ref.as_ref())?;
         let annotated_object_id = object.into();
-        let edit = gix_note::remove(root_tree_id, annotated_object_id, &self.repo)
-            .or_raise(|| message!("Could not remove note for {annotated_object_id}"))?;
+        let edit = {
+            let state = state_for(&mut self.states, root_tree_id, self.repo)?;
+            state.remove(annotated_object_id, self.repo)
+        }
+        .or_raise(|| message!("Could not remove note for {annotated_object_id}"))?;
         if edit.previous.is_some() {
             self.commit_edit(update_ref.as_ref(), parent_commit_id, edit, "Notes removed by gitoxide")?;
         }
@@ -305,6 +320,22 @@ impl<'repo> Platform<'repo> {
         }
         Ok(())
     }
+}
+
+fn state_for<'a>(
+    states: &'a mut Vec<gix_note::State>,
+    root_tree_id: gix_hash::ObjectId,
+    repo: &Repository,
+) -> Result<&'a mut gix_note::State, crate::Error> {
+    if let Some(index) = states.iter().position(|state| state.root_tree_id() == root_tree_id) {
+        return Ok(&mut states[index]);
+    }
+    let index = states.len();
+    states.push(
+        gix_note::State::new(root_tree_id, repo)
+            .or_raise(|| message!("Could not initialize notes tree {root_tree_id}"))?,
+    );
+    Ok(&mut states[index])
 }
 
 /// A selected notes reference and its lazily resolved root tree.

@@ -14,22 +14,27 @@ include = ["/src/**/*", "/LICENSE-*"]
 [lib]
 doctest = false
 
+[[bench]]
+name = "read-write"
+harness = false
+path = "./benches/read_write.rs"
+
 [package.metadata.docs.rs]
 features = ["sha1"]
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding it to dependencies.
-sha1 = ["gix-hash/sha1", "gix-object/sha1", "gix-hashtable/sha1" ]
+sha1 = ["gix-hash/sha1", "gix-object/sha1"]
 ## Enable support for the SHA-256 hash by forwarding it to dependencies.
-sha256 = ["gix-hash/sha256", "gix-object/sha256",  "gix-hashtable/sha256" ]
+sha256 = ["gix-hash/sha256", "gix-object/sha256"]
 
 [dependencies]
 gix-error = { version = "^0.3.2", path = "../gix-error" }
 gix-hash = { version = "^0.26.2", path = "../gix-hash" }
-gix-hashtable = { version = "^0.16.0", path = "../gix-hashtable" }
 gix-object = { version = "^0.64.1", path = "../gix-object" }
 
 [dev-dependencies]
+criterion = "0.8.2"
 gix-note = { path = ".", features = ["sha1", "sha256"] }
 gix-odb = { path = "../gix-odb" }
 gix-testtools = { path = "../tests/tools" }
