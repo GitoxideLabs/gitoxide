@@ -132,6 +132,7 @@ fn prepare_inner(
     reword::write_headers(
         &mut document,
         &author,
+        None,
         &committer,
         &crate::enrich::Enrichment {
             todo,
@@ -139,11 +140,8 @@ fn prepare_inner(
         },
     )?;
     document.extend_from_slice(b"\nwhat\n\nwhy\n");
-    for trailer in reword::missing_agent_trailers(b"what\n\nwhy\n").into_iter().flatten() {
-        document.extend_from_slice(b"\n;");
-        document.extend_from_slice(trailer);
-    }
-    document.extend_from_slice(b"\n\n; Changes to be committed:\n");
+    reword::write_missing_agent_trailers(&mut document, &repo, b"what\n\nwhy\n")?;
+    document.extend_from_slice(b"\n; Changes to be committed:\n");
     for line in ui::commit_diff_summary(&changes, &line_counts, changes.lines_added, changes.lines_removed) {
         document.extend_from_slice(b"; ");
         for span in line.spans {
@@ -483,6 +481,18 @@ mod tests {
                 .windows(b"tracked | 2 +- 0".len())
                 .any(|window| window == b"tracked | 2 +- 0"),
             "the editor buffer includes a commented per-file diffstat with net lines: {}",
+            prepared.document.as_bstr()
+        );
+        let trailers = b";Assisted-by: GPT 5.6\n\
+                         ;Co-authored-by: GPT 5.6 <codex@openai.com>\n\
+                         ; tix.trailer.assistedBy is unset; using the built-in default.\n\
+                         ; tix.trailer.coAuthoredBy is unset; using the built-in default.\n";
+        assert!(
+            prepared
+                .document
+                .windows(trailers.len())
+                .any(|window| window == trailers),
+            "new-commit suggestions stay adjacent and explain their defaults: {}",
             prepared.document.as_bstr()
         );
         assert_eq!(

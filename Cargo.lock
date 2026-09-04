@@ -39,6 +39,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
 
 [[package]]
+name = "ansi_term"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d52a9bb7ec0cf484c551830a7ce27bd20d67eac647e1befb56b0be4ee39a55d2"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -816,7 +825,6 @@ dependencies = [
  "crossterm_winapi",
  "derive_more",
  "document-features",
- "futures-core",
  "mio",
  "parking_lot",
  "rustix",
@@ -840,14 +848,8 @@ version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6ae462f0b868614980d59df41e217a77648de7ad7cf8b2a407155659896d889"
 dependencies = [
- "async-channel 2.5.0",
  "crossterm",
- "futures-channel",
- "futures-core",
- "futures-lite",
  "nu-ansi-term",
- "ratatui",
- "tui-react",
 ]
 
 [[package]]
@@ -1117,6 +1119,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5eb6fcfdefafb636afa3858535f557376e9fb575def4ccef9f1bf0cfa8646d6"
 dependencies = [
  "crossbeam",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "dua-core"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9b51096d83a9774c5f198a07fcf9ddb23e77791a2dad39a6312fc859624b73d"
+dependencies = [
+ "crossbeam",
+ "libc",
  "windows-sys 0.61.2",
 ]
 
@@ -1510,6 +1523,7 @@ dependencies = [
 name = "gitoxide"
 version = "0.58.0"
 dependencies = [
+ "anstream",
  "anyhow",
  "clap",
  "clap_complete",
@@ -1542,7 +1556,7 @@ dependencies = [
  "bytesize",
  "crossbeam-channel",
  "document-features",
- "dua-core",
+ "dua-core 2.41.1",
  "fs-err",
  "futures-io",
  "futures-lite",
@@ -2609,6 +2623,7 @@ dependencies = [
  "terminal-colorsaurus",
  "tracing",
  "tracing-appender",
+ "tracing-forest 0.1.6",
  "tracing-subscriber",
  "tui-markdown",
 ]
@@ -2718,6 +2733,7 @@ version = "0.56.0"
 dependencies = [
  "bstr",
  "document-features",
+ "dua-core 3.3.0",
  "gix-attributes",
  "gix-discover",
  "gix-features",
@@ -2732,6 +2748,7 @@ dependencies = [
  "gix-testtools",
  "gix-validate",
  "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4244,20 +4261,14 @@ version = "31.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "962200e2d7d551451297d9fdce85138374019ada198e30ea9ede38034e27604c"
 dependencies = [
- "async-io",
  "bytesize",
  "crosstermion",
- "futures-core",
- "futures-lite",
  "human_format",
  "is-terminal",
  "jiff",
  "log",
  "parking_lot",
- "ratatui",
  "signal-hook 0.4.4",
- "tui-react",
- "unicode-segmentation",
  "unicode-width",
 ]
 
@@ -5656,6 +5667,7 @@ version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee40835db14ddd1e3ba414292272eddde9dad04d3d4b65509656414d1c42592f"
 dependencies = [
+ "ansi_term",
  "serde",
  "smallvec",
  "thiserror 1.0.69",
@@ -5669,6 +5681,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3298fe855716711a00474eceb89cc7dc254bbe67f6bc4afafdeec5f0c538771c"
 dependencies = [
+ "ansi_term",
  "serde",
  "smallvec",
  "thiserror 2.0.18",
@@ -5734,18 +5747,6 @@ dependencies = [
  "ratatui-core",
  "rstest",
  "tracing",
-]
-
-[[package]]
-name = "tui-react"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c07031f0f4eb182785a8621967da6c75b9b21cfc7dfaaac78400b9a12492e66"
-dependencies = [
- "log",
- "ratatui",
- "unicode-segmentation",
- "unicode-width",
 ]
 
 [[package]]

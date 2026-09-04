@@ -1,6 +1,9 @@
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -21,8 +24,8 @@ pub type ProgressItem = gix::progress::DoOrDiscard<gix::progress::prodash::tree:
 pub struct State {
     pub progress: ProgressItem,
     pub gitoxide_version: String,
-    pub trace_to_progress: bool,
-    pub reverse_trace_lines: bool,
+    pub trace: u8,
+    pub trace_output: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Engine {
@@ -78,6 +81,8 @@ impl Engine {
         dry_run: bool,
     ) -> anyhow::Result<()> {
         let start = Instant::now();
+        let trace = self.state.trace;
+        let trace_output = self.state.trace_output.clone();
         let repo_progress = &mut self.state.progress;
         let threads = gix::parallel::num_threads(threads);
         let db_path = self.con.path().expect("opened from path on disk").to_owned();
@@ -106,11 +111,8 @@ impl Engine {
                     break 'tasks_loop;
                 }
                 let mut run_progress = repo_progress.add_child("set later");
-                let (_guard, current_id) = corpus::trace::override_thread_subscriber(
-                    db_path.as_str(),
-                    self.state.trace_to_progress.then(|| repo_progress.add_child("trace")),
-                    self.state.reverse_trace_lines,
-                )?;
+                let (_guard, current_id) =
+                    corpus::trace::override_thread_subscriber(db_path.as_str(), trace, trace_output.clone())?;
 
                 let mut num_errors = 0;
                 for repo in &repos {
@@ -163,14 +165,16 @@ impl Engine {
                     {
                         let shared_repo_progress = repo_progress.clone();
                         let db_path = db_path.clone();
+                        let trace_output = trace_output.clone();
                         move |tid| {
                             let mut progress = gix::threading::lock(&shared_repo_progress);
-                            (
-                                // threaded printing is usually spammy, and lines interleave so it's useless.
-                                corpus::trace::override_thread_subscriber(db_path.as_str(), None, false),
-                                progress.add_child(format!("{tid}")),
-                                rusqlite::Connection::open(&db_path),
-                            )
+                            let lane_progress = progress.add_child(format!("{tid}"));
+                            let subscriber = corpus::trace::override_thread_subscriber(
+                                db_path.as_str(),
+                                trace,
+                                trace_output.clone(),
+                            );
+                            (subscriber, lane_progress, rusqlite::Connection::open(&db_path))
                         }
                     },
                     |repo, (subscriber, progress, con), _threads_left, should_interrupt| -> anyhow::Result<()> {

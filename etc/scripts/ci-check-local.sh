@@ -25,6 +25,8 @@ esac
 # macOS script(1) changes the byte stream they are meant to verify.
 repo_root="$(git rev-parse --show-toplevel)"
 cd -- "$repo_root"
+stderr_file="$(mktemp "${TMPDIR:-/tmp}/ci-check-local.stderr.XXXXXX")"
+trap 'rm -f -- "$stderr_file"' EXIT
 
 print_command() {
     printf '%q ' "$@"
@@ -34,13 +36,16 @@ run() {
     printf 'check: '
     print_command "$@"
     printf '\n'
-    "$@" >/dev/null || {
+    if "$@" >/dev/null 2>"$stderr_file"; then
+        return
+    else
         status=$?
-        printf 'FAILED (%d): ' "$status" >&2
-        print_command "$@" >&2
-        printf '\n' >&2
-        return "$status"
-    }
+    fi
+    cat -- "$stderr_file" >&2
+    printf 'FAILED (%d): ' "$status" >&2
+    print_command "$@" >&2
+    printf '\n' >&2
+    return "$status"
 }
 
 require_clean() {
@@ -77,4 +82,10 @@ git restore -- ':(glob)**/tests/fixtures/generated-archives/*.tar'
 run just ci-journey-tests
 require_clean
 run tix enrich tree checks-pass
-run cargo clean
+if command -v dua >/dev/null 2>&1; then
+    # A warm full-workspace sweep currently settles around 70 GB.
+    printf 'target size after checks (expect about 70 GB):\n'
+    NO_COLOR=1 dua target 2>/dev/null
+else
+    printf 'note: install dua to monitor target size\n' >&2
+fi

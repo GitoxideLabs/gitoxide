@@ -227,6 +227,7 @@ pub(crate) fn checkout_review_return_reporting(
     let mut target = repository
         .find_reference(name.as_ref())
         .context("the review return reference is missing")?;
+    let pin_target = target.target().into_owned();
     let reference = if name.as_bstr().starts_with(history::PIN_PREFIX) {
         target.target().try_name().map(ToOwned::to_owned)
     } else {
@@ -236,10 +237,18 @@ pub(crate) fn checkout_review_return_reporting(
         .peel_to_id()
         .context("the review return reference does not resolve")?
         .detach();
+    let return_pin = name
+        .as_bstr()
+        .starts_with(history::REVIEW_PIN_PREFIX)
+        .then(|| history::Pin {
+            name: name.clone(),
+            target: pin_target,
+            id: selected,
+        });
     drop(repository);
     checkout(&workdir, [OsString::from("--force"), OsString::from("HEAD")])
         .context("could not discard the cancelled review checkout")?;
-    let (notice, ref_changes) = move_head_to_reporting(
+    let (mut notice, mut ref_changes) = move_head_to_reporting(
         repository_path,
         bare,
         selected,
@@ -248,6 +257,15 @@ pub(crate) fn checkout_review_return_reporting(
         include_worktrees,
         |_| None,
     )?;
+    if let Some(pin) = return_pin {
+        match open_repository(repository_path, bare, false)
+            .context("could not reopen repository to remove the review return pin")
+            .and_then(|repository| delete_pin_reporting(&repository, &pin))
+        {
+            Ok(mut changes) => ref_changes.append(&mut changes),
+            Err(err) => append_notice(&mut notice, format!("review return pin remains: {err:#}")),
+        }
+    }
     Ok((selected, notice, ref_changes))
 }
 
@@ -915,16 +933,13 @@ fn review_tree(
     roots: &[ObjectId],
     commit: ObjectId,
 ) -> Result<Option<ReviewTree>> {
-    let mut nearest = None;
-    for root in roots.iter().copied().filter(|root| graph.is_ancestor(*root, commit)) {
-        nearest = match nearest {
-            None => Some(root),
-            Some(current) if graph.is_ancestor(current, root) => Some(root),
-            Some(current) if graph.is_ancestor(root, current) => Some(current),
-            Some(_) => anyhow::bail!("commit belongs to multiple unrelated review trees"),
-        };
-    }
-    let Some(root) = nearest else { return Ok(None) };
+    let Some(root) = history::nearest_review_root(roots, commit, |ancestor, descendant| {
+        graph.is_ancestor(ancestor, descendant)
+    })
+    .map_err(|()| anyhow::anyhow!("commit belongs to multiple unrelated review trees"))?
+    else {
+        return Ok(None);
+    };
     let commit = repo.find_commit(root)?.decode()?.into_owned()?;
     let reference = super::review::reference(&commit)?.context("review root lost its review identity")?;
     Ok(Some(ReviewTree { root, reference }))
@@ -1002,7 +1017,12 @@ fn pending_base(repository: &gix::Repository, selected: ObjectId) -> Result<Opti
 
 fn selected_pin(pins: &[history::Pin], selected: ObjectId) -> Option<history::Pin> {
     pins.iter()
-        .filter(|pin| !pin.is_head() && pin.id == selected)
+        .filter(|pin| !pin.is_head() && !pin.is_review_return() && pin.id == selected)
+        .filter(|pin| {
+            pin.target
+                .try_name()
+                .is_none_or(|name| name.as_bstr().starts_with(b"refs/heads/"))
+        })
         .min_by(|a, b| {
             a.target
                 .try_name()
@@ -1113,13 +1133,17 @@ pub(crate) fn create_or_reuse_pin_reporting(
     reflog_message: &str,
 ) -> Result<(history::Pin, bool, Vec<super::undo::RefChange>)> {
     let pins = history::all_pins(repository)?;
-    if let Some(pin) = pins.iter().find(|pin| !pin.is_head() && pin.target == target) {
+    if let Some(pin) = pins
+        .iter()
+        .find(|pin| !pin.is_head() && !pin.is_review_return() && pin.target == target)
+    {
         return Ok((pin.clone(), false, Vec::new()));
     }
     let (pin, changes) = create_pin_reporting(repository, target, id, reflog_message)?;
     Ok((pin, true, changes))
 }
 
+#[cfg(test)]
 pub(crate) fn create_pin(
     repository: &gix::Repository,
     target: Target,
@@ -1162,6 +1186,26 @@ pub(crate) fn create_pin_reporting(
             suffix_len = hex.len() + 1;
         }
     };
+    create_named_pin_reporting(repository, name, target, id, reflog_message)
+}
+
+pub(crate) fn create_named_pin(
+    repository: &gix::Repository,
+    name: gix::refs::FullName,
+    target: Target,
+    id: ObjectId,
+    reflog_message: &str,
+) -> Result<history::Pin> {
+    Ok(create_named_pin_reporting(repository, name, target, id, reflog_message)?.0)
+}
+
+fn create_named_pin_reporting(
+    repository: &gix::Repository,
+    name: gix::refs::FullName,
+    target: Target,
+    id: ObjectId,
+    reflog_message: &str,
+) -> Result<(history::Pin, Vec<super::undo::RefChange>)> {
     let edit = RefEdit::update(
         name.clone(),
         target.clone(),
@@ -1201,7 +1245,7 @@ pub(crate) fn remove_pins_reporting(
         open_repository(repository_path, bare, false).context("could not open repository to remove pins")?;
     let pins: Vec<_> = history::all_pins(&repository)?
         .into_iter()
-        .filter(|pin| !pin.is_head() && pin.id == selected)
+        .filter(|pin| !pin.is_head() && !pin.is_review_return() && pin.id == selected)
         .collect();
     if pins.is_empty() {
         return Ok((0, Vec::new()));
@@ -1227,7 +1271,7 @@ pub(crate) fn toggle_pin_reporting(
         open_repository(repository_path, bare, false).context("could not open repository to toggle a pin")?;
     let pins: Vec<_> = history::all_pins(&repository)?
         .into_iter()
-        .filter(|pin| !pin.is_head() && pin.id == selected)
+        .filter(|pin| !pin.is_head() && !pin.is_review_return() && pin.id == selected)
         .collect();
     if pins.is_empty() {
         let (_, _, changes) =
@@ -1558,13 +1602,18 @@ mod tests {
         perform(&repository_path, false, tip, &graph, &[started.commit], &[], false)?.complete()?;
         let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(
-            repo.head_name()?.expect("HEAD is attached"),
-            "refs/heads/main",
-            "leaving the review returns to the attached branch"
+            repo.head_id()?,
+            tip,
+            "leaving the review checks out the selected commit"
+        );
+        assert!(
+            repo.head()?.is_detached(),
+            "ordinary travel does not consume the review return"
         );
         let snapshot = history::snapshot(&repo, &[], &[], false)?;
-        assert_eq!(snapshot.pins.len(), 1, "only the review-tree departure remains pinned");
-        assert_eq!(snapshot.pins[0].id, child);
+        assert_eq!(snapshot.pins.len(), 2, "both review-owned paths remain pinned");
+        assert!(snapshot.pins.iter().any(|pin| pin.id == child));
+        assert!(snapshot.pins.iter().any(history::Pin::is_review_return));
         assert!(
             snapshot.view_tips.contains(&child),
             "a fresh attached-HEAD snapshot retains the review-tree leaf"
@@ -1585,8 +1634,8 @@ mod tests {
         );
         let repo = crate::test_repository::open(fixture.path())?;
         assert!(
-            history::all_pins(&repo)?.iter().all(history::Pin::is_head),
-            "returning consumes the ordinary review-tree pin"
+            history::all_pins(&repo)?.iter().all(history::Pin::is_review_return),
+            "returning consumes only the ordinary review-tree pin"
         );
         assert!(repo.try_find_reference(stash_name.as_ref())?.is_none());
         assert_eq!(repo.find_reference("refs/stash")?.id(), existing_stash);
@@ -1797,6 +1846,48 @@ mod tests {
         );
         assert_eq!(repository.head_id()?, main);
         assert!(history::all_pins(&repository)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn ignores_non_branch_pins_created_from_the_ref_tree() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let selected = repository.rev_parse_single("main~2")?.detach();
+        repository.reference(
+            "refs/remotes/origin/old",
+            selected,
+            PreviousValue::MustNotExist,
+            "prepare remote ref-tree pin",
+        )?;
+        let pins = crate::ref_tree::pin_references(&repository, selected, &[history::DecorationKind::Remote])?;
+        let [retention_pin] = pins.as_slice() else {
+            return Err("the remote reference creates one pin".into());
+        };
+        let retention_pin = retention_pin.clone();
+        let graph = loaded_graph(&repository, &[])?;
+        drop(repository);
+
+        let notice = perform(&repository_path, false, selected, &graph, &[], &[], false)?
+            .complete()?
+            .context("time-travel changes HEAD")?;
+        assert!(
+            notice.contains("time-travelled"),
+            "the pin is not treated as a return: {notice}"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert!(
+            repository.head()?.is_detached(),
+            "the unsupported symbolic pin is ignored"
+        );
+        assert_eq!(repository.head_id()?, selected);
+        assert!(
+            history::all_pins(&repository)?
+                .iter()
+                .any(|pin| pin.name == retention_pin.name && pin.target == retention_pin.target),
+            "the ignored ref-tree pin remains"
+        );
         Ok(())
     }
 
@@ -2085,6 +2176,14 @@ mod tests {
         let selected = repository.rev_parse_single("main")?.detach();
         let main = repository.find_reference("refs/heads/main")?.name().to_owned();
         create_or_update_head_pin(&repository, &main, selected)?;
+        let review_pin = create_named_pin(
+            &repository,
+            "refs/worktree/tix/pins/review/1".try_into()?,
+            Target::Object(selected),
+            selected,
+            "test review return pin",
+        )?;
+        assert!(review_pin.is_review_return());
         drop(repository);
 
         let (toggle, created_changes) = toggle_pin_reporting(&repository_path, false, selected)?;
@@ -2098,7 +2197,9 @@ mod tests {
         let repository = crate::test_repository::open(fixture.path())?;
         let pins = history::all_pins(&repository)?;
         assert_eq!(
-            pins.iter().filter(|pin| !pin.is_head() && pin.id == selected).count(),
+            pins.iter()
+                .filter(|pin| !pin.is_head() && !pin.is_review_return() && pin.id == selected)
+                .count(),
             1,
             "pin creates one direct pin for the selected commit"
         );
@@ -2115,7 +2216,12 @@ mod tests {
         let pins = history::all_pins(&crate::test_repository::open(fixture.path())?)?;
         assert!(pins.iter().any(history::Pin::is_head), "unpin preserves the HEAD pin");
         assert!(
-            pins.iter().all(|pin| pin.is_head() || pin.id != selected),
+            pins.iter().any(history::Pin::is_review_return),
+            "unpin preserves the review-owned pin"
+        );
+        assert!(
+            pins.iter()
+                .all(|pin| pin.is_head() || pin.is_review_return() || pin.id != selected),
             "unpin removes every ordinary pin at the selected commit"
         );
         Ok(())
@@ -2322,6 +2428,23 @@ mod tests {
             .and_then(Perform::complete)
             .expect_err("time-travel is disabled until the index conflict is resolved");
         assert!(format!("{err:#}").contains("unresolved index conflicts"));
+
+        drop(conflict_commit);
+        drop(index);
+        drop(repository);
+        std::fs::write(fixture.path().join("file"), "resolved\n")?;
+        git(fixture.path(), &["add", "file"])?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_view_graph(&repository)?;
+        let amended = super::super::head::amend_reporting(repository, &graph)?
+            .context("tix amend resolves the materialized conflict")?
+            .selected
+            .context("amending the conflict selects its replacement")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert!(
+            !super::super::rebase::is_pending(&repository.find_commit(amended)?.decode()?.into_owned()?),
+            "amending a resolved conflict finalizes its pending rebase"
+        );
         Ok(())
     }
 

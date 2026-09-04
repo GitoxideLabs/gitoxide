@@ -24,6 +24,7 @@ const COMMIT_PANE_WIDTH: u16 = 84;
 const FILESYSTEM_NOTIFICATION_COLOR: Color = Color::Rgb(255, 165, 0);
 const NOTE_COLOR: Color = Color::LightMagenta;
 const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
+const REVIEW_BACKGROUND: Color = Color::Magenta;
 
 #[derive(Clone)]
 struct MarkdownStyle;
@@ -88,13 +89,14 @@ pub(crate) fn render_notice(frame: &mut Frame<'_>, area: Rect, notice: &Notice) 
 
 pub(crate) fn draw_command_menu(
     frame: &mut Frame<'_>,
+    bounds: Rect,
     menu: &mut Menu<CommandId>,
     commands: &[Command],
 ) -> Option<Position> {
     if !menu.is_open() {
         return None;
     }
-    let frame_area = frame.area();
+    let frame_area = bounds;
     let width = frame_area.width.saturating_sub(2).min(72);
     if width < 4 {
         menu.set_visible_rows(0);
@@ -334,10 +336,16 @@ fn changes_pane_areas(
     }
 }
 
-pub(crate) fn draw_file_diff(frame: &mut Frame<'_>, diff: &BuiltInDiff, offset: usize, horizontal_offset: usize) {
+pub(crate) fn draw_file_diff(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    diff: &BuiltInDiff,
+    offset: usize,
+    horizontal_offset: usize,
+) {
     let [header, body, footer] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-    frame.render_widget(Clear, frame.area());
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(area);
+    frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(diff.title.to_str_lossy()).style(Style::default().add_modifier(Modifier::BOLD)),
         header,
@@ -385,11 +393,26 @@ pub(crate) fn draw(
     commit_message: Option<&BStr>,
     tree_changes: Option<&Changes>,
 ) {
-    draw_with_worktree(frame, app, decorations, mailmap, commit_message, tree_changes, None);
+    let area = frame.area();
+    draw_with_worktree(
+        frame,
+        area,
+        app,
+        decorations,
+        mailmap,
+        commit_message,
+        tree_changes,
+        None,
+    );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the bounds extend the existing drawing context"
+)]
 pub(crate) fn draw_with_worktree(
     frame: &mut Frame<'_>,
+    area: Rect,
     app: &mut App,
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
@@ -397,7 +420,13 @@ pub(crate) fn draw_with_worktree(
     tree_changes: Option<&Changes>,
     worktree_changes: Option<&Changes>,
 ) {
-    let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+    let background_progress = app.background_progress().cloned();
+    let [mut body, progress_area, footer] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(u16::from(background_progress.is_some())),
+        Constraint::Length(1),
+    ])
+    .areas(area);
     let full_body = body;
     let selected_segment = app.selected_is_segment();
     let time_travel_animation = app.time_travel_animation_origin().is_some();
@@ -429,7 +458,7 @@ pub(crate) fn draw_with_worktree(
     };
     let (changes_layout, mut changes_panes, _) = changes_pane_areas(
         body,
-        frame.area().height / 2,
+        area.height / 2,
         tree_shown.then(|| {
             (
                 pane_height(ChangePane::Tree, tree_changes.expect("visible tree changes exist")),
@@ -480,10 +509,6 @@ pub(crate) fn draw_with_worktree(
             .get(&row.id)
             .is_some_and(|refs| refs.iter().any(|r| r.kind == DecorationKind::Head))
     });
-    let selected_is_review = app
-        .selected
-        .and_then(|index| app.rows.get(index))
-        .is_some_and(|row| row.is_review);
     let selected_has_stash = app
         .selected
         .and_then(|index| app.rows.get(index))
@@ -496,20 +521,10 @@ pub(crate) fn draw_with_worktree(
         });
     let worktree_path_amend = worktree_changes.is_some_and(|changes| {
         !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
-            && changes
-                .paths
-                .get(app.worktree_changes.selected)
-                .is_some_and(|change| !selected_is_review || change.group == ChangeGroup::Staged)
+            && changes.paths.get(app.worktree_changes.selected).is_some()
     });
     app.set_head_edit_availability(
-        selected_is_head
-            && worktree_changes.is_some_and(|changes| {
-                if selected_is_review {
-                    changes.paths.iter().any(|change| change.group == ChangeGroup::Staged)
-                } else {
-                    !changes.paths.is_empty()
-                }
-            }),
+        selected_is_head && worktree_changes.is_some_and(|changes| !changes.paths.is_empty()),
         stashable,
         selected_is_head && selected_has_stash,
         selected_is_head && worktree_path_amend,
@@ -535,13 +550,13 @@ pub(crate) fn draw_with_worktree(
                 && worktree_changes.is_some_and(Changes::is_visible),
         );
     }
-    app.viewport_rows = history_changes_panes
+    let visible_history_rows = history_changes_panes
         .iter()
         .map(|pane| pane.outer.y.saturating_sub(body.y))
         .chain(history_notice_area.map(|area| area.y.saturating_sub(body.y)))
         .min()
-        .unwrap_or(body.height)
-        .max(1) as usize;
+        .unwrap_or(body.height) as usize;
+    app.viewport_rows = visible_history_rows.max(1);
     app.center_initial_selection();
     app.prepare_history_viewport();
     let commands =
@@ -561,7 +576,7 @@ pub(crate) fn draw_with_worktree(
     let popup_rows = prefix_popup.as_ref().map_or(0, |(_, rows)| rows.len());
     let mut prefix_popup_allowed = prefix_popup
         .as_ref()
-        .is_some_and(|(anchor, _)| prefix_popup_can_render(frame.area(), footer, *anchor, popup_rows));
+        .is_some_and(|(anchor, _)| prefix_popup_can_render(area, footer, *anchor, popup_rows));
     if prefix_popup_allowed {
         let popup_y = footer.y - popup_rows as u16;
         let shifted_y = |area: Rect| area.y.saturating_sub(popup_rows as u16).max(full_body.y);
@@ -603,9 +618,16 @@ pub(crate) fn draw_with_worktree(
             .iter()
             .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0);
     let start = app.offset.min(app.history_len());
-    let render_end = start.saturating_add(body.height as usize).min(app.history_len());
+    let render_end = start.saturating_add(visible_history_rows).min(app.history_len());
     let visible_entries: Vec<_> = (start..render_end)
         .filter_map(|index| app.history_entry(index))
+        .collect();
+    let hidden_entries: Vec<_> = visible_entries
+        .iter()
+        .map(|entry| match *entry {
+            HistoryEntry::Commit(index) => app.is_row_hidden(index),
+            HistoryEntry::Segment { .. } => false,
+        })
         .collect();
     let lanes = app.render_lanes(start..render_end);
     let enrichment_gutter = Line::raw(crate::enrich::marker(true, true, true)).width() as u16;
@@ -637,10 +659,13 @@ pub(crate) fn draw_with_worktree(
         ),
         body.height,
     );
+    let requested_alignment = app.alignment;
+    let aligned_lane_width = |index: usize| lane_width(lanes.lane(index), requested_alignment);
     let rendered_lane_width = lanes
         .iter()
-        .filter(|lane| !lane.is_empty())
-        .map(|lane| lane.trim_end().chars().count().saturating_add(1))
+        .enumerate()
+        .filter(|(index, _)| !hidden_entries[*index])
+        .map(|(index, _)| aligned_lane_width(index))
         .max()
         .unwrap_or_default();
     let max_lane_width = if rendered_lane_width == 0 {
@@ -648,7 +673,6 @@ pub(crate) fn draw_with_worktree(
     } else {
         rendered_lane_width
     };
-    let alignment = app.alignment;
     let date_mode = app.date_mode;
     let id_mode = app.effective_id_mode();
     let name_mode = app.name_mode;
@@ -657,90 +681,182 @@ pub(crate) fn draw_with_worktree(
     let show_trailers = name_mode == NameMode::All && app.show_trailers;
     let ref_mode = app.ref_mode;
     let selected = app.selected_history_index();
-    let metadata_columns: Vec<_> = visible_entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            let HistoryEntry::Commit(row_index) = entry else {
-                return None;
-            };
-            let row = &app.rows[*row_index];
-            let row_selected = selected == Some(start + index);
-            let note_title = row_selected
-                .then(|| app.note(row.id))
-                .flatten()
-                .map(|note| gix::objs::commit::MessageRef::from_bytes(note).title);
-            let mut metadata = metadata_columns(
-                row,
-                app.title(row),
-                app.attributions(row),
-                decorations,
-                mailmap,
-                MetadataOptions {
-                    date_mode,
-                    id_mode,
-                    change_id: app.change_id(row.id),
-                    show_author_name,
-                    show_emails: app.show_emails,
-                    show_trailers,
-                    has_notes: !app.notes(row.id).is_empty(),
-                    note_title,
-                    use_mailmap: app.use_mailmap && copy_feedback != Some(CopyKind::Author),
-                    ref_mode,
-                    selected: row_selected || compared_parent == Some(row.id),
-                    copy_feedback: if row_selected { copy_feedback } else { None },
-                },
-            );
-            if !row_selected && let Some(decorations) = decorations.get(&row.id) {
-                let current_head = decorations
-                    .iter()
-                    .any(|decoration| decoration.kind == DecorationKind::Head);
-                let foreign_head = decorations.iter().any(|decoration| {
-                    matches!(
-                        decoration.kind,
-                        DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
-                    )
-                });
-                if current_head || foreign_head {
-                    for span in &mut metadata.fields[5].spans {
-                        span.style = if current_head {
-                            span.style.add_modifier(Modifier::REVERSED)
-                        } else {
-                            span.style.bg(Color::DarkGray)
-                        };
+    let build_metadata_columns = |shorten_titles: bool, compact_history: bool| {
+        visible_entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let HistoryEntry::Commit(row_index) = entry else {
+                    return None;
+                };
+                let row = &app.rows[*row_index];
+                let shorten_titles = shorten_titles && !hidden_entries[index];
+                let compact_history = compact_history && !hidden_entries[index];
+                let row_selected = selected == Some(start + index);
+                let note_title = row_selected
+                    .then(|| app.note(row.id))
+                    .flatten()
+                    .map(|note| gix::objs::commit::MessageRef::from_bytes(note).title);
+                let mut metadata = metadata_columns(
+                    row,
+                    app.title(row),
+                    app.attributions(row),
+                    decorations,
+                    mailmap,
+                    MetadataOptions {
+                        date_mode,
+                        id_mode,
+                        change_id: app.change_id(row.id),
+                        show_author_name,
+                        show_emails: app.show_emails && !compact_history,
+                        show_trailers,
+                        has_notes: !app.notes(row.id).is_empty(),
+                        note_title: if compact_history { None } else { note_title },
+                        shorten_title: shorten_titles,
+                        use_mailmap: app.use_mailmap && copy_feedback != Some(CopyKind::Author),
+                        ref_mode,
+                        selected: row_selected || compared_parent == Some(row.id),
+                        copy_feedback: if row_selected { copy_feedback } else { None },
+                    },
+                );
+                if compact_history {
+                    for field in &mut metadata.fields[..5] {
+                        *field = Line::default();
+                    }
+                    metadata.fields[4] = Line::raw(" ");
+                }
+                if !row_selected && let Some(decorations) = decorations.get(&row.id) {
+                    let current_head = decorations
+                        .iter()
+                        .any(|decoration| decoration.kind == DecorationKind::Head);
+                    let foreign_head = decorations.iter().any(|decoration| {
+                        matches!(
+                            decoration.kind,
+                            DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
+                        )
+                    });
+                    if current_head || foreign_head {
+                        for span in &mut metadata.fields[5].spans {
+                            span.style = if current_head {
+                                span.style.add_modifier(Modifier::REVERSED)
+                            } else {
+                                span.style.bg(Color::DarkGray)
+                            };
+                        }
                     }
                 }
-            }
-            Some(metadata)
-        })
-        .collect();
+                Some(metadata)
+            })
+            .collect::<Vec<_>>()
+    };
+    let full_metadata_columns = build_metadata_columns(false, false);
     let title_column = lanes
         .iter()
-        .zip(&metadata_columns)
-        .filter_map(|(lane, metadata)| {
-            metadata
-                .as_ref()
-                .map(|metadata| lane.chars().count().saturating_add(metadata.prefix_width()))
+        .enumerate()
+        .zip(&full_metadata_columns)
+        .filter_map(|((index, _), metadata)| {
+            (!hidden_entries[index])
+                .then_some(metadata.as_ref())
+                .flatten()
+                .map(|metadata| aligned_lane_width(index).saturating_add(metadata.prefix_width()))
         })
         .max()
         .unwrap_or_default();
-    let column_widths = metadata_columns.iter().flatten().fold([0; 5], |mut widths, metadata| {
-        for (width, field) in widths.iter_mut().zip(&metadata.fields[..5]) {
-            *width = (*width).max(field.width());
+    let column_widths = full_metadata_columns
+        .iter()
+        .enumerate()
+        .filter_map(|(index, metadata)| (!hidden_entries[index]).then_some(metadata.as_ref()).flatten())
+        .fold([0; 5], |mut widths, metadata| {
+            for (width, field) in widths.iter_mut().zip(&metadata.fields[..5]) {
+                *width = (*width).max(field.width());
+            }
+            widths
+        });
+    let title_start = match requested_alignment {
+        HistoryAlignment::None => 0,
+        HistoryAlignment::Title | HistoryAlignment::Compressed => title_column,
+        HistoryAlignment::Columns => max_lane_width.saturating_add(column_widths.iter().sum()),
+    };
+    let available_title_width = usize::from(content.width).saturating_sub(title_start);
+    let visible_title_widths: Vec<_> = if app.show_emails {
+        Vec::new()
+    } else {
+        visible_entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                if hidden_entries[index] {
+                    return None;
+                }
+                let HistoryEntry::Commit(row_index) = entry else {
+                    return None;
+                };
+                let metadata = full_metadata_columns[index].as_ref()?;
+                let title = app.title(&app.rows[*row_index]);
+                Some((
+                    usize::from(content.width).saturating_sub(
+                        lane_width(lanes.lane(index), HistoryAlignment::None).saturating_add(metadata.prefix_width()),
+                    ),
+                    Line::from(commit_title_spans(title, false)).width(),
+                    Line::from(commit_title_spans(title, true)).width(),
+                ))
+            })
+            .collect()
+    };
+    let drop_alignment = requested_alignment != HistoryAlignment::None
+        && less_than_sixty_percent(
+            visible_title_widths
+                .iter()
+                .map(|(_, full, _)| (available_title_width, *full)),
+        );
+    let shorten_titles = drop_alignment
+        && less_than_sixty_percent(
+            visible_title_widths
+                .iter()
+                .map(|(available, full, _)| (*available, *full)),
+        );
+    let compact_history = shorten_titles
+        && less_than_sixty_percent(
+            visible_title_widths
+                .iter()
+                .map(|(available, _, short)| (*available, *short)),
+        );
+    let alignment = if drop_alignment {
+        HistoryAlignment::None
+    } else {
+        requested_alignment
+    };
+    let alignment_for = |index: usize| {
+        if hidden_entries[index] {
+            HistoryAlignment::None
+        } else {
+            alignment
         }
-        widths
-    });
+    };
+    let displayed_lane = |index: usize| {
+        let lane = lanes.lane(index);
+        if hidden_entries[index] || (alignment == HistoryAlignment::None && !compact_history) {
+            lane
+        } else {
+            lane.trim_end()
+        }
+    };
+    let metadata_columns = if shorten_titles {
+        build_metadata_columns(true, compact_history)
+    } else {
+        full_metadata_columns
+    };
     let metadata: Vec<_> = metadata_columns
         .into_iter()
         .enumerate()
         .map(|(index, metadata)| {
-            metadata.map(|metadata| match alignment {
+            metadata.map(|metadata| match alignment_for(index) {
                 HistoryAlignment::None => {
                     let (metadata, prefix_width) = metadata.into_line_with_prefix();
                     (metadata, 0, prefix_width)
                 }
                 HistoryAlignment::Title | HistoryAlignment::Compressed => {
-                    let lane_width = lanes.lane(index).chars().count();
+                    let lane_width = aligned_lane_width(index);
                     let (metadata, prefix_width) = metadata.align_title(title_column.saturating_sub(lane_width));
                     (metadata, lane_width, prefix_width)
                 }
@@ -755,13 +871,11 @@ pub(crate) fn draw_with_worktree(
         .iter()
         .enumerate()
         .map(|(index, entry)| match (entry, &metadata[index]) {
-            (HistoryEntry::Segment { count, .. }, _) => lanes
-                .lane(index)
-                .chars()
-                .count()
-                .saturating_add(format!("[{count}]").chars().count()),
-            (HistoryEntry::Commit(_), Some((metadata, metadata_x, _))) => match alignment {
-                HistoryAlignment::None => lanes.lane(index).chars().count().saturating_add(metadata.width()),
+            (HistoryEntry::Segment { count, .. }, _) => {
+                aligned_lane_width(index).saturating_add(format!("[{count}]").chars().count())
+            }
+            (HistoryEntry::Commit(_), Some((metadata, metadata_x, _))) => match alignment_for(index) {
+                HistoryAlignment::None => displayed_lane(index).chars().count().saturating_add(metadata.width()),
                 HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
                     metadata_x.saturating_add(metadata.width())
                 }
@@ -781,13 +895,12 @@ pub(crate) fn draw_with_worktree(
         (!time_travel_animation && !selected_segment)
             .then_some(app.selection_relation)
             .flatten(),
-        app.topological_choice(),
     );
     let selection_info_width = selection_info.width();
     let mut selection_info_area = None;
 
     for (index, metadata) in metadata.into_iter().enumerate() {
-        let lane = lanes.lane(index);
+        let lane = displayed_lane(index);
         let y = body.y.saturating_add(index as u16);
         let row_area = Rect::new(content.x, y, content.width, 1);
         let row_index = match visible_entries[index] {
@@ -807,8 +920,18 @@ pub(crate) fn draw_with_worktree(
                     );
                 }
                 frame.render_widget(
-                    Paragraph::new(Line::styled(format!("{lane}[{count}]"), style))
-                        .scroll((0, horizontal_offset as u16)),
+                    Paragraph::new(Line::styled(
+                        format!(
+                            "{lane}{}[{count}]",
+                            if requested_alignment == HistoryAlignment::None || lane.is_empty() {
+                                ""
+                            } else {
+                                " "
+                            }
+                        ),
+                        style,
+                    ))
+                    .scroll((0, horizontal_offset as u16)),
                     row_area,
                 );
                 color_graph(
@@ -830,6 +953,7 @@ pub(crate) fn draw_with_worktree(
             }
         };
         let row = &app.rows[row_index];
+        let row_alignment = alignment_for(index);
         let (metadata, metadata_x, metadata_prefix_width) = metadata.expect("commit history entries have metadata");
         let selected = app.selected == Some(row_index);
         let head = decorations.get(&row.id).is_some_and(|decorations| {
@@ -848,14 +972,14 @@ pub(crate) fn draw_with_worktree(
             attached: attached_head,
         });
         let metadata_width = metadata.width();
-        let title_offset = match alignment {
+        let title_offset = match row_alignment {
             HistoryAlignment::None => lane.chars().count().saturating_add(metadata_prefix_width),
             HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
                 metadata_x.saturating_add(metadata_prefix_width)
             }
         };
         let hidden_branch_behind = app.hidden_branch_behind(row.id);
-        let line_width = match alignment {
+        let line_width = match row_alignment {
             HistoryAlignment::None => lane
                 .chars()
                 .count()
@@ -937,7 +1061,7 @@ pub(crate) fn draw_with_worktree(
 
         let mut spans = Vec::with_capacity(metadata.spans.len() + 2);
         spans.push(Span::styled(lane, style));
-        if alignment != HistoryAlignment::None {
+        if row_alignment != HistoryAlignment::None {
             spans.push(Span::raw(" ".repeat(metadata_x.saturating_sub(lane.chars().count()))));
         }
         spans.extend(metadata.spans);
@@ -966,10 +1090,34 @@ pub(crate) fn draw_with_worktree(
                 content.x
             }
             .min(body.right());
-            frame.buffer_mut().set_style(
+            let buffer = frame.buffer_mut();
+            buffer.set_style(
                 Rect::new(body.x, y, end.saturating_sub(body.x), 1),
                 Style::default().add_modifier(Modifier::REVERSED),
             );
+            for x in body.x..end {
+                let cell = &mut buffer[(x, y)];
+                if cell.fg == Color::Black && cell.bg == Color::Yellow {
+                    cell.modifier.remove(Modifier::REVERSED);
+                }
+            }
+        }
+        if row.is_review && head && title_offset > horizontal_offset {
+            let end = content
+                .x
+                .saturating_add(u16::try_from(title_offset - horizontal_offset).unwrap_or(u16::MAX))
+                .saturating_sub(1)
+                .min(body.right());
+            let buffer = frame.buffer_mut();
+            if let Some(start) = (body.x..end).find(|x| !buffer[(*x, y)].symbol().trim().is_empty()) {
+                buffer.set_style(
+                    Rect::new(start, y, end - start, 1),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(REVIEW_BACKGROUND)
+                        .remove_modifier(Modifier::REVERSED),
+                );
+            }
         }
         if selected && body.width > 0 {
             let marker_limit = hidden_branch_marker
@@ -1188,7 +1336,8 @@ pub(crate) fn draw_with_worktree(
     if app.history_display_expanded {
         emphasize_prefix(&mut view_prefix_spans[1..]);
     }
-    let mut ordered = vec![Span::raw(history_position(app)), Span::raw(" · ")];
+    let mut ordered = vec![Span::raw(history_position(app))];
+    ordered.push(Span::raw(" · "));
     ordered.extend(shortcut("p command", 'p', true));
     if selected_segment {
         ordered.push(Span::raw(" · <enter> expand"));
@@ -1247,9 +1396,29 @@ pub(crate) fn draw_with_worktree(
             render_undo_progress(frame, area, notice.kind, applied, total);
         }
     }
+    if let Some(progress) = &background_progress {
+        render_background_progress(frame, progress_area, progress);
+    }
+    let popup_anchor = background_progress.as_ref().map_or(footer, |_| progress_area);
     let _ = prefix_popup
         .filter(|_| prefix_popup_allowed)
-        .and_then(|(anchor, items)| render_prefix_popup(frame, footer, anchor, items));
+        .and_then(|(anchor, items)| render_prefix_popup(frame, area, popup_anchor, anchor, items));
+}
+
+fn render_background_progress(frame: &mut Frame<'_>, area: Rect, progress: &crate::app::BackgroundProgress) {
+    frame.render_widget(
+        Paragraph::new(progress.text.as_str()).style(Style::default().bg(Color::Reset)),
+        area,
+    );
+    let completed_width = if progress.total == 0 {
+        0
+    } else {
+        (u128::from(area.width) * progress.completed.min(progress.total) as u128 / progress.total as u128) as u16
+    };
+    frame.buffer_mut().set_style(
+        Rect::new(area.x, area.y, completed_width, area.height),
+        Style::default().bg(Color::DarkGray),
+    );
 }
 
 fn render_undo_progress(frame: &mut Frame<'_>, area: Rect, kind: NoticeKind, applied: usize, total: usize) {
@@ -1389,21 +1558,8 @@ fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app:
     }
 }
 
-fn selection_info_line(
-    changes: Option<&Changes>,
-    relation: Option<SelectionRelation>,
-    topological_choice: Option<(usize, usize)>,
-) -> Line<'static> {
+fn selection_info_line(changes: Option<&Changes>, relation: Option<SelectionRelation>) -> Line<'static> {
     let mut spans = Vec::new();
-    if let Some((choice, total)) = topological_choice {
-        push_selection_span(
-            &mut spans,
-            Span::styled(
-                format!("{choice}/{total}"),
-                selection_color(Color::Yellow).add_modifier(Modifier::BOLD),
-            ),
-        );
-    }
     if let Some(changes) = changes {
         if changes.lines_added > 0 {
             push_selection_span(
@@ -2054,6 +2210,61 @@ fn markdown_title_spans(title: &BStr) -> Vec<Span<'static>> {
     out
 }
 
+fn commit_title_spans(title: &BStr, shorten_conventional_prefix: bool) -> Vec<Span<'static>> {
+    let Some(subject) = shorten_conventional_prefix
+        .then(|| conventional_title_subject(title))
+        .flatten()
+    else {
+        return markdown_title_spans(title);
+    };
+    let mut shortened = BString::from("…:");
+    shortened.extend_from_slice(subject);
+    markdown_title_spans(shortened.as_bstr())
+}
+
+fn less_than_sixty_percent(widths: impl IntoIterator<Item = (usize, usize)>) -> bool {
+    let (available, title, count) = widths
+        .into_iter()
+        .fold((0_u128, 0_u128, 0_u128), |(available, title, count), widths| {
+            (available + widths.0 as u128, title + widths.1 as u128, count + 1)
+        });
+    count > 0 && available * 5 < title * 3
+}
+
+fn lane_width(lane: &str, alignment: HistoryAlignment) -> usize {
+    let lane = if alignment == HistoryAlignment::None {
+        lane
+    } else {
+        lane.trim_end()
+    };
+    Line::raw(lane).width() + usize::from(alignment != HistoryAlignment::None && !lane.is_empty())
+}
+
+fn conventional_title_subject(title: &BStr) -> Option<&BStr> {
+    let separator = title.find(b": ")?;
+    let mut prefix: &[u8] = &title[..separator];
+    if let Some(without_bang) = prefix.strip_suffix(b"!") {
+        prefix = without_bang;
+    }
+    let valid_type = |value: &[u8]| {
+        value.first().is_some_and(u8::is_ascii_lowercase)
+            && value
+                .iter()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+    };
+    let valid = prefix.iter().position(|byte| *byte == b'(').map_or_else(
+        || valid_type(prefix),
+        |open| {
+            let scope = &prefix[open + 1..];
+            valid_type(&prefix[..open])
+                && scope.len() > 1
+                && scope.ends_with(b")")
+                && !scope[..scope.len() - 1].iter().any(|byte| matches!(byte, b'(' | b')'))
+        },
+    );
+    valid.then(|| title[separator + 2..].as_bstr())
+}
+
 fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
     let key_start = label.find(key).expect("shortcut key is present in its label");
     let key_end = key_start + key.len_utf8();
@@ -2146,7 +2357,7 @@ fn active_prefix_popup(
         navigation.extend([
             vec![Span::raw("↑↓/jk move")],
             vec![Span::raw("h/l pan")],
-            vec![Span::raw("Shift+directions topo")],
+            vec![Span::raw("J/K topo")],
             vec![Span::raw("PgUp/PgDn move")],
             vec![Span::raw("Shift+PgUp/PgDn pan")],
         ]);
@@ -2205,12 +2416,13 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
 
 fn render_prefix_popup(
     frame: &mut Frame<'_>,
+    bounds: Rect,
     footer: Rect,
     anchor: usize,
     mut rows: Vec<Vec<Span<'static>>>,
 ) -> Option<Rect> {
     let height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
-    if !prefix_popup_can_render(frame.area(), footer, anchor, rows.len()) {
+    if !prefix_popup_can_render(bounds, footer, anchor, rows.len()) {
         return None;
     }
     let mut width = 0;
@@ -2266,6 +2478,7 @@ struct MetadataOptions<'a> {
     show_trailers: bool,
     has_notes: bool,
     note_title: Option<&'a BStr>,
+    shorten_title: bool,
     use_mailmap: bool,
     ref_mode: RefMode,
     selected: bool,
@@ -2329,6 +2542,7 @@ fn metadata_columns<'a>(
         show_trailers,
         has_notes,
         note_title,
+        shorten_title,
         use_mailmap,
         ref_mode,
         selected,
@@ -2361,9 +2575,6 @@ fn metadata_columns<'a>(
     }
     let mut refs = Vec::new();
     let row_decorations = decorations.get(&row.id).map(Vec::as_slice).unwrap_or_default();
-    if row.is_review {
-        refs.push(Span::styled(" ◆", decoration_style(DecorationKind::Review)));
-    }
     if row_decorations
         .iter()
         .any(|decoration| decoration.kind == DecorationKind::Pin)
@@ -2374,10 +2585,9 @@ fn metadata_columns<'a>(
         .iter()
         .any(|decoration| decoration.kind == DecorationKind::Stash)
     {
-        let marker = if row.is_review
-            || row_decorations
-                .iter()
-                .any(|decoration| decoration.kind == DecorationKind::Pin)
+        let marker = if row_decorations
+            .iter()
+            .any(|decoration| decoration.kind == DecorationKind::Pin)
         {
             "🎁"
         } else {
@@ -2544,7 +2754,7 @@ fn metadata_columns<'a>(
             title_spans.extend(note_title);
             title_spans.push(Span::raw(" "));
         }
-        title_spans.extend(markdown_title_spans(title));
+        title_spans.extend(commit_title_spans(title, shorten_title));
     }
     MetadataColumns {
         fields: [
@@ -2592,6 +2802,7 @@ pub(crate) fn plain_history_metadata(
             show_trailers: app.name_mode == NameMode::All && app.show_trailers,
             has_notes,
             note_title: None,
+            shorten_title: false,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
             selected: false,
@@ -2623,6 +2834,7 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
             show_trailers: app.name_mode == crate::app::NameMode::All && app.show_trailers,
             has_notes: !app.notes(row.id).is_empty(),
             note_title: None,
+            shorten_title: false,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
             selected: false,
@@ -2715,18 +2927,21 @@ fn color_graph(
         if symbol.is_whitespace() {
             continue;
         }
+        let node = matches!(symbol, '●' | '◆');
         let mut style = if let Some(highlight) = highlight {
             color(highlight).add_modifier(Modifier::REVERSED)
-        } else if symbol == '●' {
+        } else if symbol == '◆' && head.is_none() {
+            decoration_style(DecorationKind::Review)
+        } else if node {
             color(signature_color(signature))
         } else {
             graph_style(offset.saturating_add(x) / 2)
         };
-        if head.is_some_and(|head| head.has_descendants) && symbol == '●' {
+        if head.is_some_and(|head| head.has_descendants) && node {
             style = style.add_modifier(Modifier::BOLD);
         }
         let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
-        if head.is_some() && symbol == '●' {
+        if head.is_some() && node {
             cell.set_symbol("@");
             if head.is_some_and(|head| head.attached) {
                 style = style.add_modifier(Modifier::ITALIC);
@@ -2845,6 +3060,7 @@ mod tests {
             frame.render_widget(Paragraph::new("underlying history"), Rect::new(0, 0, 20, 1));
             popup = render_prefix_popup(
                 frame,
+                Rect::new(0, 0, 20, 2),
                 Rect::new(0, 1, 20, 1),
                 12,
                 vec![vec![Span::raw("abcdefghijklmnopqrstuvwxyz")]],
@@ -2888,7 +3104,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(11, 4))?;
         let mut popup = None;
         terminal.draw(|frame| {
-            popup = render_prefix_popup(frame, Rect::new(0, 3, 11, 1), 0, rows);
+            popup = render_prefix_popup(frame, Rect::new(0, 0, 11, 4), Rect::new(0, 3, 11, 1), 0, rows);
         })?;
 
         assert_eq!(popup, Some(Rect::new(0, 0, 11, 3)));
@@ -2957,7 +3173,10 @@ mod tests {
         }
         let mut cursor = None;
         let mut terminal = Terminal::new(TestBackend::new(60, 12))?;
-        terminal.draw(|frame| cursor = draw_command_menu(frame, &mut menu, &commands))?;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            cursor = draw_command_menu(frame, area, &mut menu, &commands);
+        })?;
 
         let rendered = (0..12)
             .map(|row| rendered_line(&terminal, row))
@@ -2982,17 +3201,84 @@ mod tests {
 
         menu.open(&items);
         let mut short = Terminal::new(TestBackend::new(60, 7))?;
-        short.draw(|frame| assert!(draw_command_menu(frame, &mut menu, &commands).is_some()))?;
+        short.draw(|frame| {
+            let area = frame.area();
+            assert!(draw_command_menu(frame, area, &mut menu, &commands).is_some());
+        })?;
         assert_eq!(menu.visible_indices().len(), 2, "only rendered rows are selectable");
         assert_eq!(menu.submit_digit('3', &items), None, "a clipped row cannot execute");
 
         menu.open(&items);
         let mut tiny = Terminal::new(TestBackend::new(3, 12))?;
-        tiny.draw(|frame| assert_eq!(draw_command_menu(frame, &mut menu, &commands), None))?;
+        tiny.draw(|frame| {
+            let area = frame.area();
+            assert_eq!(draw_command_menu(frame, area, &mut menu, &commands), None);
+        })?;
         assert_eq!(
             menu.submit_selected(&items),
             None,
             "an invisible selection cannot execute"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tix_view_and_overlays_stay_inside_their_area() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        let decorations = Decorations::new();
+        let commands = command_menu::commands(&app, &decorations, false);
+        let items = commands
+            .iter()
+            .map(|command| {
+                crate::menu::Item::with_search_prefix(
+                    command.label,
+                    command.group.label(),
+                    command.group.prefix(),
+                    command.id,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut menu = Menu::default();
+        menu.open(&items);
+        let diff = BuiltInDiff::new("M file".into(), vec!["+line".into()]);
+        let bounds = Rect::new(5, 3, 30, 7);
+        let mut cursor = None;
+        let mut terminal = Terminal::new(TestBackend::new(40, 12))?;
+
+        terminal.draw(|frame| {
+            for y in 0..frame.area().height {
+                for x in 0..frame.area().width {
+                    frame.buffer_mut()[(x, y)].set_symbol("x");
+                }
+            }
+            super::draw_with_worktree(
+                frame,
+                bounds,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                None,
+            );
+            draw_file_diff(frame, bounds, &diff, 0, 0);
+            cursor = draw_command_menu(frame, bounds, &mut menu, &commands);
+        })?;
+
+        for y in 0..12 {
+            for x in 0..40 {
+                if x < bounds.x || x >= bounds.right() || y < bounds.y || y >= bounds.bottom() {
+                    assert_eq!(
+                        terminal.backend().buffer()[(x, y)].symbol(),
+                        "x",
+                        "drawing escaped its supplied area at ({x}, {y})"
+                    );
+                }
+            }
+        }
+        assert!(
+            cursor.is_some_and(|position| bounds.contains(position)),
+            "the command cursor remains inside the supplied area"
         );
         Ok(())
     }
@@ -3005,8 +3291,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 5))?;
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -3036,8 +3324,10 @@ mod tests {
 
         app.update(Action::MoveDown);
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -3271,6 +3561,21 @@ mod tests {
             (0..80).any(|x| row[(x, 0)].symbol() == "t" && row[(x, 0)].modifier.contains(Modifier::ITALIC)),
             "the Markdown title is italicized"
         );
+        let head = Decorations::from([(
+            id,
+            vec![Decoration {
+                name: "HEAD".into(),
+                kind: DecorationKind::Head,
+            }],
+        )]);
+        terminal.draw(|frame| draw(frame, &mut app, &head))?;
+        let note = &terminal.backend().buffer()[(title_x, 0)];
+        assert_eq!(note.fg, Color::Black);
+        assert_eq!(note.bg, Color::Yellow, "HEAD keeps the note background visible");
+        assert!(
+            !note.modifier.contains(Modifier::REVERSED),
+            "HEAD selection does not reverse the note"
+        );
         app.enrich_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
@@ -3417,6 +3722,54 @@ mod tests {
     }
 
     #[test]
+    fn background_tasks_reserve_a_row_above_the_footer() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.start_background_task("pushing topic to origin…");
+        let mut terminal = Terminal::new(TestBackend::new(120, 3))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        let label = "pushing topic to origin…";
+        assert!(rendered_line(&terminal, 1).contains(label));
+        assert!(!rendered_line(&terminal, 2).contains(label));
+        Ok(())
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn fetch_progress_reserves_a_row_above_the_footer_and_below_notices_and_popups()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        complete(&mut app);
+        app.set_active_branch(Some("topic".into()));
+        app.start_background_task("fetching origin…");
+        assert!(app.update_background_progress("fetching origin: indexing 40/100".into(), 40, 100));
+        app.leave_attention("working tree notice");
+        let mut terminal = Terminal::new(TestBackend::new(100, 5))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        assert!(rendered_line(&terminal, 2).contains("working tree notice"));
+        assert!(rendered_line(&terminal, 3).contains("fetching origin: indexing 40/100"));
+        assert!(!rendered_line(&terminal, 4).contains("fetching origin"));
+        assert_eq!(terminal.backend().buffer()[(39, 3)].bg, Color::DarkGray);
+        assert_eq!(
+            terminal.backend().buffer()[(40, 3)].bg,
+            Color::Reset,
+            "the unfilled share keeps the status background"
+        );
+
+        app.update(Action::ToggleActions);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            (0..3).any(|row| rendered_line(&terminal, row).contains(" no actions ")),
+            "the prefix popup is rendered above progress"
+        );
+        assert!(rendered_line(&terminal, 3).contains("fetching origin"));
+        Ok(())
+    }
+
+    #[test]
     fn materialized_rebase_continuation_uses_a_persistent_notice_above_the_footer()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
@@ -3446,8 +3799,10 @@ mod tests {
 
         app.information_expanded = true;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -3597,7 +3952,7 @@ mod tests {
         assert!(buffer[(37, 0)].modifier.contains(Modifier::REVERSED));
 
         let text = |relation| {
-            selection_info_line(None, relation, None)
+            selection_info_line(None, relation)
                 .spans
                 .into_iter()
                 .map(|span| span.content.into_owned())
@@ -3606,16 +3961,14 @@ mod tests {
         assert_eq!(text(Some(SelectionRelation::Tracking { ahead: 0, behind: 2 })), "⇣2");
         assert_eq!(text(Some(SelectionRelation::Tracking { ahead: 0, behind: 0 })), "");
         assert!(
-            selection_info_line(Some(&Changes::default()), None, None)
-                .spans
-                .is_empty(),
+            selection_info_line(Some(&Changes::default()), None).spans.is_empty(),
             "selection information hides empty diff counts"
         );
         Ok(())
     }
 
     #[test]
-    fn renders_the_topological_child_choice_outside_selection_inversion() -> Result<(), Box<dyn std::error::Error>> {
+    fn renders_a_pending_topological_choice_in_the_source_disc() -> Result<(), Box<dyn std::error::Error>> {
         let ids = [1, 2, 3].map(|byte| gix::ObjectId::Sha1([byte; 20]));
         let commit = |id, parent: Option<gix::ObjectId>, title: &'static str| Commit {
             id,
@@ -3638,21 +3991,19 @@ mod tests {
         ]);
         complete(&mut app);
         app.select_commit(ids[0]);
-        app.update(Action::NextChild);
-        let mut terminal = Terminal::new(TestBackend::new(80, 4))?;
+        let selected = app.selected.expect("the fork is selected");
+        std::sync::Arc::make_mut(&mut app.rows[selected]).is_review = true;
+        app.update(Action::TopologicalUp);
+        let mut terminal = Terminal::new(TestBackend::new(80, 6))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
         let row = rendered_line(&terminal, 2);
-        let choice_byte = row.find("2/2").expect("the selected fork shows its child choice");
-        let choice_x = row[..choice_byte].chars().count() as u16;
-        let cell = &terminal.backend().buffer()[(choice_x, 2)];
-        assert_eq!(cell.fg, Color::Yellow);
-        assert!(cell.modifier.contains(Modifier::BOLD));
         assert!(
-            !cell.modifier.contains(Modifier::REVERSED),
-            "the choice annotation does not extend row inversion"
+            row.trim_start().starts_with("> 1"),
+            "the pending choice replaces the selected commit disk: {row:?}"
         );
+        assert!(!row.contains("1/2"), "the old persistent choice annotation is gone");
         Ok(())
     }
 
@@ -3667,7 +4018,10 @@ mod tests {
         );
         let mut terminal = Terminal::new(TestBackend::new(48, 7))?;
 
-        terminal.draw(|frame| draw_file_diff(frame, &diff, 0, 0))?;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            draw_file_diff(frame, area, &diff, 0, 0);
+        })?;
 
         assert_eq!(rendered_line(&terminal, 0).trim(), "M file");
         for (y, color) in [
@@ -3751,7 +4105,10 @@ mod tests {
         ));
         let mut terminal = Terminal::new(TestBackend::new(64, 9))?;
 
-        terminal.draw(|frame| draw_file_diff(frame, &diff, 0, 0))?;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            draw_file_diff(frame, area, &diff, 0, 0);
+        })?;
 
         assert_eq!(rendered_line(&terminal, 0).trim(), title);
         assert_eq!(rendered_line(&terminal, 1).trim(), "new       |   2 ++  +2");
@@ -4048,7 +4405,7 @@ mod tests {
         for x in 0..selected_line.chars().count() as u16 {
             expected[(x, 0)].set_style(Style::default().add_modifier(Modifier::REVERSED));
         }
-        for x in 6..10 {
+        for x in 6..9 {
             expected[(x, 0)].set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         }
         for x in 10..17 {
@@ -4340,13 +4697,31 @@ mod tests {
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let row = rendered_row(&terminal);
-        let review = row.find("◆").expect("a review has its resource marker");
+        let review = row.find("◆").expect("a review replaces its graph disc");
+        let hash = row.find("0101010").expect("the row contains its hash");
         let pin = row.find("📌").expect("the row contains its pin");
         let gift = row.find("🎁").expect("the row contains its stash marker");
+        assert_eq!(row.matches("◆").count(), 1, "a review has one diamond: {row:?}");
         assert!(
-            review < pin && pin < gift,
-            "review is the first resource marker: {row:?}"
+            review < hash && hash < pin && pin < gift,
+            "the graph diamond does not disturb resource ordering: {row:?}"
         );
+        decorations
+            .get_mut(&selected)
+            .expect("the selected commit has resources")
+            .retain(|decoration| decoration.kind == DecorationKind::Stash);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_row(&terminal).contains("0101010 🎁"),
+            "a lone stash remains separated from the hash"
+        );
+        decorations
+            .get_mut(&selected)
+            .expect("the selected commit has a stash")
+            .push(Decoration {
+                name: "pin:01010101".into(),
+                kind: DecorationKind::Pin,
+            });
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = false;
         app.ref_mode = RefMode::None;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
@@ -4358,7 +4733,7 @@ mod tests {
         app.actions_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(
-            rendered_line(&terminal, 1).contains(" reword · new · new-empty · d forget · unpin "),
+            rendered_line(&terminal, 1).contains(" reword · new · N new-empty · d forget · unpin "),
             "the commit actions float above their prefix"
         );
         assert!(
@@ -4421,8 +4796,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(240, 3))?;
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -4477,7 +4854,8 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(rendered_line(&terminal, 2).trim_end(), compact);
         let information = "[ title · ref-tree · message · changes";
-        let navigation = "p command · ↑↓/jk move · h/l pan · Shift+directions topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff";
+        let navigation =
+            "p command · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff";
         assert!(rendered_line(&terminal, 0).contains(information));
         assert!(rendered_line(&terminal, 1).contains(navigation));
         assert_reversed_group(&terminal, 2, "?");
@@ -4495,7 +4873,8 @@ mod tests {
     }
 
     #[test]
-    fn actions_popup_shows_insert_shortcuts_without_the_cherry_prefix() -> Result<(), Box<dyn std::error::Error>> {
+    fn actions_popup_shows_push_and_insert_shortcuts_without_the_cherry_prefix()
+    -> Result<(), Box<dyn std::error::Error>> {
         let head = gix::ObjectId::Sha1([1; 20]);
         let base = gix::ObjectId::Sha1([2; 20]);
         let parent = gix::ObjectId::Sha1([3; 20]);
@@ -4525,7 +4904,10 @@ mod tests {
             commit(target, None),
         ]);
         complete(&mut app);
-        app.selected = app.rows.iter().position(|row| row.id == parent);
+        app.selected = app.rows.iter().position(|row| row.id == head);
+        app.set_active_branch(Some("topic".into()));
+        #[cfg(feature = "blocking-network-client")]
+        app.set_fetch_remote(Some("origin".into()));
         app.actions_expanded = true;
         let mut terminal = Terminal::new(TestBackend::new(160, 5))?;
 
@@ -4536,7 +4918,18 @@ mod tests {
         assert!(popup.contains("move-insert"));
         assert!(popup.contains("fork"));
         assert!(popup.contains("attach"));
+        #[cfg(feature = "blocking-network-client")]
+        assert!(popup.contains("F fetch"));
+        assert!(popup.contains("P push"));
         assert!(!popup.contains("cherry-"));
+        let push = popup[..popup.find("P push").expect("the push action is visible")]
+            .chars()
+            .count() as u16;
+        assert!(
+            terminal.backend().buffer()[(push, 3)]
+                .modifier
+                .contains(Modifier::UNDERLINED)
+        );
         let label = "stack-insert";
         let start = popup[..popup.find(label).expect("the stack-insert action is visible")]
             .chars()
@@ -4627,8 +5020,10 @@ mod tests {
         assert!(app.can_amend(), "the focused worktree path is amendable");
         assert!(app.actions_expanded, "the actions prefix remains expanded");
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -4648,8 +5043,10 @@ mod tests {
 
         app.changes_focus = None;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -4670,8 +5067,10 @@ mod tests {
                 kind: DecorationKind::Stash,
             });
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -4692,8 +5091,10 @@ mod tests {
 
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -4703,13 +5104,15 @@ mod tests {
             );
         })?;
         assert!(
-            !rendered_line(&terminal, 5).contains("amend"),
-            "a review cannot amend an unstaged selected path"
+            rendered_line(&terminal, 5).contains(" amend "),
+            "a review may amend its selected unstaged path"
         );
         worktree.paths[0].group = ChangeGroup::Staged;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -4927,14 +5330,23 @@ mod tests {
     }
 
     #[test]
-    fn review_commit_at_head_uses_the_head_marker() -> Result<(), Box<dyn std::error::Error>> {
-        let mut terminal = Terminal::new(TestBackend::new(2, 1))?;
+    fn review_diamond_uses_review_style_unless_head() -> Result<(), Box<dyn std::error::Error>> {
+        let mut terminal = Terminal::new(TestBackend::new(4, 1))?;
         terminal.draw(|frame| {
-            frame.render_widget(Paragraph::new("●─"), Rect::new(0, 0, 2, 1));
+            frame.render_widget(Paragraph::new("◆─◆─"), Rect::new(0, 0, 4, 1));
             color_graph(
                 frame,
                 Rect::new(0, 0, 2, 1),
-                "●─",
+                "◆─",
+                0,
+                None,
+                SignatureState::Unsigned,
+                None,
+            );
+            color_graph(
+                frame,
+                Rect::new(2, 0, 2, 1),
+                "◆─",
                 0,
                 None,
                 SignatureState::Unsigned,
@@ -4944,8 +5356,13 @@ mod tests {
                 }),
             );
         })?;
-        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "@");
-        assert_eq!(terminal.backend().buffer()[(1, 0)].symbol(), "─");
+        let review = &terminal.backend().buffer()[(0, 0)];
+        assert_eq!(review.symbol(), "◆");
+        assert_eq!(review.fg, Color::LightMagenta);
+        assert!(review.modifier.contains(Modifier::BOLD));
+        assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), "@");
+        assert_eq!(terminal.backend().buffer()[(2, 0)].fg, Color::Blue);
+        assert_eq!(terminal.backend().buffer()[(3, 0)].symbol(), "─");
         Ok(())
     }
 
@@ -5241,21 +5658,27 @@ mod tests {
     }
 
     #[test]
-    fn marks_dirty_head_independently_of_history_selection() -> Result<(), Box<dyn std::error::Error>> {
+    fn marks_and_highlights_a_dirty_review_head_independently_of_selection() -> Result<(), Box<dyn std::error::Error>> {
         let head = gix::ObjectId::Sha1([1; 20]);
         let other = gix::ObjectId::Sha1([2; 20]);
         let mut app = App::new(5);
         app.extend_commits(
             [head, other]
                 .into_iter()
-                .map(|id| Commit {
+                .enumerate()
+                .map(|(index, id)| Commit {
                     id,
                     parent_ids: Default::default(),
                     author_time: gix::date::Time::default(),
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
-                    title: "subject".into(),
+                    title: if index == 0 {
+                        "feat(scope)!: subject"
+                    } else {
+                        "fix(scope)!: subject"
+                    }
+                    .into(),
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
@@ -5284,9 +5707,12 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 8))?;
 
         app.selected = Some(1);
+        std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5297,7 +5723,12 @@ mod tests {
         })?;
         assert!(rendered_line(&terminal, 0).trim_start().starts_with("🫟 @"));
         assert!(rendered_line(&terminal, 1).trim_start().starts_with("> ●"));
-        assert_eq!(terminal.backend().buffer()[(6, 0)].modifier, Modifier::empty());
+        assert_eq!(terminal.backend().buffer()[(6, 0)].bg, REVIEW_BACKGROUND);
+        assert!(
+            !terminal.backend().buffer()[(6, 0)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
         assert!(
             terminal.backend().buffer()[(6, 1)]
                 .modifier
@@ -5306,8 +5737,10 @@ mod tests {
 
         app.selected = Some(0);
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5316,12 +5749,111 @@ mod tests {
                 Some(&dirty),
             );
         })?;
-        assert!(rendered_line(&terminal, 0).trim_start().starts_with("🫟 @"));
+        let line = rendered_line(&terminal, 0);
+        assert!(line.trim_start().starts_with("🫟 @"));
+        let start = line[..line.find("🫟").expect("the dirty marker is visible")]
+            .chars()
+            .count() as u16;
+        let title = line[..line.find("feat(scope)!: subject").expect("the title is visible")]
+            .chars()
+            .count() as u16;
+        let end = title - 1;
+        let buffer = terminal.backend().buffer();
+        let highlighted = |x| {
+            buffer[(x, 0)].fg == Color::Black
+                && buffer[(x, 0)].bg == REVIEW_BACKGROUND
+                && !buffer[(x, 0)].modifier.contains(Modifier::REVERSED)
+        };
         assert!(
-            terminal.backend().buffer()[(6, 0)]
-                .modifier
-                .contains(Modifier::REVERSED)
+            highlighted(start) && (start + Line::raw("🫟").width() as u16..end).all(highlighted),
+            "the review background wins from the first visible gutter through its metadata"
         );
+        assert_ne!(buffer[(end, 0)].bg, REVIEW_BACKGROUND, "one space separates the title");
+        assert!(
+            buffer[(end, 0)].modifier.contains(Modifier::REVERSED),
+            "ordinary selection remains visible outside the review background"
+        );
+
+        app.changes_mode = Some(ChangesMode::Both);
+        app.set_lane(0, "│ ◆─┐ ");
+        app.set_lane(1, "│ ● ");
+        let mut shortened = Terminal::new(TestBackend::new(41, 8))?;
+        shortened.draw(|frame| {
+            let area = frame.area();
+            super::draw_with_worktree(
+                frame,
+                area,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&dirty),
+                Some(&dirty),
+            );
+        })?;
+        assert_eq!(app.changes_layout, ChangesLayout::Stacked);
+        let line = rendered_line(&shortened, 0);
+        let other_line = rendered_line(&shortened, 1);
+        assert!(
+            line.contains("│ @─┐")
+                && line.contains("1970-01-01 author …:")
+                && other_line.contains("1970-01-01 author")
+                && other_line.contains("…:"),
+            "stacking does not minimize rows when shortening is sufficient: {line:?} / {other_line:?}"
+        );
+        let head_x = line.chars().position(|symbol| symbol == '@').expect("HEAD is visible") as u16;
+        let title_x = line[..line.find("…:").expect("the title is visible")].chars().count() as u16;
+        let buffer = shortened.backend().buffer();
+        assert!(title_x > head_x + 2, "metadata remains between the disc and title");
+        assert_eq!(buffer[(head_x, 0)].bg, REVIEW_BACKGROUND);
+        assert_ne!(buffer[(title_x - 1, 0)].bg, REVIEW_BACKGROUND);
+        assert!(buffer[(title_x, 0)].modifier.contains(Modifier::REVERSED));
+
+        app.changes_suppressed = true;
+        shortened.draw(|frame| {
+            let area = frame.area();
+            super::draw_with_worktree(
+                frame,
+                area,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&dirty),
+                Some(&dirty),
+            );
+        })?;
+        assert!(
+            rendered_line(&shortened, 0).contains("…:") && rendered_line(&shortened, 1).contains("…:"),
+            "repeat suppression retains the width-derived row layout"
+        );
+        app.changes_suppressed = false;
+        app.changes_mode = None;
+        let mut compact = Terminal::new(TestBackend::new(31, 3))?;
+        compact.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let line = rendered_line(&compact, 0);
+        assert!(
+            line.contains("│ @─┐ …:subject") && !line.contains("1970-01-01"),
+            "narrow history keeps the graph and places the title directly after it: {line:?}"
+        );
+        let head_x = line.chars().position(|symbol| symbol == '@').expect("HEAD is visible") as u16;
+        assert_eq!(compact.backend().buffer()[(head_x, 0)].bg, REVIEW_BACKGROUND);
+
+        app.alignment = HistoryAlignment::None;
+        compact.draw(|frame| draw(frame, &mut app, &decorations))?;
+        app.update(Action::ScrollRight);
+        compact.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let line = rendered_line(&compact, 0);
+        assert!(
+            line.contains("feat(scope)!:") && !line.contains("…:"),
+            "unaligned history retains the complete prefix while scrolling: {line:?}"
+        );
+        app.alignment = HistoryAlignment::Title;
+        app.horizontal_offset = 0;
+        app.changes_mode = Some(ChangesMode::Both);
+        app.set_lane(0, "◆ ");
+        app.set_lane(1, "● ");
+        std::sync::Arc::make_mut(&mut app.rows[0]).is_review = false;
 
         let conflicted = Changes {
             paths: vec![crate::app::PathChange {
@@ -5334,8 +5866,10 @@ mod tests {
             ..Changes::default()
         };
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5358,8 +5892,10 @@ mod tests {
         );
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5376,8 +5912,10 @@ mod tests {
         app.arm_rebase_conflict(other);
         app.selected = Some(1);
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5396,8 +5934,10 @@ mod tests {
 
         app.changes_mode = Some(ChangesMode::Tree);
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &gix::mailmap::Snapshot::default(),
@@ -5722,8 +6262,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -5761,6 +6303,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
         );
+        std::sync::Arc::make_mut(&mut app.rows[9]).author =
+            author(b"an extraordinarily long covered author", b"author@example.com");
         complete(&mut app);
         app.selected = Some(7);
         app.ensure_visible();
@@ -5792,6 +6336,10 @@ mod tests {
         let short = rendered_line(&terminal, 0)
             .find("0101010")
             .expect("metadata is visible with a short changes pane");
+        assert!(
+            rendered_line(&terminal, 6).contains("author subject 7"),
+            "a covered row does not add alignment padding"
+        );
         assert_eq!((app.selected, app.offset), (selection, 0));
 
         terminal.draw(|frame| {
@@ -5979,7 +6527,7 @@ mod tests {
         );
         assert!(
             rendered_line(&footer_terminal, 14).contains(
-                " p command · <tab> switch · ↑↓/jk move · h/l pan · Shift+directions topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff "
+                " p command · <tab> switch · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff "
             ),
             "the expanded information prefix keeps keyboard help next to the footer"
         );
@@ -6275,8 +6823,10 @@ mod tests {
         app.update(Action::ToggleCommit);
         let worktree_changes = Changes::default();
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6318,8 +6868,10 @@ mod tests {
 
         let mut wide_terminal = Terminal::new(TestBackend::new(240, 16))?;
         wide_terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6366,8 +6918,10 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6421,8 +6975,10 @@ mod tests {
             ..Changes::default()
         };
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6462,8 +7018,10 @@ mod tests {
         assert!(!summary.contains("= 12"), "a single term already expresses the total");
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6489,8 +7047,10 @@ mod tests {
         assert!(!app.worktree_changes_visible, "an empty block is not focusable");
 
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6535,8 +7095,10 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6549,8 +7111,10 @@ mod tests {
         app.update(Action::MoveDown);
         app.update(Action::MoveDown);
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6631,8 +7195,10 @@ mod tests {
         let worktree = path(ChangeGroup::Staged, "worktree-file");
         let mut terminal = Terminal::new(TestBackend::new(120, 10))?;
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6665,8 +7231,10 @@ mod tests {
             "success success success success success success success success success success success success",
         );
         terminal.draw(|frame| {
+            let area = frame.area();
             super::draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
@@ -6834,6 +7402,46 @@ mod tests {
     }
 
     #[test]
+    fn shortens_only_conventional_commit_prefixes() {
+        for (input, expected) in [
+            ("feat: subject", "…:subject"),
+            ("feat(gix-tix)!: subject", "…:subject"),
+            ("change(cli-tools): subject", "…:subject"),
+            ("feat: **🧪 subject**", "…:🧪 subject"),
+            ("feat: # heading", "…:# heading"),
+            ("feat: ---", "…:---"),
+            ("Title: subject", "Title: subject"),
+            ("feat(scope: subject", "feat(scope: subject"),
+            ("feat:subject", "feat:subject"),
+        ] {
+            assert_eq!(
+                commit_title_spans(input.as_bytes().as_bstr(), true)
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>(),
+                expected,
+                "prefix classification for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn adapts_history_detail_below_sixty_percent_of_the_average_title() {
+        assert!(!less_than_sixty_percent([(6, 10)]));
+        assert!(less_than_sixty_percent([(5, 10)]));
+        assert!(!less_than_sixty_percent([(6, 8), (6, 12)]));
+        assert!(less_than_sixty_percent([(5, 8), (5, 12)]));
+        assert!(!less_than_sixty_percent([]));
+        assert_eq!(
+            Line::from(commit_title_spans("feat: 🧪".as_bytes().as_bstr(), true)).width(),
+            Line::raw("…:🧪").width(),
+            "title widths use terminal cells rather than bytes"
+        );
+        assert_eq!(lane_width("●       ", HistoryAlignment::Title), 2);
+        assert_eq!(lane_width("●       ", HistoryAlignment::None), 8);
+    }
+
+    #[test]
     fn renders_note_markers_and_notes_before_trailers() -> Result<(), Box<dyn std::error::Error>> {
         let id = gix::ObjectId::Sha1([1; 20]);
         let mut app = App::new(1);
@@ -6915,6 +7523,7 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         complete(&mut app);
+        app.alignment = HistoryAlignment::None;
         app.update(Action::Last);
         let mut terminal = Terminal::new(TestBackend::new(24, 3))?;
 
@@ -6955,7 +7564,11 @@ mod tests {
         app.id_mode = IdMode::Commit;
         app.extend_commits(vec![commit(1)]);
         std::sync::Arc::make_mut(&mut app.rows[0]).parent_ids = [gix::ObjectId::Sha1([2; 20])].into_iter().collect();
-        app.extend_hidden_commits(vec![commit(2)]);
+        let mut hidden = commit(2);
+        hidden.title = format!("subject 2 {}", "wide ".repeat(20)).into();
+        app.extend_hidden_commits(vec![hidden]);
+        std::sync::Arc::make_mut(&mut app.rows[1]).author =
+            author(b"an extraordinarily long hidden author", b"author@example.com");
         complete(&mut app);
         app.select_commit(gix::ObjectId::Sha1([2; 20]));
         app.set_hidden_branch_updates(std::collections::HashMap::from([(
@@ -6999,6 +7612,10 @@ mod tests {
             "the hidden commit keeps its normal content: {line:?}"
         );
         let visible = rendered_line(&terminal, 0);
+        assert!(
+            visible.contains("author subject 1"),
+            "the hidden boundary does not add alignment padding: {visible:?}"
+        );
         let visible_hash = visible.find("0101010").expect("the visible hash is present") as u16;
         assert_ne!(terminal.backend().buffer()[(visible_hash, 0)].fg, Color::Reset);
         let hash = line.find("0202020").expect("the hidden hash is visible") as u16;
@@ -7048,6 +7665,24 @@ mod tests {
             "the hidden base is selectable"
         );
 
+        let mut narrow_detail = Terminal::new(TestBackend::new(50, 3))?;
+        narrow_detail.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&narrow_detail, 0).contains("1970-01-01 author subject 1"),
+            "a wide hidden title does not minimize visible history: {:?}",
+            rendered_line(&narrow_detail, 0)
+        );
+
+        app.set_lane(0, "●──────────────────────────────── ");
+        std::sync::Arc::make_mut(&mut app.rows[1]).author = author(b"hidden", b"author@example.com");
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let hidden = rendered_line(&terminal, 1);
+        assert!(
+            hidden.contains("hidden subject"),
+            "hidden boundary fields remain unaligned: {hidden:?}"
+        );
+
+        app.alignment = HistoryAlignment::None;
         let mut narrow = Terminal::new(TestBackend::new(28, 3))?;
         narrow.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
@@ -7128,6 +7763,7 @@ mod tests {
                 show_trailers: true,
                 has_notes: false,
                 note_title: None,
+                shorten_title: false,
                 use_mailmap: false,
                 ref_mode: RefMode::All,
                 selected: false,
@@ -7237,6 +7873,7 @@ mod tests {
                 show_trailers: false,
                 has_notes: false,
                 note_title: None,
+                shorten_title: false,
                 use_mailmap: false,
                 ref_mode: RefMode::None,
                 selected: false,
@@ -7355,19 +7992,30 @@ mod tests {
             column(&rendered_line(&terminal, 1), "1970-01-01"),
             "title mode leaves earlier fields at natural positions"
         );
+        app.set_lane(0, "●                                                  ");
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert_eq!(
+            column(&rendered_line(&terminal, 0), "first-title"),
+            first_title,
+            "trailing graph storage does not consume visible columns"
+        );
+        app.set_lane(0, "● ");
+
+        let mut padded = Terminal::new(TestBackend::new(56, 3))?;
+        padded.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_line(&padded, 1).contains("1970-01-01 Byron Co: GPT [A] second-title"),
+            "alignment padding falls away before metadata is minimized: {:?}",
+            rendered_line(&padded, 1)
+        );
 
         let mut narrow_title = Terminal::new(TestBackend::new(40, 3))?;
         narrow_title.draw(|frame| draw(frame, &mut app, &decorations))?;
-        let before = rendered_line(&narrow_title, 0);
-        app.update(Action::ScrollRight);
         assert!(
-            app.horizontal_offset > 0,
-            "title-aligned rows expose their clipped width"
+            rendered_line(&narrow_title, 0).contains("● first-title")
+                && !rendered_line(&narrow_title, 0).contains("1970-01-01"),
+            "narrow title alignment minimizes metadata"
         );
-        narrow_title.draw(|frame| draw(frame, &mut app, &decorations))?;
-        assert_ne!(rendered_line(&narrow_title, 0), before, "l pans the title-aligned row");
-        app.update(Action::ScrollLeft);
-        assert_eq!(app.horizontal_offset, 0, "h returns to the title-aligned row start");
 
         app.update(Action::ToggleAlign);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
@@ -7391,15 +8039,10 @@ mod tests {
 
         let mut narrow = Terminal::new(TestBackend::new(46, 3))?;
         narrow.draw(|frame| draw(frame, &mut app, &decorations))?;
-        app.update(Action::ScrollRight);
-        assert!(app.horizontal_offset > 0, "wide aligned columns create a scroll range");
-        narrow.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(
-            rendered_line(&narrow, 0).contains("first-title"),
-            "l reveals the clipped aligned title"
+            rendered_line(&narrow, 0).contains("● first-title") && !rendered_line(&narrow, 0).contains("1970-01-01"),
+            "narrow column alignment minimizes metadata"
         );
-        app.update(Action::ScrollLeft);
-        assert_eq!(app.horizontal_offset, 0, "h returns to the aligned row start");
 
         let visible_title = column(&first, "first-title");
         app.offset = 1;
@@ -7408,6 +8051,17 @@ mod tests {
             column(&rendered_line(&terminal, 0), "second-title") > visible_title,
             "an off-screen wide author affects alignment only after entering the viewport"
         );
+
+        app.offset = 0;
+        app.update(Action::ToggleAlign);
+        assert_eq!(app.alignment, HistoryAlignment::None);
+        narrow.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let before = rendered_line(&narrow, 0);
+        assert!(before.contains("1970-01-01"), "unaligned rows retain metadata");
+        app.update(Action::ScrollRight);
+        assert!(app.horizontal_offset > 0, "unaligned rows expose their clipped width");
+        narrow.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert_ne!(rendered_line(&narrow, 0), before, "l pans the unaligned row");
         Ok(())
     }
 
@@ -7447,8 +8101,10 @@ mod tests {
         let mailmap = gix::mailmap::Snapshot::default();
         let stale_tree_changes = Changes::default();
         terminal.draw(|frame| {
+            let area = frame.area();
             draw_with_worktree(
                 frame,
+                area,
                 &mut app,
                 &decorations,
                 &mailmap,

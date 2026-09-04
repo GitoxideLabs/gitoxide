@@ -64,6 +64,13 @@ pub(crate) struct Notice {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BackgroundProgress {
+    pub text: String,
+    pub completed: usize,
+    pub total: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct UndoPosition {
     applied: usize,
     total: usize,
@@ -272,6 +279,12 @@ pub(crate) type CommitRow = Commit<Range<usize>>;
 pub(crate) type SharedCommitRow = Arc<CommitRow>;
 
 #[derive(Debug)]
+pub(crate) struct LaneInput {
+    rows: Vec<SharedCommitRow>,
+    review_root: Option<ObjectId>,
+}
+
+#[derive(Debug)]
 pub(crate) struct LoadedCommits {
     pub rows: Vec<LoadedCommit>,
     pub attributions: Vec<Attribution>,
@@ -331,6 +344,19 @@ pub(crate) enum CopyKind {
     Author,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TopologicalDirection {
+    Parent,
+    Child,
+}
+
+#[derive(Debug)]
+struct TopologicalNavigation {
+    direction: TopologicalDirection,
+    candidates: Vec<usize>,
+    choice: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Action {
     Cancelled,
@@ -346,6 +372,8 @@ pub(crate) enum Action {
     PanDownBy(usize),
     PreviousChild,
     NextChild,
+    SubmitTopological,
+    CancelTopological,
     CycleDuplicate,
     ScrollLeft,
     ScrollRight,
@@ -363,6 +391,10 @@ pub(crate) enum Action {
     ToggleMailmap,
     CycleRefs,
     ToggleRefs,
+    SelectEntry,
+    SelectEntryInput(String),
+    SelectEntryBackspace,
+    SubmitEntrySelection,
     Refresh,
     ToggleHidden,
     ToggleHistoryDisplay,
@@ -390,9 +422,15 @@ pub(crate) enum Action {
     Forget,
     Rebase,
     RebaseUpdate,
+    #[cfg(feature = "blocking-network-client")]
+    Fetch,
+    Push,
     Squash,
     CopyInsert,
-    PasteInsert { source: ObjectId, target: ObjectId },
+    PasteInsert {
+        source: ObjectId,
+        target: ObjectId,
+    },
     MoveInsert,
     StackInsert,
     Review,
@@ -415,6 +453,7 @@ pub(crate) enum Effect {
     Undo,
     Redo,
     CopyId(ObjectId),
+    CopyChangeId(ChangeId),
     CopyPath(BString),
     CopyAuthor(&'static Author),
     Reload(bool),
@@ -436,6 +475,9 @@ pub(crate) enum Effect {
         onto: ObjectId,
         commits: Vec<ObjectId>,
     },
+    #[cfg(feature = "blocking-network-client")]
+    Fetch(BString),
+    Push(BString),
     Squash {
         source: ObjectId,
         target: ObjectId,
@@ -445,10 +487,12 @@ pub(crate) enum Effect {
         base: ObjectId,
         target: ObjectId,
         copy: bool,
+        target_is_read_only: bool,
     },
     PasteInsert {
         source: ObjectId,
         target: ObjectId,
+        target_is_read_only: bool,
     },
     StartReview {
         tip: ObjectId,
@@ -569,18 +613,20 @@ pub(crate) struct App {
     review_tip: Option<ObjectId>,
     review_return: Option<(ObjectId, ObjectId)>,
     squash_source: Option<ObjectId>,
+    insert_selection: Option<(ObjectId, bool)>,
     stack_insert_base: Option<ObjectId>,
     reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
     pub(crate) focus_feedback: Option<&'static str>,
     notice: Option<Notice>,
+    entry_selection: Option<String>,
     undo_position: Option<UndoPosition>,
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
     pub(crate) actions_expanded: bool,
     pub(crate) enrich_expanded: bool,
     pub(crate) information_expanded: bool,
-    topo_children: HashMap<ObjectId, ObjectId>,
+    topological_navigation: Option<TopologicalNavigation>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -590,7 +636,12 @@ pub(crate) struct App {
     pending_initial_selection: Option<ObjectId>,
     selection_after_refresh: Option<ObjectId>,
     worktree_head: Option<ObjectId>,
+    review_roots: Vec<ObjectId>,
     worktree_branch: Option<(ObjectId, bool)>,
+    active_branch: Option<BString>,
+    #[cfg(feature = "blocking-network-client")]
+    fetch_remote: Option<BString>,
+    background_progress: Option<BackgroundProgress>,
     worktree_head_has_descendants: bool,
     worktree_head_unborn: bool,
     pending_rebase_conflict: Option<ObjectId>,
@@ -677,18 +728,20 @@ impl App {
             review_tip: None,
             review_return: None,
             squash_source: None,
+            insert_selection: None,
             stack_insert_base: None,
             reachable_rows: None,
             copy_feedback: None,
             focus_feedback: None,
             notice: None,
+            entry_selection: None,
             undo_position: None,
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
             actions_expanded: false,
             enrich_expanded: false,
             information_expanded: false,
-            topo_children: HashMap::new(),
+            topological_navigation: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -698,7 +751,12 @@ impl App {
             pending_initial_selection: None,
             selection_after_refresh: None,
             worktree_head: None,
+            review_roots: Vec::new(),
             worktree_branch: None,
+            active_branch: None,
+            #[cfg(feature = "blocking-network-client")]
+            fetch_remote: None,
+            background_progress: None,
             worktree_head_has_descendants: false,
             worktree_head_unborn: false,
             pending_rebase_conflict: None,
@@ -753,6 +811,33 @@ impl App {
         self.duplicate_change_ids = duplicates;
     }
 
+    pub(crate) fn show_ambiguous_pasted_change_id(
+        &mut self,
+        change_id: ChangeId,
+        candidates: impl IntoIterator<Item = ObjectId>,
+    ) {
+        let candidates: HashSet<_> = candidates.into_iter().collect();
+        for id in &candidates {
+            self.change_ids.insert(*id, change_id);
+        }
+        self.duplicate_change_ids.extend(candidates.iter().copied());
+        self.id_mode = IdMode::Commit;
+        let current = self.selected.unwrap_or_default();
+        if let Some(index) = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| candidates.contains(&row.id))
+            .map(|(index, _)| index)
+            .min_by_key(|index| index.abs_diff(current))
+        {
+            self.select(index);
+        }
+        self.leave_attention(
+            "pasted change ID is ambiguous; press 'x' to switch siblings and copy/paste the commit hash instead",
+        );
+    }
+
     #[cfg(test)]
     fn clear_change_ids(&mut self) {
         self.change_ids.clear();
@@ -771,6 +856,10 @@ impl App {
         self.leave_notice(NoticeKind::Error, message);
     }
 
+    pub(crate) fn clear_notice(&mut self) {
+        self.notice = None;
+    }
+
     pub(crate) fn close_shortcut_groups(&mut self) {
         self.history_display_expanded = false;
         self.actions_expanded = false;
@@ -786,24 +875,44 @@ impl App {
     }
 
     pub(crate) fn notice(&self) -> Option<Notice> {
-        let prompt = if self.rebase_continuation_pending() {
+        let prompt = if let Some(navigation) = self.topological_navigation.as_ref() {
+            Some(format!(
+                "choose {} {}/{} · h/l cycle · <enter> move · Esc cancel",
+                match navigation.direction {
+                    TopologicalDirection::Parent => "ancestor",
+                    TopologicalDirection::Child => "child",
+                },
+                navigation.choice + 1,
+                navigation.candidates.len()
+            ))
+        } else if let Some(entry) = self.entry_selection.as_deref() {
+            Some(format!(
+                "select entry #{} · type number · <enter> jump · Esc cancel",
+                if entry.is_empty() { "_" } else { entry }
+            ))
+        } else if self.rebase_continuation_pending() {
             Some(if self.rebase_continuation_conflicted() {
-                "REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop"
+                "REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop".into()
             } else {
-                "REBASE PAUSED · <enter> continue · Esc stop"
+                "REBASE PAUSED · <enter> continue · Esc stop".into()
             })
         } else if self.pending_rebase_conflict.is_some() {
-            Some("rebase conflict · <enter> checkout for resolution · Esc cancel")
+            Some("rebase conflict · <enter> checkout for resolution · Esc cancel".into())
         } else if self.selected_is_segment() && self.reachable_rows.is_some() {
-            Some("compressed segment · <enter> expand · Esc cancel")
+            Some("compressed segment · <enter> expand · Esc cancel".into())
         } else if self.review_return_selection_active() {
-            Some("review return is missing · j/k select commit · <enter> finish detached · Esc cancel")
+            Some("review return is missing · j/k select commit · <enter> finish detached · Esc cancel".into())
         } else if self.review_selection_active() {
-            Some("review base · j/k select ancestor · <enter> start · Esc cancel")
+            Some("review base · j/k select ancestor · <enter> start · Esc cancel".into())
         } else if self.squash_selection_active() {
-            Some("squash target · j/k select ancestor · <enter> squash · Esc cancel")
+            Some("squash target · j/k select ancestor · <enter> squash · Esc cancel".into())
+        } else if let Some((_, copy)) = self.insert_selection {
+            Some(format!(
+                "{} target · j/k select insertion point · <enter> insert · Esc cancel",
+                if copy { "copy-insert" } else { "move-insert" }
+            ))
         } else if self.stack_insert_base.is_some() {
-            Some("stack-insert target · j/k select insertion point · <enter> insert · Esc cancel")
+            Some("stack-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
         } else {
             None
         };
@@ -814,7 +923,7 @@ impl App {
             }),
             (Some(prompt), _) => Some(Notice {
                 kind: NoticeKind::Attention,
-                text: prompt.into(),
+                text: prompt,
             }),
             (None, notice) => notice.cloned(),
         }
@@ -859,6 +968,73 @@ impl App {
 
     pub(crate) fn set_worktree_branch(&mut self, branch: Option<(ObjectId, bool)>) {
         self.worktree_branch = branch;
+    }
+
+    pub(crate) fn set_review_roots(&mut self, roots: Vec<ObjectId>) {
+        self.review_roots = roots;
+    }
+
+    pub(crate) fn set_active_branch(&mut self, branch: Option<BString>) {
+        self.active_branch = branch;
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    pub(crate) fn set_fetch_remote(&mut self, remote: Option<BString>) {
+        self.fetch_remote = remote;
+    }
+
+    fn can_start_background_task(&self) -> bool {
+        self.state == State::Complete
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.background_progress.is_none()
+    }
+
+    pub(crate) fn can_push(&self) -> bool {
+        self.active_branch.is_some() && self.can_start_background_task()
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    pub(crate) fn can_fetch(&self) -> bool {
+        self.fetch_remote.is_some() && self.can_start_background_task()
+    }
+
+    pub(crate) fn start_background_task(&mut self, label: impl Into<String>) {
+        debug_assert!(self.background_progress.is_none(), "only one background task may run");
+        self.background_progress = Some(BackgroundProgress {
+            text: label.into(),
+            completed: 0,
+            total: 100,
+        });
+    }
+
+    pub(crate) fn update_background_progress(&mut self, text: String, completed: usize, total: usize) -> bool {
+        let Some(progress) = self.background_progress.as_mut() else {
+            return false;
+        };
+        let completed = completed.min(total);
+        let next = BackgroundProgress {
+            text: if completed < progress.completed {
+                progress.text.clone()
+            } else {
+                text
+            },
+            completed: progress.completed.max(completed),
+            total,
+        };
+        if *progress == next {
+            false
+        } else {
+            *progress = next;
+            true
+        }
+    }
+
+    pub(crate) fn finish_background_task(&mut self) {
+        self.background_progress = None;
+    }
+
+    pub(crate) fn background_progress(&self) -> Option<&BackgroundProgress> {
+        self.background_progress.as_ref()
     }
 
     pub(crate) fn set_worktree_head_unborn(&mut self, unborn: bool) {
@@ -1040,6 +1216,10 @@ impl App {
             .collect()
     }
 
+    pub(crate) fn cache_commits(&mut self, commits: LoadedCommits) {
+        drop(self.store_commits(commits));
+    }
+
     pub(crate) fn extend_hidden_commits(&mut self, commits: impl Into<LoadedCommits>) {
         let commits = commits.into();
         self.hidden_rows.extend(commits.rows.iter().map(|row| row.id));
@@ -1156,13 +1336,6 @@ impl App {
         self.active_compressed_history().map_or_else(
             || (index < self.rows.len()).then_some(HistoryEntry::Commit(index)),
             |history| history.entries.get(index).copied(),
-        )
-    }
-
-    fn history_row(&self, index: usize) -> Option<&CommitRow> {
-        self.active_compressed_history().map_or_else(
-            || self.rows.get(index).map(Arc::as_ref),
-            |history| history.rows.get(index).map(Arc::as_ref),
         )
     }
 
@@ -1289,114 +1462,75 @@ impl App {
         self.reachable_rows.as_ref().is_none() || (self.is_row_reachable(index) && self.reachable_row_selectable(index))
     }
 
-    fn topological_positions(&self) -> HashMap<ObjectId, usize> {
-        (0..self.history_len())
-            .filter_map(|index| self.history_row(index).map(|row| (row.id, index)))
-            .collect()
-    }
-
     fn topological_graph(&self) -> Option<&Graph> {
         self.active_compressed_history()
             .map(|history| &history.graph)
             .or(self.graph.as_ref())
     }
 
-    fn topological_parent_from_rows(
-        &self,
-        index: usize,
-        positions: &HashMap<ObjectId, usize>,
-        stop: Option<usize>,
-    ) -> Option<usize> {
-        let mut parent = self.history_row(index)?.parent_ids.first().copied();
-        while let Some(id) = parent {
-            let index = *positions.get(&id)?;
-            if stop == Some(index) || self.history_entry_selectable(index) {
-                return Some(index);
+    fn topological_candidates(&self, selected: usize, direction: TopologicalDirection) -> Vec<usize> {
+        let fallback;
+        let graph = match self.topological_graph() {
+            Some(graph) => graph,
+            None => {
+                fallback = Graph::new(&self.rows);
+                &fallback
             }
-            parent = self.history_row(index)?.parent_ids.first().copied();
-        }
-        None
-    }
-
-    fn topological_parent(&self, index: usize, stop: Option<usize>) -> Option<usize> {
-        if let Some(graph) = self.topological_graph() {
-            let mut parent = graph.first_parents.get(index).copied().flatten();
-            while let Some(index) = parent {
-                if stop == Some(index) || self.history_entry_selectable(index) {
-                    return Some(index);
-                }
-                parent = graph.first_parents.get(index).copied().flatten();
+        };
+        let mut pending = graph
+            .neighbors(selected, direction)
+            .iter()
+            .rev()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        while let Some(index) = pending.pop() {
+            if !seen.insert(index) {
+                continue;
             }
-            return None;
-        }
-        self.topological_parent_from_rows(index, &self.topological_positions(), stop)
-    }
-
-    fn topological_children(&self, parent: usize) -> Vec<usize> {
-        if let Some(graph) = self.topological_graph() {
-            let mut pending = graph
-                .first_parent_children
-                .get(parent)
-                .into_iter()
-                .flatten()
-                .rev()
-                .copied()
-                .collect::<Vec<_>>();
-            let mut children = Vec::new();
-            while let Some(child) = pending.pop() {
-                if self.history_entry_selectable(child) {
-                    children.push(child);
-                } else if let Some(descendants) = graph.first_parent_children.get(child) {
-                    pending.extend(descendants.iter().rev().copied());
-                }
+            if self.history_entry_selectable(index) {
+                candidates.push(index);
+            } else {
+                pending.extend(graph.neighbors(index, direction).iter().rev().copied());
             }
-            children.sort_unstable();
-            return children;
         }
-        let positions = self.topological_positions();
-        (0..self.history_len())
-            .filter(|index| {
-                self.history_entry_selectable(*index)
-                    && self.topological_parent_from_rows(*index, &positions, Some(parent)) == Some(parent)
-            })
-            .collect()
+        if direction == TopologicalDirection::Child {
+            candidates.sort_unstable();
+        }
+        candidates
     }
 
-    fn topological_child_index(&self, parent: usize, children: &[usize]) -> usize {
-        self.history_row(parent)
-            .and_then(|row| self.topo_children.get(&row.id))
-            .and_then(|chosen| {
-                children
-                    .iter()
-                    .position(|child| self.history_row(*child).is_some_and(|row| row.id == *chosen))
-            })
-            .unwrap_or_default()
-    }
-
-    fn move_topologically(&mut self, down: bool) -> bool {
+    fn move_topologically(&mut self, direction: TopologicalDirection) {
         let Some(selected) = self.selected_history_index() else {
-            return false;
+            return;
         };
         if matches!(self.history_entry(selected), Some(HistoryEntry::Segment { .. })) {
-            return self.peel_compressed_segment(selected, !down, false).is_some();
+            let _ = self.peel_compressed_segment(selected, direction == TopologicalDirection::Child, false);
+            return;
         }
-        let next = if down {
-            self.topological_parent(selected, None)
-        } else {
-            let children = self.topological_children(selected);
-            children.get(self.topological_child_index(selected, &children)).copied()
-        };
-        let Some(next) = next else { return false };
-        if matches!(self.history_entry(next), Some(HistoryEntry::Segment { .. })) {
-            let source = self.history_row(selected).map(|row| row.id);
-            let peeled = self.peel_compressed_segment(next, down, true);
-            if !down && let Some((source, peeled)) = source.zip(peeled) {
-                self.topo_children.insert(source, self.rows[peeled].id);
+        let candidates = self.topological_candidates(selected, direction);
+        let [next] = candidates.as_slice() else {
+            if candidates.len() > 1 {
+                self.topological_navigation = Some(TopologicalNavigation {
+                    direction,
+                    candidates,
+                    choice: 0,
+                });
+                self.follow_tail = false;
+                self.ensure_visible();
             }
-            return peeled.is_some();
+            return;
+        };
+        self.move_topologically_to(*next, direction);
+    }
+
+    fn move_topologically_to(&mut self, next: usize, direction: TopologicalDirection) {
+        if matches!(self.history_entry(next), Some(HistoryEntry::Segment { .. })) {
+            let _ = self.peel_compressed_segment(next, direction == TopologicalDirection::Parent, true);
+        } else {
+            self.select_history_index(next);
         }
-        self.select_history_index(next);
-        true
     }
 
     fn peel_compressed_segment(&mut self, display: usize, newest: bool, select_peeled: bool) -> Option<usize> {
@@ -1443,41 +1577,45 @@ impl App {
         Some(peeled)
     }
 
-    fn adjust_topological_child(&mut self, right: bool) {
-        let Some(selected) = self.selected_history_index() else {
+    fn adjust_topological_choice(&mut self, right: bool) {
+        let Some(navigation) = self.topological_navigation.as_mut() else {
             return;
         };
-        let children = self.topological_children(selected);
-        let Some(last) = children.len().checked_sub(1) else {
-            return;
-        };
-        let current = self.topological_child_index(selected, &children);
-        let next = if right {
-            current.saturating_add(1).min(last)
+        navigation.choice = if right {
+            (navigation.choice + 1) % navigation.candidates.len()
         } else {
-            current.saturating_sub(1)
+            navigation
+                .choice
+                .checked_sub(1)
+                .unwrap_or(navigation.candidates.len() - 1)
         };
-        let Some((parent, child)) = self
-            .history_row(selected)
-            .zip(self.history_row(children[next]))
-            .map(|(parent, child)| (parent.id, child.id))
-        else {
+    }
+
+    fn submit_topological_choice(&mut self) {
+        let Some(navigation) = self.topological_navigation.take() else {
             return;
         };
-        self.topo_children.insert(parent, child);
+        let Some(next) = navigation.candidates.get(navigation.choice).copied() else {
+            return;
+        };
+        self.move_topologically_to(next, navigation.direction);
     }
 
     pub(crate) fn topological_choice(&self) -> Option<(usize, usize)> {
-        self.topological_graph()?;
-        let selected = self.selected_history_index()?;
-        let children = self.topological_children(selected);
-        (children.len() > 1).then(|| (self.topological_child_index(selected, &children) + 1, children.len()))
+        self.topological_navigation
+            .as_ref()
+            .map(|navigation| (navigation.choice + 1, navigation.candidates.len()))
+    }
+
+    pub(crate) fn topological_navigation_active(&self) -> bool {
+        self.topological_navigation.is_some()
     }
 
     fn select_history_index(&mut self, display: usize) {
         if !self.history_entry_selectable(display) {
             return;
         }
+        self.topological_navigation = None;
         match self.history_entry(display) {
             Some(HistoryEntry::Commit(index)) => self.select(index),
             Some(HistoryEntry::Segment { representative, .. }) => {
@@ -1545,17 +1683,37 @@ impl App {
                 self.test_lanes[range.start.min(self.test_lanes.len())..range.end.min(self.test_lanes.len())].iter(),
             );
         }
+        let choice_marker = self.topological_choice().and_then(|(choice, _)| {
+            self.selected_history_index().map(|index| {
+                (
+                    index,
+                    if choice < 10 {
+                        char::from(b'0' + choice as u8)
+                    } else {
+                        '+'
+                    },
+                )
+            })
+        });
+        let commit_marker = |index: usize| if self.rows[index].is_review { '◆' } else { '●' };
         if let Some(history) = self.active_compressed_history() {
             return history.graph.render_with_markers(&history.rows, range, |index| {
-                if matches!(history.entries[index], HistoryEntry::Segment { .. }) {
-                    '○'
+                if choice_marker.is_some_and(|(selected, _)| selected == index) {
+                    choice_marker.expect("the marker was checked above").1
                 } else {
-                    '●'
+                    match history.entries[index] {
+                        HistoryEntry::Commit(index) => commit_marker(index),
+                        HistoryEntry::Segment { .. } => '○',
+                    }
                 }
             });
         }
         match &self.graph {
-            Some(graph) => graph.render(&self.rows, range),
+            Some(graph) => graph.render_with_markers(&self.rows, range, |index| {
+                choice_marker
+                    .filter(|(selected, _)| *selected == index)
+                    .map_or_else(|| commit_marker(index), |(_, marker)| marker)
+            }),
             None => RenderedLanes::empty(range.len()),
         }
     }
@@ -1565,6 +1723,38 @@ impl App {
             .as_ref()
             .and_then(|graph| graph.visual_counts.get(index))
             .copied()
+    }
+
+    pub(crate) fn can_select_entry(&self) -> bool {
+        self.state == State::Complete
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.changes_focus.is_none()
+            && self.reachable_rows.is_none()
+            && self.selected.and_then(|index| self.visual_count(index)).is_some()
+    }
+
+    pub(crate) fn entry_selection_active(&self) -> bool {
+        self.entry_selection.is_some()
+    }
+
+    pub(crate) fn worktrunk_history_root(&self) -> bool {
+        self.changes_focus.is_none()
+            && self.reachable_rows.is_none()
+            && self.entry_selection.is_none()
+            && self.topological_navigation.is_none()
+            && self.pending_rebase_conflict.is_none()
+            && !self.rebase_continuation_pending
+            && !self.actions_expanded
+            && !self.enrich_expanded
+            && !self.information_expanded
+    }
+
+    fn entry_number_target(&self, number: usize) -> Option<usize> {
+        let selected = self.selected?;
+        let base = selected.checked_add(self.visual_count(selected)?)?;
+        self.rows.get(base)?;
+        let target = base.checked_sub(number)?;
+        (self.visual_count(target) == Some(number)).then_some(target)
     }
 
     pub(crate) fn attributions(&self, row: &CommitRow) -> &[Attribution] {
@@ -1591,7 +1781,7 @@ impl App {
         ) {
             self.history_display_expanded = false;
         }
-        if !matches!(
+        let keeps_actions_open = matches!(
             &action,
             Action::ToggleActions
                 | Action::Reword
@@ -1605,6 +1795,7 @@ impl App {
                 | Action::TogglePin
                 | Action::Rebase
                 | Action::RebaseUpdate
+                | Action::Push
                 | Action::Squash
                 | Action::CopyInsert
                 | Action::MoveInsert
@@ -1613,7 +1804,10 @@ impl App {
                 | Action::Review
                 | Action::ForkCommit
                 | Action::Attach
-        ) {
+        );
+        #[cfg(feature = "blocking-network-client")]
+        let keeps_actions_open = keeps_actions_open || matches!(&action, Action::Fetch);
+        if !keeps_actions_open {
             self.actions_expanded = false;
         }
         if !matches!(
@@ -1651,18 +1845,18 @@ impl App {
             Action::MoveDownBy(distance) => self.move_selection(distance, true),
             Action::TopologicalUp => {
                 self.pending_initial_selection = None;
-                self.move_topologically(false);
+                self.move_topologically(TopologicalDirection::Child);
             }
             Action::TopologicalDown => {
                 self.pending_initial_selection = None;
-                self.move_topologically(true);
+                self.move_topologically(TopologicalDirection::Parent);
             }
             Action::PanUpBy(distance) => self.pan_history(distance, false),
             Action::PanDownBy(distance) => self.pan_history(distance, true),
-            Action::PreviousChild if self.changes_focus.is_some() => self.pan_horizontal(false),
-            Action::NextChild if self.changes_focus.is_some() => self.pan_horizontal(true),
-            Action::PreviousChild => self.adjust_topological_child(false),
-            Action::NextChild => self.adjust_topological_child(true),
+            Action::PreviousChild => self.adjust_topological_choice(false),
+            Action::NextChild => self.adjust_topological_choice(true),
+            Action::SubmitTopological => self.submit_topological_choice(),
+            Action::CancelTopological => self.topological_navigation = None,
             Action::CycleDuplicate => {
                 if self.changes_focus.is_none()
                     && self.reachable_rows.is_none()
@@ -1763,6 +1957,45 @@ impl App {
                     RefMode::Default => RefMode::None,
                     RefMode::None => RefMode::All,
                 };
+            }
+            Action::SelectEntry if self.can_select_entry() => self.entry_selection = Some(String::new()),
+            Action::SelectEntryInput(input) if self.entry_selection.is_some() => {
+                let input = input.trim();
+                let digits = input.strip_prefix('#').unwrap_or(input);
+                if !digits.is_empty() {
+                    if digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                        self.entry_selection
+                            .as_mut()
+                            .expect("entry selection was checked above")
+                            .push_str(digits);
+                    } else {
+                        self.leave_attention("entry number must contain only digits");
+                    }
+                }
+            }
+            Action::SelectEntryBackspace if self.entry_selection.is_some() => {
+                self.entry_selection
+                    .as_mut()
+                    .expect("entry selection was checked above")
+                    .pop();
+            }
+            Action::SubmitEntrySelection if self.entry_selection.is_some() => {
+                let input = self
+                    .entry_selection
+                    .as_deref()
+                    .expect("entry selection was checked above");
+                if input.is_empty() {
+                    self.leave_attention("enter an entry number");
+                } else if let Ok(number) = input.parse::<usize>() {
+                    if let Some(target) = self.entry_number_target(number) {
+                        self.entry_selection = None;
+                        self.select(target);
+                    } else {
+                        self.leave_attention(format!("entry #{number} is not in the current tree"));
+                    }
+                } else {
+                    self.leave_attention("entry number is too large");
+                }
             }
             Action::ToggleRefs => match self.ref_mode {
                 RefMode::None => self.ref_mode = self.visible_ref_mode,
@@ -1899,14 +2132,31 @@ impl App {
                 self.clear_reachability_selection();
                 return vec![Effect::Squash { source, target }];
             }
+            Action::OpenDiff if self.insert_selection.is_some() => {
+                let (source, copy) = self.insert_selection.expect("insert target selection has a source");
+                let Some((target, target_is_read_only)) = self
+                    .selected
+                    .filter(|index| self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
+                    .and_then(|index| self.rows.get(index).map(|row| (row.id, self.is_row_hidden(index))))
+                else {
+                    return Vec::new();
+                };
+                self.clear_reachability_selection();
+                return vec![Effect::Insert {
+                    source,
+                    base: source,
+                    target,
+                    copy,
+                    target_is_read_only,
+                }];
+            }
             Action::OpenDiff if self.stack_insert_base.is_some() => {
                 let source = self.worktree_head.expect("stack insertion requires HEAD");
                 let base = self.stack_insert_base.expect("stack insertion has a base");
-                let Some(target) = self
+                let Some((target, target_is_read_only)) = self
                     .selected
                     .filter(|index| self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
-                    .and_then(|index| self.rows.get(index))
-                    .map(|row| row.id)
+                    .and_then(|index| self.rows.get(index).map(|row| (row.id, self.is_row_hidden(index))))
                 else {
                     return Vec::new();
                 };
@@ -1916,6 +2166,7 @@ impl App {
                     base,
                     target,
                     copy: false,
+                    target_is_read_only,
                 }];
             }
             Action::OpenDiff => {
@@ -1985,6 +2236,17 @@ impl App {
                     commits: self.hidden_descendants(base),
                 }];
             }
+            #[cfg(feature = "blocking-network-client")]
+            Action::Fetch if self.can_fetch() => {
+                return vec![Effect::Fetch(
+                    self.fetch_remote.clone().expect("fetch availability requires a remote"),
+                )];
+            }
+            Action::Push if self.can_push() => {
+                return vec![Effect::Push(
+                    self.active_branch.clone().expect("push availability requires a branch"),
+                )];
+            }
             Action::Squash if self.can_squash() => {
                 let source = self.rows[self.selected.expect("squash requires a selection")].id;
                 self.squash_source = Some(source);
@@ -2004,25 +2266,17 @@ impl App {
                 }
             }
             Action::CopyInsert if self.can_copy_insert() => {
-                let source = self.worktree_head.expect("copy-insert availability requires HEAD");
-                return vec![Effect::Insert {
-                    source,
-                    base: source,
-                    target: self.rows[self.selected.expect("copy-insert requires a selection")].id,
-                    copy: true,
-                }];
+                self.begin_insert_selection(true);
             }
             Action::PasteInsert { source, target } => {
-                return vec![Effect::PasteInsert { source, target }];
+                return vec![Effect::PasteInsert {
+                    source,
+                    target,
+                    target_is_read_only: self.hidden_rows.contains(&target),
+                }];
             }
             Action::MoveInsert if self.can_move_insert() => {
-                let source = self.worktree_head.expect("move-insert availability requires HEAD");
-                return vec![Effect::Insert {
-                    source,
-                    base: source,
-                    target: self.rows[self.selected.expect("move-insert requires a selection")].id,
-                    copy: false,
-                }];
+                self.begin_insert_selection(false);
             }
             Action::StackInsert => {
                 if let Some((source, base, base_parent, stack)) = self.stack_insert() {
@@ -2120,23 +2374,32 @@ impl App {
                 }
             }
             Action::ForceQuit => return vec![Effect::Quit],
+            Action::Cancel if self.entry_selection.is_some() => self.entry_selection = None,
             Action::Cancel
                 if self.review_tip.is_some()
                     || self.review_return.is_some()
                     || self.squash_source.is_some()
+                    || self.insert_selection.is_some()
                     || self.stack_insert_base.is_some() =>
             {
                 self.clear_reachability_selection();
             }
             Action::Cancel | Action::Quit if self.changes_focus.is_some() => self.focus_history(),
+            Action::Quit if self.background_progress.is_some() => {
+                self.leave_attention("background task is still running; use Ctrl-C to quit");
+            }
             Action::Cancel if self.state == State::Loading => {
                 self.state = State::Cancelling;
                 return vec![Effect::Cancel];
             }
             Action::Copy => {
                 if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
+                    let effect = match self.effective_id_mode() {
+                        IdMode::Change => Effect::CopyChangeId(self.change_id(id)),
+                        IdMode::Commit | IdMode::Off => Effect::CopyId(id),
+                    };
                     self.copy_feedback = Some(CopyKind::Id);
-                    return vec![Effect::CopyId(id)];
+                    return vec![effect];
                 }
             }
             Action::CopyPath(path) => return vec![Effect::CopyPath(path)],
@@ -2170,13 +2433,13 @@ impl App {
             && self.reachable_rows.is_none()
     }
 
-    pub(crate) fn start_lane_computation(&mut self) -> Option<Vec<SharedCommitRow>> {
+    pub(crate) fn start_lane_computation(&mut self) -> Option<LaneInput> {
         match self.state {
             State::Loading => {
                 self.state = State::Computing;
                 self.follow_tail = false;
                 self.reload_selection = None;
-                Some(self.rows.clone())
+                Some(self.lane_input(self.rows.clone()))
             }
             State::Cancelling => {
                 self.state = State::Cancelled;
@@ -2232,7 +2495,10 @@ impl App {
         let mut rebase_bases = HashSet::new();
         for row in &self.rows {
             let state = if self.hidden_rows.contains(&row.id) {
-                states.get(&row.id).copied()
+                Some(states.get(&row.id).copied().unwrap_or(State {
+                    leaf: None,
+                    has_merge: false,
+                }))
             } else if !visible_parents.contains(&row.id) {
                 Some(State {
                     leaf: Some(row.id),
@@ -2299,9 +2565,33 @@ impl App {
         view_tips: &[ObjectId],
         hidden_tips: &[ObjectId],
         select_top: bool,
-    ) -> Option<Vec<SharedCommitRow>> {
+    ) -> Option<LaneInput> {
         self.set_view_tips(view_tips);
-        if self.stack_insert_base.is_some() {
+        let rows = self.prepare_refresh(commits, view_tips, hidden_tips, select_top);
+        Some(self.lane_input(rows))
+    }
+
+    pub(crate) fn start_preview_refresh(
+        &mut self,
+        commits: LoadedCommits,
+        view_tips: &[ObjectId],
+        hidden_tips: &[ObjectId],
+        select_top: bool,
+        review_root: Option<ObjectId>,
+    ) -> Option<LaneInput> {
+        let rows = self.prepare_refresh(commits, view_tips, hidden_tips, select_top);
+        Some(LaneInput { rows, review_root })
+    }
+
+    fn prepare_refresh(
+        &mut self,
+        commits: LoadedCommits,
+        view_tips: &[ObjectId],
+        hidden_tips: &[ObjectId],
+        select_top: bool,
+    ) -> Vec<SharedCommitRow> {
+        self.topological_navigation = None;
+        if self.insert_selection.is_some() || self.stack_insert_base.is_some() {
             self.clear_reachability_selection();
         }
         let previous_order: HashMap<_, _> = self
@@ -2312,21 +2602,11 @@ impl App {
             .collect();
         drop(self.store_commits(commits));
 
-        let visible = self.reachable_from(view_tips);
-        let hidden = self.reachable_from(hidden_tips);
-        let visible: HashSet<_> = visible.difference(&hidden).copied().collect();
-        let boundary: HashSet<_> = if view_tips.is_empty() {
-            hidden_tips.iter().copied().collect()
-        } else if hidden_tips.is_empty() {
-            HashSet::new()
-        } else {
-            visible
-                .iter()
-                .filter_map(|id| self.all_rows.get(id))
-                .flat_map(|row| row.parent_ids.iter().copied())
-                .filter(|id| !visible.contains(id))
-                .collect()
-        };
+        let (visible, boundary) = crate::history::view_scope(view_tips, hidden_tips, |id, out| {
+            if let Some(row) = self.all_rows.get(&id) {
+                out.extend(row.parent_ids.iter().copied());
+            }
+        });
         let rows: Vec<_> = self
             .all_order
             .iter()
@@ -2363,21 +2643,24 @@ impl App {
         self.select_top_after_refresh = select_top;
         self.state = State::Computing;
         self.follow_tail = false;
-        Some(rows)
+        rows
     }
 
-    fn reachable_from(&self, tips: &[ObjectId]) -> HashSet<ObjectId> {
-        let mut reachable = HashSet::new();
-        let mut pending = tips.to_vec();
-        while let Some(id) = pending.pop() {
-            if !reachable.insert(id) {
-                continue;
-            }
-            if let Some(row) = self.all_rows.get(&id) {
-                pending.extend(row.parent_ids.iter().copied());
-            }
-        }
-        reachable
+    pub(crate) fn cancel_preview_refresh(&mut self, previous_state: State) {
+        self.pending_hidden_rows = None;
+        self.select_top_after_refresh = false;
+        self.state = previous_state;
+    }
+
+    fn lane_input(&self, rows: Vec<SharedCommitRow>) -> LaneInput {
+        let review_root = self.worktree_head.and_then(|head| {
+            crate::history::nearest_review_root(&self.review_roots, head, |ancestor, descendant| {
+                self.is_known_ancestor(ancestor, descendant)
+            })
+            .ok()
+            .flatten()
+        });
+        LaneInput { rows, review_root }
     }
 
     fn is_known_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> bool {
@@ -2441,6 +2724,7 @@ impl App {
         } else {
             HashMap::new()
         };
+        self.topological_navigation = None;
         self.rows = rows;
         if let Some(hidden) = self.pending_hidden_rows.take() {
             self.hidden_rows = hidden;
@@ -2533,6 +2817,8 @@ impl App {
         self.notes.clear();
         self.clear_enrichments();
         self.graph = None;
+        self.entry_selection = None;
+        self.topological_navigation = None;
         self.view_tips.clear();
         self.compressed_history = None;
         self.compressed_anchor = None;
@@ -2596,6 +2882,7 @@ impl App {
         self.review_tip = None;
         self.review_return = None;
         self.squash_source = None;
+        self.insert_selection = None;
         self.stack_insert_base = None;
         self.reachability_anchor = None;
         self.reachable_rows = None;
@@ -2781,6 +3068,9 @@ impl App {
                 .is_some_and(|row| Some(row.id) != self.squash_source)
                 && self.is_squash_target(index);
         }
+        if self.insert_selection.is_some() || self.stack_insert_base.is_some() {
+            return self.is_row_reachable(index);
+        }
         !self.is_row_hidden(index)
             || (self.review_tip.is_some()
                 && self
@@ -2796,6 +3086,7 @@ impl App {
     }
 
     fn select(&mut self, selected: usize) {
+        self.topological_navigation = None;
         self.pending_initial_selection = None;
         self.compressed_segment = None;
         if !self.rows.is_empty() {
@@ -2860,7 +3151,9 @@ impl App {
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && match self.selected.and_then(|index| self.rows.get(index)) {
                 Some(row) => {
-                    (self.worktree_head_unborn || !self.hidden_rows.contains(&row.id))
+                    (self.worktree_head_unborn
+                        || !self.hidden_rows.contains(&row.id)
+                        || self.worktree_head == Some(row.id))
                         && !self.known_merge_descendants.contains(&row.id)
                 }
                 None => self.worktree_head_unborn,
@@ -2902,6 +3195,7 @@ impl App {
 
     pub(crate) fn can_rebase(&self) -> bool {
         self.state == State::Complete
+            && !self.worktree_head_unborn
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && self
@@ -2950,10 +3244,9 @@ impl App {
             return None;
         }
         self.selected
-            .filter(|index| !self.is_row_hidden(*index))
-            .and_then(|index| self.rows.get(index))
-            .filter(|row| !self.known_merge_descendants.contains(&row.id))
-            .map(|row| row.id)
+            .and_then(|index| self.rows.get(index).map(|row| (index, row)))
+            .filter(|(index, row)| self.is_row_hidden(*index) || !self.known_merge_descendants.contains(&row.id))
+            .map(|(_, row)| row.id)
     }
 
     pub(crate) fn can_move_insert(&self) -> bool {
@@ -2964,28 +3257,54 @@ impl App {
         if self.state != State::Complete
             || self.changes_focus.is_some()
             || self.deferred_history_state.unwrap_or(self.state) != State::Complete
+            || self.reachable_rows.is_some()
         {
             return false;
         }
-        let Some(source) = self
-            .worktree_head
-            .and_then(|head| self.rows.iter().find(|row| row.id == head))
-        else {
-            return false;
-        };
-        let Some((target_index, target)) = self
+        let Some((source_index, source)) = self
             .selected
             .and_then(|index| self.rows.get(index).map(|row| (index, row)))
         else {
             return false;
         };
-        source.parent_ids.len() == 1
-            && source.id != target.id
-            && (copy || source.parent_ids.first().copied() != Some(target.id))
-            && (!copy || !source.is_review)
-            && !self.is_row_hidden(target_index)
-            && (copy || !self.known_merge_descendants.contains(&source.id))
-            && !self.known_merge_descendants.contains(&target.id)
+        !self.is_row_hidden(source_index)
+            && source.parent_ids.len() == 1
+            && (copy || Some(source.id) == self.worktree_head && !self.known_merge_descendants.contains(&source.id))
+            && self
+                .rows
+                .iter()
+                .enumerate()
+                .any(|(index, _)| self.is_insert_target(index, source.id, copy))
+    }
+
+    fn is_insert_target(&self, index: usize, source: ObjectId, copy: bool) -> bool {
+        let Some(source) = self.all_rows.get(&source) else {
+            return false;
+        };
+        let target_is_read_only = self.is_row_hidden(index);
+        self.rows.get(index).is_some_and(|target| {
+            source.id != target.id
+                && (copy || source.parent_ids.first().copied() != Some(target.id))
+                && (target_is_read_only || !self.known_merge_descendants.contains(&target.id))
+                && (copy || !target_is_read_only || !self.is_known_ancestor(source.id, target.id))
+        })
+    }
+
+    fn begin_insert_selection(&mut self, copy: bool) {
+        let source = self
+            .selected
+            .and_then(|index| self.rows.get(index))
+            .map(|row| row.id)
+            .expect("insert availability requires a selected source");
+        let reachable = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, _)| self.is_insert_target(index, source, copy))
+            .collect();
+        self.insert_selection = Some((source, copy));
+        self.reachable_rows = Some(reachable);
+        self.ensure_visible();
     }
 
     pub(crate) fn can_stack_insert(&self) -> bool {
@@ -3035,13 +3354,17 @@ impl App {
         base_parent: ObjectId,
         stack: &HashSet<ObjectId>,
     ) -> bool {
-        !self.is_row_hidden(index)
-            && !stack.contains(&id)
+        let target_is_read_only = self.is_row_hidden(index);
+        !stack.contains(&id)
             && id != base_parent
-            && !self.known_merge_descendants.contains(&id)
-            && !stack
-                .iter()
-                .any(|ancestor| *ancestor != base && self.is_known_ancestor(*ancestor, id))
+            && if target_is_read_only {
+                !self.is_known_ancestor(base, id)
+            } else {
+                !self.known_merge_descendants.contains(&id)
+                    && !stack
+                        .iter()
+                        .any(|ancestor| *ancestor != base && self.is_known_ancestor(*ancestor, id))
+            }
     }
 
     pub(crate) fn can_review(&self) -> bool {
@@ -3566,35 +3889,64 @@ fn estimate_lane_width(rows: &[SharedCommitRow]) -> usize {
         .unwrap_or_default()
 }
 
-pub(crate) fn compute_lanes(mut rows: Vec<SharedCommitRow>) -> (Vec<SharedCommitRow>, Graph, Duration) {
+pub(crate) fn compute_lanes(input: LaneInput) -> (Vec<SharedCommitRow>, Graph, Duration) {
+    let LaneInput { mut rows, review_root } = input;
     let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
     for row in &mut rows {
         if row.parent_ids.iter().any(|id| !positions.contains_key(id)) {
             Arc::make_mut(row).parent_ids.retain(|id| positions.contains_key(id));
         }
     }
+    let review_root = review_root.and_then(|root| positions.get(&root).copied());
+    let mut child_indices = review_root.map(|_| vec![Vec::new(); rows.len()]);
     let mut children = vec![0usize; rows.len()];
-    for row in rows.iter() {
+    for (child, row) in rows.iter().enumerate() {
         for parent in &row.parent_ids {
             if let Some(index) = positions.get(parent) {
                 children[*index] += 1;
+                if let Some(child_indices) = &mut child_indices {
+                    child_indices[*index].push(child);
+                }
+            }
+        }
+    }
+    let mut review_rows = vec![false; rows.len()];
+    if let (Some(root), Some(child_indices)) = (review_root, child_indices) {
+        review_rows[root] = true;
+        let mut pending = vec![root];
+        while let Some(parent) = pending.pop() {
+            for &child in &child_indices[parent] {
+                if !std::mem::replace(&mut review_rows[child], true) {
+                    pending.push(child);
+                }
             }
         }
     }
 
-    let mut ready: Vec<_> = children
-        .iter()
-        .enumerate()
-        .rev()
-        .filter_map(|(index, count)| (*count == 0).then_some(index))
-        .collect();
+    let mut ready = Vec::new();
+    let mut review_ready = Vec::new();
+    for (index, count) in children.iter().enumerate().rev() {
+        if *count == 0 {
+            if review_rows[index] {
+                &mut review_ready
+            } else {
+                &mut ready
+            }
+            .push(index);
+        }
+    }
     let mut ordered = 0;
-    while let Some(index) = ready.pop() {
+    while let Some(index) = review_ready.pop().or_else(|| ready.pop()) {
         for parent in rows[index].parent_ids.iter().rev() {
             if let Some(parent_index) = positions.get(parent) {
                 children[*parent_index] -= 1;
                 if children[*parent_index] == 0 {
-                    ready.push(*parent_index);
+                    if review_rows[*parent_index] {
+                        &mut review_ready
+                    } else {
+                        &mut ready
+                    }
+                    .push(*parent_index);
                 }
             }
         }
@@ -3623,32 +3975,37 @@ pub(crate) struct Graph {
     offsets: Vec<usize>,
     columns: Vec<ObjectId>,
     visual_counts: Vec<usize>,
-    first_parents: Vec<Option<usize>>,
-    first_parent_children: Vec<Vec<usize>>,
+    parent_offsets: Vec<usize>,
+    parents: Vec<usize>,
+    children: Vec<Vec<usize>>,
 }
 
 impl Graph {
     fn new(rows: &[SharedCommitRow]) -> Self {
         let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
-        let mut first_parent_children = vec![Vec::new(); rows.len()];
-        let first_parents = rows
-            .iter()
-            .enumerate()
-            .map(|(child, row)| {
-                row.parent_ids
-                    .first()
-                    .and_then(|parent| positions.get(parent))
-                    .copied()
-                    .inspect(|parent| first_parent_children[*parent].push(child))
-            })
-            .collect();
+        let mut parent_offsets = Vec::with_capacity(rows.len() + 1);
+        let mut parents = Vec::new();
+        let mut children = vec![Vec::new(); rows.len()];
+        for (child, row) in rows.iter().enumerate() {
+            parent_offsets.push(parents.len());
+            for parent in row
+                .parent_ids
+                .iter()
+                .filter_map(|parent| positions.get(parent).copied())
+            {
+                parents.push(parent);
+                children[parent].push(child);
+            }
+        }
+        parent_offsets.push(parents.len());
         let mut state = LaneState::default();
         let mut graph = Graph {
             offsets: Vec::with_capacity(rows.len().div_ceil(CHECKPOINT_INTERVAL) + 1),
             columns: Vec::new(),
             visual_counts: visual_counts(rows),
-            first_parents,
-            first_parent_children,
+            parent_offsets,
+            parents,
+            children,
         };
         for (index, row) in rows.iter().enumerate() {
             if index % CHECKPOINT_INTERVAL == 0 {
@@ -3659,6 +4016,16 @@ impl Graph {
         }
         graph.offsets.push(graph.columns.len());
         graph
+    }
+
+    fn neighbors(&self, index: usize, direction: TopologicalDirection) -> &[usize] {
+        match direction {
+            TopologicalDirection::Parent => self
+                .parent_offsets
+                .get(index..=index.saturating_add(1))
+                .map_or(&[], |offsets| &self.parents[offsets[0]..offsets[1]]),
+            TopologicalDirection::Child => self.children.get(index).map_or(&[], Vec::as_slice),
+        }
     }
 
     fn render(&self, rows: &[SharedCommitRow], range: Range<usize>) -> RenderedLanes {
@@ -4098,6 +4465,37 @@ mod tests {
         assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(2)));
     }
 
+    #[test]
+    fn ambiguous_paste_shows_the_closest_sibling_by_commit_id() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row(1), row(2), row(3), row(4), row(5)]);
+        complete(&mut app);
+        app.select_commit(id(4));
+        let duplicate = ChangeId::from(id(9));
+
+        app.show_ambiguous_pasted_change_id(duplicate, [id(1), id(5)]);
+
+        assert_eq!(app.id_mode, IdMode::Commit, "ambiguous entries show commit hashes");
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(5)),
+            "the nearest ambiguous entry is selected"
+        );
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some(
+                "pasted change ID is ambiguous; press 'x' to switch siblings and copy/paste the commit hash instead"
+                    .into()
+            )
+        );
+        app.update(Action::CycleDuplicate);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(1)),
+            "the revealed siblings remain cycleable"
+        );
+    }
+
     fn show_tree_changes(app: &mut App) {
         app.set_changes_layout(ChangesLayout::SideBySide, true, false);
     }
@@ -4180,22 +4578,130 @@ mod tests {
     }
 
     #[test]
-    fn refresh_keeps_hidden_tips_as_the_unborn_view() {
+    fn stale_preview_projection_leaves_the_displayed_history_untouched() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        app.set_view_tips(&[id(3)]);
+        complete(&mut app);
+        let displayed = app.rows.iter().map(|row| row.id).collect::<Vec<_>>();
+
+        let pending = app
+            .start_preview_refresh(Vec::<LoadedCommit>::new().into(), &[id(2)], &[], true, Some(id(2)))
+            .expect("a cached preview computes lanes");
+        assert_eq!(
+            pending.review_root,
+            Some(id(2)),
+            "the preview supplies its own review root"
+        );
+        let stale = compute_lanes(pending);
+        app.cancel_preview_refresh(State::Complete);
+        app.finish_lane_computation(stale.0, stale.1, stale.2);
+
+        assert_eq!(app.state, State::Complete);
+        assert_eq!(app.view_tips, HashSet::from([id(3)]));
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            displayed,
+            "discarding a stale preview never replaces the visible rows"
+        );
+    }
+
+    #[test]
+    fn preview_projection_preserves_a_displayed_compressed_segment() {
+        let mut app = compressed_linear_app();
+        app.update(Action::MoveDown);
+        assert!(app.selected_is_segment(), "the displayed history selects a segment");
+        let selected = app.compressed_segment;
+        let view_tips = app.view_tips.clone();
+
+        let pending = app
+            .start_preview_refresh(Vec::<LoadedCommit>::new().into(), &[id(3)], &[], true, None)
+            .expect("a cached preview computes lanes");
+
+        assert_eq!(
+            app.view_tips, view_tips,
+            "preview preparation keeps the displayed rev-set"
+        );
+        assert_eq!(
+            app.compressed_segment, selected,
+            "preview preparation keeps the displayed segment selected"
+        );
+        app.cancel_preview_refresh(State::Complete);
+        let stale = compute_lanes(pending);
+        app.finish_lane_computation(stale.0, stale.1, stale.2);
+        assert_eq!(
+            app.compressed_segment, selected,
+            "stale lanes cannot replace the selection"
+        );
+    }
+
+    #[test]
+    fn refresh_keeps_the_current_tip_as_the_base_of_an_empty_view() {
         let mut app = App::new(10);
         app.extend_hidden_commits(vec![row(1)]);
+        app.set_worktree_head(Some(id(1)), false);
         complete(&mut app);
 
         let rows = app
-            .start_refresh(vec![row_with_parents(2, &[1])].into(), &[], &[id(2)], false)
+            .start_refresh(vec![row_with_parents(2, &[1])].into(), &[id(1)], &[id(2)], false)
             .expect("a hidden-only refresh computes lanes");
         assert_eq!(
-            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
-            [id(2)],
-            "only the current hidden tip remains in the view"
+            rows.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(1)],
+            "the current view tip remains as the base instead of jumping forward"
         );
         let (rows, graph, time) = compute_lanes(rows);
         app.finish_lane_computation(rows, graph, time);
         assert!(app.is_row_hidden(0), "the fallback remains a hidden boundary");
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(1)),
+            "the empty view selects its hidden base"
+        );
+        assert_eq!(
+            app.paste_insert_target(),
+            Some(id(1)),
+            "the checked-out base accepts a pasted first stack commit"
+        );
+        app.set_new_commit_availability(Some(&Changes {
+            has_tracked_changes: true,
+            ..Changes::default()
+        }));
+        assert_eq!(
+            app.update(Action::NewCommit),
+            vec![Effect::NewCommit {
+                parent: Some(id(1)),
+                empty: false,
+            }],
+            "the checked-out base accepts a first stack commit"
+        );
+        assert_eq!(
+            app.update(Action::NewEmptyCommit),
+            vec![Effect::NewCommit {
+                parent: Some(id(1)),
+                empty: true,
+            }],
+            "the checked-out base accepts a first empty commit"
+        );
+        assert_eq!(
+            app.update(Action::Rebase),
+            vec![Effect::Rebase {
+                base: id(1),
+                onto: id(1),
+                commits: Vec::new(),
+            }],
+            "a selected base supports rebasing an empty stack"
+        );
+        app.set_hidden_branch_updates(HashMap::from([(id(1), (1, id(2)))]));
+        assert_eq!(
+            app.update(Action::RebaseUpdate),
+            vec![Effect::Rebase {
+                base: id(1),
+                onto: id(2),
+                commits: Vec::new(),
+            }],
+            "an empty stack can update to a newer hidden tip"
+        );
     }
 
     #[test]
@@ -4320,7 +4826,7 @@ mod tests {
             .start_refresh(vec![row(0)].into(), &[id(2)], &[], false)
             .expect("refresh projects the extended ancestry");
         assert_eq!(
-            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            rows.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
             [id(2), id(1), id(0)],
             "lane pruning does not disconnect cached ancestry needed by a later expansion"
         );
@@ -4417,7 +4923,7 @@ mod tests {
             .into(),
         );
         app.state = State::Computing;
-        let (rows, graph, time) = compute_lanes(rows);
+        let (rows, graph, time) = compute_lanes(app.lane_input(rows));
         app.finish_lane_computation(rows, graph, time);
 
         assert_eq!(
@@ -4432,7 +4938,7 @@ mod tests {
 
         let rows = app.store_commits(vec![numbered_row(9, Some(8)), numbered_row(8, None)].into());
         app.state = State::Computing;
-        let (rows, graph, time) = compute_lanes(rows);
+        let (rows, graph, time) = compute_lanes(app.lane_input(rows));
         app.finish_lane_computation(rows, graph, time);
 
         assert_eq!(
@@ -4671,6 +5177,7 @@ mod tests {
             !unborn_with_history.can_fork_commit(),
             "a fork requires an existing worktree HEAD even when another ref is selected"
         );
+        assert!(!unborn_with_history.can_rebase(), "rebase todos require a born HEAD");
     }
 
     #[test]
@@ -4954,6 +5461,53 @@ mod tests {
     }
 
     #[test]
+    fn completion_prioritizes_the_active_review_tree_from_its_root_or_descendant() {
+        for head in [id(2), id(4)] {
+            let mut app = App::new(10);
+            let mut review = row_with_parents(2, &[1]);
+            review.is_review = true;
+            app.extend_commits(vec![
+                row_with_parents(3, &[1]),
+                row_with_parents(4, &[2]),
+                review,
+                row(1),
+            ]);
+            app.set_worktree_head(Some(head), false);
+            app.set_review_roots(vec![id(2)]);
+
+            complete(&mut app);
+
+            assert_eq!(
+                app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+                [id(4), id(2), id(3), id(1)]
+            );
+            assert_eq!(
+                app.render_lanes(0..app.rows.len()).iter().collect::<Vec<_>>(),
+                ["● ", "◆ ", "├─● ", "● "]
+            );
+        }
+    }
+
+    #[test]
+    fn ambiguous_review_roots_keep_the_ordinary_order() {
+        let mut app = App::new(10);
+        let mut left = row_with_parents(2, &[1]);
+        left.is_review = true;
+        let mut right = row_with_parents(3, &[1]);
+        right.is_review = true;
+        app.extend_commits(vec![row_with_parents(4, &[2, 3]), right, left, row(1)]);
+        app.set_worktree_head(Some(id(4)), false);
+        app.set_review_roots(vec![id(2), id(3)]);
+
+        complete(&mut app);
+
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(4), id(2), id(3), id(1)]
+        );
+    }
+
+    #[test]
     fn review_selects_only_a_strict_ancestor_before_starting() {
         let mut app = App::new(10);
         app.extend_commits(vec![
@@ -5079,7 +5633,7 @@ mod tests {
     }
 
     #[test]
-    fn single_commit_inserts_use_current_head_and_the_selected_target() {
+    fn single_commit_inserts_select_the_source_before_the_target() {
         let mut app = App::new(10);
         app.extend_commits(vec![
             row_with_parents(5, &[4]),
@@ -5093,38 +5647,59 @@ mod tests {
         app.selected = app.rows.iter().position(|row| row.id == id(3));
 
         assert!(app.can_copy_insert());
-        assert!(app.can_move_insert());
+        assert!(!app.can_move_insert(), "only HEAD can be moved");
+        assert!(app.update(Action::CopyInsert).is_empty());
         assert_eq!(
-            app.update(Action::CopyInsert),
+            app.notice().map(|notice| notice.text),
+            Some("copy-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
+        );
+        app.select_commit(id(2));
+        assert_eq!(
+            app.update(Action::OpenDiff),
             vec![Effect::Insert {
-                source: id(5),
-                base: id(5),
-                target: id(3),
+                source: id(3),
+                base: id(3),
+                target: id(2),
                 copy: true,
+                target_is_read_only: false,
             }]
         );
+
+        app.select_commit(id(5));
+        assert!(app.can_copy_insert());
+        assert!(app.can_move_insert());
+        assert!(app.update(Action::MoveInsert).is_empty());
         assert_eq!(
-            app.update(Action::MoveInsert),
+            app.notice().map(|notice| notice.text),
+            Some("move-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
+        );
+        app.update(Action::MoveDown);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(3)),
+            "move-insert skips the source's current parent"
+        );
+        assert_eq!(
+            app.update(Action::OpenDiff),
             vec![Effect::Insert {
                 source: id(5),
                 base: id(5),
                 target: id(3),
                 copy: false,
+                target_is_read_only: false,
             }]
         );
 
-        app.selected = app.rows.iter().position(|row| row.id == id(4));
-        assert!(
-            app.can_copy_insert(),
-            "copying directly above the current parent adds another occurrence"
+        app.select_commit(id(5));
+        app.update(Action::CopyInsert);
+        app.update(Action::MoveDown);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(4)),
+            "copy-insert permits the source's parent as a target"
         );
-        assert!(
-            !app.can_move_insert(),
-            "the current parent is already directly below HEAD"
-        );
-        app.set_known_merge_descendants(HashSet::from([id(3)]));
-        app.selected = app.rows.iter().position(|row| row.id == id(3));
-        assert!(!app.can_move_insert(), "a target with an affected merge is rejected");
+        app.update(Action::Cancel);
+        assert!(app.notice().is_none(), "Escape cancels target selection");
 
         let mut review_head = row_with_parents(5, &[4]);
         review_head.is_review = true;
@@ -5138,9 +5713,22 @@ mod tests {
         ]);
         review_app.set_worktree_head(Some(id(5)), false);
         complete(&mut review_app);
-        review_app.selected = review_app.rows.iter().position(|row| row.id == id(3));
-        assert!(!review_app.can_copy_insert(), "review commits cannot be duplicated");
-        assert!(review_app.can_move_insert(), "review commits can still be moved");
+        review_app.select_commit(id(3));
+        assert!(review_app.can_copy_insert(), "any single-parent commit can be copied");
+        assert!(!review_app.can_move_insert(), "a non-HEAD source cannot be moved");
+        review_app.update(Action::CopyInsert);
+        review_app.select_commit(id(5));
+        assert_eq!(
+            review_app.update(Action::OpenDiff),
+            vec![Effect::Insert {
+                source: id(3),
+                base: id(3),
+                target: id(5),
+                copy: true,
+                target_is_read_only: false,
+            }],
+            "the selected source is copied onto the subsequently selected review HEAD"
+        );
 
         let mut merge_target = App::new(10);
         merge_target.extend_commits(vec![
@@ -5152,19 +5740,65 @@ mod tests {
         ]);
         merge_target.set_worktree_head(Some(id(5)), false);
         complete(&mut merge_target);
-        merge_target.selected = merge_target.rows.iter().position(|row| row.id == id(3));
+        merge_target.select_commit(id(5));
         assert!(merge_target.can_move_insert(), "an unchanged merge target is allowed");
     }
 
     #[test]
-    fn paste_insert_uses_only_an_editable_history_selection() {
+    fn paste_insert_marks_a_hidden_boundary_as_read_only() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         complete(&mut app);
 
         assert_eq!(app.paste_insert_target(), Some(id(2)));
         app.hidden_rows.insert(id(2));
-        assert_eq!(app.paste_insert_target(), None, "a hidden boundary is not editable");
+        assert_eq!(app.paste_insert_target(), Some(id(2)));
+        assert_eq!(
+            app.update(Action::PasteInsert {
+                source: id(3),
+                target: id(2),
+            }),
+            vec![Effect::PasteInsert {
+                source: id(3),
+                target: id(2),
+                target_is_read_only: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn every_insert_mode_accepts_hidden_boundaries_as_read_only_targets() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        app.set_worktree_head(Some(id(5)), false);
+        app.hidden_rows.insert(id(2));
+        complete(&mut app);
+
+        for (action, base, copy) in [
+            (Action::CopyInsert, id(5), true),
+            (Action::MoveInsert, id(5), false),
+            (Action::StackInsert, id(4), false),
+        ] {
+            app.select_commit(base);
+            assert!(app.update(action).is_empty());
+            app.select_commit(id(2));
+            assert_eq!(
+                app.update(Action::OpenDiff),
+                vec![Effect::Insert {
+                    source: id(5),
+                    base,
+                    target: id(2),
+                    copy,
+                    target_is_read_only: true,
+                }]
+            );
+        }
     }
 
     #[test]
@@ -5216,6 +5850,7 @@ mod tests {
                 base: id(3),
                 target: id(1),
                 copy: false,
+                target_is_read_only: false,
             }]
         );
 
@@ -5283,44 +5918,46 @@ mod tests {
     }
 
     #[test]
-    fn refresh_cancels_stack_insert_selection_before_rows_change() {
-        let mut app = App::new(10);
-        app.extend_commits(vec![
-            row_with_parents(5, &[4]),
-            row_with_parents(4, &[3]),
-            row_with_parents(3, &[2]),
-            row_with_parents(2, &[1]),
-            row(1),
-        ]);
-        app.set_worktree_head(Some(id(5)), false);
-        complete(&mut app);
-        app.select_commit(id(3));
-        app.update(Action::StackInsert);
-        assert!(app.stack_insert_base.is_some(), "target selection is active");
+    fn refresh_cancels_insert_target_selections_before_rows_change() {
+        for action in [Action::CopyInsert, Action::StackInsert] {
+            let mut app = App::new(10);
+            app.extend_commits(vec![
+                row_with_parents(5, &[4]),
+                row_with_parents(4, &[3]),
+                row_with_parents(3, &[2]),
+                row_with_parents(2, &[1]),
+                row(1),
+            ]);
+            app.set_worktree_head(Some(id(5)), false);
+            complete(&mut app);
+            app.select_commit(id(3));
+            app.update(action);
+            assert!(app.reachable_rows.is_some(), "target selection is active");
 
-        let rows = app
-            .start_refresh(vec![row_with_parents(6, &[5])].into(), &[id(6)], &[], false)
-            .expect("the changed history starts lane computation");
-        assert!(
-            app.stack_insert_base.is_none(),
-            "refresh cancels the index-based selection"
-        );
-        assert!(
-            app.reachable_rows.is_none(),
-            "the stale row mask is discarded immediately"
-        );
-        assert!(app.notice().is_none(), "the cancelled selection no longer prompts");
+            let rows = app
+                .start_refresh(vec![row_with_parents(6, &[5])].into(), &[id(6)], &[], false)
+                .expect("the changed history starts lane computation");
+            assert!(
+                app.insert_selection.is_none() && app.stack_insert_base.is_none(),
+                "refresh cancels the index-based selection"
+            );
+            assert!(
+                app.reachable_rows.is_none(),
+                "the stale row mask is discarded immediately"
+            );
+            assert!(app.notice().is_none(), "the cancelled selection no longer prompts");
 
-        let (rows, graph, time) = compute_lanes(rows);
-        app.finish_lane_computation(rows, graph, time);
-        assert_eq!(app.rows.first().map(|row| row.id), Some(id(6)));
-        assert!(
-            app.rows
-                .iter()
-                .enumerate()
-                .all(|(index, _)| app.is_row_reachable(index)),
-            "the replacement projection has no stale eligibility mask"
-        );
+            let (rows, graph, time) = compute_lanes(rows);
+            app.finish_lane_computation(rows, graph, time);
+            assert_eq!(app.rows.first().map(|row| row.id), Some(id(6)));
+            assert!(
+                app.rows
+                    .iter()
+                    .enumerate()
+                    .all(|(index, _)| app.is_row_reachable(index)),
+                "the replacement projection has no stale eligibility mask"
+            );
+        }
     }
 
     #[test]
@@ -5426,55 +6063,132 @@ mod tests {
     }
 
     #[test]
-    fn topological_navigation_follows_first_parents_and_remembers_children() {
-        let mut app = App::new(5);
+    fn entry_numbers_select_within_the_current_tree() {
+        let mut app = App::new(2);
         app.extend_commits(vec![
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[3]),
+            row(3),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.select_commit(id(1));
+        assert_eq!(app.visual_count(1), Some(1), "the other tree also contains #1");
+        assert_eq!(app.visual_count(3), Some(1), "the current tree contains #1");
+
+        app.update(Action::SelectEntry);
+        app.update(Action::SelectEntryInput("1".into()));
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some("select entry #1 · type number · <enter> jump · Esc cancel".into())
+        );
+        app.update(Action::SubmitEntrySelection);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(2)),
+            "#1 resolves against the selected root instead of another tree"
+        );
+        assert!(!app.entry_selection_active());
+
+        app.update(Action::SelectEntry);
+        app.update(Action::SelectEntryInput("2".into()));
+        app.update(Action::SubmitEntrySelection);
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(2)),
+            "a number absent from the current tree keeps the cursor in place"
+        );
+        assert!(app.entry_selection_active(), "an invalid number remains editable");
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some(
+                "select entry #2 · type number · <enter> jump · Esc cancel · entry #2 is not in the current tree"
+                    .into()
+            )
+        );
+        app.update(Action::Cancel);
+        assert!(!app.entry_selection_active());
+    }
+
+    #[test]
+    fn topological_navigation_chooses_all_parents_and_children() {
+        let mut app = App::new(1);
+        app.extend_commits(vec![
+            row_with_parents(6, &[4, 5]),
             row_with_parents(5, &[3]),
             row_with_parents(4, &[3]),
-            row_with_parents(3, &[2, 1]),
+            row_with_parents(3, &[2]),
             row_with_parents(2, &[1]),
             row(1),
         ]);
         complete(&mut app);
 
+        app.update(Action::PanDownBy(3));
         app.update(Action::TopologicalDown);
-        assert_eq!(app.rows[app.selected.expect("the fork is selected")].id, id(3));
+        assert_eq!(app.rows[app.selected.expect("the merge stays selected")].id, id(6));
         assert_eq!(app.topological_choice(), Some((1, 2)));
-        app.update(Action::TopologicalUp);
-        assert_eq!(app.rows[app.selected.expect("the first child is selected")].id, id(5));
-        app.update(Action::TopologicalDown);
+        assert_eq!(app.offset, 0, "starting a choice reveals its source marker");
+        app.update(Action::NextChild);
+        assert_eq!(app.topological_choice(), Some((2, 2)));
+        app.update(Action::SubmitTopological);
+        assert_eq!(app.rows[app.selected.expect("the second parent is selected")].id, id(5));
 
-        app.update(Action::NextChild);
-        app.update(Action::NextChild);
-        assert_eq!(app.topological_choice(), Some((2, 2)), "branch choices saturate");
         app.update(Action::TopologicalUp);
-        assert_eq!(app.rows[app.selected.expect("the second child is selected")].id, id(4));
+        assert_eq!(
+            app.rows[app.selected.expect("the merge is selected again")].id,
+            id(6),
+            "a commit is a child even through its secondary-parent edge"
+        );
+
         app.update(Action::TopologicalDown);
+        app.update(Action::PreviousChild);
+        assert_eq!(app.topological_choice(), Some((2, 2)), "choices wrap to the end");
+        app.update(Action::CancelTopological);
+        assert_eq!(
+            app.rows[app.selected.expect("cancel keeps the source selected")].id,
+            id(6)
+        );
+        assert_eq!(app.topological_choice(), None);
+
+        app.select_commit(id(3));
+        app.update(Action::TopologicalUp);
+        assert_eq!(app.topological_choice(), Some((1, 2)));
+        app.update(Action::NextChild);
+        app.update(Action::SubmitTopological);
+        assert_eq!(app.rows[app.selected.expect("the second child is selected")].id, id(5));
+    }
+
+    #[test]
+    fn lane_computation_cancels_indexed_topological_choices() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![
+            row_with_parents(4, &[2, 3]),
+            row(3),
+            row(1),
+            row_with_parents(2, &[1]),
+        ]);
+
+        app.follow_tail = true;
+        app.update(Action::TopologicalDown);
+        assert_eq!(app.topological_choice(), Some((1, 2)));
+        assert!(
+            !app.follow_tail,
+            "choosing keeps streamed commits from moving the source"
+        );
+        app.update(Action::CancelTopological);
+
+        let rows = app
+            .start_lane_computation()
+            .expect("loading completion starts lane work");
+        app.update(Action::TopologicalDown);
+        assert_eq!(app.topological_choice(), Some((1, 2)));
+        let (rows, graph, elapsed) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, elapsed);
         assert_eq!(
             app.topological_choice(),
-            Some((2, 2)),
-            "returning to a fork restores its choice"
-        );
-
-        app.update(Action::PreviousChild);
-        app.update(Action::TopologicalDown);
-        assert_eq!(
-            app.rows[app.selected.expect("the first parent is selected")].id,
-            id(2),
-            "secondary merge parents are not topo-walk edges"
-        );
-        app.update(Action::TopologicalDown);
-        app.update(Action::TopologicalDown);
-        assert_eq!(app.rows[app.selected.expect("the root remains selected")].id, id(1));
-
-        app.update(Action::TopologicalUp);
-        app.update(Action::TopologicalUp);
-        assert_eq!(app.rows[app.selected.expect("the fork is selected again")].id, id(3));
-        app.update(Action::MoveUp);
-        assert_eq!(
-            app.rows[app.selected.expect("ordinary navigation is restored")].id,
-            id(4),
-            "ordinary movement remains display ordered after topological movement"
+            None,
+            "lane reordering invalidates indexed choices"
         );
     }
 
@@ -5487,6 +6201,7 @@ mod tests {
             row_with_parents(2, &[1]),
             row(1),
         ]);
+        complete(&mut app);
         app.reachable_rows = Some(vec![true, false, true, true]);
 
         app.update(Action::TopologicalDown);
@@ -5505,6 +6220,19 @@ mod tests {
             id(4),
             "an ineligible current row still anchors its child walk"
         );
+    }
+
+    #[test]
+    fn topological_navigation_deduplicates_contracted_paths() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![row_with_parents(3, &[2, 1]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+        app.reachable_rows = Some(vec![true, false, true]);
+
+        app.update(Action::TopologicalDown);
+
+        assert_eq!(app.rows[app.selected.expect("the sole ancestor is selected")].id, id(1));
+        assert_eq!(app.topological_choice(), None, "the shared ancestor is offered once");
     }
 
     #[test]
@@ -5648,8 +6376,10 @@ mod tests {
     #[test]
     fn compressed_history_retains_tips_and_selection_and_selects_segments() {
         let mut app = App::new(2);
+        let mut review = row_with_parents(6, &[5]);
+        review.is_review = true;
         app.extend_commits(vec![
-            row_with_parents(6, &[5]),
+            review,
             row_with_parents(5, &[4]),
             row_with_parents(4, &[3]),
             row_with_parents(3, &[2]),
@@ -5657,6 +6387,7 @@ mod tests {
             row(1),
         ]);
         complete(&mut app);
+        assert_eq!(app.render_lanes(0..1).lane(0), "◆ ");
         app.set_view_tips(&[id(6)]);
         app.select_commit(id(3));
         app.alignment = Alignment::None;
@@ -5680,8 +6411,8 @@ mod tests {
         );
         assert_eq!(
             app.render_lanes(0..app.history_len()).iter().collect::<Vec<_>>(),
-            ["● ", "○ ", "● ", "● ", "● "],
-            "only segments use the quieter ring marker"
+            ["◆ ", "○ ", "● ", "● ", "● "],
+            "review commits retain their diamond while segments use the quieter ring"
         );
 
         app.update(Action::MoveUp);
@@ -5971,18 +6702,21 @@ mod tests {
             );
         }
 
-        app.select_commit(id(2));
+        app.select_commit(id(6));
         assert!(
             app.can_copy_insert(),
-            "a retained merge base is an ordinary insertion target"
+            "a retained graph tip is an ordinary insertion source"
         );
+        assert!(app.update(Action::CopyInsert).is_empty());
+        app.select_commit(id(2));
         assert_eq!(
-            app.update(Action::CopyInsert),
+            app.update(Action::OpenDiff),
             vec![Effect::Insert {
                 source: id(6),
                 base: id(6),
                 target: id(2),
                 copy: true,
+                target_is_read_only: false,
             }]
         );
     }
@@ -6610,6 +7344,9 @@ mod tests {
         app.update(Action::TimeTravel);
         app.update(Action::Rebase);
         app.update(Action::RebaseUpdate);
+        app.update(Action::Push);
+        #[cfg(feature = "blocking-network-client")]
+        app.update(Action::Fetch);
         app.update(Action::Review);
         app.update(Action::Squash);
         app.update(Action::CopyInsert);
@@ -6977,6 +7714,35 @@ mod tests {
     }
 
     #[test]
+    fn worktrunk_returns_to_its_list_only_from_root_history() {
+        let mut app = App::new(1);
+        assert!(
+            app.worktrunk_history_root(),
+            "loading itself is not a modal interaction"
+        );
+        app.extend_commits(vec![row(1)]);
+        complete(&mut app);
+        assert!(app.worktrunk_history_root());
+
+        app.set_worktree_conflicted(true);
+        assert!(
+            app.worktrunk_history_root(),
+            "an ordinary unmerged index can return to the worktree list"
+        );
+        app.set_worktree_conflicted(false);
+        app.arm_rebase_conflict(app.rows[0].id);
+        assert!(
+            !app.worktrunk_history_root(),
+            "an in-memory Tix conflict consumes Escape"
+        );
+        app.clear_rebase_conflict();
+
+        show_tree_changes(&mut app);
+        app.update(Action::ToggleChangesFocus);
+        assert!(!app.worktrunk_history_root(), "a focused changes pane consumes Escape");
+    }
+
+    #[test]
     fn completion_and_copy_effects_use_the_current_selection() {
         let mut app = App::new(10);
         assert!(
@@ -6989,7 +7755,25 @@ mod tests {
         );
         app.extend_commits(vec![row(7)]);
 
-        assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(row(7).id)]);
+        assert_eq!(
+            app.update(Action::Copy),
+            vec![Effect::CopyId(row(7).id)],
+            "hidden identifiers copy the commit ID"
+        );
+        app.id_mode = IdMode::Commit;
+        assert_eq!(
+            app.update(Action::Copy),
+            vec![Effect::CopyId(row(7).id)],
+            "shown commit IDs copy the commit ID"
+        );
+        let change_id = ChangeId::from(id(8));
+        app.set_change_ids(HashMap::from([(row(7).id, change_id)]), HashSet::new());
+        app.id_mode = IdMode::Change;
+        assert_eq!(
+            app.update(Action::Copy),
+            vec![Effect::CopyChangeId(change_id)],
+            "shown change IDs copy the change ID"
+        );
         assert_eq!(
             app.update(Action::CopyPath("dir/file".into())),
             vec![Effect::CopyPath("dir/file".into())]
@@ -6999,6 +7783,78 @@ mod tests {
         assert_eq!(app.state, State::Complete);
         assert_eq!(app.rows.len(), 1, "the loaded row count is the completed total");
         assert_eq!(app.update(Action::Quit), vec![Effect::Quit]);
+    }
+
+    #[test]
+    fn one_background_network_task_excludes_another_and_blocks_only_normal_quit() {
+        let mut app = App::new(1);
+        app.state = State::Complete;
+        app.set_active_branch(Some("topic".into()));
+        #[cfg(feature = "blocking-network-client")]
+        app.set_fetch_remote(Some("origin".into()));
+
+        assert!(app.can_push());
+        assert_eq!(app.update(Action::Push), vec![Effect::Push("topic".into())]);
+        #[cfg(feature = "blocking-network-client")]
+        {
+            assert!(app.can_fetch());
+            assert_eq!(app.update(Action::Fetch), vec![Effect::Fetch("origin".into())]);
+        }
+
+        app.start_background_task("pushing topic to origin…");
+        assert!(!app.can_push(), "only one user background task may run");
+        assert!(app.update(Action::Push).is_empty());
+        #[cfg(feature = "blocking-network-client")]
+        {
+            assert!(!app.can_fetch());
+            assert!(app.update(Action::Fetch).is_empty());
+        }
+        assert!(app.update(Action::Quit).is_empty(), "ordinary quit waits for the task");
+        assert_eq!(
+            app.notice(),
+            Some(Notice {
+                kind: NoticeKind::Attention,
+                text: "background task is still running; use Ctrl-C to quit".into(),
+            })
+        );
+        assert_eq!(app.update(Action::ForceQuit), vec![Effect::Quit]);
+
+        app.finish_background_task();
+        assert!(app.can_push());
+        #[cfg(feature = "blocking-network-client")]
+        assert!(app.can_fetch());
+        assert_eq!(app.update(Action::Quit), vec![Effect::Quit]);
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn fetch_requires_a_remote_but_not_an_active_branch() {
+        let mut app = App::new(1);
+        app.state = State::Complete;
+
+        assert!(!app.can_fetch());
+        app.set_fetch_remote(Some("origin".into()));
+        assert!(app.can_fetch());
+        assert!(!app.can_push());
+        assert_eq!(app.update(Action::Fetch), vec![Effect::Fetch("origin".into())]);
+    }
+
+    #[test]
+    fn background_progress_is_monotonic() {
+        let mut app = App::new(1);
+        app.start_background_task("fetching origin…");
+
+        assert!(app.update_background_progress("counting".into(), 40, 100));
+        assert!(!app.update_background_progress("indexing".into(), 25, 100));
+        assert_eq!(
+            app.background_progress(),
+            Some(&BackgroundProgress {
+                text: "counting".into(),
+                completed: 40,
+                total: 100,
+            }),
+            "stale phase snapshots cannot move the display backwards"
+        );
     }
 
     #[test]

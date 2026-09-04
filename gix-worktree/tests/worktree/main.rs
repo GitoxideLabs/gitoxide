@@ -1,5 +1,9 @@
 use gix_hash::ObjectId;
 
+#[cfg(feature = "create")]
+mod create;
+#[cfg(feature = "remove")]
+mod remove;
 mod stack;
 
 pub use gix_testtools::Result;

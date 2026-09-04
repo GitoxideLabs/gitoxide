@@ -27,7 +27,7 @@ C0
   base
 
 C1
-  tree T1
+  tree T0
   parent C0
   author reviewer <reviewer@example.com> 978307200 +0000
   committer reviewer <reviewer@example.com> 978307200 +0000
@@ -35,20 +35,20 @@ C1
   B
 
 C2
-  tree T0
+  tree T1
   parent C1
   author reviewer <reviewer@example.com> 978307200 +0000
   committer reviewer <reviewer@example.com> 978307200 +0000
-  change-id oxzuvntpklkyxykvvmmuzqomsnzrrwwvtuoxwttx
+  change-id mskxtxntkkyslwvsqzlupkxrmkpormmxryoptmkv
 
   review
 
 C3
-  tree T0
+  tree T1
   parent C2
   author reviewer <reviewer@example.com> 978307200 +0000
   committer reviewer <reviewer@example.com> 978307200 +0000
-  change-id tlynrtysuoqktszrqppwrnsxpvokwvoqoqvkvqsv
+  change-id wxqrvqkzyzzppoxrxoqxokwnxqssvnrrvotryrkv
 
   review successor
 

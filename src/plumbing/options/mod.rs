@@ -25,26 +25,31 @@ pub struct Args {
     /// The amount of threads to use for some operations.
     ///
     /// If unset, or the value is 0, there is no limit and all logical cores can be used.
-    #[clap(long, short = 't')]
+    #[clap(long)]
     pub threads: Option<usize>,
 
     /// Display verbose messages and progress information
     #[clap(long, short = 'v')]
     pub verbose: bool,
 
-    /// Display structured `tracing` output in a tree-like structure.
-    #[clap(long)]
+    /// Display tracing output; repeat for more detail and a flat format.
+    ///
+    /// Once is forest-formatted at info, twice is forest-formatted at debug,
+    /// three times is flat at debug, and four times is flat at trace.
+    /// Output is buffered independently and written to stderr when the command finishes.
+    /// Colors follow stderr's terminal capabilities and environment configuration.
+    #[clap(
+        long,
+        short = 't',
+        action = clap::ArgAction::Count,
+        value_parser = clap::value_parser!(u8).range(0..=4)
+    )]
     #[cfg(feature = "tracing")]
-    pub trace: bool,
+    pub trace: u8,
 
     /// Turn off verbose message display for commands where these are shown by default.
     #[clap(long, conflicts_with("verbose"))]
     pub no_verbose: bool,
-
-    /// Bring up a terminal user interface displaying progress visually.
-    #[cfg(feature = "prodash-render-tui")]
-    #[clap(long, conflicts_with("verbose"))]
-    pub progress: bool,
 
     /// Don't default malformed configuration flags, but show an error instead. Ignore IO errors as well.
     ///
@@ -53,13 +58,6 @@ pub struct Args {
     //       for these.
     #[clap(long, short = 's')]
     pub strict: bool,
-
-    /// The progress TUI will stay up even though the work is already completed.
-    ///
-    /// Use this to be able to read progress messages or additional information visible in the TUI log pane.
-    #[cfg(feature = "prodash-render-tui")]
-    #[clap(long, conflicts_with("verbose"), requires("progress"))]
-    pub progress_keep_open: bool,
 
     /// Determine the format to use when outputting statistics.
     #[clap(
@@ -390,6 +388,10 @@ pub mod merge_base {
 }
 
 pub mod worktree {
+    use std::path::PathBuf;
+
+    use gix::bstr::BString;
+
     #[derive(Debug, clap::Parser)]
     #[command(about = "Commands for handling worktrees")]
     pub struct Platform {
@@ -401,6 +403,25 @@ pub mod worktree {
     pub enum SubCommands {
         /// List all worktrees, along with some accompanying information.
         List,
+        /// Add a linked worktree for an existing branch or commit.
+        Add {
+            /// Check out the given commit with a detached HEAD instead of treating it as a branch.
+            #[clap(long)]
+            detach: bool,
+            /// The path at which to create the worktree.
+            path: PathBuf,
+            /// An existing local branch, or a commit-ish if `--detach` is used.
+            #[clap(value_parser = crate::shared::AsBString)]
+            reference: BString,
+        },
+        /// Remove a linked worktree.
+        Remove {
+            /// Discard changes; repeat to also override a worktree lock.
+            #[clap(long, short = 'f', action = clap::ArgAction::Count)]
+            force: u8,
+            /// The worktree path or a unique trailing path suffix.
+            worktree: PathBuf,
+        },
     }
 }
 

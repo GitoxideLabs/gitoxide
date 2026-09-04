@@ -15,6 +15,7 @@ mod ref_tree;
 #[cfg(test)]
 mod test_repository;
 mod ui;
+mod worktrunk;
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -49,13 +50,18 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
 };
 use gix::{
-    bstr::{BString, ByteSlice},
+    bstr::{BStr, BString, ByteSlice},
     prelude::TreeDiffChangeExt,
 };
 use history::{Authors, Decorations, Event, HistoryGraph, SelectionRef, SharedAuthors};
 use menu::{Item as MenuItem, Menu};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend, layout::Position, text::Line};
+use ratatui::{
+    TerminalOptions, Viewport,
+    backend::CrosstermBackend,
+    layout::{Position, Rect},
+    text::Line,
+};
 
 const EVENT_BATCH_SIZE: usize = 256;
 const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
@@ -69,6 +75,7 @@ const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const LINE_DIFF_POOL_IDLE: Duration = Duration::from_secs(10);
 const THEME_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
+const PUSH_RETRY_PROMPT: &str = "push requires force · <enter> retry with force-with-lease · Esc cancel";
 const WORKTREE_STATUS_CURRENT: usize = 0;
 const WORKTREE_STATUS_PARTIAL: usize = usize::MAX - 1;
 const WORKTREE_STATUS_FULL: usize = usize::MAX;
@@ -78,6 +85,69 @@ struct FillRepository {
     bare: bool,
     retained: Option<gix::Repository>,
     retain: bool,
+}
+
+struct BackgroundWorker {
+    receiver: mpsc::Receiver<Result<BackgroundCompletion>>,
+    progress: Option<BackgroundProgressSource>,
+    kind: BackgroundTaskKind,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for BackgroundWorker {
+    fn drop(&mut self) {
+        if let Some(worker) = self.join.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+struct BackgroundProgressSource {
+    tree: Arc<gix::progress::tree::Root>,
+    label: String,
+    kind: BackgroundProgressKind,
+}
+
+enum BackgroundProgressKind {
+    #[cfg(feature = "blocking-network-client")]
+    Fetch,
+    RemoveWorktree,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BackgroundTaskKind {
+    References,
+    RemoveWorktree,
+}
+
+impl BackgroundTaskKind {
+    fn blocks_exit(self) -> bool {
+        self == BackgroundTaskKind::RemoveWorktree
+    }
+}
+
+enum BackgroundCompletion {
+    Success(String),
+    Attention(String),
+    PushNeedsForce(PushRequest),
+}
+
+struct PushRequest {
+    repository_path: PathBuf,
+    remote: BString,
+    branch: BString,
+}
+
+enum PushOutcome {
+    Pushed(String),
+    NeedsForce,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum PushRetryInput {
+    Retry,
+    Cancel,
+    Ignore,
 }
 
 struct PendingConflictResolution {
@@ -840,10 +910,31 @@ pub struct Options {
     pub hide: Vec<OsString>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RefreshKind {
     History,
-    RefTree { enter: bool },
+    RefTree {
+        enter: bool,
+    },
+    WorktreePreview {
+        index: usize,
+        path: PathBuf,
+        load_metadata: bool,
+    },
+}
+
+struct HistoryRefresh {
+    history: history::Refresh,
+    worktree: Option<Result<worktrunk::GraphMetadata, String>>,
+}
+
+type WorktreeMetadata = Vec<(usize, Result<worktrunk::GraphMetadata, String>)>;
+
+#[derive(Clone)]
+struct WorktreePreview {
+    path: PathBuf,
+    refs: history::RefSnapshot,
+    decorations: Decorations,
 }
 
 fn detect_commit_pane_background() -> Option<(u8, u8, u8)> {
@@ -875,8 +966,69 @@ fn shade_terminal_background((red, green, blue): (u8, u8, u8), dark: bool) -> (u
 }
 
 /// Run the interactive commit graph for `repository`.
-pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut options: Options) -> Result<()> {
-    let _log_guard = logging::init();
+pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, options: Options) -> Result<()> {
+    let _log_guard = logging::init(0)?;
+    run_without_logging(repository, revisions, options)
+}
+
+pub(crate) fn run_without_logging(
+    repository: gix::ThreadSafeRepository,
+    revisions: Vec<OsString>,
+    options: Options,
+) -> Result<()> {
+    let UiExit::Quit(lane_time) = run_ui(repository, revisions, options, None)? else {
+        unreachable!("only worktrunk can promote a selected worktree")
+    };
+    if let Some(lane_time) = lane_time {
+        eprintln!("lane computation: {:.3}s", lane_time.as_secs_f64());
+    }
+    Ok(())
+}
+
+pub(crate) fn pick_worktree(
+    repository: gix::ThreadSafeRepository,
+    picker: &mut worktrunk::Worktrees,
+    quit_on_finish: Option<String>,
+) -> Result<Option<(PathBuf, Vec<OsString>)>> {
+    let repository = repository.to_thread_local();
+    let (hide, unavailable) = history::available_hidden_revisions(&repository, &[], true)?;
+    for (revision, err) in unavailable {
+        eprintln!(
+            "warning: ignoring unavailable hidden revision {}: {err}",
+            revision.to_string_lossy()
+        );
+    }
+    match run_ui(
+        repository.into_sync(),
+        Vec::new(),
+        Options {
+            quit_on_finish,
+            hide: hide.clone(),
+            ..Options::default()
+        },
+        Some(picker),
+    )? {
+        UiExit::Quit(_) => Ok(None),
+        UiExit::Promote(path) => Ok(Some((path, hide))),
+    }
+}
+
+enum UiExit {
+    Quit(Option<Duration>),
+    Promote(PathBuf),
+}
+
+enum EventLoopExit {
+    Quit(Option<Duration>),
+    Promote(PathBuf),
+}
+
+fn run_ui(
+    repository: gix::ThreadSafeRepository,
+    revisions: Vec<OsString>,
+    mut options: Options,
+    picker: Option<&mut worktrunk::Worktrees>,
+) -> Result<UiExit> {
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (hide, unavailable) = validate_hidden_revisions(&mut repository_path, &common_dir, &options.hide)?;
@@ -930,14 +1082,20 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
                     hook(info);
                 }));
             }
-            event_loop(
+            let mut picker_focused = picker.is_some();
+            match event_loop(
                 &mut terminal,
                 repository,
                 revisions,
                 options,
                 enhanced_keyboard,
                 commit_pane_background,
-            )
+                picker,
+                &mut picker_focused,
+            )? {
+                EventLoopExit::Quit(lane_time) => Ok(UiExit::Quit(lane_time)),
+                EventLoopExit::Promote(path) => Ok(UiExit::Promote(path)),
+            }
         });
     let keyboard_restore = if quit_on_finish {
         Ok(())
@@ -962,14 +1120,11 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
     if inline {
         eprintln!();
     }
-    let lane_time = result?;
+    let outcome = result?;
     keyboard_restore.context("could not restore keyboard events")?;
     cursor_restore.context("could not restore terminal cursor")?;
     restore?;
-    if let Some(lane_time) = lane_time {
-        eprintln!("lane computation: {:.3}s", lane_time.as_secs_f64());
-    }
-    Ok(())
+    Ok(outcome)
 }
 
 #[expect(clippy::type_complexity, reason = "forward the hidden-revision result unchanged")]
@@ -1007,6 +1162,186 @@ fn is_key_press(event: &TerminalEvent) -> bool {
     matches!(event, TerminalEvent::Key(key) if key.kind != KeyEventKind::Release)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum WorktrunkInput {
+    Cancel { force: bool },
+    CancelSearch,
+    FocusHistory,
+    Refresh,
+    Remove(gix::worktree::remove::Force),
+    Search(worktrunk::SearchInput),
+    StartSearch,
+    Select(usize),
+    Promote,
+    SubmitSearch,
+}
+
+fn worktrunk_search_input(key: KeyEvent, page: usize) -> Option<WorktrunkInput> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(WorktrunkInput::Cancel { force: true })
+        }
+        KeyCode::Char('p' | 'P') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(WorktrunkInput::Search(worktrunk::SearchInput::Up(1)))
+        }
+        KeyCode::Char('n' | 'N') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(WorktrunkInput::Search(worktrunk::SearchInput::Down(1)))
+        }
+        KeyCode::Esc => Some(WorktrunkInput::CancelSearch),
+        KeyCode::Enter => Some(WorktrunkInput::SubmitSearch),
+        KeyCode::Up => Some(WorktrunkInput::Search(worktrunk::SearchInput::Up(1))),
+        KeyCode::Down => Some(WorktrunkInput::Search(worktrunk::SearchInput::Down(1))),
+        KeyCode::PageUp => Some(WorktrunkInput::Search(worktrunk::SearchInput::Up(page.max(1)))),
+        KeyCode::PageDown => Some(WorktrunkInput::Search(worktrunk::SearchInput::Down(page.max(1)))),
+        KeyCode::Left => Some(WorktrunkInput::Search(worktrunk::SearchInput::Left)),
+        KeyCode::Right => Some(WorktrunkInput::Search(worktrunk::SearchInput::Right)),
+        KeyCode::Home => Some(WorktrunkInput::Search(worktrunk::SearchInput::Home)),
+        KeyCode::End => Some(WorktrunkInput::Search(worktrunk::SearchInput::End)),
+        KeyCode::Backspace => Some(WorktrunkInput::Search(worktrunk::SearchInput::Backspace)),
+        KeyCode::Delete => Some(WorktrunkInput::Search(worktrunk::SearchInput::Delete)),
+        KeyCode::Char('/') if key.kind == KeyEventKind::Repeat => None,
+        KeyCode::Char(ch) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            Some(WorktrunkInput::Search(worktrunk::SearchInput::Insert(ch)))
+        }
+        _ => None,
+    }
+}
+
+fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> Option<WorktrunkInput> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    let select = |index| Some(WorktrunkInput::Select(index));
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(WorktrunkInput::Cancel { force: true })
+        }
+        KeyCode::Char('q' | 'Q') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            Some(WorktrunkInput::Cancel { force: false })
+        }
+        KeyCode::Esc if key.kind == KeyEventKind::Press => Some(WorktrunkInput::Cancel { force: false }),
+        KeyCode::Char('/') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            Some(WorktrunkInput::StartSearch)
+        }
+        KeyCode::Tab => Some(WorktrunkInput::FocusHistory),
+        KeyCode::Enter => Some(WorktrunkInput::Promote),
+        KeyCode::Char('r' | 'R') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            Some(WorktrunkInput::Refresh)
+        }
+        KeyCode::Char('D')
+            if key.kind == KeyEventKind::Press
+                && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(WorktrunkInput::Remove(gix::worktree::remove::Force::DiscardChanges))
+        }
+        KeyCode::Char('d')
+            if key.kind == KeyEventKind::Press
+                && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(WorktrunkInput::Remove(if key.modifiers.contains(KeyModifiers::SHIFT) {
+                gix::worktree::remove::Force::DiscardChanges
+            } else {
+                gix::worktree::remove::Force::Never
+            }))
+        }
+        KeyCode::Up => select(selected.saturating_sub(1)),
+        KeyCode::Char('k' | 'K') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            select(selected.saturating_sub(1))
+        }
+        KeyCode::Down => select(selected.saturating_add(1).min(len.saturating_sub(1))),
+        KeyCode::Char('j' | 'J') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            select(selected.saturating_add(1).min(len.saturating_sub(1)))
+        }
+        KeyCode::PageUp => select(selected.saturating_sub(page.max(1))),
+        KeyCode::PageDown => select(selected.saturating_add(page.max(1)).min(len.saturating_sub(1))),
+        KeyCode::Home => select(0),
+        KeyCode::Char('g') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => select(0),
+        KeyCode::End => select(len.saturating_sub(1)),
+        KeyCode::Char('G') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            select(len.saturating_sub(1))
+        }
+        _ => None,
+    }
+}
+
+fn worktrunk_owns_input(app: &App, picker_focused: bool, terminal_focused: bool) -> bool {
+    picker_focused && terminal_focused && app.worktrunk_history_root()
+}
+
+fn diagnostic_worktrunk_input(input: Option<WorktrunkInput>) -> Option<WorktrunkInput> {
+    input.filter(|input| {
+        matches!(
+            input,
+            WorktrunkInput::CancelSearch
+                | WorktrunkInput::FocusHistory
+                | WorktrunkInput::Refresh
+                | WorktrunkInput::Search(_)
+                | WorktrunkInput::StartSearch
+                | WorktrunkInput::Select(_)
+        )
+    })
+}
+
+fn confirm_worktree_removal(
+    armed: &mut Option<(PathBuf, gix::worktree::remove::Force)>,
+    path: &Path,
+    force: gix::worktree::remove::Force,
+) -> bool {
+    if armed
+        .as_ref()
+        .is_some_and(|(candidate, candidate_force)| candidate == path && *candidate_force == force)
+    {
+        *armed = None;
+        true
+    } else {
+        *armed = Some((path.to_owned(), force));
+        false
+    }
+}
+
+fn disarms_worktree_removal(input: Option<&WorktrunkInput>, event: &TerminalEvent) -> bool {
+    match input {
+        Some(WorktrunkInput::Remove(_)) => false,
+        Some(_) => true,
+        None => matches!(event, TerminalEvent::Key(key) if key.kind != KeyEventKind::Release),
+    }
+}
+
+fn worktrunk_refresh_blocked(
+    switching_blocked: bool,
+    refresh_running: bool,
+    metadata_running: bool,
+    lanes_running: bool,
+) -> bool {
+    switching_blocked || refresh_running || metadata_running || lanes_running
+}
+
+fn request_worktree_preview(selected: Option<usize>, requested: &mut Option<usize>, queue: &mut VecDeque<usize>) {
+    let Some(index) = selected else { return };
+    *requested = Some(index);
+    queue.retain(|candidate| *candidate != index);
+    queue.push_front(index);
+}
+
+fn clear_worktree_preview_request(
+    index: usize,
+    cached: bool,
+    requested: &mut Option<usize>,
+    queue: &mut VecDeque<usize>,
+) {
+    *requested = None;
+    if cached {
+        queue.retain(|candidate| *candidate != index);
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the picker extends the existing event-loop context"
+)]
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     mut repository: gix::ThreadSafeRepository,
@@ -1014,7 +1349,9 @@ fn event_loop(
     options: Options,
     enhanced_keyboard: bool,
     commit_pane_background: Option<(u8, u8, u8)>,
-) -> Result<Option<Duration>> {
+    mut picker: Option<&mut worktrunk::Worktrees>,
+    picker_focused: &mut bool,
+) -> Result<EventLoopExit> {
     let Options {
         quit_on_finish, hide, ..
     } = options;
@@ -1025,6 +1362,7 @@ fn event_loop(
         .map(diagnostic_key)
         .collect();
     let quit_on_finish = quit_on_finish.is_some();
+    let preview_mode = picker.is_some();
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (mut view_repository, recovered_at_startup) = open_history_repository(&mut repository_path, &common_dir)?;
@@ -1044,12 +1382,16 @@ fn event_loop(
     }
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
     let mut watcher_retry_deadline = None;
-    let mut ref_watcher = match start_ref_watcher(&repository_path, &common_dir) {
-        Ok(watcher) => Some(watcher),
-        Err(err) => {
-            tracing::warn!(error = %err, "reference watcher startup failed");
-            schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
-            None
+    let mut ref_watcher = if preview_mode {
+        None
+    } else {
+        match start_ref_watcher(&repository_path, &common_dir) {
+            Ok(watcher) => Some(watcher),
+            Err(err) => {
+                tracing::warn!(error = %err, "reference watcher startup failed");
+                schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                None
+            }
         }
     };
     let mut ref_watch_set_changed = false;
@@ -1066,18 +1408,23 @@ fn event_loop(
     app.set_view_tips(&ref_snapshot.view_tips);
     app.set_worktree_head_unborn(worktree_head_unborn);
     app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
+    app.set_active_branch(active_branch_name(&ref_snapshot));
+    #[cfg(feature = "blocking-network-client")]
+    app.set_fetch_remote(ref_snapshot.fetch_remote.clone());
     app.commit_pane_background = commit_pane_background;
     if recovered_at_startup {
         app.leave_attention("worktree removed; using the common repository without worktree changes");
     }
     let mut lane_receiver: Option<mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)>> = None;
-    let mut refresh_receiver: Option<mpsc::Receiver<(RefreshKind, HistoryGraph, Result<history::Refresh>)>> = None;
+    let mut refresh_receiver: Option<mpsc::Receiver<(RefreshKind, HistoryGraph, Result<HistoryRefresh>)>> = None;
     let mut refresh_pending = false;
     let mut ref_tree_refresh_pending = false;
     let mut return_to_history_after_refresh = None;
     let mut ref_refresh_deadline: Option<Instant> = None;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
+    let mut background_task: Option<BackgroundWorker> = None;
+    let mut pending_force_push = None;
     let mut commit_message = None;
     let mut tree_changes = TreeChangesCache::default();
     let mut worktree_changes = None;
@@ -1107,7 +1454,7 @@ fn event_loop(
         repository_is_bare,
         line_diff_parallelism,
     );
-    if worktree_watcher_needed(repository_is_bare, app.changes_mode) {
+    if !preview_mode && worktree_watcher_needed(repository_is_bare, app.changes_mode) {
         match start_worktree_watcher(&repository_path, repository_is_bare) {
             Ok(watcher) => worktree_watcher = Some(watcher),
             Err(err) => {
@@ -1142,6 +1489,8 @@ fn event_loop(
         focused,
         &mut ref_tree,
         &mut filesystem_responses,
+        picker.as_deref_mut(),
+        *picker_focused,
     )?;
     let mut last_draw = Instant::now();
     let mut dirty = false;
@@ -1150,13 +1499,26 @@ fn event_loop(
     let mut repeat_deadline: Option<Instant> = None;
     let mut history_status_deadline: Option<Instant> = None;
     let mut pending_terminal_event = None;
+    let worktree_count = picker.as_ref().map_or(0, |picker| picker.rows().len());
+    let mut worktree_previews: Vec<Option<WorktreePreview>> =
+        std::iter::repeat_with(|| None).take(worktree_count).collect();
+    let mut worktree_preview_queue: VecDeque<_> = (0..worktree_count).collect();
+    let mut worktree_metadata_receiver: Option<mpsc::Receiver<(HistoryGraph, Result<WorktreeMetadata>)>> = None;
+    let mut requested_worktree_preview = None;
+    let mut active_worktree_preview = preview_mode.then_some(0);
+    let mut pending_worktree_activation = None;
+    let mut armed_worktree_removal = None;
     let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
     let mut pending_conflict_clear_undo_on_accept = false;
     let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
     let mut pending_todo_rebase_plan: Option<edit::rebase::Plan> = None;
     let mut pending_todo_ref_changes = Vec::new();
     let mut pending_conflict_resolution: Option<PendingConflictResolution> = None;
-    let result: Result<Option<Duration>> = (|| loop {
+    let result: Result<EventLoopExit> = (|| loop {
+        if picker.as_deref_mut().is_some_and(worktrunk::Worktrees::drain_updates) {
+            dirty = true;
+            urgent |= quit_on_finish;
+        }
         if let Some(pool) = line_diff_pool.as_mut() {
             pool.expire(Instant::now());
         }
@@ -1171,6 +1533,9 @@ fn event_loop(
             fill_repository.retained = None;
             app.set_worktree_changes_available(false);
             app.set_worktree_branch(None);
+            app.set_active_branch(None);
+            #[cfg(feature = "blocking-network-client")]
+            app.set_fetch_remote(recovered.remote_default_name(gix::remote::Direction::Fetch));
             worktree_watcher = None;
             worktree_refresh_deadline = None;
             worktree_watch_refresh = WorktreeWatchRefresh::default();
@@ -1189,12 +1554,16 @@ fn event_loop(
                 line_diff_parallelism,
             );
             tracing::warn!(common_dir = %repository_path.display(), "worktree disappeared; recovered with common repository");
-            ref_watcher = match start_ref_watcher(&repository_path, &repository_path) {
-                Ok(watcher) => Some(watcher),
-                Err(err) => {
-                    tracing::warn!(error = %err, "reference watcher recovery failed");
-                    schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
-                    None
+            ref_watcher = if preview_mode {
+                None
+            } else {
+                match start_ref_watcher(&repository_path, &repository_path) {
+                    Ok(watcher) => Some(watcher),
+                    Err(err) => {
+                        tracing::warn!(error = %err, "reference watcher recovery failed");
+                        schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                        None
+                    }
                 }
             };
             ref_watch_set_changed = false;
@@ -1428,7 +1797,7 @@ fn event_loop(
             dirty = true;
             urgent = true;
         }
-        if take_due(&mut watcher_retry_deadline, Instant::now()) {
+        if !preview_mode && take_due(&mut watcher_retry_deadline, Instant::now()) {
             let mut retry = false;
             if ref_watcher.is_none() {
                 match start_ref_watcher(&repository_path, &common_dir) {
@@ -1501,9 +1870,151 @@ fn event_loop(
                 }
             }
         }
+        if let Some(progress) = background_task
+            .as_ref()
+            .and_then(|worker| worker.progress.as_ref())
+            .map(background_progress_snapshot)
+            && app.update_background_progress(progress.text, progress.completed, progress.total)
+        {
+            dirty = true;
+        }
+        let background_completion = background_task
+            .as_ref()
+            .and_then(|worker| match worker.receiver.try_recv() {
+                Ok(result) => Some((worker.kind, result)),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some((
+                    worker.kind,
+                    Err(anyhow::anyhow!("background task stopped unexpectedly")),
+                )),
+            });
+        if let Some((kind, result)) = background_completion {
+            background_task = None;
+            let (succeeded, force_push) = report_background_task(&mut app, result);
+            pending_force_push = force_push;
+            match kind {
+                BackgroundTaskKind::References => refresh_pending |= succeeded,
+                BackgroundTaskKind::RemoveWorktree => {
+                    let reinventory = recover_common_repository(&common_dir)
+                        .context("could not reopen the common repository after removing a worktree")
+                        .and_then(|repository| {
+                            picker
+                                .as_deref_mut()
+                                .context("worktree removal requires the picker")?
+                                .reinventory_after_removal(&repository)
+                        });
+                    match reinventory {
+                        Ok(_) => {
+                            let picker = picker.as_deref_mut().expect("worktree removal has a picker");
+                            worktree_previews = std::iter::repeat_with(|| None).take(picker.rows().len()).collect();
+                            worktree_preview_queue = (0..picker.rows().len()).collect();
+                            requested_worktree_preview = None;
+                            active_worktree_preview = None;
+                            pending_worktree_activation = None;
+                            request_worktree_preview(
+                                picker.selected_index(),
+                                &mut requested_worktree_preview,
+                                &mut worktree_preview_queue,
+                            );
+                        }
+                        Err(err) => app.leave_error(format!("worktree inventory: {err:#}")),
+                    }
+                }
+            }
+            dirty = true;
+            urgent = true;
+        }
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((rows, graph, lane_time)) => {
+                    let mut activated_worktree = None;
+                    if let Some((index, previous_state)) = pending_worktree_activation.take() {
+                        let picker = picker.as_deref_mut().expect("worktree activation has a picker");
+                        if picker.selected_index() != Some(index) {
+                            app.cancel_preview_refresh(previous_state);
+                            picker.cancel_preview();
+                            lane_receiver = None;
+                            dirty = true;
+                            urgent = true;
+                            continue;
+                        }
+                        let preview = worktree_previews
+                            .get(index)
+                            .and_then(Clone::clone)
+                            .context("completed worktree preview disappeared")?;
+                        let mut next_repository = gix::open(&preview.path)
+                            .with_context(|| format!("could not open worktree {}", preview.path.display()))?;
+                        next_repository.object_cache_size(None);
+                        let next_repository_path = next_repository.git_dir().to_owned();
+                        let next_repository_is_bare = next_repository.workdir().is_none();
+                        let next_mailmap = next_repository.open_mailmap();
+                        let next_head_unborn = !next_repository_is_bare && next_repository.head()?.is_unborn();
+                        drop(next_repository);
+                        std::env::set_current_dir(&preview.path)
+                            .with_context(|| format!("could not enter worktree {}", preview.path.display()))?;
+
+                        repository_path = next_repository_path;
+                        repository_is_bare = next_repository_is_bare;
+                        mailmap = next_mailmap;
+                        ref_snapshot = preview.refs;
+                        decorations = preview.decorations;
+                        worktree_head_unborn = next_head_unborn;
+                        refresh_pending = false;
+                        ref_tree_refresh_pending = false;
+                        refresh_expand_hidden = false;
+                        return_to_history_after_refresh = None;
+                        history_status_deadline = None;
+                        fill_repository.path.clone_from(&repository_path);
+                        fill_repository.bare = repository_is_bare;
+                        fill_repository.retain = false;
+                        fill_repository.retained = None;
+                        commit_message = None;
+                        tree_changes.clear();
+                        worktree_changes = None;
+                        cached_status_head = None;
+                        worktree_status_parts = WorktreeStatusParts::default();
+                        selection_relation = None;
+                        app.selection_relation = None;
+                        app.tree_changes.error = None;
+                        app.worktree_changes.error = None;
+                        app.set_worktree_conflicted(false);
+                        app.set_worktree_changes_available(!repository_is_bare);
+                        app.set_view_tips(&ref_snapshot.view_tips);
+                        app.set_worktree_head_unborn(worktree_head_unborn);
+                        app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
+                        app.set_active_branch(active_branch_name(&ref_snapshot));
+                        #[cfg(feature = "blocking-network-client")]
+                        app.set_fetch_remote(ref_snapshot.fetch_remote.clone());
+                        app.set_worktree_head(
+                            (!repository_is_bare).then(|| decoration_head(&decorations)).flatten(),
+                            false,
+                        );
+                        app.set_review_roots(decoration_review_roots(&decorations));
+                        line_diff_pool = None;
+                        sync_line_diff_pool(
+                            &mut line_diff_pool,
+                            app.changes_mode.is_some(),
+                            &repository_path,
+                            repository_is_bare,
+                            line_diff_parallelism,
+                        );
+                        let history = history_graph
+                            .as_mut()
+                            .expect("worktree activation requires the cached history graph");
+                        history.switch_view(
+                            &ref_snapshot.view_tips,
+                            if app.show_hidden {
+                                &[]
+                            } else {
+                                &ref_snapshot.hidden_tips
+                            },
+                        );
+                        app.set_known_descendants(history.commits_with_descendants());
+                        app.set_known_merge_descendants(history.commits_with_merge_descendants());
+                        ref_tree.rebuild(history, &ref_snapshot, &decorations);
+                        active_worktree_preview = Some(index);
+                        activated_worktree = Some(index);
+                    }
                     let scan =
                         scan_change_ids(&repository_path, repository_is_bare, change_id_scan_needed(&app), &rows)
                             .unwrap_or_else(|err| {
@@ -1512,6 +2023,14 @@ fn event_loop(
                             });
                     app.finish_lane_computation(rows, graph, lane_time);
                     app.set_change_ids(scan.overrides, scan.duplicates);
+                    if let Some(index) = activated_worktree
+                        && let Some(picker) = picker.as_deref_mut()
+                    {
+                        picker.mark_previewed(index);
+                        if requested_worktree_preview == Some(index) && picker.selected_index() == Some(index) {
+                            requested_worktree_preview = None;
+                        }
+                    }
                     ref_tree.set_history_commits(app.rows.iter().map(|row| row.id));
                     if return_to_history_after_refresh.take().is_some() {
                         ref_tree.leave();
@@ -1537,10 +2056,108 @@ fn event_loop(
                 }
             }
         }
+        if let Some(result) = worktree_metadata_receiver.as_ref().map(mpsc::Receiver::try_recv) {
+            match result {
+                Ok((mut graph, result)) => {
+                    let picker = picker
+                        .as_deref_mut()
+                        .expect("metadata loading requires the worktree picker");
+                    match result {
+                        Ok(metadata) => {
+                            for (index, result) in metadata {
+                                picker.set_graph_metadata(index, result);
+                            }
+                        }
+                        Err(err) => {
+                            let message = format!("{err:#}");
+                            for index in 0..picker.rows().len() {
+                                picker.set_graph_metadata(index, Err(message.clone()));
+                            }
+                        }
+                    }
+                    graph.switch_view(
+                        &ref_snapshot.view_tips,
+                        if app.show_hidden {
+                            &[]
+                        } else {
+                            &ref_snapshot.hidden_tips
+                        },
+                    );
+                    history_graph = Some(graph);
+                    worktree_metadata_receiver = None;
+                    dirty = true;
+                    urgent = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    anyhow::bail!("worktree metadata worker stopped unexpectedly")
+                }
+            }
+        }
         if let Some(result) = refresh_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((kind, mut graph, result)) => {
-                    let result = result?;
+                    let HistoryRefresh {
+                        history: result,
+                        worktree,
+                    } = match result {
+                        Ok(result) => result,
+                        Err(err) => {
+                            if let RefreshKind::WorktreePreview { index, .. } = kind {
+                                if let Some(picker) = picker.as_deref_mut() {
+                                    picker.set_graph_metadata(index, Err(format!("{err:#}")));
+                                }
+                                if requested_worktree_preview == Some(index) {
+                                    requested_worktree_preview = None;
+                                }
+                                graph.switch_view(
+                                    &ref_snapshot.view_tips,
+                                    if app.show_hidden {
+                                        &[]
+                                    } else {
+                                        &ref_snapshot.hidden_tips
+                                    },
+                                );
+                                history_graph = Some(graph);
+                                refresh_receiver = None;
+                                dirty = true;
+                                urgent = true;
+                                continue;
+                            }
+                            return Err(err);
+                        }
+                    };
+                    tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
+                    if let RefreshKind::WorktreePreview { index, path, .. } = kind {
+                        app.cache_commits(result.commits);
+                        if let Some(result) = worktree
+                            && let Some(picker) = picker.as_deref_mut()
+                        {
+                            picker.set_graph_metadata(index, result);
+                        }
+                        if let Some(slot) = worktree_previews.get_mut(index) {
+                            *slot = Some(WorktreePreview {
+                                path,
+                                refs: result.refs,
+                                decorations: result.decorations,
+                            });
+                        }
+                        graph.switch_view(
+                            &ref_snapshot.view_tips,
+                            if app.show_hidden {
+                                &[]
+                            } else {
+                                &ref_snapshot.hidden_tips
+                            },
+                        );
+                        app.set_known_descendants(graph.commits_with_descendants());
+                        app.set_known_merge_descendants(graph.commits_with_merge_descendants());
+                        history_graph = Some(graph);
+                        refresh_receiver = None;
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
                     if matches!(kind, RefreshKind::RefTree { .. }) {
                         graph.set_current_view(&ref_snapshot.view_tips);
                     }
@@ -1551,9 +2168,12 @@ fn event_loop(
                             .then(|| current_worktree_branch(&result.refs))
                             .flatten(),
                     );
+                    app.set_active_branch(active_branch_name(&result.refs));
+                    #[cfg(feature = "blocking-network-client")]
+                    app.set_fetch_remote(result.refs.fetch_remote.clone());
+                    app.set_review_roots(decoration_review_roots(&result.decorations));
                     ref_tree.rebuild(&graph, &result.refs, &result.decorations);
                     history_graph = Some(graph);
-                    tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
                     if let RefreshKind::RefTree { enter } = kind {
                         let hidden_tips = if app.show_hidden {
                             &[][..]
@@ -1598,6 +2218,13 @@ fn event_loop(
                             .and_then(|repo| Ok(repo.head()?.is_unborn()))
                             .unwrap_or(false);
                     app.set_worktree_head_unborn(worktree_head_unborn);
+                    if preview_mode {
+                        worktree_previews.iter_mut().for_each(|preview| *preview = None);
+                        worktree_preview_queue = (0..worktree_previews.len()).collect();
+                        if let Some(picker) = picker.as_deref_mut() {
+                            picker.invalidate_graph_metadata();
+                        }
+                    }
                     decorations = result.decorations;
                     selection_relation = None;
                     app.selection_relation = None;
@@ -1614,6 +2241,143 @@ fn event_loop(
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => anyhow::bail!("history refresh worker stopped unexpectedly"),
+            }
+        }
+        if picker.as_ref().is_some_and(|picker| {
+            picker
+                .rows()
+                .iter()
+                .any(|row| row.head.is_none() && matches!(row.state, worktrunk::LoadState::Loading))
+        }) && requested_worktree_preview.is_none()
+            && worktree_metadata_receiver.is_none()
+            && refresh_receiver.is_none()
+            && lane_receiver.is_none()
+            && history_graph.is_some()
+            && matches!(app.state, State::Complete | State::Cancelled)
+        {
+            let paths = picker
+                .as_ref()
+                .expect("metadata loading requires the worktree picker")
+                .rows()
+                .iter()
+                .map(|row| row.path.clone())
+                .collect();
+            worktree_metadata_receiver = Some(start_worktree_metadata(
+                repository_path.clone(),
+                repository_is_bare,
+                paths,
+                hide.clone(),
+                history_graph
+                    .take()
+                    .expect("metadata loading requires the cached history graph"),
+            ));
+        }
+        let mut next_worktree_preview = None;
+        if preview_mode
+            && refresh_receiver.is_none()
+            && lane_receiver.is_none()
+            && !background_task
+                .as_ref()
+                .is_some_and(|worker| worker.kind == BackgroundTaskKind::RemoveWorktree)
+            && history_graph.is_some()
+            && matches!(app.state, State::Complete | State::Cancelled)
+        {
+            let picker = picker.as_deref_mut().expect("preview mode has a worktree picker");
+            if let Some(index) = requested_worktree_preview {
+                if picker.selected_index() != Some(index)
+                    || active_worktree_preview == Some(index) && !picker.preview_pending()
+                {
+                    clear_worktree_preview_request(
+                        index,
+                        worktree_previews.get(index).is_some_and(Option::is_some),
+                        &mut requested_worktree_preview,
+                        &mut worktree_preview_queue,
+                    );
+                } else {
+                    next_worktree_preview = Some((index, true));
+                }
+            }
+            if next_worktree_preview.is_none()
+                && requested_worktree_preview.is_none()
+                && !quit_on_finish
+                && *picker_focused
+                && !refresh_pending
+                && !ref_tree_refresh_pending
+                && pending_terminal_event.is_none()
+                && !event::poll(Duration::ZERO)?
+            {
+                while let Some(index) = worktree_preview_queue.pop_front() {
+                    if worktree_previews.get(index).is_some_and(Option::is_none) {
+                        next_worktree_preview = Some((index, false));
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some((index, activate)) = next_worktree_preview {
+            worktree_preview_queue.retain(|candidate| *candidate != index);
+            if activate && let Some(preview) = worktree_previews.get(index).and_then(Clone::clone) {
+                let graph = history_graph
+                    .as_ref()
+                    .expect("worktree activation requires the cached history graph");
+                let review_roots = decoration_review_roots(&preview.decorations);
+                let review_root = decoration_head(&preview.decorations).and_then(|head| {
+                    history::nearest_review_root(&review_roots, head, |ancestor, descendant| {
+                        graph.is_ancestor(ancestor, descendant)
+                    })
+                    .ok()
+                    .flatten()
+                });
+                let hidden_tips = if app.show_hidden {
+                    &[][..]
+                } else {
+                    preview.refs.hidden_tips.as_slice()
+                };
+                let previous_state = app.state;
+                let rows = app
+                    .start_preview_refresh(
+                        Vec::new().into(),
+                        &preview.refs.view_tips,
+                        hidden_tips,
+                        true,
+                        review_root,
+                    )
+                    .expect("worktree activation always projects cached history");
+                lane_receiver = Some(start_lane_worker(rows));
+                pending_worktree_activation = Some((index, previous_state));
+                picker
+                    .as_deref_mut()
+                    .expect("preview mode has a worktree picker")
+                    .begin_preview();
+                dirty = true;
+                urgent = true;
+            } else if worktree_previews.get(index).is_some_and(Option::is_none) {
+                let path = picker
+                    .as_deref()
+                    .and_then(|picker| picker.rows().get(index))
+                    .map(|row| row.path.clone())
+                    .context("worktree preview disappeared")?;
+                let load_metadata = picker
+                    .as_deref()
+                    .and_then(|picker| picker.rows().get(index))
+                    .is_some_and(|row| row.head.is_none() && matches!(row.state, worktrunk::LoadState::Loading));
+                refresh_receiver = Some(start_history_refresh(
+                    path.clone(),
+                    false,
+                    Vec::new(),
+                    hide.clone(),
+                    false,
+                    Default::default(),
+                    gix::features::threading::OwnShared::clone(&authors),
+                    history_graph
+                        .take()
+                        .expect("worktree preview starts only with a cached history graph"),
+                    RefreshKind::WorktreePreview {
+                        index,
+                        path,
+                        load_metadata,
+                    },
+                ));
             }
         }
         if ref_tree_refresh_pending
@@ -1664,6 +2428,9 @@ fn event_loop(
             );
             ref_snapshot = next;
             app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
+            app.set_active_branch(active_branch_name(&ref_snapshot));
+            #[cfg(feature = "blocking-network-client")]
+            app.set_fetch_remote(ref_snapshot.fetch_remote.clone());
             refresh_pending = false;
             let hidden = if app.show_hidden { Vec::new() } else { hide.clone() };
             let expand = if refresh_expand_hidden || hidden_changed {
@@ -1711,6 +2478,8 @@ fn event_loop(
                 focused,
                 &mut ref_tree,
                 &mut filesystem_responses,
+                picker.as_deref_mut(),
+                *picker_focused,
             )?;
             last_draw = Instant::now();
             dirty = false;
@@ -1723,8 +2492,13 @@ fn event_loop(
                 && quit_inputs.is_empty()
                 && matches!(app.state, State::Complete)
                 && lane_receiver.is_none()
+                && refresh_receiver.is_none()
+                && worktree_metadata_receiver.is_none()
+                && picker.as_ref().is_none_or(|picker| !picker.is_loading())
+                && background_task.is_none()
+                && pending_force_push.is_none()
             {
-                return Ok(app.lane_time);
+                return Ok(EventLoopExit::Quit(app.lane_time));
             }
             continue;
         }
@@ -1742,6 +2516,7 @@ fn event_loop(
             match message? {
                 Event::Decorations(value) => {
                     app.set_worktree_head((!repository_is_bare).then(|| decoration_head(&value)).flatten(), true);
+                    app.set_review_roots(decoration_review_roots(&value));
                     decorations = value;
                 }
                 Event::Commits(rows) => app.extend_commits(rows),
@@ -1768,6 +2543,8 @@ fn event_loop(
             }
         }
         let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing)
+            || refresh_receiver.is_some()
+            || worktree_metadata_receiver.is_some()
             || verification_receiver.is_some()
             || repeat_deadline.is_some();
         if should_draw(dirty, streaming, last_draw.elapsed()) {
@@ -1790,6 +2567,8 @@ fn event_loop(
                 focused,
                 &mut ref_tree,
                 &mut filesystem_responses,
+                picker.as_deref_mut(),
+                *picker_focused,
             )?;
             last_draw = Instant::now();
             dirty = false;
@@ -1807,6 +2586,11 @@ fn event_loop(
         let line_diff_timeout = line_diff_pool
             .as_ref()
             .and_then(|pool| pool.idle_timeout(Instant::now()));
+        let background_task_timeout = background_task.as_ref().map(|_| REF_EVENT_INTERVAL);
+        let picker_timeout = picker
+            .as_ref()
+            .is_some_and(|picker| picker.is_loading())
+            .then_some(FRAME_INTERVAL);
         let wake_after = [
             repeat_timeout,
             watcher_timeout,
@@ -1815,13 +2599,22 @@ fn event_loop(
             retry_timeout,
             history_status_timeout,
             line_diff_timeout,
+            background_task_timeout,
+            picker_timeout,
         ]
         .into_iter()
         .flatten()
         .min();
         let (terminal_event, diagnostic_input) = match pending_terminal_event.take() {
             Some(event) => (Some(event), false),
-            None => match next_diagnostic_input(&mut quit_inputs, app.state, lane_receiver.is_some()) {
+            None => match next_diagnostic_input(
+                &mut quit_inputs,
+                app.state,
+                lane_receiver.is_some()
+                    || refresh_receiver.is_some()
+                    || worktree_metadata_receiver.is_some()
+                    || requested_worktree_preview.is_some(),
+            ) {
                 Some(key) => (Some(TerminalEvent::Key(key)), true),
                 None => (
                     match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
@@ -1836,10 +2629,321 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
+        if pending_force_push.is_some()
+            && let Some(input) = push_retry_input(&terminal_event)
+        {
+            match input {
+                PushRetryInput::Retry => {
+                    let request = pending_force_push
+                        .take()
+                        .expect("a force-push retry was checked before accepting it");
+                    app.clear_notice();
+                    app.start_background_task(format!(
+                        "pushing {} to {} with force-with-lease…",
+                        request.branch, request.remote
+                    ));
+                    background_task = Some(start_push_worker(request, true));
+                }
+                PushRetryInput::Cancel => {
+                    pending_force_push = None;
+                    app.clear_notice();
+                }
+                PushRetryInput::Ignore => continue,
+            }
+            dirty = true;
+            urgent = true;
+            continue;
+        }
+        if picker.is_some() && worktrunk_owns_input(&app, *picker_focused, focused) {
+            let input = match &terminal_event {
+                TerminalEvent::Key(key) => {
+                    let picker = picker.as_ref().expect("picker presence was checked");
+                    let list_rows = worktrunk::areas(terminal.get_frame().area(), picker.display_row_count())[0]
+                        .height
+                        .saturating_sub(2)
+                        .into();
+                    if picker.search_is_open() {
+                        worktrunk_search_input(*key, list_rows)
+                    } else {
+                        worktrunk_input(
+                            *key,
+                            picker.selected_index().unwrap_or_default(),
+                            picker.rows().len(),
+                            list_rows,
+                        )
+                    }
+                }
+                TerminalEvent::Paste(text) if picker.as_ref().is_some_and(|picker| picker.search_is_open()) => {
+                    Some(WorktrunkInput::Search(worktrunk::SearchInput::Paste(text.clone())))
+                }
+                TerminalEvent::FocusLost | TerminalEvent::FocusGained | TerminalEvent::Resize(_, _) => None,
+                TerminalEvent::Mouse(_) | TerminalEvent::Paste(_) => {
+                    dirty = true;
+                    urgent = true;
+                    continue;
+                }
+            };
+            let input = if diagnostic_input {
+                diagnostic_worktrunk_input(input)
+            } else {
+                input
+            };
+            let disarm_only = armed_worktree_removal.is_some()
+                && matches!(input.as_ref(), Some(WorktrunkInput::Cancel { force: false }))
+                && matches!(&terminal_event, TerminalEvent::Key(KeyEvent { code: KeyCode::Esc, .. }));
+            let disarmed_removal =
+                armed_worktree_removal.is_some() && disarms_worktree_removal(input.as_ref(), &terminal_event);
+            if disarmed_removal {
+                armed_worktree_removal = None;
+                app.clear_notice();
+                dirty = true;
+                urgent = true;
+            }
+            if let Some(input) = input {
+                let switching_blocked = background_task.is_some()
+                    || pending_rebase_conflict.is_some()
+                    || pending_todo_rebase_conflict.is_some()
+                    || pending_todo_rebase_plan.is_some()
+                    || pending_conflict_resolution.is_some()
+                    || app.has_rebase_conflict();
+                let picker = picker.as_deref_mut().expect("picker presence was checked");
+                match input {
+                    WorktrunkInput::Cancel { .. }
+                        if background_task.as_ref().is_some_and(|worker| worker.kind.blocks_exit()) =>
+                    {
+                        app.leave_attention("worktree removal is still running; wait for it to finish");
+                    }
+                    WorktrunkInput::Cancel { force: false } if disarm_only => {}
+                    WorktrunkInput::Cancel { force } if force || background_task.is_none() => {
+                        cancelled.store(true, Ordering::Relaxed);
+                        return Ok(EventLoopExit::Quit(None));
+                    }
+                    WorktrunkInput::Cancel { .. } => {
+                        app.leave_attention("background task is still running; use Ctrl-C to quit");
+                    }
+                    WorktrunkInput::CancelSearch => {
+                        if switching_blocked && picker.cancel_search_needs_rebind() {
+                            app.leave_attention("finish the background task or conflict before switching worktrees");
+                        } else if picker.cancel_search().is_some() {
+                            request_worktree_preview(
+                                picker.selected_index(),
+                                &mut requested_worktree_preview,
+                                &mut worktree_preview_queue,
+                            );
+                        }
+                    }
+                    WorktrunkInput::FocusHistory
+                        if picker.preview_pending()
+                            || refresh_receiver.is_some()
+                            || worktree_metadata_receiver.is_some() =>
+                    {
+                        app.leave_attention("wait for the selected worktree preview to finish loading");
+                    }
+                    WorktrunkInput::FocusHistory => *picker_focused = false,
+                    WorktrunkInput::Refresh
+                        if worktrunk_refresh_blocked(
+                            switching_blocked,
+                            refresh_receiver.is_some(),
+                            worktree_metadata_receiver.is_some(),
+                            lane_receiver.is_some(),
+                        ) =>
+                    {
+                        app.leave_attention("wait for the current task to finish before refreshing worktrees");
+                    }
+                    WorktrunkInput::Refresh => {
+                        picker.refresh();
+                        active_worktree_preview = None;
+                        pending_worktree_activation = None;
+                        worktree_previews.iter_mut().for_each(|preview| *preview = None);
+                        worktree_preview_queue = (0..picker.rows().len()).collect();
+                        request_worktree_preview(
+                            picker.selected_index(),
+                            &mut requested_worktree_preview,
+                            &mut worktree_preview_queue,
+                        );
+                    }
+                    WorktrunkInput::Remove(_) if switching_blocked => {
+                        app.leave_attention("finish the background task or conflict before removing a worktree");
+                    }
+                    WorktrunkInput::Remove(_)
+                        if picker.preview_pending()
+                            || refresh_receiver.is_some()
+                            || worktree_metadata_receiver.is_some()
+                            || lane_receiver.is_some() =>
+                    {
+                        app.leave_attention("wait for the selected worktree preview to finish loading");
+                    }
+                    WorktrunkInput::Remove(force) => {
+                        let row = picker.selected().context("worktree selection disappeared")?;
+                        if let Some(message) = row.removal_blocker() {
+                            app.leave_attention(message);
+                        } else {
+                            let path = row.path.clone();
+                            let label = row.label.clone();
+                            if !confirm_worktree_removal(&mut armed_worktree_removal, &path, force) {
+                                app.leave_attention(match force {
+                                    gix::worktree::remove::Force::Never => {
+                                        format!("press d again to remove {label}")
+                                    }
+                                    gix::worktree::remove::Force::DiscardChanges => {
+                                        format!("press D again to remove {label} and discard changes")
+                                    }
+                                    gix::worktree::remove::Force::OverrideLock => {
+                                        unreachable!("the picker never overrides worktree locks")
+                                    }
+                                });
+                            } else {
+                                picker.suspend_workers_for_removal();
+                                let common_repository = recover_common_repository(&common_dir)
+                                    .context("could not leave the worktree before removing it")?;
+                                mailmap = common_repository.open_mailmap();
+                                repository_path.clone_from(&common_dir);
+                                repository_is_bare = true;
+                                fill_repository.path.clone_from(&common_dir);
+                                fill_repository.bare = true;
+                                fill_repository.retain = false;
+                                fill_repository.retained = None;
+                                line_diff_pool = None;
+                                worktree_changes = None;
+                                cached_status_head = None;
+                                worktree_status_parts = WorktreeStatusParts::default();
+                                app.set_worktree_changes_available(false);
+                                app.set_worktree_head_unborn(false);
+                                app.set_worktree_head(None, false);
+                                app.set_worktree_branch(None);
+                                app.set_active_branch(None);
+                                #[cfg(feature = "blocking-network-client")]
+                                app.set_fetch_remote(
+                                    common_repository.remote_default_name(gix::remote::Direction::Fetch),
+                                );
+                                drop(common_repository);
+                                picker.begin_preview();
+                                requested_worktree_preview = None;
+                                worktree_preview_queue.clear();
+                                active_worktree_preview = None;
+                                filesystem_responses.cancel_pending_worktree("worktree-removal");
+                                app.clear_notice();
+                                app.start_background_task(format!("removing {label}…"));
+                                background_task =
+                                    Some(start_remove_worktree_worker(common_dir.clone(), path, label, force));
+                            }
+                        }
+                    }
+                    WorktrunkInput::Search(input) => {
+                        picker.edit_search(input);
+                        if picker.search_selection_needs_preview() {
+                            if switching_blocked {
+                                app.leave_attention(
+                                    "finish the background task or conflict before switching worktrees",
+                                );
+                            } else if picker.preview_search_selection().is_some() {
+                                request_worktree_preview(
+                                    picker.selected_index(),
+                                    &mut requested_worktree_preview,
+                                    &mut worktree_preview_queue,
+                                );
+                            }
+                        }
+                    }
+                    WorktrunkInput::StartSearch => picker.open_search(),
+                    WorktrunkInput::Select(index) => {
+                        if picker.selected_index() != Some(index) {
+                            if switching_blocked {
+                                app.leave_attention(
+                                    "finish the background task or conflict before switching worktrees",
+                                );
+                            } else {
+                                picker.select(index);
+                                request_worktree_preview(
+                                    picker.selected_index(),
+                                    &mut requested_worktree_preview,
+                                    &mut worktree_preview_queue,
+                                );
+                            }
+                        }
+                    }
+                    WorktrunkInput::SubmitSearch if switching_blocked => {
+                        app.leave_attention("finish the background task or conflict before switching worktrees");
+                    }
+                    WorktrunkInput::SubmitSearch => {
+                        let Some(path) = picker.submit_search() else {
+                            app.leave_attention("no worktree matches the search");
+                            dirty = true;
+                            urgent = true;
+                            continue;
+                        };
+                        cancelled.store(true, Ordering::Relaxed);
+                        return Ok(EventLoopExit::Promote(path));
+                    }
+                    WorktrunkInput::Promote if switching_blocked => {
+                        app.leave_attention("finish the background task or conflict before switching worktrees");
+                    }
+                    WorktrunkInput::Promote => {
+                        let path = picker
+                            .selected_path()
+                            .context("worktree selection disappeared")?
+                            .to_owned();
+                        cancelled.store(true, Ordering::Relaxed);
+                        return Ok(EventLoopExit::Promote(path));
+                    }
+                }
+                dirty = true;
+                urgent = true;
+                continue;
+            }
+            if matches!(&terminal_event, TerminalEvent::Key(_)) {
+                continue;
+            }
+        }
         if swallow_command_menu_key_event(&terminal_event, &mut command_picker_key) {
             continue;
         }
+        if picker.is_some()
+            && !*picker_focused
+            && app.worktrunk_history_root()
+            && pending_rebase_conflict.is_none()
+            && pending_todo_rebase_conflict.is_none()
+            && pending_todo_rebase_plan.is_none()
+            && pending_conflict_resolution.is_none()
+            && !ref_tree.is_active()
+            && !command_picker.is_open()
+            && matches!(
+                &terminal_event,
+                TerminalEvent::Key(KeyEvent {
+                    code: KeyCode::Esc,
+                    kind: KeyEventKind::Press,
+                    ..
+                })
+            )
+        {
+            *picker_focused = true;
+            dirty = true;
+            urgent = true;
+            continue;
+        }
+        if focused
+            && !diagnostic_input
+            && !app.entry_selection_active()
+            && !app.topological_navigation_active()
+            && opens_command_menu(&terminal_event, command_picker.is_open())
+        {
+            ref_tree.leave();
+            let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
+            command_picker.open(&command_picker_items(&commands));
+            app.close_shortcut_groups();
+            dirty = true;
+            urgent = true;
+            continue;
+        }
         if ref_tree.is_active() {
+            let force_quit = matches!(
+                &terminal_event,
+                TerminalEvent::Key(KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CONTROL)
+            );
             if matches!(
                 &terminal_event,
                 TerminalEvent::Key(KeyEvent {
@@ -2001,7 +3105,21 @@ fn event_loop(
                         urgent = true;
                         continue;
                     }
-                    ref_tree::Input::Quit => return Ok(None),
+                    ref_tree::Input::Quit
+                        if background_task.as_ref().is_some_and(|worker| worker.kind.blocks_exit()) =>
+                    {
+                        ref_tree.leave_attention("worktree removal is still running; wait for it to finish");
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
+                    ref_tree::Input::Quit if background_task.is_some() && !force_quit => {
+                        ref_tree.leave_attention("background task is still running; use Ctrl-C to quit");
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
+                    ref_tree::Input::Quit => return Ok(EventLoopExit::Quit(None)),
                 },
                 TerminalEvent::Mouse(mouse) if ref_tree.handle_mouse(mouse.kind, mouse.modifiers, 1) => {
                     dirty = true;
@@ -2016,17 +3134,6 @@ fn event_loop(
                 }
                 _ => {}
             }
-        }
-        if focused
-            && !diagnostic_input
-            && opens_command_menu(&terminal_event, app.actions_expanded, command_picker.is_open())
-        {
-            let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
-            command_picker.open(&command_picker_items(&commands));
-            app.close_shortcut_groups();
-            dirty = true;
-            urgent = true;
-            continue;
         }
         let command_action = if focused && command_picker.is_open() && !diagnostic_input {
             let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
@@ -2063,6 +3170,7 @@ fn event_loop(
                         retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
                     (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
                 }
+                TerminalEvent::Mouse(_) if app.topological_navigation_active() => continue,
                 TerminalEvent::Mouse(mouse) => {
                     let kind = mouse.kind;
                     let modifiers = mouse.modifiers;
@@ -2088,6 +3196,10 @@ fn event_loop(
                     let repeats_history = app.changes_focus.is_none() && repeats_viewport(&action);
                     (Some(action), repeats_history, true, true)
                 }
+                TerminalEvent::Paste(pasted) if app.entry_selection_active() => {
+                    (Some(Action::SelectEntryInput(pasted)), false, false, false)
+                }
+                TerminalEvent::Paste(_) if app.topological_navigation_active() => continue,
                 TerminalEvent::Paste(pasted) => {
                     let action = (|| {
                         anyhow::ensure!(!repository_is_bare, "copy-insert requires a worktree");
@@ -2096,11 +3208,23 @@ fn event_loop(
                             .context("copy-insert paste requires an editable history selection")?;
                         let repository = open_repository(&repository_path, repository_is_bare, false)
                             .context("could not open repository for pasted commit")?;
-                        let source = resolve_pasted_commit(&repository, &pasted)?;
-                        Ok::<_, anyhow::Error>(Action::PasteInsert { source, target })
+                        let source =
+                            match resolve_pasted_commit(&repository, &pasted, app.rows.iter().map(|row| row.id))? {
+                                PastedCommit::Unique(source) => source,
+                                PastedCommit::Ambiguous { change_id, candidates } => {
+                                    app.show_ambiguous_pasted_change_id(change_id, candidates);
+                                    return Ok(None);
+                                }
+                            };
+                        Ok::<_, anyhow::Error>(Some(Action::PasteInsert { source, target }))
                     })();
                     match action {
-                        Ok(action) => (Some(action), false, false, false),
+                        Ok(Some(action)) => (Some(action), false, false, false),
+                        Ok(None) => {
+                            dirty = true;
+                            urgent = true;
+                            continue;
+                        }
                         Err(err) => {
                             app.leave_attention(format!("paste: {err:#}"));
                             dirty = true;
@@ -2253,7 +3377,7 @@ fn event_loop(
                     repository_is_bare,
                     line_diff_parallelism,
                 );
-                if worktree_watcher.is_none() {
+                if !preview_mode && worktree_watcher.is_none() {
                     match start_worktree_watcher(&repository_path, repository_is_bare) {
                         Ok(watcher) => worktree_watcher = Some(watcher),
                         Err(err) => {
@@ -2504,13 +3628,15 @@ fn event_loop(
             queued_worktree_status_full = false;
             queued_worktree_status_scopes.clear();
             worktree_refresh_deadline = None;
-            match start_worktree_watcher(&repository_path, repository_is_bare) {
-                Ok(watcher) => worktree_watcher = Some(watcher),
-                Err(err) => {
-                    tracing::warn!(error = %err, "worktree watcher refresh failed");
-                    app.worktree_changes.error = Some(format!("worktree watch: {err}"));
-                    worktree_watcher = None;
-                    schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+            if !preview_mode {
+                match start_worktree_watcher(&repository_path, repository_is_bare) {
+                    Ok(watcher) => worktree_watcher = Some(watcher),
+                    Err(err) => {
+                        tracing::warn!(error = %err, "worktree watcher refresh failed");
+                        app.worktree_changes.error = Some(format!("worktree watch: {err}"));
+                        worktree_watcher = None;
+                        schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                    }
                 }
             }
         }
@@ -2522,7 +3648,7 @@ fn event_loop(
                 repository_is_bare,
                 line_diff_parallelism,
             );
-            if app.changes_mode == Some(ChangesMode::Both) {
+            if app.changes_mode == Some(ChangesMode::Both) && !preview_mode {
                 invalidate_worktree_changes(&mut worktree_changes);
                 worktree_watch_refresh = WorktreeWatchRefresh::default();
                 queued_worktree_status_full = false;
@@ -2629,6 +3755,10 @@ fn event_loop(
                     terminal.backend_mut(),
                     CopyToClipboard::to_clipboard_from(id.to_hex().to_string())
                 )?,
+                Effect::CopyChangeId(id) => execute!(
+                    terminal.backend_mut(),
+                    CopyToClipboard::to_clipboard_from(id.to_reverse_hex().to_string())
+                )?,
                 Effect::CopyPath(path) => execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(path))?,
                 Effect::CopyAuthor(author) => {
                     let actor = actor_bytes(author);
@@ -2650,7 +3780,14 @@ fn event_loop(
                         .and_then(|(change, path)| {
                             prepare_file_diff(&repository_path, repository_is_bare, change, path)
                         })
-                        .and_then(|diff| show_file_diff(terminal, diff, enhanced_keyboard));
+                        .and_then(|diff| {
+                            show_file_diff(
+                                terminal,
+                                diff,
+                                enhanced_keyboard,
+                                picker.as_deref().map(|picker| (picker, *picker_focused)),
+                            )
+                        });
                     match result {
                         Ok(true) => app.focus_history(),
                         Err(err) => app.changes_mut(pane).error = Some(format!("{err:#}")),
@@ -2676,7 +3813,14 @@ fn event_loop(
                         .filter(|(cached_target, _)| *cached_target == target)
                         .map(|(_, changes)| changes);
                     let result = prepare_commit_diff(&repository_path, repository_is_bare, target, cached, title)
-                        .and_then(|diff| show_commit_diff(terminal, diff, enhanced_keyboard));
+                        .and_then(|diff| {
+                            show_commit_diff(
+                                terminal,
+                                diff,
+                                enhanced_keyboard,
+                                picker.as_deref().map(|picker| (picker, *picker_focused)),
+                            )
+                        });
                     match result {
                         Ok(true) => app.focus_history(),
                         Err(err) => app.leave_error(format!("diff: {err:#}")),
@@ -2837,7 +3981,7 @@ fn event_loop(
                                 app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
                             let travel = open_repository(&repository_path, repository_is_bare, false)
                                 .context("could not reopen repository before travelling to fork")
-                                .and_then(|repository| edit::loaded_graph(&repository))
+                                .and_then(|repository| edit::loaded_view_graph(&repository))
                                 .and_then(|graph| {
                                     edit::time_travel::perform(
                                         &repository_path,
@@ -2944,10 +4088,10 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("split: {err:#}")),
                     }
                 }
-                edit @ (Effect::Amend(id) | Effect::Spill(id)) => {
+                Effect::Amend(id) | Effect::Spill(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
-                    let kind = if matches!(edit, Effect::Amend(_)) {
+                    let kind = if matches!(effect, Effect::Amend(_)) {
                         edit::head::Kind::Amend
                     } else {
                         edit::head::Kind::Spill
@@ -3000,7 +4144,11 @@ fn event_loop(
                                         kind,
                                         path.as_ref()
                                             .map(|(path, parent)| (std::slice::from_ref(path), *parent)),
-                                        resolving_conflict,
+                                        if resolving_conflict {
+                                            edit::rebase::PendingCheckout::FinalizeEditedHead
+                                        } else {
+                                            edit::rebase::PendingCheckout::Reject
+                                        },
                                         report,
                                     )
                                 })
@@ -3329,14 +4477,19 @@ fn event_loop(
                     }
                 }
                 effect @ (Effect::Insert { .. } | Effect::PasteInsert { .. }) => {
-                    let (source, base, target, copy, pasted) = match effect {
+                    let (source, base, target, copy, pasted, target_is_read_only) = match effect {
                         Effect::Insert {
                             source,
                             base,
                             target,
                             copy,
-                        } => (source, base, target, copy, false),
-                        Effect::PasteInsert { source, target } => (source, source, target, true, true),
+                            target_is_read_only,
+                        } => (source, base, target, copy, false, target_is_read_only),
+                        Effect::PasteInsert {
+                            source,
+                            target,
+                            target_is_read_only,
+                        } => (source, source, target, true, true, target_is_read_only),
                         _ => unreachable!("the match arm accepts only insertion effects"),
                     };
                     fill_repository.retain = false;
@@ -3352,7 +4505,7 @@ fn event_loop(
                                 OsString::from(source.to_string()),
                                 OsString::from(target.to_string()),
                             ];
-                            loaded_graph = edit::loaded_view_graph_with(&repository, &graph_revisions)?;
+                            loaded_graph = edit::loaded_explicit_view_graph(&repository, &graph_revisions, &[])?;
                             &loaded_graph
                         } else {
                             history_graph
@@ -3360,11 +4513,18 @@ fn event_loop(
                                 .context("inserting commits requires a completed history graph")?
                         };
                         let plan = if copy {
-                            edit::rebase::copy_insert_plan(&repository, graph, source, target)?
+                            edit::rebase::copy_insert_plan(&repository, graph, source, target, target_is_read_only)?
                         } else if base == source {
-                            edit::rebase::move_insert_plan(&repository, graph, source, target)?
+                            edit::rebase::move_insert_plan(&repository, graph, source, target, target_is_read_only)?
                         } else {
-                            edit::rebase::stack_insert_plan(&repository, graph, base, source, target)?
+                            edit::rebase::stack_insert_plan(
+                                &repository,
+                                graph,
+                                base,
+                                source,
+                                target,
+                                target_is_read_only,
+                            )?
                         };
                         run_rebase_plan(terminal, repository.into_sync(), graph, plan)
                     })();
@@ -3455,16 +4615,32 @@ fn event_loop(
                     match result {
                         Ok(started) => {
                             app.dismiss_undo_position();
-                            let message = format!(
-                                "started review {} at {}",
-                                started.reference.shorten(),
-                                started.commit.to_hex_with_len(7)
-                            );
+                            let commit = started.commit;
+                            let (message, checkout_succeeded) = match started.checkout_error {
+                                None => (
+                                    format!(
+                                        "started review {} at {}",
+                                        started.reference.shorten(),
+                                        commit.to_hex_with_len(7)
+                                    ),
+                                    true,
+                                ),
+                                Some(err) => (
+                                    format!(
+                                        "prepared review {} at {commit}; checkout did not complete: {err:#}; clean the index and worktree, then switch to the review commit",
+                                        started.reference.shorten()
+                                    ),
+                                    false,
+                                ),
+                            };
                             match clear_undo_history(&repository_path, repository_is_bare) {
-                                Ok(()) => app.leave_success(message),
+                                Ok(()) if checkout_succeeded => app.leave_success(message),
+                                Ok(()) => app.leave_attention(message),
                                 Err(err) => app.leave_attention(format!("{message}; undo history: {err:#}")),
                             }
-                            app.select_commit_after_refresh(started.commit);
+                            if checkout_succeeded {
+                                app.select_commit_after_refresh(commit);
+                            }
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
@@ -3576,7 +4752,12 @@ fn event_loop(
                                 },
                                 |id| {
                                     app.select_commit_for_time_travel(id);
-                                    let render_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
+                                    let area = resized_terminal_area(terminal)
+                                        .context("could not resize the terminal before drawing")?;
+                                    let history_area = picker
+                                        .as_ref()
+                                        .map_or(area, |picker| worktrunk::areas(area, picker.display_row_count())[1]);
+                                    let render_rows = history_area.height.saturating_sub(1) as usize;
                                     load_visible_history_metadata(&repository, &mut app, &authors, render_rows)?;
                                     let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
                                     let tree = tree_changes.as_ref().map(|(_, changes)| changes);
@@ -3584,18 +4765,29 @@ fn event_loop(
                                         .as_ref()
                                         .filter(|(marker, _)| *marker == WORKTREE_STATUS_CURRENT)
                                         .map(|(_, changes)| changes);
+                                    {
+                                        let mut frame = terminal.get_frame();
+                                        let area = frame.area();
+                                        let [list, history] =
+                                            picker.as_ref().map_or([Rect::default(), area], |picker| {
+                                                worktrunk::areas(area, picker.display_row_count())
+                                            });
+                                        if let Some(picker) = picker.as_deref_mut() {
+                                            worktrunk::draw(&mut frame, list, picker, *picker_focused);
+                                        }
+                                        ui::draw_with_worktree(
+                                            &mut frame,
+                                            history,
+                                            &mut app,
+                                            &decorations,
+                                            &mailmap,
+                                            message,
+                                            tree,
+                                            worktree,
+                                        );
+                                    }
                                     terminal
-                                        .draw(|frame| {
-                                            ui::draw_with_worktree(
-                                                frame,
-                                                &mut app,
-                                                &decorations,
-                                                &mailmap,
-                                                message,
-                                                tree,
-                                                worktree,
-                                            );
-                                        })
+                                        .apply_buffer_with_cursor(None)
                                         .context("could not draw time-travel animation")?;
                                     Ok(())
                                 },
@@ -3785,6 +4977,35 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("Git note: {err:#}")),
                     }
                 }
+                Effect::Push(branch) => {
+                    let remote = open_repository(&repository_path, repository_is_bare, false)
+                        .context("could not open repository to select a push remote")
+                        .map(|repository| {
+                            let remote = push_remote_name(&repository, branch.as_bstr());
+                            let directory = repository.workdir().unwrap_or(repository.git_dir()).to_owned();
+                            (directory, remote)
+                        });
+                    match remote {
+                        Ok((directory, remote)) => {
+                            app.start_background_task(format!("pushing {branch} to {remote}…"));
+                            background_task = Some(start_push_worker(
+                                PushRequest {
+                                    repository_path: directory,
+                                    remote,
+                                    branch,
+                                },
+                                false,
+                            ));
+                        }
+                        Err(err) => app.leave_error(format!("push: {err:#}")),
+                    }
+                }
+                #[cfg(feature = "blocking-network-client")]
+                Effect::Fetch(remote) => {
+                    let label = format!("fetching {remote}…");
+                    app.start_background_task(label);
+                    background_task = Some(start_fetch_worker(repository_path.clone(), repository_is_bare, remote));
+                }
                 Effect::VerifySignatures(ids) => {
                     verification_receiver = Some(start_signature_verification(
                         repository_path.clone(),
@@ -3792,7 +5013,10 @@ fn event_loop(
                         ids,
                     ));
                 }
-                Effect::Quit if force_quit => return Ok(None),
+                Effect::Quit if background_task.as_ref().is_some_and(|worker| worker.kind.blocks_exit()) => {
+                    app.leave_attention("worktree removal is still running; wait for it to finish");
+                }
+                Effect::Quit if force_quit => return Ok(EventLoopExit::Quit(None)),
                 Effect::Quit => {
                     if let Some(conflict) = pending_rebase_conflict.take() {
                         let mut changes = conflict.into_ref_changes();
@@ -3830,7 +5054,7 @@ fn event_loop(
                     {
                         tracing::warn!(error = %err, "could not record materialized rebase before exit");
                     }
-                    return Ok(None);
+                    return Ok(EventLoopExit::Quit(None));
                 }
             }
         }
@@ -3838,12 +5062,252 @@ fn event_loop(
     result
 }
 
-fn start_lane_worker(rows: Vec<SharedCommitRow>) -> mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)> {
+fn start_lane_worker(rows: app::LaneInput) -> mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(app::compute_lanes(rows));
     });
     receiver
+}
+
+fn start_push_worker(request: PushRequest, force_with_lease: bool) -> BackgroundWorker {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let completion = match push_branch(
+            &request.repository_path,
+            request.remote.as_bstr(),
+            request.branch.as_bstr(),
+            force_with_lease,
+        ) {
+            Ok(PushOutcome::Pushed(message)) => Ok(BackgroundCompletion::Success(message)),
+            Ok(PushOutcome::NeedsForce) => Ok(BackgroundCompletion::PushNeedsForce(request)),
+            Err(err) => Err(err),
+        };
+        let _ = sender.send(completion);
+    });
+    BackgroundWorker {
+        receiver,
+        progress: None,
+        kind: BackgroundTaskKind::References,
+        join: None,
+    }
+}
+
+#[cfg(feature = "blocking-network-client")]
+fn start_fetch_worker(repository_path: PathBuf, bare: bool, remote: BString) -> BackgroundWorker {
+    let (sender, receiver) = mpsc::channel();
+    let tree = gix::progress::tree::Root::new();
+    let worker_tree = Arc::clone(&tree);
+    let label = format!("fetching {remote}");
+    std::thread::spawn(move || {
+        let _ = sender.send(
+            fetch_remote(&repository_path, bare, remote.as_bstr(), worker_tree).map(BackgroundCompletion::Success),
+        );
+    });
+    BackgroundWorker {
+        receiver,
+        progress: Some(BackgroundProgressSource {
+            tree,
+            label,
+            kind: BackgroundProgressKind::Fetch,
+        }),
+        kind: BackgroundTaskKind::References,
+        join: None,
+    }
+}
+
+fn start_remove_worktree_worker(
+    common_dir: PathBuf,
+    target: PathBuf,
+    label: String,
+    force: gix::worktree::remove::Force,
+) -> BackgroundWorker {
+    let (sender, receiver) = mpsc::channel();
+    let tree = gix::progress::tree::Root::new();
+    let worker_tree = Arc::clone(&tree);
+    let progress_label = format!("removing {label}");
+    let join = std::thread::spawn(move || {
+        let _ = sender.send(remove_worktree(&common_dir, &target, &label, force, worker_tree));
+    });
+    BackgroundWorker {
+        receiver,
+        progress: Some(BackgroundProgressSource {
+            tree,
+            label: progress_label,
+            kind: BackgroundProgressKind::RemoveWorktree,
+        }),
+        kind: BackgroundTaskKind::RemoveWorktree,
+        join: Some(join),
+    }
+}
+
+fn remove_worktree(
+    common_dir: &Path,
+    target: &Path,
+    label: &str,
+    force: gix::worktree::remove::Force,
+    progress: Arc<gix::progress::tree::Root>,
+) -> Result<BackgroundCompletion> {
+    let mut repository = open_repository(common_dir, true, false).context("could not open the common repository")?;
+    let progress = progress.add_child("worktree removal");
+    let target = repository
+        .prepare_remove_worktree(target)
+        .with_context(|| format!("could not resolve worktree {label}"))?;
+    let branch_cleanup = target
+        .repository()
+        .context("could not open the worktree to inspect its branch")
+        .and_then(|worktree| worktrunk::remove::branch_cleanup_for_repository(&worktree, false));
+    target
+        .remove(force, progress)
+        .with_context(|| format!("could not remove worktree {label}"))?;
+    let (branch, expected) = match branch_cleanup {
+        Ok(Some(cleanup)) => cleanup,
+        Ok(None) => return Ok(BackgroundCompletion::Success(format!("removed worktree {label}"))),
+        Err(err) => {
+            return Ok(BackgroundCompletion::Attention(format!(
+                "removed worktree {label}; branch cleanup was skipped: {err:#}"
+            )));
+        }
+    };
+    match worktrunk::remove::delete_branch(&mut repository, (branch, expected)) {
+        worktrunk::remove::BranchCleanupOutcome::Deleted(branch) => Ok(BackgroundCompletion::Success(format!(
+            "removed worktree {label} and branch {branch}"
+        ))),
+        worktrunk::remove::BranchCleanupOutcome::DeletedWithWarning { branch, warning } => {
+            Ok(BackgroundCompletion::Attention(format!(
+                "removed worktree {label} and branch {branch}; branch configuration cleanup failed: {warning}"
+            )))
+        }
+        worktrunk::remove::BranchCleanupOutcome::Retained { branch, reason } => Ok(BackgroundCompletion::Attention(
+            format!("removed worktree {label}; kept branch {branch}: {reason}"),
+        )),
+    }
+}
+
+#[cfg(feature = "blocking-network-client")]
+fn fetch_remote(
+    repository_path: &Path,
+    bare: bool,
+    remote_name: &BStr,
+    progress_tree: Arc<gix::progress::tree::Root>,
+) -> Result<String> {
+    let mut phase = progress_tree.add_child_with_id("setup", *b"TIXF");
+    phase.init(Some(100), gix::progress::steps());
+    let mut repository = open_repository(repository_path, bare, false).context("could not open repository")?;
+    repository
+        .config_snapshot_mut()
+        .set_raw_value("gitoxide.credentials.terminalPrompt", "false")
+        .context("could not disable terminal credential prompts")?;
+    let remote = repository
+        .find_fetch_remote(Some(remote_name))
+        .with_context(|| format!("could not find fetch remote {remote_name}"))?;
+    phase.set(5);
+    phase.set_name("connect/auth");
+    let connection = remote
+        .connect(gix::remote::Direction::Fetch)
+        .with_context(|| format!("could not connect to {remote_name}"))?;
+    phase.set(10);
+    phase.set_name("refs/negotiation");
+    let mut progress = phase.add_child("fetch");
+    let fetch = connection
+        .prepare_fetch(&mut progress, Default::default())
+        .with_context(|| format!("could not prepare fetch from {remote_name}"))?;
+    phase.set(15);
+    phase.set_name("remote enumeration");
+    fetch
+        .receive(&mut progress, &AtomicBool::default())
+        .with_context(|| format!("could not fetch from {remote_name}"))?;
+    phase.set(95);
+    phase.set_name("finalizing refs");
+    Ok(format!("fetched {remote_name}"))
+}
+
+fn push_branch(repository_path: &Path, remote: &BStr, branch: &BStr, force_with_lease: bool) -> Result<PushOutcome> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repository_path).arg("push").arg("--porcelain");
+    if force_with_lease {
+        command.arg("--force-with-lease");
+    }
+    let output = command
+        .arg("--")
+        .arg(gix::path::from_bstr(remote).as_ref())
+        .arg(gix::path::from_bstr(branch).as_ref())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("could not launch git push")?;
+    if !output.status.success() {
+        if retryable_push_rejection(force_with_lease, &output.stdout) {
+            return Ok(PushOutcome::NeedsForce);
+        }
+        let stdout = output.stdout.trim();
+        let stderr = output.stderr.trim();
+        let detail = if stdout.is_empty() {
+            stderr.to_str_lossy().into_owned()
+        } else if stderr.is_empty() {
+            stdout.to_str_lossy().into_owned()
+        } else {
+            format!("{}\n{}", stdout.to_str_lossy(), stderr.to_str_lossy())
+        };
+        if detail.is_empty() {
+            anyhow::bail!("git push {remote} {branch} failed with {}", output.status);
+        }
+        anyhow::bail!("git push {remote} {branch} failed with {}: {}", output.status, detail);
+    }
+    Ok(PushOutcome::Pushed(format!("pushed {branch} to {remote}")))
+}
+
+fn retryable_push_rejection(force_with_lease: bool, stdout: &[u8]) -> bool {
+    !force_with_lease
+        && stdout.split(|byte| *byte == b'\n').any(|line| {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let mut fields = line.split(|byte| *byte == b'\t');
+            if fields.next() != Some(b"!".as_slice()) {
+                return false;
+            }
+            let _ = fields.next();
+            matches!(fields.next(), Some(status) if status == b"[rejected] (fetch first)"
+                || status == b"[rejected] (non-fast-forward)"
+                || status == b"[rejected] (needs force)")
+        })
+}
+
+fn push_retry_input(event: &TerminalEvent) -> Option<PushRetryInput> {
+    match event {
+        TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => match key.code {
+            KeyCode::Enter => Some(PushRetryInput::Retry),
+            KeyCode::Esc => Some(PushRetryInput::Cancel),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => None,
+            KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => None,
+            _ => Some(PushRetryInput::Ignore),
+        },
+        TerminalEvent::FocusLost | TerminalEvent::FocusGained | TerminalEvent::Resize(_, _) => None,
+        _ => Some(PushRetryInput::Ignore),
+    }
+}
+
+fn report_background_task(app: &mut App, result: Result<BackgroundCompletion>) -> (bool, Option<PushRequest>) {
+    app.finish_background_task();
+    match result {
+        Ok(BackgroundCompletion::Success(message)) => {
+            app.leave_success(message);
+            (true, None)
+        }
+        Ok(BackgroundCompletion::Attention(message)) => {
+            app.leave_attention(message);
+            (true, None)
+        }
+        Ok(BackgroundCompletion::PushNeedsForce(request)) => {
+            app.leave_attention(PUSH_RETRY_PROMPT);
+            (false, Some(request))
+        }
+        Err(err) => {
+            app.leave_error(format!("{err:#}"));
+            (false, None)
+        }
+    }
 }
 
 fn scan_change_ids(
@@ -3932,6 +5396,24 @@ fn start_history(
     (cancelled, receiver)
 }
 
+fn start_worktree_metadata(
+    repository_path: PathBuf,
+    bare: bool,
+    paths: Vec<PathBuf>,
+    hidden: Vec<OsString>,
+    mut graph: HistoryGraph,
+) -> mpsc::Receiver<(HistoryGraph, Result<WorktreeMetadata>)> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = open_repository(&repository_path, bare, false).and_then(|mut repository| {
+            repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
+            worktrunk::graph_metadata_for_paths(&repository, paths, &hidden, &mut graph)
+        });
+        let _ = sender.send((graph, result));
+    });
+    receiver
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the worker owns each independent refresh input"
@@ -3946,21 +5428,32 @@ fn start_history_refresh(
     authors: SharedAuthors,
     mut graph: HistoryGraph,
     kind: RefreshKind,
-) -> mpsc::Receiver<(RefreshKind, HistoryGraph, Result<history::Refresh>)> {
+) -> mpsc::Receiver<(RefreshKind, HistoryGraph, Result<HistoryRefresh>)> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let result = open_repository(&repository_path, bare, true)
             .context("could not reopen repository for history refresh")
             .and_then(|mut repository| {
                 repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
-                graph.refresh(
+                let history = graph.refresh(
                     &repository,
                     &revisions,
                     &hidden_revisions,
                     include_worktrees,
                     &expand,
                     &authors,
+                )?;
+                let worktree = matches!(
+                    &kind,
+                    RefreshKind::WorktreePreview {
+                        load_metadata: true,
+                        ..
+                    }
                 )
+                .then(|| {
+                    worktrunk::graph_metadata(&repository, &graph, &history.refs).map_err(|err| format!("{err:#}"))
+                });
+                Ok(HistoryRefresh { history, worktree })
             });
         let _ = sender.send((kind, graph, result));
     });
@@ -4453,7 +5946,8 @@ fn reconcile_external_conflict(
     );
     let finalized = if edit::rebase::is_pending(&replacement_commit) {
         drop(index);
-        let graph = edit::loaded_graph(&repository).context("could not load history to finalize the external amend")?;
+        let graph =
+            edit::loaded_view_graph(&repository).context("could not load history to finalize the external amend")?;
         let outcome = edit::head::amend_index_reporting(repository, &graph)
             .context("could not finalize the externally amended pending commit")?
             .context("the externally amended pending commit was not finalized")?;
@@ -4576,6 +6070,18 @@ fn decoration_head(decorations: &Decorations) -> Option<gix::ObjectId> {
     })
 }
 
+fn decoration_review_roots(decorations: &Decorations) -> Vec<gix::ObjectId> {
+    decorations
+        .iter()
+        .filter_map(|(id, decorations)| {
+            decorations
+                .iter()
+                .any(|decoration| decoration.kind == history::DecorationKind::Review)
+                .then_some(*id)
+        })
+        .collect()
+}
+
 fn current_worktree_branch(refs: &history::RefSnapshot) -> Option<(gix::ObjectId, bool)> {
     refs.worktrees
         .iter()
@@ -4587,6 +6093,141 @@ fn current_worktree_branch(refs: &history::RefSnapshot) -> Option<(gix::ObjectId
                     .is_some_and(|reference| reference.as_bstr().starts_with(b"refs/heads/"))
         })
         .map(|worktree| (worktree.label_id, worktree.is_detached))
+}
+
+fn active_branch_name(refs: &history::RefSnapshot) -> Option<BString> {
+    refs.active_branch.as_ref().map(|branch| branch.shorten().to_owned())
+}
+
+fn push_remote_name(repository: &gix::Repository, branch: &BStr) -> BString {
+    repository
+        .branch_remote_name(branch, gix::remote::Direction::Push)
+        .map(|name| name.as_bstr().to_owned())
+        .or_else(|| repository.remote_default_name(gix::remote::Direction::Push))
+        .unwrap_or_else(|| "origin".into())
+}
+
+fn background_progress_snapshot(source: &BackgroundProgressSource) -> app::BackgroundProgress {
+    match source.kind {
+        #[cfg(feature = "blocking-network-client")]
+        BackgroundProgressKind::Fetch => fetch_progress_snapshot(source),
+        BackgroundProgressKind::RemoveWorktree => remove_worktree_progress_snapshot(source),
+    }
+}
+
+#[cfg(feature = "blocking-network-client")]
+fn fetch_progress_snapshot(source: &BackgroundProgressSource) -> app::BackgroundProgress {
+    let mut tasks = Vec::new();
+    source.tree.sorted_snapshot(&mut tasks);
+    let mut completed = 0;
+    let mut detail = "setup".to_owned();
+    for (_, task) in tasks {
+        let step = task
+            .progress
+            .as_ref()
+            .map_or(0, |progress| progress.step.load(Ordering::Relaxed));
+        let within = |start: usize, end: usize| {
+            let Some(total) = task.progress.as_ref().and_then(|progress| progress.done_at) else {
+                return start;
+            };
+            start
+                + ((end - start) as u128 * step.min(total) as u128)
+                    .checked_div(total as u128)
+                    .unwrap_or((end - start) as u128) as usize
+        };
+        let name = task.name.to_ascii_lowercase();
+        let mapped = if task.id == *b"TIXF" {
+            step.min(95)
+        } else if task.id == *b"FERP" {
+            if name.contains("enumerating") {
+                within(15, 20)
+            } else if name.contains("counting") {
+                within(20, 25)
+            } else if name.contains("compressing") {
+                within(25, 30)
+            } else if name.contains("receiving") {
+                within(30, 75)
+            } else if name.contains("resolving") {
+                within(75, 90)
+            } else {
+                15
+            }
+        } else if task.id == *b"BWRB" || task.id == *b"IWIO" {
+            within(30, 75)
+        } else if task.id == *b"IWRO" {
+            within(75, 90)
+        } else if task.id == *b"IWBW" {
+            within(90, 95)
+        } else if name.starts_with("authentication") || name.starts_with("handshake") {
+            5
+        } else if name.starts_with("negotiate") {
+            10
+        } else if name.starts_with("receiving pack") {
+            30
+        } else {
+            continue;
+        };
+        if mapped >= completed {
+            completed = mapped;
+            detail = if let Some(total) = task.progress.as_ref().and_then(|progress| progress.done_at) {
+                format!("{} {}/{total}", task.name, step.min(total))
+            } else if step > 0 {
+                format!("{} {step}", task.name)
+            } else {
+                task.name
+            };
+        }
+    }
+    app::BackgroundProgress {
+        text: format!("{}: {detail}", source.label),
+        completed,
+        total: 100,
+    }
+}
+
+fn remove_worktree_progress_snapshot(source: &BackgroundProgressSource) -> app::BackgroundProgress {
+    let mut tasks = Vec::new();
+    source.tree.sorted_snapshot(&mut tasks);
+    let mut completed = 0;
+    let mut detail = "validate".to_owned();
+    for (_, task) in tasks {
+        let step = task
+            .progress
+            .as_ref()
+            .map_or(0, |progress| progress.step.load(Ordering::Relaxed));
+        let within = |start: usize, end: usize| {
+            let Some(total) = task.progress.as_ref().and_then(|progress| progress.done_at) else {
+                return start;
+            };
+            start
+                + ((end - start) as u128 * step.min(total) as u128)
+                    .checked_div(total as u128)
+                    .unwrap_or((end - start) as u128) as usize
+        };
+        let mapped = match task.name.to_ascii_lowercase().as_str() {
+            "validate" => within(0, 5),
+            "scan worktree" => 5,
+            "remove worktree" => within(10, 85),
+            "scan administration" => 85,
+            "remove administration" => within(90, 100),
+            _ => continue,
+        };
+        if mapped >= completed {
+            completed = mapped;
+            detail = if let Some(total) = task.progress.as_ref().and_then(|progress| progress.done_at) {
+                format!("{} {}/{total}", task.name, step.min(total))
+            } else if step > 0 {
+                format!("{} {step}", task.name)
+            } else {
+                task.name
+            };
+        }
+    }
+    app::BackgroundProgress {
+        text: format!("{}: {detail}", source.label),
+        completed,
+        total: 100,
+    }
 }
 
 fn decoration_successor(selected: gix::ObjectId, current: &Decorations, next: &Decorations) -> Option<gix::ObjectId> {
@@ -4643,6 +6284,13 @@ fn load_visible_history_metadata(
     Ok(())
 }
 
+fn resized_terminal_area<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+) -> std::result::Result<Rect, B::Error> {
+    terminal.autoresize()?;
+    Ok(terminal.get_frame().area())
+}
+
 #[expect(clippy::too_many_arguments, reason = "drawing needs the complete view state")]
 fn draw(
     terminal: &mut ratatui::DefaultTerminal,
@@ -4663,18 +6311,39 @@ fn draw(
     focused: bool,
     ref_tree: &mut ref_tree::Tree,
     filesystem_responses: &mut logging::FilesystemResponses,
+    picker: Option<&mut worktrunk::Worktrees>,
+    picker_focused: bool,
 ) -> Result<()> {
-    let render_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
+    let frame_area = resized_terminal_area(terminal).context("could not resize the terminal before drawing")?;
+    let history_area = picker.as_ref().map_or(frame_area, |picker| {
+        worktrunk::areas(frame_area, picker.display_row_count())[1]
+    });
+    let render_rows = history_area.height.saturating_sub(1) as usize;
     if !history_is_ready_to_draw(app.state, app.rows.len()) {
+        if let Some(picker) = picker {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            let [list, history] = worktrunk::areas(area, picker.display_row_count());
+            frame.render_widget(ratatui::widgets::Clear, history);
+            worktrunk::draw(&mut frame, list, picker, picker_focused);
+            terminal
+                .apply_buffer_with_cursor(None)
+                .context("could not draw worktree picker")?;
+            filesystem_responses.frame_presented();
+        }
         return Ok(());
     }
     if ref_tree.is_active() {
-        terminal
-            .autoresize()
-            .context("could not resize the terminal before drawing")?;
         {
             let mut frame = terminal.get_frame();
-            ref_tree.draw(&mut frame, history_graph.as_ref());
+            let area = frame.area();
+            let [list, history] = picker.as_ref().map_or([Rect::default(), area], |picker| {
+                worktrunk::areas(area, picker.display_row_count())
+            });
+            if let Some(picker) = picker {
+                worktrunk::draw(&mut frame, list, picker, picker_focused);
+            }
+            ref_tree.draw(&mut frame, history, history_graph.as_ref());
         }
         terminal
             .apply_buffer_with_cursor(None)
@@ -4925,13 +6594,18 @@ fn draw(
         .as_ref()
         .filter(|(marker, _)| *marker == WORKTREE_STATUS_CURRENT)
         .map(|(_, changes)| changes);
-    terminal
-        .autoresize()
-        .context("could not resize the terminal before drawing")?;
     let cursor = {
         let mut frame = terminal.get_frame();
+        let area = frame.area();
+        let [list, history] = picker.as_ref().map_or([Rect::default(), area], |picker| {
+            worktrunk::areas(area, picker.display_row_count())
+        });
+        if let Some(picker) = picker {
+            worktrunk::draw(&mut frame, list, picker, picker_focused);
+        }
         ui::draw_with_worktree(
             &mut frame,
+            history,
             app,
             decorations,
             mailmap,
@@ -4943,7 +6617,7 @@ fn draw(
             let commands = command_menu::commands(app, decorations, app.has_verifiable_signatures());
             let items = command_picker_items(&commands);
             command_picker.sync(&items);
-            ui::draw_command_menu(&mut frame, command_picker, &commands)
+            ui::draw_command_menu(&mut frame, history, command_picker, &commands)
         } else {
             None
         }
@@ -5297,11 +6971,16 @@ fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BStrin
     )
 }
 
-fn show_file_diff(terminal: &mut ratatui::DefaultTerminal, diff: FileDiff, enhanced_keyboard: bool) -> Result<bool> {
+fn show_file_diff(
+    terminal: &mut ratatui::DefaultTerminal,
+    diff: FileDiff,
+    enhanced_keyboard: bool,
+    picker: Option<(&worktrunk::Worktrees, bool)>,
+) -> Result<bool> {
     match diff {
         FileDiff::External(command) => run_external_diff(terminal, command, enhanced_keyboard).map(|()| false),
         FileDiff::Pager { command, diff } => run_pager(terminal, command, &diff, enhanced_keyboard).map(|()| false),
-        FileDiff::BuiltIn(diff) => show_builtin_diff(terminal, &diff),
+        FileDiff::BuiltIn(diff) => show_builtin_diff(terminal, &diff, picker),
     }
 }
 
@@ -5309,8 +6988,9 @@ fn show_commit_diff(
     terminal: &mut ratatui::DefaultTerminal,
     diff: CommitDiff,
     enhanced_keyboard: bool,
+    picker: Option<(&worktrunk::Worktrees, bool)>,
 ) -> Result<bool> {
-    if show_file_diff(terminal, diff.internal, enhanced_keyboard)? {
+    if show_file_diff(terminal, diff.internal, enhanced_keyboard, picker)? {
         return Ok(true);
     }
     for command in diff.external {
@@ -6119,20 +7799,33 @@ fn pager_needs_acknowledgement(elapsed: Duration) -> bool {
     elapsed <= IMMEDIATE_PAGER_EXIT
 }
 
-fn show_builtin_diff(terminal: &mut ratatui::DefaultTerminal, diff: &BuiltInDiff) -> Result<bool> {
+fn show_builtin_diff(
+    terminal: &mut ratatui::DefaultTerminal,
+    diff: &BuiltInDiff,
+    picker: Option<(&worktrunk::Worktrees, bool)>,
+) -> Result<bool> {
     let mut offset = 0usize;
     let mut horizontal_offset = 0usize;
     let mut focused = true;
     loop {
         let size = terminal.size().context("could not determine diff viewport")?;
-        let page = usize::from(size.height.saturating_sub(2)).max(1);
+        let frame_area = Rect::new(0, 0, size.width, size.height);
+        let [list_area, diff_area] = picker.map_or([Rect::default(), frame_area], |(picker, _)| {
+            worktrunk::areas(frame_area, picker.display_row_count())
+        });
+        let page = usize::from(diff_area.height.saturating_sub(2)).max(1);
         let max = diff.display_line_count().saturating_sub(page);
-        let horizontal_page = usize::from(size.width).max(1);
+        let horizontal_page = usize::from(diff_area.width).max(1);
         let horizontal_max = diff.max_width.saturating_sub(horizontal_page);
         offset = offset.min(max);
         horizontal_offset = horizontal_offset.min(horizontal_max);
         terminal
-            .draw(|frame| ui::draw_file_diff(frame, diff, offset, horizontal_offset))
+            .draw(|frame| {
+                if let Some((picker, focused)) = picker {
+                    worktrunk::draw(frame, list_area, picker, focused);
+                }
+                ui::draw_file_diff(frame, diff_area, diff, offset, horizontal_offset);
+            })
             .context("could not draw file diff")?;
         let event = event::read().context("could not read file diff input")?;
         let key = match event {
@@ -6900,14 +8593,18 @@ fn command_picker_items(commands: &[MenuCommand]) -> Vec<MenuItem<'_, CommandId>
     commands
         .iter()
         .map(|command| {
-            MenuItem::with_search_prefix(command.label, command.group.label(), command.group.prefix(), command.id)
+            MenuItem::with_search_prefix(
+                command.label,
+                command.search_prefix(),
+                command.group.prefix(),
+                command.id,
+            )
         })
         .collect()
 }
 
-fn opens_command_menu(event: &TerminalEvent, actions_expanded: bool, command_menu_open: bool) -> bool {
-    !actions_expanded
-        && !command_menu_open
+fn opens_command_menu(event: &TerminalEvent, command_menu_open: bool) -> bool {
+    !command_menu_open
         && matches!(
             event,
             TerminalEvent::Key(KeyEvent {
@@ -7012,24 +8709,53 @@ fn command_menu_input(event: &TerminalEvent, menu: &mut Menu<CommandId>, command
     }
 }
 
-fn resolve_pasted_commit(repository: &gix::Repository, pasted: &str) -> Result<gix::ObjectId> {
-    let hash = pasted.trim();
+#[derive(Debug, Eq, PartialEq)]
+enum PastedCommit {
+    Unique(gix::ObjectId),
+    Ambiguous {
+        change_id: gix::hash::ChangeId,
+        candidates: Vec<gix::ObjectId>,
+    },
+}
+
+fn resolve_pasted_commit(
+    repository: &gix::Repository,
+    pasted: &str,
+    change_id_candidates: impl IntoIterator<Item = gix::ObjectId>,
+) -> Result<PastedCommit> {
+    let id = pasted.trim();
     anyhow::ensure!(
-        !hash.is_empty() && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "expected exactly one hexadecimal commit ID"
+        !id.is_empty(),
+        "expected exactly one hexadecimal commit ID or reverse-hex change ID"
     );
-    let object = repository
-        .rev_parse(hash.as_bytes().as_bstr())
-        .context("could not resolve pasted commit ID")?
-        .single()
-        .context("pasted commit ID is ambiguous")?
-        .object()
-        .context("could not read pasted object")?;
-    anyhow::ensure!(
-        object.kind == gix::object::Kind::Commit,
-        "pasted object is not a commit"
-    );
-    Ok(object.id)
+    if id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        let object = repository
+            .rev_parse(id.as_bytes().as_bstr())
+            .context("could not resolve pasted commit ID")?
+            .single()
+            .context("pasted commit ID is ambiguous")?
+            .object()
+            .context("could not read pasted object")?;
+        anyhow::ensure!(
+            object.kind == gix::object::Kind::Commit,
+            "pasted object is not a commit"
+        );
+        return Ok(PastedCommit::Unique(object.id));
+    }
+
+    let change_id = gix::hash::ChangeId::from_reverse_hex(id.as_bytes())
+        .context("expected exactly one hexadecimal commit ID or reverse-hex change ID")?;
+    let mut candidates = Vec::new();
+    for commit_id in change_id_candidates {
+        if change_id::for_commit(repository, commit_id)? == change_id {
+            candidates.push(commit_id);
+        }
+    }
+    match candidates.len() {
+        0 => anyhow::bail!("pasted change ID is not present in the Tix view"),
+        1 => Ok(PastedCommit::Unique(candidates[0])),
+        _ => Ok(PastedCommit::Ambiguous { change_id, candidates }),
+    }
 }
 
 fn diagnostic_key(character: char) -> KeyEvent {
@@ -7047,8 +8773,8 @@ fn diagnostic_key(character: char) -> KeyEvent {
     KeyEvent::new(code, modifiers)
 }
 
-fn next_diagnostic_input(inputs: &mut VecDeque<KeyEvent>, state: State, lane_computing: bool) -> Option<KeyEvent> {
-    (state == State::Complete && !lane_computing)
+fn next_diagnostic_input(inputs: &mut VecDeque<KeyEvent>, state: State, busy: bool) -> Option<KeyEvent> {
+    (state == State::Complete && !busy)
         .then(|| inputs.pop_front())
         .flatten()
 }
@@ -7065,6 +8791,12 @@ fn diagnostic_action(key: KeyEvent, app: &App) -> Option<Action> {
 }
 
 fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
+    if app.entry_selection_active() {
+        return entry_selection_action(key);
+    }
+    if app.topological_navigation_active() {
+        return topological_selection_action(key);
+    }
     if key.kind != KeyEventKind::Release {
         let shifted =
             key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('H' | 'J' | 'K' | 'L'));
@@ -7073,8 +8805,6 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
                 match key.code {
                     KeyCode::Up | KeyCode::Char('k' | 'K') => return Some(Action::TopologicalUp),
                     KeyCode::Down | KeyCode::Char('j' | 'J') => return Some(Action::TopologicalDown),
-                    KeyCode::Left | KeyCode::Char('h' | 'H') => return Some(Action::PreviousChild),
-                    KeyCode::Right | KeyCode::Char('l' | 'L') => return Some(Action::NextChild),
                     _ => {}
                 }
             } else {
@@ -7127,6 +8857,48 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
     )
 }
 
+fn entry_selection_action(key: KeyEvent) -> Option<Action> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
+        KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => Some(Action::Quit),
+        KeyCode::Esc => Some(Action::Cancel),
+        KeyCode::Enter => Some(Action::SubmitEntrySelection),
+        KeyCode::Backspace => Some(Action::SelectEntryBackspace),
+        KeyCode::Char(digit)
+            if digit.is_ascii_digit() && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(Action::SelectEntryInput(digit.to_string()))
+        }
+        _ => None,
+    }
+}
+
+fn topological_selection_action(key: KeyEvent) -> Option<Action> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
+        KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => Some(Action::Quit),
+        KeyCode::Esc => Some(Action::CancelTopological),
+        KeyCode::Enter => Some(Action::SubmitTopological),
+        KeyCode::Left | KeyCode::Char('h' | 'H')
+            if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(Action::PreviousChild)
+        }
+        KeyCode::Right | KeyCode::Char('l' | 'L')
+            if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Some(Action::NextChild)
+        }
+        _ => None,
+    }
+}
+
 fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_focused: bool) -> bool {
     matches!(
         action,
@@ -7141,6 +8913,8 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::TopologicalDown
                 | Action::PreviousChild
                 | Action::NextChild
+                | Action::SubmitTopological
+                | Action::CancelTopological
                 | Action::CycleDuplicate
                 | Action::ScrollLeft
                 | Action::ScrollRight
@@ -7158,6 +8932,10 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::ToggleMailmap
                 | Action::CycleRefs
                 | Action::ToggleRefs
+                | Action::SelectEntry
+                | Action::SelectEntryInput(_)
+                | Action::SelectEntryBackspace
+                | Action::SubmitEntrySelection
                 | Action::ToggleHistoryDisplay
                 | Action::ToggleInformation
                 | Action::ToggleAlign
@@ -7190,6 +8968,7 @@ fn action_with_shortcut_groups(
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('a') => Some(Action::ToggleActions),
+        KeyCode::Char('n') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleEnrich),
         KeyCode::Char('?') => Some(Action::ToggleInformation),
         KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleInformation),
         KeyCode::Char('b') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -7204,10 +8983,16 @@ fn action_with_shortcut_groups(
         }
         KeyCode::Char('u') if !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Undo),
         KeyCode::Char('r') if actions_expanded => Some(Action::Review),
+        KeyCode::Char('S') if actions_expanded => Some(Action::Split),
+        KeyCode::Char('s') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Split),
         KeyCode::Char('s') if actions_expanded => Some(Action::Squash),
         KeyCode::Char('y') if actions_expanded => Some(Action::CopyInsert),
         KeyCode::Char('m') if actions_expanded => Some(Action::MoveInsert),
         KeyCode::Char('t') if actions_expanded => Some(Action::StackInsert),
+        #[cfg(feature = "blocking-network-client")]
+        KeyCode::Char('F') if actions_expanded => Some(Action::Fetch),
+        #[cfg(feature = "blocking-network-client")]
+        KeyCode::Char('f') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Fetch),
         KeyCode::Char('f') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::ForkCommit)
         }
@@ -7215,13 +9000,16 @@ fn action_with_shortcut_groups(
         KeyCode::Char('z') if actions_expanded => Some(Action::Stash),
         KeyCode::Char('o') if actions_expanded => Some(Action::Reword),
         KeyCode::Char('w') if actions_expanded => Some(Action::NewCommit),
-        KeyCode::Char('n') if actions_expanded => Some(Action::NewEmptyCommit),
+        KeyCode::Char('N') if actions_expanded => Some(Action::NewEmptyCommit),
+        KeyCode::Char('n') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => {
+            Some(Action::NewEmptyCommit)
+        }
         KeyCode::Char('e') if actions_expanded => Some(Action::Amend),
         KeyCode::Char('l') if actions_expanded => Some(Action::Spill),
-        KeyCode::Char('p') if actions_expanded && !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Split),
+        KeyCode::Char('P') if actions_expanded => Some(Action::Push),
+        KeyCode::Char('p') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Push),
         KeyCode::Char('d') if actions_expanded => Some(Action::Forget),
         KeyCode::Char('i') if actions_expanded => Some(Action::TogglePin),
-        KeyCode::Char('n') => Some(Action::ToggleEnrich),
         KeyCode::Char('P') => Some(Action::CycleChangesParent),
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
@@ -7244,6 +9032,7 @@ fn action_with_shortcut_groups(
         KeyCode::End | KeyCode::Char('G') => Some(Action::Last),
         KeyCode::Char('d') if history_display_expanded => Some(Action::ToggleDate),
         KeyCode::Char('i') if history_display_expanded => Some(Action::CycleIds),
+        KeyCode::Char('c') if history_display_expanded => Some(Action::SelectEntry),
         KeyCode::Char('s') if history_display_expanded => Some(Action::ToggleEmail),
         KeyCode::Char('e') if history_display_expanded => Some(Action::ToggleName),
         KeyCode::Char('t') if history_display_expanded => Some(Action::ToggleTrailers),
@@ -7325,8 +9114,6 @@ fn mouse_scroll_action(
         MouseEventKind::ScrollDown if shifted || changes_focused => Some(Action::MoveDownBy(distance.max(1))),
         MouseEventKind::ScrollUp => Some(Action::PanUpBy(distance.max(1))),
         MouseEventKind::ScrollDown => Some(Action::PanDownBy(distance.max(1))),
-        MouseEventKind::ScrollLeft if shifted => Some(Action::PreviousChild),
-        MouseEventKind::ScrollRight if shifted => Some(Action::NextChild),
         MouseEventKind::ScrollLeft => Some(Action::ScrollLeft),
         MouseEventKind::ScrollRight => Some(Action::ScrollRight),
         _ => None,
@@ -7338,26 +9125,262 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pasted_commit_ids_are_hex_only_and_must_name_commit_objects() -> gix_testtools::Result {
+    fn worktrunk_keys_navigate_focus_and_promote() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Char('j')), 1, 4, 2),
+            Some(WorktrunkInput::Select(2))
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::PageDown), 1, 4, 2),
+            Some(WorktrunkInput::Select(3))
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Tab), 1, 4, 2),
+            Some(WorktrunkInput::FocusHistory)
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Enter), 1, 4, 2),
+            Some(WorktrunkInput::Promote)
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Char('q')), 1, 4, 2),
+            Some(WorktrunkInput::Cancel { force: false })
+        );
+        assert_eq!(
+            worktrunk_input(
+                KeyEvent::new_with_kind(KeyCode::Esc, KeyModifiers::NONE, KeyEventKind::Repeat),
+                1,
+                4,
+                2,
+            ),
+            None,
+            "an Escape repeat cannot quit the picker after its press closed a modal"
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Char('/')), 1, 4, 2),
+            Some(WorktrunkInput::StartSearch)
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Char('d')), 1, 4, 2),
+            Some(WorktrunkInput::Remove(gix::worktree::remove::Force::Never))
+        );
+        assert_eq!(
+            worktrunk_input(key(KeyCode::Char('D')), 1, 4, 2),
+            Some(WorktrunkInput::Remove(gix::worktree::remove::Force::DiscardChanges))
+        );
+        assert_eq!(
+            worktrunk_input(
+                KeyEvent::new_with_kind(KeyCode::Char('d'), KeyModifiers::NONE, KeyEventKind::Repeat),
+                1,
+                4,
+                2,
+            ),
+            None,
+            "holding d cannot confirm a destructive action"
+        );
+        let search_cases = [
+            (
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+                WorktrunkInput::Search(worktrunk::SearchInput::Up(1)),
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+                WorktrunkInput::Search(worktrunk::SearchInput::Down(1)),
+            ),
+            (
+                key(KeyCode::Char('j')),
+                WorktrunkInput::Search(worktrunk::SearchInput::Insert('j')),
+            ),
+            (
+                key(KeyCode::PageDown),
+                WorktrunkInput::Search(worktrunk::SearchInput::Down(2)),
+            ),
+            (key(KeyCode::Esc), WorktrunkInput::CancelSearch),
+            (key(KeyCode::Enter), WorktrunkInput::SubmitSearch),
+        ];
+        for (key, expected) in search_cases {
+            assert_eq!(worktrunk_search_input(key, 2), Some(expected));
+        }
+        assert_eq!(
+            worktrunk_search_input(
+                KeyEvent::new_with_kind(KeyCode::Char('/'), KeyModifiers::NONE, KeyEventKind::Repeat),
+                2,
+            ),
+            None,
+            "a repeated opener does not leak into the search query"
+        );
+    }
+
+    #[test]
+    fn history_modals_preempt_worktrunk_input() {
+        let mut app = App::new(1);
+        assert!(worktrunk_owns_input(&app, true, true));
+
+        app.arm_rebase_continuation();
+        assert!(
+            !worktrunk_owns_input(&app, true, true),
+            "a conflicted rebase receives Escape instead of the worktree picker quitting"
+        );
+        assert_eq!(
+            app_action(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &app),
+            Some(Action::Cancel)
+        );
+    }
+
+    #[test]
+    fn diagnostic_worktrunk_inputs_are_read_only() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            diagnostic_worktrunk_input(worktrunk_input(key(KeyCode::Char('j')), 1, 4, 2)),
+            Some(WorktrunkInput::Select(2)),
+            "diagnostics use worktree navigation"
+        );
+        for input in [
+            worktrunk_input(key(KeyCode::Char('d')), 1, 4, 2),
+            worktrunk_input(key(KeyCode::Enter), 1, 4, 2),
+            worktrunk_input(key(KeyCode::Char('q')), 1, 4, 2),
+        ] {
+            assert_eq!(
+                diagnostic_worktrunk_input(input),
+                None,
+                "diagnostics ignore mutating or terminating worktree input"
+            );
+        }
+    }
+
+    #[test]
+    fn worktrunk_removal_requires_the_same_path_and_force_twice() {
+        let path = Path::new("/worktrees/topic");
+        let mut armed = None;
+        assert!(!confirm_worktree_removal(
+            &mut armed,
+            path,
+            gix::worktree::remove::Force::Never
+        ));
+        assert!(!confirm_worktree_removal(
+            &mut armed,
+            path,
+            gix::worktree::remove::Force::DiscardChanges
+        ));
+        assert!(confirm_worktree_removal(
+            &mut armed,
+            path,
+            gix::worktree::remove::Force::DiscardChanges
+        ));
+        assert!(armed.is_none(), "confirmation consumes the armed removal");
+
+        let removal = WorktrunkInput::Remove(gix::worktree::remove::Force::Never);
+        assert!(!disarms_worktree_removal(
+            Some(&removal),
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+        ));
+        assert!(disarms_worktree_removal(
+            Some(&WorktrunkInput::Select(1)),
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))
+        ));
+        assert!(disarms_worktree_removal(
+            None,
+            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+        ));
+        assert!(
+            !disarms_worktree_removal(
+                None,
+                &TerminalEvent::Key(KeyEvent::new_with_kind(
+                    KeyCode::Char('x'),
+                    KeyModifiers::NONE,
+                    KeyEventKind::Release,
+                ))
+            ),
+            "release events do not cancel an armed command"
+        );
+    }
+
+    #[test]
+    fn worktrunk_refresh_waits_for_background_tasks_and_preview_workers() {
+        assert!(worktrunk_refresh_blocked(true, false, false, false));
+        assert!(worktrunk_refresh_blocked(false, true, false, false));
+        assert!(worktrunk_refresh_blocked(false, false, true, false));
+        assert!(worktrunk_refresh_blocked(false, false, false, true));
+        assert!(!worktrunk_refresh_blocked(false, false, false, false));
+    }
+
+    #[test]
+    fn latest_worktrunk_preview_request_is_queued_first() {
+        let mut requested = None;
+        let mut queue = VecDeque::from([0, 1, 2]);
+
+        request_worktree_preview(Some(1), &mut requested, &mut queue);
+        request_worktree_preview(Some(2), &mut requested, &mut queue);
+
+        assert_eq!(requested, Some(2));
+        assert_eq!(queue, [2, 1, 0], "the latest selection moves to the front once");
+    }
+
+    #[test]
+    fn clearing_an_uncached_worktrunk_request_keeps_its_preload_queued() {
+        let mut requested = Some(1);
+        let mut queue = VecDeque::from([1, 0]);
+
+        clear_worktree_preview_request(1, false, &mut requested, &mut queue);
+
+        assert_eq!(requested, None);
+        assert_eq!(
+            queue,
+            [1, 0],
+            "uncached metadata must still be loaded in the background"
+        );
+
+        requested = Some(1);
+        clear_worktree_preview_request(1, true, &mut requested, &mut queue);
+        assert_eq!(queue, [0], "cached metadata needs no background reload");
+    }
+
+    #[test]
+    fn pasted_ids_must_uniquely_name_commit_objects() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = test_repository::open(fixture.path())?;
         let commit = repository.rev_parse_single("topic")?.detach();
         let abbreviated = commit.to_hex_with_len(8).to_string();
 
         assert_eq!(
-            resolve_pasted_commit(&repository, &format!("\n{abbreviated}\n"))?,
-            commit
+            resolve_pasted_commit(&repository, &format!("\n{abbreviated}\n"), [])?,
+            PastedCommit::Unique(commit)
         );
-        assert_eq!(resolve_pasted_commit(&repository, &commit.to_string())?, commit);
+        assert_eq!(
+            resolve_pasted_commit(&repository, &commit.to_string(), [])?,
+            PastedCommit::Unique(commit)
+        );
+
+        let change_id = change_id::for_commit(&repository, commit)?;
+        assert_eq!(
+            resolve_pasted_commit(&repository, &change_id.to_string(), [commit])?,
+            PastedCommit::Unique(commit),
+            "a unique copied change ID resolves in the Tix view"
+        );
+        let mut sibling = repository.find_commit(commit)?.decode()?.into_owned()?;
+        sibling
+            .extra_headers
+            .push((change_id::HEADER.into(), change_id.to_string().into()));
+        let sibling = repository.write_object(&sibling)?.detach();
+        assert_eq!(
+            resolve_pasted_commit(&repository, &change_id.to_string(), [commit, sibling])?,
+            PastedCommit::Ambiguous {
+                change_id,
+                candidates: vec![commit, sibling]
+            },
+            "all siblings are returned when a copied change ID is ambiguous"
+        );
+
         for invalid in ["topic", "dead beef", ""] {
             assert!(
-                resolve_pasted_commit(&repository, invalid).is_err(),
-                "{invalid:?} is not exactly one hexadecimal object ID"
+                resolve_pasted_commit(&repository, invalid, []).is_err(),
+                "{invalid:?} is not exactly one object or change ID"
             );
         }
         let blob = repository.write_blob(b"not a commit")?.detach();
         assert!(
-            resolve_pasted_commit(&repository, &blob.to_string()).is_err(),
+            resolve_pasted_commit(&repository, &blob.to_string(), []).is_err(),
             "an existing non-commit object is rejected"
         );
         Ok(())
@@ -7418,30 +9441,21 @@ mod tests {
     }
 
     #[test]
-    fn command_menu_opener_does_not_steal_prefixed_or_shifted_p() {
+    fn command_menu_opener_accepts_only_an_unmodified_press_while_closed() {
         assert!(opens_command_menu(
             &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
             false,
-            false,
         ));
         assert!(!opens_command_menu(
             &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
-            true,
-            false,
-        ));
-        assert!(!opens_command_menu(
-            &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
-            false,
             true,
         ));
         assert!(!opens_command_menu(
             &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT)),
             false,
-            false,
         ));
         assert!(!opens_command_menu(
             &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE)),
-            false,
             false,
         ));
         assert!(!opens_command_menu(
@@ -7450,7 +9464,6 @@ mod tests {
                 KeyModifiers::NONE,
                 KeyEventKind::Repeat,
             )),
-            false,
             false,
         ));
 
@@ -7711,6 +9724,9 @@ mod tests {
             view_tips: Vec::new(),
             hidden_tips: Vec::new(),
             pins: Vec::new(),
+            active_branch: None,
+            #[cfg(feature = "blocking-network-client")]
+            fetch_remote: None,
             worktrees: vec![history::WorktreeCheckout {
                 id,
                 label_id: id,
@@ -7730,6 +9746,359 @@ mod tests {
             None,
             "manual detachment has no branch to move"
         );
+    }
+
+    #[test]
+    fn pushes_the_remembered_active_branch_and_retries_rewrites_with_a_lease() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let remote = gix_testtools::tempfile::tempdir()?;
+        let initialized = Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(remote.path())
+            .status()?;
+        assert!(initialized.success(), "git creates the local bare remote");
+        let remote_added = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["remote", "add", "origin"])
+            .arg(remote.path())
+            .status()?;
+        assert!(remote_added.success(), "git configures the push remote");
+        let pinned = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["symbolic-ref", "refs/worktree/tix/pins/HEAD", "refs/heads/main"])
+            .status()?;
+        assert!(pinned.success(), "git remembers main through the HEAD pin");
+        let detached = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["checkout", "-q", "--detach", "main~2"])
+            .status()?;
+        assert!(detached.success(), "the worktree moves away from the remembered branch");
+
+        let repository = test_repository::open(fixture.path())?;
+        let main_id = repository.rev_parse_single("main")?.detach();
+        assert_ne!(
+            repository.head_id()?,
+            main_id,
+            "the detached checkout differs from main"
+        );
+        let snapshot = history::snapshot(&repository, &[], &[], false)?;
+        let branch = snapshot
+            .active_branch
+            .as_ref()
+            .context("the HEAD pin identifies a branch")?
+            .shorten()
+            .to_owned();
+        let remote_name = push_remote_name(&repository, branch.as_bstr());
+        assert_eq!(remote_name, "origin", "the sole remote is the push fallback");
+        let git_dir = repository.git_dir().to_owned();
+        drop(repository);
+
+        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), false)?
+        else {
+            panic!("the empty remote accepts the initial push");
+        };
+        assert_eq!(message, "pushed main to origin");
+        assert_eq!(
+            gix::open(remote.path())?.find_reference("refs/heads/main")?.id(),
+            main_id,
+            "the branch named by the pin is pushed, not detached HEAD"
+        );
+
+        let topic_id = test_repository::open(fixture.path())?
+            .rev_parse_single("topic")?
+            .detach();
+        let rewritten = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["update-ref", "refs/heads/main", &topic_id.to_hex().to_string()])
+            .status()?;
+        assert!(rewritten.success(), "the pushed branch is rewritten locally");
+        assert!(
+            matches!(
+                push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), false)?,
+                PushOutcome::NeedsForce
+            ),
+            "a non-fast-forward push offers the guarded retry"
+        );
+        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), true)? else {
+            panic!("a forced retry cannot request another retry");
+        };
+        assert_eq!(message, "pushed main to origin");
+        assert_eq!(
+            gix::open(remote.path())?.find_reference("refs/heads/main")?.id(),
+            topic_id,
+            "force-with-lease updates the rewritten branch"
+        );
+
+        let stale_remote = Command::new("git")
+            .arg("--git-dir")
+            .arg(remote.path())
+            .args(["update-ref", "refs/heads/main", &main_id.to_hex().to_string()])
+            .status()?;
+        assert!(stale_remote.success(), "the remote changes without local knowledge");
+        let err = match push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), true) {
+            Err(err) => err,
+            Ok(_) => panic!("a stale lease fails permanently"),
+        };
+        let message = format!("{err:#}");
+        assert!(message.contains("[rejected] (stale info)"), "{message}");
+        assert!(message.contains("failed to push some refs"), "{message}");
+        Ok(())
+    }
+
+    #[test]
+    fn only_initial_local_push_rejections_offer_force_with_lease() {
+        for reason in ["fetch first", "non-fast-forward", "needs force"] {
+            let output = format!("!\trefs/heads/main:refs/heads/main\t[rejected] ({reason})\n");
+            assert!(
+                retryable_push_rejection(false, output.as_bytes()),
+                "{reason} needs a force retry"
+            );
+            assert!(
+                !retryable_push_rejection(true, output.as_bytes()),
+                "the force-with-lease attempt is final"
+            );
+        }
+        for output in [
+            "!\trefs/heads/main:refs/heads/main\t[remote rejected] (hook declined)\n",
+            "!\trefs/heads/main:refs/heads/main\t[rejected] (stale info)\n",
+            "fatal: could not read from remote repository\n",
+        ] {
+            assert!(
+                !retryable_push_rejection(false, output.as_bytes()),
+                "unrelated failures do not suggest force"
+            );
+        }
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn selects_the_branch_fetch_remote_then_origin_or_the_sole_remote() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let git = |args: &[&str]| Command::new("git").current_dir(fixture.path()).args(args).status();
+        assert!(git(&["remote", "add", "origin", "./origin.git"])?.success());
+        assert!(git(&["remote", "add", "upstream", "./upstream.git"])?.success());
+        assert!(git(&["config", "branch.main.remote", "upstream"])?.success());
+
+        let repository = test_repository::open(fixture.path())?;
+        assert_eq!(
+            history::snapshot(&repository, &[], &[], false)?
+                .fetch_remote
+                .as_ref()
+                .map(|name| name.as_bstr()),
+            Some(b"upstream".as_bstr())
+        );
+        drop(repository);
+
+        assert!(git(&["config", "--unset", "branch.main.remote"])?.success());
+        let repository = test_repository::open(fixture.path())?;
+        assert_eq!(
+            history::snapshot(&repository, &[], &[], false)?
+                .fetch_remote
+                .as_ref()
+                .map(|name| name.as_bstr()),
+            Some(b"origin".as_bstr())
+        );
+        drop(repository);
+
+        assert!(git(&["checkout", "-q", "--detach"])?.success());
+        let repository = test_repository::open(fixture.path())?;
+        let snapshot = history::snapshot(&repository, &[], &[], false)?;
+        assert_eq!(snapshot.active_branch, None);
+        assert_eq!(
+            snapshot.fetch_remote.as_ref().map(|name| name.as_bstr()),
+            Some(b"origin".as_bstr())
+        );
+        drop(repository);
+
+        assert!(git(&["remote", "remove", "origin"])?.success());
+        let repository = test_repository::open(fixture.path())?;
+        assert_eq!(
+            history::snapshot(&repository, &[], &[], false)?
+                .fetch_remote
+                .as_ref()
+                .map(|name| name.as_bstr()),
+            Some(b"upstream".as_bstr())
+        );
+        drop(repository);
+
+        assert!(git(&["remote", "remove", "upstream"])?.success());
+        let repository = test_repository::open(fixture.path())?;
+        assert_eq!(history::snapshot(&repository, &[], &[], false)?.fetch_remote, None);
+        Ok(())
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn fetches_configured_refspecs_into_remote_tracking_refs_with_gix() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let remote = gix_testtools::tempfile::tempdir()?;
+        assert!(
+            Command::new("git")
+                .args(["init", "-q", "--bare"])
+                .arg(remote.path())
+                .status()?
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .current_dir(fixture.path())
+                .args(["remote", "add", "origin"])
+                .arg(remote.path())
+                .status()?
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .current_dir(fixture.path())
+                .args(["push", "-q", "origin", "main"])
+                .status()?
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .current_dir(fixture.path())
+                .args(["update-ref", "-d", "refs/remotes/origin/main"])
+                .status()?
+                .success()
+        );
+
+        let expected = test_repository::open(fixture.path())?
+            .rev_parse_single("main")?
+            .detach();
+        let message = fetch_remote(
+            fixture.path(),
+            false,
+            b"origin".as_bstr(),
+            gix::progress::tree::Root::new(),
+        )?;
+        assert_eq!(message, "fetched origin");
+        assert_eq!(
+            test_repository::open(fixture.path())?
+                .find_reference("refs/remotes/origin/main")?
+                .id(),
+            expected,
+            "the configured fetch refspec updates its tracking reference"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn fetch_progress_maps_real_tasks_into_monotonic_phases() {
+        let tree = gix::progress::tree::Root::new();
+        let source = BackgroundProgressSource {
+            tree: Arc::clone(&tree),
+            label: "fetching origin".into(),
+            kind: BackgroundProgressKind::Fetch,
+        };
+        let mut phase = tree.add_child_with_id("connect/auth", *b"TIXF");
+        phase.init(Some(100), gix::progress::steps());
+        phase.set(5);
+        let mut values = vec![fetch_progress_snapshot(&source).completed];
+
+        let mut fetch = phase.add_child("negotiate (round 1)");
+        values.push(fetch_progress_snapshot(&source).completed);
+        let remote = fetch.add_child_with_id("remote: Counting objects", *b"FERP");
+        remote.init(Some(100), gix::progress::count("objects"));
+        remote.set(50);
+        values.push(fetch_progress_snapshot(&source).completed);
+        let indexing = fetch.add_child_with_id("indexing", *b"IWIO");
+        indexing.init(Some(100), gix::progress::count("objects"));
+        indexing.set(50);
+        values.push(fetch_progress_snapshot(&source).completed);
+        let resolving = fetch.add_child_with_id("Resolving", *b"IWRO");
+        resolving.init(Some(100), gix::progress::count("objects"));
+        resolving.set(50);
+        values.push(fetch_progress_snapshot(&source).completed);
+        let writing = fetch.add_child_with_id("writing index file", *b"IWBW");
+        writing.init(Some(100), gix::progress::bytes());
+        writing.set(50);
+        values.push(fetch_progress_snapshot(&source).completed);
+
+        assert_eq!(values, [5, 10, 22, 52, 82, 92]);
+        assert!(
+            values.windows(2).all(|pair| pair[0] <= pair[1]),
+            "progress never moves backwards between phases"
+        );
+    }
+
+    #[test]
+    fn worktree_removal_progress_maps_stable_phases() {
+        let tree = gix::progress::tree::Root::new();
+        let source = BackgroundProgressSource {
+            tree: Arc::clone(&tree),
+            label: "removing topic".into(),
+            kind: BackgroundProgressKind::RemoveWorktree,
+        };
+        let validate = tree.add_child("validate");
+        validate.init(Some(1), gix::progress::count("worktree"));
+        validate.set(1);
+        let mut values = vec![remove_worktree_progress_snapshot(&source).completed];
+        let scan = tree.add_child("scan worktree");
+        scan.init(None, gix::progress::count("entries"));
+        scan.set(30);
+        values.push(remove_worktree_progress_snapshot(&source).completed);
+        let remove = tree.add_child("remove worktree");
+        remove.init(Some(100), gix::progress::count("entries"));
+        remove.set(50);
+        values.push(remove_worktree_progress_snapshot(&source).completed);
+        let scan_admin = tree.add_child("scan administration");
+        scan_admin.init(None, gix::progress::count("entries"));
+        values.push(remove_worktree_progress_snapshot(&source).completed);
+        let remove_admin = tree.add_child("remove administration");
+        remove_admin.init(Some(10), gix::progress::count("entries"));
+        remove_admin.set(10);
+        values.push(remove_worktree_progress_snapshot(&source).completed);
+
+        assert_eq!(values, [5, 5, 47, 85, 100]);
+    }
+
+    #[test]
+    fn only_worktree_removal_blocks_forced_exit() {
+        assert!(BackgroundTaskKind::RemoveWorktree.blocks_exit());
+        assert!(!BackgroundTaskKind::References.blocks_exit());
+    }
+
+    #[test]
+    fn background_task_results_set_notice_severity_and_release_the_slot() {
+        let mut app = App::new(1);
+        app.start_background_task("running");
+        assert!(report_background_task(&mut app, Ok(BackgroundCompletion::Success("done".into()))).0);
+        assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Success));
+        assert!(app.background_progress().is_none());
+
+        app.start_background_task("running");
+        assert!(report_background_task(&mut app, Ok(BackgroundCompletion::Attention("partly done".into()))).0);
+        assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Attention));
+
+        app.start_background_task("running");
+        assert!(!report_background_task(&mut app, Err(anyhow::anyhow!("failed"))).0);
+        assert_eq!(app.notice().map(|notice| notice.kind), Some(app::NoticeKind::Error));
+        assert!(app.background_progress().is_none());
+
+        app.start_background_task("running");
+        let (succeeded, retry) = report_background_task(
+            &mut app,
+            Ok(BackgroundCompletion::PushNeedsForce(PushRequest {
+                repository_path: "repository".into(),
+                remote: "origin".into(),
+                branch: "main".into(),
+            })),
+        );
+        assert!(!succeeded);
+        assert!(retry.is_some(), "the rejected push remains available for retry");
+        assert_eq!(
+            app.notice(),
+            Some(app::Notice {
+                kind: app::NoticeKind::Attention,
+                text: PUSH_RETRY_PROMPT.into(),
+            })
+        );
+        assert!(app.background_progress().is_none());
     }
 
     #[test]
@@ -8975,6 +11344,7 @@ mod tests {
         for (key, expected) in [
             ('d', Action::ToggleDate),
             ('i', Action::CycleIds),
+            ('c', Action::SelectEntry),
             ('s', Action::ToggleEmail),
             ('e', Action::ToggleName),
             ('t', Action::ToggleTrailers),
@@ -9003,6 +11373,7 @@ mod tests {
             for (key, expected) in [
                 ('v', Action::ToggleHistoryDisplay),
                 ('a', Action::ToggleActions),
+                ('n', Action::ToggleEnrich),
                 ('?', Action::ToggleInformation),
             ] {
                 assert_eq!(
@@ -9019,18 +11390,14 @@ mod tests {
             }
             assert_eq!(
                 action_with_shortcut_groups(
-                    KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+                    KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
                     history,
                     actions,
                     enrich,
                     information,
                 ),
-                Some(if actions {
-                    Action::NewEmptyCommit
-                } else {
-                    Action::ToggleEnrich
-                }),
-                "the actions shortcut takes priority over the enrich prefix"
+                None,
+                "p remains available to the command-menu opener regardless of the active menu"
             );
         }
         assert_eq!(
@@ -9047,10 +11414,8 @@ mod tests {
         for (key, expected) in [
             ('o', Action::Reword),
             ('w', Action::NewCommit),
-            ('n', Action::NewEmptyCommit),
             ('e', Action::Amend),
             ('l', Action::Spill),
-            ('p', Action::Split),
             ('d', Action::Forget),
             ('i', Action::TogglePin),
         ] {
@@ -9064,6 +11429,24 @@ mod tests {
                 ),
                 Some(expected),
                 "{key} is available on the commit line after the actions prefix"
+            );
+        }
+        for (key, expected) in [
+            (
+                KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE),
+                Action::NewEmptyCommit,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::SHIFT),
+                Action::NewEmptyCommit,
+            ),
+            (KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE), Action::Split),
+            (KeyEvent::new(KeyCode::Char('s'), KeyModifiers::SHIFT), Action::Split),
+        ] {
+            assert_eq!(
+                action_with_shortcut_groups(key, false, true, false, false),
+                Some(expected),
+                "shifted action shortcuts remain available without shadowing top-level prefixes"
             );
         }
         for (key, expected) in [
@@ -9090,6 +11473,38 @@ mod tests {
                 "{key} is available after the actions prefix"
             );
         }
+        for key in [
+            KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(
+                action_with_shortcut_groups(key, false, true, false, false),
+                Some(Action::Push),
+                "Shift-P pushes only after the actions prefix"
+            );
+        }
+        #[cfg(feature = "blocking-network-client")]
+        for key in [
+            KeyEvent::new(KeyCode::Char('F'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(
+                action_with_shortcut_groups(key, false, true, false, false),
+                Some(Action::Fetch),
+                "Shift-F fetches only after the actions prefix"
+            );
+        }
+        assert_eq!(
+            action_with_shortcut_groups(
+                KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+                false,
+                false,
+                false,
+                false,
+            ),
+            Some(Action::CycleChangesParent),
+            "bare Shift-P keeps cycling the compared parent"
+        );
         for (history, actions, enrich, expected) in [
             (true, false, false, Action::ToggleName),
             (false, true, false, Action::Amend),
@@ -9201,6 +11616,55 @@ mod tests {
     }
 
     #[test]
+    fn entry_selection_accepts_only_its_numeric_input_and_exit_keys() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            entry_selection_action(key(KeyCode::Char('4'))),
+            Some(Action::SelectEntryInput("4".into()))
+        );
+        assert_eq!(
+            entry_selection_action(key(KeyCode::Backspace)),
+            Some(Action::SelectEntryBackspace)
+        );
+        assert_eq!(
+            entry_selection_action(key(KeyCode::Enter)),
+            Some(Action::SubmitEntrySelection)
+        );
+        assert_eq!(entry_selection_action(key(KeyCode::Esc)), Some(Action::Cancel));
+        assert_eq!(entry_selection_action(key(KeyCode::Char('j'))), None);
+    }
+
+    #[test]
+    fn topological_selection_accepts_only_choice_and_exit_keys() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Char('h'))),
+            Some(Action::PreviousChild)
+        );
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Left)),
+            Some(Action::PreviousChild)
+        );
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Char('l'))),
+            Some(Action::NextChild)
+        );
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Right)),
+            Some(Action::NextChild)
+        );
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Enter)),
+            Some(Action::SubmitTopological)
+        );
+        assert_eq!(
+            topological_selection_action(key(KeyCode::Esc)),
+            Some(Action::CancelTopological)
+        );
+        assert_eq!(topological_selection_action(key(KeyCode::Char('j'))), None);
+    }
+
+    #[test]
     fn diagnostic_inputs_replay_only_read_only_actions() {
         let mut app = App::new(1);
         assert_eq!(diagnostic_action(diagnostic_key('j'), &app), Some(Action::MoveDown));
@@ -9240,12 +11704,6 @@ mod tests {
             (shifted(KeyCode::Down), Action::TopologicalDown),
             (shifted(KeyCode::Char('j')), Action::TopologicalDown),
             (key(KeyCode::Char('J')), Action::TopologicalDown),
-            (shifted(KeyCode::Left), Action::PreviousChild),
-            (shifted(KeyCode::Char('h')), Action::PreviousChild),
-            (key(KeyCode::Char('H')), Action::PreviousChild),
-            (shifted(KeyCode::Right), Action::NextChild),
-            (shifted(KeyCode::Char('l')), Action::NextChild),
-            (key(KeyCode::Char('L')), Action::NextChild),
         ] {
             assert_eq!(app_action(key, &app), Some(expected));
         }
@@ -9253,11 +11711,6 @@ mod tests {
         assert_eq!(app_action(key(KeyCode::Up), &app), Some(Action::MoveUp));
         app.history_display_expanded = true;
         assert_eq!(app_action(key(KeyCode::Char('h')), &app), Some(Action::ToggleHidden));
-        assert_eq!(
-            app_action(shifted(KeyCode::Char('h')), &app),
-            Some(Action::PreviousChild),
-            "shifted navigation outranks an open shortcut group"
-        );
         app.history_display_expanded = false;
 
         let control = |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
@@ -9309,7 +11762,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_inputs_wait_for_completed_lanes() {
+    fn diagnostic_inputs_wait_for_completed_work() {
         let key = diagnostic_key('j');
         let mut inputs = VecDeque::from([key]);
         assert!(next_diagnostic_input(&mut inputs, State::Loading, false).is_none());
@@ -9387,6 +11840,23 @@ mod tests {
     }
 
     #[test]
+    fn force_push_retry_accepts_enter_or_escape_and_ignores_other_input() {
+        let key = |code| TerminalEvent::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        assert_eq!(push_retry_input(&key(KeyCode::Enter)), Some(PushRetryInput::Retry));
+        assert_eq!(push_retry_input(&key(KeyCode::Esc)), Some(PushRetryInput::Cancel));
+        assert_eq!(push_retry_input(&key(KeyCode::Char('j'))), Some(PushRetryInput::Ignore));
+        assert_eq!(push_retry_input(&key(KeyCode::Char('q'))), None, "quit still works");
+        assert_eq!(
+            push_retry_input(&TerminalEvent::Key(KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL
+            ))),
+            None,
+            "forced quit still works"
+        );
+    }
+
+    #[test]
     fn materialized_rebases_allow_inspection_but_block_repository_changes() {
         for action in [
             Action::MoveDown,
@@ -9452,7 +11922,7 @@ mod tests {
         );
         assert_eq!(
             mouse_scroll_action(MouseEventKind::ScrollRight, KeyModifiers::SHIFT, 1, false),
-            Some(Action::NextChild)
+            Some(Action::ScrollRight)
         );
         assert_eq!(
             mouse_scroll_action(MouseEventKind::ScrollUp, KeyModifiers::NONE, 2, true),
@@ -9542,6 +12012,20 @@ mod tests {
             Some(FRAME_INTERVAL.saturating_sub(Duration::from_millis(10))),
             "the earlier frame deadline takes precedence over repeat-idle restoration"
         );
+    }
+
+    #[test]
+    fn terminal_resize_is_applied_before_visible_rows_are_selected() -> gix_testtools::Result {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 2))?;
+        terminal.backend_mut().resize(80, 20);
+
+        assert_eq!(terminal.get_frame().area().height, 2, "the cached frame is still short");
+        assert_eq!(
+            resized_terminal_area(&mut terminal)?.height,
+            20,
+            "the metadata pass sees every row that the next frame can draw"
+        );
+        Ok(())
     }
 
     #[test]
