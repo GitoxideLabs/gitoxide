@@ -574,6 +574,7 @@ pub(crate) struct App {
     compressed_expanded: HashSet<ObjectId>,
     time_travel_animation: Option<(ObjectId, usize)>,
     attributions: Vec<Attribution>,
+    configured_author: Option<gix::actor::Identity>,
     #[cfg(test)]
     test_lanes: Vec<String>,
     pub selected: Option<usize>,
@@ -689,6 +690,7 @@ impl App {
             compressed_expanded: HashSet::new(),
             time_travel_animation: None,
             attributions: Vec::new(),
+            configured_author: None,
             #[cfg(test)]
             test_lanes: Vec::new(),
             selected: None,
@@ -976,6 +978,14 @@ impl App {
 
     pub(crate) fn set_active_branch(&mut self, branch: Option<BString>) {
         self.active_branch = branch;
+    }
+
+    pub(crate) fn set_configured_author(&mut self, author: Option<gix::actor::Identity>) {
+        self.configured_author = author;
+    }
+
+    pub(crate) fn configured_author(&self) -> Option<&gix::actor::Identity> {
+        self.configured_author.as_ref()
     }
 
     #[cfg(feature = "blocking-network-client")]
