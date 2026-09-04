@@ -112,16 +112,25 @@ fn bases_match_git() {
         Some(i64::MAX),
         "the whole range is available in hexadecimal"
     );
+    // `git_parse_signed()` bounds values at `-max - 1` since git 2.50; up to 2.49 the
+    // bound was `-max`, which rejected this value. `main` already accepted it in
+    // decimal form, so only the hexadecimal spelling is new here.
     assert_eq!(
         decimal("-9223372036854775808"),
         Some(i64::MIN),
         "including the value whose magnitude does not fit"
     );
 
-    for invalid in ["08", "09", "0x", "0xg", "0b101", "0o17"] {
+    for invalid in ["08", "09", "0x", "0xg", "0o17"] {
         assert!(
             Integer::try_from(invalid).is_err(),
             "`{invalid}` is rejected by git too"
         );
     }
+
+    // `0b101` is deliberately absent above. glibc 2.38 taught `strtoimax()` the C2x
+    // `0b` prefix, but only "when C2X features are enabled", so whether git accepts it
+    // depends on the standards mode git itself was compiled with rather than on the
+    // version of git. It is rejected here, matching a git built without C2x strtol.
+    assert!(Integer::try_from("0b101").is_err());
 }
