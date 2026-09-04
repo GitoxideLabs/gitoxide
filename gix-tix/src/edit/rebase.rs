@@ -1285,6 +1285,7 @@ fn perform_inner(
             || (commit_tree_mode == Tree::LeaveAsIsAndMarkDescendants && Some(old_id) != root)
             || conflict.is_some()
             || new_conflict.is_some();
+        let preserve_pending_root = recorded_parent.is_some() && pending_checkout == PendingCheckout::Reject;
         let is_conflicting_commit = new_conflict.is_some();
         let signature = if conflict.is_some() || is_conflicting_commit || (repeat && !eager) {
             Signature::InvalidateExisting
@@ -1293,7 +1294,7 @@ fn perform_inner(
         } else {
             signature
         };
-        let state = if pending && (repeat || Some(old_id) != root) {
+        let state = if pending && (repeat || Some(old_id) != root || preserve_pending_root) {
             CommitState::Pending {
                 original_parent: recorded_parent.flatten().or_else(|| old_parents.first().copied()),
             }

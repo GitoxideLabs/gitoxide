@@ -2587,6 +2587,76 @@ mod tests {
     }
 
     #[test]
+    fn rewording_a_pending_destination_preserves_its_diff_and_replay_base() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        drop(repository);
+        git(fixture.path(), &["checkout", "-q", "--detach", &middle.to_string()])?;
+
+        let repository = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repository)?;
+        let spilled_middle =
+            super::super::head::perform(repository.clone(), &graph, super::super::head::Kind::Spill, None)?
+                .expect("spilling changes the middle commit");
+        let pending_tip = repository.find_reference("refs/heads/main")?.id().detach();
+        assert!(super::super::rebase::has_marker(
+            &repository.find_commit(pending_tip)?.decode()?.into_owned()?
+        ));
+        drop(repository);
+        super::super::stash::save_manual(&repository_path, false, spilled_middle)?;
+
+        let repository = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repository)?;
+        let reworded_tip = super::super::reword::apply_message_reporting(
+            repository.clone(),
+            &graph,
+            pending_tip,
+            b"reworded tip\n",
+            None,
+        )?
+        .commit
+        .expect("the changed message rewrites the pending tip");
+        let reworded = repository.find_commit(reworded_tip)?.decode()?.into_owned()?;
+        assert!(
+            super::super::rebase::has_marker(&reworded),
+            "a metadata-only rewrite retains the pending replay base"
+        );
+        let changes = crate::load_changes_without_lines(
+            &repository,
+            crate::app::TreeDiffTarget::Commit {
+                id: reworded_tip,
+                parent: 0,
+            },
+        )?;
+        assert_eq!(
+            changes
+                .paths
+                .iter()
+                .map(|change| change.path.as_bstr())
+                .collect::<Vec<_>>(),
+            ["tip"],
+            "the full diff retains only the destination commit's original change"
+        );
+        let graph = super::super::loaded_graph(&repository)?;
+        drop(repository);
+
+        perform(&repository_path, false, reworded_tip, &graph, &[], &[], false)?.complete()?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let materialized_tip = repository.head_id()?.detach();
+        assert!(!super::super::rebase::is_pending(
+            &repository.find_commit(materialized_tip)?.decode()?.into_owned()?
+        ));
+        assert_eq!(
+            git(fixture.path(), &["ls-tree", "-r", "--name-only", "HEAD"])?,
+            b"base\ntip\n",
+            "travel applies only the destination delta and does not restore the spilled file"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn time_travel_materializes_only_the_pending_path_to_the_destination() -> gix_testtools::Result {
         if !gix_testtools::signature::program_available("ssh-keygen") {
             return Ok(());
