@@ -84,8 +84,7 @@ fn as_decimal() {
 }
 
 /// git hands config integers to `strtoimax()` with a base of `0`, so a `0x` prefix is
-/// hexadecimal and a leading `0` is octal. Verified against `git config --type=int`
-/// with git 2.50.1; the expectations below are that command's output.
+/// hexadecimal, a `0b` prefix is binary, and a leading `0` is octal.
 #[test]
 fn bases_match_git() {
     fn decimal(input: &str) -> Option<i64> {
@@ -96,6 +95,10 @@ fn bases_match_git() {
     assert_eq!(decimal("0X1F"), Some(31), "the prefix is case insensitive");
     assert_eq!(decimal("+0x10"), Some(16), "a positive sign precedes the prefix");
     assert_eq!(decimal("-0x10"), Some(-16), "a sign precedes the prefix");
+    assert_eq!(decimal("0b101"), Some(5), "0b is binary");
+    assert_eq!(decimal("0B101"), Some(5), "the prefix is case insensitive");
+    assert_eq!(decimal("+0b101"), Some(5), "binary values may have a positive sign");
+    assert_eq!(decimal("-0b101"), Some(-5), "binary values may have a negative sign");
     assert_eq!(decimal("010"), Some(8), "a leading zero is octal, not decimal");
     assert_eq!(decimal("+010"), Some(8), "octal values may have a positive sign");
     assert_eq!(decimal("-010"), Some(-8), "octal values may have a negative sign");
@@ -108,6 +111,7 @@ fn bases_match_git() {
         "a suffix applies to a hexadecimal value…"
     );
     assert_eq!(decimal("0x10K"), Some(16 * 1024), "…in either case");
+    assert_eq!(decimal("0b101k"), Some(5 * 1024), "…and to a binary one");
     assert_eq!(decimal("010k"), Some(8 * 1024), "…and to an octal one");
 
     assert_eq!(
@@ -132,14 +136,14 @@ fn bases_match_git() {
         "one below i64::MIN is rejected"
     );
 
-    for invalid in ["08", "09", "0x", "0xg", "0o17"] {
+    for invalid in ["08", "09", "0x", "0xg", "0b", "0b2", "0o17"] {
         assert!(
             Integer::try_from(invalid).is_err(),
             "`{invalid}` is rejected by git too"
         );
     }
 
-    for prefix in ["0", "0x", "0X"] {
+    for prefix in ["0", "0x", "0X", "0b", "0B"] {
         for outer_sign in ["", "+", "-"] {
             for inner_sign in ["+", "-"] {
                 for suffix in ["", "k"] {
@@ -152,10 +156,4 @@ fn bases_match_git() {
             }
         }
     }
-
-    // `0b101` is deliberately absent above. glibc 2.38 taught `strtoimax()` the C2x
-    // `0b` prefix, but only "when C2X features are enabled", so whether git accepts it
-    // depends on the standards mode git itself was compiled with rather than on the
-    // version of git. It is rejected here, matching a git built without C2x strtol.
-    assert!(Integer::try_from("0b101").is_err());
 }

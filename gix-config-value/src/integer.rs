@@ -56,7 +56,7 @@ fn int_err(input: impl Into<BString>) -> Error {
 
 /// Parse `input` the way `git_parse_signed()` does, which hands the value to
 /// `strtoimax()` with a base of `0`: an optional sign, then hexadecimal behind a `0x`
-/// prefix, octal behind a `0` prefix, and decimal otherwise.
+/// prefix, binary behind a `0b` prefix, octal behind a `0` prefix, and decimal otherwise.
 fn parse_like_git(input: &str) -> Option<i64> {
     let (negative, rest) = match input.as_bytes().first() {
         Some(b'+') => (false, &input[1..]),
@@ -69,6 +69,8 @@ fn parse_like_git(input: &str) -> Option<i64> {
     };
     let (digits, radix) = if let Some(hexadecimal) = prefixed.strip_prefix(['x', 'X']) {
         (hexadecimal, 16)
+    } else if let Some(binary) = prefixed.strip_prefix(['b', 'B']) {
+        (binary, 2)
     } else if !prefixed.is_empty() {
         (prefixed, 8)
     } else {
