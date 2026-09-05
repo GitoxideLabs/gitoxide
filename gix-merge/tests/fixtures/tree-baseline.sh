@@ -2013,6 +2013,78 @@ git init renamed-file-vs-file-to-directory-with-siblings
   git commit -m "replace the file with two children"
 )
 
+git init identical-additions-with-different-relations
+(cd identical-additions-with-different-relations
+  # A's earlier directory deletion shifts the relation ID assigned to the shared
+  # addition. The relation is diff-local, so both additions still have one effect.
+  mkdir -p a-shift
+  echo shift >a-shift/file
+  git add . && git commit -m "base"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git rm -r a-shift
+  mkdir -p b-target
+  echo shared-addition >b-target/file
+  git add . && git commit -m "delete a directory and add the shared tree"
+
+  git checkout B
+  mkdir -p b-target
+  echo shared-addition >b-target/file
+  git add . && git commit -m "add the shared tree"
+)
+
+git init identical-deletions-with-different-relations
+(cd identical-deletions-with-different-relations
+  # A deletes an earlier directory as well, so the shared deletion receives a
+  # different relation ID on each side despite removing the same tree.
+  mkdir -p a-shift b-target
+  echo shift >a-shift/file
+  echo shared-deletion >b-target/file
+  git add . && git commit -m "base"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git rm -r a-shift b-target
+  git commit -m "delete the earlier and shared trees"
+
+  git checkout B
+  git rm -r b-target
+  git commit -m "delete the shared tree"
+)
+
+git init identical-rewrites-with-different-relations
+(cd identical-rewrites-with-different-relations
+  # Moving the same file into a new directory gives each rewrite a destination
+  # relation. A's earlier deletion shifts that ID without changing the rename.
+  mkdir -p a-shift
+  echo shift >a-shift/file
+  echo shared-rewrite >b-source
+  git add . && git commit -m "base"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git rm -r a-shift
+  mkdir c-target
+  git mv b-source c-target/file
+  mkdir b-source
+  echo from-A >b-source/A-only
+  git add . && git commit -m "delete an earlier tree and rename the shared file"
+
+  git checkout B
+  mkdir c-target
+  git mv b-source c-target/file
+  mkdir b-source
+  echo from-B >b-source/B-only
+  git add . && git commit -m "rename the shared file"
+)
+
 git init type-change-to-symlink
 (cd type-change-to-symlink
   touch a b link
@@ -2122,6 +2194,9 @@ baseline unrelated-renames-overlapping-destinations A-B A B
 baseline renamed-file-inside-renamed-directory A-B A B
 baseline unrelated-renames-to-same-path-with-type-mismatch A-B A B
 baseline renamed-file-vs-file-to-directory-with-siblings A-B A B
+baseline identical-additions-with-different-relations A-B A B
+baseline identical-deletions-with-different-relations A-B A B
+baseline identical-rewrites-with-different-relations A-B A B
 baseline type-change-to-symlink A-B A B
 
 ##
