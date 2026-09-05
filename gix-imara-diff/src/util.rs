@@ -52,9 +52,18 @@ pub fn strip_common_postfix(file1: &mut &[Token], file2: &mut &[Token]) -> u32 {
 }
 
 /// Computes an approximation of the square root using bit operations.
+/// This returns a u32 instead of a u64 like `xdl_bogosqrt` does, so
+/// when `val` has >=63 significant bits the result clamps to `u32::MAX`
+/// to avoid an overflow.
 pub fn sqrt(val: usize) -> u32 {
-    let nbits = (usize::BITS - val.leading_zeros()) / 2;
-    1 << nbits
+    // git's xdl_bogosqrt shifts `n` right by two per doubling and stops
+    // once it reaches zero, which rounds the halved bit count up:
+    //
+    //     for (i = 1; n > 0; n >>= 2) i <<= 1;
+    //
+    // Take the ceiling here to avoid the integer division rounding down.
+    let nbits = (usize::BITS - val.leading_zeros()).div_ceil(2);
+    1u32.checked_shl(nbits).unwrap_or(u32::MAX)
 }
 
 impl Hunk {
