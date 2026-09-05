@@ -54,12 +54,42 @@ fn int_err(input: impl Into<BString>) -> Error {
     )
 }
 
+/// Parse `input` the way `git_parse_signed()` does, which hands the value to
+/// `strtoimax()` with a base of `0`: an optional sign, then hexadecimal behind a `0x`
+/// prefix, binary behind a `0b` prefix, octal behind a `0` prefix, and decimal otherwise.
+fn parse_like_git(input: &str) -> Option<i64> {
+    let (negative, rest) = match input.as_bytes().first() {
+        Some(b'+') => (false, &input[1..]),
+        Some(b'-') => (true, &input[1..]),
+        _ => (false, input),
+    };
+
+    let Some(prefixed) = rest.strip_prefix('0') else {
+        return input.parse().ok();
+    };
+    let (digits, radix) = if let Some(hexadecimal) = prefixed.strip_prefix(['x', 'X']) {
+        (hexadecimal, 16)
+    } else if let Some(binary) = prefixed.strip_prefix(['b', 'B']) {
+        (binary, 2)
+    } else if !prefixed.is_empty() {
+        (prefixed, 8)
+    } else {
+        return input.parse().ok();
+    };
+
+    if digits.starts_with('+') || digits.starts_with('-') {
+        return None;
+    }
+    let magnitude = i128::from_str_radix(digits, radix).ok()?;
+    i64::try_from(if negative { -magnitude } else { magnitude }).ok()
+}
+
 impl TryFrom<&BStr> for Integer {
     type Error = Error;
 
     fn try_from(s: &BStr) -> Result<Self, Self::Error> {
         let s = std::str::from_utf8(s).map_err(|err| int_err(s).with_err(err))?;
-        if let Ok(value) = s.parse() {
+        if let Some(value) = parse_like_git(s) {
             return Ok(Self { value, suffix: None });
         }
 
@@ -73,7 +103,7 @@ impl TryFrom<&BStr> for Integer {
         }
 
         let (number, suffix) = s.split_at(s.len() - 1);
-        if let (Ok(value), Ok(suffix)) = (number.parse(), suffix.parse()) {
+        if let (Some(value), Ok(suffix)) = (parse_like_git(number), suffix.parse()) {
             Ok(Self {
                 value,
                 suffix: Some(suffix),
