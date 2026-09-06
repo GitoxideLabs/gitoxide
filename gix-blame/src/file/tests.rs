@@ -996,6 +996,44 @@ mod blame_ranges {
     }
 
     #[test]
+    #[expect(clippy::reversed_empty_ranges)]
+    fn constructors_reject_reversed_ranges() {
+        assert!(
+            matches!(
+                BlameRanges::from_one_based_inclusive_range(2..=1),
+                Err(Error::InvalidOneBasedLineRange)
+            ),
+            "a reversed range cannot be turned into a non-empty 0-based range, so it must be rejected"
+        );
+        assert!(
+            matches!(
+                BlameRanges::from_one_based_inclusive_ranges(vec![1..=2, 4..=3]),
+                Err(Error::InvalidOneBasedLineRange)
+            ),
+            "a single reversed range invalidates the whole set, even if other ranges are fine"
+        );
+    }
+
+    #[test]
+    #[expect(clippy::reversed_empty_ranges)]
+    fn adding_a_reversed_range_is_rejected_and_leaves_the_selection_untouched() {
+        let mut ranges = BlameRanges::from_one_based_inclusive_range(1..=3).expect("valid range");
+
+        assert!(
+            matches!(
+                ranges.add_one_based_inclusive_range(5..=4),
+                Err(Error::InvalidOneBasedLineRange)
+            ),
+            "adding a reversed range fails just like constructing from one"
+        );
+        assert_eq!(
+            ranges.to_zero_based_exclusive_ranges(100),
+            vec![0..3],
+            "a rejected range must not be merged into the existing selection"
+        );
+    }
+
+    #[test]
     fn create_from_single_range() {
         let ranges = BlameRanges::from_one_based_inclusive_range(20..=40).unwrap();
 

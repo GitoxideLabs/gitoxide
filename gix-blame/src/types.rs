@@ -24,11 +24,10 @@ use crate::file::function::tokens_for_diffing;
 /// let range = BlameRanges::from_one_based_inclusive_range(20..=40);
 ///
 /// // Blame multiple ranges
-/// let mut ranges = BlameRanges::from_one_based_inclusive_ranges(vec![
-///     1..=4, // Lines 1-4
+/// let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![
+///     1..=4,  // Lines 1-4
 ///    10..=14, // Lines 10-14
-/// ]
-/// );
+/// ]);
 /// ```
 ///
 /// # Line Number Representation
@@ -37,8 +36,18 @@ use crate::file::function::tokens_for_diffing;
 /// - A range of `20..=40` represents 21 lines, spanning from line 20 up to and including line 40
 /// - This will be converted to `19..40` internally as the algorithm uses 0-based ranges that are exclusive at the end
 ///
-/// # Empty Ranges
-/// You can blame the entire file by calling `BlameRanges::default()`, or by passing an empty vector to `from_one_based_inclusive_ranges`.
+/// Ranges are always non-empty, so `<start>` may never exceed `<end>`. This mirrors the `gix blame -L <start>,<end>`
+/// command-line interface, but differs from `git blame -L <start>,<end>` which silently swaps reversed ranges.
+/// That swapping is [explicitly documented as undocumented behaviour][swap] in `git`'s own test suite, so we
+/// prefer to reject what we cannot unambiguously interpret.
+///
+/// # Blaming the Whole File
+///
+/// You can blame the entire file by calling [`BlameRanges::default()`], or by passing an empty vector to
+/// [`BlameRanges::from_one_based_inclusive_ranges()`]. Note that this is about an empty collection of ranges;
+/// an individual range may never be empty.
+///
+/// [swap]: https://github.com/git/git/blob/3cb9185f65410273787f74333cc027d2ea5daada/t/annotate-tests.sh#L271-L273
 #[derive(Debug, Clone, Default)]
 pub enum BlameRanges {
     /// Blame the entire file.
@@ -50,21 +59,31 @@ pub enum BlameRanges {
 
 /// Lifecycle
 impl BlameRanges {
-    /// Create from a single 0-based range.
+    /// Create from a single 1-based inclusive range.
     ///
     /// Note that the input range is 1-based inclusive, as used by git, and
-    /// the output is a zero-based `BlameRanges` instance.
+    /// the output is a 0-based exclusive `BlameRanges` instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidOneBasedLineRange`] if `range` starts at `0`, or if it is reversed,
+    /// i.e. if its start exceeds its end.
     pub fn from_one_based_inclusive_range(range: RangeInclusive<u32>) -> Result<Self, Error> {
         let zero_based_range = Self::inclusive_to_zero_based_exclusive(range)?;
         Ok(Self::PartialFile(vec![zero_based_range]))
     }
 
-    /// Create from multiple 0-based ranges.
+    /// Create from multiple 1-based inclusive ranges.
     ///
     /// Note that the input ranges are 1-based inclusive, as used by git, and
-    /// the output is a zero-based `BlameRanges` instance.
+    /// the output is a 0-based exclusive `BlameRanges` instance.
     ///
     /// If the input vector is empty, the result will be `WholeFile`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidOneBasedLineRange`] if any range starts at `0`, or if any range is
+    /// reversed, i.e. if its start exceeds its end.
     pub fn from_one_based_inclusive_ranges(ranges: Vec<RangeInclusive<u32>>) -> Result<Self, Error> {
         if ranges.is_empty() {
             return Ok(Self::WholeFile);
@@ -82,13 +101,16 @@ impl BlameRanges {
     }
 
     /// Convert a 1-based inclusive range to a 0-based exclusive range.
+    ///
+    /// Reversed ranges are rejected rather than turned into empty 0-based ranges, as the blame
+    /// algorithm cannot represent a hunk without lines.
     fn inclusive_to_zero_based_exclusive(range: RangeInclusive<u32>) -> Result<Range<u32>, Error> {
-        if range.start() == &0 {
+        let (start, end) = (*range.start(), *range.end());
+        // Not `RangeInclusive::is_empty()`, which is also `true` for a range iterated to exhaustion.
+        if start == 0 || start > end {
             return Err(Error::InvalidOneBasedLineRange);
         }
-        let start = range.start() - 1;
-        let end = *range.end();
-        Ok(start..end)
+        Ok(start - 1..end)
     }
 }
 
@@ -96,6 +118,12 @@ impl BlameRanges {
     /// Add a single range to blame.
     ///
     /// The new range will be merged with any overlapping existing ranges.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidOneBasedLineRange`] if `new_range` starts at `0`, or if it is
+    /// reversed, i.e. if its start exceeds its end. The existing selection is left untouched in
+    /// that case.
     pub fn add_one_based_inclusive_range(&mut self, new_range: RangeInclusive<u32>) -> Result<(), Error> {
         let zero_based_range = Self::inclusive_to_zero_based_exclusive(new_range)?;
         self.merge_zero_based_exclusive_range(zero_based_range);
