@@ -1103,7 +1103,7 @@ mod blame_ranges {
 
     #[test]
     fn convert_full_file_to_zero_based() {
-        let ranges = BlameRanges::WholeFile;
+        let ranges = BlameRanges::default();
 
         assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![0..100]);
     }
@@ -1145,6 +1145,40 @@ mod blame_ranges {
     fn default_is_full_file() {
         let ranges = BlameRanges::default();
 
-        assert!(matches!(ranges, BlameRanges::WholeFile));
+        assert!(
+            ranges.is_whole_file(),
+            "not selecting anything in particular blames the whole file"
+        );
+        assert_eq!(
+            ranges.selected_ranges(),
+            None,
+            "there are no individual ranges to inspect when the whole file is selected"
+        );
+    }
+
+    #[test]
+    fn selected_ranges_are_non_empty_sorted_and_disjoint() {
+        let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![10..=15, 1..=5, 3..=4, 6..=7])
+            .expect("all ranges are valid");
+
+        assert!(
+            !ranges.is_whole_file(),
+            "selecting individual ranges is not the same as selecting the whole file"
+        );
+        assert_eq!(
+            ranges.selected_ranges(),
+            Some([0..7, 9..15].as_slice()),
+            "overlapping and adjacent ranges are merged, and the result is sorted, so no line is blamed twice"
+        );
+    }
+
+    #[test]
+    fn an_empty_set_of_ranges_is_the_whole_file() {
+        let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![]).expect("an empty selection is valid");
+
+        assert!(
+            ranges.is_whole_file(),
+            "selecting no ranges at all cannot be distinguished from selecting everything"
+        );
     }
 }
