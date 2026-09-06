@@ -45,5 +45,5 @@ pub use objects_impl::{objects, objects_unthreaded};
 
 ///
 pub mod objects {
-    pub use super::objects_impl::{Error, ObjectExpansion, Options, Outcome};
+    pub use super::objects_impl::{ObjectExpansion, Options, Outcome};
 }

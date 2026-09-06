@@ -2,9 +2,6 @@ use std::time::SystemTime;
 
 use crate::multi_index;
 
-/// The error returned by [`crate::multi_index::write_from_index_paths()`].
-pub type Error = gix_error::Exn;
-
 /// An entry suitable for sorting and writing
 pub(crate) struct Entry {
     pub(crate) id: gix_hash::ObjectId,
@@ -68,7 +65,7 @@ pub(super) mod function {
 
     use crate::{MMap, multi_index};
 
-    use super::{Entry, Error, Options, Outcome, ProgressId};
+    use super::{Entry, Options, Outcome, ProgressId};
 
     /// Create a new multi-index file for writing to `out` from the pack index files at `index_paths`.
     ///
@@ -79,7 +76,7 @@ pub(super) mod function {
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
         Options { object_hash }: Options,
-    ) -> Result<Outcome, Error> {
+    ) -> Result<Outcome, gix_error::Exn> {
         let out = gix_hash::io::Write::new(out, object_hash);
         let (index_paths_sorted, index_filenames_sorted) = {
             index_paths.sort();

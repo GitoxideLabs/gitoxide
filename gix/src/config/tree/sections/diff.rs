@@ -177,7 +177,7 @@ mod renames {
         /// the boolean as string
         pub fn try_into_renames(
             &'static self,
-            value: Result<Option<bool>, gix_config::value::Error>,
+            value: Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<Tracking>, GenericError> {
             Ok(match value {
                 Ok(Some(true)) => Some(Tracking::Renames),

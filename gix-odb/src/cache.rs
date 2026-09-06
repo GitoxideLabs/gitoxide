@@ -145,21 +145,11 @@ mod impls {
     where
         S: gix_object::Write,
     {
-        fn write_stream(
-            &self,
-            kind: Kind,
-            size: u64,
-            from: &mut dyn Read,
-        ) -> Result<ObjectId, gix_object::write::Error> {
+        fn write_stream(&self, kind: Kind, size: u64, from: &mut dyn Read) -> Result<ObjectId, gix_error::Exn> {
             self.inner.write_stream(kind, size, from)
         }
 
-        fn write_buf_with_known_id(
-            &self,
-            kind: Kind,
-            from: &[u8],
-            id: ObjectId,
-        ) -> Result<ObjectId, gix_object::write::Error> {
+        fn write_buf_with_known_id(&self, kind: Kind, from: &[u8], id: ObjectId) -> Result<ObjectId, gix_error::Exn> {
             self.inner.write_buf_with_known_id(kind, from, id)
         }
 
@@ -169,7 +159,7 @@ mod impls {
             size: u64,
             from: &mut dyn Read,
             id: ObjectId,
-        ) -> Result<ObjectId, gix_object::write::Error> {
+        ) -> Result<ObjectId, gix_error::Exn> {
             self.inner.write_stream_with_known_id(kind, size, from, id)
         }
     }
@@ -178,7 +168,7 @@ mod impls {
     where
         S: gix_pack::Find,
     {
-        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, gix_object::find::Error> {
+        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, gix_error::Exn> {
             gix_pack::Find::try_find(self, id, buffer).map(|t| t.map(|t| t.0))
         }
     }
@@ -196,7 +186,7 @@ mod impls {
     where
         S: crate::Header,
     {
-        fn try_header(&self, id: &oid) -> Result<Option<Header>, gix_object::find::Error> {
+        fn try_header(&self, id: &oid) -> Result<Option<Header>, gix_error::Exn> {
             self.inner.try_header(id)
         }
     }
@@ -205,7 +195,7 @@ mod impls {
     where
         S: gix_object::FindHeader,
     {
-        fn try_header(&self, id: &oid) -> Result<Option<gix_object::Header>, gix_object::find::Error> {
+        fn try_header(&self, id: &oid) -> Result<Option<gix_object::Header>, gix_error::Exn> {
             self.inner.try_header(id)
         }
     }
@@ -222,7 +212,7 @@ mod impls {
             &self,
             id: &oid,
             buffer: &'a mut Vec<u8>,
-        ) -> Result<Option<(Data<'a>, Option<Location>)>, gix_object::find::Error> {
+        ) -> Result<Option<(Data<'a>, Option<Location>)>, gix_error::Exn> {
             match self.pack_cache.as_ref().map(RefCell::borrow_mut) {
                 Some(mut pack_cache) => self.try_find_cached(id, buffer, pack_cache.deref_mut()),
                 None => self.try_find_cached(id, buffer, &mut gix_pack::cache::Never),
@@ -234,7 +224,7 @@ mod impls {
             id: &oid,
             buffer: &'a mut Vec<u8>,
             pack_cache: &mut dyn gix_pack::cache::DecodeEntry,
-        ) -> Result<Option<(Data<'a>, Option<gix_pack::data::entry::Location>)>, gix_object::find::Error> {
+        ) -> Result<Option<(Data<'a>, Option<gix_pack::data::entry::Location>)>, gix_error::Exn> {
             if let Some(mut obj_cache) = self.object_cache.as_ref().map(RefCell::borrow_mut)
                 && let Some(kind) = obj_cache.get(&id.as_ref().to_owned(), buffer)
             {

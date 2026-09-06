@@ -14,18 +14,6 @@ pub struct Request<'a> {
     pub meta: Vec<(String, BString)>,
 }
 
-///
-pub mod next_request {
-    /// The error returned by [Server::next_request()][super::Server::next_request()].
-    pub type Error = gix_error::Exn<gix_error::Message>;
-}
-
-///
-pub mod handshake {
-    /// The error returned by [Server::handshake()][super::Server::handshake()].
-    pub type Error = gix_error::Exn<gix_error::Message>;
-}
-
 impl Server {
     /// Perform a handshake with the client sending information to our `stdin` and receiving information through our `stdout`
     /// in packetline format.
@@ -43,7 +31,7 @@ impl Server {
         welcome_prefix: &str,
         pick_version: &mut dyn FnMut(&[usize]) -> Option<usize>,
         available_capabilities: &[&str],
-    ) -> Result<Self, handshake::Error> {
+    ) -> Result<Self, gix_error::Exn<gix_error::Message>> {
         use gix_error::{ErrorExt, OptionExt, ResultExt, message};
 
         let mut input = StreamingPeekableIter::new(
@@ -146,7 +134,7 @@ impl Server {
     ///
     /// Note that the process is supposed to shut-down once there are no more requests, and `git` will wait
     /// until it has finished.
-    pub fn next_request(&mut self) -> Result<Option<Request<'_>>, next_request::Error> {
+    pub fn next_request(&mut self) -> Result<Option<Request<'_>>, gix_error::Exn<gix_error::Message>> {
         use gix_error::{ErrorExt, OptionExt, ResultExt, message};
 
         let mut buf = String::new();

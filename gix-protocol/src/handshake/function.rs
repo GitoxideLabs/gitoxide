@@ -3,7 +3,6 @@ use gix_error::{ErrorExt, ResultExt, ValidationError, message};
 use gix_features::{progress, progress::Progress};
 use gix_transport::{Service, client};
 
-use super::Error;
 use crate::Handshake;
 #[crate::bisync::only_async]
 use crate::transport::client::async_io::{SetServiceResponse, Transport};
@@ -23,7 +22,7 @@ pub async fn handshake<AuthFn, T>(
     mut authenticate: AuthFn,
     extra_parameters: Vec<(String, Option<String>)>,
     progress: &mut impl Progress,
-) -> Result<Handshake, Error>
+) -> Result<Handshake, gix_error::Exn>
 where
     AuthFn: FnMut(credentials::helper::Action) -> credentials::protocol::Result,
     T: Transport,

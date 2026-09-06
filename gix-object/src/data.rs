@@ -16,7 +16,7 @@ impl<'a> Data<'a> {
     ///
     /// **Note** that [mutable, decoded objects][crate::Object] can be created from [`Data`]
     /// using [`crate::ObjectRef::into_owned()`].
-    pub fn decode(&self) -> Result<ObjectRef<'a>, crate::decode::Error> {
+    pub fn decode(&self) -> Result<ObjectRef<'a>, gix_error::ValidationError> {
         Ok(match self.kind {
             Kind::Tree => ObjectRef::Tree(TreeRef::from_bytes(self.data, self.object_hash)?),
             Kind::Blob => ObjectRef::Blob(BlobRef { data: self.data }),
@@ -57,14 +57,14 @@ impl<'a> Data<'a> {
 pub mod verify {
     use gix_error::{CorruptionError, ErrorExt, ResultExt};
 
-    /// Returned by [`crate::Data::verify_checksum()`]
-    pub type Error = gix_error::Exn<CorruptionError>;
-
     impl crate::Data<'_> {
         /// Compute the checksum of `self` and compare it with the `expected` hash.
-        /// If the hashes do not match, an [`Error`] is returned, containing the actual
+        /// If the hashes do not match, an [`gix_error::Exn`] is returned, containing the actual
         /// hash of `self`.
-        pub fn verify_checksum(&self, expected: &gix_hash::oid) -> Result<gix_hash::ObjectId, Error> {
+        pub fn verify_checksum(
+            &self,
+            expected: &gix_hash::oid,
+        ) -> Result<gix_hash::ObjectId, gix_error::Exn<gix_error::CorruptionError>> {
             let actual = crate::compute_hash(expected.kind(), self.kind, self.data)
                 .or_raise(|| CorruptionError::new("Failed to hash object"))?;
             actual.verify(expected).map_err(ErrorExt::raise)?;

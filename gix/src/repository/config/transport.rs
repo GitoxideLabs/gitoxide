@@ -26,13 +26,13 @@ impl crate::Repository {
         &self,
         url: impl Into<&'a BStr>,
         remote_name: Option<&BStr>,
-    ) -> Result<Option<Box<dyn Any>>, crate::config::transport::Error> {
+    ) -> Result<Option<Box<dyn Any>>, crate::Error> {
         let url = gix_url::parse(url.into()).or_raise(|| gix_error::message("Invalid URL passed for configuration"))?;
         use gix_url::Scheme::*;
 
         match &url.scheme {
             Http | Https => {
-                let options: Result<Option<Box<dyn Any>>, crate::config::transport::http::Error> = {
+                let options: Result<Option<Box<dyn Any>>, crate::Error> = {
                     #[cfg(not(any(
                         feature = "blocking-http-transport-reqwest",
                         feature = "blocking-http-transport-curl"
@@ -66,7 +66,7 @@ impl crate::Repository {
                             lenient: bool,
                             key_str: impl Into<BString>,
                             key: &'static config::tree::keys::String,
-                        ) -> Result<Option<String>, config::transport::Error> {
+                        ) -> Result<Option<String>, crate::Error> {
                             let key_str = key_str.into();
                             key.try_into_string(v)
                                 .map_err(|err| {
@@ -81,7 +81,7 @@ impl crate::Repository {
 
                         fn proxy_auth_method(
                             value_and_key: Option<(BString, BString, &'static config::tree::http::ProxyAuthMethod)>,
-                        ) -> Result<ProxyAuthMethod, config::transport::Error> {
+                        ) -> Result<ProxyAuthMethod, crate::Error> {
                             let value = value_and_key
                                 .map(|(method, key, key_type)| {
                                     let _ = &key; // CodeQL doesn't inspect formatting macro arguments.
@@ -102,7 +102,7 @@ impl crate::Repository {
                             key: &'static config::tree::http::SslVersion,
                             mut filter: fn(&gix_config::file::Metadata) -> bool,
                             lenient: bool,
-                        ) -> Result<Option<SslVersion>, config::transport::Error> {
+                        ) -> Result<Option<SslVersion>, crate::Error> {
                             debug_assert_eq!(
                                 key_str,
                                 key.logical_name(),
@@ -119,7 +119,7 @@ impl crate::Repository {
                         fn proxy(
                             value: Option<(BString, BString, &'static config::tree::keys::String)>,
                             lenient: bool,
-                        ) -> Result<Option<String>, config::transport::Error> {
+                        ) -> Result<Option<String>, crate::Error> {
                             Ok(value
                                 .and_then(|(v, k, key)| try_to_string(v, lenient, k.clone(), key).transpose())
                                 .transpose()?
@@ -268,7 +268,7 @@ impl crate::Repository {
                             .transpose()
                             .or_raise(|| gix_error::message("Invalid URL passed for configuration"))?
                             .filter(|url| url.user().is_some())
-                            .map(|url| -> Result<_, config::transport::http::Error> {
+                            .map(|url| -> Result<_, crate::Error> {
                                 let (mut cascade, action_with_normalized_url, prompt_opts) =
                                 self.config_snapshot().credential_helpers(url).or_raise(|| {
                                     gix_error::message(

@@ -240,12 +240,6 @@ pub mod resource {
 }
 
 ///
-pub mod set_resource {
-    /// The error returned by [Platform::set_resource](super::Platform::set_resource).
-    pub type Error = gix_error::Exn<gix_error::Message>;
-}
-
-///
 pub mod prepare_diff {
     use bstr::BStr;
 
@@ -311,17 +305,11 @@ pub mod prepare_diff {
             )
         }
     }
-
-    /// The error returned by [Platform::prepare_diff()](super::Platform::prepare_diff()).
-    pub type Error = gix_error::ValidationError;
 }
 
 ///
 pub mod prepare_diff_command {
     use std::ops::{Deref, DerefMut};
-
-    /// The error returned by [Platform::prepare_diff_command()](super::Platform::prepare_diff_command()).
-    pub type Error = gix_error::Exn<gix_error::Message>;
 
     /// The outcome of a [`prepare_diff_command`](super::Platform::prepare_diff_command()) operation.
     ///
@@ -416,7 +404,7 @@ impl Platform {
         rela_path: &BStr,
         kind: ResourceKind,
         objects: &impl gix_object::FindObjectOrHeader, // TODO: make this `dyn` once https://github.com/rust-lang/rust/issues/65991 is stable, then also make tracker.rs `objects` dyn
-    ) -> Result<(), set_resource::Error> {
+    ) -> Result<(), gix_error::Exn<gix_error::Message>> {
         let res = self.set_resource_inner(id, mode, rela_path, kind, objects);
         if res.is_err() {
             *match kind {
@@ -447,11 +435,12 @@ impl Platform {
         context: gix_command::Context,
         count: usize,
         total: usize,
-    ) -> Result<prepare_diff_command::Command, prepare_diff_command::Error> {
+    ) -> Result<prepare_diff_command::Command, gix_error::Exn<gix_error::Message>> {
         fn add_resource(
             cmd: &mut std::process::Command,
             res: Resource<'_>,
-        ) -> Result<Option<gix_tempfile::Handle<gix_tempfile::handle::Closed>>, prepare_diff_command::Error> {
+        ) -> Result<Option<gix_tempfile::Handle<gix_tempfile::handle::Closed>>, gix_error::Exn<gix_error::Message>>
+        {
             let tmpfile = match res.data {
                 resource::Data::Missing => {
                     cmd.args(["/dev/null", ".", "."]);
@@ -562,7 +551,7 @@ impl Platform {
     ///
     /// The returned outcome allows to easily perform diff operations, based on the [`prepare_diff::Outcome::operation`] field,
     /// which hints at what should be done.
-    pub fn prepare_diff(&mut self) -> Result<prepare_diff::Outcome<'_>, prepare_diff::Error> {
+    pub fn prepare_diff(&mut self) -> Result<prepare_diff::Outcome<'_>, gix_error::ValidationError> {
         let old_key = &self.old.as_ref().ok_or_else(|| {
             ValidationError::new("Either the source or the destination of the diff operation were not set")
         })?;
@@ -672,7 +661,7 @@ impl Platform {
         rela_path: &BStr,
         kind: ResourceKind,
         objects: &impl gix_object::FindObjectOrHeader,
-    ) -> Result<(), set_resource::Error> {
+    ) -> Result<(), gix_error::Exn<gix_error::Message>> {
         if matches!(
             mode,
             gix_object::tree::EntryKind::Commit | gix_object::tree::EntryKind::Tree

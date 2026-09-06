@@ -2,8 +2,7 @@ use std::io;
 
 use crate::{
     BandRef, Channel, DELIMITER_LINE, ERR_PREFIX, ErrorRef, FLUSH_LINE, MAX_DATA_LEN, PacketLineRef, RESPONSE_END_LINE,
-    TextRef,
-    encode::{Error, u16_to_hex},
+    TextRef, encode::u16_to_hex,
 };
 
 /// Write a response-end message to `out`.
@@ -86,12 +85,14 @@ fn prefixed_and_suffixed_data_to_write(
 ) -> io::Result<usize> {
     let data_len = prefix.len() + data.len() + suffix.len();
     if data_len > MAX_DATA_LEN {
-        return Err(io::Error::other(Error::new(format!(
+        return Err(io::Error::other(gix_error::ValidationError::new(format!(
             "Cannot encode more than {MAX_DATA_LEN} bytes, got {data_len}"
         ))));
     }
     if data.is_empty() {
-        return Err(io::Error::other(Error::new("Empty lines are invalid")));
+        return Err(io::Error::other(gix_error::ValidationError::new(
+            "Empty lines are invalid",
+        )));
     }
 
     let data_len = data_len + 4;

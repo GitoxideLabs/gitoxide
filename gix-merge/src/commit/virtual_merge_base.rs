@@ -11,14 +11,10 @@ pub struct Outcome {
     pub tree_id: gix_hash::ObjectId,
 }
 
-/// The error returned by [`commit::merge_base()`](crate::commit::virtual_merge_base()).
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 pub(super) mod function {
     use gix_error::{ErrorExt, ResultExt, message};
     use gix_object::FindExt;
 
-    use super::Error;
     use crate::{
         blob::builtin_driver,
         tree::{TreatAsUnresolved, treat_as_unresolved},
@@ -42,7 +38,7 @@ pub(super) mod function {
         objects: &'objects (impl gix_object::FindObjectOrHeader + gix_object::Write),
         abbreviate_hash: &mut dyn FnMut(&gix_hash::oid) -> String,
         mut options: crate::tree::Options,
-    ) -> Result<super::Outcome, crate::commit::Error> {
+    ) -> Result<super::Outcome, gix_error::Exn<gix_error::Message>> {
         let mut merged_commit_id = first_commit;
         others.push(second_commit);
 
@@ -121,7 +117,7 @@ pub(super) mod function {
         parent_a: gix_hash::ObjectId,
         parent_b: gix_hash::ObjectId,
         tree_id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, Error> {
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn<gix_error::Message>> {
         let mut buf = Vec::new();
         let commit_ref = objects
             .find_commit(&parent_a, &mut buf)

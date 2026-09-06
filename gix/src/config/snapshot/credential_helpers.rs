@@ -1,8 +1,5 @@
 use crate::config::Snapshot;
 
-/// The error returned by [`Snapshot::credential_helpers()`][Snapshot::credential_helpers()].
-pub type Error = gix_error::Error;
-
 impl Snapshot<'_> {
     /// Returns the configuration for all git-credential helpers from trusted configuration that apply
     /// to the given `url` along with an action preconfigured to invoke the cascade with.
@@ -16,7 +13,7 @@ impl Snapshot<'_> {
             gix_credentials::helper::Action,
             gix_prompt::Options,
         ),
-        Error,
+        crate::Error,
     > {
         let repo = self.repo;
         function::credential_helpers(
@@ -37,7 +34,6 @@ pub(super) mod function {
         bstr::{ByteSlice, ByteVec},
         config::{
             cache::util::ApplyLeniency,
-            credential_helpers::Error,
             tree::{Core, Credential, credential, gitoxide::Credentials},
         },
     };
@@ -85,7 +81,7 @@ pub(super) mod function {
             gix_credentials::helper::Action,
             gix_prompt::Options,
         ),
-        Error,
+        crate::Error,
     > {
         let mut programs = Vec::new();
         let mut context_options = gix_credentials::protocol::ContextOptions::default();

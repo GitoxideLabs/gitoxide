@@ -3,7 +3,7 @@ use std::{borrow::Cow, ffi::OsString, fmt::Display};
 use bstr::{BStr, BString};
 use gix_error::{ErrorExt, ResultExt, ValidationError};
 
-use crate::{Boolean, Error, Integer};
+use crate::{Boolean, Integer};
 
 fn bool_err(input: impl Into<BString>) -> ValidationError {
     ValidationError::new_with_input(
@@ -13,7 +13,7 @@ fn bool_err(input: impl Into<BString>) -> ValidationError {
 }
 
 impl TryFrom<OsString> for Boolean {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(value: OsString) -> Result<Self, Self::Error> {
         let value = gix_path::os_str_into_bstr(&value).or_raise(|| {
@@ -38,7 +38,7 @@ impl TryFrom<OsString> for Boolean {
 /// Instead of this, obtain booleans with `config.boolean(…)`, which handles the case were no separator is
 /// present correctly.
 impl TryFrom<&BStr> for Boolean {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(value: &BStr) -> Result<Self, Self::Error> {
         if parse_true(value) {
@@ -54,7 +54,7 @@ impl TryFrom<&BStr> for Boolean {
 }
 
 impl TryFrom<&str> for Boolean {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::try_from(BStr::new(value))
@@ -71,14 +71,14 @@ impl Boolean {
 }
 
 impl TryFrom<Cow<'_, BStr>> for Boolean {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
     fn try_from(c: Cow<'_, BStr>) -> Result<Self, Self::Error> {
         Self::try_from(c.as_ref())
     }
 }
 
 impl TryFrom<BString> for Boolean {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
     fn try_from(value: BString) -> Result<Self, Self::Error> {
         Self::try_from(BStr::new(&value))
     }

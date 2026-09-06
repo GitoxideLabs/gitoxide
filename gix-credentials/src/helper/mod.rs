@@ -54,10 +54,7 @@ impl Outcome {
 }
 
 /// The Result type used in [`invoke()`][crate::helper::invoke()].
-pub type Result = std::result::Result<Option<Outcome>, Error>;
-
-/// The error used in the [credentials helper invocation][crate::helper::invoke()].
-pub type Error = gix_error::Exn;
+pub type Result = std::result::Result<Option<Outcome>, gix_error::Exn>;
 
 /// The action to perform by the credentials [helper][`crate::helper::invoke()`].
 #[derive(Clone, Debug)]
@@ -138,7 +135,7 @@ pub struct NextAction {
 }
 
 impl TryFrom<&NextAction> for Context {
-    type Error = protocol::context::decode::Error;
+    type Error = gix_error::ValidationError;
 
     fn try_from(value: &NextAction) -> std::result::Result<Self, Self::Error> {
         Context::from_bytes(value.previous_output.as_ref(), value.options)

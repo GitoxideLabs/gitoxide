@@ -30,7 +30,7 @@ mod workers {
         /// or `None` if the value isn't set which is typically interpreted as "as many threads as available"
         pub fn try_from_workers(
             &'static self,
-            value: Result<Option<i64>, gix_config::value::Error>,
+            value: Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<usize>, crate::config::checkout::workers::Error> {
             match value {
                 Ok(Some(v)) if v < 0 => Ok(Some(0)),

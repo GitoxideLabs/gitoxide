@@ -1,5 +1,5 @@
 mod types;
-pub use types::{Error, Options, TrustPolicy};
+pub use types::{Options, TrustPolicy};
 
 mod util;
 
@@ -14,7 +14,7 @@ pub(crate) mod function {
     use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, ValidationError, message};
     use gix_sec::Trust;
 
-    use super::{Error, Options, TrustPolicy};
+    use super::{Options, TrustPolicy};
     #[cfg(unix)]
     use crate::upwards::util::device_id;
     use crate::{
@@ -84,7 +84,7 @@ pub(crate) mod function {
             self.physical_parent_steps.is_some()
         }
 
-        pub fn metadata(&mut self) -> Result<&std::fs::Metadata, Error> {
+        pub fn metadata(&mut self) -> Result<&std::fs::Metadata, gix_error::Exn> {
             if self.current_metadata.is_none() {
                 let path = if self.current.as_os_str().is_empty() {
                     Path::new(".")
@@ -212,7 +212,7 @@ pub(crate) mod function {
             current_dir,
             dot_git_only,
         }: Options<'_>,
-    ) -> Result<(crate::repository::Path, gix_sec::Trust), Error> {
+    ) -> Result<(crate::repository::Path, gix_sec::Trust), gix_error::Exn> {
         // Normalize the path so that `Path::parent()` _actually_ gives
         // us the parent directory. (`Path::parent` just strips off the last
         // path component, which means it will not do what you expect when
@@ -261,7 +261,7 @@ pub(crate) mod function {
         let initial_device = device_id(&dir_metadata);
         let resolved = OnceCell::<Option<PathBuf>>::new();
         let resolved = || resolved.get_or_init(|| resolved_directory_for_parent_traversal(directory, cwd.as_ref()));
-        let filter_by_trust = |dir: &Path| -> Result<Result<Trust, Trust>, Error> {
+        let filter_by_trust = |dir: &Path| -> Result<Result<Trust, Trust>, gix_error::Exn> {
             match trust {
                 TrustPolicy::Required(required) => {
                     let trust = Trust::from_path_ownership(dir).or_raise_erased(|| {
@@ -395,7 +395,7 @@ pub(crate) mod function {
     /// the trust level derived from Path ownership.
     ///
     /// Fail if no valid-looking git repository could be found.
-    pub fn discover(directory: &Path) -> Result<(crate::repository::Path, gix_sec::Trust), Error> {
+    pub fn discover(directory: &Path) -> Result<(crate::repository::Path, gix_sec::Trust), gix_error::Exn> {
         discover_opts(directory, Default::default())
     }
 }

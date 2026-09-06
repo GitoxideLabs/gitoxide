@@ -16,7 +16,7 @@ use crate::{
     remote::{
         connection::fetch::{PrepareDetached, config},
         fetch,
-        fetch::{Error, Outcome, Prepare, RefLogMessage, Status, negotiate::Algorithm, outcome, refs},
+        fetch::{Outcome, Prepare, RefLogMessage, Status, negotiate::Algorithm, outcome, refs},
     },
 };
 
@@ -71,7 +71,7 @@ where
     /// - `gitoxide.userAgent` is read to obtain the application user agent for git servers and for HTTP servers as well.
     ///
     #[gix_protocol::bisync::bisync]
-    pub async fn receive<P>(self, progress: P, should_interrupt: &AtomicBool) -> Result<Outcome, Error>
+    pub async fn receive<P>(self, progress: P, should_interrupt: &AtomicBool) -> Result<Outcome, crate::Error>
     where
         P: gix_features::progress::NestedProgress,
         P::SubProgress: 'static,
@@ -91,7 +91,7 @@ where
         repo: &crate::Repository,
         progress: P,
         should_interrupt: &AtomicBool,
-    ) -> Result<Outcome, Error>
+    ) -> Result<Outcome, crate::Error>
     where
         P: gix_features::progress::NestedProgress,
         P::SubProgress: 'static,
@@ -281,7 +281,7 @@ struct Negotiate<'a, 'b, 'c> {
 }
 
 impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
-    fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action, negotiate::Error> {
+    fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action, gix_error::Exn<gix_error::Message>> {
         negotiate::mark_complete_and_common_ref(
             &self.objects,
             self.refs,
@@ -323,7 +323,7 @@ impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
         state: &mut negotiate::one_round::State,
         arguments: &mut Arguments,
         previous_response: Option<&gix_protocol::fetch::Response>,
-    ) -> Result<(negotiate::Round, bool), negotiate::Error> {
+    ) -> Result<(negotiate::Round, bool), gix_error::Exn<gix_error::Message>> {
         negotiate::one_round(
             self.negotiator.deref_mut(),
             &mut *self.graph,

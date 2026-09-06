@@ -3,9 +3,8 @@
     feature = "blocking-http-transport-reqwest"
 ))]
 mod http_authentication {
-    use std::io::{BufRead, Write};
-
     use gix_error::ErrorExt;
+    use std::io::{BufRead, Write};
 
     #[test]
     fn cached_credentials_are_selected_without_prompting() -> crate::Result {
@@ -67,7 +66,7 @@ mod http_authentication {
             .with_credentials(|action| {
                 obtained = Some(authenticate(action));
                 // Stop after credential lookup, before the transport sends these dummy credentials.
-                Err(gix_error::message("stop after credential lookup").raise_erased())
+                Err(gix_error::message("The handler asked to stop trying to obtain credentials").raise_erased())
             })
             .ref_map(gix::progress::Discard, Default::default());
         server.join().expect("the HTTP fixture thread does not panic")?;

@@ -6,9 +6,6 @@ use gix_error::{ErrorExt, ResultExt, ValidationError};
 
 use crate::{Kind, Tag, TagRef, encode, encode::NL};
 
-/// An Error used in [`Tag::write_to()`][crate::WriteTo::write_to()].
-pub type Error = gix_error::Exn<ValidationError>;
-
 impl crate::WriteTo for Tag {
     fn write_to(&self, out: &mut dyn io::Write) -> io::Result<()> {
         encode::trusted_header_id(b"object", &self.target, out)?;
@@ -91,7 +88,7 @@ impl crate::WriteTo for TagRef<'_> {
     }
 }
 
-fn validated_name(name: &BStr) -> Result<&BStr, Error> {
+fn validated_name(name: &BStr) -> Result<&BStr, gix_error::Exn<gix_error::ValidationError>> {
     gix_validate::tag::name(name).or_raise(|| ValidationError::new("The tag name was no valid reference name"))?;
     if name[0] == b'-' {
         return Err(ValidationError::new("Tags must not start with a dash: '-'").raise());

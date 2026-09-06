@@ -7,7 +7,7 @@ use crate::{
     cache, data,
     data::{
         File, delta,
-        file::decode::{DeltaBaseUnresolved, Error, allocation_error},
+        file::decode::{DeltaBaseUnresolved, allocation_error},
     },
 };
 
@@ -80,7 +80,7 @@ impl<T> File<T>
 where
     T: crate::FileData,
 {
-    fn decoded_object_size(&self, size: u64) -> Result<usize, Error> {
+    fn decoded_object_size(&self, size: u64) -> Result<usize, gix_error::Exn> {
         decoded_object_size(size, self.alloc_limit_bytes)
     }
 
@@ -94,7 +94,7 @@ where
         entry: &data::Entry,
         inflate: &mut gix_zlib::Inflate,
         out: &mut [u8],
-    ) -> Result<usize, Error> {
+    ) -> Result<usize, gix_error::Exn> {
         let size: usize = entry
             .decompressed_size
             .try_into()
@@ -108,10 +108,10 @@ where
     /// Obtain the [`Entry`][crate::data::Entry] at the given `offset` into the pack.
     ///
     /// The `offset` is typically obtained from the pack index file.
-    pub fn entry(&self, offset: data::Offset) -> Result<data::Entry, data::entry::decode::Error> {
+    pub fn entry(&self, offset: data::Offset) -> Result<data::Entry, gix_error::CorruptionError> {
         let pack_offset: usize = offset.try_into().expect("offset representable by machine");
         if pack_offset > self.data.len() {
-            return Err(data::entry::decode::Error::new(
+            return Err(gix_error::CorruptionError::new(
                 "Pack entry is truncated: an entry offset pointing beyond pack data",
             ));
         }
@@ -130,7 +130,7 @@ where
         data_offset: data::Offset,
         inflate: &mut gix_zlib::Inflate,
         out: &mut [u8],
-    ) -> Result<usize, Error> {
+    ) -> Result<usize, gix_error::Exn> {
         let (consumed_in, _consumed_out) =
             self.decompress_complete_entry_from_data_offset(data_offset, inflate, out)?;
         Ok(consumed_in)
@@ -148,11 +148,11 @@ where
         data_offset: data::Offset,
         inflate: &mut gix_zlib::Inflate,
         out: &mut [u8],
-    ) -> Result<(usize, usize), Error> {
+    ) -> Result<(usize, usize), gix_error::Exn> {
         let (status, consumed_in, consumed_out) =
             self.decompress_entry_from_data_offset_unchecked(data_offset, inflate, out)?;
         if status != gix_zlib::Status::StreamEnd || consumed_out != out.len() {
-            return Err(data::entry::decode::Error::new(
+            return Err(gix_error::CorruptionError::new(
                 "Pack entry is truncated: pack entry decompressed size does not match entry header",
             )
             .raise_erased());
@@ -169,10 +169,10 @@ where
         data_offset: data::Offset,
         inflate: &mut gix_zlib::Inflate,
         out: &mut [u8],
-    ) -> Result<(gix_zlib::Status, usize, usize), Error> {
+    ) -> Result<(gix_zlib::Status, usize, usize), gix_error::Exn> {
         let offset: usize = data_offset.try_into().expect("offset representable by machine");
         if offset >= self.data.len() {
-            return Err(data::entry::decode::Error::new(
+            return Err(gix_error::CorruptionError::new(
                 "Pack entry is truncated: an entry data offset pointing beyond pack data",
             )
             .raise_erased());
@@ -202,7 +202,7 @@ where
         inflate: &mut gix_zlib::Inflate,
         resolve: &dyn Fn(&gix_hash::oid, &mut Vec<u8>) -> Option<ResolvedBase>,
         delta_cache: &mut dyn cache::DecodeEntry,
-    ) -> Result<Outcome, Error> {
+    ) -> Result<Outcome, gix_error::Exn> {
         use crate::data::entry::Header::*;
         match entry.header {
             Tree | Blob | Commit | Tag => {
@@ -235,7 +235,7 @@ where
         inflate: &mut gix_zlib::Inflate,
         out: &mut Vec<u8>,
         cache: &mut dyn cache::DecodeEntry,
-    ) -> Result<Outcome, Error> {
+    ) -> Result<Outcome, gix_error::Exn> {
         // all deltas, from the one that produces the desired object (first) to the oldest at the end of the chain
         let mut chain = SmallVec::<[Delta; 10]>::default();
         let first_entry = last.clone();
@@ -285,7 +285,7 @@ where
                     let offset = cursor
                         .checked_base_pack_offset(base_distance)
                         .ok_or_else(|| {
-                            crate::data::entry::decode::Error::new(
+                            gix_error::CorruptionError::new(
                                 "Pack entry is truncated: an ofs-delta base distance pointing before pack start",
                             )
                         })
@@ -360,7 +360,7 @@ where
                 let mut bytes_consumed_by_header = offset;
                 delta.base_size = self.decoded_object_size(base_size)?;
                 if delta.base_size != expected_base_size {
-                    return Err(delta::apply::Error::new(
+                    return Err(gix_error::CorruptionError::new(
                         "Corrupt delta data: delta base size does not match base object size",
                     )
                     .raise_erased());
@@ -491,7 +491,7 @@ where
 }
 
 /// Convert user-controlled sizes from pack data into allocation sizes while enforcing the configured allocation cap.
-fn decoded_object_size(size: u64, alloc_limit_bytes: Option<usize>) -> Result<usize, Error> {
+fn decoded_object_size(size: u64, alloc_limit_bytes: Option<usize>) -> Result<usize, gix_error::Exn> {
     let size: usize = size
         .try_into()
         .map_err(|_| allocation_error(ResourceExhaustionKind::AllocationFailure))?;

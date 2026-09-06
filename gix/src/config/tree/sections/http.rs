@@ -124,7 +124,7 @@ mod key_impls {
         pub fn try_into_follow_redirects(
             &'static self,
             value: impl gix_utils::AsBStr,
-            boolean: impl FnOnce() -> Result<Option<bool>, gix_config::value::Error>,
+            boolean: impl FnOnce() -> Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<
             crate::protocol::transport::client::blocking_io::http::options::FollowRedirects,
             crate::config::key::GenericErrorWithValue,

@@ -5,18 +5,9 @@ use bstr::BStr;
 use crate::{Pipeline, driver, eol, ident, pipeline::util::Configuration, worktree};
 
 ///
-pub mod configuration {
-    /// Errors related to the configuration of filter attributes.
-    pub type Error = gix_error::ValidationError;
-}
-
-///
 pub mod to_git {
     /// A function that fills `buf` `fn(&mut buf)` with the data stored in the index of the file that should be converted.
-    pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> Result<Option<()>, gix_object::find::Error> + 'a;
-
-    /// The error returned by [Pipeline::convert_to_git()][super::Pipeline::convert_to_git()].
-    pub type Error = gix_error::Exn;
+    pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> Result<Option<()>, gix_error::Exn> + 'a;
 }
 
 ///
@@ -41,9 +32,6 @@ pub mod to_worktree {
         /// Return an error.
         Fail,
     }
-
-    /// The error returned by [Pipeline::convert_to_worktree()][super::Pipeline::convert_to_worktree()].
-    pub type Error = gix_error::Exn;
 }
 
 /// Access
@@ -58,7 +46,7 @@ impl Pipeline {
         rela_path: &Path,
         attributes: &mut dyn FnMut(&BStr, &mut gix_attributes::search::Outcome),
         index_object: &mut to_git::IndexObjectFn<'_>,
-    ) -> Result<ToGitOutcome<'_, R>, to_git::Error>
+    ) -> Result<ToGitOutcome<'_, R>, gix_error::Exn>
     where
         R: std::io::Read,
     {
@@ -180,7 +168,7 @@ impl Pipeline {
             can_delay,
             unknown_encoding,
         }: to_worktree::Options,
-    ) -> Result<ToWorktreeOutcome<'input, '_>, to_worktree::Error> {
+    ) -> Result<ToWorktreeOutcome<'input, '_>, gix_error::Exn> {
         use gix_error::ResultExt;
 
         let Configuration {

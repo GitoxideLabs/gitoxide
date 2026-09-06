@@ -5,7 +5,7 @@ impl Comment {
         &self,
         source: &[u8],
         target: &mut Vec<u8>,
-    ) -> Result<Comment, crate::parse::span::Error> {
+    ) -> Result<Comment, gix_error::ValidationError> {
         Ok(Comment {
             tag: self.tag,
             text: self.text.copy_to_backing_in(source, target)?,

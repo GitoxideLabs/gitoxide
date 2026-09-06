@@ -13,7 +13,7 @@ pub mod ref_iter;
 
 impl<'a> TagRef<'a> {
     /// Deserialize a tag from `data`.
-    pub fn from_bytes(mut data: &'a [u8], hash_kind: gix_hash::Kind) -> Result<TagRef<'a>, crate::decode::Error> {
+    pub fn from_bytes(mut data: &'a [u8], hash_kind: gix_hash::Kind) -> Result<TagRef<'a>, gix_error::ValidationError> {
         let input = &mut data;
         match decode::git_tag(input, hash_kind) {
             Ok(tag) => Ok(tag),
@@ -26,7 +26,7 @@ impl<'a> TagRef<'a> {
     }
 
     /// Return the tagger, if present.
-    pub fn tagger(&self) -> Result<Option<gix_actor::SignatureRef<'a>>, crate::decode::Error> {
+    pub fn tagger(&self) -> Result<Option<gix_actor::SignatureRef<'a>>, gix_error::ValidationError> {
         Ok(self
             .tagger
             .map(parse_signature)
@@ -42,7 +42,7 @@ impl<'a> TagRef<'a> {
     }
 
     /// Copy all data into a fully-owned instance.
-    pub fn into_owned(self) -> Result<crate::Tag, crate::decode::Error> {
+    pub fn into_owned(self) -> Result<crate::Tag, gix_error::ValidationError> {
         self.try_into()
     }
 }

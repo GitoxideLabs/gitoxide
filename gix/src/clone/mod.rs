@@ -78,15 +78,12 @@ pub mod with_revision {
         }
     }
 
-    impl From<gix_refspec::parse::Error> for Error {
-        fn from(err: gix_refspec::parse::Error) -> Self {
+    impl From<gix_error::Exn<gix_error::ValidationError>> for Error {
+        fn from(err: gix_error::Exn<gix_error::ValidationError>) -> Self {
             Error::Parse(err.into_error())
         }
     }
 }
-
-/// The error returned by [`PrepareFetch::new()`].
-pub type Error = gix_error::Error;
 
 /// Instantiation
 impl PrepareFetch {
@@ -106,7 +103,7 @@ impl PrepareFetch {
         kind: crate::create::Kind,
         create_opts: crate::create::Options,
         open_opts: crate::open::Options,
-    ) -> Result<Self, Error>
+    ) -> Result<Self, crate::Error>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -119,7 +116,7 @@ impl PrepareFetch {
         kind: crate::create::Kind,
         mut create_opts: crate::create::Options,
         mut open_opts: crate::open::Options,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::Error> {
         if create_opts.destination_must_be_empty.is_none() {
             create_opts.destination_must_be_empty = Some(true);
         }

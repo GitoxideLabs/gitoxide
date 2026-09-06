@@ -1,8 +1,5 @@
 use std::{env, ffi::OsStr, path::PathBuf};
 
-/// The error returned by [`gix_discover::upwards()`][crate::upwards()].
-pub type Error = gix_error::Exn;
-
 /// How to obtain the trust level for a discovered repository.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum TrustPolicy {

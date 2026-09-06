@@ -5,15 +5,15 @@ use crate::{
     file::{Metadata, init::Options},
 };
 
-/// The error returned by [`File::from_paths_metadata()`] and [`File::from_path_no_includes()`].
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// Instantiation from one or more paths
 impl File {
     /// Load the single file at `path` with `source` without following include directives.
     ///
     /// Note that the path will be checked for ownership to derive trust.
-    pub fn from_path_no_includes(path: std::path::PathBuf, source: crate::Source) -> Result<Self, Error> {
+    pub fn from_path_no_includes(
+        path: std::path::PathBuf,
+        source: crate::Source,
+    ) -> Result<Self, gix_error::Exn<gix_error::Message>> {
         use gix_error::{ResultExt, message};
         let trust = gix_sec::Trust::from_path_ownership(&path).or_raise(|| {
             message!(
@@ -44,7 +44,7 @@ impl File {
     pub fn from_paths_metadata(
         path_meta: impl IntoIterator<Item = impl Into<Metadata>>,
         options: Options<'_>,
-    ) -> Result<Option<Self>, Error> {
+    ) -> Result<Option<Self>, gix_error::Exn<gix_error::Message>> {
         let mut buf = Vec::with_capacity(512);
         let err_on_nonexisting_paths = true;
         Self::from_paths_metadata_buf(
@@ -64,7 +64,7 @@ impl File {
         buf: &mut Vec<u8>,
         err_on_non_existing_paths: bool,
         options: Options<'_>,
-    ) -> Result<Option<Self>, Error> {
+    ) -> Result<Option<Self>, gix_error::Exn<gix_error::Message>> {
         use gix_error::{ErrorExt, ResultExt, message};
         let mut target = None;
         let mut seen = BTreeSet::default();

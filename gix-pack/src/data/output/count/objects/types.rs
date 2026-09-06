@@ -76,6 +76,3 @@ impl Default for Options {
         }
     }
 }
-
-/// The error returned by the pack generation iterator [`bytes::FromEntriesIter`][crate::data::output::bytes::FromEntriesIter].
-pub type Error = gix_error::Exn;

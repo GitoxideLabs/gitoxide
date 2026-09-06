@@ -22,7 +22,7 @@ pub(crate) fn loose_file(name: &str) -> gix_index::File {
     verify(file)
 }
 
-pub(crate) fn try_file(name: &str, needs_archive: bool) -> Result<gix_index::File, gix_index::file::init::Error> {
+pub(crate) fn try_file(name: &str, needs_archive: bool) -> Result<gix_index::File, gix_error::Exn> {
     let path = if needs_archive {
         crate::fixture_index_path_needs_archive(name)
     } else {

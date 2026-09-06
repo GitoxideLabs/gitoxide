@@ -1,10 +1,5 @@
-/// The error returned by [`encode_to_worktree()][super::encode_to_worktree()].
-pub type Error = gix_error::Exn<gix_error::ValidationError>;
-
 pub(crate) mod function {
     use encoding_rs::EncoderResult;
-
-    use super::Error;
 
     /// Encode `src_utf8`, which is assumed to be UTF-8 encoded, according to `worktree_encoding` for placement in the working directory,
     /// and write it to `buf`, possibly resizing it.
@@ -13,7 +8,7 @@ pub(crate) mod function {
         src_utf8: &[u8],
         worktree_encoding: &'static encoding_rs::Encoding,
         buf: &mut Vec<u8>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), gix_error::Exn<gix_error::ValidationError>> {
         use gix_error::{ErrorExt, ResultExt};
 
         let mut encoder = worktree_encoding.new_encoder();

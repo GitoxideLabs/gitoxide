@@ -4,9 +4,6 @@ use gix_error::{ResultExt, message};
 
 use crate::{data::output, exact_vec};
 
-/// The error returned by `next()` in the [`FromEntriesIter`] iterator.
-pub type Error = gix_error::Exn;
-
 /// An implementation of [`Iterator`] to write [encoded entries][output::Entry] to an inner implementation each time
 /// `next()` is called.
 pub struct FromEntriesIter<I, W> {
@@ -74,7 +71,7 @@ where
         self.trailer
     }
 
-    fn next_inner(&mut self) -> Result<u64, Error> {
+    fn next_inner(&mut self) -> Result<u64, gix_error::Exn> {
         let previous_written = self.written;
         if let Some((version, num_entries)) = self.header_info.take() {
             let header_bytes = crate::data::header::encode(version, num_entries);
@@ -132,7 +129,7 @@ where
     W: std::io::Write,
 {
     /// The amount of bytes written to `out` if `Ok` or the error `E` received from the input.
-    type Item = Result<u64, Error>;
+    type Item = Result<u64, gix_error::Exn>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_done {

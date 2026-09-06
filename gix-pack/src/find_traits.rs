@@ -25,7 +25,7 @@ pub trait Find {
         &self,
         id: &gix_hash::oid,
         buffer: &'a mut Vec<u8>,
-    ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_object::find::Error> {
+    ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_error::Exn> {
         self.try_find_cached(id, buffer, &mut crate::cache::Never)
     }
 
@@ -40,7 +40,7 @@ pub trait Find {
         id: &gix_hash::oid,
         buffer: &'a mut Vec<u8>,
         pack_cache: &mut dyn crate::cache::DecodeEntry,
-    ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_object::find::Error>;
+    ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_error::Exn>;
 
     /// Find the packs location where an object with `id` can be found in the database, or `None` if there is no pack
     /// holding the object.
@@ -83,8 +83,7 @@ mod ext {
                 &self,
                 id: &gix_hash::oid,
                 buffer: &'a mut Vec<u8>,
-            ) -> Result<($object_type, Option<crate::data::entry::Location>), gix_object::find::existing_object::Error>
-            {
+            ) -> Result<($object_type, Option<crate::data::entry::Location>), gix_error::Exn> {
                 let id = id.as_ref();
                 self.try_find(id, buffer)?
                     .ok_or_else(|| not_found(id))
@@ -109,7 +108,7 @@ mod ext {
                 &self,
                 id: &gix_hash::oid,
                 buffer: &'a mut Vec<u8>,
-            ) -> Result<($object_type, Option<crate::data::entry::Location>), gix_object::find::existing_iter::Error> {
+            ) -> Result<($object_type, Option<crate::data::entry::Location>), gix_error::Exn> {
                 let id = id.as_ref();
                 self.try_find(id, buffer)?
                     .ok_or_else(|| not_found(id))
@@ -129,8 +128,7 @@ mod ext {
             &self,
             id: &gix_hash::oid,
             buffer: &'a mut Vec<u8>,
-        ) -> Result<(gix_object::Data<'a>, Option<crate::data::entry::Location>), gix_object::find::existing::Error>
-        {
+        ) -> Result<(gix_object::Data<'a>, Option<crate::data::entry::Location>), gix_error::Exn> {
             self.try_find(id, buffer)?.ok_or_else(|| not_found(id))
         }
 
@@ -167,7 +165,7 @@ mod find_impls {
             id: &oid,
             buffer: &'a mut Vec<u8>,
             pack_cache: &mut dyn crate::cache::DecodeEntry,
-        ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_object::find::Error> {
+        ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_error::Exn> {
             (*self).try_find_cached(id, buffer, pack_cache)
         }
 
@@ -197,7 +195,7 @@ mod find_impls {
             id: &oid,
             buffer: &'a mut Vec<u8>,
             pack_cache: &mut dyn crate::cache::DecodeEntry,
-        ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_object::find::Error> {
+        ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_error::Exn> {
             self.deref().try_find_cached(id, buffer, pack_cache)
         }
 
@@ -227,7 +225,7 @@ mod find_impls {
             id: &oid,
             buffer: &'a mut Vec<u8>,
             pack_cache: &mut dyn crate::cache::DecodeEntry,
-        ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_object::find::Error> {
+        ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_error::Exn> {
             self.deref().try_find_cached(id, buffer, pack_cache)
         }
 
@@ -257,7 +255,7 @@ mod find_impls {
             id: &oid,
             buffer: &'a mut Vec<u8>,
             pack_cache: &mut dyn crate::cache::DecodeEntry,
-        ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_object::find::Error> {
+        ) -> Result<Option<(gix_object::Data<'a>, Option<data::entry::Location>)>, gix_error::Exn> {
             self.deref().try_find_cached(id, buffer, pack_cache)
         }
 

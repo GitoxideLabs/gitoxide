@@ -2,21 +2,9 @@ use std::cmp::Ordering;
 
 use crate::State;
 
-///
-pub mod entries {
-    /// The error returned by [`State::verify_entries()`][crate::State::verify_entries()].
-    pub type Error = gix_error::Exn<gix_error::CorruptionError>;
-}
-
-///
-pub mod extensions {
-    /// The error returned by [`State::verify_extensions()`][crate::State::verify_extensions()].
-    pub type Error = gix_error::Exn<gix_error::CorruptionError>;
-}
-
 impl State {
     /// Assure our entries are consistent.
-    pub fn verify_entries(&self) -> Result<(), entries::Error> {
+    pub fn verify_entries(&self) -> Result<(), gix_error::Exn<gix_error::CorruptionError>> {
         use gix_error::ErrorExt;
 
         let _span = gix_features::trace::coarse!("gix_index::File::verify_entries()");
@@ -40,7 +28,11 @@ impl State {
     }
 
     /// Note: `objects` cannot be `Option<F>` as we can't call it with a closure then due to the indirection through `Some`.
-    pub fn verify_extensions(&self, use_find: bool, objects: impl gix_object::Find) -> Result<(), extensions::Error> {
+    pub fn verify_extensions(
+        &self,
+        use_find: bool,
+        objects: impl gix_object::Find,
+    ) -> Result<(), gix_error::Exn<gix_error::CorruptionError>> {
         if let Some(tree) = self.tree() {
             tree.verify(use_find, objects)?;
             tree.verify_entries_count(self.entries.len())?;

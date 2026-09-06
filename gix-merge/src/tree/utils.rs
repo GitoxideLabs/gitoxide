@@ -19,7 +19,7 @@ use gix_object::{
 use crate::{
     blob::{ResourceKind, builtin_driver::binary::Pick},
     tree::{
-        Conflict, ConflictIndexEntry, ConflictIndexEntryPathHint, ConflictMapping, Error, Options, Resolution,
+        Conflict, ConflictIndexEntry, ConflictIndexEntryPathHint, ConflictMapping, Options, Resolution,
         ResolutionFailure,
     },
 };
@@ -77,7 +77,7 @@ pub fn unique_path_in_tree(
     editor: &tree::Editor<'_>,
     tree: &TreeNodes,
     side_name: &BStr,
-) -> Result<BString, Error> {
+) -> Result<BString, gix_error::Exn> {
     let mut qualifier = BString::from("~");
     qualifier.extend(
         side_name
@@ -131,7 +131,7 @@ pub fn perform_blob_merge(
     (previous_location, previous_id, previous_mode): (&BString, ObjectId, EntryMode),
     (extra_markers, outer_side): (u8, ConflictMapping),
     options: &Options,
-) -> Result<(ObjectId, crate::blob::Resolution), Error> {
+) -> Result<(ObjectId, crate::blob::Resolution), gix_error::Exn> {
     if our_id == their_id {
         // This can happen if the merge modes are different.
         debug_assert_ne!(
@@ -387,7 +387,7 @@ pub fn apply_change(
     editor: &mut tree::Editor<'_>,
     change: &Change,
     alternative_location: Option<&BString>,
-) -> Result<(), tree::editor::Error> {
+) -> Result<(), gix_error::Exn> {
     use to_components_bstring_ref as to_components;
     if change.entry_mode().is_tree() {
         return Ok(());
@@ -860,7 +860,7 @@ mod tree_nodes_tests {
     }
 
     #[test]
-    fn unique_path_qualifies_a_non_tree_parent_instead_of_looping_over_child_names() -> Result<(), Error> {
+    fn unique_path_qualifies_a_non_tree_parent_instead_of_looping_over_child_names() -> Result<(), gix_error::Exn> {
         let mut tree = TreeNodes::new();
         tree.track_change(
             &Change::Addition {

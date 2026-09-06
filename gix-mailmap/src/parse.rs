@@ -1,6 +1,3 @@
-/// The error returned by [`parse()`](crate::parse()).
-pub type Error = gix_error::Exn<gix_error::ValidationError>;
-
 use bstr::{BStr, ByteSlice};
 use gix_error::{ErrorExt, OptionExt, ValidationError};
 
@@ -22,7 +19,7 @@ impl<'a> Lines<'a> {
 }
 
 impl<'a> Iterator for Lines<'a> {
-    type Item = Result<Entry<'a>, Error>;
+    type Item = Result<Entry<'a>, gix_error::Exn<gix_error::ValidationError>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         for line in self.lines.by_ref() {
@@ -42,7 +39,7 @@ impl<'a> Iterator for Lines<'a> {
     }
 }
 
-fn parse_line(line: &BStr, line_number: usize) -> Result<Entry<'_>, Error> {
+fn parse_line(line: &BStr, line_number: usize) -> Result<Entry<'_>, gix_error::Exn<gix_error::ValidationError>> {
     let (name1, email1, rest) = parse_name_and_email(line, line_number, false)?;
     let (name2, email2, _rest) = parse_name_and_email(rest, line_number, true).unwrap_or((None, None, rest));
     if email1.is_none() {
@@ -74,11 +71,12 @@ fn parse_line(line: &BStr, line_number: usize) -> Result<Entry<'_>, Error> {
     })
 }
 
+#[expect(clippy::type_complexity)]
 fn parse_name_and_email(
     line: &BStr,
     line_number: usize,
     allow_empty_email: bool,
-) -> Result<(Option<&'_ BStr>, Option<&'_ BStr>, &'_ BStr), Error> {
+) -> Result<(Option<&'_ BStr>, Option<&'_ BStr>, &'_ BStr), gix_error::Exn<gix_error::ValidationError>> {
     match line.find_byte(b'<') {
         Some(start_bracket) => {
             let email = &line[start_bracket + 1..];

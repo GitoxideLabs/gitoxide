@@ -1,5 +1,5 @@
 #![allow(clippy::result_large_err)]
-use crate::{Remote, bstr::BStr, config, remote, remote::find};
+use crate::{Remote, bstr::BStr, config, remote};
 use gix_error::{ErrorExt, ResultExt};
 
 impl crate::Repository {
@@ -29,7 +29,7 @@ impl crate::Repository {
     /// );
     /// # Ok(()) }
     /// ```
-    pub fn remote_at<Url, E>(&self, url: Url) -> Result<Remote<'_>, remote::init::Error>
+    pub fn remote_at<Url, E>(&self, url: Url) -> Result<Remote<'_>, crate::Error>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -41,7 +41,7 @@ impl crate::Repository {
     /// but don't rewrite the url according to rewrite rules.
     /// This eliminates a failure mode in case the rewritten URL is faulty, allowing to selectively [apply rewrite
     /// rules][Remote::rewrite_urls()] later and do so non-destructively.
-    pub fn remote_at_without_url_rewrite<Url, E>(&self, url: Url) -> Result<Remote<'_>, remote::init::Error>
+    pub fn remote_at_without_url_rewrite<Url, E>(&self, url: Url) -> Result<Remote<'_>, crate::Error>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -66,7 +66,7 @@ impl crate::Repository {
     /// assert_eq!(remote.refspecs(gix::remote::Direction::Fetch).len(), 1);
     /// # Ok(()) }
     /// ```
-    pub fn find_remote(&self, name_or_url: impl gix_utils::AsBStr) -> Result<Remote<'_>, find::existing::Error> {
+    pub fn find_remote(&self, name_or_url: impl gix_utils::AsBStr) -> Result<Remote<'_>, crate::Error> {
         let name_or_url = name_or_url.as_bstr();
         self.try_find_remote(name_or_url).ok_or_else(|| {
             gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
@@ -92,10 +92,7 @@ impl crate::Repository {
     /// assert_eq!(remote.name().expect("named").as_bstr(), "origin");
     /// # Ok(()) }
     /// ```
-    pub fn find_default_remote(
-        &self,
-        direction: remote::Direction,
-    ) -> Option<Result<Remote<'_>, find::existing::Error>> {
+    pub fn find_default_remote(&self, direction: remote::Direction) -> Option<Result<Remote<'_>, crate::Error>> {
         self.remote_default_name(direction).map(|name| self.find_remote(name))
     }
 
@@ -117,7 +114,7 @@ impl crate::Repository {
     /// as negations/excludes are applied after includes.
     ///
     /// We will only include information if we deem it [trustworthy][crate::open::Options::filter_config_section()].
-    pub fn try_find_remote<'a>(&self, name_or_url: impl Into<&'a BStr>) -> Option<Result<Remote<'_>, find::Error>> {
+    pub fn try_find_remote<'a>(&self, name_or_url: impl Into<&'a BStr>) -> Option<Result<Remote<'_>, crate::Error>> {
         self.try_find_remote_inner(name_or_url.into(), true)
     }
 
@@ -148,7 +145,7 @@ impl crate::Repository {
     /// assert_eq!(remote.name().expect("configured").as_bstr(), "origin");
     /// # Ok(()) }
     /// ```
-    pub fn find_fetch_remote(&self, name_or_url: Option<&BStr>) -> Result<Remote<'_>, find::for_fetch::Error> {
+    pub fn find_fetch_remote(&self, name_or_url: Option<&BStr>) -> Result<Remote<'_>, crate::Error> {
         Ok(match name_or_url {
             Some(name) => match self.try_find_remote(name).and_then(Result::ok) {
                 Some(remote) => remote,
@@ -176,7 +173,7 @@ impl crate::Repository {
     pub fn try_find_remote_without_url_rewrite<'a>(
         &self,
         name_or_url: impl Into<&'a BStr>,
-    ) -> Option<Result<Remote<'_>, find::Error>> {
+    ) -> Option<Result<Remote<'_>, crate::Error>> {
         self.try_find_remote_inner(name_or_url.into(), false)
     }
 
@@ -184,13 +181,13 @@ impl crate::Repository {
         &self,
         name_or_url: impl Into<&'a BStr>,
         rewrite_urls: bool,
-    ) -> Option<Result<Remote<'_>, find::Error>> {
+    ) -> Option<Result<Remote<'_>, crate::Error>> {
         fn config_spec<T: config::tree::keys::Validate>(
             specs: Vec<crate::bstr::BString>,
             name_or_url: &BStr,
             key: &'static config::tree::keys::Any<T>,
             op: gix_refspec::parse::Operation,
-        ) -> Result<Vec<gix_refspec::RefSpec>, find::Error> {
+        ) -> Result<Vec<gix_refspec::RefSpec>, crate::Error> {
             let kind = key.name;
             specs
                 .into_iter()

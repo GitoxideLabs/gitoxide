@@ -5,17 +5,18 @@ use gix_features::decode::leb64_from_read;
 use super::{BLOB, COMMIT, OFS_DELTA, REF_DELTA, TAG, TREE};
 use crate::data;
 
-/// The error returned by [data::Entry::from_bytes()].
-pub type Error = gix_error::CorruptionError;
-
-fn corrupt(message: &'static str) -> Error {
-    Error::new(format!("Pack entry is truncated: {message}"))
+fn corrupt(message: &'static str) -> gix_error::CorruptionError {
+    gix_error::CorruptionError::new(format!("Pack entry is truncated: {message}"))
 }
 
 /// Decoding
 impl data::Entry {
     /// Decode an entry from the given entry data `d`, providing the `pack_offset` to allow tracking the start of the entry data section.
-    pub fn from_bytes(d: &[u8], pack_offset: data::Offset, object_hash: gix_hash::Kind) -> Result<data::Entry, Error> {
+    pub fn from_bytes(
+        d: &[u8],
+        pack_offset: data::Offset,
+        object_hash: gix_hash::Kind,
+    ) -> Result<data::Entry, gix_error::CorruptionError> {
         let (type_id, size, mut consumed) = parse_header_info(d)?;
         let hash_len = object_hash.len_in_bytes();
 
@@ -45,7 +46,11 @@ impl data::Entry {
             TREE => Tree,
             COMMIT => Commit,
             TAG => Tag,
-            other => return Err(Error::new(format!("Object type {other} is unsupported"))),
+            other => {
+                return Err(gix_error::CorruptionError::new(format!(
+                    "Object type {other} is unsupported"
+                )));
+            }
         };
         Ok(data::Entry {
             header: object,
@@ -96,7 +101,7 @@ impl data::Entry {
     }
 }
 
-fn encoded_header_size(consumed: usize) -> Result<u16, Error> {
+fn encoded_header_size(consumed: usize) -> Result<u16, gix_error::CorruptionError> {
     consumed
         .try_into()
         .map_err(|_| corrupt("entry header size does not fit into u16"))
@@ -128,7 +133,7 @@ fn streaming_parse_header_info(read: &mut dyn io::Read) -> Result<(u8, u64, usiz
 
 /// Parses the header of a pack-entry, yielding object type id, decompressed object size, and consumed bytes
 #[inline]
-fn parse_header_info(data: &[u8]) -> Result<(u8, u64, usize), Error> {
+fn parse_header_info(data: &[u8]) -> Result<(u8, u64, usize), gix_error::CorruptionError> {
     let mut c = *data
         .first()
         .ok_or_else(|| corrupt("need a pack entry header, got empty input"))?;
@@ -143,16 +148,16 @@ fn parse_header_info(data: &[u8]) -> Result<(u8, u64, usize), Error> {
         i += 1;
         let component = u64::from(c & 0b0111_1111)
             .checked_shl(shift)
-            .ok_or_else(|| Error::new("Pack entry header value overflowed while decoding"))?;
+            .ok_or_else(|| gix_error::CorruptionError::new("Pack entry header value overflowed while decoding"))?;
         size = size
             .checked_add(component)
-            .ok_or_else(|| Error::new("Pack entry header value overflowed while decoding"))?;
+            .ok_or_else(|| gix_error::CorruptionError::new("Pack entry header value overflowed while decoding"))?;
         shift += 7;
     }
     Ok((type_id, size, i))
 }
 
-fn parse_leb64(data: &[u8]) -> Result<(u64, usize), Error> {
+fn parse_leb64(data: &[u8]) -> Result<(u64, usize), gix_error::CorruptionError> {
     let mut i = 0;
     let mut c = *data.first().ok_or_else(|| corrupt("an ofs-delta base distance"))?;
     i += 1;
@@ -166,7 +171,7 @@ fn parse_leb64(data: &[u8]) -> Result<(u64, usize), Error> {
             .checked_add(1)
             .and_then(|value| value.checked_shl(7))
             .and_then(|value| value.checked_add(u64::from(c) & 0x7f))
-            .ok_or_else(|| Error::new("Pack entry header value overflowed while decoding"))?;
+            .ok_or_else(|| gix_error::CorruptionError::new("Pack entry header value overflowed while decoding"))?;
     }
     Ok((value, i))
 }

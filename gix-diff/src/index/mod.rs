@@ -2,9 +2,6 @@ use std::borrow::Cow;
 
 use bstr::BStr;
 
-/// The error returned by [`index()`](crate::index()).
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// What to do after a [ChangeRef] was passed ot the callback of [`index()`](crate::index()).
 ///
 /// Use [`std::ops::ControlFlow::Continue`] to continue the operation.

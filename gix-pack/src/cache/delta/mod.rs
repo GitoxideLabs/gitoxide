@@ -1,5 +1,3 @@
-/// Returned when using various methods on a [`Tree`]
-pub type Error = gix_error::Exn;
 ///
 /// A tree that allows one-time iteration over all nodes and their children, consuming it in the process,
 /// while being shareable among threads without a lock.

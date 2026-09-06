@@ -128,11 +128,7 @@ fn absolute_path_escapes_worktree() {
     assert_eq!(err.input.as_ref().expect("offending path").to_str_lossy(), "/dev");
 }
 
-fn normalized_spec(
-    path: &str,
-    prefix: &str,
-    root: &str,
-) -> Result<gix_pathspec::Pattern, gix_pathspec::normalize::Error> {
+fn normalized_spec(path: &str, prefix: &str, root: &str) -> Result<gix_pathspec::Pattern, gix_error::ValidationError> {
     let mut spec = gix_pathspec::parse(path.as_bytes(), Default::default()).expect("valid");
     spec.normalize(Path::new(prefix), Path::new(root))?;
     Ok(spec)

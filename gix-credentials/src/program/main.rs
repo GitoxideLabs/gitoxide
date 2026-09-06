@@ -42,16 +42,13 @@ impl Action {
     }
 }
 
-/// The error of [`main()`][crate::program::main()].
-pub type Error = gix_error::Exn;
-
 pub(crate) mod function {
     use std::ffi::OsString;
 
     use gix_error::{ErrorExt, ResultExt, ValidationError};
 
     use crate::{
-        program::main::{Action, Error},
+        program::main::Action,
         protocol::{Context, ContextOptions},
     };
 
@@ -69,7 +66,7 @@ pub(crate) mod function {
         stdout: impl std::io::Write,
         options: ContextOptions,
         credentials: CredentialsFn,
-    ) -> Result<(), Error>
+    ) -> Result<(), gix_error::Exn>
     where
         CredentialsFn: FnOnce(Action, Context) -> Result<Option<Context>, gix_error::Exn>,
     {

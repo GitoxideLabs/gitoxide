@@ -97,7 +97,7 @@ impl<'repo> SnapshotMut<'repo> {
         &mut self,
         values: impl IntoIterator<Item = impl gix_utils::AsBStr>,
         source: gix_config::Source,
-    ) -> Result<&mut Self, crate::config::overrides::Error> {
+    ) -> Result<&mut Self, crate::Error> {
         crate::config::overrides::append(&mut self.config, values, source, |v| Some(format!("-c {v}").into()))?;
         Ok(self)
     }
@@ -105,7 +105,7 @@ impl<'repo> SnapshotMut<'repo> {
     ///
     /// Note that this would also happen once this instance is dropped, but using this method may be more intuitive and won't squelch errors
     /// in case the new configuration is partially invalid.
-    pub fn commit(mut self) -> Result<&'repo mut crate::Repository, crate::config::Error> {
+    pub fn commit(mut self) -> Result<&'repo mut crate::Repository, crate::Error> {
         let repo = self.repo.take().expect("always present here");
         self.commit_inner(repo)
     }
@@ -116,7 +116,7 @@ impl<'repo> SnapshotMut<'repo> {
         &mut self,
         key: &'static dyn crate::config::tree::Key,
         new_value: impl gix_utils::AsBStr,
-    ) -> Result<Option<BString>, crate::config::set_value::Error> {
+    ) -> Result<Option<BString>, crate::Error> {
         if let Some(crate::config::tree::SubSectionRequirement::Parameter(_)) = key.subsection_requirement() {
             return Err(gix_error::Error::from_error(gix_error::ValidationError::new(
                 "The key needs a subsection parameter to be valid.",
@@ -145,7 +145,7 @@ impl<'repo> SnapshotMut<'repo> {
         key: &'static dyn crate::config::tree::Key,
         subsection: impl gix_utils::AsBStr,
         new_value: impl gix_utils::AsBStr,
-    ) -> Result<Option<BString>, crate::config::set_value::Error> {
+    ) -> Result<Option<BString>, crate::Error> {
         if let Some(crate::config::tree::SubSectionRequirement::Never) = key.subsection_requirement() {
             return Err(gix_error::Error::from_error(gix_error::ValidationError::new(
                 "The key must not be used with a subsection",
@@ -169,13 +169,13 @@ impl<'repo> SnapshotMut<'repo> {
     pub(crate) fn commit_inner(
         &mut self,
         repo: &'repo mut crate::Repository,
-    ) -> Result<&'repo mut crate::Repository, crate::config::Error> {
+    ) -> Result<&'repo mut crate::Repository, crate::Error> {
         repo.reread_values_and_clear_caches_replacing_config(std::mem::take(&mut self.config).into())?;
         Ok(repo)
     }
 
     /// Create a structure the temporarily commits the changes, but rolls them back when dropped.
-    pub fn commit_auto_rollback(mut self) -> Result<CommitAutoRollback<'repo>, crate::config::Error> {
+    pub fn commit_auto_rollback(mut self) -> Result<CommitAutoRollback<'repo>, crate::Error> {
         let repo = self.repo.take().expect("this only runs once on consumption");
         let prev_config = OwnShared::clone(&repo.config.resolved);
 
@@ -195,7 +195,7 @@ impl<'repo> SnapshotMut<'repo> {
 /// Utilities
 impl<'repo> CommitAutoRollback<'repo> {
     /// Rollback the changes previously applied and all values before the change.
-    pub fn rollback(mut self) -> Result<&'repo mut crate::Repository, crate::config::Error> {
+    pub fn rollback(mut self) -> Result<&'repo mut crate::Repository, crate::Error> {
         let repo = self.repo.take().expect("still present, consumed only once");
         self.rollback_inner(repo)
     }
@@ -203,7 +203,7 @@ impl<'repo> CommitAutoRollback<'repo> {
     pub(crate) fn rollback_inner(
         &mut self,
         repo: &'repo mut crate::Repository,
-    ) -> Result<&'repo mut crate::Repository, crate::config::Error> {
+    ) -> Result<&'repo mut crate::Repository, crate::Error> {
         repo.reread_values_and_clear_caches_replacing_config(OwnShared::clone(&self.prev_config))?;
         Ok(repo)
     }

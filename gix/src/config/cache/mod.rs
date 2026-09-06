@@ -1,4 +1,4 @@
-use super::{Cache, Error};
+use super::Cache;
 
 mod incubate;
 pub(crate) use incubate::StageOne;

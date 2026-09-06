@@ -15,7 +15,7 @@ mod data_to_write {
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn binary_and_non_binary() -> crate::Result {
+    async fn binary_and_non_binary() -> gix_error::TestResult {
         let mut out = Vec::new();
         let res = data_to_write(b"\0", &mut out).await?;
         assert_eq!(res, 5);
@@ -59,7 +59,7 @@ mod text_to_write {
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn always_appends_a_newline() -> crate::Result {
+    async fn always_appends_a_newline() -> gix_error::TestResult {
         let mut out = Vec::new();
         let res = text_to_write(b"a", &mut out).await?;
         assert_eq!(res, 6);
@@ -87,7 +87,7 @@ mod error {
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn write_line() -> crate::Result {
+    async fn write_line() -> gix_error::TestResult {
         let mut out = Vec::new();
         let res = error_to_write(b"hello error", &mut out).await?;
         assert_eq!(res, 19);
@@ -106,7 +106,7 @@ mod flush_delim_response_end {
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn success_flush_delim_response_end() -> crate::Result {
+    async fn success_flush_delim_response_end() -> gix_error::TestResult {
         let mut out = Vec::new();
         let res = flush_to_write(&mut out).await?;
         assert_eq!(res, 4);

@@ -24,7 +24,7 @@ impl AsRef<str> for NameRef<'_> {
 }
 
 impl<'a> TryFrom<&'a BStr> for NameRef<'a> {
-    type Error = Error;
+    type Error = gix_error::ValidationError;
 
     fn try_from(attr: &'a BStr) -> Result<Self, Self::Error> {
         fn attr_valid(attr: &BStr) -> bool {
@@ -38,7 +38,12 @@ impl<'a> TryFrom<&'a BStr> for NameRef<'a> {
 
         attr_valid(attr)
             .then(|| NameRef(attr.to_str().expect("no illformed utf8")))
-            .ok_or_else(|| Error::new_with_input("Attribute has non-ascii characters or starts with '-'", attr))
+            .ok_or_else(|| {
+                gix_error::ValidationError::new_with_input(
+                    "Attribute has non-ascii characters or starts with '-'",
+                    attr,
+                )
+            })
     }
 }
 
@@ -92,6 +97,3 @@ impl<'de> serde::Deserialize<'de> for Name {
             .map_err(serde::de::Error::custom)
     }
 }
-
-/// The error returned by [`parse::Iter`][crate::parse::Iter].
-pub type Error = gix_error::ValidationError;

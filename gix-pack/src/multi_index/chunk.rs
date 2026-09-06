@@ -7,12 +7,6 @@ pub mod index_names {
     /// The ID used for the index-names chunk.
     pub const ID: gix_chunk::Id = *b"PNAM";
 
-    ///
-    pub mod decode {
-        /// The error returned by [`from_bytes()`][super::from_bytes()].
-        pub type Error = gix_error::Exn;
-    }
-
     /// Parse null-separated index names from the given `chunk` of bytes.
     ///
     /// `chunk`
@@ -30,7 +24,7 @@ pub mod index_names {
         mut chunk: &[u8],
         num_packs: u32,
         alloc_limit_bytes: Option<usize>,
-    ) -> Result<Vec<PathBuf>, decode::Error> {
+    ) -> Result<Vec<PathBuf>, gix_error::Exn> {
         use gix_error::{
             CorruptionError, ErrorExt, OptionExt, ResourceExhaustionError, ResourceExhaustionKind, ResultExt,
         };

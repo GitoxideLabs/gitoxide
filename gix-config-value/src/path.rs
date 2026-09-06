@@ -31,9 +31,6 @@ pub mod interpolate {
         }
     }
 
-    /// The error returned by [`Path::interpolate()`][crate::Path::interpolate()].
-    pub type Error = gix_error::Exn;
-
     /// Obtain the home directory for the given user `name` or return `None` if the user wasn't found
     /// or any other error occurred.
     /// It can be used as `home_for_user` parameter in [`Path::interpolate()`][crate::Path::interpolate()].
@@ -154,7 +151,7 @@ impl Path {
             home_dir,
             home_for_user,
         }: interpolate::Context<'_>,
-    ) -> Result<PathBuf, interpolate::Error> {
+    ) -> Result<PathBuf, gix_error::Exn> {
         if self.is_empty() {
             return Err(NotFoundError::new("path is missing").raise_erased());
         }
@@ -207,7 +204,7 @@ impl Path {
     fn home_for_username(
         username: &[u8],
         home_for_user: fn(&str) -> Option<PathBuf>,
-    ) -> Result<PathBuf, interpolate::Error> {
+    ) -> Result<PathBuf, gix_error::Exn> {
         let username = std::str::from_utf8(username)
             .or_raise_erased(|| ValidationError::new_with_input("Ill-formed UTF-8 in username", username))?;
         home_for_user(username).ok_or_raise_erased(|| NotFoundError::new("pwd user info is missing"))

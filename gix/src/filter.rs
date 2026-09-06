@@ -13,33 +13,6 @@ use crate::{
     prelude::ObjectIdExt,
 };
 
-///
-pub mod pipeline {
-    ///
-    pub mod options {
-        /// The error returned by [Pipeline::options()](crate::filter::Pipeline::options()).
-        pub type Error = gix_error::Error;
-    }
-
-    ///
-    pub mod convert_to_git {
-        /// The error returned by [Pipeline::convert_to_git()](crate::filter::Pipeline::convert_to_git()).
-        pub type Error = gix_error::Error;
-    }
-
-    ///
-    pub mod convert_to_worktree {
-        /// The error returned by [Pipeline::convert_to_worktree()](crate::filter::Pipeline::convert_to_worktree()).
-        pub type Error = gix_error::Error;
-    }
-
-    ///
-    pub mod worktree_file_to_object {
-        /// The error returned by [Pipeline::worktree_file_to_object()](crate::filter::Pipeline::worktree_file_to_object()).
-        pub type Error = gix_error::Error;
-    }
-}
-
 /// A git pipeline for transforming data *to-git* and *to-worktree*, based
 /// [on git configuration and attributes](https://git-scm.com/docs/gitattributes).
 #[derive(Clone)]
@@ -53,7 +26,7 @@ pub struct Pipeline<'repo> {
 /// Lifecycle
 impl<'repo> Pipeline<'repo> {
     /// Extract options from `repo` that are needed to properly drive a standard git filter pipeline.
-    pub fn options(repo: &'repo Repository) -> Result<gix_filter::pipeline::Options, pipeline::options::Error> {
+    pub fn options(repo: &'repo Repository) -> Result<gix_filter::pipeline::Options, crate::Error> {
         let config = &repo.config.resolved;
         let encodings = Core::CHECK_ROUND_TRIP_ENCODING
             .try_into_encodings(config.string("core.checkRoundtripEncoding"))
@@ -93,7 +66,7 @@ impl<'repo> Pipeline<'repo> {
 
     /// Create a new instance by extracting all necessary information and configuration from a `repo` along with `cache` for accessing
     /// attributes. The `index` is used for some filters which may access it under very specific circumstances.
-    pub fn new(repo: &'repo Repository, cache: gix_worktree::Stack) -> Result<Self, pipeline::options::Error> {
+    pub fn new(repo: &'repo Repository, cache: gix_worktree::Stack) -> Result<Self, crate::Error> {
         let pipeline = gix_filter::Pipeline::new(repo.command_context()?, Self::options(repo)?);
         Ok(Pipeline {
             inner: pipeline,
@@ -120,7 +93,7 @@ impl Pipeline<'_> {
         src: R,
         rela_path: &std::path::Path,
         index: &gix_index::State,
-    ) -> Result<gix_filter::pipeline::convert::ToGitOutcome<'_, R>, pipeline::convert_to_git::Error>
+    ) -> Result<gix_filter::pipeline::convert::ToGitOutcome<'_, R>, crate::Error>
     where
         R: std::io::Read,
     {
@@ -135,7 +108,7 @@ impl Pipeline<'_> {
                 &mut |_, attrs| {
                     entry.matching_attributes(attrs);
                 },
-                &mut |buf| -> Result<_, gix_object::find::Error> {
+                &mut |buf| -> Result<_, gix_error::Exn> {
                     let entry = match index
                         .entry_by_path(gix_path::to_unix_separators_on_windows(gix_path::into_bstr(rela_path)).as_ref())
                     {
@@ -162,8 +135,7 @@ impl Pipeline<'_> {
         src: &'input [u8],
         rela_path: &BStr,
         options: gix_filter::pipeline::convert::to_worktree::Options,
-    ) -> Result<gix_filter::pipeline::convert::ToWorktreeOutcome<'input, '_>, pipeline::convert_to_worktree::Error>
-    {
+    ) -> Result<gix_filter::pipeline::convert::ToWorktreeOutcome<'input, '_>, crate::Error> {
         let entry = self.cache.at_entry(rela_path, None, &self.repo.objects).or_erased()?;
         Ok(self.inner.convert_to_worktree(
             src,
@@ -188,10 +160,7 @@ impl Pipeline<'_> {
         &mut self,
         rela_path: &BStr,
         index: &gix_index::State,
-    ) -> Result<
-        Option<(gix_hash::ObjectId, gix_object::tree::EntryKind, std::fs::Metadata)>,
-        pipeline::worktree_file_to_object::Error,
-    > {
+    ) -> Result<Option<(gix_hash::ObjectId, gix_object::tree::EntryKind, std::fs::Metadata)>, crate::Error> {
         let rela_path_as_path = gix_path::from_bstr(rela_path);
         let repo = self.repo;
         let worktree_dir = repo.workdir().ok_or_else(|| {
@@ -268,7 +237,7 @@ impl Pipeline<'_> {
 }
 
 /// Obtain a list of all configured driver, but ignore those in sections that we don't trust enough.
-fn extract_drivers(repo: &Repository) -> Result<Vec<gix_filter::Driver>, pipeline::options::Error> {
+fn extract_drivers(repo: &Repository) -> Result<Vec<gix_filter::Driver>, crate::Error> {
     let mut drivers = Vec::<gix_filter::Driver>::new();
     for section in repo
         .config

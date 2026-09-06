@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 
 use super::{Change, UnblamedHunk, process_changes};
 use crate::{
-    BlameEntry, Error, Options, Outcome, Statistics,
+    BlameEntry, Options, Outcome, Statistics,
     types::{BlamePathEntry, Start},
 };
 
@@ -72,7 +72,7 @@ pub fn file(
     resource_cache: &mut gix_diff::blob::Platform,
     file_path: &BStr,
     options: Options,
-) -> Result<Outcome, Error> {
+) -> Result<Outcome, gix_error::Exn> {
     let _span = gix_trace::coarse!("gix_blame::file()", ?file_path, ?start);
 
     let mut stats = Statistics::default();
@@ -580,7 +580,7 @@ fn tree_diff_at_file_path(
     lhs_tree_buf: &mut Vec<u8>,
     rhs_tree_buf: &mut Vec<u8>,
     rewrites: Option<gix_diff::Rewrites>,
-) -> Result<Option<TreeDiffChange>, Error> {
+) -> Result<Option<TreeDiffChange>, gix_error::Exn> {
     let parent_tree_id = find_commit(cache, &odb, &parent_id, commit_buf)
         .or_raise_erased(|| message("Could not find existing iterator over a tree"))?
         .tree_id()
@@ -637,7 +637,7 @@ fn tree_diff_without_rewrites_at_file_path(
     state: &mut gix_diff::tree::State,
     parent_tree_iter: gix_object::TreeRefIter<'_>,
     tree_iter: gix_object::TreeRefIter<'_>,
-) -> Result<Option<TreeDiffChange>, Error> {
+) -> Result<Option<TreeDiffChange>, gix_error::Exn> {
     struct FindChangeToPath {
         inner: gix_diff::tree::Recorder,
         interesting_path: BString,
@@ -740,7 +740,7 @@ fn tree_diff_with_rewrites_at_file_path(
     parent_tree_iter: gix_object::TreeRefIter<'_>,
     tree_iter: gix_object::TreeRefIter<'_>,
     rewrites: gix_diff::Rewrites,
-) -> Result<Option<TreeDiffChange>, Error> {
+) -> Result<Option<TreeDiffChange>, gix_error::Exn> {
     let mut change: Option<gix_diff::tree_with_rewrites::Change> = None;
 
     let options: gix_diff::tree_with_rewrites::Options = gix_diff::tree_with_rewrites::Options {
@@ -781,7 +781,7 @@ fn blob_changes(
     previous_file_path: &BStr,
     diff_algorithm: gix_diff::blob::Algorithm,
     stats: &mut Statistics,
-) -> Result<Vec<Change>, Error> {
+) -> Result<Vec<Change>, gix_error::Exn> {
     resource_cache
         .set_resource(
             previous_oid,
@@ -869,7 +869,7 @@ fn find_path_entry_in_commit(
     buf: &mut Vec<u8>,
     buf2: &mut Vec<u8>,
     stats: &mut Statistics,
-) -> Result<Option<ObjectId>, Error> {
+) -> Result<Option<ObjectId>, gix_error::Exn> {
     let tree_id = find_commit(cache, odb, commit, buf)
         .or_raise_erased(|| message("Could not find existing iterator over a tree"))?
         .tree_id()
@@ -897,7 +897,7 @@ fn collect_parents(
     odb: &impl gix_object::Find,
     cache: Option<&gix_commitgraph::Graph>,
     buf: &mut Vec<u8>,
-) -> Result<ParentIds, Error> {
+) -> Result<ParentIds, gix_error::Exn> {
     let mut parent_ids: ParentIds = Default::default();
     match commit {
         gix_traverse::commit::Either::CachedCommit(commit) => {
@@ -952,7 +952,7 @@ fn initial_state(
     buf: &mut Vec<u8>,
     buf2: &mut Vec<u8>,
     stats: &mut Statistics,
-) -> Result<InitialState, Error> {
+) -> Result<InitialState, gix_error::Exn> {
     match start {
         Start::Commit(suspect) => {
             let blamed_file_entry_id = find_path_entry_in_commit(&odb, &suspect, file_path, cache, buf, buf2, stats)?

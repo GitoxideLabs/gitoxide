@@ -60,7 +60,7 @@ fn exclude_by_dir_is_handled_just_like_git() {
             &self,
             id: &gix_hash::oid,
             buffer: &'a mut Vec<u8>,
-        ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+        ) -> Result<Option<gix_object::Data<'a>>, gix_error::Exn> {
             gix_object::FindExt::find(&gix_object::find::Never, id, buffer).map(Some)
         }
     }

@@ -11,14 +11,12 @@ pub fn named_subrepo_opts(
     fixture: &str,
     name: &str,
     opts: gix::open::Options,
-) -> std::result::Result<Repository, gix::open::Error> {
+) -> std::result::Result<Repository, gix_error::Error> {
     let repo_path = gix_testtools::scripted_fixture_read_only(fixture).unwrap().join(name);
     Ok(ThreadSafeRepository::open_opts(repo_path, opts)?.to_thread_local())
 }
 
-fn discover_with_environment_overrides_isolated(
-    directory: impl AsRef<Path>,
-) -> Result<Repository, gix::discover::Error> {
+fn discover_with_environment_overrides_isolated(directory: impl AsRef<Path>) -> Result<Repository, gix_error::Error> {
     let mut options = gix::open::Options::isolated();
     options.permissions.env.git_prefix = Permission::Allow;
     ThreadSafeRepository::discover_with_environment_overrides_opts(

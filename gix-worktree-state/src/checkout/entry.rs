@@ -77,7 +77,7 @@ pub fn checkout<'entry, Find>(
         filter_process_delay,
         ..
     }: crate::checkout::chunk::Options,
-) -> Result<Outcome<'entry>, crate::checkout::Error>
+) -> Result<Outcome<'entry>, gix_error::Exn>
 where
     Find: gix_object::Find,
 {
@@ -300,7 +300,7 @@ pub(crate) fn finalize_entry(
     file: std::fs::File,
     desired_bytes: u64,
     #[cfg_attr(windows, allow(unused_variables))] executable_bit_change: ExecutableBitChange,
-) -> Result<(), crate::checkout::Error> {
+) -> Result<(), gix_error::Exn> {
     // For possibly existing, overwritten files, we must change the file mode explicitly to match the index.
     #[cfg(unix)]
     match executable_bit_change {

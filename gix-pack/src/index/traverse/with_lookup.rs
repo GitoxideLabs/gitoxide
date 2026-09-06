@@ -6,7 +6,7 @@ use gix_features::{
     threading::{Mutable, OwnShared, lock},
 };
 
-use super::{Error, Reducer};
+use super::Reducer;
 use crate::{
     data, exact_vec, index,
     index::{traverse::Outcome, util},
@@ -79,7 +79,7 @@ where
             check,
             make_pack_lookup_cache,
         }: Options<F>,
-    ) -> Result<Outcome, Error>
+    ) -> Result<Outcome, gix_error::Exn>
     where
         C: crate::cache::DecodeEntry,
         Processor:
@@ -144,7 +144,7 @@ where
                     state_per_thread,
                     move |entries: &[index::Entry],
                           (cache, buf, inflate, progress)|
-                          -> Result<Vec<data::decode::entry::Outcome>, Error> {
+                          -> Result<Vec<data::decode::entry::Outcome>, gix_error::Exn> {
                         progress.init(
                             Some(entries.len()),
                             gix_features::progress::count_with_decimals("objects", 2),

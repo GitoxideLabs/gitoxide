@@ -7,8 +7,6 @@ use crate::{exact_vec, index, multi_index::File};
 
 ///
 pub mod integrity {
-    /// Returned by [`multi_index::File::verify_integrity()`][crate::multi_index::File::verify_integrity()].
-    pub type Error = gix_error::Exn;
 
     /// Returned by [`multi_index::File::verify_integrity()`][crate::multi_index::File::verify_integrity()].
     pub struct Outcome {
@@ -39,12 +37,6 @@ pub mod integrity {
     }
 }
 
-///
-pub mod checksum {
-    /// Returned by [`multi_index::File::verify_checksum()`][crate::multi_index::File::verify_checksum()].
-    pub type Error = crate::verify::checksum::Error;
-}
-
 impl<T> File<T>
 where
     T: crate::FileData,
@@ -55,7 +47,7 @@ where
         &self,
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
-    ) -> Result<gix_hash::ObjectId, checksum::Error> {
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
         crate::verify::checksum_on_disk_or_mmap(
             self.path(),
             &self.data,
@@ -73,7 +65,7 @@ where
         &self,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
-    ) -> Result<gix_hash::ObjectId, integrity::Error> {
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
         self.verify_integrity_inner(
             progress,
             should_interrupt,
@@ -91,7 +83,7 @@ where
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
         options: index::verify::integrity::Options<F>,
-    ) -> Result<integrity::Outcome, index::traverse::Error>
+    ) -> Result<integrity::Outcome, gix_error::Exn>
     where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
@@ -105,7 +97,7 @@ where
         should_interrupt: &AtomicBool,
         deep_check: bool,
         options: index::verify::integrity::Options<F>,
-    ) -> Result<integrity::Outcome, index::traverse::Error>
+    ) -> Result<integrity::Outcome, gix_error::Exn>
     where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,

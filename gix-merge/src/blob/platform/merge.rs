@@ -15,9 +15,6 @@ pub struct Options {
     pub text: builtin_driver::text::Options,
 }
 
-/// The error returned by [`PlatformRef::merge()`].
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// The product of a [`PlatformRef::prepare_external_driver()`] operation.
 ///
 /// This type allows to creation of [`std::process::Command`], ready to run, with `stderr` and `stdout` set to *inherit*,
@@ -61,9 +58,6 @@ pub(super) mod inner {
             platform::{DriverChoice, merge},
         };
 
-        /// The error returned by [PlatformRef::prepare_external_driver()](PlatformRef::prepare_external_driver()).
-        pub type Error = gix_error::Exn;
-
         /// Plumbing
         impl<'parent> PlatformRef<'parent> {
             /// Given `merge_command` and `context`, typically obtained from git-configuration, and the currently set merge-resources,
@@ -89,7 +83,7 @@ pub(super) mod inner {
                     other,
                 }: builtin_driver::text::Labels<'_>,
                 context: gix_command::Context,
-            ) -> Result<merge::Command, Error> {
+            ) -> Result<merge::Command, gix_error::Exn> {
                 use gix_error::{OptionExt, ResultExt, ValidationError, message};
 
                 fn write_data(
@@ -397,7 +391,7 @@ impl<'parent> PlatformRef<'parent> {
         out: &mut Vec<u8>,
         labels: builtin_driver::text::Labels<'_>,
         context: &gix_command::Context,
-    ) -> Result<(inner::builtin_merge::Pick, Resolution), Error> {
+    ) -> Result<(inner::builtin_merge::Pick, Resolution), gix_error::Exn<gix_error::Message>> {
         use gix_error::{ErrorExt, ResultExt, message};
 
         match self.configured_driver() {

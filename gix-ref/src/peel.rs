@@ -45,8 +45,8 @@ pub mod to_id {
         }
     }
 
-    impl From<gix_object::find::Error> for Error {
-        fn from(err: gix_object::find::Error) -> Self {
+    impl From<gix_error::Exn> for Error {
+        fn from(err: gix_error::Exn) -> Self {
             Error::Find(err.into_error())
         }
     }

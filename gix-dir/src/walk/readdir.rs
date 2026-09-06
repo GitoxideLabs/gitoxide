@@ -14,7 +14,7 @@ use crate::{
     walk::{
         Action, CollapsedEntriesEmissionMode, Context, Delegate,
         EmissionMode::CollapseDirectory,
-        Error, ForDeletionMode, Options, Outcome, classify,
+        ForDeletionMode, Options, Outcome, classify,
         function::{can_recurse, emit_entry},
     },
 };
@@ -33,7 +33,7 @@ pub(super) fn recursive(
     delegate: &mut dyn Delegate,
     out: &mut Outcome,
     state: &mut State,
-) -> Result<(Action, bool), Error> {
+) -> Result<(Action, bool), gix_error::Exn> {
     if ctx.should_interrupt.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return Err(message("Interrupted").raise_erased());
     }
