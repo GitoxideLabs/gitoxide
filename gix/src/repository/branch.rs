@@ -52,6 +52,10 @@ pub mod delete {
             /// All of these references and their reflogs are guaranteed to be absent. Their `branch.<name>` configuration
             /// sections may remain; inspect `source` to determine which cleanup phase failed.
             references: Vec<FullName>,
+            /// The branches actually deleted, as would have been returned on success.
+            ///
+            /// Names are sorted and deduplicated; branches missing when locked for deletion are excluded.
+            deleted: Vec<FullName>,
             /// The configuration cleanup phase that failed.
             #[source]
             source: CleanupError,
@@ -67,19 +71,23 @@ impl crate::Repository {
     /// associated local configuration is still removed. **It deliberately performs no merged-state check**.
     ///
     /// On success, every requested reference and its reflog is absent, and every matching `branch.<name>` section has been
-    /// removed from the local configuration. A requested reference which was already missing is treated as successfully absent,
-    /// and its configuration is still removed.
+    /// removed from the local configuration. Return the sorted, deduplicated names of branches that existed when locked for
+    /// deletion. Missing branches are omitted from the returned vector, but their configuration is still removed.
     ///
     /// Reference deletion and configuration cleanup cannot be one atomic transaction. Once reference deletion succeeds, a
     /// configuration write or commit failure is returned as [`delete::Error::Cleanup`]. Its `references` field contains
     /// every requested name—including names which were missing initially—and guarantees only that their references and reflogs
-    /// are absent. See [`delete::CleanupError`] to determine whether the on-disk configuration was updated.
-    pub fn delete_local_branches(&mut self, names: impl IntoIterator<Item = FullName>) -> Result<(), delete::Error> {
+    /// are absent. Its `deleted` field contains the branches actually deleted, just as in the success case.
+    /// See [`delete::CleanupError`] to determine whether the on-disk configuration was updated.
+    pub fn delete_local_branches(
+        &mut self,
+        names: impl IntoIterator<Item = FullName>,
+    ) -> Result<Vec<FullName>, delete::Error> {
         let mut names: Vec<_> = names.into_iter().collect();
         names.sort();
         names.dedup();
         if names.is_empty() {
-            return Ok(());
+            return Ok(names);
         }
 
         for name in &names {
@@ -125,7 +133,11 @@ impl crate::Repository {
             .as_mut()
             .is_some_and(|config| remove_branch_config(config, &names, |_| true));
 
-        self.edit_references(edits)?;
+        let deleted: Vec<_> = self
+            .edit_references(edits)?
+            .into_iter()
+            .filter_map(|edit| edit.change.previous_value().is_some().then_some(edit.name))
+            .collect();
 
         if removed_config {
             let config = config.expect("configuration was present when sections were removed");
@@ -133,10 +145,12 @@ impl crate::Repository {
                 .write_to(&mut config_lock)
                 .map_err(|source| delete::Error::Cleanup {
                     references: names.clone(),
+                    deleted: deleted.clone(),
                     source: delete::CleanupError::Write(source),
                 })?;
             config_lock.commit().map_err(|err| delete::Error::Cleanup {
                 references: names.clone(),
+                deleted: deleted.clone(),
                 source: delete::CleanupError::Commit(err.error),
             })?;
             remove_branch_config(
@@ -149,7 +163,7 @@ impl crate::Repository {
                 },
             );
         }
-        Ok(())
+        Ok(deleted)
     }
 }
 

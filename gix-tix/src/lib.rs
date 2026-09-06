@@ -1948,10 +1948,10 @@ fn event_loop(
                                         });
                                     let message = result.as_ref().map_or_else(
                                         |err| format!("delete {label}: {err}"),
-                                        |()| format!("deleted {label}"),
+                                        |_| format!("deleted {label}"),
                                     );
                                     match (result, recorded) {
-                                        (Ok(()), Ok(())) => ref_tree.leave_success(message),
+                                        (Ok(_), Ok(())) => ref_tree.leave_success(message),
                                         (_, Ok(())) => ref_tree.leave_attention(message),
                                         (_, Err(err)) => {
                                             ref_tree.leave_attention(format!("{message}; undo history: {err:#}"));
