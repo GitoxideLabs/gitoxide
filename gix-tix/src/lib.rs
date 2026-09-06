@@ -21,6 +21,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     io::{self, Write},
+    num::NonZeroU16,
     path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
     sync::{
@@ -59,6 +60,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::{
     TerminalOptions, Viewport,
     backend::CrosstermBackend,
+    buffer::{CellDiffOption, CellWidth},
     layout::{Position, Rect},
     text::Line,
 };
@@ -4799,6 +4801,7 @@ fn event_loop(
                                             tree,
                                             worktree,
                                         );
+                                        prepare_terminal_frame(&mut frame);
                                     }
                                     terminal
                                         .apply_buffer_with_cursor(None)
@@ -6298,6 +6301,20 @@ fn load_visible_history_metadata(
     Ok(())
 }
 
+fn prepare_terminal_frame(frame: &mut ratatui::Frame<'_>) {
+    // Ratatui 0.30 emits trailing-cell clears for VS16 emojis. Crossterm writes
+    // those blanks after the wide glyph, shifting the row. Keep the measured
+    // width while skipping the covered cells during diffing.
+    for cell in &mut frame.buffer_mut().content {
+        if cell.diff_option == CellDiffOption::None
+            && cell.symbol().contains('\u{fe0f}')
+            && let Some(width) = NonZeroU16::new(cell.cell_width()).filter(|width| width.get() > 1)
+        {
+            cell.set_diff_option(CellDiffOption::ForcedWidth(width));
+        }
+    }
+}
+
 fn resized_terminal_area<B: ratatui::backend::Backend>(
     terminal: &mut ratatui::Terminal<B>,
 ) -> std::result::Result<Rect, B::Error> {
@@ -6340,6 +6357,7 @@ fn draw(
             let [list, history] = worktrunk::areas(area, picker.display_row_count());
             frame.render_widget(ratatui::widgets::Clear, history);
             worktrunk::draw(&mut frame, list, picker, picker_focused);
+            prepare_terminal_frame(&mut frame);
             terminal
                 .apply_buffer_with_cursor(None)
                 .context("could not draw worktree picker")?;
@@ -6358,6 +6376,7 @@ fn draw(
                 worktrunk::draw(&mut frame, list, picker, picker_focused);
             }
             ref_tree.draw(&mut frame, history, history_graph.as_ref());
+            prepare_terminal_frame(&mut frame);
         }
         terminal
             .apply_buffer_with_cursor(None)
@@ -6627,14 +6646,16 @@ fn draw(
             tree_changes,
             worktree_changes,
         );
-        if command_picker.is_open() {
+        let cursor = if command_picker.is_open() {
             let commands = command_menu::commands(app, decorations, app.has_verifiable_signatures());
             let items = command_picker_items(&commands);
             command_picker.sync(&items);
             ui::draw_command_menu(&mut frame, history, command_picker, &commands)
         } else {
             None
-        }
+        };
+        prepare_terminal_frame(&mut frame);
+        cursor
     };
     if matches!(app.state, State::Complete | State::Cancelled) {
         let response_ids = filesystem_responses.active_reference_ids().to_vec();
@@ -7575,7 +7596,10 @@ fn run_with_todo_progress<T: Send>(
                 && now.duration_since(last_draw) >= FRAME_INTERVAL
             {
                 let progress = latest.expect("a changed progress snapshot is available");
-                if let Err(err) = terminal.draw(|frame| ui::draw_todo_progress(frame, progress)) {
+                if let Err(err) = terminal.draw(|frame| {
+                    ui::draw_todo_progress(frame, progress);
+                    prepare_terminal_frame(frame);
+                }) {
                     break Err(err).context("could not draw rebase progress");
                 }
                 rendered = latest;
@@ -7864,6 +7888,7 @@ fn show_builtin_diff(
                     worktrunk::draw(frame, list_area, picker, focused);
                 }
                 ui::draw_file_diff(frame, diff_area, diff, offset, horizontal_offset);
+                prepare_terminal_frame(frame);
             })
             .context("could not draw file diff")?;
         let event = event::read().context("could not read file diff input")?;
@@ -12065,6 +12090,39 @@ mod tests {
             Some(FRAME_INTERVAL.saturating_sub(Duration::from_millis(10))),
             "the earlier frame deadline takes precedence over repeat-idle restoration"
         );
+    }
+
+    #[test]
+    fn repainting_wide_emoji_keeps_terminal_columns_aligned() -> gix_testtools::Result {
+        for symbol in ["✔️", "👯‍♂️", "⚠️"] {
+            let mut output = Vec::new();
+            {
+                let mut terminal = ratatui::Terminal::with_options(
+                    CrosstermBackend::new(&mut output),
+                    TerminalOptions {
+                        viewport: Viewport::Fixed(Rect::new(0, 0, 20, 1)),
+                    },
+                )?;
+                // A changes pane left text in both cells that the emoji will cover.
+                terminal
+                    .get_frame()
+                    .render_widget("abcdefghijklmnop", Rect::new(0, 0, 20, 1));
+                prepare_terminal_frame(&mut terminal.get_frame());
+                terminal.apply_buffer_with_cursor(None)?;
+                terminal
+                    .get_frame()
+                    .render_widget(format!("{symbol}  ● row"), Rect::new(4, 0, 16, 1));
+                prepare_terminal_frame(&mut terminal.get_frame());
+                terminal.apply_buffer_with_cursor(None)?;
+            }
+            let output = String::from_utf8(output)?;
+            let (_, following) = output.rsplit_once(symbol).expect("the wide emoji was emitted");
+            assert!(
+                following.starts_with("\u{1b}[1;7H"),
+                "after {symbol:?}, the cursor must move past both columns before writing the row: {following:?}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
