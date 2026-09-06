@@ -539,18 +539,47 @@ without trading responsiveness for metadata that is not visible.
 | `@` | Time-travel to the selected commit, or return through its tix pin. Terminals reporting the base key as `Shift-2` are also accepted. |
 | `x` | Select the next visible commit with the same change ID, wrapping at the end. |
 
+Interactive history replaces known conventional-commit types with bold, colored
+symbols:
+
+| Type | Symbol | Color |
+| --- | --- | --- |
+| `feat` | `+` | Green |
+| `fix` | `~` | Yellow |
+| `change` | `Δ` | Yellow |
+| `remove` | `-` | Red |
+| `rename` | `→` | Cyan |
+| `refactor` | `↔` | Cyan |
+| `perf` | `↑` | Magenta |
+| `docs` | `§` | Blue |
+| `test` | `✓` | Green |
+| `style` | `◇` | Magenta |
+| `build` | `#` | Yellow |
+| `ci` | `↻` | Blue |
+| `chore` | `·` | Dark gray |
+| `revert` | `↶` | Red |
+
+Scopes follow the symbol in italic cyan without parentheses. Breaking changes
+retain a bold, bright red `!`, so `feat(gix-tix)!: subject` appears as
+`+ gix-tix! subject`. Unknown types retain their original prefixes. Subject
+Markdown remains intact, including literal leading heading or list markers.
+Hidden boundary rows retain their usual colorless styling. Plain `tix show`,
+rebase todos, commit-message panes, and enrichment notes keep the original
+prefixes.
+
 Alignment uses only rows in the current viewport to determine widths and starts
 in title mode. Hidden boundary rows remain unaligned and do not participate in
 alignment width calculations. Title, full-column, and compressed alignment discard unused
 trailing graph cells before placing metadata. If their shared title column
 leaves less than 60% of the average rendered width of visible commit titles,
 rows first fall back to natural per-row spacing. If that leaves less than 60%,
-valid conventional-commit prefixes are shortened to `…:` without a following
-space. If the shortened titles still fall below 60%, rows retain their gutters
+symbolic prefixes drop their scopes and unknown conventional types become `…`.
+Both retain any breaking-change `!` and one space before the subject. If the
+shortened titles still fall below 60%, rows retain their gutters
 and complete graph, followed by one space and the shortened title; other
 metadata is hidden. Widths are terminal display cells and exactly 60% retains
-the more detailed form. Explicitly selected unaligned history never adapts its
-titles or metadata and remains horizontally scrollable.
+the more detailed form. Explicitly selected unaligned history retains scopes
+and metadata and remains horizontally scrollable.
 
 Topological navigation follows every parent and child edge in the displayed
 history. A single destination is selected immediately. If there are multiple,
