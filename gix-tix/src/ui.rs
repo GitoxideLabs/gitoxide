@@ -713,7 +713,11 @@ pub(crate) fn draw_with_worktree(
                         show_trailers,
                         has_notes: !app.notes(row.id).is_empty(),
                         note_title: if compact_history { None } else { note_title },
-                        shorten_title: shorten_titles,
+                        title_format: if shorten_titles {
+                            TitleFormat::Abbreviated
+                        } else {
+                            TitleFormat::Symbolic
+                        },
                         use_mailmap: app.use_mailmap && copy_feedback != Some(CopyKind::Author),
                         ref_mode,
                         selected: row_selected || compared_parent == Some(row.id),
@@ -798,8 +802,8 @@ pub(crate) fn draw_with_worktree(
                     usize::from(content.width).saturating_sub(
                         lane_width(lanes.lane(index), HistoryAlignment::None).saturating_add(metadata.prefix_width()),
                     ),
-                    Line::from(commit_title_spans(title, false)).width(),
-                    Line::from(commit_title_spans(title, true)).width(),
+                    Line::from(commit_title_spans(title, TitleFormat::Symbolic)).width(),
+                    Line::from(commit_title_spans(title, TitleFormat::Abbreviated)).width(),
                 ))
             })
             .collect()
@@ -2211,16 +2215,64 @@ fn markdown_title_spans(title: &BStr) -> Vec<Span<'static>> {
     out
 }
 
-fn commit_title_spans(title: &BStr, shorten_conventional_prefix: bool) -> Vec<Span<'static>> {
-    let Some(subject) = shorten_conventional_prefix
-        .then(|| conventional_title_subject(title))
-        .flatten()
-    else {
+#[derive(Clone, Copy)]
+enum TitleFormat {
+    Original,
+    Symbolic,
+    Abbreviated,
+}
+
+fn commit_title_spans(title: &BStr, format: TitleFormat) -> Vec<Span<'static>> {
+    let abbreviated = match format {
+        TitleFormat::Original => return markdown_title_spans(title),
+        TitleFormat::Symbolic => false,
+        TitleFormat::Abbreviated => true,
+    };
+    let Some(conventional) = conventional_title(title) else {
         return markdown_title_spans(title);
     };
-    let mut shortened = BString::from("…:");
-    shortened.extend_from_slice(subject);
-    markdown_title_spans(shortened.as_bstr())
+    let (symbol, symbol_color) = match conventional.kind {
+        b"feat" => ("+", Color::Green),
+        b"fix" => ("~", Color::Yellow),
+        b"change" => ("Δ", Color::Yellow),
+        b"remove" => ("-", Color::Red),
+        b"rename" => ("→", Color::Cyan),
+        b"refactor" => ("↔", Color::Cyan),
+        b"perf" => ("↑", Color::Magenta),
+        b"docs" => ("§", Color::Blue),
+        b"test" => ("✓", Color::Green),
+        b"style" => ("◇", Color::Magenta),
+        b"build" => ("#", Color::Yellow),
+        b"ci" => ("↻", Color::Blue),
+        b"chore" => ("·", Color::DarkGray),
+        b"revert" => ("↶", Color::Red),
+        _ if abbreviated => ("…", Color::DarkGray),
+        _ => return markdown_title_spans(title),
+    };
+    let mut spans = vec![Span::styled(symbol, color(symbol_color).add_modifier(Modifier::BOLD))];
+    if !abbreviated && let Some(scope) = conventional.scope {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            scope.to_str_lossy().into_owned(),
+            color(Color::Cyan).add_modifier(Modifier::ITALIC),
+        ));
+    }
+    if conventional.breaking {
+        spans.push(Span::styled("!", color(Color::LightRed).add_modifier(Modifier::BOLD)));
+    }
+    spans.push(Span::raw(" "));
+
+    // Keep the subject in paragraph context so leading `#` or `---` stays literal.
+    let mut subject = BString::from("…:");
+    subject.extend_from_slice(conventional.subject);
+    let mut subject_spans = markdown_title_spans(subject.as_bstr());
+    if let Some(first) = subject_spans.first_mut()
+        && let Some(subject) = first.content.strip_prefix("…:")
+    {
+        first.content = subject.to_owned().into();
+    }
+    spans.extend(subject_spans);
+    spans
 }
 
 fn less_than_sixty_percent(widths: impl IntoIterator<Item = (usize, usize)>) -> bool {
@@ -2241,29 +2293,37 @@ fn lane_width(lane: &str, alignment: HistoryAlignment) -> usize {
     Line::raw(lane).width() + usize::from(alignment != HistoryAlignment::None && !lane.is_empty())
 }
 
-fn conventional_title_subject(title: &BStr) -> Option<&BStr> {
+struct ConventionalTitle<'a> {
+    kind: &'a [u8],
+    scope: Option<&'a BStr>,
+    breaking: bool,
+    subject: &'a BStr,
+}
+
+fn conventional_title(title: &BStr) -> Option<ConventionalTitle<'_>> {
     let separator = title.find(b": ")?;
-    let mut prefix: &[u8] = &title[..separator];
-    if let Some(without_bang) = prefix.strip_suffix(b"!") {
-        prefix = without_bang;
-    }
-    let valid_type = |value: &[u8]| {
-        value.first().is_some_and(u8::is_ascii_lowercase)
-            && value
-                .iter()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+    let prefix = &title[..separator];
+    let breaking = prefix.ends_with(b"!");
+    let prefix = prefix.strip_suffix(b"!").unwrap_or(prefix);
+    let (kind, scope) = if let Some(open) = prefix.iter().position(|byte| *byte == b'(') {
+        let scope = prefix[open + 1..].strip_suffix(b")")?;
+        if scope.is_empty() || scope.iter().any(|byte| matches!(byte, b'(' | b')')) {
+            return None;
+        }
+        (&prefix[..open], Some(scope.as_bstr()))
+    } else {
+        (prefix, None)
     };
-    let valid = prefix.iter().position(|byte| *byte == b'(').map_or_else(
-        || valid_type(prefix),
-        |open| {
-            let scope = &prefix[open + 1..];
-            valid_type(&prefix[..open])
-                && scope.len() > 1
-                && scope.ends_with(b")")
-                && !scope[..scope.len() - 1].iter().any(|byte| matches!(byte, b'(' | b')'))
-        },
-    );
-    valid.then(|| title[separator + 2..].as_bstr())
+    let valid_type = kind.first().is_some_and(u8::is_ascii_lowercase)
+        && kind
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-');
+    valid_type.then(|| ConventionalTitle {
+        kind,
+        scope,
+        breaking,
+        subject: title[separator + 2..].as_bstr(),
+    })
 }
 
 fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
@@ -2480,7 +2540,7 @@ struct MetadataOptions<'a> {
     show_trailers: bool,
     has_notes: bool,
     note_title: Option<&'a BStr>,
-    shorten_title: bool,
+    title_format: TitleFormat,
     use_mailmap: bool,
     ref_mode: RefMode,
     selected: bool,
@@ -2545,7 +2605,7 @@ fn metadata_columns<'a>(
         show_trailers,
         has_notes,
         note_title,
-        shorten_title,
+        title_format,
         use_mailmap,
         ref_mode,
         selected,
@@ -2749,7 +2809,7 @@ fn metadata_columns<'a>(
             title_spans.extend(note_title);
             title_spans.push(Span::raw(" "));
         }
-        title_spans.extend(commit_title_spans(title, shorten_title));
+        title_spans.extend(commit_title_spans(title, title_format));
     }
     MetadataColumns {
         fields: [
@@ -2798,7 +2858,7 @@ pub(crate) fn plain_history_metadata(
             show_trailers: app.name_mode == NameMode::All && app.show_trailers,
             has_notes,
             note_title: None,
-            shorten_title: false,
+            title_format: TitleFormat::Original,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
             selected: false,
@@ -2831,7 +2891,7 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
             show_trailers: app.name_mode == crate::app::NameMode::All && app.show_trailers,
             has_notes: !app.notes(row.id).is_empty(),
             note_title: None,
-            shorten_title: false,
+            title_format: TitleFormat::Original,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
             selected: false,
@@ -5878,7 +5938,7 @@ mod tests {
         let start = line[..line.find("🫟").expect("the dirty marker is visible")]
             .chars()
             .count() as u16;
-        let title = line[..line.find("feat(scope)!: subject").expect("the title is visible")]
+        let title = line[..line.find("+ scope! subject").expect("the title is visible")]
             .chars()
             .count() as u16;
         let end = title - 1;
@@ -5920,13 +5980,13 @@ mod tests {
         let other_line = rendered_line(&shortened, 1);
         assert!(
             line.contains("│ @─┐")
-                && line.contains("1970-01-01 author …:")
+                && line.contains("1970-01-01 author +!")
                 && other_line.contains("1970-01-01 author")
-                && other_line.contains("…:"),
+                && other_line.contains("~!"),
             "stacking does not minimize rows when shortening is sufficient: {line:?} / {other_line:?}"
         );
         let head_x = line.chars().position(|symbol| symbol == '@').expect("HEAD is visible") as u16;
-        let title_x = line[..line.find("…:").expect("the title is visible")].chars().count() as u16;
+        let title_x = line[..line.find("+!").expect("the title is visible")].chars().count() as u16;
         let buffer = shortened.backend().buffer();
         assert!(title_x > head_x + 2, "metadata remains between the disc and title");
         assert_eq!(buffer[(head_x, 0)].bg, REVIEW_BACKGROUND);
@@ -5948,7 +6008,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&shortened, 0).contains("…:") && rendered_line(&shortened, 1).contains("…:"),
+            rendered_line(&shortened, 0).contains("+!") && rendered_line(&shortened, 1).contains("~!"),
             "repeat suppression retains the width-derived row layout"
         );
         app.changes_suppressed = false;
@@ -5957,7 +6017,7 @@ mod tests {
         compact.draw(|frame| draw(frame, &mut app, &decorations))?;
         let line = rendered_line(&compact, 0);
         assert!(
-            line.contains("│ @─┐ …:subject") && !line.contains("1970-01-01"),
+            line.contains("│ @─┐ +! subject") && !line.contains("1970-01-01"),
             "narrow history keeps the graph and places the title directly after it: {line:?}"
         );
         let head_x = line.chars().position(|symbol| symbol == '@').expect("HEAD is visible") as u16;
@@ -5969,8 +6029,8 @@ mod tests {
         compact.draw(|frame| draw(frame, &mut app, &decorations))?;
         let line = rendered_line(&compact, 0);
         assert!(
-            line.contains("feat(scope)!:") && !line.contains("…:"),
-            "unaligned history retains the complete prefix while scrolling: {line:?}"
+            line.contains("+ scope!"),
+            "unaligned history retains the scope while scrolling: {line:?}"
         );
         app.alignment = HistoryAlignment::Title;
         app.horizontal_offset = 0;
@@ -7526,27 +7586,147 @@ mod tests {
     }
 
     #[test]
-    fn shortens_only_conventional_commit_prefixes() {
-        for (input, expected) in [
-            ("feat: subject", "…:subject"),
-            ("feat(gix-tix)!: subject", "…:subject"),
-            ("change(cli-tools): subject", "…:subject"),
-            ("feat: **🧪 subject**", "…:🧪 subject"),
-            ("feat: # heading", "…:# heading"),
-            ("feat: ---", "…:---"),
-            ("Title: subject", "Title: subject"),
-            ("feat(scope: subject", "feat(scope: subject"),
-            ("feat:subject", "feat:subject"),
+    fn formats_only_conventional_commit_prefixes() {
+        for (input, symbolic, abbreviated) in [
+            ("feat: subject", "+ subject", "+ subject"),
+            ("feat(gix-tix)!: subject", "+ gix-tix! subject", "+! subject"),
+            ("fix!: subject", "~! subject", "~! subject"),
+            ("change(cli-tools): subject", "Δ cli-tools subject", "Δ subject"),
+            ("remove: subject", "- subject", "- subject"),
+            ("rename: subject", "→ subject", "→ subject"),
+            ("refactor: subject", "↔ subject", "↔ subject"),
+            ("perf: subject", "↑ subject", "↑ subject"),
+            ("docs: subject", "§ subject", "§ subject"),
+            ("test: subject", "✓ subject", "✓ subject"),
+            ("style: subject", "◇ subject", "◇ subject"),
+            ("build: subject", "# subject", "# subject"),
+            ("ci: subject", "↻ subject", "↻ subject"),
+            ("chore: subject", "· subject", "· subject"),
+            ("revert: subject", "↶ subject", "↶ subject"),
+            ("feat: **🧪 subject**", "+ 🧪 subject", "+ 🧪 subject"),
+            ("feat: # heading", "+ # heading", "+ # heading"),
+            ("feat: ---", "+ ---", "+ ---"),
+            ("feat: - item", "+ - item", "+ - item"),
+            ("feat: > quote", "+ > quote", "+ > quote"),
+            ("feat: …:literal", "+ …:literal", "+ …:literal"),
+            ("feat(**scope**): **subject**", "+ **scope** subject", "+ subject"),
+            (
+                "custom-type2(scope)!: subject",
+                "custom-type2(scope)!: subject",
+                "…! subject",
+            ),
+            ("Title: subject", "Title: subject", "Title: subject"),
+            ("feat(scope: subject", "feat(scope: subject", "feat(scope: subject"),
+            ("feat(): subject", "feat(): subject", "feat(): subject"),
+            ("feat(a(b)): subject", "feat(a(b)): subject", "feat(a(b)): subject"),
+            ("feat!!: subject", "feat!!: subject", "feat!!: subject"),
+            ("feat:subject", "feat:subject", "feat:subject"),
         ] {
+            for (format, expected) in [
+                (TitleFormat::Symbolic, symbolic),
+                (TitleFormat::Abbreviated, abbreviated),
+            ] {
+                assert_eq!(
+                    Line::from(commit_title_spans(input.as_bytes().as_bstr(), format)).to_string(),
+                    expected,
+                    "prefix classification for {input:?}"
+                );
+            }
+        }
+        assert_eq!(
+            Line::from(commit_title_spans(
+                b"fix(sc\xffpe)!: sub\xffject".as_bstr(),
+                TitleFormat::Symbolic
+            ))
+            .to_string(),
+            "~ sc�pe! sub�ject",
+            "non-UTF-8 scopes and subjects retain lossy display handling"
+        );
+    }
+
+    #[test]
+    fn styles_conventional_prefixes_only_in_history() -> gix_testtools::Result {
+        let commit_id = gix::ObjectId::Sha1([1; 20]);
+        let mut app = App::new(1);
+        app.extend_commits(vec![Commit {
+            id: commit_id,
+            parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "feat(gix-tix)!: **subject**".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        complete(&mut app);
+        app.set_worktree_head(Some(commit_id), false);
+        let decorations = Decorations::from([(
+            commit_id,
+            vec![Decoration {
+                name: "HEAD".into(),
+                kind: DecorationKind::Head,
+            }],
+        )]);
+        let mut terminal = Terminal::new(TestBackend::new(100, 2))?;
+        for selected in [None, Some(0)] {
+            app.selected = selected;
+            terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+            let line = rendered_row(&terminal);
+            let start = line[..line.find("+ gix-tix! subject").expect("the symbolic title is visible")]
+                .chars()
+                .count() as u16;
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(start, 0)].fg, Color::Green, "the feature symbol is green");
+            assert!(
+                buffer[(start, 0)].modifier.contains(Modifier::BOLD),
+                "the symbol is bold"
+            );
+            for x in start + 2..start + 9 {
+                assert_eq!(buffer[(x, 0)].fg, Color::Cyan, "the scope is cyan");
+                assert!(
+                    buffer[(x, 0)].modifier.contains(Modifier::ITALIC),
+                    "the scope is italic"
+                );
+            }
             assert_eq!(
-                commit_title_spans(input.as_bytes().as_bstr(), true)
-                    .into_iter()
-                    .map(|span| span.content.into_owned())
-                    .collect::<String>(),
-                expected,
-                "prefix classification for {input:?}"
+                buffer[(start + 9, 0)].fg,
+                Color::LightRed,
+                "breaking changes retain a red bang"
+            );
+            let subject = &buffer[(start + 11, 0)];
+            assert!(
+                subject.modifier.contains(Modifier::BOLD),
+                "subject Markdown is preserved"
+            );
+            assert!(
+                !subject.modifier.contains(Modifier::ITALIC),
+                "scope styling does not leak into the subject"
+            );
+            assert_eq!(subject.fg, Color::Reset, "the subject keeps its original color");
+            for x in start..start + "+ gix-tix! subject".len() as u16 {
+                assert!(
+                    buffer[(x, 0)].modifier.contains(Modifier::REVERSED),
+                    "HEAD emphasis includes the styled prefix"
+                );
+            }
+        }
+
+        let row = &app.rows[0];
+        let mailmap = gix::mailmap::Snapshot::default();
+        for text in [
+            plain_history_metadata(&app, row, &decorations, &mailmap, false, None),
+            todo_metadata(&app, row, &mailmap),
+            message_text(app.title(row), None).lines[0].to_string(),
+        ] {
+            assert!(
+                text.ends_with("feat(gix-tix)!: subject"),
+                "outside history, prefixes stay intact: {text:?}"
             );
         }
+        Ok(())
     }
 
     #[test]
@@ -7557,8 +7737,12 @@ mod tests {
         assert!(less_than_sixty_percent([(5, 8), (5, 12)]));
         assert!(!less_than_sixty_percent([]));
         assert_eq!(
-            Line::from(commit_title_spans("feat: 🧪".as_bytes().as_bstr(), true)).width(),
-            Line::raw("…:🧪").width(),
+            Line::from(commit_title_spans(
+                "feat: 🧪".as_bytes().as_bstr(),
+                TitleFormat::Abbreviated
+            ))
+            .width(),
+            Line::raw("+ 🧪").width(),
             "title widths use terminal cells rather than bytes"
         );
         assert_eq!(lane_width("●       ", HistoryAlignment::Title), 2);
@@ -7689,7 +7873,7 @@ mod tests {
         app.extend_commits(vec![commit(1)]);
         std::sync::Arc::make_mut(&mut app.rows[0]).parent_ids = [gix::ObjectId::Sha1([2; 20])].into_iter().collect();
         let mut hidden = commit(2);
-        hidden.title = format!("subject 2 {}", "wide ".repeat(20)).into();
+        hidden.title = format!("fix(scope)!: subject 2 {}", "wide ".repeat(20)).into();
         app.extend_hidden_commits(vec![hidden]);
         std::sync::Arc::make_mut(&mut app.rows[1]).author =
             author(b"an extraordinarily long hidden author", b"author@example.com");
@@ -7732,7 +7916,7 @@ mod tests {
 
         let line = rendered_line(&terminal, 1);
         assert!(
-            line.contains("subject 2"),
+            line.contains("~ scope! subject 2"),
             "the hidden commit keeps its normal content: {line:?}"
         );
         let visible = rendered_line(&terminal, 0);
@@ -7802,7 +7986,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let hidden = rendered_line(&terminal, 1);
         assert!(
-            hidden.contains("hidden subject"),
+            hidden.contains("hidden ~ scope! subject"),
             "hidden boundary fields remain unaligned: {hidden:?}"
         );
 
@@ -7888,7 +8072,7 @@ mod tests {
                 show_trailers: true,
                 has_notes: false,
                 note_title: None,
-                shorten_title: false,
+                title_format: TitleFormat::Original,
                 use_mailmap: false,
                 ref_mode: RefMode::All,
                 selected: false,
@@ -7999,7 +8183,7 @@ mod tests {
                 show_trailers: false,
                 has_notes: false,
                 note_title: None,
-                shorten_title: false,
+                title_format: TitleFormat::Original,
                 use_mailmap: false,
                 ref_mode: RefMode::None,
                 selected: false,
