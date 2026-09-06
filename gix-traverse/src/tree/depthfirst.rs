@@ -1,5 +1,3 @@
-pub use super::breadthfirst::Error;
-
 /// The state used and potentially shared by multiple tree traversals, reusing memory.
 #[derive(Default, Clone)]
 pub struct State {
@@ -31,7 +29,7 @@ pub(super) mod function {
     use gix_hash::ObjectId;
     use gix_object::{FindExt, TreeRefIter};
 
-    use super::{Error, State};
+    use super::State;
     use crate::tree::Visit;
 
     /// A depth-first traversal of the `root` tree, that preserves the natural order of a tree while immediately descending
@@ -43,7 +41,7 @@ pub(super) mod function {
         mut state: StateMut,
         objects: Find,
         delegate: &mut V,
-    ) -> Result<(), Error>
+    ) -> Result<(), gix_error::Exn>
     where
         Find: gix_object::Find,
         StateMut: BorrowMut<State>,

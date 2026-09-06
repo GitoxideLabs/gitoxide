@@ -1,6 +1,3 @@
-/// The error returned by [`commit()`](crate::commit()).
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// A way to configure [`commit()`](crate::commit()).
 #[derive(Default, Debug, Clone)]
 pub struct Options {

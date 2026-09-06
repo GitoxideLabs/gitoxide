@@ -273,9 +273,6 @@ pub struct Outcome {
     pub seen_entries: u32,
 }
 
-/// The error returned by [`walk()`](function::walk()).
-pub type Error = gix_error::Exn;
-
 mod classify;
 pub(crate) mod function;
 mod readdir;

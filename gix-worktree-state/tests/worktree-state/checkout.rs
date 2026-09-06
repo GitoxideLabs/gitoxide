@@ -972,11 +972,7 @@ fn checkout_index_in_tmp_dir_opts(
         Allow: FnMut(&gix_hash::oid) -> bool + Send + Clone,
         Find: gix_object::Find + Send + Clone,
     {
-        fn try_find<'a>(
-            &self,
-            id: &gix_hash::oid,
-            buf: &'a mut Vec<u8>,
-        ) -> Result<Option<Data<'a>>, gix_object::find::Error> {
+        fn try_find<'a>(&self, id: &gix_hash::oid, buf: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, gix_error::Exn> {
             if (self.allow.borrow_mut())(id) {
                 self.objects.try_find(id, buf)
             } else {

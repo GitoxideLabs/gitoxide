@@ -1,8 +1,5 @@
 use crate::{file::init, parse::EventRef};
 
-/// The error returned by [`File::from_bytes_no_includes()`][crate::File::from_bytes_no_includes()].
-pub type Error = gix_error::Exn;
-
 /// Options when loading git config using [`File::from_paths_metadata()`][crate::File::from_paths_metadata()].
 #[derive(Clone, Copy, Default)]
 pub struct Options<'a> {

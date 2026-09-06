@@ -1,5 +1,5 @@
 #![allow(clippy::result_large_err)]
-use super::Error;
+
 use crate::{
     config,
     config::tree::{Core, gitoxide},
@@ -31,7 +31,7 @@ pub(crate) fn config_bool(
     key_str: &str,
     default: bool,
     lenient: bool,
-) -> Result<bool, Error> {
+) -> Result<bool, crate::Error> {
     use config::tree::Key;
     debug_assert_eq!(
         key_str,
@@ -40,7 +40,7 @@ pub(crate) fn config_bool(
     );
     Ok(key
         .enrich_error(config.boolean(key_str))
-        .map_err(Error::from)
+        .map_err(gix_error::Error::from)
         .with_lenient_default(lenient)?
         .unwrap_or(default))
 }
@@ -50,7 +50,7 @@ pub(crate) fn config_bool_opt(
     key: &'static config::tree::keys::Boolean,
     key_str: &str,
     lenient: bool,
-) -> Result<Option<bool>, Error> {
+) -> Result<Option<bool>, crate::Error> {
     use config::tree::Key;
     debug_assert_eq!(
         key_str,
@@ -58,14 +58,14 @@ pub(crate) fn config_bool_opt(
         "BUG: key name and hardcoded name must match"
     );
     key.enrich_error(config.boolean(key_str))
-        .map_err(Error::from)
+        .map_err(gix_error::Error::from)
         .with_leniency(lenient)
 }
 
 pub(crate) fn query_refupdates(
     config: &gix_config::File,
     lenient_config: bool,
-) -> Result<Option<gix_ref::store::WriteReflog>, Error> {
+) -> Result<Option<gix_ref::store::WriteReflog>, crate::Error> {
     let key = "core.logAllRefUpdates";
     Core::LOG_ALL_REF_UPDATES
         .try_into_ref_updates(config.boolean(key))
@@ -103,7 +103,7 @@ pub(crate) fn parse_object_caches(
     config: &gix_config::File,
     lenient: bool,
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
-) -> Result<ObjectCaches, Error> {
+) -> Result<ObjectCaches, crate::Error> {
     let static_pack_cache_limit = gitoxide::Core::DEFAULT_PACK_CACHE_MEMORY_LIMIT
         .try_into_usize(config.integer_filter("gitoxide.core.deltaBaseCacheLimit", &mut filter_config_section))
         .with_leniency(lenient)?;
@@ -128,7 +128,7 @@ pub(crate) fn parse_object_caches(
 pub(crate) fn parse_core_abbrev(
     config: &gix_config::File,
     object_hash: gix_hash::Kind,
-) -> Result<Option<usize>, Error> {
+) -> Result<Option<usize>, crate::Error> {
     Ok(config
         .string("core.abbrev")
         .map(|abbrev| Core::ABBREV.try_into_abbreviation(abbrev, object_hash))

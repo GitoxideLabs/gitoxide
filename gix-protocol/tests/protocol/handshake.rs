@@ -211,7 +211,7 @@ impl std::io::BufRead for Fixture<'_> {
 impl gix_transport::client::blocking_io::ReadlineBufRead for Fixture<'_> {
     fn readline(
         &mut self,
-    ) -> Option<std::io::Result<Result<gix_packetline::PacketLineRef<'_>, gix_packetline::decode::Error>>> {
+    ) -> Option<std::io::Result<Result<gix_packetline::PacketLineRef<'_>, gix_error::ValidationError>>> {
         use bstr::{BStr, ByteSlice};
         let bytes: &BStr = self.0.into();
         let mut lines = bytes.lines();
@@ -275,7 +275,7 @@ impl futures_io::AsyncBufRead for Fixture<'_> {
 impl gix_transport::client::async_io::ReadlineBufRead for Fixture<'_> {
     async fn readline(
         &mut self,
-    ) -> Option<std::io::Result<Result<gix_packetline::PacketLineRef<'_>, gix_packetline::decode::Error>>> {
+    ) -> Option<std::io::Result<Result<gix_packetline::PacketLineRef<'_>, gix_error::ValidationError>>> {
         use bstr::{BStr, ByteSlice};
         let bytes: &BStr = self.0.into();
         let mut lines = bytes.lines();

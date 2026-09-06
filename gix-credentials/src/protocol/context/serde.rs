@@ -1,7 +1,5 @@
 use bstr::BStr;
 
-use crate::protocol::context::Error;
-
 mod write {
     use bstr::{BStr, BString};
 
@@ -80,13 +78,10 @@ pub mod decode {
 
     use crate::protocol::{Context, ContextOptions, context::serde::validate};
 
-    /// The error returned by [`from_bytes()`][Context::from_bytes()].
-    pub type Error = ValidationError;
-
     impl Context {
         /// Decode ourselves from `input` which is the format written by [`write_to()`][Self::write_to()].
         /// `options` control what to support during deserialization.
-        pub fn from_bytes(input: &[u8], options: ContextOptions) -> Result<Self, Error> {
+        pub fn from_bytes(input: &[u8], options: ContextOptions) -> Result<Self, gix_error::ValidationError> {
             let mut ctx = Context {
                 options,
                 ..Context::default()
@@ -157,7 +152,7 @@ pub mod decode {
     }
 }
 
-fn validate(key: &str, value: &BStr, protect_protocol: bool) -> Result<(), Error> {
+fn validate(key: &str, value: &BStr, protect_protocol: bool) -> Result<(), gix_error::ValidationError> {
     if key.contains('\0')
         || key.contains('\n')
         || key.contains('\r')

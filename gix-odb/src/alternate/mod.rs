@@ -71,8 +71,8 @@ impl From<io::Error> for Error {
     }
 }
 
-impl From<gix_path::realpath::Error> for Error {
-    fn from(err: gix_path::realpath::Error) -> Self {
+impl From<gix_error::Exn> for Error {
+    fn from(err: gix_error::Exn) -> Self {
         Error::Realpath(err.into_error())
     }
 }

@@ -68,9 +68,6 @@ pub enum Sorting {
     },
 }
 
-/// The error is part of the item returned by the [Ancestors](super::Simple) iterator.
-pub type Error = gix_error::Exn;
-
 use Result as Either;
 
 type QueueKey<T> = Either<T, Reverse<T>>;
@@ -171,7 +168,7 @@ fn compute_hidden_frontier(
     hidden_tips: &[ObjectId],
     objects: &impl gix_object::Find,
     cache: Option<&gix_commitgraph::Graph>,
-) -> Result<gix_revwalk::graph::IdMap<()>, Error> {
+) -> Result<gix_revwalk::graph::IdMap<()>, gix_error::Exn> {
     let mut graph = gix_revwalk::Graph::<gix_revwalk::graph::Commit<PaintFlags>>::new(objects, cache);
     let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
 
@@ -228,7 +225,7 @@ fn compute_hidden_frontier(
 ///
 mod init {
     use super::{
-        CommitDateQueue, CommitTimeOrder, Error, Sorting, State, collect_parents, compute_hidden_frontier, to_queue_key,
+        CommitDateQueue, CommitTimeOrder, Sorting, State, collect_parents, compute_hidden_frontier, to_queue_key,
     };
     use crate::commit::{Either, Info, ParentIds, Parents, Simple};
     use gix_date::SecondsSinceUnixEpoch;
@@ -292,7 +289,7 @@ mod init {
         Find: gix_object::Find,
     {
         /// Set the `sorting` method.
-        pub fn sorting(mut self, sorting: Sorting) -> Result<Self, Error> {
+        pub fn sorting(mut self, sorting: Sorting) -> Result<Self, gix_error::Exn> {
             self.sorting = sorting;
             match self.sorting {
                 Sorting::BreadthFirst => self.queue_to_vecdeque(),
@@ -324,7 +321,7 @@ mod init {
 
         /// Hide the given `tips`, along with all commits reachable by them so that they will not be returned
         /// by the traversal.
-        pub fn hide(mut self, tips: impl IntoIterator<Item = ObjectId>) -> Result<Self, Error> {
+        pub fn hide(mut self, tips: impl IntoIterator<Item = ObjectId>) -> Result<Self, gix_error::Exn> {
             self.state.hidden_tips = tips.into_iter().collect();
             Ok(self)
         }
@@ -360,7 +357,7 @@ mod init {
             out
         }
 
-        fn compute_hidden_frontier(&mut self, hidden_tips: Vec<ObjectId>) -> Result<(), Error> {
+        fn compute_hidden_frontier(&mut self, hidden_tips: Vec<ObjectId>) -> Result<(), gix_error::Exn> {
             self.state.hidden.clear();
             if hidden_tips.is_empty() {
                 return Ok(());
@@ -387,7 +384,7 @@ mod init {
         queue: &mut CommitDateQueue,
         objects: &impl gix_object::Find,
         buf: &mut Vec<u8>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), gix_error::Exn> {
         let commit_iter = objects.find_commit_iter(&commit_id, buf)?;
         let time = commit_iter
             .committer()
@@ -480,7 +477,7 @@ mod init {
         Find: gix_object::Find,
         Predicate: FnMut(&oid) -> bool,
     {
-        type Item = Result<Info, Error>;
+        type Item = Result<Info, gix_error::Exn>;
 
         fn next(&mut self) -> Option<Self::Item> {
             if !self.state.hidden_tips.is_empty() {
@@ -513,7 +510,7 @@ mod init {
             &mut self,
             order: CommitTimeOrder,
             cutoff: Option<SecondsSinceUnixEpoch>,
-        ) -> Option<Result<Info, Error>> {
+        ) -> Option<Result<Info, gix_error::Exn>> {
             let state = &mut self.state;
             let next = &mut state.queue;
 
@@ -599,7 +596,7 @@ mod init {
             }
         }
 
-        fn next_by_topology(&mut self) -> Option<Result<Info, Error>> {
+        fn next_by_topology(&mut self) -> Option<Result<Info, gix_error::Exn>> {
             let state = &mut self.state;
             let next = &mut state.next;
 

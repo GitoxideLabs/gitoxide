@@ -64,7 +64,7 @@ mod algorithm {
         /// Obtain the way submodules should be updated.
         pub fn try_into_recurse_submodules(
             &'static self,
-            value: Result<Option<bool>, gix_config::value::Error>,
+            value: Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<gix_submodule::config::FetchRecurse>, crate::config::key::GenericErrorWithValue> {
             gix_submodule::config::FetchRecurse::new(value)
                 .map_err(|err| crate::config::key::GenericErrorWithValue::from_value(self, err))

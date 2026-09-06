@@ -28,7 +28,7 @@ impl PrepareFetch {
     /// [`configure_remote()`](Self::configure_remote()).
     ///
     /// If not set here, it defaults to `origin` or the value of `clone.defaultRemoteName`.
-    pub fn with_remote_name(mut self, name: impl Into<BString>) -> Result<Self, crate::remote::name::Error> {
+    pub fn with_remote_name(mut self, name: impl Into<BString>) -> Result<Self, crate::Error> {
         self.remote_name = Some(crate::remote::name::validated(name)?);
         Ok(self)
     }

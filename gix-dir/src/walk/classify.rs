@@ -9,7 +9,7 @@ use gix_error::{ResultExt, message};
 use crate::{
     Entry, EntryRef, entry,
     entry::PathspecMatch,
-    walk::{Context, Error, ForDeletionMode, Options},
+    walk::{Context, ForDeletionMode, Options},
 };
 
 /// Classify the `worktree_relative_root` path and return the first `PathKind` that indicates that
@@ -21,7 +21,7 @@ pub fn root(
     worktree_relative_root: &Path,
     options: Options<'_>,
     ctx: &mut Context<'_>,
-) -> Result<(Outcome, bool), Error> {
+) -> Result<(Outcome, bool), gix_error::Exn> {
     buf.clear();
     let mut last_length = None;
     let mut path_buf = worktree_root.to_owned();
@@ -147,7 +147,7 @@ pub fn path(
         ..
     }: Options<'_>,
     ctx: &mut Context<'_>,
-) -> Result<Outcome, Error> {
+) -> Result<Outcome, gix_error::Exn> {
     let mut out = Outcome {
         status: entry::Status::Pruned,
         property: None,

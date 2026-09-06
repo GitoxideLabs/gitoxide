@@ -49,7 +49,7 @@ impl crate::Repository {
     /// When the [`git_dir`](Self::git_dir()) is relative and the current working dir changed,
     /// then a reload will be performed on the joined path of both to make it succeed, which makes
     /// the reloaded repository git-dir absolute.
-    pub fn reload(&mut self) -> Result<&mut Self, crate::open::Error> {
+    pub fn reload(&mut self) -> Result<&mut Self, crate::Error> {
         let mut git_dir = self.git_dir().to_owned();
         let options = self.options.clone().open_path_as_is(true);
         if git_dir.is_relative()

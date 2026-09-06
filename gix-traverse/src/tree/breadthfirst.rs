@@ -2,10 +2,6 @@ use std::collections::VecDeque;
 
 use gix_hash::ObjectId;
 
-/// The error is part of the item returned by the [`breadthfirst()`](crate::tree::breadthfirst())  and
-///[`depthfirst()`](crate::tree::depthfirst()) functions.
-pub type Error = gix_error::Exn;
-
 /// The state used and potentially shared by multiple tree traversals.
 #[derive(Default, Clone)]
 pub struct State {
@@ -26,7 +22,7 @@ pub(super) mod function {
     use gix_error::{CorruptionError, ErrorExt, ResultExt, message};
     use gix_object::{FindExt, TreeRefIter};
 
-    use super::{Error, State};
+    use super::State;
     use crate::tree::Visit;
 
     /// Start a breadth-first iteration over the `root` trees entries.
@@ -48,7 +44,7 @@ pub(super) mod function {
         mut state: StateMut,
         objects: Find,
         delegate: &mut V,
-    ) -> Result<(), Error>
+    ) -> Result<(), gix_error::Exn>
     where
         Find: gix_object::Find,
         StateMut: BorrowMut<State>,

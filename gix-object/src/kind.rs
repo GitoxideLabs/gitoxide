@@ -1,18 +1,15 @@
 use crate::Kind;
 
-/// The Error used in [`Kind::from_bytes()`].
-pub type Error = gix_error::ValidationError;
-
 /// Initialization
 impl Kind {
     /// Parse a `Kind` from its serialized loose git objects.
-    pub fn from_bytes(s: &[u8]) -> Result<Kind, Error> {
+    pub fn from_bytes(s: &[u8]) -> Result<Kind, gix_error::ValidationError> {
         Ok(match s {
             b"tree" => Kind::Tree,
             b"blob" => Kind::Blob,
             b"commit" => Kind::Commit,
             b"tag" => Kind::Tag,
-            _ => return Err(Error::new_with_input("Unknown object kind", s)),
+            _ => return Err(gix_error::ValidationError::new_with_input("Unknown object kind", s)),
         })
     }
 }

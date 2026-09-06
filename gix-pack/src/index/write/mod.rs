@@ -1,7 +1,3 @@
-pub use error::Error;
-
-mod error;
-
 pub(crate) struct TreeEntry {
     pub id: gix_hash::ObjectId,
     pub crc32: u32,
@@ -63,7 +59,7 @@ pub(super) mod function {
 
     use crate::cache::delta::{Tree, traverse};
 
-    use super::{Error, Outcome, ProgressId, TreeEntry, modify_base};
+    use super::{Outcome, ProgressId, TreeEntry, modify_base};
 
     /// Write information about `entries` as obtained from a pack data file into a pack index file via the `out` stream.
     /// The resolver produced by `make_resolver` must resolve pack entries from the same pack data file that produced the
@@ -100,7 +96,7 @@ pub(super) mod function {
     pub fn write_data_iter_to_stream<F, F2, R>(
         version: crate::index::Version,
         make_resolver: F,
-        entries: &mut dyn Iterator<Item = Result<crate::data::input::Entry, crate::data::input::Error>>,
+        entries: &mut dyn Iterator<Item = Result<crate::data::input::Entry, gix_error::Exn>>,
         thread_limit: Option<usize>,
         root_progress: &mut dyn DynNestedProgress,
         out: &mut dyn io::Write,
@@ -108,7 +104,7 @@ pub(super) mod function {
         object_hash: gix_hash::Kind,
         alloc_limit_bytes: Option<usize>,
         pack_version: crate::data::Version,
-    ) -> Result<Outcome, Error>
+    ) -> Result<Outcome, gix_error::Exn>
     where
         F: FnOnce() -> io::Result<(F2, R)>,
         R: Send + Sync,

@@ -3,7 +3,7 @@ use libfuzzer_sys::fuzz_target;
 use std::hint::black_box;
 use std::path::Path;
 
-fn fuzz(data: &[u8]) -> Result<(), gix_url::parse::Error> {
+fn fuzz(data: &[u8]) -> Result<(), gix_error::Exn<gix_error::ValidationError>> {
     let url = gix_url::parse(data)?;
     _ = black_box(url.user());
     _ = black_box(url.password());

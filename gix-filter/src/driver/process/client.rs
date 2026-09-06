@@ -8,24 +8,6 @@ use crate::driver::{
     process::{Capabilities, Client, PacketlineReader},
 };
 
-///
-pub mod handshake {
-    /// The error returned by [Client::handshake()][super::Client::handshake()].
-    pub type Error = gix_error::Exn<gix_error::Message>;
-}
-
-///
-pub mod invoke {
-    /// The error returned by [Client::invoke()][super::Client::invoke()].
-    pub type Error = gix_error::Exn<gix_error::Message>;
-
-    ///
-    pub mod without_content {
-        /// The error returned by [Client::invoke_without_content()][super::super::Client::invoke_without_content()].
-        pub type Error = gix_error::Exn<gix_error::Message>;
-    }
-}
-
 /// Protocol implementation
 impl Client {
     /// Given a spawned `process` as created from `cmd`, use the 'long-running-process' protocol to send `welcome-prefix` and supported
@@ -36,7 +18,7 @@ impl Client {
         welcome_prefix: &str,
         versions: &[usize],
         desired_capabilities: &[&str],
-    ) -> Result<Self, handshake::Error> {
+    ) -> Result<Self, gix_error::Exn<gix_error::Message>> {
         use gix_error::{ErrorExt, ResultExt, message};
 
         let mut out = Writer::new(process.stdin.take().expect("configured stdin when spawning"));
@@ -143,7 +125,7 @@ impl Client {
         command: &str,
         meta: &mut dyn Iterator<Item = (&str, BString)>,
         content: &mut dyn std::io::Read,
-    ) -> Result<process::Status, invoke::Error> {
+    ) -> Result<process::Status, gix_error::Exn<gix_error::Message>> {
         use gix_error::{ResultExt, message};
 
         self.send_command_and_meta(command, meta)?;
@@ -166,7 +148,7 @@ impl Client {
         command: &str,
         meta: &mut dyn Iterator<Item = (&'a str, BString)>,
         inspect_line: &mut dyn FnMut(&BStr),
-    ) -> Result<process::Status, invoke::without_content::Error> {
+    ) -> Result<process::Status, gix_error::Exn<gix_error::Message>> {
         use gix_error::{ResultExt, message};
 
         self.send_command_and_meta(command, meta)?;
@@ -206,7 +188,7 @@ impl Client {
         &mut self,
         command: &str,
         meta: &mut dyn Iterator<Item = (&str, BString)>,
-    ) -> Result<(), invoke::Error> {
+    ) -> Result<(), gix_error::Exn<gix_error::Message>> {
         use gix_error::{ResultExt, message};
 
         self.input

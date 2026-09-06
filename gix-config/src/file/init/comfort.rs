@@ -23,7 +23,7 @@ impl File {
     /// which excludes repository local configuration, as well as override-configuration from environment variables.
     ///
     /// Note that the file might [be empty][File::is_void()] in case no configuration file was found.
-    pub fn from_globals() -> Result<File, init::from_paths::Error> {
+    pub fn from_globals() -> Result<File, gix_error::Exn<gix_error::Message>> {
         let metas = [
             source::Kind::GitInstallation,
             source::Kind::System,
@@ -60,7 +60,7 @@ impl File {
     /// See [`git-config`'s documentation] for more information on the environment variables in question.
     ///
     /// [`git-config`'s documentation]: https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGCOUNT
-    pub fn from_environment_overrides() -> Result<File, init::from_env::Error> {
+    pub fn from_environment_overrides() -> Result<File, gix_error::Exn> {
         let home = gix_path::env::home_dir();
         let options = init::Options {
             includes: init::includes::Options::follow_without_conditional(home.as_deref()),
@@ -84,7 +84,7 @@ impl File {
     ///
     /// Includes will be resolved within limits as some information like the git installation directory is missing to interpolate
     /// paths with as well as git repository information like the branch name.
-    pub fn from_git_dir(dir: std::path::PathBuf) -> Result<File, from_git_dir::Error> {
+    pub fn from_git_dir(dir: std::path::PathBuf) -> Result<File, gix_error::Exn<gix_error::Message>> {
         use gix_error::{ResultExt, message};
 
         let (mut local, git_dir) = {
@@ -158,10 +158,4 @@ impl File {
 
         Ok(globals)
     }
-}
-
-///
-pub mod from_git_dir {
-    /// The error returned by [`File::from_git_dir()`][crate::File::from_git_dir()].
-    pub type Error = gix_error::Exn<gix_error::Message>;
 }

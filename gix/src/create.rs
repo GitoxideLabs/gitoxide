@@ -7,10 +7,7 @@ use std::{
 use gix_discover::DOT_GIT_DIR;
 use gix_error::{ErrorExt, ResultExt};
 
-/// The error used in [`into()`].
-pub type Error = gix_error::Error;
-
-fn io_error(source: std::io::Error, action: &str, path: &Path) -> Error {
+fn io_error(source: std::io::Error, action: &str, path: &Path) -> crate::Error {
     source
         .and_raise(gix_error::message!("{action} at '{}'", path.display()))
         .into()
@@ -52,7 +49,7 @@ impl PathCursor<'_> {
 }
 
 impl NewDir<'_> {
-    fn at(self, component: &str) -> Result<Self, Error> {
+    fn at(self, component: &str) -> Result<Self, crate::Error> {
         self.0.push(component);
         create_dir(self.0)?;
         Ok(self)
@@ -74,7 +71,7 @@ impl Drop for PathCursor<'_> {
     }
 }
 
-fn write_file(data: &[u8], path: &Path) -> Result<(), Error> {
+fn write_file(data: &[u8], path: &Path) -> Result<(), crate::Error> {
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
@@ -86,7 +83,7 @@ fn write_file(data: &[u8], path: &Path) -> Result<(), Error> {
         .map_err(|err| io_error(err, "Could not write data", path))
 }
 
-fn create_dir(p: &Path) -> Result<(), Error> {
+fn create_dir(p: &Path) -> Result<(), crate::Error> {
     fs::create_dir_all(p).map_err(|err| io_error(err, "Could not create directory", p))
 }
 
@@ -151,7 +148,7 @@ pub fn into(
     directory: impl Into<PathBuf>,
     kind: Kind,
     options: Options,
-) -> Result<gix_discover::repository::Path, Error> {
+) -> Result<gix_discover::repository::Path, crate::Error> {
     into_with_capabilities(directory, kind, options).map(|(path, _)| path)
 }
 
@@ -163,7 +160,7 @@ pub(crate) fn into_with_capabilities(
         destination_must_be_empty,
         object_hash,
     }: Options,
-) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities), Error> {
+) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities), crate::Error> {
     let mut dot_git = directory.into();
     let bare = matches!(kind, Kind::Bare);
 

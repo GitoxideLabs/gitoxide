@@ -63,10 +63,10 @@ impl<P> parallel::Reduce for Reducer<'_, P>
 where
     P: Progress,
 {
-    type Input = Result<Vec<data::decode::entry::Outcome>, traverse::Error>;
+    type Input = Result<Vec<data::decode::entry::Outcome>, gix_error::Exn>;
     type FeedProduce = ();
     type Output = traverse::Statistics;
-    type Error = traverse::Error;
+    type Error = gix_error::Exn;
 
     fn feed(&mut self, input: Self::Input) -> Result<(), Self::Error> {
         let chunk_stats = input?;

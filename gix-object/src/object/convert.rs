@@ -4,7 +4,7 @@ use crate::parse::parse_signature;
 use crate::{Blob, BlobRef, Commit, CommitRef, Object, ObjectRef, Tag, TagRef, Tree, TreeRef, tree};
 
 impl TryFrom<TagRef<'_>> for Tag {
-    type Error = crate::decode::Error;
+    type Error = gix_error::ValidationError;
 
     fn try_from(other: TagRef<'_>) -> Result<Tag, Self::Error> {
         let TagRef {
@@ -28,7 +28,7 @@ impl TryFrom<TagRef<'_>> for Tag {
 }
 
 impl TryFrom<CommitRef<'_>> for Commit {
-    type Error = crate::decode::Error;
+    type Error = gix_error::ValidationError;
 
     fn try_from(other: CommitRef<'_>) -> Result<Commit, Self::Error> {
         let CommitRef {
@@ -101,7 +101,7 @@ impl<'a> From<&'a tree::Entry> for tree::EntryRef<'a> {
 }
 
 impl TryFrom<ObjectRef<'_>> for Object {
-    type Error = crate::decode::Error;
+    type Error = gix_error::ValidationError;
 
     fn try_from(v: ObjectRef<'_>) -> Result<Self, Self::Error> {
         Ok(match v {

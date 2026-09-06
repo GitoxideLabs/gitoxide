@@ -1,7 +1,7 @@
 use bstr::{BStr, BString};
 use gix_error::{ErrorExt, ValidationError};
 
-use crate::{AsBStrOpt, AsKey, File, file::Metadata, value};
+use crate::{AsBStrOpt, AsKey, File, file::Metadata};
 
 /// Comfortable API for accessing values
 impl File {
@@ -86,7 +86,7 @@ impl File {
     }
 
     /// Like [`boolean_by()`](File::boolean_by()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn boolean(&self, key: impl AsKey) -> Result<Option<bool>, value::Error> {
+    pub fn boolean(&self, key: impl AsKey) -> Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>> {
         self.boolean_filter(key, |_| true)
     }
 
@@ -96,7 +96,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<Option<bool>, value::Error> {
+    ) -> Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>> {
         self.boolean_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -105,7 +105,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<bool>, value::Error> {
+    ) -> Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>> {
         let Some(key) = key.try_as_key() else {
             return Ok(None);
         };
@@ -119,7 +119,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<bool>, value::Error> {
+    ) -> Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>> {
         let section_name = section_name.as_ref();
         let section_ids = self
             .section_ids_by_name_and_subname(section_name, subsection_name.as_bstr_opt())
@@ -143,7 +143,7 @@ impl File {
     }
 
     /// Like [`integer_by()`](File::integer_by()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn integer(&self, key: impl AsKey) -> Result<Option<i64>, value::Error> {
+    pub fn integer(&self, key: impl AsKey) -> Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>> {
         self.integer_filter(key, |_| true)
     }
 
@@ -153,7 +153,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<Option<i64>, value::Error> {
+    ) -> Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>> {
         self.integer_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -162,7 +162,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<i64>, value::Error> {
+    ) -> Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>> {
         let Some(key) = key.try_as_key() else {
             return Ok(None);
         };
@@ -176,7 +176,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<i64>, value::Error> {
+    ) -> Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>> {
         let Some(int) = self
             .raw_value_filter_by(section_name, subsection_name, value_name, filter)
             .ok()
@@ -226,7 +226,7 @@ impl File {
     }
 
     /// Like [`integers()`](File::integers()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn integers(&self, key: impl AsKey) -> Result<Option<Vec<i64>>, value::Error> {
+    pub fn integers(&self, key: impl AsKey) -> Result<Option<Vec<i64>>, gix_error::Exn<gix_error::ValidationError>> {
         self.integers_filter(key, |_| true)
     }
 
@@ -237,7 +237,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<Option<Vec<i64>>, value::Error> {
+    ) -> Result<Option<Vec<i64>>, gix_error::Exn<gix_error::ValidationError>> {
         self.integers_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -246,7 +246,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<Vec<i64>>, value::Error> {
+    ) -> Result<Option<Vec<i64>>, gix_error::Exn<gix_error::ValidationError>> {
         let Some(key) = key.try_as_key() else {
             return Ok(None);
         };
@@ -261,7 +261,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<Vec<i64>>, value::Error> {
+    ) -> Result<Option<Vec<i64>>, gix_error::Exn<gix_error::ValidationError>> {
         let Some(values) = self
             .raw_values_filter_by(section_name, subsection_name, value_name, filter)
             .ok()

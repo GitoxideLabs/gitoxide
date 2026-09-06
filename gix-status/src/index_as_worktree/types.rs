@@ -3,9 +3,6 @@ use std::sync::atomic::AtomicBool;
 use bstr::BStr;
 use gix_index::entry;
 
-/// The error returned by [index_as_worktree()`](crate::index_as_worktree()).
-pub type Error = gix_error::Exn;
-
 /// Options that control how the index status with a worktree is computed.
 #[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub struct Options {

@@ -12,8 +12,6 @@ use gix_tempfile::{AutoRemove, ContainingDirectory};
 
 use crate::data;
 
-mod error;
-pub use error::Error;
 use gix_features::progress::prodash::DynNestedProgress;
 
 mod types;
@@ -69,7 +67,7 @@ impl crate::Bundle {
         thin_pack_base_object_lookup: Option<impl gix_object::Find>,
         object_hash: gix_hash::Kind,
         options: Options,
-    ) -> Result<Outcome, Error> {
+    ) -> Result<Outcome, gix_error::Exn> {
         let _span = gix_features::trace::coarse!("gix_pack::Bundle::write_to_directory()");
         let mut read_progress = progress.add_child_with_id("read pack".into(), ProgressId::ReadPackBytes.into());
         read_progress.init(None, progress::bytes());
@@ -88,7 +86,7 @@ impl crate::Bundle {
             },
         )));
         let (pack_entries_iter, pack_version): (
-            Box<dyn Iterator<Item = Result<data::input::Entry, data::input::Error>>>,
+            Box<dyn Iterator<Item = Result<data::input::Entry, gix_error::Exn>>>,
             _,
         ) = match thin_pack_base_object_lookup {
             Some(thin_pack_lookup) => {
@@ -184,7 +182,7 @@ impl crate::Bundle {
         thin_pack_base_object_lookup: Option<impl gix_object::Find + Send + 'static>,
         object_hash: gix_hash::Kind,
         options: Options,
-    ) -> Result<Outcome, Error> {
+    ) -> Result<Outcome, gix_error::Exn> {
         let _span = gix_features::trace::coarse!("gix_pack::Bundle::write_to_directory_eagerly()");
         let mut read_progress = progress.add_child_with_id("read pack".into(), ProgressId::ReadPackBytes.into()); /* Bundle Write Read pack Bytes*/
         read_progress.init(pack_size.map(|s| s as usize), progress::bytes());
@@ -201,7 +199,7 @@ impl crate::Bundle {
         })));
         let eight_pages = 4096 * 8;
         let (pack_entries_iter, pack_version): (
-            Box<dyn Iterator<Item = Result<data::input::Entry, data::input::Error>> + Send + 'static>,
+            Box<dyn Iterator<Item = Result<data::input::Entry, gix_error::Exn>> + Send + 'static>,
             _,
         ) = match thin_pack_base_object_lookup {
             Some(thin_pack_lookup) => {
@@ -285,10 +283,10 @@ impl crate::Bundle {
             compression: _,
         }: Options,
         data_file: SharedTempFile,
-        mut pack_entries_iter: Box<dyn Iterator<Item = Result<data::input::Entry, data::input::Error>> + 'a>,
+        mut pack_entries_iter: Box<dyn Iterator<Item = Result<data::input::Entry, gix_error::Exn>> + 'a>,
         should_interrupt: &AtomicBool,
         pack_version: data::Version,
-    ) -> Result<WriteOutcome, Error> {
+    ) -> Result<WriteOutcome, gix_error::Exn> {
         let mut indexing_progress = progress.add_child_with_id(
             "create index file".into(),
             ProgressId::IndexingSteps(Default::default()).into(),

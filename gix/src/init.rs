@@ -18,9 +18,6 @@ use gix_error::ResultExt;
 /// We use `main` instead of `master`.
 pub const DEFAULT_BRANCH_NAME: &str = "main";
 
-/// The error returned by [`crate::init()`].
-pub type Error = gix_error::Error;
-
 impl ThreadSafeRepository {
     /// Create a repository with work-tree within `directory`, creating intermediate directories as needed.
     ///
@@ -32,7 +29,7 @@ impl ThreadSafeRepository {
         directory: impl AsRef<Path>,
         kind: crate::create::Kind,
         options: crate::create::Options,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::Error> {
         use gix_sec::trust::DefaultForLevel;
         let open_options = crate::open::Options::default_for_level(gix_sec::Trust::Full);
         Self::init_opts(directory, kind, options, open_options)
@@ -49,7 +46,7 @@ impl ThreadSafeRepository {
         kind: crate::create::Kind,
         create_options: crate::create::Options,
         mut open_options: crate::open::Options,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::Error> {
         let (path, capabilities) = crate::create::into_with_capabilities(directory.as_ref(), kind, create_options)?;
         if !capabilities.symlink {
             open_options.api_config_overrides.push("core.symlinks=false".into());

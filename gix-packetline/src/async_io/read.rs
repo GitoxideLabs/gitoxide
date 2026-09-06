@@ -38,7 +38,7 @@ where
     async fn read_line_inner<'a>(
         reader: &mut T,
         buf: &'a mut [u8],
-    ) -> io::Result<Result<PacketLineRef<'a>, decode::Error>> {
+    ) -> io::Result<Result<PacketLineRef<'a>, gix_error::ValidationError>> {
         if buf.len() < U16_HEX_BYTES {
             return Ok(Err(decode::not_enough_data(U16_HEX_BYTES - buf.len())));
         }
@@ -130,7 +130,7 @@ where
     ///  * natural EOF
     ///  * ERR packet line encountered if [`fail_on_err_lines()`](StreamingPeekableIterState::fail_on_err_lines()) is true.
     ///  * A `delimiter` packet line encountered
-    pub async fn read_line(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, decode::Error>>> {
+    pub async fn read_line(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_error::ValidationError>>> {
         let state = &mut self.state;
         if state.is_done {
             return None;
@@ -162,7 +162,7 @@ where
     /// was encountered.
     ///
     /// Multiple calls to peek will return the same packet line, if there is one.
-    pub async fn peek_line(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, decode::Error>>> {
+    pub async fn peek_line(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_error::ValidationError>>> {
         let state = &mut self.state;
         if state.is_done {
             return None;

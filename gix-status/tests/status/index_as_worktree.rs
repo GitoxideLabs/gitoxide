@@ -309,13 +309,13 @@ fn hash_errors_preserve_io_kinds() {
 
 #[test]
 fn hash_errors_without_io_causes_preserve_hashing_failure() {
-    let err = gix_hash::io::from_hasher(gix_hash::hasher::Error::new("hash collision"));
+    let err = gix_hash::io::from_hasher(gix_error::CorruptionError::new("hash collision"));
     assert!(
         err.downcast_any_ref::<std::io::Error>().is_none(),
         "a hashing failure without an I/O cause has no native kind"
     );
     assert!(
-        err.downcast_any_ref::<gix_hash::hasher::Error>()
+        err.downcast_any_ref::<gix_error::CorruptionError>()
             .is_some_and(|source| source.to_string().contains("hash collision")),
         "the original hashing failure remains available for diagnostics"
     );
@@ -1223,7 +1223,7 @@ fn racy_git() {
             worktree_file_size: u64,
             data: impl ReadData<'a>,
             buf: &mut Vec<u8>,
-        ) -> Result<Option<Self::Output>, gix_status::index_as_worktree::Error> {
+        ) -> Result<Option<Self::Output>, gix_error::Exn> {
             self.0.fetch_add(1, Ordering::Relaxed);
             self.1.compare_blobs(entry, worktree_file_size, data, buf)
         }

@@ -203,7 +203,6 @@ mod filter {
     mod check_round_trip_encoding {
         use crate::{
             bstr::ByteSlice,
-            config,
             config::tree::{Key, core::CheckRoundTripEncoding},
         };
 
@@ -213,7 +212,7 @@ mod filter {
             pub fn try_into_encodings(
                 &'static self,
                 value: Option<impl gix_utils::AsBStr>,
-            ) -> Result<Vec<&'static gix_filter::encoding::Encoding>, config::encoding::Error> {
+            ) -> Result<Vec<&'static gix_filter::encoding::Encoding>, crate::Error> {
                 Ok(match value {
                     None => vec![gix_filter::encoding::SHIFT_JIS],
                     Some(value) => {
@@ -397,7 +396,7 @@ mod log_all_ref_updates {
         /// the interpretation of booleans in special in `git-config`, i.e. we can't just treat it as string.
         pub fn try_into_ref_updates(
             &'static self,
-            value: Result<Option<bool>, gix_config::value::Error>,
+            value: Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<gix_ref::store::WriteReflog>, config::key::GenericErrorWithValue> {
             match value {
                 Ok(Some(bool)) => Ok(Some(if bool {
@@ -441,9 +440,8 @@ mod check_stat {
 }
 
 mod abbrev {
-    use config::abbrev::Error;
 
-    use crate::{bstr::ByteSlice, config, config::tree::core::Abbrev};
+    use crate::{bstr::ByteSlice, config::tree::core::Abbrev};
 
     impl Abbrev {
         /// Convert the given `hex_len_str` into the amount of characters that a short hash should have.
@@ -452,7 +450,7 @@ mod abbrev {
             &'static self,
             hex_len_str: impl gix_utils::AsBStr,
             object_hash: gix_hash::Kind,
-        ) -> Result<Option<usize>, Error> {
+        ) -> Result<Option<usize>, crate::Error> {
             let hex_len_str = hex_len_str.as_bstr();
             let max = object_hash.len_in_hex() as u8;
             let invalid = || {

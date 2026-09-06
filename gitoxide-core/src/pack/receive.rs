@@ -164,7 +164,7 @@ struct Negotiate<'a> {
 }
 
 impl gix::protocol::fetch::Negotiate for Negotiate<'_> {
-    fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action, negotiate::Error> {
+    fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action, gix::Exn<gix::error::Message>> {
         Ok(negotiate::Action::MustNegotiate {
             remote_ref_target_known: vec![], /* we don't really negotiate */
         })
@@ -184,7 +184,7 @@ impl gix::protocol::fetch::Negotiate for Negotiate<'_> {
         _state: &mut negotiate::one_round::State,
         _arguments: &mut Arguments,
         _previous_response: Option<&Response>,
-    ) -> Result<(negotiate::Round, bool), negotiate::Error> {
+    ) -> Result<(negotiate::Round, bool), gix::Exn<gix::error::Message>> {
         Ok((
             negotiate::Round {
                 haves_sent: 0,

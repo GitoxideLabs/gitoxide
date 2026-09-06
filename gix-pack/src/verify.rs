@@ -3,12 +3,6 @@ use std::{path::Path, sync::atomic::AtomicBool};
 use gix_error::{ErrorExt, ResultExt, RetryableError, message};
 use gix_features::progress::Progress;
 
-///
-pub mod checksum {
-    /// Returned by various methods to verify the checksum of a memory mapped file that might also exist on disk.
-    pub type Error = gix_error::Exn;
-}
-
 /// Returns the `index` at which the following `index + 1` value is not an increment over the value at `index`.
 pub fn fan(data: &[u32]) -> Option<usize> {
     data.windows(2)
@@ -25,7 +19,7 @@ pub fn checksum_on_disk_or_mmap(
     object_hash: gix_hash::Kind,
     progress: &mut dyn Progress,
     should_interrupt: &AtomicBool,
-) -> Result<gix_hash::ObjectId, checksum::Error> {
+) -> Result<gix_hash::ObjectId, gix_error::Exn> {
     let data_len_without_trailer = data.len() - object_hash.len_in_bytes();
     let actual = match gix_hash::bytes_of_file(
         data_path,

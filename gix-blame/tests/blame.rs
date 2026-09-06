@@ -218,7 +218,7 @@ impl Fixture {
         &mut self,
         source_file_name: &bstr::BStr,
         options: gix_blame::Options,
-    ) -> Result<gix_blame::Outcome, gix_blame::Error> {
+    ) -> Result<gix_blame::Outcome, gix_error::Exn> {
         gix_blame::file(
             &self.odb,
             gix_blame::Start::Commit(self.suspect),
@@ -234,7 +234,7 @@ impl Fixture {
         source_file_name: &bstr::BStr,
         contents: Vec<u8>,
         options: gix_blame::Options,
-    ) -> Result<gix_blame::Outcome, gix_blame::Error> {
+    ) -> Result<gix_blame::Outcome, gix_error::Exn> {
         gix_blame::file(
             &self.odb,
             gix_blame::Start::Contents {

@@ -6,18 +6,19 @@ use gix_object::FindExt;
 
 use crate::extension::Tree;
 
-/// The error returned by [`Tree::verify()`][crate::extension::Tree::verify()].
-pub type Error = gix_error::Exn<gix_error::CorruptionError>;
-
 impl Tree {
     /// Validate the correctness of this instance. If `use_objects` is true, then `objects` will be used to access all objects.
-    pub fn verify(&self, use_objects: bool, objects: impl gix_object::Find) -> Result<(), Error> {
+    pub fn verify(
+        &self,
+        use_objects: bool,
+        objects: impl gix_object::Find,
+    ) -> Result<(), gix_error::Exn<gix_error::CorruptionError>> {
         fn verify_recursive(
             parent_id: gix_hash::ObjectId,
             children: &[Tree],
             mut object_buf: Option<&mut Vec<u8>>,
             objects: &impl gix_object::Find,
-        ) -> Result<Option<u32>, Error> {
+        ) -> Result<Option<u32>, gix_error::Exn<gix_error::CorruptionError>> {
             if children.is_empty() {
                 return Ok(None);
             }
@@ -115,7 +116,10 @@ impl Tree {
     ///
     /// This is a cheap heuristic: it doesn't prove each cached subtree count matches its actual path range,
     /// but no TREE node can describe more entries than the entire index contains.
-    pub(crate) fn verify_entries_count(&self, num_index_entries: usize) -> Result<(), Error> {
+    pub(crate) fn verify_entries_count(
+        &self,
+        num_index_entries: usize,
+    ) -> Result<(), gix_error::Exn<gix_error::CorruptionError>> {
         if let Some(actual) = self.num_entries
             && actual as usize > num_index_entries
         {
@@ -145,7 +149,7 @@ mod tests {
             &self,
             _id: &gix_hash::oid,
             _buffer: &'a mut Vec<u8>,
-        ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+        ) -> Result<Option<gix_object::Data<'a>>, gix_error::Exn> {
             Ok(Some(gix_object::Data::new(
                 b"40000 child\0",
                 gix_object::Kind::Tree,
@@ -171,6 +175,6 @@ mod tests {
 
         let err = tree.verify(true, MalformedTree).expect_err("malformed entry must fail");
         assert_eq!(err.to_string(), format!("Could not decode an entry in tree {root_id}"));
-        assert!(err.downcast_any_ref::<gix_object::decode::Error>().is_some());
+        assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
     }
 }

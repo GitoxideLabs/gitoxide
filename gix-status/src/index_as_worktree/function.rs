@@ -19,7 +19,7 @@ use crate::{
     index_as_worktree::{
         Change, Conflict, Context, EntryStatus, Outcome, VisitEntry, traits,
         traits::{CompareBlobs, SubmoduleStatus, read_data::Stream},
-        types::{Error, Options},
+        types::Options,
     },
     is_dir_to_mode,
 };
@@ -67,7 +67,7 @@ pub fn index_as_worktree<'index, T, U, Find>(
         should_interrupt,
     }: Context<'_>,
     options: Options,
-) -> Result<Outcome, Error>
+) -> Result<Outcome, gix_error::Exn>
 where
     T: Send,
     U: Send,
@@ -255,7 +255,8 @@ struct State<'a, 'b> {
     odb_reads: &'a AtomicUsize,
 }
 
-type StatusResult<'index, T, U> = Result<(&'index gix_index::Entry, usize, &'index BStr, EntryStatus<T, U>), Error>;
+type StatusResult<'index, T, U> =
+    Result<(&'index gix_index::Entry, usize, &'index BStr, EntryStatus<T, U>), gix_error::Exn>;
 
 impl<'index> State<'_, 'index> {
     #[expect(clippy::too_many_arguments)]
@@ -375,7 +376,7 @@ impl<'index> State<'_, 'index> {
         diff: &mut impl CompareBlobs<Output = T>,
         submodule: &mut impl SubmoduleStatus<Output = U>,
         objects: &Find,
-    ) -> Result<Option<EntryStatus<T, U>>, Error>
+    ) -> Result<Option<EntryStatus<T, U>>, gix_error::Exn>
     where
         Find: gix_object::Find,
     {
@@ -551,7 +552,7 @@ impl<'index, T, U, C: VisitEntry<'index, ContentChange = T, SubmoduleStatus = U>
 
     type Output = ();
 
-    type Error = Error;
+    type Error = gix_error::Exn;
 
     fn feed(&mut self, items: Self::Input) -> Result<Self::FeedProduce, Self::Error> {
         for item in items {
@@ -591,7 +592,7 @@ impl<'a, Find> traits::ReadData<'a> for ReadDataImpl<'a, Find>
 where
     Find: gix_object::Find,
 {
-    fn read_blob(self) -> Result<&'a [u8], Error> {
+    fn read_blob(self) -> Result<&'a [u8], gix_error::Exn> {
         self.objects
             .find_blob(self.id, self.buf)
             .or_raise_erased(|| message("Failed to obtain blob from object database"))
@@ -602,7 +603,7 @@ where
             })
     }
 
-    fn stream_worktree_file(self) -> Result<Stream<'a>, Error> {
+    fn stream_worktree_file(self) -> Result<Stream<'a>, gix_error::Exn> {
         self.buf.clear();
         // symlinks are only stored as actual symlinks if the FS supports it otherwise they are just
         // normal files with their content equal to the linked path (so can be read normally)
@@ -732,7 +733,7 @@ impl Conflict {
     }
 }
 
-fn live_metadata(worktree_path: &Path) -> Result<Option<gix_index::fs::Metadata>, Error> {
+fn live_metadata(worktree_path: &Path) -> Result<Option<gix_index::fs::Metadata>, gix_error::Exn> {
     match gix_index::fs::Metadata::from_path_no_follow(worktree_path) {
         Ok(md) => Ok(Some(md)),
         Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => Ok(None),

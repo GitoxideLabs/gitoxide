@@ -1,7 +1,7 @@
 use gix_config_value::Color;
 
 #[test]
-fn from_utf8_str() -> crate::Result {
+fn from_utf8_str() -> gix_error::Result {
     assert_eq!(
         Color::try_from("red bold")?.to_string(),
         "red bold",
@@ -288,7 +288,7 @@ mod from_git {
         try_color(name).expect("input color is expected to be valid")
     }
 
-    fn try_color<'a>(name: impl Into<&'a BStr>) -> crate::Result<String> {
+    fn try_color<'a>(name: impl Into<&'a BStr>) -> gix_error::Result<String> {
         Ok(Color::try_from(name.into())?.to_string())
     }
 }

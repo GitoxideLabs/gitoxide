@@ -1,8 +1,5 @@
 use std::path::PathBuf;
 
-/// The error returned by [ask()][crate::ask()].
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// The way the user is prompted.
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Mode {

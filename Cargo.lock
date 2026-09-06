@@ -1948,6 +1948,7 @@ dependencies = [
 name = "gix-fsck"
 version = "0.25.1"
 dependencies = [
+ "gix-error",
  "gix-hash",
  "gix-hashtable",
  "gix-object",
@@ -2135,6 +2136,7 @@ dependencies = [
  "bitflags 2.13.0",
  "gix-commitgraph",
  "gix-date",
+ "gix-error",
  "gix-hash",
  "gix-object",
  "gix-odb",
@@ -2680,6 +2682,7 @@ dependencies = [
  "document-features",
  "gix-attributes",
  "gix-discover",
+ "gix-error",
  "gix-features",
  "gix-fs",
  "gix-glob",

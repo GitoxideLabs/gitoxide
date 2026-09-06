@@ -4,9 +4,6 @@ use bstr::{BStr, ByteSlice};
 
 use crate::index_as_worktree::{Change, EntryStatus};
 
-/// The error returned by [index_as_worktree_with_renames()`](crate::index_as_worktree_with_renames()).
-pub type Error = gix_error::Exn;
-
 /// The way all output should be sorted.
 #[derive(Clone, Copy, Default, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub enum Sorting {

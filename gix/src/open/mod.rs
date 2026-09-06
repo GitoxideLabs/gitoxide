@@ -50,9 +50,6 @@ pub struct Options {
     pub(crate) current_dir: Option<PathBuf>,
 }
 
-/// The error returned by [`crate::open()`].
-pub type Error = gix_error::Error;
-
 mod options;
 pub mod permissions;
 mod repository;

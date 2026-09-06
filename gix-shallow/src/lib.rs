@@ -48,7 +48,7 @@ pub enum Update {
 /// The list of shallow commits represents the shallow boundary, beyond which we are lacking all (parent) commits.
 /// Note that the list is never empty, as `Ok(None)` is returned in that case indicating the repository
 /// isn't a shallow clone.
-pub fn read(shallow_file: &std::path::Path) -> Result<Option<nonempty::NonEmpty<gix_hash::ObjectId>>, read::Error> {
+pub fn read(shallow_file: &std::path::Path) -> Result<Option<nonempty::NonEmpty<gix_hash::ObjectId>>, gix_error::Exn> {
     use bstr::ByteSlice;
     use gix_error::{CorruptionError, ErrorExt, ResultExt, message};
     let buf = match std::fs::read(shallow_file) {
@@ -80,7 +80,6 @@ pub mod write {
 
         use gix_error::{ErrorExt, ResultExt, message};
 
-        use super::Error;
         use crate::Update;
 
         /// Write the [previously obtained](crate::read()) (possibly non-existing) `shallow_commits` to the shallow `file`
@@ -95,7 +94,7 @@ pub mod write {
             mut file: gix_lock::File,
             shallow_commits: Option<nonempty::NonEmpty<gix_hash::ObjectId>>,
             updates: &[Update],
-        ) -> Result<(), Error> {
+        ) -> Result<(), gix_error::Exn<gix_error::Message>> {
             let mut shallow_commits = shallow_commits.map(Vec::from).unwrap_or_default();
             for update in updates {
                 match update {
@@ -130,14 +129,5 @@ pub mod write {
             Ok(())
         }
     }
-
-    /// The error returned by [`write()`](crate::write()).
-    pub type Error = gix_error::Exn<gix_error::Message>;
 }
 pub use write::function::write;
-
-///
-pub mod read {
-    /// The error returned by [`read`](crate::read()).
-    pub type Error = gix_error::Exn;
-}

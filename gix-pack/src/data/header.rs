@@ -7,7 +7,7 @@ pub(crate) const N32_SIZE: usize = std::mem::size_of::<u32>();
 pub const SIZE: usize = b"PACK".len() + N32_SIZE * 2;
 
 /// Parses the first 12 bytes of a pack file, returning the pack version as well as the number of objects contained in the pack.
-pub fn decode(data: &[u8; SIZE]) -> Result<(data::Version, u32), decode::Error> {
+pub fn decode(data: &[u8; SIZE]) -> Result<(data::Version, u32), gix_error::Exn> {
     let mut ofs = 0;
     if &data[ofs..ofs + b"PACK".len()] != b"PACK" {
         return Err(gix_error::CorruptionError::new("Pack data type not recognized").raise_erased());
@@ -38,10 +38,4 @@ pub fn encode(version: data::Version, num_objects: u32) -> [u8; SIZE] {
     );
     buf[8..].copy_from_slice(&num_objects.to_be_bytes()[..]);
     buf
-}
-
-///
-pub mod decode {
-    /// Returned by [`decode()`][super::decode()].
-    pub type Error = gix_error::Exn;
 }

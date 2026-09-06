@@ -27,7 +27,7 @@ mod index_version {
         /// Try to interpret an integer value as index version.
         pub fn try_into_index_version(
             &'static self,
-            value: Result<Option<i64>, gix_config::value::Error>,
+            value: Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<gix_pack::index::Version>, config::key::GenericError> {
             let Some(value) =
                 value.map_err(|err| config::key::GenericError::from(self).with_source(err.into_error()))?

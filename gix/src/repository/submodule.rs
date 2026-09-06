@@ -11,7 +11,7 @@ impl Repository {
     ///
     /// Note that his method will not look in other places, like the index or the `HEAD` tree.
     // TODO(submodule): make it use an updated snapshot instead once we have `config()`.
-    pub fn open_modules_file(&self) -> Result<Option<gix_submodule::File>, submodule::open_modules_file::Error> {
+    pub fn open_modules_file(&self) -> Result<Option<gix_submodule::File>, crate::Error> {
         let path = match self.modules_path() {
             Some(path) => path,
             None => return Ok(None),
@@ -44,7 +44,7 @@ impl Repository {
     /// Note that git configuration is also contributing to the result based on the current snapshot.
     ///
     // TODO(submodule): make it use an updated snapshot instead once we have `config()`.
-    pub fn modules(&self) -> Result<Option<submodule::ModulesSnapshot>, submodule::modules::Error> {
+    pub fn modules(&self) -> Result<Option<submodule::ModulesSnapshot>, crate::Error> {
         match self
             .modules
             .recent_snapshot(
@@ -68,7 +68,7 @@ impl Repository {
                         .head()
                         .or_erased()?
                         .try_peel_to_id()?
-                        .map(|id| -> Result<Option<_>, submodule::modules::Error> {
+                        .map(|id| -> Result<Option<_>, crate::Error> {
                             Ok(id
                                 .object()?
                                 .peel_to_commit()?
@@ -103,7 +103,7 @@ impl Repository {
 
     /// Return the list of available submodules, or `None` if there is no submodule configuration.
     #[doc(alias = "git2")]
-    pub fn submodules(&self) -> Result<Option<impl Iterator<Item = crate::Submodule<'_>>>, submodule::modules::Error> {
+    pub fn submodules(&self) -> Result<Option<impl Iterator<Item = crate::Submodule<'_>>>, crate::Error> {
         let modules = match self.modules()? {
             None => return Ok(None),
             Some(m) => m,

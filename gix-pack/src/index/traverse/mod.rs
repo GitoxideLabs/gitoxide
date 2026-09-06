@@ -12,8 +12,6 @@ pub mod with_index;
 pub mod with_lookup;
 use reduce::Reducer;
 
-mod error;
-pub use error::Error;
 use gix_features::progress::DynNestedProgress;
 
 mod types;
@@ -94,7 +92,7 @@ where
             alloc_limit_bytes,
             make_pack_lookup_cache,
         }: Options<F>,
-    ) -> Result<Outcome, Error>
+    ) -> Result<Outcome, gix_error::Exn>
     where
         C: crate::cache::DecodeEntry,
         Processor:
@@ -135,7 +133,7 @@ where
         pack_progress: &mut dyn Progress,
         index_progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
-    ) -> Result<gix_hash::ObjectId, Error>
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn>
     where
         D: crate::FileData + Send + Sync,
     {
@@ -165,7 +163,7 @@ where
         progress: &mut dyn Progress,
         index_entry: &index::Entry,
         processor: &mut impl FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result<(), gix_error::Exn>,
-    ) -> Result<Option<crate::data::decode::entry::Outcome>, Error>
+    ) -> Result<Option<crate::data::decode::entry::Outcome>, gix_error::Exn>
     where
         C: crate::cache::DecodeEntry,
         D: crate::FileData + Send + Sync,
@@ -227,7 +225,7 @@ fn process_entry(
     pack_entry_crc32: impl FnOnce() -> u32,
     progress: &dyn Progress,
     processor: &mut impl FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result<(), gix_error::Exn>,
-) -> Result<(), Error> {
+) -> Result<(), gix_error::Exn> {
     if check.object_checksum() {
         gix_object::Data::new(decompressed, object_kind, index_entry.oid.kind())
             .verify_checksum(&index_entry.oid)
