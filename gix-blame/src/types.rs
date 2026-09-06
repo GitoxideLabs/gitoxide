@@ -185,10 +185,23 @@ impl BlameRanges {
         }
     }
 
-    /// Gets zero-based exclusive ranges.
-    pub(crate) fn to_zero_based_exclusive_ranges(&self, max_lines: u32) -> Vec<Range<u32>> {
-        match &self.0 {
+    /// Resolves the selection into 0-based exclusive ranges while taking into account `max_lines` -
+    /// the number of lines in the content that will be blamed.
+    ///
+    /// Ranges that reach past `max_lines` are clamped to it, and ranges that start past `max_lines`
+    /// are dropped. Consequently the result can be empty, if every selected range starts past
+    /// `max_lines`, but every range it does contain is guaranteed to be non-empty.
+    /// [`file()`](crate::file()) relies on that guarantee, as a hunk without lines cannot be turned
+    /// into a [`BlameEntry`].
+    ///
+    /// Note that a file without lines cannot be expressed here, as `max_lines` is a [`NonZeroU32`].
+    /// Such a file has nothing to attribute, and [`file()`](crate::file()) recognizes it before
+    /// any range is resolved.
+    pub(crate) fn to_zero_based_exclusive_ranges(&self, max_lines: NonZeroU32) -> Vec<Range<u32>> {
+        let max_lines = max_lines.get();
+        let ranges = match &self.0 {
             Selection::WholeFile => {
+                // Kept as a binding to avoid `clippy::single_range_in_vec_init`.
                 let full_range = 0..max_lines;
                 vec![full_range]
             }
@@ -206,7 +219,12 @@ impl BlameRanges {
                     }
                 })
                 .collect(),
-        }
+        };
+        debug_assert!(
+            ranges.iter().all(|range| !range.is_empty()),
+            "BUG: resolved ranges must never be empty, or creating a `BlameEntry` from them will panic"
+        );
+        ranges
     }
 }
 

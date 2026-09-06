@@ -926,17 +926,18 @@ fn initial_state(
                 commit_id: suspect,
             })?;
             let blamed_file_blob = odb.find_blob(&blamed_file_entry_id, buf)?.data.to_vec();
-            let num_lines_in_blamed = tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32;
 
             // Binary or otherwise empty?
-            if num_lines_in_blamed == 0 {
+            let Some(num_lines_in_blamed) =
+                NonZeroU32::new(tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32)
+            else {
                 return Ok(InitialState {
                     blamed_file_blob,
                     hunks_to_blame: Vec::new(),
                     out: Vec::new(),
                     first_suspect: None,
                 });
-            }
+            };
 
             let ranges_to_blame = options.ranges.to_zero_based_exclusive_ranges(num_lines_in_blamed);
             let hunks_to_blame = ranges_to_blame
@@ -957,16 +958,18 @@ fn initial_state(
         } => {
             let null_id = first_suspect.kind().null();
             let blamed_file_blob = contents.into_owned();
-            let num_lines_in_blamed = tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32;
 
-            if num_lines_in_blamed == 0 {
+            // Binary or otherwise empty?
+            let Some(num_lines_in_blamed) =
+                NonZeroU32::new(tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32)
+            else {
                 return Ok(InitialState {
                     blamed_file_blob,
                     hunks_to_blame: Vec::new(),
                     out: Vec::new(),
                     first_suspect: None,
                 });
-            }
+            };
 
             let ranges_to_blame = options.ranges.to_zero_based_exclusive_ranges(num_lines_in_blamed);
             let mut hunks_to_blame = ranges_to_blame
