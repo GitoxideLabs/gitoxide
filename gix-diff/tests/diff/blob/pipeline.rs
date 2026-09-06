@@ -434,6 +434,81 @@ pub(crate) mod convert_to_diffable {
     }
 
     #[test]
+    fn worktree_filter_skips_null_id_lookups() -> crate::Result {
+        struct NonNullObjects(crate::util::ObjectDb);
+
+        impl gix_object::Find for NonNullObjects {
+            fn try_find<'a>(
+                &self,
+                id: &gix_hash::oid,
+                buffer: &'a mut Vec<u8>,
+            ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+                assert!(!id.is_null(), "null IDs must not be looked up in the object database");
+                gix_object::Find::try_find(&self.0, id, buffer)
+            }
+        }
+
+        impl gix_object::FindHeader for NonNullObjects {
+            fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>, gix_object::find::Error> {
+                assert!(!id.is_null(), "null IDs must not be looked up in the object database");
+                gix_object::FindHeader::try_header(&self.0, id)
+            }
+        }
+
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        std::fs::write(tmp.path().join("a"), "worktree\r\n")?;
+        let mut filter = gix_diff::blob::Pipeline::new(
+            WorktreeRoots {
+                old_root: None,
+                new_root: Some(tmp.path().to_owned()),
+            },
+            gix_filter::Pipeline::new(
+                Default::default(),
+                gix_filter::pipeline::Options {
+                    eol_config: eol::Configuration {
+                        auto_crlf: AutoCrlf::Input,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ),
+            vec![],
+            default_options(),
+        );
+        let objects = NonNullObjects(object_db());
+        let index_id = insert(&objects.0, "index\r\n")?;
+        let mut buf = Vec::new();
+        for mode in [pipeline::Mode::ToGit, pipeline::Mode::ToGitUnlessBinaryToTextIsPresent] {
+            for (id, expected) in [
+                (crate::fixture_hash_kind().null(), "worktree\n"),
+                (index_id, "worktree\r\n"),
+            ] {
+                let out = filter.convert_to_diffable(
+                    &id,
+                    EntryKind::Blob,
+                    "a".into(),
+                    ResourceKind::NewOrDestination,
+                    &mut |_, _| {},
+                    &objects,
+                    mode,
+                    &mut buf,
+                )?;
+                assert_eq!(
+                    out.data,
+                    Some(pipeline::Data::Buffer { is_derived: false }),
+                    "worktree content remains available for diffing"
+                );
+                assert_eq!(
+                    buf.as_bstr(),
+                    expected,
+                    "only a known index object can prevent CRLF normalization"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn binary_by_buffer_inspection() -> crate::Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let root = crate::scripted_fixture_read_only("make_blob_repo.sh")?;
