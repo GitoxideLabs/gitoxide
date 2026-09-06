@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use gix_error::{CorruptionError, ErrorExt, ResourceExhaustionError, ResourceExhaustionKind, ResultExt};
 
-use super::{Error, Tree, traverse};
+use super::Tree;
 
 /// Maps each referenced base object ID to indices in `Tree::child_items` of ref-deltas waiting for it.
 pub(super) type RefDeltaChildren = BTreeMap<gix_hash::ObjectId, Vec<u32>>;
@@ -53,7 +53,7 @@ fn allocation_error(kind: ResourceExhaustionKind) -> ResourceExhaustionError {
 
 impl<T> Tree<T> {
     /// Instantiate a empty tree capable of storing `num_objects` amounts of items.
-    pub(crate) fn with_capacity(num_objects: usize, alloc_limit_bytes: Option<usize>) -> Result<Self, Error> {
+    pub(crate) fn with_capacity(num_objects: usize, alloc_limit_bytes: Option<usize>) -> Result<Self, gix_error::Exn> {
         let capacity = num_objects / 2;
         let allocation_bytes = capacity
             .checked_mul(std::mem::size_of::<Item<T>>())
@@ -93,7 +93,7 @@ impl<T> Tree<T> {
     pub(super) fn assert_is_incrementing_and_update_next_offset(
         &mut self,
         offset: crate::data::Offset,
-    ) -> Result<(), Error> {
+    ) -> Result<(), gix_error::Exn> {
         let items = match &self.last_seen {
             Some(NodeKind::Root) => &mut self.root_items,
             Some(NodeKind::Child) => &mut self.child_items,
@@ -114,7 +114,7 @@ impl<T> Tree<T> {
     pub(super) fn set_pack_entries_end_and_resolve_ref_offsets(
         &mut self,
         pack_entries_end: crate::data::Offset,
-    ) -> Result<(), traverse::Error> {
+    ) -> Result<(), gix_error::Exn> {
         if !self.future_child_offsets.is_empty() {
             for (parent_offset, child_index) in self.future_child_offsets.drain(..) {
                 // SAFETY invariants upheld:
@@ -143,7 +143,7 @@ impl<T> Tree<T> {
 
     /// Add a new root node, one that only has children but is not a child itself, at the given pack `offset` and associate
     /// custom `data` with it.
-    pub(crate) fn add_root(&mut self, offset: crate::data::Offset, data: T) -> Result<(), Error> {
+    pub(crate) fn add_root(&mut self, offset: crate::data::Offset, data: T) -> Result<(), gix_error::Exn> {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
         self.last_seen = NodeKind::Root.into();
         self.root_items.push(Item {
@@ -162,7 +162,7 @@ impl<T> Tree<T> {
         base_offset: crate::data::Offset,
         offset: crate::data::Offset,
         data: T,
-    ) -> Result<(), Error> {
+    ) -> Result<(), gix_error::Exn> {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
 
         let next_child_index = self.child_items.len();
@@ -205,7 +205,7 @@ impl<T> Tree<T> {
         base_id: gix_hash::ObjectId,
         offset: crate::data::Offset,
         data: T,
-    ) -> Result<(), Error> {
+    ) -> Result<(), gix_error::Exn> {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
 
         let child_index = self.child_items.len() as u32;

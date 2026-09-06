@@ -6,19 +6,18 @@ use gix_pack::cache::DecodeEntry;
 use crate::store::{handle, load_index};
 
 pub(crate) mod error {
-    use gix_error::Error as GixError;
 
-    use crate::{loose, pack};
+    use crate::loose;
 
     /// Returned by [`Handle::try_find()`][gix_pack::Find::try_find()]
     #[derive(Debug)]
     #[allow(missing_docs)]
     pub enum Error {
         Loose(loose::find::Error),
-        Pack(GixError),
+        Pack(gix_error::Error),
         LoadIndex(crate::store::load_index::Error),
         LoadPack(std::io::Error),
-        EntryType(gix_pack::data::entry::decode::Error),
+        EntryType(gix_error::CorruptionError),
         DeltaBaseRecursionLimit {
             /// the maximum recursion depth we encountered.
             max_depth: usize,
@@ -92,8 +91,8 @@ pub(crate) mod error {
         }
     }
 
-    impl From<pack::data::decode::Error> for Error {
-        fn from(err: pack::data::decode::Error) -> Self {
+    impl From<gix_error::Exn> for Error {
+        fn from(err: gix_error::Exn) -> Self {
             Error::Pack(err.into_error())
         }
     }
@@ -110,8 +109,8 @@ pub(crate) mod error {
         }
     }
 
-    impl From<gix_pack::data::entry::decode::Error> for Error {
-        fn from(err: gix_pack::data::entry::decode::Error) -> Self {
+    impl From<gix_error::CorruptionError> for Error {
+        fn from(err: gix_error::CorruptionError) -> Self {
             Error::EntryType(err)
         }
     }
@@ -425,7 +424,7 @@ where
         id: &gix_hash::oid,
         buffer: &'a mut Vec<u8>,
         pack_cache: &mut dyn DecodeEntry,
-    ) -> Result<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>, gix_object::find::Error> {
+    ) -> Result<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>, gix_error::Exn> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
         self.try_find_cached_inner(id, buffer, &mut inflate, pack_cache, &mut snapshot, None)
@@ -590,7 +589,7 @@ where
         &self,
         id: &gix_hash::oid,
         buffer: &'a mut Vec<u8>,
-    ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+    ) -> Result<Option<gix_object::Data<'a>>, gix_error::Exn> {
         gix_pack::Find::try_find(self, id, buffer).map(|t| t.map(|t| t.0))
     }
 }
@@ -599,7 +598,7 @@ impl<S> gix_object::FindHeader for super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>, gix_object::find::Error> {
+    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>, gix_error::Exn> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
         self.try_header_inner(id, &mut inflate, &mut snapshot, None)

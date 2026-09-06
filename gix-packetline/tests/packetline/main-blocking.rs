@@ -2,8 +2,6 @@ pub mod bisync {
     pub use gix_macros::{discard as only_async, keep as only_sync, sync as bisync};
 }
 
-pub type Result = gix_error::TestResult;
-
 pub fn assert_err_display<T: std::fmt::Debug, E: std::error::Error>(
     res: std::result::Result<T, E>,
     expected: impl AsRef<str>,

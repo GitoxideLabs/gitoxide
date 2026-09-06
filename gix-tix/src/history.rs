@@ -1658,7 +1658,7 @@ fn decode_commit(
 }
 
 fn decode_metadata<'a>(
-    tokens: impl Iterator<Item = Result<Token<'a>, gix::objs::decode::Error>>,
+    tokens: impl Iterator<Item = Result<Token<'a>, gix::error::ValidationError>>,
     authors: &mut Authors,
     attributions: &mut Vec<Attribution>,
 ) -> Result<Metadata<BString>> {

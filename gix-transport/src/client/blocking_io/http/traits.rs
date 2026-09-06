@@ -1,8 +1,5 @@
 use crate::client::WriteMode;
 
-/// The error used by the [Http] trait.
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// The return value of [`Http::get()`].
 pub struct GetResponse<H, B> {
     /// The response headers.
@@ -73,7 +70,7 @@ pub trait Http {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<GetResponse<Self::Headers, Self::ResponseBody>, Error>;
+    ) -> Result<GetResponse<Self::Headers, Self::ResponseBody>, gix_error::Exn<gix_error::Message>>;
 
     /// Initiate a `POST` request to `url` providing with the given `headers`, where `base_url` is so that `base_url + tail == url`.
     ///
@@ -89,7 +86,7 @@ pub trait Http {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         body: PostBodyDataKind,
-    ) -> Result<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, Error>;
+    ) -> Result<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, gix_error::Exn<gix_error::Message>>;
 
     /// Pass `config` which can deserialize in the implementation's configuration, as documented separately.
     ///

@@ -12,7 +12,7 @@ pub(crate) mod cache {
     pub use gix_pack::cache::object::MemoryCappedHashmap;
 }
 pub(crate) use errors::existing_error;
-pub use errors::{conversion, find, write};
+
 ///
 pub mod blob;
 ///
@@ -22,12 +22,6 @@ pub mod peel;
 mod tag;
 ///
 pub mod tree;
-
-///
-pub mod try_into {
-    /// The error returned when converting an object to an unexpected kind.
-    pub type Error = gix_error::ValidationError;
-}
 
 impl ObjectDetached {
     /// Infuse this owned object with `repo` access.
@@ -103,7 +97,7 @@ impl<'repo> Object<'repo> {
     }
 
     /// Transform this object into a commit, or return it as part of the `Err` if it is no commit.
-    pub fn try_into_commit(self) -> Result<Commit<'repo>, try_into::Error> {
+    pub fn try_into_commit(self) -> Result<Commit<'repo>, gix_error::ValidationError> {
         self.try_into().map_err(|this: Self| {
             gix_error::ValidationError::new(format!(
                 "Object named {} was supposed to be of kind {}, but was kind {}.",
@@ -115,7 +109,7 @@ impl<'repo> Object<'repo> {
     }
 
     /// Transform this object into a tag, or return it as part of the `Err` if it is no commit.
-    pub fn try_into_tag(self) -> Result<Tag<'repo>, try_into::Error> {
+    pub fn try_into_tag(self) -> Result<Tag<'repo>, gix_error::ValidationError> {
         self.try_into().map_err(|this: Self| {
             gix_error::ValidationError::new(format!(
                 "Object named {} was supposed to be of kind {}, but was kind {}.",
@@ -127,7 +121,7 @@ impl<'repo> Object<'repo> {
     }
 
     /// Transform this object into a tree, or return it as part of the `Err` if it is no tree.
-    pub fn try_into_tree(self) -> Result<Tree<'repo>, try_into::Error> {
+    pub fn try_into_tree(self) -> Result<Tree<'repo>, gix_error::ValidationError> {
         self.try_into().map_err(|this: Self| {
             gix_error::ValidationError::new(format!(
                 "Object named {} was supposed to be of kind {}, but was kind {}.",
@@ -139,7 +133,7 @@ impl<'repo> Object<'repo> {
     }
 
     /// Transform this object into a blob, or return it as part of the `Err` if it is no blob.
-    pub fn try_into_blob(self) -> Result<Blob<'repo>, try_into::Error> {
+    pub fn try_into_blob(self) -> Result<Blob<'repo>, gix_error::ValidationError> {
         self.try_into().map_err(|this: Self| {
             gix_error::ValidationError::new(format!(
                 "Object named {} was supposed to be of kind {}, but was kind {}.",
@@ -180,7 +174,7 @@ impl<'repo> Object<'repo> {
     }
 
     /// Obtain a fully parsed commit whose fields reference our data buffer.
-    pub fn try_to_commit_ref(&self) -> Result<gix_object::CommitRef<'_>, conversion::Error> {
+    pub fn try_to_commit_ref(&self) -> Result<gix_object::CommitRef<'_>, crate::Error> {
         gix_object::Data::new(&self.data, self.kind, self.id.kind())
             .decode()
             .or_erased()?
@@ -241,7 +235,7 @@ impl<'repo> Object<'repo> {
     }
 
     /// Obtain a fully parsed tag object whose fields reference our data buffer.
-    pub fn try_to_tag_ref(&self) -> Result<gix_object::TagRef<'_>, conversion::Error> {
+    pub fn try_to_tag_ref(&self) -> Result<gix_object::TagRef<'_>, crate::Error> {
         gix_object::Data::new(&self.data, self.kind, self.id.kind())
             .decode()
             .or_erased()?

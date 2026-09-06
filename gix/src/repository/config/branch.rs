@@ -10,9 +10,6 @@ use crate::{
         tree::{Branch, Push},
     },
     push, remote,
-    repository::{
-        branch_remote_ref_name, branch_remote_tracking_ref_name, upstream_branch_and_remote_name_for_tracking_branch,
-    },
 };
 
 /// Query configuration related to branches.
@@ -46,7 +43,7 @@ impl crate::Repository {
         &self,
         name: &FullNameRef,
         direction: remote::Direction,
-    ) -> Option<Result<FullName, branch_remote_ref_name::Error>> {
+    ) -> Option<Result<FullName, crate::Error>> {
         match direction {
             remote::Direction::Fetch => {
                 let short_name = name.shorten();
@@ -125,7 +122,7 @@ impl crate::Repository {
         &self,
         name: &FullNameRef,
         direction: remote::Direction,
-    ) -> Option<Result<FullName, branch_remote_tracking_ref_name::Error>> {
+    ) -> Option<Result<FullName, crate::Error>> {
         let remote_ref = match self.branch_remote_ref_name(name, direction)? {
             Ok(r) => r,
             Err(err) => {
@@ -164,7 +161,7 @@ impl crate::Repository {
     pub fn upstream_branch_and_remote_for_tracking_branch(
         &self,
         tracking_branch: &FullNameRef,
-    ) -> Result<Option<(FullName, crate::Remote<'_>)>, upstream_branch_and_remote_name_for_tracking_branch::Error> {
+    ) -> Result<Option<(FullName, crate::Remote<'_>)>, crate::Error> {
         if tracking_branch.category() != Some(gix_ref::Category::RemoteBranch) {
             return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
                 "The input branch '{}' needs to be a remote tracking branch",
@@ -258,7 +255,7 @@ impl crate::Repository {
         &self,
         short_branch_name: impl Into<&'a BStr>,
         direction: remote::Direction,
-    ) -> Option<Result<crate::Remote<'_>, remote::find::existing::Error>> {
+    ) -> Option<Result<crate::Remote<'_>, crate::Error>> {
         let name = self.branch_remote_name(short_branch_name, direction)?;
         self.try_find_remote(name.as_bstr()).or_else(|| match name {
             remote::Name::Url(url) => gix_url::parse(&url)

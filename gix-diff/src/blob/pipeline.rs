@@ -123,12 +123,6 @@ impl Mode {
     }
 }
 
-///
-pub mod convert_to_diffable {
-    /// The error returned by [Pipeline::convert_to_diffable()](super::Pipeline::convert_to_diffable()).
-    pub type Error = gix_error::Exn<gix_error::Message>;
-}
-
 /// Lifecycle
 impl Pipeline {
     /// Create a new instance of a pipeline which produces blobs suitable for diffing. `roots` allow to read worktree files directly, otherwise
@@ -203,7 +197,7 @@ impl Pipeline {
         objects: &dyn gix_object::FindObjectOrHeader,
         convert: Mode,
         out: &mut Vec<u8>,
-    ) -> Result<Outcome, convert_to_diffable::Error> {
+    ) -> Result<Outcome, gix_error::Exn<gix_error::Message>> {
         let is_symlink = match mode {
             EntryKind::Link => true,
             EntryKind::Blob | EntryKind::BlobExecutable => false,
@@ -506,7 +500,7 @@ fn none_if_missing<T>(res: std::io::Result<T>) -> std::io::Result<Option<T>> {
     }
 }
 
-fn run_cmd(rela_path: &BStr, mut cmd: Command, out: &mut Vec<u8>) -> Result<(), convert_to_diffable::Error> {
+fn run_cmd(rela_path: &BStr, mut cmd: Command, out: &mut Vec<u8>) -> Result<(), gix_error::Exn<gix_error::Message>> {
     gix_trace::debug!(cmd = ?cmd, "Running binary-to-text command");
     let mut res = cmd
         .output()

@@ -4,9 +4,6 @@ use gix_object::TreeRefIter;
 use super::{Action, Change, Platform};
 use crate::Tree;
 
-/// The error return by methods on the [diff platform][Platform].
-pub type Error = gix_error::Error;
-
 /// Add the item to compare to.
 impl<'old> Platform<'_, 'old> {
     /// Call `for_each` repeatedly with all changes that are needed to convert the source of the diff to the tree to `other`.
@@ -17,7 +14,7 @@ impl<'old> Platform<'_, 'old> {
         &mut self,
         other: &Tree<'new>,
         for_each: impl FnMut(Change<'_, 'old, 'new>) -> Result<Action, gix_error::Exn>,
-    ) -> Result<Option<gix_diff::rewrites::Outcome>, Error> {
+    ) -> Result<Option<gix_diff::rewrites::Outcome>, crate::Error> {
         self.for_each_to_obtain_tree_inner(other, for_each, None)
     }
 
@@ -36,7 +33,7 @@ impl<'old> Platform<'_, 'old> {
         other: &Tree<'new>,
         resource_cache: &mut gix_diff::blob::Platform,
         for_each: impl FnMut(Change<'_, 'old, 'new>) -> Result<Action, gix_error::Exn>,
-    ) -> Result<Option<gix_diff::rewrites::Outcome>, Error> {
+    ) -> Result<Option<gix_diff::rewrites::Outcome>, crate::Error> {
         self.for_each_to_obtain_tree_inner(other, for_each, Some(resource_cache))
     }
 
@@ -45,7 +42,7 @@ impl<'old> Platform<'_, 'old> {
         other: &Tree<'new>,
         mut for_each: impl FnMut(Change<'_, 'old, 'new>) -> Result<Action, gix_error::Exn>,
         resource_cache: Option<&mut gix_diff::blob::Platform>,
-    ) -> Result<Option<gix_diff::rewrites::Outcome>, Error> {
+    ) -> Result<Option<gix_diff::rewrites::Outcome>, crate::Error> {
         let repo = self.lhs.repo;
         let mut storage;
         let cache = match resource_cache {

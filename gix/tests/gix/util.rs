@@ -214,7 +214,7 @@ pub fn freeze_time() -> gix_testtools::Env<'static> {
 pub fn init_repo_isolated(
     path: impl AsRef<std::path::Path>,
     kind: gix::create::Kind,
-) -> std::result::Result<ThreadSafeRepository, gix::init::Error> {
+) -> std::result::Result<ThreadSafeRepository, gix::Error> {
     ThreadSafeRepository::init_opts(path, kind, Default::default(), open::Options::isolated())
 }
 
@@ -223,7 +223,7 @@ pub fn repo(name: &str) -> Result<ThreadSafeRepository> {
     Ok(ThreadSafeRepository::open_opts(repo_path, restricted())?)
 }
 
-pub fn repo_opts(name: &str, opts: open::Options) -> std::result::Result<ThreadSafeRepository, open::Error> {
+pub fn repo_opts(name: &str, opts: open::Options) -> std::result::Result<ThreadSafeRepository, gix_error::Error> {
     let repo_path = gix_testtools::scripted_fixture_read_only(name).unwrap();
     ThreadSafeRepository::open_opts(repo_path, opts)
 }
@@ -237,9 +237,9 @@ pub fn named_subrepo_opts(
     fixture: &str,
     name: &str,
     opts: open::Options,
-) -> std::result::Result<Repository, gix::open::Error> {
+) -> std::result::Result<Repository, gix_error::Error> {
     let repo_path = gix_testtools::scripted_fixture_read_only(fixture)
-        .map_err(gix::open::Error::from_boxed)?
+        .map_err(gix_error::Error::from_boxed)?
         .join(name);
     Ok(ThreadSafeRepository::open_opts(repo_path, opts)?.to_thread_local())
 }

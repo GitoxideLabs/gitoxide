@@ -3,9 +3,6 @@ use std::io::{self, Write};
 
 use bstr::ByteSlice;
 
-/// An error returned when object encoding fails.
-pub type Error = gix_error::ValidationError;
-
 macro_rules! check {
     ($e: expr) => {
         $e.expect("Writing to a Vec should never fail.")
@@ -69,10 +66,12 @@ pub(crate) fn trusted_header_id(
 
 pub(crate) fn header_field(name: &[u8], value: &[u8], out: &mut dyn io::Write) -> io::Result<()> {
     if value.is_empty() {
-        return Err(io::Error::other(Error::new("Header values must not be empty")));
+        return Err(io::Error::other(gix_error::ValidationError::new(
+            "Header values must not be empty",
+        )));
     }
     if value.find(NL).is_some() {
-        return Err(io::Error::other(Error::new_with_input(
+        return Err(io::Error::other(gix_error::ValidationError::new_with_input(
             "Newlines are not allowed in header values",
             value,
         )));

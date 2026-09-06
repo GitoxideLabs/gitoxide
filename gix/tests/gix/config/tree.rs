@@ -1,4 +1,4 @@
-fn config_value_error(message: &'static str, input: &'static str) -> gix_config::value::Error {
+fn config_value_error(message: &'static str, input: &'static str) -> gix_error::Exn<gix_error::ValidationError> {
     use gix_error::ErrorExt;
     gix_error::ValidationError::new_with_input(message, input).raise()
 }
@@ -470,7 +470,7 @@ mod core {
     use gix::config::tree::{Core, Key};
     use gix_lock::acquire::Fail;
 
-    fn signed(value: i64) -> Result<Option<i64>, gix_config::value::Error> {
+    fn signed(value: i64) -> Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>> {
         Ok(Some(value))
     }
 
@@ -837,7 +837,7 @@ mod extensions {
 mod checkout {
     use gix::config::tree::{Checkout, Key};
 
-    fn int(value: i64) -> Result<Option<i64>, gix_config::value::Error> {
+    fn int(value: i64) -> Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>> {
         Ok(Some(value))
     }
 

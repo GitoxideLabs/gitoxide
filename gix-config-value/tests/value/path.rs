@@ -6,7 +6,7 @@ mod interpolate {
     use gix_error::{NotFoundError, ValidationError};
 
     #[test]
-    fn backslash_is_not_special_and_they_are_not_escaping_anything() -> crate::Result {
+    fn backslash_is_not_special_and_they_are_not_escaping_anything() -> gix_error::Result {
         for path in [r"C:\foo\bar", "/foo/bar"] {
             let actual = gix_config_value::Path::from(path).interpolate(Default::default())?;
             assert_eq!(actual, Path::new(path));
@@ -56,7 +56,7 @@ mod interpolate {
     }
 
     #[test]
-    fn tilde_alone_substitutes_current_user() -> crate::Result {
+    fn tilde_alone_substitutes_current_user() -> gix_error::Result {
         let home = std::env::current_dir().expect("current directory is available");
         assert_eq!(
             gix_config_value::Path::from("~").interpolate(path::interpolate::Context {
@@ -77,7 +77,7 @@ mod interpolate {
     }
 
     #[test]
-    fn tilde_slash_substitutes_current_user() -> crate::Result {
+    fn tilde_slash_substitutes_current_user() -> gix_error::Result {
         let home = std::env::current_dir().expect("current directory is available");
         for suffix in ["", "user/bar", r"user\bar", "/user/bar"] {
             let actual = gix_config_value::Path::from(format!("~/{suffix}").as_str()).interpolate(
@@ -97,7 +97,7 @@ mod interpolate {
     }
 
     #[test]
-    fn tilde_with_given_user() -> crate::Result {
+    fn tilde_with_given_user() -> gix_error::Result {
         let home = std::env::current_dir().expect("current directory is available");
 
         for path_suffix in &["foo/bar", r"foo\bar", ""] {
@@ -141,9 +141,7 @@ mod interpolate {
         assert!(err.downcast_any_ref::<std::str::Utf8Error>().is_some());
     }
 
-    fn interpolate_without_context(
-        path: impl AsRef<str>,
-    ) -> Result<PathBuf, gix_config_value::path::interpolate::Error> {
+    fn interpolate_without_context(path: impl AsRef<str>) -> Result<PathBuf, gix_error::Exn> {
         gix_config_value::Path::from(path.as_ref()).interpolate(path::interpolate::Context {
             home_for_user: Some(home_for_user),
             ..Default::default()

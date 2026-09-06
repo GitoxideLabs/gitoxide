@@ -1,5 +1,3 @@
-pub type Result<T = ()> = std::result::Result<T, gix_error::TestError>;
-
 mod convert;
 mod realpath;
 mod relative_path;

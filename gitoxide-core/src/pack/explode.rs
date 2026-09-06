@@ -76,31 +76,21 @@ enum OutputWriter {
 }
 
 impl gix::objs::Write for OutputWriter {
-    fn write_buf(&self, kind: object::Kind, from: &[u8]) -> Result<ObjectId, gix::objs::write::Error> {
+    fn write_buf(&self, kind: object::Kind, from: &[u8]) -> Result<ObjectId, gix::Exn> {
         match self {
             OutputWriter::Loose(db) => db.write_buf(kind, from),
             OutputWriter::Sink(db) => db.write_buf(kind, from),
         }
     }
 
-    fn write_buf_with_known_id(
-        &self,
-        kind: object::Kind,
-        from: &[u8],
-        id: ObjectId,
-    ) -> Result<ObjectId, gix::objs::write::Error> {
+    fn write_buf_with_known_id(&self, kind: object::Kind, from: &[u8], id: ObjectId) -> Result<ObjectId, gix::Exn> {
         match self {
             OutputWriter::Loose(db) => db.write_buf_with_known_id(kind, from, id),
             OutputWriter::Sink(db) => db.write_buf_with_known_id(kind, from, id),
         }
     }
 
-    fn write_stream(
-        &self,
-        kind: object::Kind,
-        size: u64,
-        from: &mut dyn Read,
-    ) -> Result<ObjectId, gix::objs::write::Error> {
+    fn write_stream(&self, kind: object::Kind, size: u64, from: &mut dyn Read) -> Result<ObjectId, gix::Exn> {
         match self {
             OutputWriter::Loose(db) => db.write_stream(kind, size, from),
             OutputWriter::Sink(db) => db.write_stream(kind, size, from),
@@ -113,7 +103,7 @@ impl gix::objs::Write for OutputWriter {
         size: u64,
         from: &mut dyn Read,
         id: ObjectId,
-    ) -> Result<ObjectId, gix::objs::write::Error> {
+    ) -> Result<ObjectId, gix::Exn> {
         match self {
             OutputWriter::Loose(db) => db.write_stream_with_known_id(kind, size, from, id),
             OutputWriter::Sink(db) => db.write_stream_with_known_id(kind, size, from, id),

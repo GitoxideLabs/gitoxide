@@ -25,9 +25,6 @@
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
 #![deny(missing_docs, unsafe_code)]
 
-/// The error returned when any config value couldn't be instantiated due to malformed input.
-pub type Error = gix_error::Exn<gix_error::ValidationError>;
-
 mod boolean;
 /// Color value parsing and the supported color names and attributes.
 pub mod color;

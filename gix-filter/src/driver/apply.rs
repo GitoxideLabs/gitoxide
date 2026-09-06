@@ -23,9 +23,6 @@ pub enum Delay {
     Forbid,
 }
 
-/// The error returned by [State::apply()][super::State::apply()].
-pub type Error = gix_error::Exn;
-
 /// Additional information for use in the [`State::apply()`] method.
 #[derive(Debug, Copy, Clone)]
 pub struct Context<'a, 'b> {
@@ -67,7 +64,7 @@ impl State {
         src: &mut impl std::io::Read,
         operation: Operation,
         ctx: Context<'_, '_>,
-    ) -> Result<Option<Box<dyn std::io::Read + 'a>>, Error> {
+    ) -> Result<Option<Box<dyn std::io::Read + 'a>>, gix_error::Exn> {
         match self.apply_delayed(driver, src, operation, Delay::Forbid, ctx)? {
             Some(MaybeDelayed::Delayed(_)) => {
                 unreachable!("we forbid delaying the entry")
@@ -88,7 +85,7 @@ impl State {
         operation: Operation,
         delay: Delay,
         ctx: Context<'_, '_>,
-    ) -> Result<Option<MaybeDelayed<'a>>, Error> {
+    ) -> Result<Option<MaybeDelayed<'a>>, gix_error::Exn> {
         use gix_error::{ErrorExt, ResultExt, message};
 
         match self

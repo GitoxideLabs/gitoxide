@@ -5,8 +5,6 @@ use gix_hash::ObjectId;
 use gix_index as index;
 use index::Entry;
 
-use crate::index_as_worktree::Error;
-
 /// Compares the content of two blobs in some way.
 pub trait CompareBlobs {
     /// Output data produced by [`compare_blobs()`][CompareBlobs::compare_blobs()].
@@ -23,7 +21,7 @@ pub trait CompareBlobs {
         worktree_blob_size: u64,
         data: impl ReadData<'a>,
         buf: &mut Vec<u8>,
-    ) -> Result<Option<Self::Output>, Error>;
+    ) -> Result<Option<Self::Output>, gix_error::Exn>;
 }
 
 /// Determine the status of a submodule, which always indicates that it changed if present.
@@ -41,10 +39,10 @@ pub trait ReadData<'a> {
     ///
     /// This potentially performs IO and other expensive operations
     /// and should only be called when necessary.
-    fn read_blob(self) -> Result<&'a [u8], Error>;
+    fn read_blob(self) -> Result<&'a [u8], gix_error::Exn>;
 
     /// Stream a worktree file in such a manner that its content matches what would be put into git.
-    fn stream_worktree_file(self) -> Result<read_data::Stream<'a>, Error>;
+    fn stream_worktree_file(self) -> Result<read_data::Stream<'a>, gix_error::Exn>;
 }
 
 ///
@@ -107,7 +105,7 @@ impl CompareBlobs for FastEq {
         worktree_file_size: u64,
         data: impl ReadData<'a>,
         buf: &mut Vec<u8>,
-    ) -> Result<Option<Self::Output>, Error> {
+    ) -> Result<Option<Self::Output>, gix_error::Exn> {
         // make sure to account for racily smudged entries here so that they don't always keep
         // showing up as modified even after their contents have changed again, to a potentially
         // unmodified state. That means that we want to ignore stat.size == 0 for non_empty_blobs.
@@ -136,7 +134,7 @@ impl CompareBlobs for HashEq {
         _worktree_blob_size: u64,
         data: impl ReadData<'a>,
         buf: &mut Vec<u8>,
-    ) -> Result<Option<Self::Output>, Error> {
+    ) -> Result<Option<Self::Output>, gix_error::Exn> {
         let mut stream = data.stream_worktree_file()?;
         match stream.as_bytes() {
             Some(buffer) => {

@@ -5,18 +5,6 @@ use crate::{
     driver::{Operation, State, apply::handle_io_err},
 };
 
-///
-pub mod list {
-    /// The error returned by [State::list_delayed_paths()][super::State::list_delayed_paths()].
-    pub type Error = gix_error::Exn<gix_error::Message>;
-}
-
-///
-pub mod fetch {
-    /// The error returned by [State::fetch_delayed()][super::State::fetch_delayed()].
-    pub type Error = gix_error::Exn<gix_error::Message>;
-}
-
 /// Operations related to delayed filtering.
 impl State {
     /// Return a list of delayed paths for `process` that can then be obtained with [`fetch_delayed()`][Self::fetch_delayed()].
@@ -29,7 +17,10 @@ impl State {
     ///
     /// Usually if the process sends the "abort" status, we will not use a certain capability again. Here it's unclear what capability
     /// that is and what to do, so we leave the process running and do nothing else (just like `git`).
-    pub fn list_delayed_paths(&mut self, process: &driver::Key) -> Result<Vec<BString>, list::Error> {
+    pub fn list_delayed_paths(
+        &mut self,
+        process: &driver::Key,
+    ) -> Result<Vec<BString>, gix_error::Exn<gix_error::Message>> {
         use gix_error::{ErrorExt, OptionExt, message};
 
         let client = self.running.get_mut(&process.0).ok_or_raise(|| {
@@ -81,7 +72,7 @@ impl State {
         process: &driver::Key,
         path: &BStr,
         operation: Operation,
-    ) -> Result<impl std::io::Read + '_, fetch::Error> {
+    ) -> Result<impl std::io::Read + '_, gix_error::Exn<gix_error::Message>> {
         use gix_error::{ErrorExt, OptionExt, message};
 
         let client = self.running.get_mut(&process.0).ok_or_raise(|| {

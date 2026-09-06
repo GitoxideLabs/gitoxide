@@ -2,9 +2,6 @@ use bstr::ByteSlice;
 
 use crate::{File, KeyRef, file, file::init};
 
-/// Represents the errors that may occur when calling [`File::from_env()`].
-pub type Error = gix_error::Exn;
-
 /// Instantiation from environment variables
 impl File {
     /// Generates a config from `GIT_CONFIG_*` environment variables or returns `Ok(None)` if no configuration was found.
@@ -13,7 +10,7 @@ impl File {
     /// With `options` configured, it's possible to resolve `include.path` or `includeIf.<condition>.path` directives as well.
     ///
     /// [`git-config`'s documentation]: https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGCOUNT
-    pub fn from_env(options: init::Options<'_>) -> Result<Option<File>, Error> {
+    pub fn from_env(options: init::Options<'_>) -> Result<Option<File>, gix_error::Exn> {
         use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, ValidationError, message};
         use std::env;
         let count: usize = match env::var("GIT_CONFIG_COUNT") {

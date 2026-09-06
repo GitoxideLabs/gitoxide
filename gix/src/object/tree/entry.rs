@@ -19,7 +19,7 @@ impl<'repo> Entry<'repo> {
     }
 
     /// Return the object this entry points to.
-    pub fn object(&self) -> Result<crate::Object<'repo>, crate::object::find::existing::Error> {
+    pub fn object(&self) -> Result<crate::Object<'repo>, crate::Error> {
         self.id().object()
     }
 
@@ -69,7 +69,7 @@ impl<'repo, 'a> EntryRef<'repo, 'a> {
     }
 
     /// Return the object this entry points to.
-    pub fn object(&self) -> Result<crate::Object<'repo>, crate::object::find::existing::Error> {
+    pub fn object(&self) -> Result<crate::Object<'repo>, crate::Error> {
         self.id().object()
     }
 

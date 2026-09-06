@@ -19,7 +19,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
     ///
     /// This is the single-most important date for determining recency of commits.
     /// Note that this can only fail if the commit is backed by the object database *and* parsing fails.
-    pub fn committer_timestamp(&self) -> Result<SecondsSinceUnixEpoch, gix_object::decode::Error> {
+    pub fn committer_timestamp(&self) -> Result<SecondsSinceUnixEpoch, gix_error::ValidationError> {
         Ok(match &self.backing {
             Either::Left(buf) => gix_object::CommitRefIter::from_bytes(buf, self.object_hash)
                 .committer()?
@@ -39,7 +39,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
     /// Returns the generation of the commit and its commit-time, either from cache if available, or parsed from the object buffer.
     pub fn generation_and_timestamp(
         &self,
-    ) -> Result<(Option<Generation>, SecondsSinceUnixEpoch), gix_object::decode::Error> {
+    ) -> Result<(Option<Generation>, SecondsSinceUnixEpoch), gix_error::ValidationError> {
         Ok(match &self.backing {
             Either::Left(buf) => (
                 None,
@@ -60,7 +60,10 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
 
     /// Convert ourselves into an owned version, which effectively detaches us from the underlying graph.
     /// Use `new_data()` to provide the `data` field for the owned `Commit`.
-    pub fn to_owned<T>(&self, new_data: impl FnOnce() -> T) -> Result<Commit<T>, to_owned::Error> {
+    pub fn to_owned<T>(
+        &self,
+        new_data: impl FnOnce() -> T,
+    ) -> Result<Commit<T>, gix_error::Exn<gix_error::CorruptionError>> {
         let data = new_data();
         Ok(match &self.backing {
             Either::Left(buf) => {
@@ -128,7 +131,7 @@ pub struct Parents<'graph, 'cache> {
 }
 
 impl Iterator for Parents<'_, '_> {
-    type Item = Result<gix_hash::ObjectId, iter_parents::Error>;
+    type Item = Result<gix_hash::ObjectId, gix_error::Exn<gix_error::CorruptionError>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.backing {
@@ -153,16 +156,4 @@ impl Iterator for Parents<'_, '_> {
             }),
         }
     }
-}
-
-///
-pub mod iter_parents {
-    /// The error returned by the [`Parents`][super::Parents] iterator.
-    pub type Error = gix_error::Exn<gix_error::CorruptionError>;
-}
-
-///
-pub mod to_owned {
-    /// The error returned by [`to_owned()`][crate::graph::LazyCommit::to_owned()].
-    pub type Error = gix_error::Exn<gix_error::CorruptionError>;
 }

@@ -46,7 +46,7 @@ fn size_of_hasher_sha1_and_sha256() {
 #[cfg(all(not(feature = "sha256"), feature = "sha1"))]
 fn size_of_try_finalize_return_type_sha1_only() {
     assert_eq!(
-        std::mem::size_of::<Result<ObjectId, gix_hash::hasher::Error>>(),
+        std::mem::size_of::<Result<ObjectId, gix_error::CorruptionError>>(),
         32,
         "The size of the return value should remain compact"
     );
@@ -56,7 +56,7 @@ fn size_of_try_finalize_return_type_sha1_only() {
 #[cfg(all(feature = "sha256", feature = "sha1"))]
 fn size_of_try_finalize_return_type_sha1_and_sha256() {
     assert_eq!(
-        std::mem::size_of::<Result<ObjectId, gix_hash::hasher::Error>>(),
+        std::mem::size_of::<Result<ObjectId, gix_error::CorruptionError>>(),
         32 + std::mem::size_of::<usize>(),
         "The size of the return value should remain compact"
     );

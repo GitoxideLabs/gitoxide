@@ -6,17 +6,11 @@ pub(crate) fn header(data: &[u8]) -> (Signature, u32, &[u8]) {
     (signature.try_into().unwrap(), from_be_u32(size), data)
 }
 
-mod error {
-    /// The error returned when decoding extensions.
-    pub type Error = gix_error::Exn<gix_error::Message>;
-}
-pub use error::Error;
-
 pub(crate) fn all(
     maybe_beginning_of_extensions: &[u8],
     object_hash: gix_hash::Kind,
     alloc_limit_bytes: Option<usize>,
-) -> Result<(Outcome, &[u8]), Error> {
+) -> Result<(Outcome, &[u8]), gix_error::Exn<gix_error::Message>> {
     use gix_error::{ErrorExt, ResultExt, message};
 
     let mut ext_iter = match extension::Iter::new_without_checksum(maybe_beginning_of_extensions, object_hash) {

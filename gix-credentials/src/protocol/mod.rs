@@ -13,10 +13,7 @@ pub struct Outcome {
 }
 
 /// The Result type used in credentials top-level functions to obtain a complete identity.
-pub type Result = std::result::Result<Option<Outcome>, Error>;
-
-/// The error returned top-level credential functions.
-pub type Error = gix_error::Exn;
+pub type Result = std::result::Result<Option<Outcome>, gix_error::Exn>;
 
 /// Additional context to be passed to the credentials helper.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
@@ -80,7 +77,7 @@ pub fn helper_outcome_to_result(outcome: Option<helper::Outcome>, action: helper
     }
 }
 
-fn identity_missing(context: Context) -> Error {
+fn identity_missing(context: Context) -> gix_error::Exn {
     let mut buf = Vec::new();
     // Invalid protocol values must not prevent reporting the missing identity.
     context.redacted().write_to(&mut buf).ok();

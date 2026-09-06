@@ -13,10 +13,7 @@ use gix_diff::{tree::recorder::Location, tree_with_rewrites::Change};
 use gix_error::ResultExt;
 use gix_object::FindExt;
 
-use crate::tree::{
-    Error,
-    utils::{ChangeList, ChangeListRef, PossibleConflict, TreeNodes, track},
-};
+use crate::tree::utils::{ChangeList, ChangeListRef, PossibleConflict, TreeNodes, track};
 
 pub(super) struct SideState {
     changes: ChangeList,
@@ -102,7 +99,7 @@ pub(super) fn collect(
     diff_resource_cache: &mut gix_diff::blob::Platform,
     diff_state: &mut gix_diff::tree::State,
     rewrites: Option<gix_diff::Rewrites>,
-) -> Result<SideState, Error> {
+) -> Result<SideState, gix_error::Exn> {
     let mut changes = Vec::new();
     if base_tree != side_tree {
         let side_tree = objects

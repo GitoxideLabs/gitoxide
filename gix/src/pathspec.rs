@@ -4,12 +4,6 @@ pub use gix_pathspec::*;
 use crate::{AttributeStack, Pathspec, PathspecDetached, Repository, bstr::BStr};
 use gix_error::ResultExt;
 
-///
-pub mod init {
-    /// The error returned by [`Pathspec::new()`](super::Pathspec::new()).
-    pub type Error = gix_error::Error;
-}
-
 /// Lifecycle
 impl<'repo> Pathspec<'repo> {
     /// Create a new instance by parsing `patterns` into [`Pathspecs`](Pattern) to make them usable for searches.
@@ -30,7 +24,7 @@ impl<'repo> Pathspec<'repo> {
         patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
         inherit_ignore_case: bool,
         make_attributes: impl FnOnce() -> Result<gix_worktree::Stack, gix_error::Exn>,
-    ) -> Result<Self, init::Error> {
+    ) -> Result<Self, crate::Error> {
         let defaults = repo.pathspec_defaults_inherit_ignore_case(inherit_ignore_case)?;
         let patterns = patterns
             .into_iter()

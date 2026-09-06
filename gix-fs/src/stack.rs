@@ -7,26 +7,20 @@ use bstr::{BStr, BString, ByteSlice};
 
 use crate::Stack;
 
-///
-pub mod to_normal_path_components {
-    /// The error used in [`ToNormalPathComponents::to_normal_path_components()`](super::ToNormalPathComponents::to_normal_path_components()).
-    pub type Error = gix_error::ValidationError;
-}
-
 /// Obtain an iterator over `OsStr`-components which are normal, none-relative and not absolute.
 pub trait ToNormalPathComponents {
     /// Return an iterator over the normal components of a path, without the separator.
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>>;
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>>;
 }
 
 impl ToNormalPathComponents for &Path {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>> {
         self.components().map(|c| component_to_os_str(c, self))
     }
 }
 
 impl ToNormalPathComponents for PathBuf {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>> {
         self.components().map(|c| component_to_os_str(c, self))
     }
 }
@@ -34,10 +28,10 @@ impl ToNormalPathComponents for PathBuf {
 fn component_to_os_str<'a>(
     component: Component<'a>,
     path_with_component: &Path,
-) -> Result<&'a OsStr, to_normal_path_components::Error> {
+) -> Result<&'a OsStr, gix_error::ValidationError> {
     match component {
         Component::Normal(os_str) => Ok(os_str),
-        _ => Err(to_normal_path_components::Error::new(format!(
+        _ => Err(gix_error::ValidationError::new(format!(
             "Input path \"{}\" contains relative or absolute components",
             path_with_component.display()
         ))),
@@ -45,21 +39,21 @@ fn component_to_os_str<'a>(
 }
 
 impl ToNormalPathComponents for &BStr {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>> {
         self.split(|b| *b == b'/')
             .filter_map(|c| bytes_component_to_os_str(c, self))
     }
 }
 
 impl ToNormalPathComponents for &str {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>> {
         self.split('/')
             .filter_map(|c| bytes_component_to_os_str(c.as_bytes(), (*self).into()))
     }
 }
 
 impl ToNormalPathComponents for &BString {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>> {
         self.split(|b| *b == b'/')
             .filter_map(|c| bytes_component_to_os_str(c, self.as_bstr()))
     }
@@ -68,7 +62,7 @@ impl ToNormalPathComponents for &BString {
 fn bytes_component_to_os_str<'a>(
     component: &'a [u8],
     path: &BStr,
-) -> Option<Result<&'a OsStr, to_normal_path_components::Error>> {
+) -> Option<Result<&'a OsStr, gix_error::ValidationError>> {
     if component.is_empty() {
         return None;
     }

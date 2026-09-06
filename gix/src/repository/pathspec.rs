@@ -22,7 +22,7 @@ impl Repository {
         inherit_ignore_case: bool,
         index: &gix_index::State,
         attributes_source: gix_worktree::stack::state::attributes::Source,
-    ) -> Result<Pathspec<'_>, crate::pathspec::init::Error> {
+    ) -> Result<Pathspec<'_>, crate::Error> {
         Pathspec::new(self, empty_patterns_match_prefix, patterns, inherit_ignore_case, || {
             self.attributes_only(index, attributes_source)
                 .map(AttributeStack::detach)
@@ -43,7 +43,7 @@ impl Repository {
     pub fn pathspec_defaults_inherit_ignore_case(
         &self,
         inherit_ignore_case: bool,
-    ) -> Result<gix_pathspec::Defaults, crate::repository::pathspec_defaults_ignore_case::Error> {
+    ) -> Result<gix_pathspec::Defaults, crate::Error> {
         let mut defaults = self.config.pathspec_defaults().map_err(gix_error::Exn::into_error)?;
         if inherit_ignore_case
             && self

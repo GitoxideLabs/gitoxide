@@ -1,12 +1,4 @@
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
-mod error {
-    /// The error returned by invoking a [`super::function::LsRefsCommand`].
-    pub type Error = gix_error::Exn;
-}
-#[cfg(any(feature = "blocking-client", feature = "async-client"))]
-pub use error::Error;
-
-#[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub use self::function::RefPrefixes;
 
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
@@ -18,7 +10,6 @@ pub(crate) mod function {
     use gix_features::progress::Progress;
     use gix_transport::client::Capabilities;
 
-    use super::Error;
     #[cfg(feature = "async-client")]
     use crate::transport::client::async_io::TransportV2Ext as _;
     #[cfg(feature = "blocking-client")]
@@ -119,7 +110,7 @@ pub(crate) mod function {
                 mut transport: impl $transport,
                 progress: &mut impl Progress,
                 trace: bool,
-            ) -> Result<Vec<Ref>, Error> {
+            ) -> Result<Vec<Ref>, gix_error::Exn> {
                 let _span = gix_features::trace::detail!("gix_protocol::LsRefsCommand::invoke()", mode = $mode);
                 Command::LsRefs
                     .validate_argument_prefixes(

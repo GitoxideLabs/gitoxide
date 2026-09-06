@@ -15,12 +15,6 @@ use _impl::{Action, DelegateBlocking, RefsAction};
 
 mod ref_map;
 
-mod error {
-    /// The error used in [`fetch()`][crate::fetch()].
-    pub type Error = gix_error::Exn;
-}
-pub use error::Error;
-
 mod arguments;
 
 #[cfg(feature = "blocking-client")]

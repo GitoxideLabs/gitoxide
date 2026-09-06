@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 use crate::{
     Driver, driver, eol,
     eol::AttributesDigest,
-    pipeline::{Context, CrlfRoundTripCheck, convert::configuration},
+    pipeline::{Context, CrlfRoundTripCheck},
 };
 
 pub(crate) struct Configuration<'a> {
@@ -29,7 +29,7 @@ impl<'driver> Configuration<'driver> {
         attributes: &mut dyn FnMut(&BStr, &mut gix_attributes::search::Outcome),
         config: eol::Configuration,
         ignore_unknown_encoding: bool,
-    ) -> Result<Configuration<'driver>, configuration::Error> {
+    ) -> Result<Configuration<'driver>, gix_error::ValidationError> {
         fn extract_driver<'a>(drivers: &'a [Driver], attr: &gix_attributes::search::Match<'_>) -> Option<&'a Driver> {
             if let StateRef::Value(name) = attr.assignment.state {
                 drivers.iter().find(|d| d.name == name.as_bstr())
@@ -41,7 +41,7 @@ impl<'driver> Configuration<'driver> {
         fn extract_encoding(
             attr: &gix_attributes::search::Match<'_>,
             ignore_unknown: bool,
-        ) -> Result<Option<&'static encoding_rs::Encoding>, configuration::Error> {
+        ) -> Result<Option<&'static encoding_rs::Encoding>, gix_error::ValidationError> {
             match attr.assignment.state {
                 StateRef::Set | StateRef::Unset => Err(gix_error::ValidationError::new(
                     "Encodings must be names, like UTF-16, and cannot be booleans.",

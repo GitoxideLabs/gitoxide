@@ -42,7 +42,7 @@ mod util {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-io", test)]
 #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-async fn read_pack_with_progress_extraction() -> crate::Result {
+async fn read_pack_with_progress_extraction() -> gix_error::TestResult {
     let buf = fixture_bytes("v1/01-clone.combined-output");
     let mut rd = StreamingPeekableIter::new(&buf[..], &[PacketLineRef::Flush], false);
 
@@ -105,7 +105,7 @@ async fn read_pack_with_progress_extraction() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-io", test)]
 #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-async fn read_line_trait_method_reads_one_packet_line_at_a_time() -> crate::Result {
+async fn read_line_trait_method_reads_one_packet_line_at_a_time() -> gix_error::TestResult {
     let buf = fixture_bytes("v1/01-clone.combined-output-no-binary");
 
     let mut rd = StreamingPeekableIter::new(&buf[..], &[PacketLineRef::Flush], false);
@@ -156,7 +156,7 @@ async fn read_line_trait_method_reads_one_packet_line_at_a_time() -> crate::Resu
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-io", test)]
 #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-async fn readline_reads_one_packet_line_at_a_time() -> crate::Result {
+async fn readline_reads_one_packet_line_at_a_time() -> gix_error::TestResult {
     let buf = fixture_bytes("v1/01-clone.combined-output-no-binary");
 
     let mut rd = StreamingPeekableIter::new(&buf[..], &[PacketLineRef::Flush], false);
@@ -207,7 +207,7 @@ async fn readline_reads_one_packet_line_at_a_time() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-io", test)]
 #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-async fn empty_progress_and_error_sidebands_are_forwarded_without_panic() -> crate::Result {
+async fn empty_progress_and_error_sidebands_are_forwarded_without_panic() -> gix_error::TestResult {
     let input = b"0005\x020005\x030000";
     let mut rd = StreamingPeekableIter::new(&input[..], &[PacketLineRef::Flush], false);
     let mut seen = Vec::new();
@@ -233,7 +233,7 @@ async fn empty_progress_and_error_sidebands_are_forwarded_without_panic() -> cra
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-io", test)]
 #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-async fn peek_past_an_actual_eof_is_an_error() -> crate::Result {
+async fn peek_past_an_actual_eof_is_an_error() -> gix_error::TestResult {
     let input = b"0009ERR e";
     let mut rd = StreamingPeekableIter::new(&input[..], &[], false);
     let mut reader = rd.as_read();
@@ -259,7 +259,7 @@ async fn peek_past_an_actual_eof_is_an_error() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-io", test)]
 #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-async fn peek_past_a_delimiter_is_no_error() -> crate::Result {
+async fn peek_past_a_delimiter_is_no_error() -> gix_error::TestResult {
     let input = b"0009hello0000";
     let mut rd = StreamingPeekableIter::new(&input[..], &[PacketLineRef::Flush], false);
     let mut reader = rd.as_read();

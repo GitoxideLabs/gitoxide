@@ -1,6 +1,6 @@
 //! Changes between the index and the worktree along with optional rename tracking.
 mod types;
-pub use types::{Context, DirwalkContext, Entry, Error, Options, Outcome, RewriteSource, Sorting, Summary, VisitEntry};
+pub use types::{Context, DirwalkContext, Entry, Options, Outcome, RewriteSource, Sorting, Summary, VisitEntry};
 
 mod recorder;
 pub use recorder::Recorder;
@@ -15,8 +15,7 @@ pub(super) mod function {
     use crate::{
         index_as_worktree::traits::{CompareBlobs, SubmoduleStatus},
         index_as_worktree_with_renames::{
-            Context, Entry, Error, Options, Outcome, RewriteSource, VisitEntry,
-            function::rewrite::ModificationOrDirwalkEntry,
+            Context, Entry, Options, Outcome, RewriteSource, VisitEntry, function::rewrite::ModificationOrDirwalkEntry,
         },
         is_dir_to_mode,
     };
@@ -56,7 +55,7 @@ pub(super) mod function {
         progress: &mut dyn gix_features::progress::Progress,
         mut ctx: Context<'_>,
         options: Options<'_>,
-    ) -> Result<Outcome, Error>
+    ) -> Result<Outcome, gix_error::Exn>
     where
         T: Send + Clone,
         U: Send + Clone,
@@ -64,7 +63,7 @@ pub(super) mod function {
     {
         let mut tracked_file_modifications = options.tracked_file_modifications;
         tracked_file_modifications.fscache = options.fscache;
-        gix_features::parallel::threads(|scope| -> Result<Outcome, Error> {
+        gix_features::parallel::threads(|scope| -> Result<Outcome, gix_error::Exn> {
             let (tx, rx) = std::sync::mpsc::channel();
             let walk_outcome = options
                 .dirwalk
@@ -91,7 +90,7 @@ pub(super) mod function {
                                 .any(|p| !p.attributes.is_empty())
                                 .then(|| ctx.resource_cache.attr_stack.clone());
                             let mut pathspec = ctx.pathspec.clone();
-                            move || -> Result<_, Error> {
+                            move || -> Result<_, gix_error::Exn> {
                                 gix_dir::walk(
                                     worktree,
                                     gix_dir::walk::Context {
@@ -140,7 +139,7 @@ pub(super) mod function {
                     let objects = objects.clone();
                     let stack = ctx.resource_cache.attr_stack.clone();
                     let filter = ctx.resource_cache.filter.worktree_filter.clone();
-                    move || -> Result<_, Error> {
+                    move || -> Result<_, gix_error::Exn> {
                         crate::index_as_worktree(
                             index,
                             worktree,
@@ -419,7 +418,7 @@ pub(super) mod function {
 
         use crate::{
             index_as_worktree::{Change, EntryStatus},
-            index_as_worktree_with_renames::{Entry, Error},
+            index_as_worktree_with_renames::Entry,
         };
         use bstr::BStr;
         use gix_diff::{rewrites::tracker::ChangeKind, tree::visit::Relation};
@@ -516,7 +515,7 @@ pub(super) mod function {
             objects: &dyn gix_object::Find,
             buf: &mut Vec<u8>,
             should_interrupt: &std::sync::atomic::AtomicBool,
-        ) -> Result<gix_hash::ObjectId, Error> {
+        ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
             let Some(kind) = disk_kind else {
                 return Ok(object_hash.null());
             };

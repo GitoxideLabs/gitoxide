@@ -2,7 +2,7 @@ use gix_credentials::{program, protocol};
 use gix_error::ErrorExt;
 
 /// Run like this `echo url=https://example.com | cargo run --example custom-helper -- get`
-pub fn main() -> Result<(), gix_credentials::program::main::Error> {
+pub fn main() -> Result<(), gix_error::Exn> {
     gix_credentials::program::main(
         std::env::args_os().skip(1),
         std::io::stdin(),

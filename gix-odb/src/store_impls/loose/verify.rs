@@ -14,17 +14,17 @@ pub mod integrity {
     #[allow(missing_docs)]
     pub enum Error {
         ObjectDecode {
-            source: gix_object::decode::Error,
+            source: gix_error::ValidationError,
             kind: gix_object::Kind,
             id: gix_hash::ObjectId,
         },
         ObjectHasher {
-            source: gix_hash::hasher::Error,
+            source: gix_error::CorruptionError,
             kind: gix_object::Kind,
             expected: gix_hash::ObjectId,
         },
         ObjectEncodeMismatch {
-            source: gix_hash::verify::Error,
+            source: gix_error::CorruptionError,
             kind: gix_object::Kind,
         },
         Retry,

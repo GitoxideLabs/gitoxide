@@ -332,7 +332,7 @@ mod clap {
 
         fn parse_ref(&self, cmd: &Command, arg: Option<&Arg>, value: &OsStr) -> Result<Self::Value, Error> {
             OsStringValueParser::new()
-                .try_map(|arg| -> Result<_, gix::pathspec::parse::Error> {
+                .try_map(|arg| -> Result<_, gix::error::ValidationError> {
                     let arg = gix::path::into_bstr(std::path::PathBuf::from(arg));
                     gix::pathspec::parse(arg.as_ref(), *PATHSPEC_DEFAULTS)?;
                     Ok(arg.into_owned())
@@ -354,7 +354,7 @@ mod clap {
 
         fn parse_ref(&self, cmd: &Command, arg: Option<&Arg>, value: &OsStr) -> Result<Self::Value, Error> {
             OsStringValueParser::new()
-                .try_map(|arg| -> Result<_, gix::pathspec::parse::Error> {
+                .try_map(|arg| -> Result<_, gix::error::ValidationError> {
                     let arg = gix::path::into_bstr(std::path::PathBuf::from(arg));
                     gix::pathspec::parse(arg.as_ref(), Default::default())?;
                     Ok(arg.into_owned())

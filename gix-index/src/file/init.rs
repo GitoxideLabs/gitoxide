@@ -6,9 +6,6 @@ use gix_error::{ResultExt, message};
 
 use crate::{File, State, decode, extension};
 
-/// The error returned by [File::at()][File::at()].
-pub type Error = gix_error::Exn;
-
 /// A failure to open an index file, retaining its path to distinguish primary and shared indexes.
 #[derive(Debug)]
 pub struct OpenError {
@@ -42,7 +39,7 @@ impl File {
         object_hash: gix_hash::Kind,
         skip_hash: bool,
         options: decode::Options,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, gix_error::Exn> {
         let path = path.into();
         Ok(match Self::at(&path, object_hash, skip_hash, options) {
             Ok(f) => f,
@@ -68,7 +65,7 @@ impl File {
         object_hash: gix_hash::Kind,
         skip_hash: bool,
         options: decode::Options,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, gix_error::Exn> {
         let _span = gix_features::trace::detail!("gix_index::File::at()");
         let path = path.into();
         let (data, mtime) = {

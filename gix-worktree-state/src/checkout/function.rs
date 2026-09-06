@@ -24,7 +24,7 @@ pub fn checkout<Find>(
     bytes: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     options: crate::checkout::Options,
-) -> Result<crate::checkout::Outcome, crate::checkout::Error>
+) -> Result<crate::checkout::Outcome, gix_error::Exn>
 where
     Find: gix_object::Find + Send + Clone,
 {
@@ -44,7 +44,7 @@ fn checkout_inner<Find>(
     bytes: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     mut options: crate::checkout::Options,
-) -> Result<crate::checkout::Outcome, crate::checkout::Error>
+) -> Result<crate::checkout::Outcome, gix_error::Exn>
 where
     Find: gix_object::Find + Send + Clone,
 {

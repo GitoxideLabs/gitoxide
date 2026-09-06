@@ -179,10 +179,7 @@ pub mod connect {
     use super::Connection;
     use crate::client::git;
 
-    /// The error used in [`connect()`].
-    pub type Error = gix_error::Exn<gix_error::Message>;
-
-    fn parse_host(input: String) -> Result<(String, Option<u16>), Error> {
+    fn parse_host(input: String) -> Result<(String, Option<u16>), gix_error::Exn<gix_error::Message>> {
         let mut tokens = input.splitn(2, ':');
         Ok(match (tokens.next(), tokens.next()) {
             (Some(host), None) => (host.to_owned(), None),
@@ -206,7 +203,7 @@ pub mod connect {
         desired_version: crate::Protocol,
         port: Option<u16>,
         trace: bool,
-    ) -> Result<Connection<TcpStream, TcpStream>, Error> {
+    ) -> Result<Connection<TcpStream, TcpStream>, gix_error::Exn<gix_error::Message>> {
         let read = TcpStream::connect_timeout(
             &(host, port.unwrap_or(9418))
                 .to_socket_addrs()

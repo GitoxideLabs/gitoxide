@@ -1,8 +1,5 @@
 use crate::path::interpolate;
 
-/// The error returned when following includes.
-pub type Error = gix_error::Exn;
-
 /// Options to handle includes, like `include.path` or `includeIf.<condition>.path`,
 #[derive(Clone, Copy)]
 pub struct Options<'a> {

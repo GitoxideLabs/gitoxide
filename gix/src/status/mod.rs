@@ -63,9 +63,6 @@ impl Default for Submodule {
     }
 }
 
-/// The error returned by [status()](Repository::status).
-pub type Error = gix_error::Error;
-
 /// Status
 impl Repository {
     /// Obtain a platform for configuring iterators for traversing git repository status information.
@@ -89,7 +86,7 @@ impl Repository {
     /// Whereas Git runs the index-modified check before the directory walk to set entries
     /// as up-to-date to (potentially) safe some disk-access, we run both in parallel which
     /// ultimately is much faster.
-    pub fn status<P>(&self, progress: P) -> Result<Platform<'_, P>, Error>
+    pub fn status<P>(&self, progress: P) -> Result<Platform<'_, P>, crate::Error>
     where
         P: gix_features::progress::Progress + 'static,
     {
@@ -128,9 +125,6 @@ impl Repository {
 pub mod is_dirty {
     use crate::Repository;
 
-    /// The error returned by [Repository::is_dirty()].
-    pub type Error = gix_error::Error;
-
     impl Repository {
         /// Returns `true` if the repository is dirty.
         /// This means it's changed in one of the following ways:
@@ -143,7 +137,7 @@ pub mod is_dirty {
         // TODO(performance): this could be its very own implementation with parallelism and the special:
         //                    stop once there is a change flag, but without using the iterator for
         //                    optimal resource usage.
-        pub fn is_dirty(&self) -> Result<bool, Error> {
+        pub fn is_dirty(&self) -> Result<bool, crate::Error> {
             {
                 let head_tree_id = self.head_tree_id_or_empty()?;
                 let mut index_is_dirty = false;
@@ -187,12 +181,6 @@ pub mod is_dirty {
             Ok(is_dirty)
         }
     }
-}
-
-///
-pub mod into_iter {
-    /// The error returned by [status::Platform::into_iter()](crate::status::Platform::into_iter()).
-    pub type Error = gix_error::Error;
 }
 
 mod platform;

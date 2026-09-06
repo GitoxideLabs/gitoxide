@@ -1,12 +1,12 @@
 use crate::transport::client::blocking_io::ReadlineBufRead;
 use crate::{
     fetch::response::ShallowUpdate,
-    handshake::{Ref, refs, refs::parse::Error},
+    handshake::{Ref, refs},
 };
 use gix_error::{ResultExt, message};
 
 /// Parse refs from the given input line by line. Protocol V2 is required for this to succeed.
-pub fn from_v2_refs(in_refs: &mut dyn ReadlineBufRead) -> Result<Vec<Ref>, Error> {
+pub fn from_v2_refs(in_refs: &mut dyn ReadlineBufRead) -> Result<Vec<Ref>, gix_error::Exn> {
     let mut out_refs = Vec::new();
     while let Some(line) = in_refs
         .readline()
@@ -32,7 +32,7 @@ pub fn from_v2_refs(in_refs: &mut dyn ReadlineBufRead) -> Result<Vec<Ref>, Error
 pub fn from_v1_refs_received_as_part_of_handshake_and_capabilities<'a>(
     in_refs: &mut dyn ReadlineBufRead,
     capabilities: impl Iterator<Item = gix_transport::client::capabilities::Capability<'a>>,
-) -> Result<(Vec<Ref>, Vec<ShallowUpdate>), Error> {
+) -> Result<(Vec<Ref>, Vec<ShallowUpdate>), gix_error::Exn> {
     let mut out_refs = refs::shared::from_capabilities(capabilities)?;
     let mut out_shallow = Vec::new();
     let number_of_possible_symbolic_refs_for_lookup = out_refs.len();

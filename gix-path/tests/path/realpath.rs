@@ -4,9 +4,9 @@ use std::{
 };
 
 use bstr::ByteVec;
-use gix_path::{realpath::Error, realpath_opts};
+use gix_path::realpath_opts;
 
-fn assert_validation<T>(result: Result<T, Error>, expected_message: &str) {
+fn assert_validation<T>(result: Result<T, gix_error::Exn>, expected_message: &str) {
     let err = result.err().expect("input should be invalid");
     let validation = err
         .downcast_any_ref::<gix_error::ValidationError>()
@@ -15,7 +15,7 @@ fn assert_validation<T>(result: Result<T, Error>, expected_message: &str) {
 }
 
 #[test]
-fn fuzzed_timeout() -> crate::Result {
+fn fuzzed_timeout() -> gix_error::TestResult {
     let path = PathBuf::from(std::fs::read("tests/fixtures/fuzzed/54k-path-components.path")?.into_string()?);
     assert_eq!(path.components().count(), 54862);
     let start = std::time::Instant::now();
@@ -33,7 +33,7 @@ fn fuzzed_timeout() -> crate::Result {
 }
 
 #[test]
-fn assorted() -> crate::Result {
+fn assorted() -> gix_error::TestResult {
     let cwd = tempfile::tempdir()?;
     let cwd = cwd.path();
     let symlinks_disabled = 0;
@@ -89,7 +89,7 @@ fn assorted() -> crate::Result {
 }
 
 #[test]
-fn link_cycle_is_detected() -> crate::Result {
+fn link_cycle_is_detected() -> gix_error::TestResult {
     let tmp_dir = canonicalized_tempdir()?;
     let dir = tmp_dir.path();
     let link_name = "link";
@@ -106,7 +106,7 @@ fn link_cycle_is_detected() -> crate::Result {
 }
 
 #[test]
-fn symlink_with_absolute_path_gets_expanded() -> crate::Result {
+fn symlink_with_absolute_path_gets_expanded() -> gix_error::TestResult {
     let tmp_dir = canonicalized_tempdir()?;
     let dir = tmp_dir.path();
     let link_from = dir.join("a").join("b").join("tmp_p_q_link");
@@ -122,7 +122,7 @@ fn symlink_with_absolute_path_gets_expanded() -> crate::Result {
 }
 
 #[test]
-fn symlink_to_relative_path_gets_expanded_into_absolute_path() -> crate::Result {
+fn symlink_to_relative_path_gets_expanded_into_absolute_path() -> gix_error::TestResult {
     let cwd = canonicalized_tempdir()?;
     let dir = cwd.path();
     let link_name = "pq_link";
@@ -136,7 +136,7 @@ fn symlink_to_relative_path_gets_expanded_into_absolute_path() -> crate::Result 
 }
 
 #[test]
-fn symlink_processing_is_disabled_if_the_value_is_zero() -> crate::Result {
+fn symlink_processing_is_disabled_if_the_value_is_zero() -> gix_error::TestResult {
     let cwd = canonicalized_tempdir()?;
     let link_name = "x_link";
     create_symlink(cwd.path().join(link_name), Path::new("link destination does not exist"))?;

@@ -128,7 +128,7 @@ impl Pattern for Attributes {
 
     fn bytes_to_patterns(&self, bytes: &[u8], _source: &std::path::Path) -> Vec<pattern::Mapping<Self::Value>> {
         fn into_owned_assignments<'a>(
-            attrs: impl Iterator<Item = Result<crate::AssignmentRef<'a>, crate::name::Error>>,
+            attrs: impl Iterator<Item = Result<crate::AssignmentRef<'a>, gix_error::ValidationError>>,
         ) -> Option<Assignments> {
             let res = attrs
                 .map(|res| {

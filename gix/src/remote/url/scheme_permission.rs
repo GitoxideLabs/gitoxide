@@ -18,9 +18,6 @@ pub enum Allow {
     User,
 }
 
-/// The error returned when obtaining transport permissions from configuration.
-pub type Error = gix_error::Error;
-
 impl Allow {
     /// Return true if we represent something like 'allow == true'.
     pub fn to_bool(self, user_allowed: Option<bool>) -> bool {
@@ -61,7 +58,7 @@ impl SchemePermission {
     pub fn from_config(
         config: &gix_config::File,
         mut filter: fn(&gix_config::file::Metadata) -> bool,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::Error> {
         if let Some(allow_protocol) = config.string_filter(gitoxide::Allow::PROTOCOL, &mut filter) {
             return Ok(SchemePermission {
                 user_allowed: None,

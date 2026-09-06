@@ -4,7 +4,7 @@ use gix_error::OptionExt;
 
 use crate::{
     Entry, Version,
-    decode::{self, header},
+    decode::header,
     entry,
     util::{read_u32, split_at_byte_exclusive, var_int},
 };
@@ -99,7 +99,7 @@ pub fn chunk<'a>(
     num_entries: u32,
     object_hash: gix_hash::Kind,
     version: Version,
-) -> Result<(Outcome, &'a [u8]), decode::Error> {
+) -> Result<(Outcome, &'a [u8]), gix_error::Exn> {
     let mut is_sparse = false;
     let has_delta_paths = version == Version::V4;
     let mut prev_path = None;

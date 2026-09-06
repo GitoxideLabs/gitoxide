@@ -175,7 +175,7 @@ mod with_io {
             server: &Capabilities,
             arguments: &[BString],
             features: &[Feature],
-        ) -> Result<(), validate_argument_prefixes::Error> {
+        ) -> Result<(), gix_error::ValidationError> {
             use gix_error::message;
             let allowed = self.all_argument_prefixes();
             for arg in arguments {
@@ -223,12 +223,4 @@ mod with_io {
             Ok(())
         }
     }
-
-    ///
-    pub mod validate_argument_prefixes {
-        /// The error returned by [Command::validate_argument_prefixes()](super::Command::validate_argument_prefixes()).
-        pub type Error = gix_error::ValidationError;
-    }
 }
-#[cfg(any(test, feature = "async-client", feature = "blocking-client"))]
-pub use with_io::validate_argument_prefixes;

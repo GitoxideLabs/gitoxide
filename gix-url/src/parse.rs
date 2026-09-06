@@ -3,9 +3,6 @@ use gix_error::{ErrorExt, ResultExt, ValidationError};
 
 use crate::Scheme;
 
-/// The error returned by [parse()](crate::parse()).
-pub type Error = gix_error::Exn<ValidationError>;
-
 /// The syntax used to interpret an input location.
 #[derive(Debug, Clone, Copy)]
 pub enum UrlKind {
@@ -116,7 +113,7 @@ pub(crate) fn remote_helper(input: &BStr, helper_end: usize) -> crate::Url {
     }
 }
 
-pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error> {
+pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, gix_error::Exn<gix_error::ValidationError>> {
     const MAX_LEN: usize = 1024;
     let input_after_protocol = &input[protocol_end + "://".len()..];
     let scheme = &input[..protocol_end];
@@ -222,7 +219,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     })
 }
 
-pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
+pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, gix_error::Exn<gix_error::ValidationError>> {
     let input = input_to_utf8(input, UrlKind::Scp)?;
 
     // TODO: this incorrectly splits at IPv6 addresses, check for `[]` before splitting
@@ -283,7 +280,10 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
     })
 }
 
-pub(crate) fn file_url(input: &BStr, protocol_colon: usize) -> Result<crate::Url, Error> {
+pub(crate) fn file_url(
+    input: &BStr,
+    protocol_colon: usize,
+) -> Result<crate::Url, gix_error::Exn<gix_error::ValidationError>> {
     let input = input_to_utf8(input, UrlKind::Url)?;
     let input_after_protocol = &input[protocol_colon + "://".len()..];
 
@@ -342,7 +342,7 @@ pub(crate) fn file_url(input: &BStr, protocol_colon: usize) -> Result<crate::Url
     })
 }
 
-pub(crate) fn local(input: &BStr) -> Result<crate::Url, Error> {
+pub(crate) fn local(input: &BStr) -> Result<crate::Url, gix_error::Exn<gix_error::ValidationError>> {
     if input.is_empty() {
         return Err(ValidationError::new_with_input(
             format!("{} does not specify a path to a repository", UrlKind::Local.as_str()),
@@ -363,12 +363,15 @@ pub(crate) fn local(input: &BStr) -> Result<crate::Url, Error> {
     })
 }
 
-fn input_to_utf8(input: &BStr, kind: UrlKind) -> Result<&str, Error> {
+fn input_to_utf8(input: &BStr, kind: UrlKind) -> Result<&str, gix_error::Exn<gix_error::ValidationError>> {
     let kind = kind.as_str();
     std::str::from_utf8(input).or_raise(|| ValidationError::new_with_input(format!("{kind} is not valid UTF-8"), input))
 }
 
-fn input_to_utf8_and_url(input: &BStr, kind: UrlKind) -> Result<(&str, crate::simple_url::ParsedUrl), Error> {
+fn input_to_utf8_and_url(
+    input: &BStr,
+    kind: UrlKind,
+) -> Result<(&str, crate::simple_url::ParsedUrl), gix_error::Exn<gix_error::ValidationError>> {
     let input = input_to_utf8(input, kind)?;
     crate::simple_url::ParsedUrl::parse(input)
         .map(|url| (input, url))

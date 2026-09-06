@@ -26,7 +26,6 @@ mod fetch_fn {
     use std::ops::ControlFlow;
 
     use super::{Action, Delegate, RefsAction};
-    use crate::fetch::Error;
 
     /// A way to indicate how to treat the connection underlying the transport, potentially allowing to reuse it.
     #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -77,7 +76,7 @@ mod fetch_fn {
         fetch_mode: FetchConnection,
         agent: impl Into<String>,
         trace: bool,
-    ) -> Result<(), Error>
+    ) -> Result<(), gix_error::Exn>
     where
         F: FnMut(credentials::helper::Action) -> credentials::protocol::Result,
         D: Delegate,

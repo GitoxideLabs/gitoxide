@@ -1,9 +1,6 @@
 use bstr::BString;
 use gix_diff::{Rewrites, tree_with_rewrites::Change};
 
-/// The error returned by [`tree()`](crate::tree()).
-pub type Error = gix_error::Exn;
-
 /// The outcome produced by [`tree()`](crate::tree()).
 #[derive(Clone)]
 pub struct Outcome<'a> {

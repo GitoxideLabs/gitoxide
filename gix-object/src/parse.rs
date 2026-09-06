@@ -5,7 +5,7 @@ pub(crate) const SPACE: &[u8] = b" ";
 const SPACE_OR_NL: &[u8] = b" \n";
 
 /// The result type shared by object parsers.
-pub(crate) type ParseResult<T> = Result<T, crate::decode::Error>;
+pub(crate) type ParseResult<T> = Result<T, gix_error::ValidationError>;
 
 /// Parse any multi-line object header field.
 ///
@@ -147,6 +147,6 @@ pub(crate) fn signature_raw(i: &[u8]) -> ParseResult<&BStr> {
 ///
 /// This is a convenience wrapper around [`signature`] for callers that already
 /// hold byte-string data.
-pub(crate) fn parse_signature(raw: &BStr) -> Result<gix_actor::SignatureRef<'_>, crate::decode::Error> {
+pub(crate) fn parse_signature(raw: &BStr) -> Result<gix_actor::SignatureRef<'_>, gix_error::ValidationError> {
     signature(raw.as_ref())
 }

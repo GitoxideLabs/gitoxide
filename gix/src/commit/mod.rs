@@ -42,9 +42,6 @@ fn signature_program(
 /// An empty array of a type usable with the `gix::easy` API to help declaring no parents should be used
 pub const NO_PARENT_IDS: [gix_hash::ObjectId; 0] = [];
 
-/// The error returned by [`commit(…)`](crate::Repository::commit()).
-pub type Error = gix_error::Error;
-
 ///
 #[cfg(feature = "revision")]
 pub mod describe {
@@ -65,7 +62,7 @@ pub mod describe {
 
     impl Resolution<'_> {
         /// Turn this instance into something displayable.
-        pub fn format(self) -> Result<gix_revision::describe::Format<'static>, Error> {
+        pub fn format(self) -> Result<gix_revision::describe::Format<'static>, crate::Error> {
             let prefix = self
                 .id
                 .shorten()
@@ -83,7 +80,7 @@ pub mod describe {
         pub fn format_with_dirty_suffix(
             self,
             dirty_suffix: impl Into<Option<String>>,
-        ) -> Result<gix_revision::describe::Format<'static>, Error> {
+        ) -> Result<gix_revision::describe::Format<'static>, crate::Error> {
             let prefix = self
                 .id
                 .shorten()
@@ -98,9 +95,6 @@ pub mod describe {
         }
     }
 
-    /// The error returned by [`try_format()`][Platform::try_format()].
-    pub type Error = gix_error::Error;
-
     /// A selector to choose what kind of references should contribute to names.
     #[derive(Default, Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
     pub enum SelectRef {
@@ -114,7 +108,7 @@ pub mod describe {
     }
 
     impl SelectRef {
-        fn names(&self, repo: &Repository) -> Result<HashMap<ObjectId, Cow<'static, BStr>>, Error> {
+        fn names(&self, repo: &Repository) -> Result<HashMap<ObjectId, Cow<'static, BStr>>, crate::Error> {
             let platform = repo.references().or_erased()?;
 
             Ok(match self {
@@ -222,7 +216,7 @@ pub mod describe {
 
         /// Try to find a name for the configured commit id using all prior configuration, returning `Some(describe::Format)`
         /// if one was found, or `None` if that wasn't the case.
-        pub fn try_format(&self) -> Result<Option<gix_revision::describe::Format<'static>>, Error> {
+        pub fn try_format(&self) -> Result<Option<gix_revision::describe::Format<'static>>, crate::Error> {
             self.try_resolve()?.map(Resolution::format).transpose()
         }
 
@@ -238,7 +232,7 @@ pub mod describe {
         pub fn try_resolve_with_cache(
             &self,
             cache: Option<&'_ gix_commitgraph::Graph>,
-        ) -> Result<Option<Resolution<'repo>>, Error> {
+        ) -> Result<Option<Resolution<'repo>>, crate::Error> {
             let mut graph = self.repo.revision_graph(cache);
             let outcome = gix_revision::describe(
                 &self.id,
@@ -262,13 +256,13 @@ pub mod describe {
         /// # Performance
         ///
         /// Prefer to use the [`Self::try_resolve_with_cache()`] method when processing more than one commit at a time.
-        pub fn try_resolve(&self) -> Result<Option<Resolution<'repo>>, Error> {
+        pub fn try_resolve(&self) -> Result<Option<Resolution<'repo>>, crate::Error> {
             let cache = self.repo.commit_graph_if_enabled()?;
             self.try_resolve_with_cache(cache.as_ref())
         }
 
         /// Like [`try_format()`](Self::try_format()), but turns `id_as_fallback()` on to always produce a format.
-        pub fn format(&mut self) -> Result<gix_revision::describe::Format<'static>, Error> {
+        pub fn format(&mut self) -> Result<gix_revision::describe::Format<'static>, crate::Error> {
             self.id_as_fallback = true;
             Ok(self.try_format()?.expect("BUG: fallback must always produce a format"))
         }

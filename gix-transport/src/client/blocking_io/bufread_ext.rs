@@ -25,9 +25,8 @@ pub trait ReadlineBufRead: io::BufRead {
     ///  * natural EOF
     ///  * ERR packet line encountered
     ///  * A `delimiter` packet line encountered
-    fn readline(
-        &mut self,
-    ) -> Option<io::Result<Result<gix_packetline::PacketLineRef<'_>, gix_packetline::decode::Error>>>;
+    fn readline(&mut self)
+    -> Option<io::Result<Result<gix_packetline::PacketLineRef<'_>, gix_error::ValidationError>>>;
 
     /// Read a line similar to `BufRead::read_line()`, but assure it doesn't try to find newlines
     /// which might concatenate multiple distinct packet lines.
@@ -53,7 +52,7 @@ pub trait ExtendedBufRead<'a>: ReadlineBufRead {
 }
 
 impl<T: ReadlineBufRead + ?Sized> ReadlineBufRead for Box<T> {
-    fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_packetline::decode::Error>>> {
+    fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_error::ValidationError>>> {
         ReadlineBufRead::readline(self.deref_mut())
     }
     fn readline_str(&mut self, line: &mut String) -> io::Result<usize> {
@@ -80,7 +79,7 @@ impl<'a, T: ExtendedBufRead<'a> + ?Sized + 'a> ExtendedBufRead<'a> for Box<T> {
 }
 
 impl<T: io::Read> ReadlineBufRead for WithSidebands<'_, T, fn(bool, &[u8]) -> ProgressAction> {
-    fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_packetline::decode::Error>>> {
+    fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_error::ValidationError>>> {
         self.read_data_line()
     }
 
@@ -90,7 +89,7 @@ impl<T: io::Read> ReadlineBufRead for WithSidebands<'_, T, fn(bool, &[u8]) -> Pr
 }
 
 impl<'a, T: io::Read> ReadlineBufRead for WithSidebands<'a, T, HandleProgress<'a>> {
-    fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_packetline::decode::Error>>> {
+    fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_error::ValidationError>>> {
         self.read_data_line()
     }
 

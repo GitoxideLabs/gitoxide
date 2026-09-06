@@ -41,8 +41,8 @@ where
     }
 }
 
-impl From<gix_object::decode::Error> for Error {
-    fn from(err: gix_object::decode::Error) -> Self {
+impl From<gix_error::ValidationError> for Error {
+    fn from(err: gix_error::ValidationError) -> Self {
         Error::Failure(gix_error::Error::from_error(err))
     }
 }

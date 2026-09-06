@@ -63,7 +63,7 @@ impl crate::Repository {
         &mut self,
         name: impl gix_utils::AsBStr,
         email: impl gix_utils::AsBStr,
-    ) -> Result<gix_actor::SignatureRef<'_>, config::commit_signature::Error> {
+    ) -> Result<gix_actor::SignatureRef<'_>, crate::Error> {
         if self.committer().is_none() {
             let mut config = gix_config::File::new(gix_config::file::Metadata::api());
             config.set_raw_value(gitoxide::Committer::NAME_FALLBACK, name)?;
@@ -78,9 +78,7 @@ impl crate::Repository {
     ///
     /// This is equivalent to calling [`committer_or_set_fallback()`](Self::committer_or_set_fallback()) with
     /// `no name configured <noEmailAvailable@example.com>`.
-    pub fn committer_or_set_generic_fallback(
-        &mut self,
-    ) -> Result<gix_actor::SignatureRef<'_>, config::commit_signature::Error> {
+    pub fn committer_or_set_generic_fallback(&mut self) -> Result<gix_actor::SignatureRef<'_>, crate::Error> {
         self.committer_or_set_fallback("no name configured", "noEmailAvailable@example.com")
     }
 
