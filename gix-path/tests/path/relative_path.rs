@@ -1,7 +1,11 @@
 use bstr::{BStr, BString};
-use gix_path::{RelativePath, relative_path::Error};
+use gix_path::RelativePath;
 
-fn assert_validation<T>(result: Result<T, Error>, expected_message: &str, has_component_source: bool) {
+fn assert_validation<T>(
+    result: Result<T, gix_error::Exn<gix_error::ValidationError>>,
+    expected_message: &str,
+    has_component_source: bool,
+) {
     let err = result.err().expect("input should be invalid");
     assert_eq!(err.message, expected_message);
     assert_eq!(

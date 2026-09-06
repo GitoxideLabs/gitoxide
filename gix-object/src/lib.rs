@@ -63,12 +63,6 @@ pub mod data;
 ///
 pub mod find;
 
-///
-pub mod write {
-    /// The error type returned by the [`Write`](crate::Write) trait.
-    pub type Error = gix_error::Exn;
-}
-
 mod traits;
 pub use traits::{Exists, Find, FindExt, FindObjectOrHeader, Header as FindHeader, HeaderExt, Write, WriteTo};
 
@@ -317,18 +311,12 @@ pub struct Header {
 ///
 pub mod decode {
     mod error {
-        pub(crate) fn empty_error() -> Error {
-            Error::new("object parsing failed")
+        pub(crate) fn empty_error() -> gix_error::ValidationError {
+            gix_error::ValidationError::new("object parsing failed")
         }
-
-        /// A type to indicate any error occurred during parsing.
-        pub type Error = gix_error::ValidationError;
     }
-    pub use error::Error;
-    pub(crate) use error::empty_error;
 
-    /// Returned by [`loose_header()`]
-    pub type LooseHeaderDecodeError = gix_error::Exn<gix_error::ValidationError>;
+    pub(crate) use error::empty_error;
 
     use bstr::ByteSlice;
     use gix_error::{ErrorExt, ResultExt, ValidationError};
@@ -336,7 +324,7 @@ pub mod decode {
     /// ([`kind`](super::Kind), `size`, `consumed bytes`).
     ///
     /// `size` is the uncompressed size of the payload in bytes.
-    pub fn loose_header(input: &[u8]) -> Result<(super::Kind, u64, usize), LooseHeaderDecodeError> {
+    pub fn loose_header(input: &[u8]) -> Result<(super::Kind, u64, usize), gix_error::Exn<gix_error::ValidationError>> {
         let kind_end = input
             .find_byte(0x20)
             .ok_or_else(|| ValidationError::new("Expected '<type> <size>'").raise())?;
@@ -364,7 +352,7 @@ pub fn compute_hash(
     hash_kind: gix_hash::Kind,
     object_kind: Kind,
     data: &[u8],
-) -> Result<gix_hash::ObjectId, gix_hash::hasher::Error> {
+) -> Result<gix_hash::ObjectId, gix_error::CorruptionError> {
     let mut hasher = object_hasher(hash_kind, object_kind, data.len() as u64);
     hasher.update(data);
     hasher.try_finalize()
@@ -382,7 +370,7 @@ pub fn compute_stream_hash(
     stream_len: u64,
     progress: &mut dyn gix_features::progress::Progress,
     should_interrupt: &std::sync::atomic::AtomicBool,
-) -> Result<gix_hash::ObjectId, gix_hash::io::Error> {
+) -> Result<gix_hash::ObjectId, gix_error::Exn> {
     let hasher = object_hasher(hash_kind, object_kind, stream_len);
     gix_hash::bytes_with_hasher(stream, stream_len, hasher, progress, should_interrupt)
 }

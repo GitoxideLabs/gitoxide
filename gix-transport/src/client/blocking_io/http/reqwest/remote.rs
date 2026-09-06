@@ -17,9 +17,6 @@ use crate::client::blocking_io::http::{
     traits::PostBodyDataKind,
 };
 
-/// The error returned by the 'remote' helper, a purely internal construct to perform http requests.
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 fn classify_reqwest(err: reqwest::Error) -> gix_error::Error {
     if err.is_timeout() || err.is_connect() || err.status().is_some_and(|status| status.is_server_error()) {
         gix_error::Error::from_error(gix_error::RetryableError::new(err))
@@ -40,7 +37,7 @@ impl Default for Remote {
         let (res_send, res_recv) = std::sync::mpsc::sync_channel(0);
         let redirected_base_url_shared = Arc::new(Mutex::new(None));
         let redirected_base_url_shared_for_field = redirected_base_url_shared.clone();
-        let handle = std::thread::spawn(move || -> Result<(), Error> {
+        let handle = std::thread::spawn(move || -> Result<(), gix_error::Exn<gix_error::Message>> {
             let mut follow = None;
             let redirect_action = Arc::new(Mutex::new(RedirectAction::Stop));
             let redirect_tail = Arc::new(Mutex::new(String::new()));
@@ -246,7 +243,7 @@ impl Default for Remote {
 
 /// utilities
 impl Remote {
-    fn restore_thread_after_failure(&mut self) -> http::Error {
+    fn restore_thread_after_failure(&mut self) -> gix_error::Exn<gix_error::Message> {
         let err_that_brought_thread_down = self
             .handle
             .take()
@@ -264,7 +261,7 @@ impl Remote {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         upload_body_kind: Option<PostBodyDataKind>,
-    ) -> Result<http::PostResponse<pipe::Reader, pipe::Reader, pipe::Writer>, http::Error> {
+    ) -> Result<http::PostResponse<pipe::Reader, pipe::Reader, pipe::Writer>, gix_error::Exn<gix_error::Message>> {
         let mut header_map = reqwest::header::HeaderMap::new();
         for header_line in headers {
             insert_header(&mut header_map, header_line.as_ref());
@@ -334,7 +331,7 @@ impl http::Http for Remote {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<http::GetResponse<Self::Headers, Self::ResponseBody>, http::Error> {
+    ) -> Result<http::GetResponse<Self::Headers, Self::ResponseBody>, gix_error::Exn<gix_error::Message>> {
         self.make_request(url, base_url, headers, None).map(Into::into)
     }
 
@@ -344,7 +341,8 @@ impl http::Http for Remote {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         post_body_kind: PostBodyDataKind,
-    ) -> Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, http::Error> {
+    ) -> Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, gix_error::Exn<gix_error::Message>>
+    {
         self.make_request(url, base_url, headers, Some(post_body_kind))
     }
 

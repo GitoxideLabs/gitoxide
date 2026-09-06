@@ -56,9 +56,6 @@ pub mod delete {
     }
 
     impl std::error::Error for CleanupError {}
-
-    /// The error returned by [`Repository::delete_local_branches()`][crate::Repository::delete_local_branches()].
-    pub type Error = gix_error::Error;
 }
 
 impl crate::Repository {
@@ -83,7 +80,7 @@ impl crate::Repository {
     pub fn delete_local_branches(
         &mut self,
         names: impl IntoIterator<Item = FullName>,
-    ) -> Result<Vec<FullName>, delete::Error> {
+    ) -> Result<Vec<FullName>, crate::Error> {
         let mut names: Vec<_> = names.into_iter().collect();
         names.sort();
         names.dedup();

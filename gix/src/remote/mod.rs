@@ -40,9 +40,6 @@ pub mod name;
 
 mod build;
 
-mod errors;
-pub use errors::find;
-
 ///
 pub mod init;
 

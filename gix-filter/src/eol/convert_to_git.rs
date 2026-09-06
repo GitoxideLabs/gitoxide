@@ -26,9 +26,6 @@ pub enum RoundTripCheck<'a> {
     },
 }
 
-/// The error returned by [convert_to_git()][super::convert_to_git()].
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// A function that writes a buffer like `fn(&mut buf)` with by tes of an object in the index that is the one that should be converted.
 pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> Result<Option<()>, gix_error::Exn> + 'a;
 
@@ -39,7 +36,7 @@ pub(crate) mod function {
         clear_and_set_capacity,
         eol::{
             AttributesDigest, Stats,
-            convert_to_git::{Error, IndexObjectFn, Options, RoundTripCheck},
+            convert_to_git::{IndexObjectFn, Options, RoundTripCheck},
         },
     };
 
@@ -61,7 +58,7 @@ pub(crate) mod function {
             round_trip_check,
             config,
         }: Options<'_>,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, gix_error::Exn<gix_error::Message>> {
         use gix_error::{ErrorExt, ResultExt, message};
 
         if digest == AttributesDigest::Binary || src.is_empty() {

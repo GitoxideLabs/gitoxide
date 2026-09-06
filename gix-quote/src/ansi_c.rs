@@ -1,9 +1,3 @@
-///
-pub mod undo {
-    /// The error returned by [`ansi_c`](crate::ansi_c::undo()).
-    pub type Error = gix_error::Exn<gix_error::ValidationError>;
-}
-
 use std::{borrow::Cow, io::Read};
 
 use bstr::{BStr, BString, ByteSlice};
@@ -58,7 +52,7 @@ pub fn quote(input: &BStr) -> Cow<'_, BStr> {
 /// See [the tests][tests] for quotation examples.
 ///
 /// [tests]: https://github.com/GitoxideLabs/gitoxide/blob/64872690e60efdd9267d517f4d9971eecd3b875c/gix-quote/tests/quote.rs#L57-L74
-pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize), undo::Error> {
+pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize), gix_error::Exn<gix_error::ValidationError>> {
     if !input.starts_with(b"\"") {
         return Ok((input.into(), input.len()));
     }
@@ -69,7 +63,7 @@ pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize), undo::Error> {
     let mut input = &input[1..];
     let mut consumed = 1;
     let mut out = BString::default();
-    fn consume_one_past(input: &mut &BStr, position: usize) -> Result<u8, undo::Error> {
+    fn consume_one_past(input: &mut &BStr, position: usize) -> Result<u8, gix_error::Exn<gix_error::ValidationError>> {
         use gix_error::{OptionExt, ValidationError};
         *input = input
             .get(position + 1..)

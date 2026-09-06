@@ -8,7 +8,7 @@ use gix_error::{CorruptionError, ErrorExt, RetryableError, message};
 use gix_transport::{Protocol, client, client::MessageKind};
 
 use crate::fetch::{
-    Response, response,
+    Response,
     response::{Acknowledgement, ShallowUpdate, WantedRef, shallow_update_from_line},
 };
 
@@ -17,8 +17,8 @@ async fn parse_v2_section<'a, T>(
     line: &mut String,
     reader: &mut impl ExtendedBufRead<'a>,
     res: &mut Vec<T>,
-    parse: impl Fn(&str) -> Result<T, response::Error>,
-) -> Result<bool, response::Error> {
+    parse: impl Fn(&str) -> Result<T, gix_error::Exn>,
+) -> Result<bool, gix_error::Exn> {
     line.clear();
     while reader.readline_str(line).await.map_err(read_error)? != 0 {
         res.push(parse(line)?);
@@ -53,7 +53,7 @@ impl Response {
         reader: &mut impl ExtendedBufRead<'a>,
         client_expects_pack: bool,
         wants_to_negotiate: bool,
-    ) -> Result<Response, response::Error> {
+    ) -> Result<Response, gix_error::Exn> {
         match version {
             Protocol::V0 | Protocol::V1 => {
                 let mut line = String::new();
@@ -169,7 +169,7 @@ impl Response {
     }
 }
 
-fn read_error(err: io::Error) -> response::Error {
+fn read_error(err: io::Error) -> gix_error::Exn {
     let err = if err.kind() == io::ErrorKind::Other {
         match err.into_inner() {
             Some(err) => match err.downcast::<gix_transport::packetline::read::Error>() {
@@ -184,7 +184,7 @@ fn read_error(err: io::Error) -> response::Error {
     transport_error(err.into())
 }
 
-fn transport_error(err: client::Error) -> response::Error {
+fn transport_error(err: client::Error) -> gix_error::Exn {
     let context = message("Failed to read from line reader");
     if err.can_retry() {
         RetryableError::new(err).and_raise(context).erased()

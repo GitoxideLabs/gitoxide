@@ -163,11 +163,10 @@ mod is_active_platform {
 }
 
 mod path {
-    use gix_submodule::config::path::Error;
 
     use crate::file::submodule;
 
-    fn submodule_path(value: &str) -> Error {
+    fn submodule_path(value: &str) -> gix_error::ValidationError {
         let module = submodule(&format!("[submodule.a]\npath = {value}"));
         module.path("a".into()).unwrap_err()
     }
@@ -215,11 +214,10 @@ mod path {
 }
 
 mod url {
-    use gix_submodule::config::url::Error;
 
     use crate::file::submodule;
 
-    fn submodule_url(value: &str) -> Error {
+    fn submodule_url(value: &str) -> gix_error::Exn<gix_error::ValidationError> {
         let module = submodule(&format!("[submodule.a]\nurl = {value}"));
         module.url("a".into()).unwrap_err()
     }
@@ -265,11 +263,11 @@ mod url {
 mod update {
     use std::str::FromStr;
 
-    use gix_submodule::config::{Update, update::Error};
+    use gix_submodule::config::Update;
 
     use crate::file::submodule;
 
-    fn submodule_update(value: &str) -> Error {
+    fn submodule_update(value: &str) -> gix_error::ValidationError {
         let module = submodule(&format!("[submodule.a]\nupdate = {value}"));
         module.update("a".into()).unwrap_err()
     }

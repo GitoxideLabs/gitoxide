@@ -23,11 +23,6 @@ pub struct Options {
     pub schannel_check_revoke: Option<bool>,
 }
 
-/// The error returned by the 'remote' helper, a purely internal construct to perform http requests.
-///
-/// It can be used for downcasting errors, which are boxed to hide the actual implementation.
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 pub(crate) fn curl_is_retryable(err: &curl::Error) -> bool {
     err.is_couldnt_connect()
         || err.is_couldnt_resolve_proxy()
@@ -45,13 +40,13 @@ pub(crate) fn curl_is_retryable(err: &curl::Error) -> bool {
 pub struct Curl {
     req: SyncSender<remote::Request>,
     res: Receiver<remote::Response>,
-    handle: Option<thread::JoinHandle<Result<(), Error>>>,
+    handle: Option<thread::JoinHandle<Result<(), gix_error::Exn<gix_error::Message>>>>,
     config: http::Options,
     redirected_base_url: Arc<Mutex<Option<String>>>,
 }
 
 impl Curl {
-    fn restore_thread_after_failure(&mut self) -> http::Error {
+    fn restore_thread_after_failure(&mut self) -> gix_error::Exn<gix_error::Message> {
         let err_that_brought_thread_down = self
             .handle
             .take()
@@ -73,7 +68,10 @@ impl Curl {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         upload_body_kind: Option<PostBodyDataKind>,
-    ) -> Result<http::PostResponse<io::pipe::Reader, io::pipe::Reader, io::pipe::Writer>, http::Error> {
+    ) -> Result<
+        http::PostResponse<io::pipe::Reader, io::pipe::Reader, io::pipe::Writer>,
+        gix_error::Exn<gix_error::Message>,
+    > {
         let mut list = curl::easy::List::new();
         for header in headers {
             list.append(header.as_ref())
@@ -138,7 +136,7 @@ impl http::Http for Curl {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<http::GetResponse<Self::Headers, Self::ResponseBody>, http::Error> {
+    ) -> Result<http::GetResponse<Self::Headers, Self::ResponseBody>, gix_error::Exn<gix_error::Message>> {
         self.make_request(url, base_url, headers, None).map(Into::into)
     }
 
@@ -148,7 +146,8 @@ impl http::Http for Curl {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         body: PostBodyDataKind,
-    ) -> Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, http::Error> {
+    ) -> Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, gix_error::Exn<gix_error::Message>>
+    {
         self.make_request(url, base_url, headers, Some(body))
     }
 

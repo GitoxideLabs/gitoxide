@@ -2,7 +2,7 @@ use std::io::Read;
 
 use gix_error::{ErrorExt, ResultExt, RetryableError, message};
 
-use crate::helper::{Action, Context, Error, NextAction, Outcome, Result};
+use crate::helper::{Action, Context, NextAction, Outcome, Result};
 
 impl Action {
     /// Send ourselves to the given `write` which is expected to be credentials-helper compatible
@@ -44,7 +44,10 @@ pub fn invoke(helper: &mut crate::Program, action: &Action) -> Result {
     }
 }
 
-pub(crate) fn raw(helper: &mut crate::Program, action: &Action) -> std::result::Result<Option<Vec<u8>>, Error> {
+pub(crate) fn raw(
+    helper: &mut crate::Program,
+    action: &Action,
+) -> std::result::Result<Option<Vec<u8>>, gix_error::Exn> {
     let communication_error = || message("An IO error occurred while communicating to the credentials helper");
     let (mut stdin, stdout) = helper.start(action).or_raise_erased(communication_error)?;
     if let (Action::Get(_), None) = (&action, &stdout) {

@@ -9,9 +9,6 @@ use gix_error::{ErrorExt, ResultExt, message};
 
 use super::FileTransaction;
 
-/// The error produced by [`crate::config_path()`] or when opening or committing a [`FileTransaction`].
-pub type Error = gix_error::Error;
-
 impl FileTransaction {
     pub(crate) fn open(
         path: std::path::PathBuf,
@@ -19,7 +16,7 @@ impl FileTransaction {
         trust: gix_sec::Trust,
         lock_mode: gix_lock::acquire::Fail,
         shared_repository_permissions: i32,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::Error> {
         let adjust_permissions =
             |permissions| gix_fs::adjust_shared_repository_permissions(permissions, shared_repository_permissions);
         let adjust_permissions: Option<&dyn Fn(std::fs::Permissions) -> std::fs::Permissions> =
@@ -64,7 +61,7 @@ impl FileTransaction {
     }
 
     /// Write this physical file atomically without changing any repository instance.
-    pub fn commit(mut self) -> Result<(), Error> {
+    pub fn commit(mut self) -> Result<(), crate::Error> {
         let path = self.lock.resource_path();
         self.config
             .write_to(&mut self.lock)
@@ -99,7 +96,7 @@ impl FileTransaction {
 pub(crate) fn shared_repository_permissions(
     config: &gix_config::File,
     filter: fn(&gix_config::file::Metadata) -> bool,
-) -> Result<i32, Error> {
+) -> Result<i32, crate::Error> {
     let value = config.sections_by_name_and_filter("core", filter).and_then(|sections| {
         sections
             .filter(|section| section.header().subsection_name().is_none())

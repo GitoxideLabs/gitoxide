@@ -7,7 +7,7 @@ use gix_error::{ErrorExt, ResultExt, RetryableError, ValidationError, message};
 use gix_features::progress::DynNestedProgress;
 
 use crate::fetch::{
-    Arguments, Context, Error, Negotiate, NegotiateOutcome, Options, Outcome, ProgressId, Shallow, Tags, negotiate,
+    Arguments, Context, Negotiate, NegotiateOutcome, Options, Outcome, ProgressId, Shallow, Tags, negotiate,
 };
 #[crate::bisync::only_async]
 use crate::transport::client::async_io::{ExtendedBufRead, HandleProgress, Transport};
@@ -58,7 +58,7 @@ pub async fn fetch<P, T>(
         tags,
         reject_shallow_remote,
     }: Options<'_>,
-) -> Result<Option<Outcome>, Error>
+) -> Result<Option<Outcome>, gix_error::Exn>
 where
     P: gix_features::progress::NestedProgress,
     P::SubProgress: 'static,
@@ -197,7 +197,7 @@ fn consume_received_pack<R>(
     consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool, gix_error::Exn>,
     progress: &mut dyn DynNestedProgress,
     should_interrupt: &AtomicBool,
-) -> Result<(R, bool), Error>
+) -> Result<(R, bool), gix_error::Exn>
 where
     R: crate::futures_io::AsyncBufRead + Unpin,
 {
@@ -213,7 +213,7 @@ fn consume_received_pack<R>(
     consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool, gix_error::Exn>,
     progress: &mut dyn DynNestedProgress,
     should_interrupt: &AtomicBool,
-) -> Result<(R, bool), Error>
+) -> Result<(R, bool), gix_error::Exn>
 where
     R: std::io::BufRead,
 {
@@ -234,7 +234,7 @@ fn read_remaining(reader: &mut impl std::io::Read) -> std::io::Result<()> {
     std::io::copy(reader, &mut std::io::sink()).map(|_| ())
 }
 
-fn acquire_shallow_lock(shallow_file: &Path) -> Result<gix_lock::File, Error> {
+fn acquire_shallow_lock(shallow_file: &Path) -> Result<gix_lock::File, gix_error::Exn> {
     gix_lock::File::acquire_to_update_resource(shallow_file, gix_lock::acquire::Fail::Immediately, None)
         .or_raise_erased(|| message("'shallow' file could not be locked in preparation for writing changes"))
 }
@@ -243,7 +243,7 @@ fn add_shallow_args(
     args: &mut Arguments,
     shallow: &Shallow,
     shallow_file: &std::path::Path,
-) -> Result<(Option<nonempty::NonEmpty<gix_hash::ObjectId>>, Option<gix_lock::File>), Error> {
+) -> Result<(Option<nonempty::NonEmpty<gix_hash::ObjectId>>, Option<gix_lock::File>), gix_error::Exn> {
     let expect_change = *shallow != Shallow::NoChange;
     let shallow_lock = expect_change.then(|| acquire_shallow_lock(shallow_file)).transpose()?;
 
@@ -286,7 +286,7 @@ fn add_shallow_args(
     Ok((shallow_commits, shallow_lock))
 }
 
-pub(crate) fn transport_error(err: crate::transport::client::Error, context: &'static str) -> Error {
+pub(crate) fn transport_error(err: crate::transport::client::Error, context: &'static str) -> gix_error::Exn {
     if err.can_retry() {
         RetryableError::new(err).and_raise(message(context)).erased()
     } else {

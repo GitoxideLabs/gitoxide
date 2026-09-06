@@ -4,7 +4,7 @@ use bstr::{BStr, BString, ByteSlice};
 use gix_error::{ErrorExt, ResultExt, ValidationError};
 
 use crate::{
-    File, IsActivePlatform, config,
+    File, IsActivePlatform,
     config::{Branch, FetchRecurse, Ignore, Update},
 };
 
@@ -58,8 +58,8 @@ impl File {
                         + 'a
                 ),
     ) -> Result<
-        impl Iterator<Item = (&'a BStr, Result<bool, gix_config::value::Error>)> + 'a,
-        crate::is_active_platform::Error,
+        impl Iterator<Item = (&'a BStr, Result<bool, gix_error::Exn<gix_error::ValidationError>>)> + 'a,
+        gix_error::ValidationError,
     > {
         let mut platform = self.is_active_platform(config, defaults)?;
         let iter = self
@@ -78,10 +78,10 @@ impl File {
         &self,
         config: &gix_config::File,
         defaults: gix_pathspec::Defaults,
-    ) -> Result<IsActivePlatform, crate::is_active_platform::Error> {
+    ) -> Result<IsActivePlatform, gix_error::ValidationError> {
         let search = config
             .strings("submodule.active")
-            .map(|patterns| -> Result<_, crate::is_active_platform::Error> {
+            .map(|patterns| -> Result<_, gix_error::ValidationError> {
                 let patterns = patterns
                     .into_iter()
                     .map(|pattern| gix_pathspec::parse(&pattern, defaults))
@@ -114,7 +114,7 @@ impl File {
     ///
     /// Git currently allows absolute paths to be used when adding submodules, but fails later as it can't find the submodule by
     /// relative path anymore. Let's play it safe here.
-    pub fn path(&self, name: &BStr) -> Result<BString, config::path::Error> {
+    pub fn path(&self, name: &BStr) -> Result<BString, gix_error::ValidationError> {
         let path_bstr = self.config.string(&format!("submodule.{name}.path")).ok_or_else(|| {
             ValidationError::new(format!(
                 "The submodule '{name}' was missing its 'path' field or it was empty"
@@ -142,7 +142,7 @@ impl File {
     }
 
     /// Retrieve the `url` field of the submodule named `name`. It's an error if it doesn't exist or is empty.
-    pub fn url(&self, name: &BStr) -> Result<gix_url::Url, config::url::Error> {
+    pub fn url(&self, name: &BStr) -> Result<gix_url::Url, gix_error::Exn<gix_error::ValidationError>> {
         let url = self.config.string(&format!("submodule.{name}.url")).ok_or_else(|| {
             ValidationError::new(format!(
                 "The submodule '{name}' was missing its 'url' field or it was empty"
@@ -162,7 +162,7 @@ impl File {
     }
 
     /// Retrieve the `update` field of the submodule named `name`, if present.
-    pub fn update(&self, name: &BStr) -> Result<Option<Update>, config::update::Error> {
+    pub fn update(&self, name: &BStr) -> Result<Option<Update>, gix_error::ValidationError> {
         let mut value_is_from_modules_file = None;
         let our_meta = self.config.meta();
         let value: Update = match self.config.string_filter(&format!("submodule.{name}.update"), |meta| {
@@ -189,7 +189,7 @@ impl File {
     /// Retrieve the `branch` field of the submodule named `name`, or `None` if unset.
     ///
     /// Note that `Default` is implemented for [`Branch`].
-    pub fn branch(&self, name: &BStr) -> Result<Option<Branch>, config::branch::Error> {
+    pub fn branch(&self, name: &BStr) -> Result<Option<Branch>, gix_error::Exn<gix_error::ValidationError>> {
         let branch = match self.config.string(&format!("submodule.{name}.branch")) {
             Some(v) => v,
             None => return Ok(None),
@@ -206,7 +206,7 @@ impl File {
     /// Retrieve the `fetchRecurseSubmodules` field of the submodule named `name`, or `None` if unset.
     ///
     /// Note that if it's unset, it should be retrieved from `fetch.recurseSubmodules` in the configuration.
-    pub fn fetch_recurse(&self, name: &BStr) -> Result<Option<FetchRecurse>, config::Error> {
+    pub fn fetch_recurse(&self, name: &BStr) -> Result<Option<FetchRecurse>, gix_error::ValidationError> {
         FetchRecurse::new(self.config.boolean(&format!("submodule.{name}.fetchRecurseSubmodules"))).map_err(|value| {
             ValidationError::new_with_input(
                 format!("The 'fetchRecurseSubmodules' field of submodule '{name}' was invalid"),
@@ -216,7 +216,7 @@ impl File {
     }
 
     /// Retrieve the `ignore` field of the submodule named `name`, or `None` if unset.
-    pub fn ignore(&self, name: &BStr) -> Result<Option<Ignore>, config::Error> {
+    pub fn ignore(&self, name: &BStr) -> Result<Option<Ignore>, gix_error::ValidationError> {
         self.config
             .string(&format!("submodule.{name}.ignore"))
             .map(|value| {
@@ -233,7 +233,7 @@ impl File {
     /// Retrieve the `shallow` field of the submodule named `name`, or `None` if unset.
     ///
     /// If `true`, the submodule will be checked out with `depth = 1`. If unset, `false` is assumed.
-    pub fn shallow(&self, name: &BStr) -> Result<Option<bool>, gix_config::value::Error> {
+    pub fn shallow(&self, name: &BStr) -> Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>> {
         self.config.boolean(&format!("submodule.{name}.shallow"))
     }
 }

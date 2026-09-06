@@ -23,13 +23,7 @@ mod types {
     use bstr::ByteSlice;
 
     macro_rules! generate_case_insensitive {
-        ($name:ident, $module:ident, $err_doc:literal, $validate:ident, $cow_inner_type:ty, $comment:literal) => {
-            ///
-            pub mod $module {
-                /// The error returned when `TryFrom` is invoked to create an instance.
-                pub type Error = gix_error::ValidationError;
-            }
-
+        ($name:ident, $err_doc:literal, $validate:ident, $cow_inner_type:ty, $comment:literal) => {
             #[doc = $comment]
             #[derive(Clone, Eq, Debug, Default)]
             pub struct $name(pub(crate) bstr::BString);
@@ -80,7 +74,7 @@ mod types {
             }
 
             impl std::convert::TryFrom<&str> for $name {
-                type Error = $module::Error;
+                type Error = gix_error::ValidationError;
 
                 fn try_from(s: &str) -> Result<Self, Self::Error> {
                     Self::try_from(bstr::ByteSlice::as_bstr(s.as_bytes()))
@@ -88,7 +82,7 @@ mod types {
             }
 
             impl std::convert::TryFrom<String> for $name {
-                type Error = $module::Error;
+                type Error = gix_error::ValidationError;
 
                 fn try_from(s: String) -> Result<Self, Self::Error> {
                     Self::try_from(bstr::BString::from(s))
@@ -96,7 +90,7 @@ mod types {
             }
 
             impl std::convert::TryFrom<bstr::BString> for $name {
-                type Error = $module::Error;
+                type Error = gix_error::ValidationError;
 
                 fn try_from(s: bstr::BString) -> Result<Self, Self::Error> {
                     if $validate(s.as_slice().as_bstr()) {
@@ -108,7 +102,7 @@ mod types {
             }
 
             impl std::convert::TryFrom<&bstr::BStr> for $name {
-                type Error = $module::Error;
+                type Error = gix_error::ValidationError;
 
                 fn try_from(s: &bstr::BStr) -> Result<Self, Self::Error> {
                     if $validate(s) {
@@ -144,7 +138,6 @@ mod types {
 
     generate_case_insensitive!(
         Name,
-        name,
         "Valid names consist of alphanumeric characters or dashes.",
         is_valid_name,
         bstr::BStr,
@@ -153,15 +146,14 @@ mod types {
 
     generate_case_insensitive!(
         ValueName,
-        value_name,
         "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.",
         is_valid_value_name,
         bstr::BStr,
         "Wrapper struct for value names, like `path` in `include.path`, since keys are case-insensitive."
     );
 }
+pub use types::Name;
 pub(crate) use types::ValueName;
-pub use types::{Name, name, value_name};
 
 #[cfg(test)]
 mod tests {

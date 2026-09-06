@@ -8,8 +8,6 @@ use bstr::ByteSlice;
 use gix_zlib::stream::deflate::{self, Compress, FlushCompress};
 use gix_zlib::{Compression, Decompress};
 
-type TestResult = gix_error::TestResult;
-
 pub(crate) fn compressed(data: &[u8]) -> Vec<u8> {
     let mut writer = deflate::Write::new(Vec::new(), Compression::BEST_SPEED);
     writer.write_all(data).expect("in-memory writes never fail");
@@ -46,7 +44,7 @@ where
 }
 
 #[test]
-fn small_file_decompress() -> TestResult {
+fn small_file_decompress() -> gix_error::TestResult {
     fn fixture_path(path: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../gix-odb/tests/fixtures")
@@ -64,7 +62,7 @@ fn small_file_decompress() -> TestResult {
 }
 
 #[test]
-fn all_at_once() -> TestResult {
+fn all_at_once() -> gix_error::TestResult {
     let mut w = deflate::Write::new(Vec::new(), Compression::BEST_SPEED);
     assert_eq!(w.write(b"hello")?, 5);
     w.flush()?;
@@ -84,7 +82,7 @@ fn assert_deflate_buffer(out: Vec<u8>, expected: &[u8]) -> io::Result<()> {
 }
 
 #[test]
-fn higher_levels_compress_better() -> TestResult {
+fn higher_levels_compress_better() -> gix_error::TestResult {
     let data: Vec<u8> = (0..128 * 1024).map(|i| (i % 100) as u8).collect();
     let mut sizes = Vec::new();
     for level in [Compression::NONE, Compression::BEST_SPEED, Compression::DEFAULT] {
@@ -103,7 +101,7 @@ fn higher_levels_compress_better() -> TestResult {
 }
 
 #[test]
-fn big_file_small_writes() -> TestResult {
+fn big_file_small_writes() -> gix_error::TestResult {
     let mut w = deflate::Write::new(Vec::new(), Compression::BEST_SPEED);
     let bytes = include_bytes!(
         "../../../../gix-odb/tests/fixtures/objects/pack/pack-11fdfa9e156ab73caae3b6da867192221f2089c2.pack"
@@ -118,7 +116,7 @@ fn big_file_small_writes() -> TestResult {
 }
 
 #[test]
-fn big_file_a_few_big_writes() -> TestResult {
+fn big_file_a_few_big_writes() -> gix_error::TestResult {
     let mut w = deflate::Write::new(Vec::new(), Compression::BEST_SPEED);
     let bytes = include_bytes!(
         "../../../../gix-odb/tests/fixtures/objects/pack/pack-11fdfa9e156ab73caae3b6da867192221f2089c2.pack"
@@ -133,7 +131,7 @@ fn big_file_a_few_big_writes() -> TestResult {
 }
 
 #[test]
-fn compressor_lifecycle_counters_and_flush_modes() -> TestResult {
+fn compressor_lifecycle_counters_and_flush_modes() -> gix_error::TestResult {
     for flush in [
         FlushCompress::None,
         FlushCompress::Partial,
@@ -169,7 +167,7 @@ fn compressor_lifecycle_counters_and_flush_modes() -> TestResult {
 }
 
 #[test]
-fn writer_clone_and_reset() -> TestResult {
+fn writer_clone_and_reset() -> gix_error::TestResult {
     let original = deflate::Write::new(Vec::new(), Compression::BEST_SPEED);
     let mut cloned = original.clone();
     cloned.write_all(b"clone owns a fresh compressor")?;

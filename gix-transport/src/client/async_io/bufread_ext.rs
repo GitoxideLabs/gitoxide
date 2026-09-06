@@ -33,7 +33,7 @@ pub trait ReadlineBufRead: AsyncBufRead {
     ///  * A `delimiter` packet line encountered
     async fn readline(
         &mut self,
-    ) -> Option<io::Result<Result<gix_packetline::PacketLineRef<'_>, gix_packetline::decode::Error>>>;
+    ) -> Option<io::Result<Result<gix_packetline::PacketLineRef<'_>, gix_error::ValidationError>>>;
 
     /// Read a line similar to `BufRead::read_line()`, but assure it doesn't try to find newlines
     /// which might concatenate multiple distinct packet lines.
@@ -61,7 +61,7 @@ pub trait ExtendedBufRead<'a>: ReadlineBufRead {
 
 #[async_trait(?Send)]
 impl<T: ReadlineBufRead + ?Sized + Unpin> ReadlineBufRead for Box<T> {
-    async fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_packetline::decode::Error>>> {
+    async fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_error::ValidationError>>> {
         self.deref_mut().readline().await
     }
     async fn readline_str(&mut self, line: &mut String) -> io::Result<usize> {
@@ -90,7 +90,7 @@ impl<'a, T: ExtendedBufRead<'a> + ?Sized + 'a + Unpin> ExtendedBufRead<'a> for B
 
 #[async_trait(?Send)]
 impl<T: AsyncRead + Unpin> ReadlineBufRead for WithSidebands<'_, T, for<'b> fn(bool, &'b [u8]) -> ProgressAction> {
-    async fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_packetline::decode::Error>>> {
+    async fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_error::ValidationError>>> {
         self.read_data_line().await
     }
     async fn readline_str(&mut self, line: &mut String) -> io::Result<usize> {
@@ -100,7 +100,7 @@ impl<T: AsyncRead + Unpin> ReadlineBufRead for WithSidebands<'_, T, for<'b> fn(b
 
 #[async_trait(?Send)]
 impl<'a, T: AsyncRead + Unpin> ReadlineBufRead for WithSidebands<'a, T, HandleProgress<'a>> {
-    async fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_packetline::decode::Error>>> {
+    async fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_error::ValidationError>>> {
         self.read_data_line().await
     }
     async fn readline_str(&mut self, line: &mut String) -> io::Result<usize> {

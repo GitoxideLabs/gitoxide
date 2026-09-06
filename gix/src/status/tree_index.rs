@@ -1,9 +1,6 @@
 use crate::{Repository, config::tree};
 use gix_error::ResultExt;
 
-/// The error returned by [Repository::tree_index_status()].
-pub type Error = gix_error::Error;
-
 /// Specify how to perform rewrite tracking [Repository::tree_index_status()].
 #[derive(Default, Debug, Copy, Clone)]
 pub enum TrackRenames {
@@ -53,7 +50,7 @@ impl Repository {
             &gix_index::State,
             &gix_index::State,
         ) -> Result<gix_diff::index::Action, gix_error::Exn>,
-    ) -> Result<Outcome, Error> {
+    ) -> Result<Outcome, crate::Error> {
         let _span = gix_trace::coarse!("gix::tree_index_status");
         let tree_index: gix_index::State = self.index_from_tree(tree_id)?.into();
         let rewrites = match renames {

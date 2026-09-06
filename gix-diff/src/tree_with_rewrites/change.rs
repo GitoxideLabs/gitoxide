@@ -341,7 +341,7 @@ impl crate::blob::Platform {
         &mut self,
         change: ChangeRef<'_>,
         objects: &impl gix_object::FindObjectOrHeader,
-    ) -> Result<&mut Self, crate::blob::platform::set_resource::Error> {
+    ) -> Result<&mut Self, gix_error::Exn<gix_error::Message>> {
         match change {
             ChangeRef::Addition {
                 location,

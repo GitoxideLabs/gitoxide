@@ -3,13 +3,10 @@ use std::borrow::Cow;
 use super::Name;
 use crate::bstr::{BStr, BString, ByteSlice, ByteVec};
 
-/// The error returned by [validated()].
-pub type Error = gix_error::Error;
-
 /// Return `name` if it is valid as symbolic remote name.
 ///
 /// This means it has to be valid within a the ref path of a tracking branch.
-pub fn validated(name: impl Into<BString>) -> Result<BString, Error> {
+pub fn validated(name: impl Into<BString>) -> Result<BString, crate::Error> {
     let name = name.into();
     match gix_refspec::parse(
         format!("refs/heads/test:refs/remotes/{name}/test").as_str().into(),

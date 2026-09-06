@@ -43,7 +43,7 @@ impl File {
     pub fn append_submodule_overrides(
         &mut self,
         config: &gix_config::File,
-    ) -> Result<&mut Self, gix_config::file::section::value::Error> {
+    ) -> Result<&mut Self, gix_error::ValidationError> {
         let mut values = BTreeMap::<_, Vec<_>>::new();
         for (module_name, section) in config
             .sections_by_name("submodule")
@@ -112,10 +112,6 @@ pub mod init {
     /// A marker we use when listing names to not pick them up from overridden sections.
     pub(crate) const META_MARKER: gix_config::Source = gix_config::Source::Api;
 
-    /// Lifecycle
-    /// The error returned when parsing a submodule configuration file.
-    pub type Error = gix_error::Exn<ValidationError>;
-
     impl File {
         /// Parse `bytes` as git configuration, typically from `.gitmodules`, without doing any further validation.
         /// `path` can be provided to keep track of where the file was read from in the underlying [`config`](Self::config())
@@ -133,7 +129,7 @@ pub mod init {
             bytes: &[u8],
             path: impl Into<Option<PathBuf>>,
             config: &gix_config::File,
-        ) -> Result<Self, Error> {
+        ) -> Result<Self, gix_error::Exn<gix_error::ValidationError>> {
             let metadata = {
                 let mut meta = gix_config::file::Metadata::from(META_MARKER);
                 meta.path = path.into();

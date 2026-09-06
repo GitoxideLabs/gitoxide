@@ -10,9 +10,6 @@ use gix_transport::client::blocking_io::{Transport, connect};
 
 use crate::{Remote, config::tree::Protocol, remote::Connection};
 
-/// The error returned by [connect()][crate::Remote::connect()].
-pub type Error = gix_error::Error;
-
 /// Establishing connections to remote hosts (without performing a git-handshake).
 impl<'repo> Remote<'repo> {
     /// Create a new connection using `transport` to communicate, with `progress` to indicate changes.
@@ -47,7 +44,7 @@ impl<'repo> Remote<'repo> {
     pub async fn connect(
         &self,
         direction: crate::remote::Direction,
-    ) -> Result<Connection<'_, 'static, 'repo, Box<dyn Transport + Send>>, Error> {
+    ) -> Result<Connection<'_, 'static, 'repo, Box<dyn Transport + Send>>, crate::Error> {
         let (url, version) = self.sanitized_url_and_version(direction)?;
         #[cfg(feature = "blocking-network-client")]
         let scheme_is_ssh = url.scheme == gix_url::Scheme::Ssh;
@@ -75,8 +72,8 @@ impl<'repo> Remote<'repo> {
     pub fn sanitized_url_and_version(
         &self,
         direction: crate::remote::Direction,
-    ) -> Result<(gix_url::Url, gix_protocol::transport::Protocol), Error> {
-        fn sanitize(mut url: gix_url::Url) -> Result<gix_url::Url, Error> {
+    ) -> Result<(gix_url::Url, gix_protocol::transport::Protocol), crate::Error> {
+        fn sanitize(mut url: gix_url::Url) -> Result<gix_url::Url, crate::Error> {
             if url.scheme == gix_url::Scheme::File {
                 let mut dir = gix_path::to_native_path_on_windows(Cow::Borrowed(url.path.as_ref()));
                 let kind = gix_discover::is_git(dir.as_ref())

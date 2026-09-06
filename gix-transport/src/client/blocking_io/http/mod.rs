@@ -9,7 +9,7 @@ use std::{
 use base64::Engine;
 use bstr::BStr;
 use gix_error::{ErrorExt, message};
-pub use traits::{Error, GetResponse, Http, PostBodyDataKind, PostResponse};
+pub use traits::{GetResponse, Http, PostBodyDataKind, PostResponse};
 
 use crate::{
     Protocol, Service,
@@ -537,7 +537,7 @@ impl<H: Http, B: BufRead + Unpin> BufRead for HeadersThenBody<H, B> {
 }
 
 impl<H: Http, B: ReadlineBufRead + Unpin> ReadlineBufRead for HeadersThenBody<H, B> {
-    fn readline(&mut self) -> Option<std::io::Result<Result<PacketLineRef<'_>, gix_packetline::decode::Error>>> {
+    fn readline(&mut self) -> Option<std::io::Result<Result<PacketLineRef<'_>, gix_error::ValidationError>>> {
         if let Err(err) = self.handle_headers() {
             return Some(Err(err));
         }

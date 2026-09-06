@@ -1,16 +1,10 @@
-///
-pub mod apply {
-    /// Returned when failing to apply deltas.
-    pub type Error = gix_error::CorruptionError;
-}
-
-fn corrupt(message: &'static str) -> apply::Error {
-    apply::Error::new(format!("Corrupt delta data: {message}"))
+fn corrupt(message: &'static str) -> gix_error::CorruptionError {
+    gix_error::CorruptionError::new(format!("Corrupt delta data: {message}"))
 }
 
 /// Given the decompressed pack delta `d`, decode a size in bytes (either the base object size or the result object size)
 /// Equivalent to [this canonical git function](https://github.com/git/git/blob/311531c9de557d25ac087c1637818bd2aad6eb3a/delta.h#L89)
-pub(crate) fn decode_header_size(d: &[u8]) -> Result<(u64, usize), apply::Error> {
+pub(crate) fn decode_header_size(d: &[u8]) -> Result<(u64, usize), gix_error::CorruptionError> {
     let mut shift = 0;
     let mut size = 0u64;
     let mut consumed = 0;
@@ -28,8 +22,8 @@ pub(crate) fn decode_header_size(d: &[u8]) -> Result<(u64, usize), apply::Error>
     Err(corrupt("delta header size is truncated"))
 }
 
-pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(), apply::Error> {
-    fn next_byte(data: &[u8], i: &mut usize) -> Result<u8, apply::Error> {
+pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(), gix_error::CorruptionError> {
+    fn next_byte(data: &[u8], i: &mut usize) -> Result<u8, gix_error::CorruptionError> {
         let byte = *data
             .get(*i)
             .ok_or_else(|| corrupt("delta copy instruction is truncated"))?;
@@ -76,7 +70,7 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                     base.get(ofs..end)
                         .ok_or_else(|| corrupt("delta copy range exceeds base object size"))?,
                 )
-                .map_err(|_| apply::Error::new("Delta copy from base: byte slices must match"))?;
+                .map_err(|_| gix_error::CorruptionError::new("Delta copy from base: byte slices must match"))?;
             }
             0 => {
                 return Err(corrupt("delta command 0 is reserved and invalid"));
@@ -90,7 +84,7 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                     data.get(i..end)
                         .ok_or_else(|| corrupt("delta insert data is truncated"))?,
                 )
-                .map_err(|_| apply::Error::new("Delta copy data: byte slices must match"))?;
+                .map_err(|_| gix_error::CorruptionError::new("Delta copy data: byte slices must match"))?;
                 i = end;
             }
         }

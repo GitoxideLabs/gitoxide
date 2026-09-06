@@ -7,10 +7,6 @@ use crate::{
     Repository,
     config::{cache::util::ApplyLeniencyDefault, tree},
     prelude::ObjectIdExt,
-    repository::{
-        blob_merge_options, merge_commits, merge_resource_cache, merge_trees, tree_merge_options, virtual_merge_base,
-        virtual_merge_base_with_graph,
-    },
 };
 
 /// Merge-utilities
@@ -24,7 +20,7 @@ impl Repository {
     pub fn merge_resource_cache(
         &self,
         worktree_roots: gix_merge::blob::pipeline::WorktreeRoots,
-    ) -> Result<gix_merge::blob::Platform, merge_resource_cache::Error> {
+    ) -> Result<gix_merge::blob::Platform, crate::Error> {
         let index = self.index_or_load_from_head_or_empty()?;
         let mode = {
             let renormalize = tree::Merge::RENORMALIZE
@@ -60,7 +56,7 @@ impl Repository {
 
     /// Return options for use with [`gix_merge::blob::PlatformRef::merge()`], accessible through
     /// [merge_resource_cache()](Self::merge_resource_cache).
-    pub fn blob_merge_options(&self) -> Result<gix_merge::blob::platform::merge::Options, blob_merge_options::Error> {
+    pub fn blob_merge_options(&self) -> Result<gix_merge::blob::platform::merge::Options, crate::Error> {
         Ok(gix_merge::blob::platform::merge::Options {
             is_virtual_ancestor: false,
             resolve_binary_with: None,
@@ -86,7 +82,7 @@ impl Repository {
     }
 
     /// Read all relevant configuration options to instantiate options for use in [`merge_trees()`](Self::merge_trees).
-    pub fn tree_merge_options(&self) -> Result<crate::merge::tree::Options, tree_merge_options::Error> {
+    pub fn tree_merge_options(&self) -> Result<crate::merge::tree::Options, crate::Error> {
         let (mut rewrites, mut is_configured) = crate::diff::utils::new_rewrites_inner(
             &self.config.resolved,
             self.config.lenient_config,
@@ -135,7 +131,7 @@ impl Repository {
         their_tree: impl AsRef<gix_hash::oid>,
         labels: gix_merge::blob::builtin_driver::text::Labels<'_>,
         options: crate::merge::tree::Options,
-    ) -> Result<crate::merge::tree::Outcome<'_>, merge_trees::Error> {
+    ) -> Result<crate::merge::tree::Outcome<'_>, crate::Error> {
         let mut diff_cache = self.diff_resource_cache_for_tree_diff()?;
         let mut blob_merge = self.merge_resource_cache(Default::default())?;
         let gix_merge::tree::Outcome {
@@ -190,7 +186,7 @@ impl Repository {
         their_commit: impl Into<gix_hash::ObjectId>,
         labels: gix_merge::blob::builtin_driver::text::Labels<'_>,
         options: crate::merge::commit::Options,
-    ) -> Result<crate::merge::commit::Outcome<'_>, merge_commits::Error> {
+    ) -> Result<crate::merge::commit::Outcome<'_>, crate::Error> {
         let mut diff_cache = self.diff_resource_cache_for_tree_diff()?;
         let mut blob_merge = self.merge_resource_cache(Default::default())?;
         let commit_graph = self.commit_graph_if_enabled()?;
@@ -249,7 +245,7 @@ impl Repository {
         &self,
         merge_bases: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
         options: crate::merge::tree::Options,
-    ) -> Result<crate::merge::virtual_merge_base::Outcome<'_>, virtual_merge_base::Error> {
+    ) -> Result<crate::merge::virtual_merge_base::Outcome<'_>, crate::Error> {
         let commit_graph = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(commit_graph.as_ref());
         self.virtual_merge_base_with_graph(merge_bases, &mut graph, options)
@@ -262,7 +258,7 @@ impl Repository {
         merge_bases: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
         graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
         options: crate::merge::tree::Options,
-    ) -> Result<crate::merge::virtual_merge_base::Outcome<'_>, virtual_merge_base_with_graph::Error> {
+    ) -> Result<crate::merge::virtual_merge_base::Outcome<'_>, crate::Error> {
         let mut merge_bases: Vec<_> = merge_bases.into_iter().map(Into::into).collect();
         let first = merge_bases
             .pop()

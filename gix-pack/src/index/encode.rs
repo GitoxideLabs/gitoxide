@@ -74,7 +74,7 @@ mod function {
         kind: crate::index::Version,
         object_hash: gix_hash::Kind,
         progress: &mut dyn DynNestedProgress,
-    ) -> Result<gix_hash::ObjectId, gix_hash::io::Error> {
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
         use io::Write;
         assert_eq!(kind, crate::index::Version::V2, "Can only write V2 packs right now");
         assert!(

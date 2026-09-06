@@ -179,10 +179,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> crate::Result {
 }
 
 fn comparable_ext_diff(
-    cmd: Result<
-        gix_diff::blob::platform::prepare_diff_command::Command,
-        gix_diff::blob::platform::prepare_diff_command::Error,
-    >,
+    cmd: Result<gix_diff::blob::platform::prepare_diff_command::Command, gix_error::Exn<gix_error::Message>>,
 ) -> String {
     let cmd = cmd.expect("no error");
     let command = format!("{:?}", *cmd);

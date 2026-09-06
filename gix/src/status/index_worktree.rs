@@ -10,9 +10,6 @@ use crate::{
 };
 use gix_status::index_as_worktree::traits::{CompareBlobs, SubmoduleStatus};
 
-/// The error returned by [Repository::index_worktree_status()].
-pub type Error = gix_error::Error;
-
 /// Options for use with [Repository::index_worktree_status()].
 #[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub struct Options {
@@ -84,7 +81,7 @@ impl Repository {
         progress: &mut dyn gix_features::progress::Progress,
         should_interrupt: &AtomicBool,
         options: Options,
-    ) -> Result<gix_status::index_as_worktree_with_renames::Outcome, Error>
+    ) -> Result<gix_status::index_as_worktree_with_renames::Outcome, crate::Error>
     where
         T: Send + Clone,
         U: Send + Clone,
@@ -167,7 +164,7 @@ impl Repository {
         patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
         index: &gix_index::State,
         options: Option<&crate::dirwalk::Options>,
-    ) -> Result<crate::Pathspec<'_>, Error> {
+    ) -> Result<crate::Pathspec<'_>, crate::Error> {
         let empty_patterns_match_prefix = options.is_some_and(|opts| opts.empty_patterns_match_prefix);
         let attrs_and_excludes = self
             .attributes(
@@ -213,10 +210,7 @@ mod submodule_status {
 
     impl BuiltinSubmoduleStatus {
         /// Create a new instance from a `repo` and a `mode` to control how the submodule status will be obtained.
-        pub fn new(
-            repo: crate::ThreadSafeRepository,
-            mode: Submodule,
-        ) -> Result<Self, crate::submodule::modules::Error> {
+        pub fn new(repo: crate::ThreadSafeRepository, mode: Submodule) -> Result<Self, crate::Error> {
             let local_repo = repo.to_thread_local();
             let submodule_paths = match local_repo.submodules() {
                 Ok(Some(sm)) => {
@@ -570,7 +564,7 @@ pub mod iter {
         pub fn into_index_worktree_iter(
             mut self,
             patterns: impl IntoIterator<Item = BString>,
-        ) -> Result<index_worktree::Iter, crate::status::into_iter::Error> {
+        ) -> Result<index_worktree::Iter, crate::Error> {
             // deactivate the tree-iteration
             self.head_tree = None;
             Ok(index_worktree::Iter {
@@ -580,7 +574,7 @@ pub mod iter {
     }
 
     impl Iterator for super::Iter {
-        type Item = Result<Item, index_worktree::Error>;
+        type Item = Result<Item, crate::Error>;
 
         fn next(&mut self) -> Option<Self::Item> {
             self.inner.next().map(|res| {

@@ -92,10 +92,7 @@ where
     ///
     /// It's meant to be used by users of the [`with_credentials()`](Self::with_credentials()) builder to gain access to the
     /// default way of handling credentials, which they can call as fallback.
-    pub fn configured_credentials(
-        &self,
-        url: gix_url::Url,
-    ) -> Result<AuthenticateFn<'static>, crate::config::credential_helpers::Error> {
+    pub fn configured_credentials(&self, url: gix_url::Url) -> Result<AuthenticateFn<'static>, crate::Error> {
         let (mut cascade, _action_with_normalized_url, prompt_opts) =
             self.remote.repo.config_snapshot().credential_helpers(url)?;
         Ok(Box::new(move |action| cascade.invoke(action, prompt_opts.clone())) as AuthenticateFn<'_>)

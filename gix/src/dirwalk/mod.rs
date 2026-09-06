@@ -27,7 +27,7 @@ pub struct Iter {
     #[expect(clippy::type_complexity)]
     rx_and_join: Option<(
         std::sync::mpsc::Receiver<iter::Item>,
-        std::thread::JoinHandle<Result<iter::Outcome, Error>>,
+        std::thread::JoinHandle<Result<iter::Outcome, crate::Error>>,
     )>,
     #[cfg(feature = "parallel")]
     should_interrupt: crate::util::OwnedOrStaticAtomicBool,
@@ -37,9 +37,6 @@ pub struct Iter {
     /// The outcome of the operation, only available once the operation has ended.
     out: Option<iter::Outcome>,
 }
-
-/// The error returned by [dirwalk()](crate::Repository::dirwalk()).
-pub type Error = gix_error::Error;
 
 /// The outcome of the [dirwalk()](crate::Repository::dirwalk).
 pub struct Outcome<'repo> {

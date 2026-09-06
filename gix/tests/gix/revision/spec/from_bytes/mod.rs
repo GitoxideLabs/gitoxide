@@ -158,13 +158,13 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         insta::assert_snapshot!(format!("{err:#?}").replace('\\', "/"), @r#"
         delegate.peel_until(ValidObject) failed: "{object}"
         |
-        └─ Loose(Decode(The object header contained an unknown object kind., at gix-object/src/lib.rs:344
+        └─ Loose(Decode(The object header contained an unknown object kind., at gix-object/src/lib.rs:332
         |
-        └─ Unknown object kind: "bad", at gix-object/src/lib.rs:344))
+        └─ Unknown object kind: "bad", at gix-object/src/lib.rs:332))
         |
-        └─ Decode(The object header contained an unknown object kind., at gix-object/src/lib.rs:344
+        └─ Decode(The object header contained an unknown object kind., at gix-object/src/lib.rs:332
         |
-        └─ Unknown object kind: "bad", at gix-object/src/lib.rs:344)
+        └─ Unknown object kind: "bad", at gix-object/src/lib.rs:332)
             |
             └─ ValidationError { message: "Unknown object kind", input: Some("bad") }
         |
@@ -201,17 +201,17 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         insta::assert_snapshot!(actual, @r#"
         delegate.peel_until(ValidObject) failed: "{object}"
         |
-        └─ Loose(DecompressFile { source: Could not decode zip stream, at gix-zlib/src/inflate.rs:16
+        └─ Loose(DecompressFile { source: Could not decode zip stream, at gix-zlib/src/inflate.rs:13
         |
-        └─ Invalid input data, at gix-zlib/src/decompress.rs:67, path: "tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b" })
+        └─ Invalid input data, at gix-zlib/src/decompress.rs:64, path: "tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b" })
         |
-        └─ DecompressFile { source: Could not decode zip stream, at gix-zlib/src/inflate.rs:16
+        └─ DecompressFile { source: Could not decode zip stream, at gix-zlib/src/inflate.rs:13
         |
-        └─ Invalid input data, at gix-zlib/src/decompress.rs:67, path: "tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b" }
+        └─ Invalid input data, at gix-zlib/src/decompress.rs:64, path: "tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b" }
             |
-            └─ Could not decode zip stream, at gix-zlib/src/inflate.rs:16
+            └─ Could not decode zip stream, at gix-zlib/src/inflate.rs:13
         |
-        └─ Invalid input data, at gix-zlib/src/decompress.rs:67
+        └─ Invalid input data, at gix-zlib/src/decompress.rs:64
                 |
                 └─ Invalid input data
         |

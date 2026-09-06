@@ -6,8 +6,6 @@ mod entries;
 ///
 pub mod header;
 
-/// The error returned by [`State::from_bytes()`][crate::State::from_bytes()].
-pub type Error = gix_error::Exn;
 use gix_error::{CorruptionError, ErrorExt, ResourceExhaustionError, ResourceExhaustionKind, ResultExt, message};
 use gix_features::parallel::InOrderIter;
 
@@ -48,7 +46,7 @@ impl State {
             expected_checksum,
             alloc_limit_bytes,
         }: Options,
-    ) -> Result<(Self, Option<gix_hash::ObjectId>), Error> {
+    ) -> Result<(Self, Option<gix_hash::ObjectId>), gix_error::Exn> {
         let _span = gix_features::trace::detail!("gix_index::State::from_bytes()", options = ?_options);
         let (version, num_entries, post_header_data) = header::decode(data, object_hash)?;
         let start_of_extensions = extension::end_of_index_entry::decode(data, object_hash)
@@ -134,7 +132,7 @@ impl State {
                                                 )?;
                                                 is_sparse |= chunk_is_sparse;
                                             }
-                                            Ok::<_, Error>((
+                                            Ok::<_, gix_error::Exn>((
                                                 id,
                                                 EntriesOutcome {
                                                     entries,
@@ -267,7 +265,7 @@ struct EntriesOutcome {
     pub is_sparse: bool,
 }
 
-fn vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
+fn vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, gix_error::Exn> {
     let mut vec = Vec::new();
     vec.try_reserve(capacity)
         .or_raise_erased(|| message("Index data would require more memory than can be reserved"))?;
@@ -280,7 +278,7 @@ fn entries(
     num_entries: u32,
     object_hash: gix_hash::Kind,
     version: Version,
-) -> Result<(EntriesOutcome, &[u8]), Error> {
+) -> Result<(EntriesOutcome, &[u8]), gix_error::Exn> {
     let mut entries = vec_with_capacity(num_entries as usize)?;
     let mut path_backing = vec_with_capacity(path_backing_buffer_size)?;
     entries::chunk(
@@ -333,13 +331,13 @@ pub(crate) fn stat(data: &[u8]) -> Option<(entry::Stat, &[u8])> {
     ))
 }
 
-fn ensure_in_alloc_limit(size: usize, alloc_limit_bytes: Option<usize>) -> Result<(), Error> {
+fn ensure_in_alloc_limit(size: usize, alloc_limit_bytes: Option<usize>) -> Result<(), gix_error::Exn> {
     if alloc_limit_bytes.is_some_and(|limit| size > limit) {
         return Err(allocation_error(ResourceExhaustionKind::AllocationLimit));
     }
     Ok(())
 }
 
-fn allocation_error(kind: ResourceExhaustionKind) -> Error {
+fn allocation_error(kind: ResourceExhaustionKind) -> gix_error::Exn {
     ResourceExhaustionError::new(kind, "Index data would require more memory than can be reserved").raise_erased()
 }

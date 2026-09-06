@@ -44,11 +44,6 @@ pub(crate) mod connect {
         /// If `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
         pub trace: bool,
     }
-
-    /// The error used in `connect()`.
-    ///
-    /// (Both blocking and async I/O use the same error type.)
-    pub type Error = gix_error::Exn<gix_error::Message>;
 }
 
 mod error {
@@ -58,14 +53,9 @@ mod error {
 
     #[cfg(feature = "blocking-client")]
     use crate::client::blocking_io::ssh;
-    use crate::client::capabilities;
 
-    #[cfg(feature = "http-client")]
-    type HttpError = gix_error::Error;
     #[cfg(feature = "blocking-client")]
     type SshInvocationError = ssh::invocation::Error;
-    #[cfg(not(feature = "http-client"))]
-    type HttpError = std::convert::Infallible;
     #[cfg(not(feature = "blocking-client"))]
     type SshInvocationError = std::convert::Infallible;
 
@@ -75,17 +65,29 @@ mod error {
     pub enum Error {
         MissingHandshake,
         Io(std::io::Error),
-        Capabilities { err: gix_error::Error },
-        LineDecode { err: gix_packetline::decode::Error },
+        Capabilities {
+            err: gix_error::Error,
+        },
+        LineDecode {
+            err: gix_error::ValidationError,
+        },
         ExpectedLine(&'static str),
         ExpectedDataLine,
         AuthenticationUnsupported,
         AuthenticationRefused(&'static str),
         UnsupportedProtocolVersion(BString),
-        InvokeProgram { source: std::io::Error, command: OsString },
-        Http(HttpError),
+        InvokeProgram {
+            source: std::io::Error,
+            command: OsString,
+        },
+        #[cfg(feature = "http-client")]
+        Http(gix_error::Error),
+        #[cfg(not(feature = "http-client"))]
+        Http(std::convert::Infallible),
         SshInvocation(SshInvocationError),
-        AmbiguousPath { path: BString },
+        AmbiguousPath {
+            path: BString,
+        },
     }
 
     impl std::fmt::Display for Error {
@@ -139,14 +141,14 @@ mod error {
         }
     }
 
-    impl From<capabilities::Error> for Error {
-        fn from(err: capabilities::Error) -> Self {
+    impl From<gix_error::Exn<gix_error::Message>> for Error {
+        fn from(err: gix_error::Exn<gix_error::Message>) -> Self {
             Error::Capabilities { err: err.into_error() }
         }
     }
 
-    impl From<gix_packetline::decode::Error> for Error {
-        fn from(err: gix_packetline::decode::Error) -> Self {
+    impl From<gix_error::ValidationError> for Error {
+        fn from(err: gix_error::ValidationError) -> Self {
             Error::LineDecode { err }
         }
     }

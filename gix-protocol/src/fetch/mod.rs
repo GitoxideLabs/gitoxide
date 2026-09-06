@@ -21,12 +21,6 @@
 mod arguments;
 pub use arguments::Arguments;
 
-#[cfg(any(feature = "blocking-client", feature = "async-client"))]
-#[cfg(feature = "fetch")]
-mod error;
-#[cfg(any(feature = "blocking-client", feature = "async-client"))]
-#[cfg(feature = "fetch")]
-pub use error::Error;
 ///
 pub mod response;
 

@@ -11,7 +11,6 @@ use gix::{
     bstr::{BStr, BString, ByteSlice},
     diff::{blob::platform::prepare_diff::Operation, rewrites::CopySource},
     features::progress,
-    objs::find::Error,
     parallel::{InOrderIter, SequenceId},
     prelude::ObjectIdExt,
 };
@@ -385,7 +384,11 @@ pub fn update(
         where
             Find: gix::prelude::Find + Clone,
         {
-            fn try_find<'b>(&self, id: &gix::oid, buf: &'b mut Vec<u8>) -> Result<Option<gix::objs::Data<'b>>, Error> {
+            fn try_find<'b>(
+                &self,
+                id: &gix::oid,
+                buf: &'b mut Vec<u8>,
+            ) -> Result<Option<gix::objs::Data<'b>>, gix::Exn> {
                 let obj = self.inner.try_find(id, buf)?;
                 let Some(obj) = obj else { return Ok(None) };
                 if !obj.kind.is_commit() {

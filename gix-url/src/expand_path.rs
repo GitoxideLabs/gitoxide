@@ -23,9 +23,6 @@ impl From<ForUser> for Option<BString> {
     }
 }
 
-/// The error used by [`parse()`], [`with()`] and [`expand_path()`](crate::expand_path()).
-pub type Error = gix_error::Exn;
-
 fn path_segments(path: &BStr) -> Option<impl Iterator<Item = &[u8]>> {
     if path.starts_with(b"/") {
         Some(path[1..].split(|c| *c == b'/'))
@@ -41,7 +38,7 @@ fn path_segments(path: &BStr) -> Option<impl Iterator<Item = &[u8]>> {
 /// * `/~user/repopath` - the named user's home, returning `/repopath`.
 ///
 /// Paths without a leading slash or home marker are returned unchanged without user information.
-pub fn parse(path: &BStr) -> Result<(Option<ForUser>, BString), Error> {
+pub fn parse(path: &BStr) -> Result<(Option<ForUser>, BString), gix_error::Exn> {
     Ok(path_segments(path)
         .and_then(|mut iter| {
             iter.next().map(|segment| {
@@ -100,7 +97,7 @@ pub fn with(
     user: Option<&ForUser>,
     path: &BStr,
     home_for_user: impl FnOnce(&ForUser) -> Option<PathBuf>,
-) -> Result<PathBuf, Error> {
+) -> Result<PathBuf, gix_error::Exn> {
     fn make_relative(path: &Path) -> PathBuf {
         path.components().skip(1).collect()
     }

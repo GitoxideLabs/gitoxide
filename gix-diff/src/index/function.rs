@@ -4,7 +4,7 @@ use bstr::BStr;
 use gix_error::{ErrorExt, message};
 use gix_filter::attributes::glob::pattern::Case;
 
-use super::{Action, ChangeRef, Error, RewriteOptions};
+use super::{Action, ChangeRef, RewriteOptions};
 use crate::rewrites;
 
 /// Produce an entry-by-entry diff between `lhs` and `rhs`, sending changes to `cb(change) -> Action` for consumption,
@@ -34,7 +34,7 @@ pub fn diff<'rhs, 'lhs: 'rhs, Find>(
     rewrite_options: Option<RewriteOptions<'_, Find>>,
     pathspec: &mut gix_pathspec::Search,
     pathspec_attributes: &mut dyn FnMut(&BStr, Case, bool, &mut gix_attributes::search::Outcome) -> bool,
-) -> Result<Option<rewrites::Outcome>, Error>
+) -> Result<Option<rewrites::Outcome>, gix_error::Exn<gix_error::Message>>
 where
     Find: gix_object::FindObjectOrHeader,
 {
@@ -226,7 +226,7 @@ fn emit_deletion<'rhs, 'lhs: 'rhs>(
     (idx, path, entry): (usize, &'lhs BStr, &'lhs gix_index::Entry),
     mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action, gix_error::Exn>,
     tracker: Option<&mut rewrites::Tracker<ChangeRef<'lhs, 'rhs>>>,
-) -> Result<Action, Error> {
+) -> Result<Action, gix_error::Exn<gix_error::Message>> {
     let change = ChangeRef::Deletion {
         location: Cow::Borrowed(path),
         index: idx,
@@ -249,7 +249,7 @@ fn emit_addition<'rhs, 'lhs: 'rhs>(
     (idx, path, entry): (usize, &'rhs BStr, &'rhs gix_index::Entry),
     mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action, gix_error::Exn>,
     tracker: Option<&mut rewrites::Tracker<ChangeRef<'lhs, 'rhs>>>,
-) -> Result<Action, Error> {
+) -> Result<Action, gix_error::Exn<gix_error::Message>> {
     if ignore_unmerged_and_intent_to_add((idx, path, entry)) {
         return Ok(std::ops::ControlFlow::Continue(()));
     }
@@ -272,7 +272,7 @@ fn emit_addition<'rhs, 'lhs: 'rhs>(
     cb(change).map_err(callback_error)
 }
 
-fn callback_error(err: gix_error::Exn) -> Error {
+fn callback_error(err: gix_error::Exn) -> gix_error::Exn<gix_error::Message> {
     err.raise(message("The callback indicated failure"))
 }
 

@@ -2,10 +2,7 @@ use gix_error::{ErrorExt, ResultExt};
 
 use crate::{
     data,
-    data::{
-        File, delta,
-        file::decode::{DeltaBaseUnresolved, Error},
-    },
+    data::{File, delta, file::decode::DeltaBaseUnresolved},
 };
 
 /// A return value of a resolve function, which given an [`ObjectId`][gix_hash::ObjectId] determines where an object can be found.
@@ -60,7 +57,7 @@ where
         mut entry: data::Entry,
         inflate: &mut gix_zlib::Inflate,
         resolve: &dyn Fn(&gix_hash::oid) -> Option<ResolvedBase>,
-    ) -> Result<Outcome, Error> {
+    ) -> Result<Outcome, gix_error::Exn> {
         use crate::data::entry::Header::*;
         let mut num_deltas = 0;
         let mut first_delta_decompressed_size = None::<u64>;
@@ -81,7 +78,7 @@ where
                     let offset = entry
                         .checked_base_pack_offset(base_distance)
                         .ok_or_else(|| {
-                            crate::data::entry::decode::Error::new(
+                            gix_error::CorruptionError::new(
                                 "Pack entry is truncated: an ofs-delta base distance pointing before pack start",
                             )
                         })
@@ -122,20 +119,24 @@ where
     /// decompression through `decode_entry()` must still validate that the stream length matches
     /// the pack entry header.
     #[inline]
-    fn decode_delta_object_size(&self, inflate: &mut gix_zlib::Inflate, entry: &data::Entry) -> Result<u64, Error> {
+    fn decode_delta_object_size(
+        &self,
+        inflate: &mut gix_zlib::Inflate,
+        entry: &data::Entry,
+    ) -> Result<u64, gix_error::Exn> {
         let mut buf = [0_u8; 20];
         let max_size = entry.decompressed_size.min(buf.len() as u64) as usize;
         let (status, _consumed_in, consumed_out) =
             self.decompress_entry_from_data_offset_unchecked(entry.data_offset, inflate, &mut buf[..max_size])?;
         if status == gix_zlib::Status::StreamEnd {
             if consumed_out as u64 != entry.decompressed_size {
-                return Err(data::entry::decode::Error::new(
+                return Err(gix_error::CorruptionError::new(
                     "Pack entry is truncated: pack entry decompressed to fewer bytes than declared in the entry header",
                 )
                 .raise_erased());
             }
         } else if entry.decompressed_size == max_size as u64 {
-            return Err(data::entry::decode::Error::new(
+            return Err(gix_error::CorruptionError::new(
                 "Pack entry is truncated: pack entry decompressed to more bytes than declared in the entry header",
             )
             .raise_erased());

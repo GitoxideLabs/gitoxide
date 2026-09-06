@@ -444,7 +444,7 @@ fn open_options_preset_system_config_paths_avoid_running_git() -> gix_testtools:
 }
 
 #[cfg(feature = "revision")]
-fn probable_cause(res: Result<gix::Id<'_>, gix::revision::spec::parse::single::Error>) -> String {
+fn probable_cause(res: Result<gix::Id<'_>, gix_error::Error>) -> String {
     res.expect_err("the revspec must not resolve")
         .probable_cause()
         .to_string()

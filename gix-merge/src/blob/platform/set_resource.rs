@@ -3,9 +3,6 @@ use gix_error::{ErrorExt, ResultExt, message};
 
 use crate::blob::{Platform, ResourceKind, platform::Resource};
 
-/// The error returned by [Platform::set_resource](Platform::set_resource).
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// Preparation
 impl Platform {
     /// Store enough information about a resource to eventually use it in a merge, where…
@@ -26,7 +23,7 @@ impl Platform {
         rela_path: &BStr,
         kind: ResourceKind,
         objects: &impl gix_object::FindObjectOrHeader,
-    ) -> Result<(), Error> {
+    ) -> Result<(), gix_error::Exn<gix_error::Message>> {
         if !matches!(
             mode,
             gix_object::tree::EntryKind::Blob | gix_object::tree::EntryKind::BlobExecutable

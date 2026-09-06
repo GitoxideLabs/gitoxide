@@ -17,7 +17,6 @@ use parking_lot::Mutex;
 
 use crate::client::blocking_io::http::{
     self,
-    curl::Error,
     curl::curl_is_retryable,
     options::{FollowRedirects, HttpVersion, ProxyAuthMethod, SslVersion},
     redirect::{self, Action as RedirectAction},
@@ -325,7 +324,7 @@ pub struct Response {
 }
 
 type Worker = (
-    thread::JoinHandle<Result<(), Error>>,
+    thread::JoinHandle<Result<(), gix_error::Exn<gix_error::Message>>>,
     SyncSender<Request>,
     Receiver<Response>,
     SharedRedirectedBaseUrl,
@@ -336,7 +335,7 @@ pub fn new() -> Worker {
     let redirected_base_url_shared_out = redirected_base_url_shared.clone();
     let (req_send, req_recv) = sync_channel(0);
     let (res_send, res_recv) = sync_channel(0);
-    let handle = std::thread::spawn(move || -> Result<(), Error> {
+    let handle = std::thread::spawn(move || -> Result<(), gix_error::Exn<gix_error::Message>> {
         let mut handle = Easy2::new(Handler::default());
         // We don't wait for the possibility for pipelining to become clear, and curl tries to reuse connections by default anyway.
         curl!(handle.pipewait(false));

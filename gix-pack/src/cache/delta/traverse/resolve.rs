@@ -8,7 +8,7 @@ use gix_features::{
 
 use crate::{
     cache::delta::{
-        traverse::{Context, Error, allocation_error, interrupted, util::ItemSliceSync},
+        traverse::{Context, allocation_error, interrupted, util::ItemSliceSync},
         tree::Item,
     },
     data,
@@ -75,7 +75,7 @@ fn attach_ref_delta_children<T: Send>(
     decompressed: &[u8],
     ref_delta_children: Option<&super::SharedRefDeltaChildren>,
     object_hash: gix_hash::Kind,
-) -> Result<(), Error> {
+) -> Result<(), gix_error::Exn> {
     let Some(ref_delta_children) = ref_delta_children else {
         return Ok(());
     };
@@ -144,7 +144,7 @@ pub(super) unsafe fn all<T, F, MBFN, R>(
     object_hash: gix_hash::Kind,
     alloc_limit_bytes: Option<usize>,
     should_interrupt: &AtomicBool,
-) -> Result<(), Error>
+) -> Result<(), gix_error::Exn>
 where
     T: Send,
     R: Send + Sync,
@@ -222,7 +222,7 @@ fn resolve_serial<T, F, MBFN, R>(
     object_hash: gix_hash::Kind,
     alloc_limit_bytes: Option<usize>,
     should_interrupt: &AtomicBool,
-) -> Result<(), Error>
+) -> Result<(), gix_error::Exn>
 where
     T: Send,
     R: Send + Sync,
@@ -279,7 +279,7 @@ fn resolve_parallel<T, F, MBFN, R>(
     object_hash: gix_hash::Kind,
     alloc_limit_bytes: Option<usize>,
     should_interrupt: &AtomicBool,
-) -> Result<(), Error>
+) -> Result<(), gix_error::Exn>
 where
     T: Send,
     R: Send + Sync,
@@ -462,7 +462,7 @@ fn resolve_task<'a, T, F, MBFN, R>(
     objects: &gix_features::progress::StepShared,
     size: &gix_features::progress::StepShared,
     mut push: impl FnMut(WorkItem<'a, T>),
-) -> Result<(), Error>
+) -> Result<(), gix_error::Exn>
 where
     T: Send,
     R: Send + Sync,
@@ -486,7 +486,7 @@ where
         let (base_size, consumed) = data::delta::decode_header_size(delta_bytes).or_erased()?;
         let base_size = decoded_size_limited(base_size, alloc_limit_bytes)?;
         if parent.bytes.len() != base_size {
-            return Err(data::delta::apply::Error::new(
+            return Err(gix_error::CorruptionError::new(
                 "Corrupt delta data: delta base size does not match base object size",
             )
             .raise_erased());
@@ -579,7 +579,7 @@ fn inspect<T, MBFN>(
     modify_base: &mut MBFN,
     objects: &gix_features::progress::StepShared,
     size: &gix_features::progress::StepShared,
-) -> Result<(), Error>
+) -> Result<(), gix_error::Exn>
 where
     T: Send,
     MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> Result<(), gix_error::Exn> + Send,
@@ -612,7 +612,7 @@ fn decompress_from_resolver<F, R>(
     resolve_data: &R,
     object_hash: gix_hash::Kind,
     alloc_limit_bytes: Option<usize>,
-) -> Result<(data::Entry, u64), Error>
+) -> Result<(data::Entry, u64), gix_error::Exn>
 where
     F: for<'r> Fn(EntryRange, &'r R) -> Option<&'r [u8]> + Send,
 {
@@ -636,7 +636,7 @@ fn decompress_all_at_once_with(
     decompressed_len: usize,
     out: &mut Vec<u8>,
     alloc_limit_bytes: Option<usize>,
-) -> Result<(), Error> {
+) -> Result<(), gix_error::Exn> {
     resize_with_limit(out, decompressed_len, alloc_limit_bytes)?;
     inflate.reset();
     inflate
@@ -645,7 +645,7 @@ fn decompress_all_at_once_with(
     Ok(())
 }
 
-fn decoded_size_limited(size: u64, alloc_limit_bytes: Option<usize>) -> Result<usize, Error> {
+fn decoded_size_limited(size: u64, alloc_limit_bytes: Option<usize>) -> Result<usize, gix_error::Exn> {
     let size: usize = size
         .try_into()
         .map_err(|_| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
@@ -655,7 +655,7 @@ fn decoded_size_limited(size: u64, alloc_limit_bytes: Option<usize>) -> Result<u
     Ok(size)
 }
 
-fn resize_with_limit(out: &mut Vec<u8>, len: usize, alloc_limit_bytes: Option<usize>) -> Result<(), Error> {
+fn resize_with_limit(out: &mut Vec<u8>, len: usize, alloc_limit_bytes: Option<usize>) -> Result<(), gix_error::Exn> {
     if alloc_limit_bytes.is_some_and(|limit| len > limit) {
         return Err(allocation_error(ResourceExhaustionKind::AllocationLimit));
     }
@@ -845,7 +845,7 @@ mod tests {
         );
     }
 
-    fn traverse_with_limit(tree: Tree<()>, pack: &Vec<u8>) -> Result<(), traverse::Error> {
+    fn traverse_with_limit(tree: Tree<()>, pack: &Vec<u8>) -> Result<(), gix_error::Exn> {
         traverse(
             tree,
             pack,
@@ -863,7 +863,7 @@ mod tests {
         alloc_limit_bytes: Option<usize>,
         resolve: F,
         inspect: MBFN,
-    ) -> Result<(), traverse::Error>
+    ) -> Result<(), gix_error::Exn>
     where
         F: for<'r> Fn(data::EntryRange, &'r Vec<u8>) -> Option<&'r [u8]> + Send + Clone,
         MBFN:

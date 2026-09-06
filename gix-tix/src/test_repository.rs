@@ -9,11 +9,11 @@ const DEFAULT_OVERRIDES: &[&str] = &[
     "core.editor=:",
 ];
 
-pub(crate) fn open(path: impl AsRef<Path>) -> Result<gix::Repository, gix::open::Error> {
+pub(crate) fn open(path: impl AsRef<Path>) -> Result<gix::Repository, gix::Error> {
     open_with(path, std::iter::empty::<String>())
 }
 
-pub(crate) fn open_with<I, S>(path: impl AsRef<Path>, overrides: I) -> Result<gix::Repository, gix::open::Error>
+pub(crate) fn open_with<I, S>(path: impl AsRef<Path>, overrides: I) -> Result<gix::Repository, gix::Error>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,

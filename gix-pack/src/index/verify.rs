@@ -12,9 +12,6 @@ pub mod integrity {
     use std::marker::PhantomData;
 
     /// Returned by [`index::File::verify_integrity()`][crate::index::File::verify_integrity()].
-    pub type Error = gix_error::Exn;
-
-    /// Returned by [`index::File::verify_integrity()`][crate::index::File::verify_integrity()].
     pub struct Outcome {
         /// The computed checksum of the index which matched the stored one.
         pub actual_index_checksum: gix_hash::ObjectId,
@@ -67,12 +64,6 @@ pub mod integrity {
     }
 }
 
-///
-pub mod checksum {
-    /// Returned by [`index::File::verify_checksum()`][crate::index::File::verify_checksum()].
-    pub type Error = crate::verify::checksum::Error;
-}
-
 /// Various ways in which a pack and index can be verified
 #[derive(Default, Debug, Eq, PartialEq, Hash, Clone, Copy)]
 pub enum Mode {
@@ -121,7 +112,7 @@ where
         &self,
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
-    ) -> Result<gix_hash::ObjectId, checksum::Error> {
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
         crate::verify::checksum_on_disk_or_mmap(
             self.path(),
             &self.data,
@@ -154,7 +145,7 @@ where
         pack: Option<PackContext<'_, F, D>>,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
-    ) -> Result<integrity::Outcome, index::traverse::Error>
+    ) -> Result<integrity::Outcome, gix_error::Exn>
     where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
@@ -221,7 +212,7 @@ where
         buf: &[u8],
         index_entry: &index::Entry,
         _progress: &dyn gix_features::progress::Progress,
-    ) -> Result<(), integrity::Error> {
+    ) -> Result<(), gix_error::Exn> {
         if let Mode::HashCrc32Decode | Mode::HashCrc32DecodeEncode = verify_mode {
             use gix_object::Kind::*;
             match object_kind {

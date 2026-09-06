@@ -1,11 +1,5 @@
-///
-pub mod decode {
-    /// The error returned by [`decode()`](super::decode()).
-    pub type Error = gix_error::Exn<gix_error::ValidationError>;
-}
-
 /// Decode `data` as EWAH bitmap.
-pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), decode::Error> {
+pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), gix_error::Exn<gix_error::ValidationError>> {
     use crate::decode;
     use gix_error::{OptionExt, message};
 

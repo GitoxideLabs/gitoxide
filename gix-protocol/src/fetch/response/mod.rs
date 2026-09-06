@@ -4,10 +4,7 @@ use gix_transport::Protocol;
 
 use crate::{command::Feature, fetch::Response};
 
-/// The error returned in the [response module][crate::fetch::response].
-pub type Error = gix_error::Exn;
-
-fn unknown_line(line: &str) -> Error {
+fn unknown_line(line: &str) -> gix_error::Exn {
     CorruptionError::new(format!("Encountered an unknown line prefix in {line:?}")).raise_erased()
 }
 
@@ -36,7 +33,7 @@ pub struct WantedRef {
 }
 
 /// Parse a `ShallowUpdate` from a `line` as received to the server.
-pub fn shallow_update_from_line(line: &str) -> Result<ShallowUpdate, Error> {
+pub fn shallow_update_from_line(line: &str) -> Result<ShallowUpdate, gix_error::Exn> {
     match line.trim_end().split_once(' ') {
         Some((prefix, id)) => {
             let id = gix_hash::ObjectId::from_hex(id.as_bytes())
@@ -53,7 +50,7 @@ pub fn shallow_update_from_line(line: &str) -> Result<ShallowUpdate, Error> {
 
 impl Acknowledgement {
     /// Parse an `Acknowledgement` from a `line` as received to the server.
-    pub fn from_line(line: &str) -> Result<Acknowledgement, Error> {
+    pub fn from_line(line: &str) -> Result<Acknowledgement, gix_error::Exn> {
         let mut tokens = line.trim_end().splitn(3, ' ');
         match (tokens.next(), tokens.next(), tokens.next()) {
             (Some(first), id, description) => Ok(match first {
@@ -91,7 +88,7 @@ impl Acknowledgement {
 
 impl WantedRef {
     /// Parse a `WantedRef` from a `line` as received from the server.
-    pub fn from_line(line: &str) -> Result<WantedRef, Error> {
+    pub fn from_line(line: &str) -> Result<WantedRef, gix_error::Exn> {
         match line.trim_end().split_once(' ') {
             Some((id, path)) => {
                 let id = gix_hash::ObjectId::from_hex(id.as_bytes()).or_raise_erased(|| {
@@ -115,7 +112,7 @@ impl Response {
     ///
     /// Even though technically any set of features supported by the server could work, we only implement the ones that
     /// make it easy to maintain all versions with a single code base that aims to be and remain maintainable.
-    pub fn check_required_features(version: Protocol, features: &[Feature]) -> Result<(), Error> {
+    pub fn check_required_features(version: Protocol, features: &[Feature]) -> Result<(), gix_error::Exn> {
         match version {
             Protocol::V0 | Protocol::V1 => {
                 let has = |name: &str| features.iter().any(|f| f.0 == name);

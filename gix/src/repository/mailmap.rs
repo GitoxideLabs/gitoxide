@@ -22,8 +22,8 @@ impl crate::Repository {
     ///
     /// Only the first error will be reported, and as many source mailmaps will be merged into `target` as possible.
     /// Parsing errors will be ignored.
-    pub fn open_mailmap_into(&self, target: &mut gix_mailmap::Snapshot) -> Result<(), crate::mailmap::load::Error> {
-        let mut err = None::<crate::mailmap::load::Error>;
+    pub fn open_mailmap_into(&self, target: &mut gix_mailmap::Snapshot) -> Result<(), crate::Error> {
+        let mut err = None::<crate::Error>;
         let mut buf = Vec::new();
         let mut blob_id = self.config.resolved.string(Mailmap::BLOB).and_then(|spec| {
             self.rev_parse_single(spec.as_bstr())

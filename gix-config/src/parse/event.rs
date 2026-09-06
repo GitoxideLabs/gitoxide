@@ -6,7 +6,7 @@ use crate::parse::{Event, EventRef};
 
 impl Event {
     /// Shift all backing-buffer spans in this event forward by `offset` bytes.
-    pub(crate) fn rebase(&mut self, offset: usize) -> Result<(), crate::parse::span::Error> {
+    pub(crate) fn rebase(&mut self, offset: usize) -> Result<(), gix_error::ValidationError> {
         match self {
             Event::Comment(comment) => comment.text.rebase(offset),
             Event::SectionHeader(header) => header.rebase(offset),
@@ -24,7 +24,7 @@ impl Event {
         &self,
         source: &[u8],
         target: &mut Vec<u8>,
-    ) -> Result<Event, crate::parse::span::Error> {
+    ) -> Result<Event, gix_error::ValidationError> {
         Ok(match self {
             Event::Comment(comment) => Event::Comment(comment.copy_to_backing_in(source, target)?),
             Event::SectionHeader(header) => Event::SectionHeader(header.copy_to_backing_in(source, target)?),

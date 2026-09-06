@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use gix_features::{parallel, progress::DynNestedProgress};
 
-use super::Error;
 use crate::{
     cache::delta::traverse,
     index::{self, traverse::Outcome, util::index_entries_sorted_by_offset_ascending},
@@ -73,7 +72,7 @@ where
             thread_limit,
             alloc_limit_bytes,
         }: Options,
-    ) -> Result<Outcome, Error>
+    ) -> Result<Outcome, gix_error::Exn>
     where
         Processor: FnMut(
                 gix_object::Kind,
@@ -104,7 +103,7 @@ where
                     res
                 }
             },
-            || -> Result<_, Error> {
+            || -> Result<_, gix_error::Exn> {
                 let sorted_entries = index_entries_sorted_by_offset_ascending(
                     self,
                     &mut progress.add_child_with_id(

@@ -8,9 +8,6 @@ use crate::{
     tree::{Entry, EntryRef},
 };
 
-/// The Error used in [`Tree::write_to()`][crate::WriteTo::write_to()].
-pub type Error = gix_error::ValidationError;
-
 /// Serialization
 impl crate::WriteTo for Tree {
     /// Serialize this tree to `out` in the git internal format.
@@ -30,7 +27,7 @@ impl crate::WriteTo for Tree {
             out.write_all(SPACE)?;
 
             if filename.find_byte(0).is_some() {
-                return Err(io::Error::other(Error::new_with_input(
+                return Err(io::Error::other(gix_error::ValidationError::new_with_input(
                     "Nullbytes are invalid in file paths as they are separators",
                     filename.clone(),
                 )));
@@ -77,7 +74,7 @@ impl crate::WriteTo for TreeRef<'_> {
             out.write_all(SPACE)?;
 
             if filename.find_byte(0).is_some() {
-                return Err(io::Error::other(Error::new_with_input(
+                return Err(io::Error::other(gix_error::ValidationError::new_with_input(
                     "Nullbytes are invalid in file paths as they are separators",
                     (*filename).to_owned(),
                 )));

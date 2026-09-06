@@ -110,12 +110,6 @@ pub enum Data {
     },
 }
 
-///
-pub mod convert_to_mergeable {
-    /// The error returned by [Pipeline::convert_to_mergeable()](super::Pipeline::convert_to_mergeable()).
-    pub type Error = gix_error::Exn;
-}
-
 /// Conversion
 impl Pipeline {
     /// Convert the object at `id`, `mode`, `rela_path` and `kind`, providing access to `attributes` and `objects`.
@@ -150,7 +144,7 @@ impl Pipeline {
         objects: &dyn gix_object::FindObjectOrHeader,
         convert: Mode,
         out: &mut Vec<u8>,
-    ) -> Result<Option<Data>, convert_to_mergeable::Error> {
+    ) -> Result<Option<Data>, gix_error::Exn> {
         use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, message};
 
         if !matches!(mode, EntryKind::Blob | EntryKind::BlobExecutable) {

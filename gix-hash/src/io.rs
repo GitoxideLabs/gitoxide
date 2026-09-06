@@ -1,23 +1,19 @@
-use crate::hasher;
 use gix_error::{ErrorExt, message};
 
-/// The error type for I/O operations that compute hashes.
-pub type Error = gix_error::Exn;
-
 /// Convert an I/O error into this module's error type without changing its message.
-pub fn from_std_io(source: std::io::Error) -> Error {
+pub fn from_std_io(source: std::io::Error) -> gix_error::Exn {
     source.raise_erased()
 }
 
 /// Convert a hashing error into this module's error type and add operation context.
-pub fn from_hasher(source: hasher::Error) -> Error {
+pub fn from_hasher(source: gix_error::CorruptionError) -> gix_error::Exn {
     source.and_raise(message("Failed to hash data")).erased()
 }
 
 pub(super) mod _impl {
     use crate::{
         Hasher, hasher,
-        io::{Error, from_hasher, from_std_io},
+        io::{from_hasher, from_std_io},
     };
 
     /// Compute the hash of `kind` for the bytes in the file at `path`, hashing only the first `num_bytes_from_start`
@@ -35,7 +31,7 @@ pub(super) mod _impl {
         kind: crate::Kind,
         progress: &mut dyn gix_features::progress::Progress,
         should_interrupt: &std::sync::atomic::AtomicBool,
-    ) -> Result<crate::ObjectId, Error> {
+    ) -> Result<crate::ObjectId, gix_error::Exn> {
         bytes(
             &mut std::fs::File::open(path).map_err(from_std_io)?,
             num_bytes_from_start,
@@ -52,7 +48,7 @@ pub(super) mod _impl {
         kind: crate::Kind,
         progress: &mut dyn gix_features::progress::Progress,
         should_interrupt: &std::sync::atomic::AtomicBool,
-    ) -> Result<crate::ObjectId, Error> {
+    ) -> Result<crate::ObjectId, gix_error::Exn> {
         bytes_with_hasher(read, num_bytes_from_start, hasher(kind), progress, should_interrupt)
     }
 
@@ -63,7 +59,7 @@ pub(super) mod _impl {
         mut hasher: Hasher,
         progress: &mut dyn gix_features::progress::Progress,
         should_interrupt: &std::sync::atomic::AtomicBool,
-    ) -> Result<crate::ObjectId, Error> {
+    ) -> Result<crate::ObjectId, gix_error::Exn> {
         let start = std::time::Instant::now();
         // init progress before the possibility for failure, as convenience in case people want to recover
         progress.init(

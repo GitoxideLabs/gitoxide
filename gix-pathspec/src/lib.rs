@@ -46,12 +46,6 @@ use bstr::BString;
 /// `gix-glob` types are available through [`attributes::glob`].
 pub use gix_attributes as attributes;
 
-///
-pub mod normalize {
-    /// The error returned by [Pattern::normalize()](super::Pattern::normalize()).
-    pub type Error = gix_error::ValidationError;
-}
-
 mod pattern;
 
 ///
@@ -169,6 +163,6 @@ pub enum SearchMode {
 /// setting the given `default` values in case these aren't specified in `input`.
 ///
 /// Note that empty [paths](Pattern::path) are allowed here, and generally some processing has to be performed.
-pub fn parse(input: &[u8], default: Defaults) -> Result<Pattern, parse::Error> {
+pub fn parse(input: &[u8], default: Defaults) -> Result<Pattern, gix_error::ValidationError> {
     Pattern::from_bytes(input, default)
 }

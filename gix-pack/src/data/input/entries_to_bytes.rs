@@ -29,7 +29,7 @@ pub struct EntriesToBytesIter<I: Iterator, W> {
 
 impl<I, W> EntriesToBytesIter<I, W>
 where
-    I: Iterator<Item = Result<input::Entry, input::Error>>,
+    I: Iterator<Item = Result<input::Entry, gix_error::Exn>>,
     W: std::io::Read + std::io::Write + std::io::Seek,
 {
     /// Create a new instance reading [entries][input::Entry] from an `input` iterator and write pack data bytes to
@@ -54,7 +54,7 @@ where
         self.trailer
     }
 
-    fn next_inner(&mut self, entry: input::Entry) -> Result<input::Entry, gix_hash::io::Error> {
+    fn next_inner(&mut self, entry: input::Entry) -> Result<input::Entry, gix_error::Exn> {
         if self.num_entries == 0 {
             let header_bytes = crate::data::header::encode(self.data_version, 0);
             self.output
@@ -77,7 +77,7 @@ where
         Ok(entry)
     }
 
-    fn write_header_and_digest(&mut self, last_entry: Option<&mut input::Entry>) -> Result<(), gix_hash::io::Error> {
+    fn write_header_and_digest(&mut self, last_entry: Option<&mut input::Entry>) -> Result<(), gix_error::Exn> {
         let header_bytes = crate::data::header::encode(self.data_version, self.num_entries);
         let num_bytes_written = if last_entry.is_some() {
             self.output.stream_position().map_err(gix_hash::io::from_std_io)?
@@ -115,11 +115,11 @@ where
 
 impl<I, W> Iterator for EntriesToBytesIter<I, W>
 where
-    I: Iterator<Item = Result<input::Entry, input::Error>>,
+    I: Iterator<Item = Result<input::Entry, gix_error::Exn>>,
     W: std::io::Read + std::io::Write + std::io::Seek,
 {
     /// The amount of bytes written to `out` if `Ok` or the error `E` received from the input.
-    type Item = Result<input::Entry, input::Error>;
+    type Item = Result<input::Entry, gix_error::Exn>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_done {
@@ -155,7 +155,7 @@ where
     }
 }
 
-fn hash_io_error(err: gix_hash::io::Error) -> input::Error {
+fn hash_io_error(err: gix_error::Exn) -> gix_error::Exn {
     err.raise(message("An IO operation failed while streaming an entry"))
         .erased()
 }

@@ -7,9 +7,6 @@ use crate::{
     driver::{Operation, Process, State, process, substitute_f_parameter},
 };
 
-/// The error returned by [State::maybe_launch_process()][super::State::maybe_launch_process()].
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// Lifecycle
 impl State {
     /// Obtain a process as defined in `driver` suitable for a given `operation. `rela_path` may be used to substitute the current
@@ -21,7 +18,7 @@ impl State {
         driver: &Driver,
         operation: Operation,
         rela_path: &BStr,
-    ) -> Result<Option<Process<'_>>, Error> {
+    ) -> Result<Option<Process<'_>>, gix_error::Exn<gix_error::Message>> {
         match driver.process.as_ref() {
             Some(process) => {
                 let client = match self.running.remove(process) {
@@ -73,7 +70,7 @@ impl State {
 fn spawn_driver(
     cmd: BString,
     context: &gix_command::Context,
-) -> Result<(std::process::Child, std::process::Command), Error> {
+) -> Result<(std::process::Child, std::process::Command), gix_error::Exn<gix_error::Message>> {
     let mut cmd: std::process::Command = gix_command::prepare(gix_path::from_bstr(cmd).into_owned())
         .command_may_be_shell_script()
         .with_context(context.clone())

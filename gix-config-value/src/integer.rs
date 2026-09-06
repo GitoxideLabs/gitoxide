@@ -3,7 +3,7 @@ use std::{borrow::Cow, fmt::Display, str::FromStr};
 use bstr::{BStr, BString};
 use gix_error::{ErrorExt, ResultExt, ValidationError};
 
-use crate::{Error, Integer};
+use crate::Integer;
 
 impl Integer {
     /// Canonicalize values as simple decimal numbers.
@@ -86,7 +86,7 @@ fn parse_like_git(input: &str) -> Option<i64> {
 }
 
 impl TryFrom<&BStr> for Integer {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(s: &BStr) -> Result<Self, Self::Error> {
         let s = std::str::from_utf8(s).or_raise(|| int_err(s))?;
@@ -116,7 +116,7 @@ impl TryFrom<&BStr> for Integer {
 }
 
 impl TryFrom<&str> for Integer {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::try_from(BStr::new(value))
@@ -124,7 +124,7 @@ impl TryFrom<&str> for Integer {
 }
 
 impl TryFrom<Cow<'_, BStr>> for Integer {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(c: Cow<'_, BStr>) -> Result<Self, Self::Error> {
         Self::try_from(c.as_ref())
@@ -132,7 +132,7 @@ impl TryFrom<Cow<'_, BStr>> for Integer {
 }
 
 impl TryFrom<BString> for Integer {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(value: BString) -> Result<Self, Self::Error> {
         Self::try_from(BStr::new(&value))

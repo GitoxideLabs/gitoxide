@@ -62,7 +62,7 @@ impl File {
         &'a self,
         section_name: &'a str,
         subsection_name: Option<&BStr>,
-    ) -> Result<impl ExactSizeIterator<Item = SectionId> + DoubleEndedIterator + 'a, lookup::existing::Error> {
+    ) -> Result<impl ExactSizeIterator<Item = SectionId> + DoubleEndedIterator + 'a, gix_error::Exn> {
         let section_name = section::Name::from_str_unchecked(section_name);
         let lookup = self
             .section_lookup_tree
@@ -79,7 +79,7 @@ impl File {
     pub(crate) fn section_ids_by_name<'a>(
         &'a self,
         section_name: &str,
-    ) -> Result<impl Iterator<Item = SectionId> + 'a + use<'a>, lookup::existing::Error> {
+    ) -> Result<impl Iterator<Item = SectionId> + 'a + use<'a>, gix_error::Exn> {
         let lookup_name = section::Name::from_str_unchecked(section_name);
         let lookup = self
             .section_lookup_tree

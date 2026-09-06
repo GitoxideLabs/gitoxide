@@ -5,9 +5,6 @@ use gix_error::ValidationError;
 
 use crate::{Defaults, MagicSignature, Pattern, SearchMode};
 
-/// The error returned by [parse()][crate::parse()].
-pub type Error = gix_error::ValidationError;
-
 impl Pattern {
     /// Try to parse a path-spec pattern from the given `input` bytes.
     pub fn from_bytes(
@@ -17,7 +14,7 @@ impl Pattern {
             search_mode,
             literal,
         }: Defaults,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, gix_error::ValidationError> {
         if input.is_empty() {
             return Err(ValidationError::new_with_input(
                 "An empty string is not a valid pathspec",
@@ -74,7 +71,7 @@ impl Pattern {
     }
 }
 
-fn parse_short_keywords(input: &[u8], cursor: &mut usize) -> Result<MagicSignature, Error> {
+fn parse_short_keywords(input: &[u8], cursor: &mut usize) -> Result<MagicSignature, gix_error::ValidationError> {
     let unimplemented_chars = b"\"#%&'-',;<=>@_`~";
 
     let mut signature = MagicSignature::empty();
@@ -97,7 +94,7 @@ fn parse_short_keywords(input: &[u8], cursor: &mut usize) -> Result<MagicSignatu
     Ok(signature)
 }
 
-fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Result<(), Error> {
+fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Result<(), gix_error::ValidationError> {
     let end = input
         .find(")")
         .ok_or_else(|| ValidationError::new_with_input("Missing ')' at the end of pathspec signature", input))?;
@@ -163,8 +160,8 @@ fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Res
 fn split_on_non_escaped_char(
     input: &[u8],
     split_char: u8,
-    mut f: impl FnMut(&[u8]) -> Result<(), Error>,
-) -> Result<(), Error> {
+    mut f: impl FnMut(&[u8]) -> Result<(), gix_error::ValidationError>,
+) -> Result<(), gix_error::ValidationError> {
     // Mirrors `strcspn_escaped()` in Git's `pathspec.c`: a backslash consumes the byte that
     // follows it, so `\,` is a literal comma while `\\,` is an escaped backslash followed by a
     // separator. Scanning byte-by-byte also lets a separator at index 0 be seen, which a
@@ -185,7 +182,7 @@ fn split_on_non_escaped_char(
     f(&input[last..])
 }
 
-fn parse_attributes(input: &[u8]) -> Result<Vec<gix_attributes::Assignment>, Error> {
+fn parse_attributes(input: &[u8]) -> Result<Vec<gix_attributes::Assignment>, gix_error::ValidationError> {
     if input.is_empty() {
         return Err(ValidationError::new("Attribute specification cannot be empty"));
     }
@@ -221,7 +218,7 @@ fn parse_attributes(input: &[u8]) -> Result<Vec<gix_attributes::Assignment>, Err
         .collect()
 }
 
-fn unescape_and_check_attr_value(value: &BStr) -> Result<BString, Error> {
+fn unescape_and_check_attr_value(value: &BStr) -> Result<BString, gix_error::ValidationError> {
     let mut out = BString::from(Vec::with_capacity(value.len()));
     let mut bytes = value.iter();
     while let Some(mut b) = bytes.next().copied() {
@@ -239,7 +236,7 @@ fn unescape_and_check_attr_value(value: &BStr) -> Result<BString, Error> {
     Ok(out)
 }
 
-fn check_attribute_value(input: &BStr) -> Result<(), Error> {
+fn check_attribute_value(input: &BStr) -> Result<(), gix_error::ValidationError> {
     match input.iter().copied().find(|b| !is_valid_attr_value(*b)) {
         Some(b) => Err(ValidationError::new_with_input(
             "Invalid character in attribute value",
@@ -253,7 +250,7 @@ fn is_valid_attr_value(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || b",-_".contains(&byte)
 }
 
-fn validated_attr_value_byte(byte: u8) -> Result<u8, Error> {
+fn validated_attr_value_byte(byte: u8) -> Result<u8, gix_error::ValidationError> {
     if is_valid_attr_value(byte) {
         Ok(byte)
     } else {

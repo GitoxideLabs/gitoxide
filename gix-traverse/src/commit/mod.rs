@@ -81,7 +81,7 @@ pub enum Either<'buf, 'cache> {
 impl Either<'_, '_> {
     /// Get a commit’s `tree_id` by either getting it from a [`gix_commitgraph::Graph`], if
     /// present, or a [`gix_object::CommitRefIter`] otherwise.
-    pub fn tree_id(self) -> Result<ObjectId, gix_object::decode::Error> {
+    pub fn tree_id(self) -> Result<ObjectId, gix_error::ValidationError> {
         match self {
             Self::CommitRefIter(mut commit_ref_iter) => commit_ref_iter.tree_id(),
             Self::CachedCommit(commit) => Ok(commit.root_tree_id().into()),
@@ -90,7 +90,7 @@ impl Either<'_, '_> {
 
     /// Get a committer timestamp by either getting it from a [`gix_commitgraph::Graph`], if
     /// present, or a [`gix_object::CommitRefIter`] otherwise.
-    pub fn commit_time(self) -> Result<gix_date::SecondsSinceUnixEpoch, gix_object::decode::Error> {
+    pub fn commit_time(self) -> Result<gix_date::SecondsSinceUnixEpoch, gix_error::ValidationError> {
         match self {
             Self::CommitRefIter(commit_ref_iter) => commit_ref_iter.committer().map(|c| c.seconds()),
             Self::CachedCommit(commit) => Ok(commit.committer_timestamp() as gix_date::SecondsSinceUnixEpoch),
@@ -105,7 +105,7 @@ pub fn find<'cache, 'buf, Find>(
     objects: Find,
     id: &gix_hash::oid,
     buf: &'buf mut Vec<u8>,
-) -> Result<Either<'buf, 'cache>, gix_object::find::existing_iter::Error>
+) -> Result<Either<'buf, 'cache>, gix_error::Exn>
 where
     Find: gix_object::Find,
 {

@@ -8,9 +8,6 @@ fn mapping_validation(err: &gix_error::Error) -> Option<&gix_refspec::match_grou
     err.downcast_any_ref()
 }
 
-/// The error returned by [`PrepareFetch::fetch_only()`].
-pub type Error = gix_error::Error;
-
 /// Modification
 impl PrepareFetch {
     /// Fetch a pack and update local branches according to refspecs, providing `progress` and checking `should_interrupt` to stop
@@ -32,7 +29,7 @@ impl PrepareFetch {
         &mut self,
         mut progress: P,
         should_interrupt: &std::sync::atomic::AtomicBool,
-    ) -> Result<(crate::Repository, crate::remote::fetch::Outcome), Error>
+    ) -> Result<(crate::Repository, crate::remote::fetch::Outcome), crate::Error>
     where
         P: crate::NestedProgress,
         P::SubProgress: 'static,
@@ -377,7 +374,7 @@ impl PrepareFetch {
         &mut self,
         progress: P,
         should_interrupt: &std::sync::atomic::AtomicBool,
-    ) -> Result<(crate::clone::PrepareCheckout, crate::remote::fetch::Outcome), Error>
+    ) -> Result<(crate::clone::PrepareCheckout, crate::remote::fetch::Outcome), crate::Error>
     where
         P: crate::NestedProgress,
         P::SubProgress: 'static,

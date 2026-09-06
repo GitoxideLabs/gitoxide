@@ -40,16 +40,13 @@ where
     /// This isn't feasible to do here as it would mean that returned items would have to be delayed,
     /// degrading performance for everyone who isn't order-dependent.
     #[doc(alias = "diff_index_to_workdir", alias = "git2")]
-    pub fn into_iter(
-        self,
-        patterns: impl IntoIterator<Item = BString>,
-    ) -> Result<Iter, crate::status::into_iter::Error> {
+    pub fn into_iter(self, patterns: impl IntoIterator<Item = BString>) -> Result<Iter, crate::Error> {
         let index = match self.index {
             None => IndexPersistedOrInMemory::Persisted(self.repo.index_or_empty()?),
             Some(index) => index,
         };
 
-        let obtain_tree_id = || -> Result<Option<gix_hash::ObjectId>, crate::status::into_iter::Error> {
+        let obtain_tree_id = || -> Result<Option<gix_hash::ObjectId>, crate::Error> {
             Ok(match self.head_tree {
                 Some(None) => Some(
                     self.repo
@@ -127,7 +124,7 @@ where
                     let options = self.index_worktree_options;
                     let should_interrupt = should_interrupt.clone();
                     let mut progress = self.progress;
-                    move || -> Result<_, index_worktree::Error> {
+                    move || -> Result<_, crate::Error> {
                         let repo = repo.to_thread_local();
                         let out = repo.index_worktree_status(
                             &index,
@@ -230,11 +227,8 @@ where
     }
 }
 
-/// The error returned for each item returned by [`Iter`].
-pub type Error = gix_error::Error;
-
 impl Iterator for Iter {
-    type Item = Result<Item, Error>;
+    type Item = Result<Item, crate::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         #[cfg(feature = "parallel")]

@@ -29,7 +29,7 @@ pub struct Entry {
 mod entry;
 
 mod types;
-pub use types::{EntryDataMode, Error, Mode};
+pub use types::{EntryDataMode, Mode};
 
 mod bytes_to_entries;
 pub use bytes_to_entries::BytesToEntriesIter;

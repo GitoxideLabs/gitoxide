@@ -68,7 +68,7 @@ mod sha1 {
 
     use gix_hash::{Kind, ObjectId, hasher};
 
-    fn hash_contents(s: &[u8]) -> Result<ObjectId, hasher::Error> {
+    fn hash_contents(s: &[u8]) -> Result<ObjectId, gix_error::CorruptionError> {
         let mut hasher = hasher(Kind::Sha1);
         hasher.update(s);
         hasher.try_finalize()
@@ -139,7 +139,7 @@ mod sha1 {
 mod sha256 {
     use gix_hash::{Kind, ObjectId, hasher};
 
-    fn hash_contents(s: &[u8]) -> Result<ObjectId, hasher::Error> {
+    fn hash_contents(s: &[u8]) -> Result<ObjectId, gix_error::CorruptionError> {
         let mut hasher = hasher(Kind::Sha256);
         hasher.update(s);
         hasher.try_finalize()

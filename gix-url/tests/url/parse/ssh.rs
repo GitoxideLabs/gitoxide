@@ -3,7 +3,7 @@ use gix_url::Scheme;
 use crate::parse::{assert_url, assert_url_roundtrip, url, url_alternate, url_with_pass};
 
 #[test]
-fn without_user_and_without_port() -> crate::Result {
+fn without_user_and_without_port() -> gix_error::TestResult {
     Ok(assert_url_roundtrip(
         "ssh://host.xz/path/to/repo.git/",
         url(Scheme::Ssh, None, "host.xz", None, b"/path/to/repo.git/"),
@@ -11,7 +11,7 @@ fn without_user_and_without_port() -> crate::Result {
 }
 
 #[test]
-fn without_user_and_with_port() -> crate::Result {
+fn without_user_and_with_port() -> gix_error::TestResult {
     Ok(assert_url_roundtrip(
         "ssh://host.xz:21/",
         url(Scheme::Ssh, None, "host.xz", 21, b"/"),
@@ -19,7 +19,7 @@ fn without_user_and_with_port() -> crate::Result {
 }
 
 #[test]
-fn host_is_ipv4() -> crate::Result {
+fn host_is_ipv4() -> gix_error::TestResult {
     Ok(assert_url_roundtrip(
         "ssh://127.69.0.1/hello",
         url(Scheme::Ssh, None, "127.69.0.1", None, b"/hello"),
@@ -27,7 +27,7 @@ fn host_is_ipv4() -> crate::Result {
 }
 
 #[test]
-fn username_expansion_with_username() -> crate::Result {
+fn username_expansion_with_username() -> gix_error::TestResult {
     Ok(assert_url_roundtrip(
         "ssh://example.com/~byron/hello/git",
         url(Scheme::Ssh, None, "example.com", None, b"~byron/hello/git"),
@@ -35,7 +35,7 @@ fn username_expansion_with_username() -> crate::Result {
 }
 
 #[test]
-fn username_expansion_without_username() -> crate::Result {
+fn username_expansion_without_username() -> gix_error::TestResult {
     Ok(assert_url_roundtrip(
         "ssh://example.com/~/hello/git",
         url(Scheme::Ssh, None, "example.com", None, b"~/hello/git"),
@@ -43,7 +43,7 @@ fn username_expansion_without_username() -> crate::Result {
 }
 
 #[test]
-fn scp_like_with_ssh_host_alias() -> crate::Result {
+fn scp_like_with_ssh_host_alias() -> gix_error::TestResult {
     Ok(assert_url_roundtrip(
         "user@alias:username/repo.git",
         url_alternate(Scheme::Ssh, "user", "alias", None, b"username/repo.git"),
@@ -51,7 +51,7 @@ fn scp_like_with_ssh_host_alias() -> crate::Result {
 }
 
 #[test]
-fn with_user_and_without_port() -> crate::Result {
+fn with_user_and_without_port() -> gix_error::TestResult {
     Ok(assert_url_roundtrip(
         "ssh://user@host.xz/.git",
         url(Scheme::Ssh, "user", "host.xz", None, b"/.git"),
@@ -59,7 +59,7 @@ fn with_user_and_without_port() -> crate::Result {
 }
 
 #[test]
-fn username_with_dot_is_not_percent_encoded() -> crate::Result {
+fn username_with_dot_is_not_percent_encoded() -> gix_error::TestResult {
     Ok(assert_url_roundtrip(
         "ssh://user.name@host.xz/.git",
         url(Scheme::Ssh, "user.name", "host.xz", None, b"/.git"),
@@ -67,7 +67,7 @@ fn username_with_dot_is_not_percent_encoded() -> crate::Result {
 }
 
 #[test]
-fn with_user_and_port_and_absolute_path() -> crate::Result {
+fn with_user_and_port_and_absolute_path() -> gix_error::TestResult {
     Ok(assert_url_roundtrip(
         "ssh://user@host.xz:42/.git",
         url(Scheme::Ssh, "user", "host.xz", 42, b"/.git"),
@@ -75,7 +75,7 @@ fn with_user_and_port_and_absolute_path() -> crate::Result {
 }
 
 #[test]
-fn ssh_alias_without_username() -> crate::Result {
+fn ssh_alias_without_username() -> gix_error::TestResult {
     let url = assert_url(
         "host:/path/to/git",
         url_alternate(Scheme::Ssh, None, "host", None, b"/path/to/git"),
@@ -86,14 +86,14 @@ fn ssh_alias_without_username() -> crate::Result {
 }
 
 #[test]
-fn default_port_is_22() -> crate::Result {
+fn default_port_is_22() -> gix_error::TestResult {
     let url = url_alternate(Scheme::Ssh, None, "host.xz", None, b"path/to/git");
     assert_eq!(url.port_or_default(), Some(22));
     Ok(())
 }
 
 #[test]
-fn scp_like_without_user() -> crate::Result {
+fn scp_like_without_user() -> gix_error::TestResult {
     let url = assert_url(
         "host.xz:path/to/git",
         url_alternate(Scheme::Ssh, None, "host.xz", None, b"path/to/git"),
@@ -104,7 +104,7 @@ fn scp_like_without_user() -> crate::Result {
 }
 
 #[test]
-fn scp_like_with_absolute_path() -> crate::Result {
+fn scp_like_with_absolute_path() -> gix_error::TestResult {
     let url = assert_url(
         "host.xz:/path/to/git",
         url_alternate(Scheme::Ssh, None, "host.xz", None, b"/path/to/git"),
@@ -115,7 +115,7 @@ fn scp_like_with_absolute_path() -> crate::Result {
 }
 
 #[test]
-fn scp_like_with_absolute_path_with_whitespace() -> crate::Result {
+fn scp_like_with_absolute_path_with_whitespace() -> gix_error::TestResult {
     let url = assert_url(
         "host.xz:/path/to/git with space",
         url_alternate(Scheme::Ssh, None, "host.xz", None, b"/path/to/git with space"),
@@ -126,7 +126,7 @@ fn scp_like_with_absolute_path_with_whitespace() -> crate::Result {
 }
 
 #[test]
-fn scp_like_without_user_and_username_expansion_without_username() -> crate::Result {
+fn scp_like_without_user_and_username_expansion_without_username() -> gix_error::TestResult {
     let url = assert_url(
         "host.xz:~/to/git",
         url_alternate(Scheme::Ssh, None, "host.xz", None, b"~/to/git"),
@@ -137,7 +137,7 @@ fn scp_like_without_user_and_username_expansion_without_username() -> crate::Res
 }
 
 #[test]
-fn scp_like_without_user_and_username_expansion_with_username() -> crate::Result {
+fn scp_like_without_user_and_username_expansion_with_username() -> gix_error::TestResult {
     let url = assert_url(
         "host.xz:~byron/to/git",
         url_alternate(Scheme::Ssh, None, "host.xz", None, b"~byron/to/git"),
@@ -148,7 +148,7 @@ fn scp_like_without_user_and_username_expansion_with_username() -> crate::Result
 }
 
 #[test]
-fn scp_like_with_user_and_relative_path_keep_relative_path() -> crate::Result {
+fn scp_like_with_user_and_relative_path_keep_relative_path() -> gix_error::TestResult {
     let url = assert_url(
         "user@host.xz:relative",
         url_alternate(Scheme::Ssh, "user", "host.xz", None, b"relative"),
@@ -187,7 +187,7 @@ fn scp_like_with_user_and_relative_path_keep_relative_path() -> crate::Result {
 }
 
 #[test]
-fn canonical_form_is_used_only_if_it_preserves_scp_path_semantics() -> crate::Result {
+fn canonical_form_is_used_only_if_it_preserves_scp_path_semantics() -> gix_error::TestResult {
     assert_eq!(
         gix_url::parse("user@host.xz:relative")?
             .with_request_alternate_form(false)
@@ -222,7 +222,7 @@ fn canonical_form_is_used_only_if_it_preserves_scp_path_semantics() -> crate::Re
 }
 
 #[test]
-fn scp_like_with_windows_path() -> crate::Result {
+fn scp_like_with_windows_path() -> gix_error::TestResult {
     let url = assert_url(
         "user@host.xz:C:/strange/absolute/path",
         url_alternate(Scheme::Ssh, "user", "host.xz", None, b"C:/strange/absolute/path"),
@@ -233,7 +233,7 @@ fn scp_like_with_windows_path() -> crate::Result {
 }
 
 #[test]
-fn scp_like_with_windows_path_and_port_thinks_port_is_part_of_path() -> crate::Result {
+fn scp_like_with_windows_path_and_port_thinks_port_is_part_of_path() -> gix_error::TestResult {
     let url = gix_url::parse("user@host.xz:42:C:/strange/absolute/path")?;
     assert_eq!(
         url.to_bstring(),
@@ -249,7 +249,7 @@ fn scp_like_with_windows_path_and_port_thinks_port_is_part_of_path() -> crate::R
 }
 
 #[test]
-fn scp_like_with_non_alphanumeric_username() -> crate::Result {
+fn scp_like_with_non_alphanumeric_username() -> gix_error::TestResult {
     let url = assert_url(
         "_user.name@host.xz:C:/path",
         url_alternate(Scheme::Ssh, "_user.name", "host.xz", None, b"C:/path"),
@@ -262,7 +262,7 @@ fn scp_like_with_non_alphanumeric_username() -> crate::Result {
 // Git passes the non-path part "user@name@host.xz" to OpenSSH, and the ssh
 // command interprets it as user = "user@name", host = "host.xz".
 #[test]
-fn scp_like_with_username_including_at() -> crate::Result {
+fn scp_like_with_username_including_at() -> gix_error::TestResult {
     let url = assert_url(
         "user@name@host.xz:path",
         url_alternate(Scheme::Ssh, "user@name", "host.xz", None, b"path"),
@@ -273,7 +273,7 @@ fn scp_like_with_username_including_at() -> crate::Result {
 }
 
 #[test]
-fn scp_like_username_with_colon_is_not_mistaken_for_a_password() -> crate::Result {
+fn scp_like_username_with_colon_is_not_mistaken_for_a_password() -> gix_error::TestResult {
     let input = "[:[@]:\x1a";
     let url = gix_url::parse(input)?;
     assert_eq!(url.user(), Some("[:["), "OpenSSH splits user and host at the last @");
@@ -287,14 +287,14 @@ fn scp_like_username_with_colon_is_not_mistaken_for_a_password() -> crate::Resul
 // I btw tested this, yes you can really clone a repository from there, just `git init`
 // in the directory above your home directory on the remote machine.
 #[test]
-fn strange_scp_like_with_host_named_file() -> crate::Result {
+fn strange_scp_like_with_host_named_file() -> gix_error::TestResult {
     let url = assert_url("file:..", url_alternate(Scheme::Ssh, None, "file", None, b".."))?;
     assert_eq!(url.to_bstring(), "file:..");
     Ok(())
 }
 
 #[test]
-fn bad_alternative_form_with_password() -> crate::Result {
+fn bad_alternative_form_with_password() -> gix_error::TestResult {
     let password = std::process::id().to_string();
     let url = url_with_pass(Scheme::Ssh, "user", password.as_str(), "host.xz", None, b"/")
         .with_request_alternate_form(true)
@@ -304,21 +304,21 @@ fn bad_alternative_form_with_password() -> crate::Result {
 }
 
 #[test]
-fn bad_alternative_form_with_port() -> crate::Result {
+fn bad_alternative_form_with_port() -> gix_error::TestResult {
     let url = url_alternate(Scheme::Ssh, None, "host.xz", 21, b"/").to_bstring();
     assert_eq!(url, "ssh://host.xz:21/");
     Ok(())
 }
 
 #[test]
-fn ipv6_address_without_port() -> crate::Result {
+fn ipv6_address_without_port() -> gix_error::TestResult {
     let url = assert_url("ssh://[::1]/repo", url(Scheme::Ssh, None, "::1", None, b"/repo"))?;
     assert_eq!(url.host(), Some("::1"), "brackets are stripped for SSH");
     Ok(())
 }
 
 #[test]
-fn ipv6_address_with_port() -> crate::Result {
+fn ipv6_address_with_port() -> gix_error::TestResult {
     let url = assert_url("ssh://[::1]:22/repo", url(Scheme::Ssh, None, "::1", 22, b"/repo"))?;
     assert_eq!(url.host(), Some("::1"));
     assert_eq!(url.port, Some(22));
@@ -326,7 +326,7 @@ fn ipv6_address_with_port() -> crate::Result {
 }
 
 #[test]
-fn ipv6_address_with_user() -> crate::Result {
+fn ipv6_address_with_user() -> gix_error::TestResult {
     let url = assert_url("ssh://user@[::1]/repo", url(Scheme::Ssh, "user", "::1", None, b"/repo"))?;
     assert_eq!(url.host(), Some("::1"));
     assert_eq!(url.user(), Some("user"));
@@ -334,7 +334,7 @@ fn ipv6_address_with_user() -> crate::Result {
 }
 
 #[test]
-fn ipv6_address_with_user_and_port() -> crate::Result {
+fn ipv6_address_with_user_and_port() -> gix_error::TestResult {
     let url = assert_url(
         "ssh://user@[::1]:22/repo",
         url(Scheme::Ssh, "user", "::1", 22, b"/repo"),
@@ -346,7 +346,7 @@ fn ipv6_address_with_user_and_port() -> crate::Result {
 }
 
 #[test]
-fn ipv6_full_address() -> crate::Result {
+fn ipv6_full_address() -> gix_error::TestResult {
     let url = assert_url(
         "ssh://[2001:db8::1]/repo",
         url(Scheme::Ssh, None, "2001:db8::1", None, b"/repo"),
@@ -356,7 +356,7 @@ fn ipv6_full_address() -> crate::Result {
 }
 
 #[test]
-fn scoped_ipv6_address() -> crate::Result {
+fn scoped_ipv6_address() -> gix_error::TestResult {
     let input = "ssh://[fe80::1%25Eth0]/repo";
     let url = gix_url::parse(input)?;
     assert_eq!(
@@ -370,7 +370,7 @@ fn scoped_ipv6_address() -> crate::Result {
 }
 
 #[test]
-fn scp_like_scoped_ipv6_address_uses_a_raw_zone_separator() -> crate::Result {
+fn scp_like_scoped_ipv6_address_uses_a_raw_zone_separator() -> gix_error::TestResult {
     let input = "[fe80::1%Eth0]:repo";
     let url = gix_url::parse(input)?;
     assert_eq!(url.host(), Some("fe80::1%Eth0"), "the raw percent sign is host data");
@@ -384,7 +384,7 @@ fn scp_like_scoped_ipv6_address_uses_a_raw_zone_separator() -> crate::Result {
 }
 
 #[test]
-fn scoped_ipv6_address_with_empty_port() -> crate::Result {
+fn scoped_ipv6_address_with_empty_port() -> gix_error::TestResult {
     let url = gix_url::parse("ssh://[fe80::1%25Eth0]:/repo")?;
     assert_eq!(
         url.host(),
@@ -401,7 +401,7 @@ fn scoped_ipv6_address_with_empty_port() -> crate::Result {
 }
 
 #[test]
-fn bracketed_host_is_percent_decoded_once() -> crate::Result {
+fn bracketed_host_is_percent_decoded_once() -> gix_error::TestResult {
     let url = gix_url::parse("ssh://[::81ssssssssssssssssssssssssssssssssssssss%2585]:/00%2585]://")?;
     assert_eq!(
         url.host(),
@@ -413,7 +413,7 @@ fn bracketed_host_is_percent_decoded_once() -> crate::Result {
 }
 
 #[test]
-fn escaped_authority_delimiters_remain_host_data() -> crate::Result {
+fn escaped_authority_delimiters_remain_host_data() -> gix_error::TestResult {
     for (input, expected_host) in [
         ("ssh://host%3A123/repo", "host:123"),
         ("ssh://host%2Fname/repo", "host/name"),
@@ -439,7 +439,7 @@ fn escaped_authority_delimiters_remain_host_data() -> crate::Result {
 }
 
 #[test]
-fn percent_encoded_paths_are_decoded_and_the_original_is_retained() -> crate::Result {
+fn percent_encoded_paths_are_decoded_and_the_original_is_retained() -> gix_error::TestResult {
     for (input, decoded_path, original_path, message) in [
         (
             "ssh://example.com/a%2Fb",
@@ -463,14 +463,14 @@ fn percent_encoded_paths_are_decoded_and_the_original_is_retained() -> crate::Re
 }
 
 #[test]
-fn ipv6_address_scp_like() -> crate::Result {
+fn ipv6_address_scp_like() -> gix_error::TestResult {
     let url = assert_url("[::1]:repo", url_alternate(Scheme::Ssh, None, "::1", None, b"repo"))?;
     assert_eq!(url.host(), Some("::1"), "SCP-like format with IPv6");
     Ok(())
 }
 
 #[test]
-fn ipv6_address_scp_like_with_user() -> crate::Result {
+fn ipv6_address_scp_like_with_user() -> gix_error::TestResult {
     let result = gix_url::parse("user@[::1]:repo");
     assert!(
         result.is_err(),

@@ -45,9 +45,6 @@ pub mod repository;
 
 const ARCHIVE_DIR_NAME: &str = "generated-archives";
 
-/// The error returned by test functions.
-pub use gix_error::TestError as Error;
-
 /// A result type to allow using the try operator `?` in unit tests.
 ///
 /// Use it like so:

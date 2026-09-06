@@ -7,10 +7,7 @@ use gix_error::{CorruptionError, ErrorExt, ResultExt, ValidationError, message};
 
 use crate::multi_index::{File, Version, chunk};
 
-/// The error returned by [File::at()].
-pub type Error = gix_error::Exn;
-
-fn corrupt(message: impl Into<Cow<'static, str>>) -> Error {
+fn corrupt(message: impl Into<Cow<'static, str>>) -> gix_error::Exn {
     CorruptionError::new(message).raise_erased()
 }
 
@@ -20,11 +17,11 @@ impl File<crate::MMap> {
     ///
     /// `alloc_limit_bytes` bounds each allocation caused by user-controlled on-disk data, useful for untrusted input.
     /// Use `None` to disable the limit.
-    pub fn at(path: impl AsRef<Path>, alloc_limit_bytes: Option<usize>) -> Result<Self, Error> {
+    pub fn at(path: impl AsRef<Path>, alloc_limit_bytes: Option<usize>) -> Result<Self, gix_error::Exn> {
         Self::at_inner(path.as_ref(), alloc_limit_bytes)
     }
 
-    fn at_inner(path: &Path, alloc_limit_bytes: Option<usize>) -> Result<Self, Error> {
+    fn at_inner(path: &Path, alloc_limit_bytes: Option<usize>) -> Result<Self, gix_error::Exn> {
         let data = crate::mmap::read_only(path)
             .or_raise_erased(|| message!("Could not open multi-index file at '{}'", path.display()))?;
         Self::from_data(data, path.to_owned(), alloc_limit_bytes)
@@ -42,7 +39,7 @@ where
     ///
     ///  It is used to reject reserving the output `Vec<PathBuf>` if its capacity estimate exceeds the limit,
     ///  and to reject any single path entry whose byte length exceeds the limit before turning it into a `PathBuf`.
-    pub fn from_data(data: T, path: PathBuf, alloc_limit_bytes: Option<usize>) -> Result<Self, Error> {
+    pub fn from_data(data: T, path: PathBuf, alloc_limit_bytes: Option<usize>) -> Result<Self, gix_error::Exn> {
         const TRAILER_LEN: usize = gix_hash::Kind::shortest().len_in_bytes(); /* trailing hash */
         if data.len()
             < Self::HEADER_LEN
@@ -149,7 +146,7 @@ where
     }
 }
 
-fn validate_fan(fan: &[u32; 256]) -> Result<(), Error> {
+fn validate_fan(fan: &[u32; 256]) -> Result<(), gix_error::Exn> {
     if !crate::fan_is_monotonically_increasing(fan) {
         return Err(corrupt("multi-index fan-out table must be monotonically increasing"));
     }

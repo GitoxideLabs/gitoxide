@@ -2,9 +2,6 @@ use bstr::BString;
 
 use crate::protocol::{Context, ContextOptions};
 
-/// Indicates key or values contain errors that can't be encoded.
-pub type Error = gix_error::ValidationError;
-
 impl Context {
     /// Create a context containing `url`, encoded and decoded according to `options`.
     pub fn from_url(url: impl Into<BString>, options: ContextOptions) -> Self {
@@ -94,14 +91,14 @@ mod mutate {
     use bstr::ByteSlice;
     use gix_error::{OptionExt, ResultExt, ValidationError};
 
-    use crate::{protocol, protocol::Context};
+    use crate::protocol::Context;
 
     /// In-place mutation
     impl Context {
         /// Destructure the url at our `url` field into parts like protocol, host, username and path and store
         /// them in our respective fields. If `use_http_path` is set, http paths are significant even though
         /// normally this isn't the case.
-        pub fn destructure_url_in_place(&mut self, use_http_path: bool) -> Result<&mut Self, protocol::Error> {
+        pub fn destructure_url_in_place(&mut self, use_http_path: bool) -> Result<&mut Self, gix_error::Exn> {
             if self.url.is_none() {
                 self.url = Some(self.to_url().ok_or_raise_erased(|| {
                     ValidationError::new("Either 'url' field or both 'protocol' and 'host' fields must be provided")

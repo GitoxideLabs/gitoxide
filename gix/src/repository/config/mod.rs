@@ -9,7 +9,7 @@ impl crate::Repository {
     }
 
     /// Return the effective compression level used when writing pack entries.
-    pub fn pack_compression(&self) -> Result<gix_zlib::Compression, config::Error> {
+    pub fn pack_compression(&self) -> Result<gix_zlib::Compression, crate::Error> {
         config::cache::access::pack_compression(
             &self.config.resolved,
             self.config.lenient_config,
@@ -75,7 +75,7 @@ impl crate::Repository {
     pub fn config_file_mut(
         &self,
         path: impl Into<std::path::PathBuf>,
-    ) -> Result<config::FileTransaction, config::file_mut::Error> {
+    ) -> Result<config::FileTransaction, crate::Error> {
         let path = path.into();
         let path = if path.is_absolute() {
             path
@@ -136,7 +136,7 @@ impl crate::Repository {
     /// The returned command has repository context and inherited standard streams. Add the paths to edit as arguments
     /// before spawning it.
     #[cfg(feature = "command")]
-    pub fn editor_command(&self) -> Result<Option<gix_command::Prepare>, config::command_context::Error> {
+    pub fn editor_command(&self) -> Result<Option<gix_command::Prepare>, crate::Error> {
         use std::{path::Path, process::Stdio};
 
         let Some(editor) = self.editor() else {
@@ -163,9 +163,7 @@ impl crate::Repository {
     /// The returned plumbing options may be adjusted before use, for example to disable GPG pinentry by adding
     /// `--pinentry-mode=error` to `program_arguments`.
     #[cfg(feature = "command")]
-    pub fn commit_signing_options(
-        &self,
-    ) -> Result<gix_object::signature::sign::Options, crate::commit::sign::options::Error> {
+    pub fn commit_signing_options(&self) -> Result<gix_object::signature::sign::Options, crate::Error> {
         crate::commit::sign::signing_options(self)
     }
 
@@ -175,7 +173,7 @@ impl crate::Repository {
     #[cfg(feature = "command")]
     pub fn commit_signing_options_if_enabled(
         &self,
-    ) -> Result<Option<gix_object::signature::sign::Options>, crate::commit::sign::options::Error> {
+    ) -> Result<Option<gix_object::signature::sign::Options>, crate::Error> {
         crate::commit::sign::signing_options_if_enabled(self)
     }
 
@@ -209,7 +207,7 @@ impl crate::Repository {
     ///
     /// Note that these values have not been [probed](gix_fs::Capabilities::probe()).
     #[cfg(feature = "index")]
-    pub fn stat_options(&self) -> Result<gix_index::entry::stat::Options, config::stat_options::Error> {
+    pub fn stat_options(&self) -> Result<gix_index::entry::stat::Options, crate::Error> {
         self.config.stat_options()
     }
 
@@ -237,8 +235,7 @@ impl crate::Repository {
     #[cfg(feature = "blocking-network-client")]
     pub fn ssh_connect_options(
         &self,
-    ) -> Result<gix_protocol::transport::client::blocking_io::ssh::connect::Options, config::ssh_connect_options::Error>
-    {
+    ) -> Result<gix_protocol::transport::client::blocking_io::ssh::connect::Options, crate::Error> {
         use crate::config::{
             cache::util::ApplyLeniency,
             tree::{Core, Ssh, gitoxide},
@@ -270,7 +267,7 @@ impl crate::Repository {
     /// Return the context to be passed to any spawned program that is supposed to interact with the repository, like
     /// hooks or filters.
     #[cfg(feature = "command")]
-    pub fn command_context(&self) -> Result<gix_command::Context, config::command_context::Error> {
+    pub fn command_context(&self) -> Result<gix_command::Context, crate::Error> {
         use crate::config::{cache::util::ApplyLeniency, tree::gitoxide};
 
         let pathspec_boolean = |key: &'static config::tree::keys::Boolean| {

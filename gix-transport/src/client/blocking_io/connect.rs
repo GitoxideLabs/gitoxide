@@ -1,11 +1,11 @@
-pub use crate::client::non_io_types::connect::{Error, Options};
+pub use crate::client::non_io_types::connect::Options;
 
 pub(crate) mod function {
+    use crate::client::blocking_io::Transport;
     #[cfg(feature = "http-client-curl")]
     use crate::client::blocking_io::http::curl::Curl;
     #[cfg(all(feature = "http-client-reqwest", not(feature = "http-client-curl")))]
     use crate::client::blocking_io::http::reqwest::Remote as Reqwest;
-    use crate::client::{blocking_io::Transport, non_io_types::connect::Error};
     use gix_error::{ErrorExt, ResultExt, message};
 
     /// A general purpose connector connecting to a repository identified by the given `url`.
@@ -17,7 +17,10 @@ pub(crate) mod function {
     /// and if compiled in connections to [git repositories over https](crate::client::blocking_io::http::connect()).
     ///
     /// Use `options` to further control specifics of the transport resulting from the connection.
-    pub fn connect<Url, E>(url: Url, options: super::Options) -> Result<Box<dyn Transport + Send>, Error>
+    pub fn connect<Url, E>(
+        url: Url,
+        options: super::Options,
+    ) -> Result<Box<dyn Transport + Send>, gix_error::Exn<gix_error::Message>>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,

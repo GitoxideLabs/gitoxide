@@ -2,13 +2,6 @@ use std::path::PathBuf;
 
 use crate::remote::fetch;
 
-mod error {
-    /// The error returned when updating references.
-    pub type Error = gix_error::Error;
-}
-
-pub use error::Error;
-
 /// The outcome of the refs-update operation at the end of a fetch.
 #[derive(Debug, Clone)]
 pub struct Outcome {

@@ -51,7 +51,7 @@ impl Transaction<'_, '_> {
     /// (such as a path collision reported as `NotADirectory`) as [`Error::Io`] rather than
     /// burying them in [`Error::LockAcquire`], which is reserved for actual contention.
     // This happens for path collisions where `a` is a ref file, and `a/b` is the lock to be created.
-    fn lock_acquire_error(err: gix_lock::acquire::Error, full_name: &str) -> Error {
+    fn lock_acquire_error(err: gix_error::Exn, full_name: &str) -> Error {
         match (
             err.downcast_any_ref::<gix_error::RetryableError>().is_some(),
             err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),

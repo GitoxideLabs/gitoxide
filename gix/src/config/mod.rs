@@ -64,32 +64,6 @@ pub mod section {
 }
 
 ///
-pub mod set_value {
-    /// The error produced when calling [`SnapshotMut::set(_subsection)?_value()`][crate::config::SnapshotMut::set_value()]
-    pub type Error = gix_error::Error;
-}
-
-/// The error returned when failing to initialize the repository configuration.
-///
-/// This configuration is on the critical path when opening a repository.
-pub type Error = gix_error::Error;
-
-///
-pub mod merge {
-    ///
-    pub mod pipeline_options {
-        /// The error produced when obtaining options needed to fill in [gix_merge::blob::pipeline::Options].
-        pub type Error = gix_error::Error;
-    }
-
-    ///
-    pub mod drivers {
-        /// The error produced when obtaining a list of [Drivers](gix_merge::blob::Driver).
-        pub type Error = gix_error::Error;
-    }
-}
-
-///
 pub mod diff {
     ///
     pub mod algorithm {
@@ -114,66 +88,6 @@ pub mod diff {
 
         impl std::error::Error for Error {}
     }
-
-    ///
-    pub mod pipeline_options {
-        /// The error produced when obtaining options needed to fill in [gix_diff::blob::pipeline::Options].
-        pub type Error = gix_error::Error;
-    }
-
-    ///
-    pub mod drivers {
-        /// The error produced when obtaining a list of [Drivers](gix_diff::blob::Driver).
-        pub type Error = gix_error::Error;
-    }
-}
-
-///
-pub mod stat_options {
-    /// The error produced when collecting stat information, and returned by [Repository::stat_options()](crate::Repository::stat_options()).
-    pub type Error = gix_error::Error;
-}
-
-///
-#[cfg(feature = "attributes")]
-pub mod checkout_options {
-    /// The error produced when collecting all information needed for checking out files into a worktree.
-    pub type Error = gix_error::Error;
-}
-
-///
-#[cfg(feature = "command")]
-pub mod command_context {
-    /// The error produced when collecting all information relevant to spawned commands,
-    /// obtained via [Repository::command_context()](crate::Repository::command_context()).
-    pub type Error = gix_error::Error;
-}
-
-///
-pub mod exclude_stack {
-    /// The error produced when setting up a stack to query `gitignore` information.
-    pub type Error = gix_error::Error;
-}
-
-///
-pub mod attribute_stack {
-    /// The error produced when setting up the attribute stack to query `gitattributes`.
-    pub type Error = gix_error::Error;
-}
-
-///
-pub mod protocol {
-    ///
-    pub mod allow {
-        /// The error returned when obtaining the permission for a particular scheme.
-        pub type Error = gix_error::Error;
-    }
-}
-
-///
-pub mod ssh_connect_options {
-    /// The error produced when obtaining ssh connection configuration.
-    pub type Error = gix_error::Error;
 }
 
 ///
@@ -315,12 +229,6 @@ pub mod key {
 }
 
 ///
-pub mod encoding {
-    /// The error produced when failing to parse the `core.checkRoundTripEncoding` key.
-    pub type Error = gix_error::Error;
-}
-
-///
 pub mod checkout {
     ///
     pub mod workers {
@@ -332,30 +240,18 @@ pub mod checkout {
 }
 
 ///
-pub mod abbrev {
-    /// The error describing an incorrect `core.abbrev` value.
-    pub type Error = gix_error::Error;
-}
-
-///
 pub mod remote {
     ///
     pub mod symbolic_name {
         /// The error produced when failing to produce a symbolic remote name from configuration.
-        pub type Error = super::super::key::Error<crate::remote::name::Error, 'v', 'i'>;
+        pub type Error = super::super::key::Error<crate::Error, 'v', 'i'>;
     }
 }
 
 ///
 pub mod time {
     /// The error produced when failing to parse time from configuration.
-    pub type Error = super::key::Error<gix_date::Error, 't', 'i'>;
-}
-
-///
-pub mod commit_signature {
-    /// The error produced when obtaining or installing a fallback commit signature.
-    pub type Error = gix_error::Error;
+    pub type Error = super::key::Error<gix_error::ValidationError, 't', 'i'>;
 }
 
 ///
@@ -410,18 +306,6 @@ pub mod refs_namespace {
 pub mod ssl_version {
     /// The error produced when failing to parse a refspec from the configuration.
     pub type Error = super::key::Error<std::convert::Infallible, 's', 'i'>;
-}
-
-///
-pub mod transport {
-    /// The error produced when configuring a transport for a particular protocol.
-    pub type Error = gix_error::Error;
-
-    ///
-    pub mod http {
-        /// The error produced when configuring a HTTP transport.
-        pub type Error = gix_error::Error;
-    }
 }
 
 /// Utility type to keep pre-obtained configuration values, only for those required during initial setup

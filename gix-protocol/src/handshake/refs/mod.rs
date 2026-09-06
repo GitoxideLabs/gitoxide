@@ -2,12 +2,6 @@ use bstr::BStr;
 
 use super::Ref;
 
-///
-pub mod parse {
-    /// The error returned when parsing References/refs from the server response.
-    pub type Error = gix_error::Exn;
-}
-
 impl Ref {
     /// Provide shared fields referring to the ref itself, namely `(name, target, [peeled])`.
     /// In case of peeled refs, the tag object itself is returned as it is what the ref directly refers to, and target of the tag is returned

@@ -1,10 +1,7 @@
 use bstr::{BStr, BString, ByteSlice};
 use gix_error::{CorruptionError, ErrorExt, ResultExt};
 
-use crate::{
-    fetch::response::ShallowUpdate,
-    handshake::{Ref, refs::parse::Error},
-};
+use crate::{fetch::response::ShallowUpdate, handshake::Ref};
 
 impl From<InternalRef> for Ref {
     fn from(v: InternalRef) -> Self {
@@ -95,7 +92,7 @@ impl InternalRef {
 
 pub(crate) fn from_capabilities<'a>(
     capabilities: impl Iterator<Item = gix_transport::client::capabilities::Capability<'a>>,
-) -> Result<Vec<InternalRef>, Error> {
+) -> Result<Vec<InternalRef>, gix_error::Exn> {
     let mut out_refs = Vec::new();
     let symref_values = capabilities.filter_map(|c| {
         if c.name() == b"symref".as_bstr() {
@@ -133,7 +130,7 @@ pub(in crate::handshake::refs) fn parse_v1(
     out_refs: &mut Vec<InternalRef>,
     out_shallow: &mut Vec<ShallowUpdate>,
     line: &BStr,
-) -> Result<(), Error> {
+) -> Result<(), gix_error::Exn> {
     let trimmed = line.trim_end();
     let (hex_hash, path) = trimmed.split_at(trimmed.find(b" ").ok_or_else(|| {
         CorruptionError::new(format!(
@@ -209,7 +206,7 @@ pub(in crate::handshake::refs) fn parse_v1(
     Ok(())
 }
 
-pub(in crate::handshake::refs) fn parse_v2(line: &BStr) -> Result<Ref, Error> {
+pub(in crate::handshake::refs) fn parse_v2(line: &BStr) -> Result<Ref, gix_error::Exn> {
     let trimmed = line.trim_end();
     let mut tokens = trimmed.splitn(4, |b| *b == b' ');
     match (tokens.next(), tokens.next()) {

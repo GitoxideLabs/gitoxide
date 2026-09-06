@@ -22,7 +22,7 @@ pub struct LookupRefDeltaObjectsIter<I, Find> {
 
 impl<I, Find> LookupRefDeltaObjectsIter<I, Find>
 where
-    I: Iterator<Item = Result<input::Entry, input::Error>>,
+    I: Iterator<Item = Result<input::Entry, gix_error::Exn>>,
     Find: gix_object::Find,
 {
     /// Create a new instance wrapping `iter` and using `lookup` as function to retrieve objects that will serve as bases
@@ -76,10 +76,10 @@ where
 
 impl<I, Find> Iterator for LookupRefDeltaObjectsIter<I, Find>
 where
-    I: Iterator<Item = Result<input::Entry, input::Error>>,
+    I: Iterator<Item = Result<input::Entry, gix_error::Exn>>,
     Find: gix_object::Find,
 {
-    type Item = Result<input::Entry, input::Error>;
+    type Item = Result<input::Entry, gix_error::Exn>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(delta) = self.next_delta.take() {

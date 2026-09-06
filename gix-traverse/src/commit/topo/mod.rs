@@ -2,9 +2,6 @@
 
 use bitflags::bitflags;
 
-/// The errors that can occur during creation and iteration.
-pub type Error = gix_error::Exn;
-
 bitflags! {
     /// Set of flags to describe the state of a particular commit while iterating.
     // NOTE: The names correspond to the names of the flags in revision.h

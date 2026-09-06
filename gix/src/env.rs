@@ -36,22 +36,3 @@ pub fn args_os_opt(precompose_unicode: bool) -> impl Iterator<Item = OsString> {
 pub fn os_str_to_bstring(input: &OsStr) -> Option<BString> {
     Vec::from_os_string(input.into()).map(Into::into).ok()
 }
-
-/// Utilities to collate errors of common operations into one error type.
-///
-/// This is useful as this type can present an API to answer common questions, like whether a network request seems to have failed
-/// spuriously or if the underlying repository seems to be corrupted.
-/// Error collation supports all operations, including opening the repository.
-///
-/// ### Usage
-///
-/// The caller may define a function that specifies the result type as `Result<T, gix::env::collate::{operation}::Error>` to collect
-/// errors into a well-known error type which provides an API for simple queries.
-pub mod collate {
-
-    ///
-    pub mod fetch {
-        /// An error which combines all possible errors when opening a repository, finding remotes and using them to fetch.
-        pub type Error = gix_error::Error;
-    }
-}

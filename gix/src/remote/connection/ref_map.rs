@@ -7,9 +7,6 @@ use gix_transport::client::blocking_io::Transport;
 
 use crate::remote::{Connection, connection::ConnectionDetached, fetch};
 
-/// The error returned by [`Connection::ref_map()`].
-pub type Error = gix_error::Error;
-
 /// For use in [`Connection::ref_map()`].
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -61,7 +58,7 @@ where
         self,
         progress: impl Progress,
         options: Options,
-    ) -> Result<(fetch::RefMap, gix_protocol::Handshake), Error> {
+    ) -> Result<(fetch::RefMap, gix_protocol::Handshake), crate::Error> {
         let repo = self.remote.repo;
         self.into_detached().ref_map(repo, progress, options).await
     }
@@ -77,7 +74,7 @@ where
         repo: &crate::Repository,
         progress: impl Progress,
         options: Options,
-    ) -> Result<(fetch::RefMap, gix_protocol::Handshake), Error> {
+    ) -> Result<(fetch::RefMap, gix_protocol::Handshake), crate::Error> {
         let refmap = self.ref_map_by_ref(repo, progress, options).await?;
         let handshake = self
             .handshake
@@ -95,7 +92,7 @@ where
             handshake_parameters,
             mut extra_refspecs,
         }: Options,
-    ) -> Result<fetch::RefMap, Error> {
+    ) -> Result<fetch::RefMap, crate::Error> {
         let _span = gix_trace::coarse!("remote::Connection::ref_map()");
         if let Some(tag_spec) = self.remote.fetch_tags.to_refspec().map(|spec| spec.to_owned())
             && !extra_refspecs.contains(&tag_spec)

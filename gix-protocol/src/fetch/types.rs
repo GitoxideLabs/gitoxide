@@ -69,7 +69,7 @@ mod with_fetch {
     /// Typical implementations use the utilities found in the [`negotiate`] module.
     pub trait Negotiate {
         /// Typically invokes [`negotiate::mark_complete_and_common_ref()`].
-        fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action, negotiate::Error>;
+        fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action, gix_error::Exn<gix_error::Message>>;
         /// Typically invokes [`negotiate::add_wants()`].
         /// Returns `true` if wants were added, or `false` if the negotiation should be aborted.
         #[must_use]
@@ -80,7 +80,7 @@ mod with_fetch {
             state: &mut negotiate::one_round::State,
             arguments: &mut fetch::Arguments,
             previous_response: Option<&fetch::Response>,
-        ) -> Result<(negotiate::Round, bool), negotiate::Error>;
+        ) -> Result<(negotiate::Round, bool), gix_error::Exn<gix_error::Message>>;
     }
 
     /// The outcome of [`fetch()`](crate::fetch()).

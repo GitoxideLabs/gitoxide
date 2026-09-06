@@ -3,7 +3,7 @@ use gix_error::ResultExt;
 use gix_error::{ErrorExt, message};
 use gix_worktree_stream::{Entry, Stream};
 
-use crate::{Error, Format, Options};
+use crate::{Format, Options};
 
 #[cfg(feature = "zip")]
 use std::io::Write;
@@ -22,7 +22,7 @@ pub fn write_stream<NextFn>(
     mut next_entry: NextFn,
     out: impl std::io::Write,
     opts: Options,
-) -> Result<(), Error>
+) -> Result<(), gix_error::Exn<gix_error::Message>>
 where
     NextFn: FnMut(&mut Stream) -> Result<Option<Entry<'_>>, gix_error::Exn>,
 {
@@ -39,7 +39,11 @@ where
         }
 
         impl<W: std::io::Write> State<W> {
-            pub fn new(format: Format, mtime: gix_date::SecondsSinceUnixEpoch, out: W) -> Result<Self, Error> {
+            pub fn new(
+                format: Format,
+                mtime: gix_date::SecondsSinceUnixEpoch,
+                out: W,
+            ) -> Result<Self, gix_error::Exn<gix_error::Message>> {
                 match format {
                     Format::InternalTransientNonPersistable => unreachable!("handled earlier"),
                     Format::Zip { .. } => {
@@ -148,7 +152,7 @@ pub fn write_stream_seek<NextFn>(
     mut next_entry: NextFn,
     out: impl std::io::Write + std::io::Seek,
     opts: Options,
-) -> Result<(), Error>
+) -> Result<(), gix_error::Exn<gix_error::Message>>
 where
     NextFn: FnMut(&mut Stream) -> Result<Option<Entry<'_>>, gix_error::Exn>,
 {
@@ -204,7 +208,7 @@ fn append_zip_entry<W: std::io::Write + std::io::Seek>(
     mtime: rawzip::time::UtcDateTime,
     compression_level: Option<i64>,
     tree_prefix: Option<&bstr::BString>,
-) -> Result<(), Error> {
+) -> Result<(), gix_error::Exn<gix_error::Message>> {
     use bstr::ByteSlice;
     let path = add_prefix(entry.relative_path(), tree_prefix).into_owned();
     let unix_permissions = if entry.mode.is_executable() { 0o755 } else { 0o644 };
@@ -299,7 +303,7 @@ fn append_tar_entry<W: std::io::Write>(
     mut entry: gix_worktree_stream::Entry<'_>,
     mtime_seconds_since_epoch: i64,
     opts: &Options,
-) -> Result<(), Error> {
+) -> Result<(), gix_error::Exn<gix_error::Message>> {
     let mut header = tar::Header::new_gnu();
     header.set_mtime(mtime_seconds_since_epoch as u64);
     header.set_entry_type(tar_entry_type(entry.mode));

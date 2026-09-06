@@ -11,7 +11,7 @@ pub(crate) mod function {
         },
     };
 
-    use super::{Error, Mode, Options, Outcome, ProgressId, reduce, util};
+    use super::{Mode, Options, Outcome, ProgressId, reduce, util};
     use crate::data::output;
 
     /// Given a known list of object `counts`, calculate entries ready to be put into a data pack.
@@ -55,8 +55,8 @@ pub(crate) mod function {
             chunk_size,
             compression,
         }: Options,
-    ) -> impl Iterator<Item = Result<(SequenceId, Vec<output::Entry>), Error>>
-    + parallel::reduce::Finalize<Reduce = reduce::Statistics<Error>>
+    ) -> impl Iterator<Item = Result<(SequenceId, Vec<output::Entry>), gix_error::Exn>>
+    + parallel::reduce::Finalize<Reduce = reduce::Statistics<gix_error::Exn>>
     where
         Find: crate::Find + Send + Clone + 'static,
     {
@@ -411,9 +411,6 @@ mod types {
         }
     }
 
-    /// The error returned by the pack generation function [`iter_from_counts()`][crate::data::output::entry::iter_from_counts()].
-    pub type Error = gix_error::Exn;
-
     /// The progress ids used in [`write_to_directory()`][crate::Bundle::write_to_directory()].
     ///
     /// Use this information to selectively extract the progress of interest in case the parent application has custom visualization.
@@ -434,4 +431,4 @@ mod types {
         }
     }
 }
-pub use types::{Error, Mode, Options, Outcome, ProgressId};
+pub use types::{Mode, Options, Outcome, ProgressId};

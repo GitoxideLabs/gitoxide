@@ -60,7 +60,7 @@ Result on 2026-04-22:
 ## Migration Rules
 
 - Replace `thiserror` in `Cargo.toml` with `gix-error`.
-- Prefer `pub type Error = gix_error::Exn<gix_error::Message>;` unless the crate needs a more specific concrete error.
+- Use canonical `gix-error` types directly in signatures, with imports where helpful. Forwarding aliases used during individual crate migrations are removed in the final cleanup pass.
 - Convert validation/parsing-only paths to `gix_error::ValidationError`.
 - Replace `#[from]` / `#[source]` propagation with `.or_raise(...)` or `.ok_or_raise(...)`.
 - Keep `gix_error::Error` as the erased boundary type, mainly at `gix` and in tests that benefit from downcasting or frame inspection.
@@ -177,3 +177,13 @@ Result on 2026-04-22:
 - [ ] `cargo nextest --workflow` no longer excludes `gix-error`.
 - [ ] The `gix` boundary still returns `gix_error::Error` where type erasure is desired.
 - [ ] Validation-heavy crates still expose typed validation failures where callers need them.
+
+## Final Cleanup at the Stack Tip
+
+Remove the forwarding aliases retained during crate-by-crate migration in one self-contained breaking commit, including all downstream adaptations.
+
+- [x] Remove direct and indirect forwarding aliases, renamed error exports, and test-only synonyms.
+- [x] Remove namespaces and files that only exposed those aliases, and update documentation links.
+- [x] Keep the central `gix::{Error, Exn}` and `gix::error` exports, canonical unrenamed re-exports, required associated types, and aliases with additional structure.
+- [x] Preserve concrete error types, `Exn` parameters, feature-dependent alternatives, messages, and error chains.
+- [x] Pass `etc/scripts/ci-check-local.sh --thorough` on the completed tip commit.

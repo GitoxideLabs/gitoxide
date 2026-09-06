@@ -1,7 +1,7 @@
 use filetime::FileTime;
 use std::path::PathBuf;
 
-fn decode_fuzzed(data: &[u8]) -> Result<(gix_index::State, Option<gix_hash::ObjectId>), gix_index::decode::Error> {
+fn decode_fuzzed(data: &[u8]) -> Result<(gix_index::State, Option<gix_hash::ObjectId>), gix_error::Exn> {
     gix_index::State::from_bytes(
         data,
         FileTime::from_unix_time(0, 0),
@@ -10,7 +10,7 @@ fn decode_fuzzed(data: &[u8]) -> Result<(gix_index::State, Option<gix_hash::Obje
     )
 }
 
-fn is_corruption_with(err: &gix_index::decode::Error, prefix: &str) -> bool {
+fn is_corruption_with(err: &gix_error::Exn, prefix: &str) -> bool {
     err.downcast_any_ref::<gix_error::CorruptionError>()
         .is_some_and(|err| err.message.starts_with(prefix))
 }

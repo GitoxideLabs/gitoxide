@@ -129,7 +129,7 @@ impl crate::Repository {
     pub fn normalize_path<'a>(
         &self,
         path: &'a (impl gix_utils::AsBStr + ?Sized),
-    ) -> Result<Cow<'a, BStr>, crate::repository::normalize_path::Error> {
+    ) -> Result<Cow<'a, BStr>, crate::Error> {
         let path = gix_path::from_bstr(Cow::Borrowed(path.as_bstr()));
         let path = if gix_path::is_absolute(path.as_ref()) {
             let root = gix_path::realpath_opts(
@@ -199,7 +199,7 @@ impl crate::Repository {
     ///
     /// Note that the CWD is obtained once upon instantiation of the repository.
     // TODO: tests, details - there is a lot about environment variables to change things around.
-    pub fn prefix(&self) -> Result<Option<&Path>, gix_path::realpath::Error> {
+    pub fn prefix(&self) -> Result<Option<&Path>, gix_error::Exn> {
         let (root, current_dir) = match self.workdir().zip(self.options.current_dir.as_deref()) {
             Some((work_dir, cwd)) => (work_dir, cwd),
             None => return Ok(None),

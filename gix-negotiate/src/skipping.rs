@@ -1,7 +1,7 @@
 use gix_date::SecondsSinceUnixEpoch;
 use gix_hash::ObjectId;
 
-use crate::{Error, Flags, Metadata, Negotiator};
+use crate::{Flags, Metadata, Negotiator};
 
 pub(crate) struct Algorithm {
     revs: gix_revwalk::PriorityQueue<SecondsSinceUnixEpoch, ObjectId>,
@@ -19,7 +19,12 @@ impl Default for Algorithm {
 
 impl Algorithm {
     /// Add `id` to our priority queue and *add* `flags` to it.
-    fn add_to_queue(&mut self, id: ObjectId, mark: Flags, graph: &mut crate::Graph<'_, '_>) -> Result<(), Error> {
+    fn add_to_queue(
+        &mut self,
+        id: ObjectId,
+        mark: Flags,
+        graph: &mut crate::Graph<'_, '_>,
+    ) -> Result<(), gix_error::Exn> {
         let commit = graph.get_or_insert_commit(id, |entry| {
             entry.flags |= mark | Flags::SEEN;
         })?;
@@ -32,7 +37,7 @@ impl Algorithm {
         Ok(())
     }
 
-    fn mark_common(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<(), Error> {
+    fn mark_common(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<(), gix_error::Exn> {
         let mut is_common = false;
         if let Some(commit) = graph
             .get_or_insert_commit(id, |entry| {
@@ -77,7 +82,7 @@ impl Algorithm {
         entry: Metadata,
         parent_id: ObjectId,
         graph: &mut crate::Graph<'_, '_>,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, gix_error::Exn> {
         let mut was_seen = false;
         if let Some(parent) = graph
             .get(&parent_id)
@@ -112,7 +117,7 @@ impl Algorithm {
 }
 
 impl Negotiator for Algorithm {
-    fn known_common(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<(), Error> {
+    fn known_common(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<(), gix_error::Exn> {
         if graph
             .get(&id)
             .is_some_and(|commit| commit.data.flags.contains(Flags::SEEN))
@@ -122,7 +127,7 @@ impl Negotiator for Algorithm {
         self.add_to_queue(id, Flags::ADVERTISED, graph)
     }
 
-    fn add_tip(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<(), Error> {
+    fn add_tip(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<(), gix_error::Exn> {
         if graph
             .get(&id)
             .is_some_and(|commit| commit.data.flags.contains(Flags::SEEN))
@@ -132,7 +137,7 @@ impl Negotiator for Algorithm {
         self.add_to_queue(id, Flags::default(), graph)
     }
 
-    fn next_have(&mut self, graph: &mut crate::Graph<'_, '_>) -> Option<Result<ObjectId, Error>> {
+    fn next_have(&mut self, graph: &mut crate::Graph<'_, '_>) -> Option<Result<ObjectId, gix_error::Exn>> {
         loop {
             let id = self.revs.pop_value().filter(|_| self.non_common_revs != 0)?;
             let commit = graph.get_mut(&id).expect("it was added to the graph by now");
@@ -165,7 +170,11 @@ impl Negotiator for Algorithm {
         }
     }
 
-    fn in_common_with_remote(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<bool, Error> {
+    fn in_common_with_remote(
+        &mut self,
+        id: ObjectId,
+        graph: &mut crate::Graph<'_, '_>,
+    ) -> Result<bool, gix_error::Exn> {
         let mut was_seen = false;
         let known_to_be_common = graph.get(&id).is_some_and(|commit| {
             was_seen = commit.data.flags.contains(Flags::SEEN);

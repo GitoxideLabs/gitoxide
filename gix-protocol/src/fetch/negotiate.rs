@@ -16,9 +16,6 @@ use crate::fetch::{RefMap, Shallow, Tags, refmap};
 
 type Queue = gix_revwalk::PriorityQueue<SecondsSinceUnixEpoch, gix_hash::ObjectId>;
 
-/// The error returned during [`one_round()`] or [`mark_complete_and_common_ref()`].
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// Determines what should be done after [preparing the commit-graph for negotiation](mark_complete_and_common_ref).
 #[must_use]
 #[derive(Debug, Clone)]
@@ -111,7 +108,7 @@ pub fn mark_complete_and_common_ref<Out, F>(
     ref_map: &RefMap,
     shallow: &Shallow,
     mapping_is_ignored: impl Fn(&refmap::Mapping) -> bool,
-) -> Result<Action, Error>
+) -> Result<Action, gix_error::Exn<gix_error::Message>>
 where
     Out: Iterator<Item = (gix_ref::file::Store, F)>,
     F: gix_object::Find,
@@ -201,7 +198,7 @@ where
         Cow::Borrowed(&queue)
     };
 
-    gix_trace::detail!("mark known_common").into_scope(|| -> Result<_, Error> {
+    gix_trace::detail!("mark known_common").into_scope(|| -> Result<_, gix_error::Exn<gix_error::Message>> {
         // mark all complete advertised refs as common refs.
         for mapping in ref_map
             .mappings
@@ -226,14 +223,16 @@ where
 
     // As negotiators currently may rely on getting `known_common` calls first and tips after, we adhere to that which is the only
     // reason we cached the set of tips.
-    gix_trace::detail!("mark tips", num_tips = tips.len()).into_scope(|| -> Result<_, Error> {
-        for tip in tips.iter_unordered() {
-            negotiator
-                .add_tip(*tip, graph)
-                .or_raise(|| message("Could not add negotiation tip"))?;
-        }
-        Ok(())
-    })?;
+    gix_trace::detail!("mark tips", num_tips = tips.len()).into_scope(
+        || -> Result<_, gix_error::Exn<gix_error::Message>> {
+            for tip in tips.iter_unordered() {
+                negotiator
+                    .add_tip(*tip, graph)
+                    .or_raise(|| message("Could not add negotiation tip"))?;
+            }
+            Ok(())
+        },
+    )?;
 
     Ok(Action::MustNegotiate {
         remote_ref_target_known,
@@ -327,7 +326,7 @@ fn mark_recent_complete_commits(
     queue: &mut Queue,
     graph: &mut gix_negotiate::Graph<'_, '_>,
     cutoff: SecondsSinceUnixEpoch,
-) -> Result<(), Error> {
+) -> Result<(), gix_error::Exn<gix_error::Message>> {
     let _span = gix_trace::detail!("mark_recent_complete", queue_len = queue.len());
     while let Some(id) = queue
         .peek()
@@ -358,7 +357,7 @@ fn mark_all_refs_in_repo(
     graph: &mut gix_negotiate::Graph<'_, '_>,
     queue: &mut Queue,
     mark: Flags,
-) -> Result<(), Error> {
+) -> Result<(), gix_error::Exn<gix_error::Message>> {
     let _span = gix_trace::detail!("mark_all_refs");
     for local_ref in store
         .iter()
@@ -453,7 +452,7 @@ pub fn one_round(
     state: &mut one_round::State,
     arguments: &mut crate::fetch::Arguments,
     previous_response: Option<&crate::fetch::Response>,
-) -> Result<(Round, bool), Error> {
+) -> Result<(Round, bool), gix_error::Exn<gix_error::Message>> {
     let mut seen_ack = false;
     if let Some(response) = previous_response {
         use crate::fetch::response::Acknowledgement;

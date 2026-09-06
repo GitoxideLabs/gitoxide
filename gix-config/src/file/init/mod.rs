@@ -7,7 +7,7 @@ use crate::{
 };
 
 mod types;
-pub use types::{Error, Options};
+pub use types::Options;
 
 mod comfort;
 ///
@@ -36,7 +36,7 @@ impl File {
         input: &[u8],
         meta: impl Into<OwnShared<Metadata>>,
         options: Options<'_>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, gix_error::Exn> {
         use gix_error::{ResultExt, message};
         let meta = meta.into();
         Ok(Self::from_parse_events_no_includes(
@@ -84,7 +84,7 @@ impl File {
         input_and_buf: &mut Vec<u8>,
         meta: impl Into<OwnShared<Metadata>>,
         options: Options<'_>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, gix_error::Exn> {
         use gix_error::{ResultExt, message};
         let mut config = Self::from_parse_events_no_includes(
             parse::Events::from_bytes(input_and_buf, options.to_event_filter())

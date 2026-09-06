@@ -12,13 +12,10 @@ pub struct Bitmaps {
     pub replace: gix_bitmap::ewah::Vec,
 }
 
-///
-pub mod decode {
-    /// The error returned when decoding link extensions.
-    pub type Error = gix_error::Exn<gix_error::CorruptionError>;
-}
-
-pub(crate) fn decode(data: &[u8], object_hash: gix_hash::Kind) -> Result<Link, decode::Error> {
+pub(crate) fn decode(
+    data: &[u8],
+    object_hash: gix_hash::Kind,
+) -> Result<Link, gix_error::Exn<gix_error::CorruptionError>> {
     use gix_error::{ErrorExt, OptionExt, ResultExt};
 
     let (id, data) = data
@@ -55,7 +52,7 @@ impl Link {
         object_hash: gix_hash::Kind,
         skip_hash: bool,
         options: crate::decode::Options,
-    ) -> Result<(), crate::file::init::Error> {
+    ) -> Result<(), gix_error::Exn> {
         use gix_error::ErrorExt;
 
         let corrupt = |message| gix_error::CorruptionError::new(message).raise_erased();

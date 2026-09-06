@@ -30,9 +30,6 @@ pub mod interpolate {
         }
     }
 
-    /// The error returned by [`Path::interpolate()`][crate::Path::interpolate()].
-    pub type Error = gix_error::Exn;
-
     /// Obtain the home directory for the given user `name` or return `None` if the user wasn't found
     /// or any other error occurred.
     /// It can be used as `home_for_user` parameter in [`Path::interpolate()`][crate::Path::interpolate()].
@@ -152,7 +149,7 @@ impl Path {
             home_dir,
             home_for_user,
         }: interpolate::Context<'_>,
-    ) -> Result<PathBuf, interpolate::Error> {
+    ) -> Result<PathBuf, gix_error::Exn> {
         if self.is_empty() {
             return Err(NotFoundError::new("path is missing").raise_erased());
         }
@@ -187,12 +184,12 @@ impl Path {
     }
 
     #[cfg(any(target_os = "windows", target_os = "android"))]
-    fn interpolate_user(self, _home_for_user: fn(&str) -> Option<PathBuf>) -> Result<PathBuf, interpolate::Error> {
+    fn interpolate_user(self, _home_for_user: fn(&str) -> Option<PathBuf>) -> Result<PathBuf, gix_error::Exn> {
         Err(gix_error::message("User interpolation is not available on this platform").raise_erased())
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
-    fn interpolate_user(self, home_for_user: fn(&str) -> Option<PathBuf>) -> Result<PathBuf, interpolate::Error> {
+    fn interpolate_user(self, home_for_user: fn(&str) -> Option<PathBuf>) -> Result<PathBuf, gix_error::Exn> {
         let (_prefix, val) = self.split_at("/".len());
         let i = val
             .iter()

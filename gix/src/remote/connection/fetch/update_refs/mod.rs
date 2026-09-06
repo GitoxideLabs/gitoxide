@@ -69,7 +69,7 @@ pub(crate) fn update(
     fetch_tags: fetch::Tags,
     dry_run: fetch::DryRun,
     write_packed_refs: fetch::WritePackedRefs,
-) -> Result<update::Outcome, update::Error> {
+) -> Result<update::Outcome, crate::Error> {
     let _span = gix_trace::detail!("update_refs()", mappings = mappings.len());
     let mut edits = Vec::new();
     let mut updates = Vec::new();
@@ -416,7 +416,7 @@ fn update_needs_adjustment_as_edits_symbolic_target_is_missing(
 ///
 /// Born symbolic remote refs are written as direct refs to the advertised target object id.
 /// Unborn remote refs remain symbolic as there is no object id to write.
-fn new_value_by_remote(remote: &Source) -> Result<Target, update::Error> {
+fn new_value_by_remote(remote: &Source) -> Result<Target, crate::Error> {
     let remote_id = remote.as_id();
     Ok(
         if let Source::Ref(

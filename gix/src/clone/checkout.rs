@@ -8,9 +8,6 @@ pub mod main_worktree {
 
     use crate::{Progress, Repository, clone::PrepareCheckout};
 
-    /// The error returned by [`PrepareCheckout::main_worktree()`].
-    pub type Error = gix_error::Error;
-
     /// The progress ids used in [`PrepareCheckout::main_worktree()`].
     ///
     /// Use this information to selectively extract the progress of interest in case the parent application has custom visualization.
@@ -48,7 +45,7 @@ pub mod main_worktree {
             &mut self,
             mut progress: P,
             should_interrupt: &AtomicBool,
-        ) -> Result<(Repository, gix_worktree_state::checkout::Outcome), Error>
+        ) -> Result<(Repository, gix_worktree_state::checkout::Outcome), crate::Error>
         where
             P: gix_features::progress::NestedProgress,
             P::SubProgress: gix_features::progress::NestedProgress + 'static,
@@ -60,7 +57,7 @@ pub mod main_worktree {
             &mut self,
             progress: &mut dyn gix_features::progress::DynNestedProgress,
             should_interrupt: &AtomicBool,
-        ) -> Result<(Repository, gix_worktree_state::checkout::Outcome), Error> {
+        ) -> Result<(Repository, gix_worktree_state::checkout::Outcome), crate::Error> {
             let _span = gix_trace::coarse!("gix::clone::PrepareCheckout::main_worktree()");
             let repo = self
                 .repo

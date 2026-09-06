@@ -1,7 +1,7 @@
 /// An implementation for HTTP requests via `reqwest`.
 pub struct Remote {
     /// A worker thread which performs the actual request.
-    handle: Option<std::thread::JoinHandle<Result<(), remote::Error>>>,
+    handle: Option<std::thread::JoinHandle<Result<(), gix_error::Exn<gix_error::Message>>>>,
     /// A channel to send requests (work) to the worker thread.
     request: std::sync::mpsc::SyncSender<remote::Request>,
     /// A channel to receive the result of the prior request.

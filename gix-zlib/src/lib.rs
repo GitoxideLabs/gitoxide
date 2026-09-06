@@ -96,4 +96,3 @@ pub mod stream;
 pub mod inflate;
 
 mod decompress;
-pub use decompress::DecompressError;

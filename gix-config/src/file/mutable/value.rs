@@ -3,7 +3,6 @@ use bstr::BString;
 use crate::{
     file,
     file::{Index, Size, mutable::section::SectionMut},
-    lookup,
     parse::section,
 };
 
@@ -19,21 +18,21 @@ pub struct ValueMut<'borrow> {
 impl<'borrow> ValueMut<'borrow> {
     /// Returns the actual value. This is computed each time this is called
     /// requiring an allocation for multi-line values.
-    pub fn get(&self) -> Result<BString, lookup::existing::Error> {
+    pub fn get(&self) -> Result<BString, gix_error::Exn> {
         self.section.get(&self.key, self.index, self.index + self.size)
     }
 
     /// Update the value to the provided one. This modifies the value such that
     /// the Value event(s) are replaced with a single new event containing the
     /// new value.
-    pub fn set_string(&mut self, input: impl AsRef<str>) -> Result<(), crate::parse::span::Error> {
+    pub fn set_string(&mut self, input: impl AsRef<str>) -> Result<(), gix_error::ValidationError> {
         self.set(input.as_ref())
     }
 
     /// Update the value to the provided one. This modifies the value such that
     /// the Value event(s) are replaced with a single new event containing the
     /// new value.
-    pub fn set(&mut self, input: impl crate::AsBStr) -> Result<(), crate::parse::span::Error> {
+    pub fn set(&mut self, input: impl crate::AsBStr) -> Result<(), gix_error::ValidationError> {
         let new_size = self
             .section
             .set_internal(self.index, self.key.to_owned(), input.as_bstr())?;

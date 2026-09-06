@@ -18,7 +18,7 @@
 //! # let nested = dir.path().join("src").join("module");
 //! # std::fs::create_dir_all(&nested)?;
 //! let (path, _trust) =
-//!     gix_discover::upwards(&nested).map_err(gix_discover::upwards::Error::into_error)?;
+//!     gix_discover::upwards(&nested).map_err(gix_error::Exn::into_error)?;
 //! let (repository_dir, worktree_dir) = path.into_repository_and_work_tree_directories();
 //!
 //! assert_eq!(repository_dir, git_dir);
@@ -37,12 +37,6 @@ pub const MODULES: &str = "modules";
 
 ///
 pub mod repository;
-
-///
-pub mod is_git {
-    /// The error returned by [`crate::is_git()`].
-    pub type Error = gix_error::Exn;
-}
 
 mod is;
 #[expect(

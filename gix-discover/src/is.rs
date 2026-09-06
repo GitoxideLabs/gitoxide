@@ -30,7 +30,7 @@ pub fn submodule_git_dir(git_dir: &Path) -> bool {
 ///   * …a refs directory
 ///
 /// This obtains filesystem metadata for `git_dir` before checking its repository layout.
-pub fn git(git_dir: &Path) -> Result<crate::repository::Kind, crate::is_git::Error> {
+pub fn git(git_dir: &Path) -> Result<crate::repository::Kind, gix_error::Exn> {
     let git_dir_metadata = git_dir
         .metadata()
         .or_raise_erased(|| gix_error::message!("Could not retrieve metadata of \"{}\"", git_dir.display()))?;
@@ -44,7 +44,7 @@ pub(crate) fn git_with_metadata(
     git_dir: &Path,
     git_dir_metadata: &std::fs::Metadata,
     cwd: &Path,
-) -> Result<crate::repository::Kind, crate::is_git::Error> {
+) -> Result<crate::repository::Kind, gix_error::Exn> {
     #[derive(Eq, PartialEq)]
     enum Kind {
         MaybeRepo,

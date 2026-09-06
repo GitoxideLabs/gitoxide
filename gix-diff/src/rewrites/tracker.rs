@@ -134,12 +134,6 @@ pub mod visit {
     }
 }
 
-///
-pub mod emit {
-    /// The error returned by [Tracker::emit()](super::Tracker::emit()).
-    pub type Error = gix_error::Exn<gix_error::Message>;
-}
-
 /// Lifecycle
 impl<T: Change> Tracker<T> {
     /// Create a new instance with `rewrites` configuration.
@@ -210,7 +204,7 @@ impl<T: Change> Tracker<T> {
         diff_cache: &mut crate::blob::Platform,
         objects: &impl gix_object::FindObjectOrHeader,
         mut push_source_tree: PushSourceTreeFn,
-    ) -> Result<Outcome, emit::Error>
+    ) -> Result<Outcome, gix_error::Exn<gix_error::Message>>
     where
         PushSourceTreeFn: FnMut(&mut dyn FnMut(T, &BStr)) -> Result<(), E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -367,7 +361,7 @@ impl<T: Change> Tracker<T> {
         diff_cache: &mut crate::blob::Platform,
         objects: &impl gix_object::FindObjectOrHeader,
         filter: Option<fn(&T) -> bool>,
-    ) -> Result<(), emit::Error> {
+    ) -> Result<(), gix_error::Exn<gix_error::Message>> {
         // we try to cheaply reduce the set of possibilities first, before possibly looking more exhaustively.
         let needs_second_pass = !needs_exact_match(percentage);
 
@@ -418,7 +412,7 @@ impl<T: Change> Tracker<T> {
         diff_cache: &mut crate::blob::Platform,
         objects: &impl gix_object::FindObjectOrHeader,
         filter: Option<fn(&T) -> bool>,
-    ) -> Result<Action, emit::Error> {
+    ) -> Result<Action, gix_error::Exn<gix_error::Message>> {
         let mut dest_ofs = 0;
         let mut num_checks = 0;
         let max_checks = {
@@ -529,7 +523,7 @@ impl<T: Change> Tracker<T> {
         kind: visit::SourceKind,
         src_parent_id: ChangeId,
         dst_parent_id: ChangeId,
-    ) -> Result<Action, emit::Error> {
+    ) -> Result<Action, gix_error::Exn<gix_error::Message>> {
         debug_assert_ne!(
             src_parent_id, dst_parent_id,
             "src and destination directories must be distinct"
@@ -592,7 +586,7 @@ impl<T: Change> Tracker<T> {
     fn match_renamed_directories(
         &mut self,
         cb: &mut impl FnMut(visit::Destination<'_, T>, Option<visit::Source<'_, T>>) -> Action,
-    ) -> Result<(), emit::Error> {
+    ) -> Result<(), gix_error::Exn<gix_error::Message>> {
         fn unemitted_directory_matching_relation_id<T: Change>(items: &[Item<T>], child_id: ChangeId) -> Option<usize> {
             items.iter().position(|i| {
                 !i.emitted && matches!(i.change.relation(), Some(Relation::Parent(pid)) if pid == child_id)
@@ -698,7 +692,7 @@ fn find_match<'a, T: Change>(
     diff_cache: &mut crate::blob::Platform,
     path_backing: &[u8],
     num_checks: &mut usize,
-) -> Result<Option<SourceTuple<'a, T>>, emit::Error> {
+) -> Result<Option<SourceTuple<'a, T>>, gix_error::Exn<gix_error::Message>> {
     let (item_id, item_mode) = item.change.id_and_entry_mode();
     // Symlinks and gitlinks only participate in exact-ID matching; neither has meaningful blob similarity here.
     if needs_exact_match(percentage) || item_mode.is_link() || item_mode.is_commit() {

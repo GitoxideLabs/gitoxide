@@ -395,7 +395,7 @@ mod branch_remote {
         Ok(())
     }
 
-    fn repo(name: &str) -> Result<gix::Repository, gix::open::Error> {
+    fn repo(name: &str) -> Result<gix::Repository, gix_error::Error> {
         named_subrepo_opts("make_remote_config_repos.sh", name, gix::open::Options::isolated())
     }
 }

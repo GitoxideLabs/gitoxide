@@ -16,17 +16,8 @@ pub mod diff {
     }
 
     ///
-    pub mod init {
-        /// The error returned by [`object::tree::diff::Change::diff`](crate::object::tree::diff::Change::diff()).
-        pub type Error = gix_error::Error;
-    }
-
-    ///
     pub mod lines {
         use crate::bstr::BStr;
-
-        /// The error returned by [Platform::lines()](super::Platform::lines()).
-        pub type Error = gix_error::Error;
 
         /// A change to a hunk of lines.
         pub enum Change<'a, 'data> {
@@ -59,7 +50,7 @@ pub mod diff {
         pub fn lines<FnH, E>(
             &mut self,
             mut process_hunk: FnH,
-        ) -> Result<gix_diff::blob::platform::prepare_diff::Outcome<'_>, lines::Error>
+        ) -> Result<gix_diff::blob::platform::prepare_diff::Outcome<'_>, crate::Error>
         where
             FnH: FnMut(lines::Change<'_, '_>) -> Result<(), E>,
             E: std::error::Error + Send + Sync + 'static,
@@ -121,9 +112,7 @@ pub mod diff {
 
         /// Count the amount of removed and inserted lines efficiently.
         /// Note that nothing will happen if one of the inputs is binary, and `None` will be returned.
-        pub fn line_counts(
-            &mut self,
-        ) -> Result<Option<gix_diff::blob::DiffLineStats>, gix_diff::blob::platform::prepare_diff::Error> {
+        pub fn line_counts(&mut self) -> Result<Option<gix_diff::blob::DiffLineStats>, gix_error::ValidationError> {
             self.resource_cache.options.skip_internal_diff_if_external_is_configured = false;
 
             let prep = self.resource_cache.prepare_diff()?;

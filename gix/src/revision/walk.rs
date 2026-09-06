@@ -6,9 +6,6 @@ use gix_traverse::commit::simple::CommitTimeOrder;
 
 use crate::{Repository, ext::ObjectIdExt, revision};
 
-/// The error returned by [`Platform::all()`] and [`Platform::selected()`].
-pub type Error = gix_error::Error;
-
 /// Specify how to sort commits during a [revision::Walk] traversal.
 ///
 /// ### Sample History
@@ -98,7 +95,7 @@ impl<'repo> Info<'repo> {
     ///
     /// Note that this is an expensive operation which shouldn't be performed unless one needs more than parent ids
     /// and commit time.
-    pub fn object(&self) -> Result<crate::Commit<'repo>, crate::object::find::existing::Error> {
+    pub fn object(&self) -> Result<crate::Commit<'repo>, crate::Error> {
         Ok(self.id().object()?.into_commit())
     }
 
@@ -266,7 +263,7 @@ impl<'repo> Platform<'repo> {
     pub fn selected(
         self,
         mut filter: impl FnMut(&gix_hash::oid) -> bool + 'repo,
-    ) -> Result<revision::Walk<'repo>, Error> {
+    ) -> Result<revision::Walk<'repo>, crate::Error> {
         let Platform {
             repo,
             tips,
@@ -335,15 +332,9 @@ impl<'repo> Platform<'repo> {
     ///
     /// It's highly recommended to set an [`object cache`](Repository::object_cache_size()) on the parent repo
     /// to greatly speed up performance if the returned id is supposed to be looked up right after.
-    pub fn all(self) -> Result<revision::Walk<'repo>, Error> {
+    pub fn all(self) -> Result<revision::Walk<'repo>, crate::Error> {
         self.selected(|_| true)
     }
-}
-
-///
-pub mod iter {
-    /// The error returned by the [Walk](crate::revision::Walk) iterator.
-    pub type Error = gix_error::Error;
 }
 
 pub(crate) mod iter_impl {
@@ -351,11 +342,11 @@ pub(crate) mod iter_impl {
     pub struct Walk<'repo> {
         /// The owning repository.
         pub repo: &'repo crate::Repository,
-        pub(crate) inner: Box<dyn Iterator<Item = Result<gix_traverse::commit::Info, super::iter::Error>> + 'repo>,
+        pub(crate) inner: Box<dyn Iterator<Item = Result<gix_traverse::commit::Info, crate::Error>> + 'repo>,
     }
 
     impl<'repo> Iterator for Walk<'repo> {
-        type Item = Result<super::Info<'repo>, super::iter::Error>;
+        type Item = Result<super::Info<'repo>, crate::Error>;
 
         fn next(&mut self) -> Option<Self::Item> {
             self.inner

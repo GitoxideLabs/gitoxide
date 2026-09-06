@@ -5,16 +5,16 @@ use smallvec::SmallVec;
 
 use crate::commit::{
     Either, Info, Parents, Topo, find,
-    topo::{Error, Sorting, WalkFlags},
+    topo::{Sorting, WalkFlags},
 };
 
 pub(in crate::commit) type GenAndCommitTime = (u32, i64);
 
-fn missing_indegree() -> Error {
+fn missing_indegree() -> gix_error::Exn {
     CorruptionError::new("Indegree information is missing").raise_erased()
 }
 
-fn missing_state() -> Error {
+fn missing_state() -> gix_error::Exn {
     CorruptionError::new("Internal state (bitflags) not found").raise_erased()
 }
 
@@ -61,7 +61,7 @@ impl<Find, Predicate> Topo<Find, Predicate>
 where
     Find: gix_object::Find,
 {
-    pub(super) fn compute_indegrees_to_depth(&mut self, gen_cutoff: u32) -> Result<(), Error> {
+    pub(super) fn compute_indegrees_to_depth(&mut self, gen_cutoff: u32) -> Result<(), gix_error::Exn> {
         while let Some(((generation, _), _)) = self.indegree_queue.peek() {
             if *generation >= gen_cutoff {
                 self.indegree_walk_step()?;
@@ -73,7 +73,7 @@ where
         Ok(())
     }
 
-    fn indegree_walk_step(&mut self) -> Result<(), Error> {
+    fn indegree_walk_step(&mut self) -> Result<(), gix_error::Exn> {
         if let Some(((generation, _), id)) = self.indegree_queue.pop() {
             self.explore_to_depth(generation)?;
 
@@ -91,7 +91,7 @@ where
         Ok(())
     }
 
-    fn explore_to_depth(&mut self, gen_cutoff: u32) -> Result<(), Error> {
+    fn explore_to_depth(&mut self, gen_cutoff: u32) -> Result<(), gix_error::Exn> {
         while let Some(((generation, _), _)) = self.explore_queue.peek() {
             if *generation >= gen_cutoff {
                 self.explore_walk_step()?;
@@ -102,7 +102,7 @@ where
         Ok(())
     }
 
-    fn explore_walk_step(&mut self) -> Result<(), Error> {
+    fn explore_walk_step(&mut self) -> Result<(), gix_error::Exn> {
         if let Some((_, id)) = self.explore_queue.pop() {
             let parents = self.collect_parents(&id)?;
             self.process_parents(&id, &parents)?;
@@ -119,7 +119,7 @@ where
         Ok(())
     }
 
-    fn expand_topo_walk(&mut self, id: &oid) -> Result<(), Error> {
+    fn expand_topo_walk(&mut self, id: &oid) -> Result<(), gix_error::Exn> {
         let parents = self.collect_parents(id)?;
         self.process_parents(id, &parents)?;
 
@@ -155,7 +155,7 @@ where
         Ok(())
     }
 
-    fn process_parents(&mut self, id: &oid, parents: &[(ObjectId, GenAndCommitTime)]) -> Result<(), Error> {
+    fn process_parents(&mut self, id: &oid, parents: &[(ObjectId, GenAndCommitTime)]) -> Result<(), gix_error::Exn> {
         let state = self.states.get_mut(id).ok_or_else(missing_state)?;
         if state.contains(WalkFlags::Added) {
             return Ok(());
@@ -191,7 +191,7 @@ where
         Ok(())
     }
 
-    fn collect_parents(&mut self, id: &oid) -> Result<SmallVec<[(ObjectId, GenAndCommitTime); 1]>, Error> {
+    fn collect_parents(&mut self, id: &oid) -> Result<SmallVec<[(ObjectId, GenAndCommitTime); 1]>, gix_error::Exn> {
         collect_parents(
             &mut self.commit_graph,
             &self.find,
@@ -205,11 +205,11 @@ where
     pub(super) fn collect_all_parents(
         &mut self,
         id: &oid,
-    ) -> Result<SmallVec<[(ObjectId, GenAndCommitTime); 1]>, Error> {
+    ) -> Result<SmallVec<[(ObjectId, GenAndCommitTime); 1]>, gix_error::Exn> {
         collect_parents(&mut self.commit_graph, &self.find, id, false, &mut self.buf)
     }
 
-    fn pop_commit(&mut self) -> Option<Result<Info, Error>> {
+    fn pop_commit(&mut self) -> Option<Result<Info, gix_error::Exn>> {
         let commit = self.topo_queue.pop()?;
         let i = match self.indegrees.get_mut(&commit.id) {
             Some(i) => i,
@@ -232,7 +232,7 @@ where
     Find: gix_object::Find,
     Predicate: FnMut(&oid) -> bool,
 {
-    type Item = Result<Info, Error>;
+    type Item = Result<Info, gix_error::Exn>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -254,7 +254,7 @@ fn collect_parents<Find>(
     id: &oid,
     first_only: bool,
     buf: &mut Vec<u8>,
-) -> Result<SmallVec<[(ObjectId, GenAndCommitTime); 1]>, Error>
+) -> Result<SmallVec<[(ObjectId, GenAndCommitTime); 1]>, gix_error::Exn>
 where
     Find: gix_object::Find,
 {
@@ -310,7 +310,7 @@ where
     Ok(parents)
 }
 
-pub(super) fn gen_and_commit_time(c: Either<'_, '_>) -> Result<GenAndCommitTime, Error> {
+pub(super) fn gen_and_commit_time(c: Either<'_, '_>) -> Result<GenAndCommitTime, gix_error::Exn> {
     match c {
         Either::CommitRefIter(c) => {
             let mut commit_time = 0;

@@ -4,12 +4,6 @@ use gix_error::{ErrorExt, ValidationError};
 
 use crate::{Defaults, MagicSignature, SearchMode};
 
-///
-pub mod from_environment {
-    /// The error returned by [Defaults::from_environment()](super::Defaults::from_environment()).
-    pub type Error = gix_error::Exn<gix_error::ValidationError>;
-}
-
 impl Defaults {
     /// Initialize this instance using information from the environment as
     /// [per the official documentation](https://git-scm.com/book/en/v2/Git-Internals-Environment-Variables) *(look for `PATHSPECS`)*,
@@ -23,8 +17,10 @@ impl Defaults {
     ///
     /// Instead of failing if `GIT_LITERAL_PATHSPECS` is used with glob globals, we ignore these. Also our implementation allows global
     /// `icase` settings in combination with this setting.
-    pub fn from_environment(var: &mut dyn FnMut(&str) -> Option<OsString>) -> Result<Self, from_environment::Error> {
-        let mut env_bool = |name: &str| -> Result<Option<bool>, from_environment::Error> {
+    pub fn from_environment(
+        var: &mut dyn FnMut(&str) -> Option<OsString>,
+    ) -> Result<Self, gix_error::Exn<gix_error::ValidationError>> {
+        let mut env_bool = |name: &str| -> Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>> {
             var(name)
                 .map(|val| gix_config_value::Boolean::try_from(val).map(|b| b.0))
                 .transpose()

@@ -321,7 +321,7 @@ impl gix_object::Find for CountingFind<'_> {
         &self,
         id: &gix_hash::oid,
         buffer: &'a mut Vec<u8>,
-    ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+    ) -> Result<Option<gix_object::Data<'a>>, gix_error::Exn> {
         self.lookups.set(self.lookups.get() + 1);
         gix_object::Find::try_find(self.inner, id, buffer)
     }

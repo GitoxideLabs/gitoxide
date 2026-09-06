@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::HashSet, io, path::PathBuf};
 
-use gix_error::{CorruptionError, Error as GixError, ResourceExhaustionError, ResourceExhaustionKind};
+use gix_error::{CorruptionError, ResourceExhaustionError, ResourceExhaustionKind};
 
 use crate::store_impls::loose::{HEADER_MAX_SIZE, Store, hash_path};
 
@@ -9,7 +9,7 @@ use crate::store_impls::loose::{HEADER_MAX_SIZE, Store, hash_path};
 #[allow(missing_docs)]
 pub enum Error {
     DecompressFile {
-        source: GixError,
+        source: gix_error::Error,
         path: PathBuf,
     },
     SizeMismatch {
@@ -17,10 +17,10 @@ pub enum Error {
         expected: u64,
         path: PathBuf,
     },
-    Decode(GixError),
+    Decode(gix_error::Error),
     OutOfMemory {
         size: u64,
-        source: GixError,
+        source: gix_error::Error,
     },
     Io {
         source: std::io::Error,
@@ -59,8 +59,8 @@ impl std::error::Error for Error {
     }
 }
 
-impl From<gix_object::decode::LooseHeaderDecodeError> for Error {
-    fn from(err: gix_object::decode::LooseHeaderDecodeError) -> Self {
+impl From<gix_error::Exn<gix_error::ValidationError>> for Error {
+    fn from(err: gix_error::Exn<gix_error::ValidationError>) -> Self {
         Error::Decode(err.into_error())
     }
 }
@@ -170,7 +170,7 @@ impl Store {
 
         if status == gix_zlib::Status::BufError {
             return Err(Error::DecompressFile {
-                source: GixError::from_error(CorruptionError::new(
+                source: gix_error::Error::from_error(CorruptionError::new(
                     "The zlib status indicated an error, status was 'BufError'",
                 )),
                 path,
@@ -196,7 +196,7 @@ impl Store {
             })?;
         if status == gix_zlib::Status::BufError {
             return Err(Error::DecompressFile {
-                source: GixError::from_error(CorruptionError::new(
+                source: gix_error::Error::from_error(CorruptionError::new(
                     "The zlib status indicated an error, status was 'BufError'",
                 )),
                 path,
@@ -207,7 +207,7 @@ impl Store {
         self.ensure_in_alloc_limit(size)?;
         let size_usize = usize::try_from(size).map_err(|_| Error::OutOfMemory {
             size,
-            source: GixError::from_error(ResourceExhaustionError::new(
+            source: gix_error::Error::from_error(ResourceExhaustionError::new(
                 ResourceExhaustionKind::AllocationFailure,
                 "The object size cannot be represented in memory",
             )),
@@ -233,7 +233,7 @@ impl Store {
         out.clear();
         out.try_reserve(size_usize).map_err(|err| Error::OutOfMemory {
             size,
-            source: GixError::from_error(err),
+            source: gix_error::Error::from_error(err),
         })?;
         if status == gix_zlib::Status::StreamEnd {
             out.extend_from_slice(&header[header_size..consumed_out]);
@@ -272,7 +272,7 @@ impl Store {
         if self.alloc_limit_bytes.is_some_and(|limit| size > limit as u64) {
             return Err(Error::OutOfMemory {
                 size,
-                source: GixError::from_error(ResourceExhaustionError::new(
+                source: gix_error::Error::from_error(ResourceExhaustionError::new(
                     ResourceExhaustionKind::AllocationLimit,
                     "The object exceeds the configured allocation limit",
                 )),

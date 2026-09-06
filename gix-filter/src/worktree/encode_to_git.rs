@@ -7,13 +7,10 @@ pub enum RoundTripCheck {
     Skip,
 }
 
-/// The error returned by [`encode_to_git()][super::encode_to_git()].
-pub type Error = gix_error::ValidationError;
-
 pub(crate) mod function {
     use encoding_rs::DecoderResult;
 
-    use super::{Error, RoundTripCheck};
+    use super::RoundTripCheck;
 
     /// Decode `src` according to `src_encoding` to `UTF-8` for storage in git and place it in `buf`.
     /// Note that the encoding is always applied, there is no conditional even if `src_encoding` already is `UTF-8`.
@@ -22,7 +19,7 @@ pub(crate) mod function {
         src_encoding: &'static encoding_rs::Encoding,
         buf: &mut Vec<u8>,
         round_trip: RoundTripCheck,
-    ) -> Result<(), Error> {
+    ) -> Result<(), gix_error::ValidationError> {
         let mut decoder = src_encoding.new_decoder_with_bom_removal();
         let buf_len = decoder
             .max_utf8_buffer_length_without_replacement(src.len())

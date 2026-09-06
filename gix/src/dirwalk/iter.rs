@@ -43,9 +43,6 @@ pub struct Outcome {
     pub dirwalk: gix_dir::walk::Outcome,
 }
 
-/// The error returned by [Repository::dirwalk_iter()].
-pub type Error = gix_error::Error;
-
 /// Lifecycle
 impl Iter {
     pub(crate) fn new(
@@ -54,7 +51,7 @@ impl Iter {
         patterns: Vec<BString>,
         should_interrupt: OwnedOrStaticAtomicBool,
         options: dirwalk::Options,
-    ) -> Result<Iter, Error> {
+    ) -> Result<Iter, crate::Error> {
         #[cfg(feature = "parallel")]
         {
             let repo = repo.clone().into_sync();
@@ -63,7 +60,7 @@ impl Iter {
                 .name("gix::dirwalk::iter::producer".into())
                 .spawn({
                     let should_interrupt = should_interrupt.clone();
-                    move || -> Result<Outcome, dirwalk::Error> {
+                    move || -> Result<Outcome, crate::Error> {
                         let repo: Repository = repo.into();
                         let mut collect = Collect { tx };
                         let out = repo.dirwalk(&index, patterns, &should_interrupt, options, &mut collect)?;
@@ -119,7 +116,7 @@ impl Iter {
 }
 
 impl Iterator for Iter {
-    type Item = Result<Item, dirwalk::Error>;
+    type Item = Result<Item, crate::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         #[cfg(feature = "parallel")]

@@ -28,7 +28,7 @@ pub(super) mod types {
 use types::RelativePath;
 
 impl RelativePath {
-    fn new_unchecked(value: &BStr) -> Result<&RelativePath, Error> {
+    fn new_unchecked(value: &BStr) -> Result<&RelativePath, gix_error::Exn<gix_error::ValidationError>> {
         // SAFETY: `RelativePath` is transparent and equivalent to a `&BStr` if provided as reference.
         #[expect(unsafe_code)]
         unsafe {
@@ -37,10 +37,10 @@ impl RelativePath {
     }
 }
 
-/// The error used in [`RelativePath`].
-pub type Error = gix_error::Exn<ValidationError>;
-
-fn relative_path_from_value_and_path<'a>(path_bstr: &'a BStr, path: &Path) -> Result<&'a RelativePath, Error> {
+fn relative_path_from_value_and_path<'a>(
+    path_bstr: &'a BStr,
+    path: &Path,
+) -> Result<&'a RelativePath, gix_error::Exn<gix_error::ValidationError>> {
     if path.is_absolute() {
         return Err(ValidationError::new("A RelativePath is not allowed to be absolute").raise());
     }
@@ -57,7 +57,7 @@ fn relative_path_from_value_and_path<'a>(path_bstr: &'a BStr, path: &Path) -> Re
 }
 
 impl<'a> TryFrom<&'a str> for &'a RelativePath {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(value: &'a str) -> Result<Self, Self::Error> {
         relative_path_from_value_and_path(value.into(), Path::new(value))
@@ -65,7 +65,7 @@ impl<'a> TryFrom<&'a str> for &'a RelativePath {
 }
 
 impl<'a> TryFrom<&'a BStr> for &'a RelativePath {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(value: &'a BStr) -> Result<Self, Self::Error> {
         let path = try_from_bstr(value)?;
@@ -74,7 +74,7 @@ impl<'a> TryFrom<&'a BStr> for &'a RelativePath {
 }
 
 impl<'a> TryFrom<&'a [u8]> for &'a RelativePath {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     #[inline]
     fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
@@ -84,7 +84,7 @@ impl<'a> TryFrom<&'a [u8]> for &'a RelativePath {
 }
 
 impl<'a, const N: usize> TryFrom<&'a [u8; N]> for &'a RelativePath {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     #[inline]
     fn try_from(value: &'a [u8; N]) -> Result<Self, Self::Error> {
@@ -94,7 +94,7 @@ impl<'a, const N: usize> TryFrom<&'a [u8; N]> for &'a RelativePath {
 }
 
 impl<'a> TryFrom<&'a BString> for &'a RelativePath {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(value: &'a BString) -> Result<Self, Self::Error> {
         let path = try_from_bstr(value.as_bstr())?;

@@ -31,9 +31,7 @@ impl crate::Repository {
     }
 
     /// Return a newly opened commit-graph if it is available *and* enabled in the Git configuration.
-    pub fn commit_graph_if_enabled(
-        &self,
-    ) -> Result<Option<gix_commitgraph::Graph>, super::commit_graph_if_enabled::Error> {
+    pub fn commit_graph_if_enabled(&self) -> Result<Option<gix_commitgraph::Graph>, crate::Error> {
         self.config
             .may_use_commit_graph()?
             .then(|| gix_commitgraph::at(self.objects.store_ref().path().join("info")))

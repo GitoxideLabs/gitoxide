@@ -483,11 +483,11 @@ fn pattern(name: &str, flags: gix_glob::pattern::Mode, first_wildcard_pos: Optio
     })
 }
 
-fn has_validation_message<T>(result: Result<T, parse::Error>, expected: &str) -> bool {
+fn has_validation_message<T>(result: Result<T, gix_error::Exn<gix_error::ValidationError>>, expected: &str) -> bool {
     result.is_err_and(|err| err.message == expected)
 }
 
-fn try_line(input: &str) -> Result<ExpandedAttribute<'_>, parse::Error> {
+fn try_line(input: &str) -> Result<ExpandedAttribute<'_>, gix_error::Exn<gix_error::ValidationError>> {
     let mut lines = gix_attributes::parse(input.as_bytes());
     let res = expand(lines.next().unwrap())?;
     assert!(lines.next().is_none(), "expected only one line");
@@ -502,7 +502,7 @@ fn byte_line(input: &[u8]) -> ExpandedAttribute<'_> {
     try_byte_line(input).unwrap()
 }
 
-fn try_byte_line(input: &[u8]) -> Result<ExpandedAttribute<'_>, parse::Error> {
+fn try_byte_line(input: &[u8]) -> Result<ExpandedAttribute<'_>, gix_error::Exn<gix_error::ValidationError>> {
     let mut lines = gix_attributes::parse(input);
     let res = expand(lines.next().unwrap())?;
     assert!(lines.next().is_none(), "expected only one line");
@@ -516,13 +516,13 @@ fn lenient_lines(input: &str) -> Vec<ExpandedAttribute<'_>> {
         .collect()
 }
 
-fn try_lines(input: &str) -> Result<Vec<ExpandedAttribute<'_>>, parse::Error> {
+fn try_lines(input: &str) -> Result<Vec<ExpandedAttribute<'_>>, gix_error::Exn<gix_error::ValidationError>> {
     gix_attributes::parse(input.as_bytes()).map(expand).collect()
 }
 
 fn expand(
-    input: Result<(parse::Kind, parse::Iter<'_>, usize), parse::Error>,
-) -> Result<ExpandedAttribute<'_>, parse::Error> {
+    input: Result<(parse::Kind, parse::Iter<'_>, usize), gix_error::Exn<gix_error::ValidationError>>,
+) -> Result<ExpandedAttribute<'_>, gix_error::Exn<gix_error::ValidationError>> {
     let (pattern, attrs, line_no) = input?;
     let attrs = attrs
         .map(|r| r.map(|attr| (attr.name.as_str().into(), attr.state)))

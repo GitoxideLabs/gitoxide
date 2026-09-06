@@ -39,7 +39,7 @@ impl Repository {
         should_interrupt: &AtomicBool,
         options: dirwalk::Options,
         delegate: &mut dyn gix_dir::walk::Delegate,
-    ) -> Result<dirwalk::Outcome<'_>, dirwalk::Error> {
+    ) -> Result<dirwalk::Outcome<'_>, crate::Error> {
         let _span = gix_trace::coarse!("gix::dirwalk");
         let workdir = self.workdir().ok_or_else(|| {
             gix_error::Error::from_error(gix_error::message(
@@ -135,7 +135,7 @@ impl Repository {
         patterns: impl IntoIterator<Item = impl Into<BString>>,
         should_interrupt: OwnedOrStaticAtomicBool,
         options: dirwalk::Options,
-    ) -> Result<dirwalk::Iter, dirwalk::iter::Error> {
+    ) -> Result<dirwalk::Iter, crate::Error> {
         dirwalk::Iter::new(
             self,
             index.into(),

@@ -1,10 +1,7 @@
 //! exclude information
 use gix_error::ResultExt;
 
-use crate::{AttributeStack, Repository, config};
-
-/// The error returned by [`Repository::attributes()`].
-pub type Error = gix_error::Error;
+use crate::{AttributeStack, Repository};
 
 impl Repository {
     /// Configure a file-system cache for accessing git attributes *and* excludes on a per-path basis.
@@ -27,7 +24,7 @@ impl Repository {
         attributes_source: gix_worktree::stack::state::attributes::Source,
         ignore_source: gix_worktree::stack::state::ignore::Source,
         exclude_overrides: Option<gix_ignore::Search>,
-    ) -> Result<AttributeStack<'_>, Error> {
+    ) -> Result<AttributeStack<'_>, crate::Error> {
         let case = if self.config.ignore_case {
             gix_glob::pattern::Case::Fold
         } else {
@@ -66,7 +63,7 @@ impl Repository {
         &self,
         index: &gix_index::State,
         attributes_source: gix_worktree::stack::state::attributes::Source,
-    ) -> Result<AttributeStack<'_>, config::attribute_stack::Error> {
+    ) -> Result<AttributeStack<'_>, crate::Error> {
         let case = if self.config.ignore_case {
             gix_glob::pattern::Case::Fold
         } else {
@@ -112,7 +109,7 @@ impl Repository {
         index: &gix_index::State,
         overrides: Option<gix_ignore::Search>,
         source: gix_worktree::stack::state::ignore::Source,
-    ) -> Result<AttributeStack<'_>, config::exclude_stack::Error> {
+    ) -> Result<AttributeStack<'_>, crate::Error> {
         let case = if self.config.ignore_case {
             gix_glob::pattern::Case::Fold
         } else {

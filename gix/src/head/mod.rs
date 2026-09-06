@@ -139,10 +139,7 @@ mod remote {
         /// handle detached heads, i.e. obtain a remote even in case of detached heads,
         /// or call [`Repository::find_fetch_remote(…)`](crate::Repository::find_fetch_remote()) for the highest-level way of finding
         /// the right remote, just like `git fetch` does.
-        pub fn into_remote(
-            self,
-            direction: remote::Direction,
-        ) -> Option<Result<Remote<'repo>, remote::find::existing::Error>> {
+        pub fn into_remote(self, direction: remote::Direction) -> Option<Result<Remote<'repo>, crate::Error>> {
             let repo = self.repo;
             self.try_into_referent()?
                 .remote(direction)

@@ -9,7 +9,7 @@ pub(in crate::data::output::count::objects_impl) mod reduce;
 mod util;
 
 mod types;
-pub use types::{Error, ObjectExpansion, Options, Outcome};
+pub use types::{ObjectExpansion, Options, Outcome};
 
 mod tree;
 
@@ -39,7 +39,7 @@ pub fn objects<Find>(
         input_object_expansion,
         chunk_size,
     }: Options,
-) -> Result<(Vec<output::Count>, Outcome), Error>
+) -> Result<(Vec<output::Count>, Outcome), gix_error::Exn>
 where
     Find: crate::Find + Send + Clone,
 {
@@ -96,7 +96,7 @@ pub fn objects_unthreaded(
     objects: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     input_object_expansion: ObjectExpansion,
-) -> Result<(Vec<output::Count>, Outcome), Error> {
+) -> Result<(Vec<output::Count>, Outcome), gix_error::Exn> {
     let seen_objs = RefCell::new(gix_hashtable::HashSet::default());
 
     let (mut buf1, mut buf2) = (Vec::new(), Vec::new());
@@ -125,7 +125,7 @@ mod expand {
 
     use super::{
         tree,
-        types::{Error, ObjectExpansion, Outcome},
+        types::{ObjectExpansion, Outcome},
         util,
     };
     use crate::{
@@ -144,7 +144,7 @@ mod expand {
         objects: &gix_features::progress::AtomicStep,
         should_interrupt: &AtomicBool,
         allow_pack_lookups: bool,
-    ) -> Result<(Vec<output::Count>, Outcome), Error> {
+    ) -> Result<(Vec<output::Count>, Outcome), gix_error::Exn> {
         use ObjectExpansion::*;
 
         let mut out = Vec::new();
@@ -385,7 +385,7 @@ mod expand {
     }
 
     impl gix_object::Find for CountingObjects<'_> {
-        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, gix_object::find::Error> {
+        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, gix_error::Exn> {
             let res = Ok(self.objects.try_find(id, buffer)?.map(|t| t.0));
             *self.decoded_objects.borrow_mut() += 1;
             res
@@ -423,7 +423,7 @@ mod expand {
     }
 
     impl gix_object::Find for ExpandedCountingObjects<'_> {
-        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, gix_object::find::Error> {
+        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, gix_error::Exn> {
             let maybe_obj = self.objects.try_find(id, buffer)?;
             *self.decoded_objects.borrow_mut() += 1;
             match maybe_obj {

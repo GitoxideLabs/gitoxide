@@ -2,12 +2,6 @@ use gix_error::ResultExt;
 
 use crate::{Repository, filter, worktree::IndexPersistedOrInMemory};
 
-///
-pub mod pipeline {
-    /// The error returned by [Repository::filter_pipeline()](super::Repository::filter_pipeline()).
-    pub type Error = gix_error::Error;
-}
-
 impl Repository {
     /// Configure a pipeline for converting byte buffers to the worktree representation, and byte streams to the git-internal
     /// representation. Also return the index that was used when initializing the pipeline as it may be useful when calling
@@ -26,7 +20,7 @@ impl Repository {
     pub fn filter_pipeline(
         &self,
         tree_if_bare: Option<gix_hash::ObjectId>,
-    ) -> Result<(filter::Pipeline<'_>, IndexPersistedOrInMemory), pipeline::Error> {
+    ) -> Result<(filter::Pipeline<'_>, IndexPersistedOrInMemory), crate::Error> {
         let (cache, index) = if self.is_bare() {
             let tree = tree_if_bare.map_or_else(
                 || -> Result<_, gix_error::Error> {

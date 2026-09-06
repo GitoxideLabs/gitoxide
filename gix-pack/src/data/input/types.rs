@@ -1,7 +1,3 @@
-/// Returned by [`BytesToEntriesIter::new_from_header()`][crate::data::input::BytesToEntriesIter::new_from_header()] and as part
-/// of `Item` of [`BytesToEntriesIter`][crate::data::input::BytesToEntriesIter].
-pub type Error = gix_error::Exn;
-
 /// Iteration Mode
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

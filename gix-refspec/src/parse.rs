@@ -1,6 +1,3 @@
-/// The error returned by the [`parse()`][crate::parse()] function.
-pub type Error = gix_error::Exn<gix_error::ValidationError>;
-
 /// Define how the parsed refspec should be used.
 #[derive(PartialOrd, Ord, PartialEq, Eq, Copy, Clone, Hash, Debug)]
 pub enum Operation {
@@ -11,16 +8,15 @@ pub enum Operation {
 }
 
 pub(crate) mod function {
-    use crate::{
-        RefSpecRef,
-        parse::{Error, Operation},
-        types::Mode,
-    };
+    use crate::{RefSpecRef, parse::Operation, types::Mode};
     use bstr::{BStr, ByteSlice};
     use gix_error::{ErrorExt, ValidationError};
 
     /// Parse `spec` for use in `operation` and return it if it is valid.
-    pub fn parse(mut spec: &BStr, operation: Operation) -> Result<RefSpecRef<'_>, Error> {
+    pub fn parse(
+        mut spec: &BStr,
+        operation: Operation,
+    ) -> Result<RefSpecRef<'_>, gix_error::Exn<gix_error::ValidationError>> {
         fn fetch_head_only(mode: Mode) -> RefSpecRef<'static> {
             RefSpecRef {
                 mode,
@@ -131,7 +127,7 @@ pub(crate) mod function {
         spec.len() >= gix_hash::Kind::shortest().len_in_hex() && spec.iter().all(u8::is_ascii_hexdigit)
     }
 
-    fn validate_partial_name_with_single_glob(spec: &BStr) -> Result<(), Error> {
+    fn validate_partial_name_with_single_glob(spec: &BStr) -> Result<(), gix_error::Exn<gix_error::ValidationError>> {
         let mut buf = smallvec::SmallVec::<[u8; 256]>::with_capacity(spec.len());
         buf.extend_from_slice(spec);
         let glob_pos = buf.find_byte(b'*').expect("glob present");
@@ -146,7 +142,10 @@ pub(crate) mod function {
     /// Validate `spec`, and return it along with whether it holds a glob.
     ///
     /// `any_name` skips the check entirely, for the one side Git leaves unchecked.
-    fn validated(spec: Option<&BStr>, any_name: bool) -> Result<(Option<&BStr>, bool), Error> {
+    fn validated(
+        spec: Option<&BStr>,
+        any_name: bool,
+    ) -> Result<(Option<&BStr>, bool), gix_error::Exn<gix_error::ValidationError>> {
         match spec {
             Some(spec) => {
                 let glob_count = spec.iter().filter(|b| **b == b'*').take(2).count();

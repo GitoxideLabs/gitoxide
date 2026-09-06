@@ -16,7 +16,7 @@ use gix_object::{
 use crate::tree::{
     Conflict, ConflictIndexEntry, ConflictIndexEntryPathHint, ConflictMapping,
     ConflictMapping::{Original, Swapped},
-    ContentMerge, Error, Options, Outcome, Resolution, ResolutionFailure, ResolveWith,
+    ContentMerge, Options, Outcome, Resolution, ResolutionFailure, ResolveWith,
     utils::{
         ChangeDisposition, ChangeList, PossibleConflict, TrackedChange, apply_change, perform_blob_merge,
         possibly_rewritten_location, rewrite_location_with_renamed_directory, to_components, unique_path_in_tree,
@@ -99,7 +99,7 @@ pub fn tree<'objects>(
     diff_resource_cache: &mut gix_diff::blob::Platform,
     blob_merge: &mut crate::blob::Platform,
     options: Options,
-) -> Result<Outcome<'objects>, Error> {
+) -> Result<Outcome<'objects>, gix_error::Exn> {
     let _span = gix_trace::coarse!("gix_merge::tree", ?base_tree, ?our_tree, ?their_tree, ?labels);
     let (mut base_buf, mut side_buf) = (Vec::new(), Vec::new());
     let mut editor = {
@@ -2032,7 +2032,7 @@ fn apply_change_and_mark(
     editor: &mut tree::Editor<'_>,
     change: &Change,
     disposition: &mut ChangeDisposition,
-) -> Result<(), Error> {
+) -> Result<(), gix_error::Exn> {
     apply_change(editor, change, None)?;
     *disposition = ChangeDisposition::Applied;
     Ok(())
@@ -2045,7 +2045,7 @@ fn apply_our_resolution(
     editor: &mut gix_object::tree::Editor<'_>,
     local_ours_disposition: &mut ChangeDisposition,
     local_theirs_disposition: &mut ChangeDisposition,
-) -> Result<(), Error> {
+) -> Result<(), gix_error::Exn> {
     let (ours, disposition) = match outer_side {
         Original => (local_ours, local_ours_disposition),
         Swapped => (local_theirs, local_theirs_disposition),

@@ -14,7 +14,7 @@ impl crate::Bundle {
         out: &'a mut Vec<u8>,
         inflate: &mut gix_zlib::Inflate,
         cache: &mut dyn crate::cache::DecodeEntry,
-    ) -> Result<Option<(gix_object::Data<'a>, crate::data::entry::Location)>, crate::data::decode::Error> {
+    ) -> Result<Option<(gix_object::Data<'a>, crate::data::entry::Location)>, gix_error::Exn> {
         let idx = match self.index.lookup(id) {
             Some(idx) => idx,
             None => return Ok(None),
@@ -35,7 +35,7 @@ impl crate::Bundle {
         out: &'a mut Vec<u8>,
         inflate: &mut gix_zlib::Inflate,
         cache: &mut dyn crate::cache::DecodeEntry,
-    ) -> Result<(gix_object::Data<'a>, crate::data::entry::Location), crate::data::decode::Error> {
+    ) -> Result<(gix_object::Data<'a>, crate::data::entry::Location), gix_error::Exn> {
         let ofs = self.index.pack_offset_at_index(idx);
         let pack_entry = self.pack.entry(ofs).or_erased()?;
         let header_size = pack_entry.header_size();

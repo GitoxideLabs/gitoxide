@@ -10,9 +10,6 @@ use crate::blob::{
     platform::{DriverChoice, ResourceRef, merge},
 };
 
-/// The error returned by [Platform::prepare_merge_state()](Platform::prepare_merge()).
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// Preparation
 impl Platform {
     /// Prepare all state needed for performing a merge, using all [previously set](Self::set_resource()) resources.
@@ -27,7 +24,7 @@ impl Platform {
         &mut self,
         objects: &impl gix_object::Find,
         mut options: merge::Options,
-    ) -> Result<PlatformRef<'_>, Error> {
+    ) -> Result<PlatformRef<'_>, gix_error::Exn<gix_error::Message>> {
         let current = self.current.as_ref().ok_or_raise(|| {
             message("The 'current', 'ancestor' or 'other' resource for the merge operation were not set")
         })?;

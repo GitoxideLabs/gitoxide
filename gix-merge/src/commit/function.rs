@@ -3,10 +3,7 @@ use std::borrow::Cow;
 use gix_error::{ErrorExt, ResultExt, message};
 use gix_object::FindExt;
 
-use crate::{
-    blob::builtin_driver,
-    commit::{Error, Options},
-};
+use crate::{blob::builtin_driver, commit::Options};
 
 /// Like [`tree()`](crate::tree()), but it takes only two commits, `our_commit` and `their_commit` to automatically
 /// compute the merge-bases among them.
@@ -53,7 +50,7 @@ pub fn commit<'objects>(
     objects: &'objects (impl gix_object::FindObjectOrHeader + gix_object::Write),
     abbreviate_hash: &mut dyn FnMut(&gix_hash::oid) -> String,
     options: Options,
-) -> Result<super::Outcome<'objects>, Error> {
+) -> Result<super::Outcome<'objects>, gix_error::Exn<gix_error::Message>> {
     let merge_bases = gix_revision::merge_base(our_commit, &[their_commit], graph)
         .or_raise(|| message("Failed to obtain the merge base between the two commits to be merged"))?;
     let mut virtual_merge_bases = Vec::new();

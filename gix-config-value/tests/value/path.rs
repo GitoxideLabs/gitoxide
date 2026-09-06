@@ -11,7 +11,7 @@ mod interpolate {
     use gix_error::ValidationError;
 
     #[test]
-    fn backslash_is_not_special_and_they_are_not_escaping_anything() -> crate::Result {
+    fn backslash_is_not_special_and_they_are_not_escaping_anything() -> gix_error::Result {
         for path in [r"C:\foo\bar", "/foo/bar"] {
             let actual = gix_config_value::Path::from(path).interpolate(Default::default())?;
             assert_eq!(actual, Path::new(path));
@@ -61,13 +61,13 @@ mod interpolate {
     }
 
     #[test]
-    fn tilde_alone_does_not_interpolate() -> crate::Result {
+    fn tilde_alone_does_not_interpolate() -> gix_error::Result {
         assert_eq!(interpolate_without_context("~")?, Path::new("~"));
         Ok(())
     }
 
     #[test]
-    fn tilde_slash_substitutes_current_user() -> crate::Result {
+    fn tilde_slash_substitutes_current_user() -> gix_error::Result {
         let path = "~/user/bar";
         let home = std::env::current_dir().expect("current directory is available");
         let expected = home.join("user").join("bar");
@@ -91,7 +91,7 @@ mod interpolate {
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
     #[test]
-    fn tilde_with_given_user() -> crate::Result {
+    fn tilde_with_given_user() -> gix_error::Result {
         let home = std::env::current_dir().expect("current directory is available");
 
         for path_suffix in &["foo/bar", r"foo\bar", ""] {
@@ -116,9 +116,7 @@ mod interpolate {
         assert!(err.downcast_any_ref::<std::str::Utf8Error>().is_some());
     }
 
-    fn interpolate_without_context(
-        path: impl AsRef<str>,
-    ) -> Result<PathBuf, gix_config_value::path::interpolate::Error> {
+    fn interpolate_without_context(path: impl AsRef<str>) -> Result<PathBuf, gix_error::Exn> {
         gix_config_value::Path::from(path.as_ref()).interpolate(path::interpolate::Context {
             home_for_user: Some(home_for_user),
             ..Default::default()

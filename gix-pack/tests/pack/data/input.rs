@@ -2,7 +2,7 @@ mod lookup_ref_delta_objects {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use gix_hash::{ObjectId, oid};
-    use gix_object::{Data, find::Error};
+    use gix_object::Data;
     use gix_pack::data::{entry::Header, input, input::LookupRefDeltaObjectsIter};
 
     use crate::hex_to_id;
@@ -60,7 +60,7 @@ mod lookup_ref_delta_objects {
 
     fn into_results_iter(
         entries: Vec<input::Entry>,
-    ) -> impl ExactSizeIterator<Item = Result<input::Entry, input::Error>> {
+    ) -> impl ExactSizeIterator<Item = Result<input::Entry, gix_error::Exn>> {
         entries.into_iter().map(Ok)
     }
 
@@ -79,7 +79,7 @@ mod lookup_ref_delta_objects {
     }
 
     impl gix_object::Find for FindData<'_> {
-        fn try_find<'a>(&self, id: &oid, buf: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, Error> {
+        fn try_find<'a>(&self, id: &oid, buf: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, gix_error::Exn> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             if let Some(data) = self.data {
                 buf.resize(data.len(), 0);
@@ -264,7 +264,7 @@ mod lookup_ref_delta_objects {
         struct MaxSizeHint;
 
         impl Iterator for MaxSizeHint {
-            type Item = Result<input::Entry, input::Error>;
+            type Item = Result<input::Entry, gix_error::Exn>;
 
             fn next(&mut self) -> Option<Self::Item> {
                 None

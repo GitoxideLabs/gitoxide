@@ -139,7 +139,7 @@ impl<T: Validate> Key for Any<T> {
         self.name
     }
 
-    fn validate(&self, value: &BStr) -> Result<(), config::tree::key::validate::Error> {
+    fn validate(&self, value: &BStr) -> Result<(), crate::Error> {
         self.validate.validate(value).map_err(|err| {
             err.raise(gix_error::ValidationError::new_with_input(
                 format!("Invalid value for configuration key '{}'", self.logical_name()),
@@ -261,7 +261,7 @@ mod duration {
         /// Return a valid duration as parsed from an integer that is interpreted as milliseconds.
         pub fn try_into_duration(
             &'static self,
-            value: Result<Option<i64>, gix_config::value::Error>,
+            value: Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<std::time::Duration>, config::duration::Error> {
             let Some(value) = value.map_err(|err| config::duration::Error::from(self).with_source(err.into_error()))?
             else {
@@ -294,7 +294,7 @@ mod lock_timeout {
         /// Return information on how long to wait for locked files.
         pub fn try_into_lock_timeout(
             &'static self,
-            value: Result<Option<i64>, gix_config::value::Error>,
+            value: Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<gix_lock::acquire::Fail>, config::lock_timeout::Error> {
             let Some(value) =
                 value.map_err(|err| config::lock_timeout::Error::from(self).with_source(err.into_error()))?
@@ -328,7 +328,7 @@ mod compression {
         /// zlib default, just like `git` does.
         pub fn try_into_compression(
             &'static self,
-            value: Result<Option<i64>, gix_config::value::Error>,
+            value: Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<gix_zlib::Compression>, config::key::GenericError> {
             let Some(value) =
                 value.map_err(|err| config::key::GenericError::from(self).with_source(err.into_error()))?
@@ -433,7 +433,7 @@ mod workers {
         /// Convert `value` into a `usize` or wrap it into a specialized error.
         pub fn try_into_usize(
             &'static self,
-            value: Result<Option<i64>, gix_config::value::Error>,
+            value: Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<usize>, crate::config::unsigned_integer::Error> {
             let value = value
                 .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
@@ -449,7 +449,7 @@ mod workers {
         /// Convert `value` into a `u64` or wrap it into a specialized error.
         pub fn try_into_u64(
             &'static self,
-            value: Result<Option<i64>, gix_config::value::Error>,
+            value: Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<u64>, crate::config::unsigned_integer::Error> {
             let value = value
                 .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
@@ -465,7 +465,7 @@ mod workers {
         /// Convert `value` into a `u32` or wrap it into a specialized error.
         pub fn try_into_u32(
             &'static self,
-            value: Result<Option<i64>, gix_config::value::Error>,
+            value: Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<u32>, crate::config::unsigned_integer::Error> {
             let value = value
                 .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
@@ -501,13 +501,13 @@ mod time {
             &self,
             value: impl gix_utils::AsBStr,
             now: Option<gix_date::Zoned>,
-        ) -> Result<gix_date::Time, Exn<gix_date::Error>> {
+        ) -> Result<gix_date::Time, Exn<gix_error::ValidationError>> {
             let value = value.as_bstr();
             gix_date::parse(
                 value
                     .as_bstr()
                     .to_str()
-                    .map_err(|_| gix_date::Error::new_with_input("UTF8 conversion failed", value))?,
+                    .map_err(|_| gix_error::ValidationError::new_with_input("UTF8 conversion failed", value))?,
                 now,
             )
         }
@@ -534,7 +534,7 @@ mod boolean {
         /// `value` is expected to be provided by [`gix_config::File::boolean()`].
         pub fn enrich_error(
             &'static self,
-            value: Result<Option<bool>, gix_config::value::Error>,
+            value: Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<Option<bool>, config::boolean::Error> {
             value.map_err(|err| config::boolean::Error::from(self).with_source(err.into_error()))
         }

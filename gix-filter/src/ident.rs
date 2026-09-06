@@ -40,12 +40,6 @@ pub fn undo(src: &[u8], buf: &mut Vec<u8>) -> Result<bool, std::collections::Try
     Ok(initialized)
 }
 
-///
-pub mod apply {
-    /// The error produced by [`super::apply()`].
-    pub type Error = gix_error::Exn<gix_error::Message>;
-}
-
 /// Substitute all occurrences of `$Id$` with `$Id: <hexsha-of-input>$` if present in `src` and write all changes to `buf`,
 /// with `object_hash` being used accordingly. Return `true` if `buf` was written to or `false` if no change was made
 /// (as there was nothing to do).
@@ -54,7 +48,11 @@ pub mod apply {
 ///
 /// `Git` also tries to cleanup 'stray' substituted `$Id: <hex>$`, but we don't do that, sticking exactly to what ought to be done.
 /// The respective code is up to 16 years old and one might assume that `git` by now handles checking and checkout filters correctly.
-pub fn apply(src: &[u8], object_hash: gix_hash::Kind, buf: &mut Vec<u8>) -> Result<bool, apply::Error> {
+pub fn apply(
+    src: &[u8],
+    object_hash: gix_hash::Kind,
+    buf: &mut Vec<u8>,
+) -> Result<bool, gix_error::Exn<gix_error::Message>> {
     use gix_error::{ResultExt, message};
 
     const HASH_LEN: usize = ": ".len() + gix_hash::Kind::longest().len_in_hex();

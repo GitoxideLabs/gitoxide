@@ -15,9 +15,6 @@ use crate::{
     },
 };
 
-mod error;
-pub use error::Error;
-
 use crate::remote::fetch::WritePackedRefs;
 
 /// The way reflog messages should be composed whenever a ref is written with recent objects from a remote.
@@ -99,12 +96,6 @@ pub mod outcome {
 
 pub use gix_protocol::fetch::ProgressId;
 
-///
-pub mod prepare {
-    /// The error returned by [`prepare_fetch()`][super::Connection::prepare_fetch()].
-    pub type Error = gix_error::Error;
-}
-
 impl<'auth, 'repo, T> Connection<'_, 'auth, 'repo, T>
 where
     T: Transport,
@@ -126,7 +117,7 @@ where
         self,
         progress: impl Progress,
         options: ref_map::Options,
-    ) -> Result<Prepare<'auth, 'repo, T>, prepare::Error> {
+    ) -> Result<Prepare<'auth, 'repo, T>, crate::Error> {
         let repo = self.remote.repo;
         let inner = self.into_detached().prepare_fetch(repo, progress, options).await?;
         Ok(Prepare { inner, repo })
@@ -143,7 +134,7 @@ where
         repo: &crate::Repository,
         progress: impl Progress,
         options: ref_map::Options,
-    ) -> Result<PrepareDetached<'remote, T>, prepare::Error> {
+    ) -> Result<PrepareDetached<'remote, T>, crate::Error> {
         if self.remote.fetch_refspecs().is_empty() && options.extra_refspecs.is_empty() {
             return Err(gix_error::Error::from_error(gix_error::ValidationError::new(
                 "Cannot perform a meaningful fetch operation without any configured ref-specs",

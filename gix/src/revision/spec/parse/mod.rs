@@ -8,12 +8,6 @@ pub use types::{ObjectKindHint, Options, RefsHint};
 use crate::bstr::BString;
 
 ///
-pub mod single {
-    /// The error returned by [`crate::Repository::rev_parse_single()`].
-    pub type Error = gix_error::Error;
-}
-
-///
 pub mod error;
 
 impl<'repo> Spec<'repo> {

@@ -2,7 +2,7 @@ use std::fs;
 
 use gix_config::{
     File,
-    file::{includes, init, init::from_paths},
+    file::{includes, init},
 };
 use gix_testtools::tempfile::tempdir;
 
@@ -18,7 +18,7 @@ fn follow_options() -> init::Options<'static> {
     }
 }
 
-fn assert_include_depth(err: from_paths::Error, max_depth: u8) {
+fn assert_include_depth(err: gix_error::Exn<gix_error::Message>, max_depth: u8) {
     let err = err
         .downcast_any_ref::<gix_error::ValidationError>()
         .expect("exceeding the include depth is a validation error");

@@ -13,7 +13,7 @@ use crate::{
 /// stored prior to this one to assure they are correct.
 ///
 /// If the checksum wasn't matched, we will ignore this extension entirely.
-pub fn decode(data: &[u8], object_hash: gix_hash::Kind) -> Result<Option<usize>, gix_hash::hasher::Error> {
+pub fn decode(data: &[u8], object_hash: gix_hash::Kind) -> Result<Option<usize>, gix_error::CorruptionError> {
     let hash_len = object_hash.len_in_bytes();
     if data.len() < MIN_SIZE_WITH_HEADER + hash_len {
         return Ok(None);

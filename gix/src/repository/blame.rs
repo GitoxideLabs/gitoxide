@@ -17,7 +17,7 @@ impl Repository {
         file_path: &BStr,
         suspect: impl Into<ObjectId>,
         options: blame_file::Options,
-    ) -> Result<gix_blame::Outcome, blame_file::Error> {
+    ) -> Result<gix_blame::Outcome, crate::Error> {
         let cache = self.commit_graph_if_enabled()?;
         let mut resource_cache = self.diff_resource_cache_for_tree_diff()?;
 

@@ -29,7 +29,7 @@ pub use parse::function::parse;
 #[allow(missing_docs)]
 pub enum Error {
     Io(io::Error),
-    Realpath(gix_path::realpath::Error),
+    Realpath(gix_error::Exn),
     Parse(parse::Error),
     Cycle(Vec<PathBuf>),
 }
@@ -71,8 +71,8 @@ impl From<io::Error> for Error {
     }
 }
 
-impl From<gix_path::realpath::Error> for Error {
-    fn from(err: gix_path::realpath::Error) -> Self {
+impl From<gix_error::Exn> for Error {
+    fn from(err: gix_error::Exn) -> Self {
         Error::Realpath(err)
     }
 }

@@ -83,7 +83,7 @@ mod blocking_and_async_io {
 
     pub(crate) fn try_repo_rw(
         name: &str,
-    ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix::open::Error> {
+    ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix_error::Error> {
         try_repo_rw_args(name, Vec::<String>::new(), Mode::FastClone)
     }
 
@@ -96,7 +96,7 @@ mod blocking_and_async_io {
         name: &str,
         args: impl IntoIterator<Item = S>,
         mode: Mode,
-    ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix::open::Error> {
+    ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix_error::Error> {
         let dir = gix_testtools::scripted_fixture_writable_with_args_single_archive(
             "make_fetch_repos.sh",
             [{
@@ -258,7 +258,7 @@ mod blocking_and_async_io {
 
     #[test]
     #[cfg(feature = "blocking-network-client")]
-    fn collate_fetch_error() -> Result<(), gix::env::collate::fetch::Error> {
+    fn collate_fetch_error() -> Result<(), gix_error::Error> {
         let (repo, _tmp) = try_repo_rw("two-origins")?;
         let remote = repo
             .head()?

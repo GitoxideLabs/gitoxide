@@ -1,7 +1,7 @@
 use gix_config_value::Boolean;
 
 #[test]
-fn from_utf8_str() -> crate::Result {
+fn from_utf8_str() -> gix_error::Result {
     assert_eq!(
         Boolean::try_from("yes")?,
         Boolean(true),
@@ -11,7 +11,7 @@ fn from_utf8_str() -> crate::Result {
 }
 
 #[test]
-fn from_str_false() -> crate::Result {
+fn from_str_false() -> gix_error::Result {
     assert!(!Boolean::try_from("no")?.0);
     assert!(!Boolean::try_from("off")?.0);
     assert!(!Boolean::try_from("false")?.0);
@@ -21,7 +21,7 @@ fn from_str_false() -> crate::Result {
 }
 
 #[test]
-fn from_str_true() -> crate::Result {
+fn from_str_true() -> gix_error::Result {
     assert!(Boolean::try_from("yes")?.0);
     assert!(Boolean::try_from("on")?.0);
     assert!(Boolean::try_from("true")?.0);

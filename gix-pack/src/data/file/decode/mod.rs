@@ -22,13 +22,8 @@ impl std::fmt::Display for DeltaBaseUnresolved {
 
 impl std::error::Error for DeltaBaseUnresolved {}
 
-/// Returned by [`File::decode_header()`][crate::data::File::decode_header()],
-/// [`File::decode_entry()`][crate::data::File::decode_entry()] and .
-/// [`File::decompress_entry()`][crate::data::File::decompress_entry()]
-pub type Error = gix_error::Exn;
-
 #[cold]
-pub(super) fn allocation_error(kind: gix_error::ResourceExhaustionKind) -> Error {
+pub(super) fn allocation_error(kind: gix_error::ResourceExhaustionKind) -> gix_error::Exn {
     use gix_error::ErrorExt;
     gix_error::ResourceExhaustionError::new(kind, "Entry too large to fit in memory").raise_erased()
 }

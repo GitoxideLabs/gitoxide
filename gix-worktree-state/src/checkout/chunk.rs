@@ -10,17 +10,16 @@ use gix_worktree::Stack;
 use crate::{checkout, checkout::entry};
 
 mod reduce {
-    use crate::checkout;
 
     pub struct Reduce<'entry> {
         pub aggregate: super::Outcome<'entry>,
     }
 
     impl<'entry> gix_features::parallel::Reduce for Reduce<'entry> {
-        type Input = Result<super::Outcome<'entry>, checkout::Error>;
+        type Input = Result<super::Outcome<'entry>, gix_error::Exn>;
         type FeedProduce = ();
         type Output = super::Outcome<'entry>;
-        type Error = checkout::Error;
+        type Error = gix_error::Exn;
 
         fn feed(&mut self, item: Self::Input) -> Result<Self::FeedProduce, Self::Error> {
             let item = item?;
@@ -106,7 +105,7 @@ pub fn process<'entry, Find>(
     bytes: &AtomicUsize,
     delayed_filter_results: &mut Vec<DelayedFilteredStream<'entry>>,
     ctx: &mut Context<Find>,
-) -> Result<Outcome<'entry>, checkout::Error>
+) -> Result<Outcome<'entry>, gix_error::Exn>
 where
     Find: gix_object::Find + Clone,
 {
@@ -161,7 +160,7 @@ pub fn process_delayed_filter_results<Find>(
     bytes: &AtomicUsize,
     out: &mut Outcome<'_>,
     ctx: &mut Context<Find>,
-) -> Result<(), checkout::Error>
+) -> Result<(), gix_error::Exn>
 where
     Find: gix_object::Find + Clone,
 {
@@ -305,7 +304,7 @@ pub fn checkout_entry_handle_result<'entry, Find>(
         buf,
         options,
     }: &mut Context<Find>,
-) -> Result<entry::Outcome<'entry>, checkout::Error>
+) -> Result<entry::Outcome<'entry>, gix_error::Exn>
 where
     Find: gix_object::Find + Clone,
 {
@@ -343,12 +342,12 @@ where
 }
 
 fn handle_error(
-    err: checkout::Error,
+    err: gix_error::Exn,
     entry_path: &BStr,
     files: &AtomicUsize,
     errors: &mut Vec<checkout::ErrorRecord>,
     keep_going: bool,
-) -> Result<(), checkout::Error> {
+) -> Result<(), gix_error::Exn> {
     if keep_going {
         errors.push(checkout::ErrorRecord {
             path: entry_path.into(),

@@ -266,7 +266,7 @@ pub(crate) fn buffer_into_transaction(
     lock_mode: gix_lock::acquire::Fail,
     precompose_unicode: bool,
     namespace: Option<Namespace>,
-) -> Result<packed::Transaction, gix_lock::acquire::Error> {
+) -> Result<packed::Transaction, gix_error::Exn> {
     let lock = gix_lock::File::acquire_to_update_resource(&buffer.path, lock_mode, None)?;
     Ok(packed::Transaction {
         buffer: Some(buffer),

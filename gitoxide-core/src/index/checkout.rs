@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::bail;
-use gix::{NestedProgress, Progress, objs::find::Error, worktree::state::checkout};
+use gix::{NestedProgress, Progress, worktree::state::checkout};
 
 use crate::{
     index,
@@ -183,7 +183,7 @@ impl<Find> gix::objs::Find for EmptyOrDb<Find>
 where
     Find: gix::objs::Find,
 {
-    fn try_find<'a>(&self, id: &gix::oid, buf: &'a mut Vec<u8>) -> Result<Option<gix::objs::Data<'a>>, Error> {
+    fn try_find<'a>(&self, id: &gix::oid, buf: &'a mut Vec<u8>) -> Result<Option<gix::objs::Data<'a>>, gix::Exn> {
         if self.empty_files {
             // We always want to query the ODB here…
             let Some(kind) = self.db.try_find(id, buf)?.map(|d| d.kind) else {
@@ -206,7 +206,7 @@ where
 struct Empty;
 
 impl gix::objs::Find for Empty {
-    fn try_find<'a>(&self, id: &gix::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix::objs::Data<'a>>, Error> {
+    fn try_find<'a>(&self, id: &gix::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix::objs::Data<'a>>, gix::Exn> {
         buffer.clear();
         Ok(Some(gix::objs::Data {
             kind: gix::object::Kind::Blob,

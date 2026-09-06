@@ -16,7 +16,7 @@ const MAX_LINE_LEN: usize = 4 + MAX_DATA_LEN;
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-io", test)]
 #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-async fn each_write_results_in_one_line() -> crate::Result {
+async fn each_write_results_in_one_line() -> gix_error::TestResult {
     let mut w = Writer::new(Vec::new());
     w.write_all(b"hello").await?;
     w.write(b"world!").await?;
@@ -29,7 +29,7 @@ async fn each_write_results_in_one_line() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-io", test)]
 #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-async fn write_text_and_write_binary() -> crate::Result {
+async fn write_text_and_write_binary() -> gix_error::TestResult {
     let buf = {
         let mut w = Writer::new(Vec::new());
         w.enable_text_mode();
@@ -46,7 +46,7 @@ async fn write_text_and_write_binary() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-io", test)]
 #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-async fn huge_writes_are_split_into_lines() -> crate::Result {
+async fn huge_writes_are_split_into_lines() -> gix_error::TestResult {
     let buf = {
         let data = vec![0u8; MAX_DATA_LEN * 2];
         let mut w = Writer::new(Vec::new());

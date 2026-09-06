@@ -34,30 +34,28 @@ impl<E: std::error::Error + 'static> std::error::Error for Error<E> {
     }
 }
 
-impl<E> From<existing::Error> for Error<E> {
-    fn from(err: existing::Error) -> Self {
+impl<E> From<gix_error::Exn> for Error<E> {
+    fn from(err: gix_error::Exn) -> Self {
         Error::ValueMissing(err.into_error())
     }
 }
 
 ///
 pub mod existing {
-    /// The error when looking up a value that doesn't exist, for example via [`File::value()`][crate::File::value()].
-    pub type Error = gix_error::Exn;
 
-    pub(crate) fn section_missing() -> Error {
+    pub(crate) fn section_missing() -> gix_error::Exn {
         not_found("The requested section does not exist")
     }
 
-    pub(crate) fn subsection_missing() -> Error {
+    pub(crate) fn subsection_missing() -> gix_error::Exn {
         not_found("The requested subsection does not exist")
     }
 
-    pub(crate) fn key_missing() -> Error {
+    pub(crate) fn key_missing() -> gix_error::Exn {
         not_found("The key does not exist in the requested section")
     }
 
-    fn not_found(message: &'static str) -> Error {
+    fn not_found(message: &'static str) -> gix_error::Exn {
         use gix_error::ErrorExt;
         gix_error::NotFoundError::new(message).raise_erased()
     }

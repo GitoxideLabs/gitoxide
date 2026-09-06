@@ -32,9 +32,6 @@ pub enum Kind {
     },
 }
 
-/// The error returned by [`output::Entry::from_data()`].
-pub type Error = gix_error::Exn;
-
 impl output::Entry {
     /// An object which can be identified as invalid easily which happens if objects didn't exist even if they were referred to.
     pub fn invalid() -> output::Entry {
@@ -64,7 +61,7 @@ impl output::Entry {
         bases_index_offset: usize,
         pack_offset_to_oid: Option<impl FnMut(u32, u64) -> Option<ObjectId>>,
         target_version: data::Version,
-    ) -> Option<Result<Self, Error>> {
+    ) -> Option<Result<Self, gix_error::Exn>> {
         if entry.version != target_version {
             return None;
         }
@@ -138,7 +135,7 @@ impl output::Entry {
         count: &output::Count,
         obj: &gix_object::Data<'_>,
         compression: gix_zlib::Compression,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, gix_error::Exn> {
         Ok(output::Entry {
             id: count.id.to_owned(),
             kind: Kind::Base(obj.kind),

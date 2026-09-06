@@ -4,12 +4,6 @@ pub mod set_target_id {
 
     use crate::{Reference, bstr::BString};
 
-    mod error {
-        /// The error returned by [`Reference::set_target_id()`][super::Reference::set_target_id()].
-        pub type Error = gix_error::Error;
-    }
-    pub use error::Error;
-
     impl Reference<'_> {
         /// Set the id of this direct reference to `id` and use `reflog_message` for the reflog (if enabled in the repository).
         ///
@@ -22,7 +16,7 @@ pub mod set_target_id {
             &mut self,
             id: impl Into<gix_hash::ObjectId>,
             reflog_message: impl Into<BString>,
-        ) -> Result<(), Error> {
+        ) -> Result<(), crate::Error> {
             match &self.inner.target {
                 Target::Symbolic(name) => {
                     return Err(gix_error::Error::from_error(gix_error::message!(
@@ -53,7 +47,7 @@ pub mod delete {
     impl Reference<'_> {
         /// Delete this reference or fail if it was changed since last observed.
         /// Note that this instance remains available in memory but probably shouldn't be used anymore.
-        pub fn delete(&self) -> Result<(), crate::reference::edit::Error> {
+        pub fn delete(&self) -> Result<(), crate::Error> {
             self.repo
                 .edit_reference(RefEdit::delete(
                     self.inner.name.clone(),

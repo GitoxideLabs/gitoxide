@@ -4,13 +4,7 @@ use crate::{Version, util::from_be_u32};
 
 pub(crate) const SIGNATURE: &[u8] = b"DIRC";
 
-mod error {
-    /// The error produced when failing to decode an index header.
-    pub type Error = gix_error::Exn;
-}
-pub use error::Error;
-
-pub(crate) fn decode(data: &[u8], object_hash: gix_hash::Kind) -> Result<(Version, u32, &[u8]), Error> {
+pub(crate) fn decode(data: &[u8], object_hash: gix_hash::Kind) -> Result<(Version, u32, &[u8]), gix_error::Exn> {
     use gix_error::ErrorExt;
 
     if data.len() < (3 * 4) + object_hash.len_in_bytes() {

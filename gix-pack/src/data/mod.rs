@@ -45,11 +45,6 @@ pub use file::{Header, decode, verify};
 pub mod header;
 
 ///
-pub mod init {
-    pub use super::header::decode::Error;
-}
-
-///
 pub mod entry;
 
 ///

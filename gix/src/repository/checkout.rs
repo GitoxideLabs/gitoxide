@@ -1,4 +1,4 @@
-use crate::{Repository, config};
+use crate::Repository;
 
 impl Repository {
     /// Return options that can be used to drive a low-level checkout operation.
@@ -8,7 +8,7 @@ impl Repository {
     pub fn checkout_options(
         &self,
         attributes_source: gix_worktree::stack::state::attributes::Source,
-    ) -> Result<gix_worktree_state::checkout::Options, config::checkout_options::Error> {
+    ) -> Result<gix_worktree_state::checkout::Options, crate::Error> {
         self.config.checkout_options(self, attributes_source)
     }
 }

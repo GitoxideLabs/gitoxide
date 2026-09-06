@@ -1186,7 +1186,7 @@ fn racy_git() {
             worktree_file_size: u64,
             data: impl ReadData<'a>,
             buf: &mut Vec<u8>,
-        ) -> Result<Option<Self::Output>, gix_status::index_as_worktree::Error> {
+        ) -> Result<Option<Self::Output>, gix_error::Exn> {
             self.0.fetch_add(1, Ordering::Relaxed);
             self.1.compare_blobs(entry, worktree_file_size, data, buf)
         }

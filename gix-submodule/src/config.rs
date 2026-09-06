@@ -55,7 +55,9 @@ impl FetchRecurse {
     /// Check if `boolean` is set and translate it the respective variant, or check the underlying string
     /// value for non-boolean options.
     /// On error, it returns the obtained string value which would be the invalid value.
-    pub fn new(boolean: Result<Option<bool>, gix_config::value::Error>) -> Result<Option<Self>, BString> {
+    pub fn new(
+        boolean: Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>>,
+    ) -> Result<Option<Self>, BString> {
         Ok(match boolean {
             Ok(Some(value)) => Some(if value {
                 FetchRecurse::Always
@@ -93,7 +95,7 @@ impl Default for Branch {
 }
 
 impl TryFrom<&BStr> for Branch {
-    type Error = gix_refspec::parse::Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(value: &BStr) -> Result<Self, Self::Error> {
         if value == "." {
@@ -139,31 +141,4 @@ impl TryFrom<&BStr> for Update {
             _ => return Err(()),
         })
     }
-}
-
-/// The error returned by [File::fetch_recurse()](crate::File::fetch_recurse) and [File::ignore()](crate::File::ignore).
-pub type Error = gix_error::ValidationError;
-
-///
-pub mod branch {
-    /// The error returned by [File::branch()](crate::File::branch).
-    pub type Error = gix_error::Exn<gix_error::ValidationError>;
-}
-
-///
-pub mod update {
-    /// The error returned by [File::update()](crate::File::update).
-    pub type Error = gix_error::ValidationError;
-}
-
-///
-pub mod url {
-    /// The error returned by [File::url()](crate::File::url).
-    pub type Error = gix_error::Exn<gix_error::ValidationError>;
-}
-
-///
-pub mod path {
-    /// The error returned by [File::path()](crate::File::path).
-    pub type Error = gix_error::ValidationError;
 }

@@ -13,7 +13,7 @@ use std::{
     path::PathBuf,
 };
 
-use super::{Error, Options};
+use super::Options;
 use crate::{
     ThreadSafeRepository,
     bstr::BString,
@@ -25,7 +25,7 @@ use crate::{
     open::Permissions,
 };
 
-fn not_a_repository(source: gix_discover::is_git::Error, path: PathBuf) -> Error {
+fn not_a_repository(source: gix_error::Exn, path: PathBuf) -> crate::Error {
     source
         .raise(gix_error::NotFoundError::new(format!(
             "\"{}\" does not appear to be a git repository",
@@ -62,7 +62,7 @@ impl EnvironmentOverrides {
 
 impl ThreadSafeRepository {
     /// Open a git repository at the given `path`, possibly expanding it to `path/.git` if `path` is a work tree dir.
-    pub fn open(path: impl Into<PathBuf>) -> Result<Self, Error> {
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, crate::Error> {
         Self::open_opts(path, Options::default())
     }
 
@@ -78,7 +78,7 @@ impl ThreadSafeRepository {
     ///
     /// Note that opening a repository for implementing custom hooks is also handle specifically in
     /// [`open_with_environment_overrides()`][Self::open_with_environment_overrides()].
-    pub fn open_opts(path: impl Into<PathBuf>, mut options: Options) -> Result<Self, Error> {
+    pub fn open_opts(path: impl Into<PathBuf>, mut options: Options) -> Result<Self, crate::Error> {
         let _span = gix_trace::coarse!("ThreadSafeRepository::open()");
         let (path, kind) = {
             let path = path.into();
@@ -133,7 +133,7 @@ impl ThreadSafeRepository {
     pub fn open_with_environment_overrides(
         fallback_directory: impl Into<PathBuf>,
         trust_map: gix_sec::trust::Mapping<Options>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::Error> {
         let _span = gix_trace::coarse!("ThreadSafeRepository::open_with_environment_overrides()");
         let overrides = EnvironmentOverrides::from_env().or_erased()?;
         let (path, path_kind): (PathBuf, _) = match overrides.git_dir {
@@ -167,7 +167,7 @@ impl ThreadSafeRepository {
         mut worktree_dir: Option<PathBuf>,
         mut options: Options,
         known_common_dir: Option<PathBuf>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::Error> {
         let _span = gix_trace::detail!("open_from_paths()");
         options.open_path_as_is = false;
         let Options {
@@ -608,7 +608,7 @@ fn replacement_objects_refs_prefix(
     config: &gix_config::File,
     lenient: bool,
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
-) -> Result<Option<BString>, Error> {
+) -> Result<Option<BString>, crate::Error> {
     let is_disabled = config::shared::is_replace_refs_enabled(config, lenient, filter_config_section)
         .map_err(gix_error::Error::from)?
         .unwrap_or(true);
@@ -633,7 +633,7 @@ fn check_safe_directories(
     current_dir: &std::path::Path,
     home: Option<&std::path::Path>,
     safe_dirs: &[BString],
-) -> Result<(), Error> {
+) -> Result<(), crate::Error> {
     let mut is_safe = false;
     let realpath_or_original = |path: &std::path::Path| {
         std::fs::canonicalize(path)

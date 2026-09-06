@@ -10,9 +10,6 @@ use gix_features::progress::{self, Progress};
 
 use crate::{cache::delta::Tree, data};
 
-/// Returned by [`Tree::from_offsets_in_pack()`]
-pub type Error = gix_error::Exn;
-
 /// Generate tree from certain input
 impl<T> Tree<T> {
     /// Create a new `Tree` from any data sorted by offset, ascending as returned by the `data_sorted_by_offsets` iterator.
@@ -34,7 +31,7 @@ impl<T> Tree<T> {
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
         object_hash: gix_hash::Kind,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, gix_error::Exn> {
         let mut r = io::BufReader::with_capacity(
             8192 * 8, // this value directly corresponds to performance, 8k (default) is about 4x slower than 64k
             fs::File::open(pack_path).or_raise_erased(|| message("open pack path"))?,
@@ -112,7 +109,7 @@ impl<T> Tree<T> {
         r: &mut io::BufReader<fs::File>,
         pack_offset: u64,
         previous_offset: u64,
-    ) -> Result<(), Error> {
+    ) -> Result<(), gix_error::Exn> {
         let bytes_to_skip: u64 = pack_offset
             .checked_sub(previous_offset)
             .expect("continuously ascending pack offsets");

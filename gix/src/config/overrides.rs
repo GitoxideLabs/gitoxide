@@ -2,15 +2,12 @@ use gix_error::ResultExt;
 
 use crate::bstr::{BStr, BString, ByteSlice};
 
-/// The error returned by [`SnapshotMut::apply_cli_overrides()`][crate::config::SnapshotMut::append_config()].
-pub type Error = gix_error::Error;
-
 pub(crate) fn append(
     config: &mut gix_config::File,
     values: impl IntoIterator<Item = impl gix_utils::AsBStr>,
     source: gix_config::Source,
     mut make_comment: impl FnMut(&BStr) -> Option<BString>,
-) -> Result<(), Error> {
+) -> Result<(), crate::Error> {
     let mut file = gix_config::File::new(gix_config::file::Metadata::from(source));
     for key_value in values {
         let key_value = key_value.as_bstr();

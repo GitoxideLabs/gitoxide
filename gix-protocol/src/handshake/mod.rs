@@ -92,7 +92,7 @@ pub(crate) mod hero {
                     mut progress: impl Progress,
                     transport: &mut impl $transport,
                     trace_packetlines: bool,
-                ) -> Result<RefMap, crate::fetch::refmap::init::Error> {
+                ) -> Result<RefMap, gix_error::Exn> {
                     let (cmd, cx) = match self {
                         ObtainRefMap::Existing(map) => return Ok(map),
                         ObtainRefMap::LsRefsCommand(cmd, cx) => (cmd, cx),
@@ -139,7 +139,7 @@ pub(crate) mod hero {
                 user_agent: Feature,
                 prefix_from_spec_as_filter_on_remote: bool,
                 refmap_context: crate::fetch::refmap::init::Context,
-            ) -> Result<ObtainRefMap<'_>, crate::fetch::refmap::init::Error> {
+            ) -> Result<ObtainRefMap<'_>, gix_error::Exn> {
                 if let Some(refs) = self.refs.take() {
                     return Ok(ObtainRefMap::Existing(RefMap::from_refs(
                         refs,
@@ -160,15 +160,6 @@ pub(crate) mod hero {
         }
     }
 }
-
-#[cfg(feature = "handshake")]
-mod error {
-    /// The error returned by [`handshake()`][crate::handshake()].
-    pub type Error = gix_error::Exn;
-}
-
-#[cfg(feature = "handshake")]
-pub use error::Error;
 
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 #[cfg(feature = "handshake")]

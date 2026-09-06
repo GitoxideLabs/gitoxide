@@ -6,7 +6,7 @@ use gix_revwalk::{PriorityQueue, graph::IdMap};
 
 use crate::commit::{
     Info, Parents, Topo, find,
-    topo::{Error, Sorting, WalkFlags, iter::gen_and_commit_time},
+    topo::{Sorting, WalkFlags, iter::gen_and_commit_time},
 };
 
 /// Builder for [`Topo`].
@@ -119,7 +119,7 @@ where
     /// Build a new [`Topo`] instance.
     ///
     /// Note that merely building an instance is currently expensive.
-    pub fn build(self) -> Result<Topo<Find, Predicate>, Error> {
+    pub fn build(self) -> Result<Topo<Find, Predicate>, gix_error::Exn> {
         let mut w = Topo {
             commit_graph: self.commit_graph,
             find: self.find,

@@ -1,7 +1,4 @@
-use crate::{
-    bstr::{BStr, BString, ByteVec},
-    config::tree::key::validate_assignment,
-};
+use crate::bstr::{BStr, BString, ByteVec};
 
 /// Provide information about a configuration section.
 pub trait Section {
@@ -53,7 +50,7 @@ pub trait Key: std::fmt::Debug {
     /// The key's name, like `url` in `remote.origin.url`.
     fn name(&self) -> &str;
     /// See if `value` is allowed as value of this key, or return a descriptive error if it is not.
-    fn validate(&self, value: &BStr) -> Result<(), crate::config::tree::key::validate::Error>;
+    fn validate(&self, value: &BStr) -> Result<(), crate::Error>;
     /// The section containing this key. Git configuration has no free-standing keys, they are always underneath a section.
     fn section(&self) -> &dyn Section;
     /// The return value encodes three possible states to indicate subsection requirements
@@ -175,7 +172,7 @@ pub trait Key: std::fmt::Debug {
 
     /// Return an assignment with the keys full name to `value`, suitable for [configuration overrides][crate::open::Options::config_overrides()].
     /// Note that this will fail if the key requires a subsection name.
-    fn validated_assignment(&self, value: &BStr) -> Result<BString, validate_assignment::Error> {
+    fn validated_assignment(&self, value: &BStr) -> Result<BString, crate::Error> {
         self.validate(value)?;
         let mut key = self
             .full_name(None)
@@ -187,21 +184,14 @@ pub trait Key: std::fmt::Debug {
 
     /// Return an assignment with the keys full name to `value`, suitable for [configuration overrides][crate::open::Options::config_overrides()].
     /// Note that this will fail if the key requires a subsection name.
-    fn validated_assignment_fmt(
-        &self,
-        value: &dyn std::fmt::Display,
-    ) -> Result<BString, crate::config::tree::key::validate_assignment::Error> {
+    fn validated_assignment_fmt(&self, value: &dyn std::fmt::Display) -> Result<BString, crate::Error> {
         let value = value.to_string();
         self.validated_assignment(value.as_str().into())
     }
 
     /// Return an assignment to `value` with the keys full name within `subsection`, suitable for [configuration overrides][crate::open::Options::config_overrides()].
     /// Note that this is only valid if this key supports parameterized sub-sections, or else an error is returned.
-    fn validated_assignment_with_subsection(
-        &self,
-        value: &BStr,
-        subsection: &BStr,
-    ) -> Result<BString, crate::config::tree::key::validate_assignment::Error> {
+    fn validated_assignment_with_subsection(&self, value: &BStr, subsection: &BStr) -> Result<BString, crate::Error> {
         self.validate(value)?;
         let mut key = self
             .full_name(Some(subsection))

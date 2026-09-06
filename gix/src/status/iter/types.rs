@@ -35,8 +35,8 @@ pub struct Iter {
     #[expect(clippy::type_complexity)]
     pub(super) rx_and_join: Option<(
         std::sync::mpsc::Receiver<Item>,
-        std::thread::JoinHandle<Result<Outcome, index_worktree::Error>>,
-        Option<std::thread::JoinHandle<Result<tree_index::Outcome, tree_index::Error>>>,
+        std::thread::JoinHandle<Result<Outcome, crate::Error>>,
+        Option<std::thread::JoinHandle<Result<tree_index::Outcome, crate::Error>>>,
     )>,
     #[cfg(feature = "parallel")]
     pub(super) should_interrupt: crate::status::OwnedOrStaticAtomicBool,

@@ -1,6 +1,6 @@
 #![allow(clippy::result_large_err)]
 
-use super::{Error, util};
+use super::util;
 use crate::config::{
     cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
     tree::{Core, Extensions, gitoxide},
@@ -29,7 +29,7 @@ impl StageOne {
         git_dir_trust: gix_sec::Trust,
         lossy: bool,
         lenient: bool,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::Error> {
         let mut buf = Vec::with_capacity(512);
         let mut config = load_config(
             common_dir.join("config"),
@@ -109,7 +109,7 @@ impl StageOne {
 /// Git interprets a missing objectFormat as the original Sha1 layout, so we return
 /// gix_hash::Kind::Sha1 whenever this build can handle it.
 /// In Sha256-only builds we cannot open such a repository, so return an error instead.
-fn legacy_object_hash() -> Result<gix_hash::Kind, Error> {
+fn legacy_object_hash() -> Result<gix_hash::Kind, crate::Error> {
     #[cfg(feature = "sha1")]
     {
         Ok(gix_hash::Kind::Sha1)
@@ -129,7 +129,7 @@ fn load_config(
     git_dir_trust: gix_sec::Trust,
     lossy: bool,
     lenient: bool,
-) -> Result<gix_config::File, Error> {
+) -> Result<gix_config::File, crate::Error> {
     let metadata = gix_config::file::Metadata::from(source)
         .at(&config_path)
         .with(git_dir_trust);

@@ -67,7 +67,7 @@ impl crate::Repository {
     ///
     /// Note that it might be the one that is currently open if this repository doesn't point to a linked worktree.
     /// Also note that the main repo might be bare.
-    pub fn main_repo(&self) -> Result<crate::Repository, crate::open::Error> {
+    pub fn main_repo(&self) -> Result<crate::Repository, crate::Error> {
         let options = match (self.kind(), self.options.clone()) {
             (crate::repository::Kind::LinkedWorkTree, opts) => opts.without_repository_environment_overrides(),
             (_, opts) => opts,
@@ -101,7 +101,7 @@ impl crate::Repository {
     pub fn worktree_stream(
         &self,
         id: impl Into<gix_hash::ObjectId>,
-    ) -> Result<(gix_worktree_stream::Stream, gix_index::File), crate::repository::worktree_stream::Error> {
+    ) -> Result<(gix_worktree_stream::Stream, gix_index::File), crate::Error> {
         use gix_odb::HeaderExt;
         let id = id.into();
         let header = self.objects.header(id).map_err(gix_error::Exn::into_error)?;
@@ -155,7 +155,7 @@ impl crate::Repository {
         blobs: impl gix_features::progress::Count,
         should_interrupt: &std::sync::atomic::AtomicBool,
         options: gix_archive::Options,
-    ) -> Result<(), crate::repository::worktree_archive::Error> {
+    ) -> Result<(), crate::Error> {
         let mut out = gix_features::interrupt::Write {
             inner: out,
             should_interrupt,

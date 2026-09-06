@@ -65,7 +65,7 @@ pub mod disambiguate {
         ///
         /// It is considered ambiguous until it's disambiguated by validating that there is only a single object
         /// matching this prefix.
-        pub fn new(id: impl Into<gix_hash::ObjectId>, hex_len: usize) -> Result<Self, gix_hash::prefix::Error> {
+        pub fn new(id: impl Into<gix_hash::ObjectId>, hex_len: usize) -> Result<Self, gix_error::ValidationError> {
             let id = id.into();
             gix_hash::Prefix::new(&id, hex_len)?;
             Ok(Candidate { id, hex_len })

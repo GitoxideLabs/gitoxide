@@ -8,18 +8,6 @@ use crate::{
     prelude::ObjectIdExt,
 };
 
-///
-pub mod init {
-    /// The error returned by [`Editor::new()](crate::object::tree::Editor::new()).
-    pub type Error = gix_error::Error;
-}
-
-///
-pub mod write {
-    /// The error returned by [`Editor::write()](crate::object::tree::Editor::write()) and [`Cursor::write()](super::Cursor::write).
-    pub type Error = gix_error::Error;
-}
-
 /// A cursor at a specific portion of a tree to [edit](super::Editor).
 pub struct Cursor<'a, 'repo> {
     inner: gix_object::tree::editor::Cursor<'a, 'repo>,
@@ -30,7 +18,7 @@ pub struct Cursor<'a, 'repo> {
 /// Lifecycle
 impl<'repo> super::Editor<'repo> {
     /// Initialize a new editor from the given `tree`.
-    pub fn new(tree: &crate::Tree<'repo>) -> Result<Self, init::Error> {
+    pub fn new(tree: &crate::Tree<'repo>) -> Result<Self, crate::Error> {
         let tree_ref = tree.decode().or_erased()?;
         let repo = tree.repo;
         let validate = repo.config.protect_options().or_erased()?;
@@ -52,7 +40,7 @@ impl<'repo> super::Editor<'repo> {
 impl<'repo> crate::Tree<'repo> {
     /// Start editing a new tree based on this one.
     #[doc(alias = "treebuilder", alias = "git2")]
-    pub fn edit(&self) -> Result<super::Editor<'repo>, init::Error> {
+    pub fn edit(&self) -> Result<super::Editor<'repo>, crate::Error> {
         super::Editor::new(self)
     }
 }
@@ -153,7 +141,7 @@ impl<'repo> Cursor<'_, 'repo> {
     }
 
     /// Like [`Editor::write()`](super::Editor::write()), but will write only the subtree of the cursor.
-    pub fn write(&mut self) -> Result<Id<'repo>, write::Error> {
+    pub fn write(&mut self) -> Result<Id<'repo>, crate::Error> {
         write_cursor(self)
     }
 
@@ -180,7 +168,7 @@ impl<'repo> super::Editor<'repo> {
     /// Note that this erases all previous edits.
     ///
     /// This is useful if the same editor is re-used for various trees.
-    pub fn set_root(&mut self, root: &crate::Tree<'repo>) -> Result<&mut Self, init::Error> {
+    pub fn set_root(&mut self, root: &crate::Tree<'repo>) -> Result<&mut Self, crate::Error> {
         let new_editor = super::Editor::new(root)?;
         self.inner = new_editor.inner;
         self.repo = new_editor.repo;
@@ -242,7 +230,7 @@ impl<'repo> super::Editor<'repo> {
     ///
     /// Before writing a tree, all of its entries (not only added ones), will be validated to assure they are
     /// correct. The objects pointed to by entries also have to exist already.
-    pub fn write(&mut self) -> Result<Id<'repo>, write::Error> {
+    pub fn write(&mut self) -> Result<Id<'repo>, crate::Error> {
         write_cursor(&mut self.to_cursor())
     }
 
@@ -262,10 +250,10 @@ impl<'repo> super::Editor<'repo> {
     }
 }
 
-fn write_cursor<'repo>(cursor: &mut Cursor<'_, 'repo>) -> Result<Id<'repo>, write::Error> {
+fn write_cursor<'repo>(cursor: &mut Cursor<'_, 'repo>) -> Result<Id<'repo>, crate::Error> {
     cursor
         .inner
-        .write(|tree| -> Result<ObjectId, write::Error> {
+        .write(|tree| -> Result<ObjectId, crate::Error> {
             for entry in &tree.entries {
                 let kind: EntryKind = entry.mode.into();
                 gix_validate::path::component(

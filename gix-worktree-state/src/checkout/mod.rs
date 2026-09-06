@@ -74,9 +74,6 @@ pub struct Options {
     pub filter_process_delay: gix_filter::driver::apply::Delay,
 }
 
-/// The error returned by the [checkout()][crate::checkout()] function.
-pub type Error = gix_error::Exn;
-
 mod chunk;
 mod entry;
 pub(crate) mod function;

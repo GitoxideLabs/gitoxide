@@ -18,7 +18,7 @@ impl crate::Repository {
         name: impl AsRef<str>,
         target: impl Into<ObjectId>,
         constraint: PreviousValue,
-    ) -> Result<Reference<'_>, reference::edit::Error> {
+    ) -> Result<Reference<'_>, crate::Error> {
         let id = target.into();
         let name = format!("refs/tags/{}", name.as_ref()).try_into().map_err(
             |err: gix_validate::reference::name::Error| {
@@ -82,7 +82,7 @@ impl crate::Repository {
         target: impl Into<ObjectId>,
         constraint: PreviousValue,
         log_message: impl Into<BString>,
-    ) -> Result<Reference<'_>, reference::edit::Error>
+    ) -> Result<Reference<'_>, crate::Error>
     where
         Name: TryInto<FullName, Error = E>,
         gix_validate::reference::name::Error: From<E>,
@@ -107,7 +107,7 @@ impl crate::Repository {
         id: ObjectId,
         constraint: PreviousValue,
         log_message: BString,
-    ) -> Result<Reference<'_>, reference::edit::Error> {
+    ) -> Result<Reference<'_>, crate::Error> {
         let mut edits = self.edit_reference(RefEdit::update(name, id, constraint, log_message))?;
         assert_eq!(
             edits.len(),
@@ -127,7 +127,7 @@ impl crate::Repository {
     ///
     /// One or more `RefEdit`s  are returned - symbolic reference splits can cause more edits to be performed. All edits have the previous
     /// reference values set to the ones encountered at rest after acquiring the respective reference's lock.
-    pub fn edit_reference(&self, edit: RefEdit) -> Result<Vec<RefEdit>, reference::edit::Error> {
+    pub fn edit_reference(&self, edit: RefEdit) -> Result<Vec<RefEdit>, crate::Error> {
         self.edit_references(Some(edit))
     }
 
@@ -138,10 +138,7 @@ impl crate::Repository {
     ///
     /// Returns all reference edits, which might be more than where provided due the splitting of symbolic references, and
     /// whose previous (_old_) values are the ones seen on in storage after the reference was locked.
-    pub fn edit_references(
-        &self,
-        edits: impl IntoIterator<Item = RefEdit>,
-    ) -> Result<Vec<RefEdit>, reference::edit::Error> {
+    pub fn edit_references(&self, edits: impl IntoIterator<Item = RefEdit>) -> Result<Vec<RefEdit>, crate::Error> {
         self.edit_references_as(edits, self.committer().transpose()?)
     }
 
@@ -152,7 +149,7 @@ impl crate::Repository {
         &self,
         edits: impl IntoIterator<Item = RefEdit>,
         committer: Option<gix_actor::SignatureRef<'_>>,
-    ) -> Result<Vec<RefEdit>, reference::edit::Error> {
+    ) -> Result<Vec<RefEdit>, crate::Error> {
         let (file_lock_fail, packed_refs_lock_fail) = self.config.lock_timeout().map_err(|err| {
             gix_error::Error::from(err.and_raise(gix_error::message(
                 "Could not interpret core.filesRefLockTimeout or core.packedRefsTimeout, it must be the number in \
@@ -185,7 +182,7 @@ impl crate::Repository {
     /// assert!(!head.is_unborn());
     /// # Ok(()) }
     /// ```
-    pub fn head(&self) -> Result<crate::Head<'_>, reference::find::existing::Error> {
+    pub fn head(&self) -> Result<crate::Head<'_>, crate::Error> {
         let head = self.find_reference("HEAD")?;
         Ok(match head.inner.target {
             Target::Symbolic(branch) => match self.find_reference(&branch) {
@@ -209,7 +206,7 @@ impl crate::Repository {
     ///
     /// Also note that the returned id is likely to point to a commit, but could also
     /// point to a tree or blob. It won't, however, point to a tag as these are always peeled.
-    pub fn head_id(&self) -> Result<crate::Id<'_>, reference::head_id::Error> {
+    pub fn head_id(&self) -> Result<crate::Id<'_>, crate::Error> {
         self.head()?.into_peeled_id()
     }
 
@@ -217,12 +214,12 @@ impl crate::Repository {
     ///
     /// The difference to [`head_ref()`](Self::head_ref()) is that the latter requires the reference to exist,
     /// whereas here we merely return a the name of the possibly unborn reference.
-    pub fn head_name(&self) -> Result<Option<FullName>, reference::find::existing::Error> {
+    pub fn head_name(&self) -> Result<Option<FullName>, crate::Error> {
         Ok(self.head()?.referent_name().map(std::borrow::ToOwned::to_owned))
     }
 
     /// Return the reference that `HEAD` points to, or `None` if the head is detached or unborn.
-    pub fn head_ref(&self) -> Result<Option<Reference<'_>>, reference::find::existing::Error> {
+    pub fn head_ref(&self) -> Result<Option<Reference<'_>>, crate::Error> {
         Ok(self.head()?.try_into_referent())
     }
 
@@ -251,7 +248,7 @@ impl crate::Repository {
     /// }
     /// # Ok(()) }
     /// ```
-    pub fn head_commit(&self) -> Result<crate::Commit<'_>, reference::head_commit::Error> {
+    pub fn head_commit(&self) -> Result<crate::Commit<'_>, crate::Error> {
         self.head()?.peel_to_commit()
     }
 
@@ -261,12 +258,12 @@ impl crate::Repository {
     /// Note that this may fail for various reasons, most notably because the repository
     /// is freshly initialized and doesn't have any commits yet. It could also fail if the
     /// head does not point to a commit.
-    pub fn head_tree_id(&self) -> Result<crate::Id<'_>, reference::head_tree_id::Error> {
+    pub fn head_tree_id(&self) -> Result<crate::Id<'_>, crate::Error> {
         Ok(self.head_commit()?.tree_id().or_erased()?)
     }
 
     /// Like [`Self::head_tree_id()`], but will return an empty tree hash if the repository HEAD is unborn.
-    pub fn head_tree_id_or_empty(&self) -> Result<crate::Id<'_>, reference::head_tree_id::Error> {
+    pub fn head_tree_id_or_empty(&self) -> Result<crate::Id<'_>, crate::Error> {
         let mut head = self.head()?;
         if head.is_unborn() {
             Ok(self.empty_tree().id())
@@ -293,7 +290,7 @@ impl crate::Repository {
     /// assert_eq!(tree.find_entry("this").expect("present").filename(), "this");
     /// # Ok(()) }
     /// ```
-    pub fn head_tree(&self) -> Result<crate::Tree<'_>, reference::head_tree::Error> {
+    pub fn head_tree(&self) -> Result<crate::Tree<'_>, crate::Error> {
         self.head_commit()?.tree()
     }
 
@@ -315,7 +312,7 @@ impl crate::Repository {
     /// assert_eq!(reference.peel_to_commit()?.message()?.title, "c2\n");
     /// # Ok(()) }
     /// ```
-    pub fn find_reference<'a, Name, E>(&self, name: Name) -> Result<Reference<'_>, reference::find::existing::Error>
+    pub fn find_reference<'a, Name, E>(&self, name: Name) -> Result<Reference<'_>, crate::Error>
     where
         Name: TryInto<&'a PartialNameRef, Error = E> + Clone,
         gix_ref::file::find::Error: From<E>,
@@ -365,7 +362,7 @@ impl crate::Repository {
     ///
     /// Otherwise return `None` if the reference wasn't found.
     /// If the reference is expected to exist, use [`find_reference()`](crate::Repository::find_reference()).
-    pub fn try_find_reference<'a, Name, E>(&self, name: Name) -> Result<Option<Reference<'_>>, reference::find::Error>
+    pub fn try_find_reference<'a, Name, E>(&self, name: Name) -> Result<Option<Reference<'_>>, crate::Error>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
         gix_ref::file::find::Error: From<E>,

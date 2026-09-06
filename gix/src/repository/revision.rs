@@ -42,10 +42,7 @@ impl crate::Repository {
     /// ```
     #[doc(alias = "revparse_single", alias = "git2")]
     #[cfg(feature = "revision")]
-    pub fn rev_parse_single<'repo, 'a>(
-        &'repo self,
-        spec: impl Into<&'a BStr>,
-    ) -> Result<Id<'repo>, revision::spec::parse::single::Error> {
+    pub fn rev_parse_single<'repo, 'a>(&'repo self, spec: impl Into<&'a BStr>) -> Result<Id<'repo>, crate::Error> {
         let spec = spec.into();
         self.rev_parse(spec)?.single().ok_or_else(|| {
             let spec: crate::bstr::BString = spec.into();
@@ -65,7 +62,7 @@ impl crate::Repository {
         &self,
         one: impl Into<gix_hash::ObjectId>,
         two: impl Into<gix_hash::ObjectId>,
-    ) -> Result<Id<'_>, super::merge_base::Error> {
+    ) -> Result<Id<'_>, crate::Error> {
         use crate::prelude::ObjectIdExt;
         let one = one.into();
         let two = two.into();
@@ -92,7 +89,7 @@ impl crate::Repository {
         one: impl Into<gix_hash::ObjectId>,
         two: impl Into<gix_hash::ObjectId>,
         graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
-    ) -> Result<Id<'_>, super::merge_base_with_graph::Error> {
+    ) -> Result<Id<'_>, crate::Error> {
         use crate::prelude::ObjectIdExt;
         let one = one.into();
         let two = two.into();
@@ -139,7 +136,7 @@ impl crate::Repository {
         &self,
         one: impl Into<gix_hash::ObjectId>,
         others: &[gix_hash::ObjectId],
-    ) -> Result<Vec<Id<'_>>, crate::repository::merge_bases_many::Error> {
+    ) -> Result<Vec<Id<'_>>, crate::Error> {
         let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
         Ok(self.merge_bases_many_with_graph(one, others, &mut graph).or_erased()?)
@@ -153,7 +150,7 @@ impl crate::Repository {
         &self,
         commits: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
         graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
-    ) -> Result<Id<'_>, crate::repository::merge_base_octopus_with_graph::Error> {
+    ) -> Result<Id<'_>, crate::Error> {
         use crate::prelude::ObjectIdExt;
         let commits: Vec<_> = commits.into_iter().map(Into::into).collect();
         let first = commits
@@ -175,7 +172,7 @@ impl crate::Repository {
     pub fn merge_base_octopus(
         &self,
         commits: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
-    ) -> Result<Id<'_>, crate::repository::merge_base_octopus::Error> {
+    ) -> Result<Id<'_>, crate::Error> {
         let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
         self.merge_base_octopus_with_graph(commits, &mut graph)

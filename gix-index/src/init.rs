@@ -12,9 +12,6 @@ pub mod from_tree {
         entry::{Flags, Mode, Stat},
     };
 
-    /// The error returned by [State::from_tree()].
-    pub type Error = gix_error::Exn;
-
     /// Initialization
     impl State {
         /// Return a new and empty in-memory index assuming the given `object_hash`.
@@ -55,7 +52,7 @@ pub mod from_tree {
             tree: &gix_hash::oid,
             objects: Find,
             validate: gix_validate::path::component::Options,
-        ) -> Result<Self, Error>
+        ) -> Result<Self, gix_error::Exn>
         where
             Find: gix_object::Find,
         {

@@ -58,7 +58,12 @@ impl Compress {
     }
 
     /// Compress `input` and write compressed bytes to `output`, with `flush` controlling additional characteristics.
-    pub fn compress(&mut self, input: &[u8], output: &mut [u8], flush: FlushCompress) -> Result<Status, CompressError> {
+    pub fn compress(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        flush: FlushCompress,
+    ) -> Result<Status, gix_error::Exn> {
         let flush = match flush {
             FlushCompress::None => zlib_rs::DeflateFlush::NoFlush,
             FlushCompress::Partial => zlib_rs::DeflateFlush::PartialFlush,
@@ -81,9 +86,6 @@ impl Compress {
         }
     }
 }
-
-/// The error produced by [`Compress::compress()`].
-pub type CompressError = gix_error::Exn;
 
 /// Values which indicate the form of flushing to be used when compressing
 /// in-memory data.

@@ -1,11 +1,10 @@
-use super::Error;
 use crate::{
     Repository,
     config::{cache::util::ApplyLeniency, tree::Pack},
 };
 use gix_error::ErrorExt;
 
-pub fn index_threads(repo: &Repository) -> Result<Option<usize>, Error> {
+pub fn index_threads(repo: &Repository) -> Result<Option<usize>, crate::Error> {
     Pack::THREADS
         .try_into_usize(
             repo.config
@@ -20,7 +19,7 @@ pub fn index_threads(repo: &Repository) -> Result<Option<usize>, Error> {
         })
 }
 
-pub fn pack_index_version(repo: &Repository) -> Result<gix_pack::index::Version, Error> {
+pub fn pack_index_version(repo: &Repository) -> Result<gix_pack::index::Version, crate::Error> {
     Ok(Pack::INDEX_VERSION
         .try_into_index_version(repo.config.resolved.integer(Pack::INDEX_VERSION))
         .with_leniency(repo.options.lenient_config)

@@ -255,7 +255,7 @@ pub mod merge;
 /// assert!(repo.workdir_path("this").expect("non-bare").is_file());
 /// # Ok(()) }
 /// ```
-pub fn discover(directory: impl AsRef<std::path::Path>) -> Result<Repository, discover::Error> {
+pub fn discover(directory: impl AsRef<std::path::Path>) -> Result<Repository, crate::Error> {
     ThreadSafeRepository::discover(directory).map(Into::into)
 }
 
@@ -266,7 +266,7 @@ pub fn discover_opts(
     directory: impl AsRef<std::path::Path>,
     options: discover::upwards::Options<'_>,
     open_options: open::Options,
-) -> Result<Repository, discover::Error> {
+) -> Result<Repository, crate::Error> {
     ThreadSafeRepository::discover_opts(
         directory,
         options,
@@ -281,16 +281,14 @@ pub fn discover_opts(
 /// Try to discover a git repository directly from the environment.
 ///
 /// For details, see [`ThreadSafeRepository::discover_with_environment_overrides_opts()`].
-pub fn discover_with_environment_overrides(
-    directory: impl AsRef<std::path::Path>,
-) -> Result<Repository, discover::Error> {
+pub fn discover_with_environment_overrides(directory: impl AsRef<std::path::Path>) -> Result<Repository, crate::Error> {
     ThreadSafeRepository::discover_with_environment_overrides(directory).map(Into::into)
 }
 
 /// Try to open a git repository directly from the environment.
 ///
 /// See [`ThreadSafeRepository::open_with_environment_overrides()`].
-pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>) -> Result<Repository, open::Error> {
+pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>) -> Result<Repository, crate::Error> {
     ThreadSafeRepository::open_with_environment_overrides(directory, Default::default()).map(Into::into)
 }
 
@@ -309,12 +307,12 @@ pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>)
 /// assert!(repo.head()?.is_unborn());
 /// # Ok(()) }
 /// ```
-pub fn init(directory: impl AsRef<std::path::Path>) -> Result<Repository, init::Error> {
+pub fn init(directory: impl AsRef<std::path::Path>) -> Result<Repository, crate::Error> {
     ThreadSafeRepository::init(directory, create::Kind::WithWorktree, create::Options::default()).map(Into::into)
 }
 
 /// See [`ThreadSafeRepository::init()`], but returns a [`Repository`] instead.
-pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository, init::Error> {
+pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository, crate::Error> {
     ThreadSafeRepository::init(directory, create::Kind::Bare, create::Options::default()).map(Into::into)
 }
 
@@ -325,7 +323,7 @@ pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository, i
 pub fn prepare_clone_bare<Url, E>(
     url: Url,
     path: impl AsRef<std::path::Path>,
-) -> Result<clone::PrepareFetch, clone::Error>
+) -> Result<clone::PrepareFetch, crate::Error>
 where
     Url: std::convert::TryInto<gix_url::Url, Error = E>,
     E: std::error::Error + Send + Sync + 'static,
@@ -343,7 +341,7 @@ where
 /// (but amended with using configuration from the git installation to ensure all authentication options are honored).
 ///
 /// See [`clone::PrepareFetch::new()`] for a function to take full control over all options.
-pub fn prepare_clone<Url, E>(url: Url, path: impl AsRef<std::path::Path>) -> Result<clone::PrepareFetch, clone::Error>
+pub fn prepare_clone<Url, E>(url: Url, path: impl AsRef<std::path::Path>) -> Result<clone::PrepareFetch, crate::Error>
 where
     Url: std::convert::TryInto<gix_url::Url, Error = E>,
     E: std::error::Error + Send + Sync + 'static,
@@ -379,13 +377,13 @@ fn open_opts_with_git_binary_config() -> open::Options {
 /// # Ok(()) }
 /// ```
 #[doc(alias = "git2")]
-pub fn open(directory: impl Into<std::path::PathBuf>) -> Result<Repository, open::Error> {
+pub fn open(directory: impl Into<std::path::PathBuf>) -> Result<Repository, crate::Error> {
     ThreadSafeRepository::open(directory).map(Into::into)
 }
 
 /// See [`ThreadSafeRepository::open_opts()`], but returns a [`Repository`] instead.
 #[doc(alias = "open_ext", alias = "git2")]
-pub fn open_opts(directory: impl Into<std::path::PathBuf>, options: open::Options) -> Result<Repository, open::Error> {
+pub fn open_opts(directory: impl Into<std::path::PathBuf>, options: open::Options) -> Result<Repository, crate::Error> {
     ThreadSafeRepository::open_opts(directory, options).map(Into::into)
 }
 

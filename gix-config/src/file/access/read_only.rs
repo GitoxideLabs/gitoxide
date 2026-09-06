@@ -176,7 +176,7 @@ impl File {
     /// // ... or explicitly declare the type to avoid the turbofish
     /// let c_value: Vec<Boolean> = git_config.values("core.c")?;
     /// assert_eq!(c_value, vec![Boolean(false)]);
-    /// # Ok::<(), gix_config::lookup::Error<gix_config::value::Error>>(())
+    /// # Ok::<(), gix_config::lookup::Error<gix_error::Exn<gix_error::ValidationError>>>(())
     /// ```
     ///
     /// [`value`]: crate::value
@@ -230,7 +230,7 @@ impl File {
     /// // ... or explicitly declare the type to avoid the turbofish
     /// let c_value: Vec<Boolean> = git_config.values_by("core", None, "c")?;
     /// assert_eq!(c_value, vec![Boolean(false)]);
-    /// # Ok::<(), gix_config::lookup::Error<gix_config::value::Error>>(())
+    /// # Ok::<(), gix_config::lookup::Error<gix_error::Exn<gix_error::ValidationError>>>(())
     /// ```
     ///
     /// [`value`]: crate::value
@@ -277,17 +277,14 @@ impl File {
         &self,
         name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
-    ) -> Result<file::SectionRef<'_>, lookup::existing::Error> {
+    ) -> Result<file::SectionRef<'_>, gix_error::Exn> {
         self.section_filter(name, subsection_name, |_| true)?
             .ok_or_else(lookup::existing::section_missing)
     }
 
     /// Returns the last found immutable section with a given `section_key`, identifying the name and subsection name like `core`
     /// or `remote.origin`.
-    pub fn section_by_key(
-        &self,
-        section_key: impl crate::AsBStr,
-    ) -> Result<file::SectionRef<'_>, lookup::existing::Error> {
+    pub fn section_by_key(&self, section_key: impl crate::AsBStr) -> Result<file::SectionRef<'_>, gix_error::Exn> {
         let key = crate::parse::section::unvalidated::KeyRef::parse(section_key.as_bstr())
             .ok_or_else(lookup::existing::key_missing)?;
         self.section(key.section_name, key.subsection_name)
@@ -302,7 +299,7 @@ impl File {
         name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<file::SectionRef<'_>>, lookup::existing::Error> {
+    ) -> Result<Option<file::SectionRef<'_>>, gix_error::Exn> {
         Ok(self
             .section_ids_by_name_and_subname(name.as_ref(), subsection_name.as_bstr_opt())?
             .rev()
@@ -320,7 +317,7 @@ impl File {
         &self,
         section_key: impl crate::AsBStr,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<file::SectionRef<'_>>, lookup::existing::Error> {
+    ) -> Result<Option<file::SectionRef<'_>>, gix_error::Exn> {
         let key = crate::parse::section::unvalidated::KeyRef::parse(section_key.as_bstr())
             .ok_or_else(lookup::existing::key_missing)?;
         self.section_filter(key.section_name, key.subsection_name, filter)

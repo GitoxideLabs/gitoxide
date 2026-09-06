@@ -8,7 +8,7 @@ use gix_error::{ErrorExt, OptionExt, ResultExt, ValidationError};
 
 use crate::{
     EntryRef, entry,
-    walk::{Action, Context, Delegate, Error, ForDeletionMode, Options, Outcome, classify, readdir},
+    walk::{Action, Context, Delegate, ForDeletionMode, Options, Outcome, classify, readdir},
 };
 
 /// A function to perform a git-style, unsorted, directory walk.
@@ -49,7 +49,7 @@ pub fn walk(
     mut ctx: Context<'_>,
     options: Options<'_>,
     delegate: &mut dyn Delegate,
-) -> Result<(Outcome, PathBuf), Error> {
+) -> Result<(Outcome, PathBuf), gix_error::Exn> {
     let root = match ctx.explicit_traversal_root {
         Some(root) => root.to_owned(),
         None => ctx
@@ -135,7 +135,7 @@ pub fn walk(
 fn assure_no_symlink_in_root<'root>(
     worktree_root: &Path,
     root: &'root Path,
-) -> Result<(PathBuf, Cow<'root, Path>), Error> {
+) -> Result<(PathBuf, Cow<'root, Path>), gix_error::Exn> {
     let mut current = worktree_root.to_owned();
     let worktree_relative = root
         .strip_prefix(worktree_root)

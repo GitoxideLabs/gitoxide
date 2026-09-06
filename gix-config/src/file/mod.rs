@@ -24,18 +24,6 @@ mod util;
 ///
 pub mod section;
 
-///
-pub mod rename_section {
-    /// The error returned by [`File::rename_section(…)`][crate::File::rename_section()].
-    pub type Error = gix_error::Exn;
-}
-
-///
-pub mod set_raw_value {
-    /// The error returned by [`File::set_raw_value(…)`][crate::File::set_raw_value()].
-    pub type Error = gix_error::Exn;
-}
-
 /// Convert ergonomic subsection inputs into an optional owned name.
 pub trait IntoBStringOpt {
     /// Convert into an optional owned subsection name.
