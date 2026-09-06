@@ -781,6 +781,11 @@ is bounded above the top-most changes block: moving down at that boundary scroll
 history so the selected row stays visible. Shrinking a changes block does not
 pull history back into the freed rows. The commit view reserves right-side
 space first; changes blocks adapt within the remaining history width.
+Rows uncovered by a shrinking or dismissed overlay retain their gutter, graph,
+and metadata columns. Terminal output preserves each wide emoji's measured
+width without separately writing blank cells covered by the glyph. This also
+applies when switching between history, the worktree picker, ref-tree, and diff
+views.
 
 ### Commit message
 
