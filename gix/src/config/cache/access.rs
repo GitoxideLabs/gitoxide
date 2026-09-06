@@ -253,13 +253,7 @@ impl Cache {
     }
 
     pub(crate) fn config_lock_timeout(&self) -> Result<gix_lock::acquire::Fail, config::lock_timeout::Error> {
-        Core::CONFIG_LOCK_TIMEOUT
-            .try_into_lock_timeout(
-                self.resolved
-                    .integer_filter(Core::CONFIG_LOCK_TIMEOUT, &mut self.filter_config_section.clone()),
-            )
-            .with_leniency(self.lenient_config)
-            .map(|value| value.unwrap_or_else(|| Fail::from(Duration::from_millis(1000))))
+        config_lock_timeout(&self.resolved, self.lenient_config, self.filter_config_section)
     }
 
     /// The path to the user-level excludes file to ignore certain files in the worktree.
@@ -528,6 +522,17 @@ impl Cache {
     pub(crate) fn home_dir(&self) -> Option<PathBuf> {
         home_dir(self.environment)
     }
+}
+
+pub(crate) fn config_lock_timeout(
+    config: &gix_config::File,
+    lenient: bool,
+    mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
+) -> Result<Fail, config::lock_timeout::Error> {
+    Core::CONFIG_LOCK_TIMEOUT
+        .try_into_lock_timeout(config.integer_filter(Core::CONFIG_LOCK_TIMEOUT, &mut filter_config_section))
+        .with_leniency(lenient)
+        .map(|value| value.unwrap_or_else(|| Fail::from(Duration::from_millis(1000))))
 }
 
 fn compression(

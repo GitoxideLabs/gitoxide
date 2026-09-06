@@ -11,6 +11,14 @@ use super::FileTransaction;
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]
 pub enum Error {
+    #[error("Configuration source {0:?} requires a repository or has no physical file")]
+    UnsupportedSource(gix_config::Source),
+    #[error("Configuration source {0:?} has no available path with these options")]
+    SourceUnavailable(gix_config::Source),
+    #[error("Could not load global configuration")]
+    Config(#[from] super::Error),
+    #[error("Could not obtain the current directory for a relative configuration path")]
+    CurrentDir(#[source] std::io::Error),
     #[error(transparent)]
     LockTimeout(#[from] super::lock_timeout::Error),
     #[error(transparent)]
@@ -44,6 +52,7 @@ pub enum Error {
 impl FileTransaction {
     pub(crate) fn open(
         path: std::path::PathBuf,
+        source: gix_config::Source,
         trust: gix_sec::Trust,
         lock_mode: gix_lock::acquire::Fail,
         shared_repository_permissions: i32,
@@ -59,7 +68,6 @@ impl FileTransaction {
             Some(&gix_lock::acquire::resolve_symlink),
             adjust_permissions,
         )?;
-        let source = gix_config::Source::Local;
         let path = lock.resource_path();
         let config = match std::fs::File::open(&path) {
             Ok(mut file) => {

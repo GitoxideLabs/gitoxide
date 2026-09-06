@@ -32,88 +32,558 @@ fn discover_with_environment_overrides_isolated(
     .map(|repo| repo.to_thread_local())
 }
 
-#[test]
-#[serial]
-fn globals_from_open_options_match_repository_opening() -> gix_testtools::Result {
-    let temp = gix_testtools::tempfile::TempDir::new()?;
-    let _cwd = gix_testtools::set_current_dir(temp.path())?;
+mod config {
+    use gix_sec::Permission;
+    use serial_test::serial;
 
-    let repo_path = std::env::current_dir()?.join("project");
-    let git_dir = repo_path.join(".git");
-    let included = temp.path().join("included.config");
-    let global = temp.path().join("global.config");
-    std::fs::write(
-        &included,
-        "[marker]
-            included = true",
-    )?;
-    std::fs::write(
-        &global,
-        format!(
+    #[test]
+    #[serial]
+    fn globals_from_open_options_match_repository_opening() -> gix_testtools::Result {
+        let temp = gix_testtools::tempfile::TempDir::new()?;
+        let _cwd = gix_testtools::set_current_dir(temp.path())?;
+
+        let repo_path = std::env::current_dir()?.join("project");
+        let git_dir = repo_path.join(".git");
+        let included = temp.path().join("included.config");
+        let global = temp.path().join("global.config");
+        std::fs::write(
+            &included,
             "[marker]
+            included = true",
+        )?;
+        std::fs::write(
+            &global,
+            format!(
+                "[marker]
                 global = true
             [includeIf \"gitdir:{git_dir}\"]
                 path = {included}
             [includeIf \"gitdir:**/unrelated/.git\"]
                 path = {included}",
-            git_dir = git_dir.display().to_string().replace('\\', "/"),
-            included = included.display().to_string().replace('\\', "/"),
-        ),
-    )?;
-    let _env = gix_testtools::Env::new().set("GIT_CONFIG_GLOBAL", global.display().to_string());
+                git_dir = git_dir.display().to_string().replace('\\', "/"),
+                included = included.display().to_string().replace('\\', "/"),
+            ),
+        )?;
+        let _env = gix_testtools::Env::new().set("GIT_CONFIG_GLOBAL", global.display().to_string());
 
-    let mut permissions = gix::open::Permissions::isolated();
-    permissions.config.user = true;
-    permissions.config.includes = true;
-    permissions.env.git_prefix = Permission::Allow;
-    let options = gix::open::Options::isolated()
-        .permissions(permissions)
-        .cli_overrides(["marker.precedence=cli"])
-        .config_overrides(["marker.precedence=api"]);
+        let mut permissions = gix::open::Permissions::isolated();
+        permissions.config.user = true;
+        permissions.config.includes = true;
+        permissions.env.git_prefix = Permission::Allow;
+        let options = gix::open::Options::isolated()
+            .permissions(permissions)
+            .cli_overrides(["marker.precedence=cli"])
+            .config_overrides(["marker.precedence=api"]);
 
-    let globals = gix::config(Some(std::path::Path::new("project/.git")), &options)?;
-    assert_eq!(globals.boolean("marker.global")?, Some(true), "global files are loaded");
-    assert_eq!(
-        globals.boolean("marker.included")?,
-        Some(true),
-        "git-dir conditional includes use the provided future repository path"
-    );
-    assert_eq!(
-        globals.string("marker.precedence").expect("API override is present"),
-        "api",
-        "API overrides retain repository-opening precedence"
-    );
-
-    let globals_without_repo = gix::config(None, &options)?;
-    assert_eq!(
-        globals_without_repo.boolean("marker.global")?,
-        Some(true),
-        "global files are loaded without repository context"
-    );
-    assert_eq!(
-        globals_without_repo.boolean("marker.included")?,
-        None,
-        "git-dir conditional includes aren't loaded without repository context"
-    );
-
-    let repo =
-        gix::ThreadSafeRepository::init_opts(&repo_path, gix::create::Kind::WithWorktree, Default::default(), options)?
-            .to_thread_local();
-    let repo = repo.config_snapshot();
-
-    for key in ["marker.global", "marker.included"] {
+        let globals = gix::config(Some(std::path::Path::new("project/.git")), &options)?;
+        assert_eq!(globals.boolean("marker.global")?, Some(true), "global files are loaded");
         assert_eq!(
-            globals.boolean(key)?,
-            repo.try_boolean(key)?,
-            "{key} is loaded identically before and during repository opening"
+            globals.boolean("marker.included")?,
+            Some(true),
+            "git-dir conditional includes use the provided future repository path"
         );
+        assert_eq!(
+            globals.string("marker.precedence").expect("API override is present"),
+            "api",
+            "API overrides retain repository-opening precedence"
+        );
+
+        let globals_without_repo = gix::config(None, &options)?;
+        assert_eq!(
+            globals_without_repo.boolean("marker.global")?,
+            Some(true),
+            "global files are loaded without repository context"
+        );
+        assert_eq!(
+            globals_without_repo.boolean("marker.included")?,
+            None,
+            "git-dir conditional includes aren't loaded without repository context"
+        );
+
+        let repo = gix::ThreadSafeRepository::init_opts(
+            &repo_path,
+            gix::create::Kind::WithWorktree,
+            Default::default(),
+            options,
+        )?
+        .to_thread_local();
+        let repo = repo.config_snapshot();
+
+        for key in ["marker.global", "marker.included"] {
+            assert_eq!(
+                globals.boolean(key)?,
+                repo.try_boolean(key)?,
+                "{key} is loaded identically before and during repository opening"
+            );
+        }
+        assert_eq!(
+            globals.string("marker.precedence"),
+            repo.string("marker.precedence"),
+            "overrides are loaded identically before and during repository opening"
+        );
+        Ok(())
     }
-    assert_eq!(
-        globals.string("marker.precedence"),
-        repo.string("marker.precedence"),
-        "overrides are loaded identically before and during repository opening"
-    );
-    Ok(())
+}
+
+mod config_mut {
+    use gix::config::{Source, file_mut::Error};
+    use gix_sec::Permission;
+    use gix_testtools::{Env, Result};
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn edits_one_physical_file_losslessly_without_a_repository() -> Result {
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let _cwd = gix_testtools::set_current_dir(temp.path())?;
+        let path = std::env::current_dir()?.join("global.config");
+        let included = path.with_file_name("included.config");
+        let original = "# leading comment
+[include]
+    path = included.config
+[marker]
+    value = before
+# trailing comment
+";
+        let included_contents = "[marker]
+    included = true
+";
+        std::fs::write(&path, original)?;
+        std::fs::write(&included, included_contents)?;
+        let _env = Env::new().set("GIT_CONFIG_GLOBAL", path.display().to_string());
+        let mut options = options_for(Source::User)
+            .lossy_config(true)
+            .cli_overrides(["marker.cli=transient"])
+            .config_overrides(["marker.api=transient"]);
+        options.permissions.config.includes = true;
+        options.permissions.env.git_prefix = Permission::Allow;
+
+        let mut file = gix::config_mut(Source::User, &options)?;
+        assert_eq!(
+            file.meta().source,
+            Source::User,
+            "metadata identifies the requested source"
+        );
+        assert_eq!(
+            file.meta().path.as_deref(),
+            Some(path.as_path()),
+            "metadata identifies the physical file"
+        );
+        assert_eq!(
+            file.meta().trust,
+            gix_sec::Trust::Full,
+            "global configuration is fully trusted"
+        );
+        for key in ["marker.included", "marker.cli", "marker.api"] {
+            assert!(file.string(key).is_none(), "{key} is not part of the physical file");
+        }
+        file.set_raw_value("marker.value", "after")?;
+        assert_eq!(
+            std::fs::read_to_string(&path)?,
+            original,
+            "changes wait for an explicit commit"
+        );
+        file.commit()?;
+        let written = original.replace("value = before", "value = after");
+        assert_eq!(
+            std::fs::read_to_string(&path)?,
+            written,
+            "comments, whitespace and includes survive lossy options"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&included)?,
+            included_contents,
+            "included files are untouched"
+        );
+        assert_eq!(
+            gix::config(None, &options)?
+                .string("marker.value")
+                .expect("committed marker"),
+            "after",
+            "standalone reads see the committed value"
+        );
+
+        let mut file = gix::config_mut(Source::User, &options)?;
+        file.set_raw_value("marker.value", "discarded")?;
+        drop(file);
+        assert_eq!(std::fs::read_to_string(&path)?, written, "dropping discards edits");
+        assert!(
+            !path.with_extension("config.lock").exists(),
+            "dropping releases the lock"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn source_paths_match_standalone_reads() -> Result {
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let home = temp.path();
+        let xdg = home.join("xdg");
+        std::fs::create_dir_all(xdg.join("git"))?;
+        std::fs::create_dir_all(home.join(".config/git"))?;
+        let _env = Env::new()
+            .set("HOME", home.display().to_string())
+            .set("XDG_CONFIG_HOME", xdg.display().to_string());
+        let installation = home.join("installation.config");
+        let system = home.join("system.config");
+
+        for (source, path) in [
+            (Source::GitInstallation, installation.clone()),
+            (Source::System, system.clone()),
+            (Source::Git, xdg.join("git/config")),
+            (Source::User, home.join(".gitconfig")),
+        ] {
+            let mut options = options_for(source)
+                .git_installation_config_path(&installation)
+                .system_config_path(&system);
+            options.permissions.env.home = Permission::Allow;
+            options.permissions.env.xdg_config_home = Permission::Allow;
+            let mut file = gix::config_mut(source, &options)?;
+            assert_eq!(
+                file.meta().path.as_deref(),
+                Some(path.as_path()),
+                "source resolves to its own file"
+            );
+            assert_eq!(file.meta().source, source, "new files retain their selected source");
+            file.set_raw_value("marker.value", "created")?;
+            assert_eq!(
+                file.section_by_key("marker")?.meta().source,
+                source,
+                "new sections inherit the source"
+            );
+            file.commit()?;
+            assert!(path.is_file(), "the selected missing file is created on commit");
+            assert_eq!(
+                gix::config(None, &options)?
+                    .string("marker.value")
+                    .expect("created marker"),
+                "created",
+                "reading uses the same source path"
+            );
+        }
+
+        let mut options = options_for(Source::Git);
+        options.permissions.env.home = Permission::Allow;
+        let file = gix::config_mut(Source::Git, &options)?;
+        assert_eq!(
+            file.meta().path.as_deref(),
+            Some(home.join(".config/git/config").as_path()),
+            "denying XDG environment access falls back to HOME"
+        );
+        drop(file);
+        options.permissions.env.home = Permission::Deny;
+        assert!(
+            matches!(
+                gix::config_mut(Source::Git, &options),
+                Err(Error::SourceUnavailable(Source::Git))
+            ),
+            "a source with no permitted path is unavailable"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn honors_environment_and_explicit_path_overrides() -> Result {
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let global = temp.path().join("global.config");
+        let system = temp.path().join("system.config");
+        let explicit = temp.path().join("explicit.config");
+        let _env = Env::new()
+            .set("GIT_CONFIG_GLOBAL", global.display().to_string())
+            .set("GIT_CONFIG_SYSTEM", system.display().to_string())
+            .set("GIT_CONFIG_NOSYSTEM", "false");
+        for source in [Source::Git, Source::User, Source::System] {
+            let mut options = options_for(source);
+            options.permissions.env.git_prefix = Permission::Allow;
+            let file = gix::config_mut(source, &options)?;
+            let expected = if source == Source::System { &system } else { &global };
+            assert_eq!(
+                file.meta().path.as_deref(),
+                Some(expected.as_path()),
+                "Git environment overrides select the target"
+            );
+        }
+
+        for source in [Source::GitInstallation, Source::System] {
+            let mut options = options_for(source)
+                .git_installation_config_path(&explicit)
+                .system_config_path(&explicit);
+            options.permissions.env.git_prefix = Permission::Allow;
+            let file = gix::config_mut(source, &options)?;
+            assert_eq!(
+                file.meta().path.as_deref(),
+                Some(explicit.as_path()),
+                "explicit options take precedence over environment paths"
+            );
+            drop(file);
+            let _no_system = Env::new().set("GIT_CONFIG_NOSYSTEM", "true");
+            assert!(
+                matches!(gix::config_mut(source, &options), Err(Error::SourceUnavailable(actual)) if actual == source),
+                "GIT_CONFIG_NOSYSTEM suppresses explicit installation and system paths"
+            );
+            options.permissions.env.git_prefix = Permission::Deny;
+            assert!(
+                gix::config_mut(source, &options).is_ok(),
+                "denying environment access ignores GIT_CONFIG_NOSYSTEM, so the explicit path can be opened"
+            );
+        }
+
+        let mut options = options_for(Source::User).config_overrides(["core.configLockTimeout=0"]);
+        options.permissions.config.git = true;
+        options.permissions.env.git_prefix = Permission::Allow;
+        let _file = gix::config_mut(Source::User, &options)?;
+        assert!(
+            matches!(gix::config_mut(Source::Git, &options), Err(Error::AcquireLock(_))),
+            "sources overridden to the same file share its lock"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_unsupported_and_disabled_sources() -> Result {
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let options = gix::open::Options::isolated()
+            .git_installation_config_path(temp.path().join("installation.config"))
+            .system_config_path(temp.path().join("system.config"));
+        for source in [Source::GitInstallation, Source::System, Source::Git, Source::User] {
+            assert!(
+                matches!(gix::config_mut(source, &options), Err(Error::SourceUnavailable(actual)) if actual == source),
+                "disabled sources cannot be opened for writing"
+            );
+        }
+        for source in [
+            Source::Local,
+            Source::Worktree,
+            Source::Env,
+            Source::Cli,
+            Source::Api,
+            Source::EnvOverride,
+        ] {
+            assert!(
+                matches!(gix::config_mut(source, &options), Err(Error::UnsupportedSource(actual)) if actual == source),
+                "repository and in-memory sources have no standalone transaction"
+            );
+        }
+        assert_eq!(
+            std::fs::read_dir(temp.path())?.count(),
+            0,
+            "rejected sources do not create files or locks"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn missing_files_require_existing_parent_directories() -> Result {
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let path = temp.path().join("missing/global.config");
+        let options = options_for(Source::System).system_config_path(&path);
+        assert!(
+            matches!(gix::config_mut(Source::System, &options), Err(Error::AcquireLock(gix::lock::acquire::Error::Io(err))) if err.kind() == std::io::ErrorKind::NotFound),
+            "the parent directory must already exist"
+        );
+        assert!(
+            !path.parent().expect("config parent").exists(),
+            "opening does not create directories"
+        );
+        std::fs::create_dir(path.parent().expect("config parent"))?;
+        let mut file = gix::config_mut(Source::System, &options)?;
+        file.set_raw_value("marker.value", "discarded")?;
+        drop(file);
+        assert_eq!(
+            std::fs::read_dir(path.parent().expect("config parent"))?.count(),
+            0,
+            "dropping a new file leaves neither the file nor its lock"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn malformed_configuration_cannot_be_overwritten() -> Result {
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let path = temp.path().join("global.config");
+        let options = options_for(Source::System).system_config_path(&path);
+        let malformed = "[unterminated";
+        std::fs::write(&path, malformed)?;
+        assert!(
+            matches!(gix::config_mut(Source::System, &options), Err(Error::Config(_))),
+            "malformed configuration cannot be overwritten through a transaction"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path)?,
+            malformed,
+            "failed opening preserves malformed input"
+        );
+        assert!(
+            !path.with_extension("config.lock").exists(),
+            "failed opening leaves no lock"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn lock_timeout_uses_global_configuration_and_option_precedence() -> Result {
+        use gix::lock::acquire::{Error as LockError, Fail};
+
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let global_config_path = temp.path().join("global.config");
+        std::fs::write(
+            &global_config_path,
+            "[core]
+    configLockTimeout = 0
+",
+        )?;
+        std::fs::write(global_config_path.with_extension("config.lock"), "held")?;
+        let options = options_for(Source::System)
+            .system_config_path(&global_config_path)
+            .strict_config(true)
+            .cli_overrides(["core.configLockTimeout=invalid"])
+            .config_overrides(["core.configLockTimeout=0"]);
+        assert!(
+            matches!(
+                gix::config_mut(Source::System, &options),
+                Err(Error::AcquireLock(LockError::PermanentlyLocked {
+                    mode: Fail::Immediately,
+                    ..
+                }))
+            ),
+            "API overrides take precedence over CLI and disk values"
+        );
+        let options = options.filter_config_section(|meta| meta.source != Source::Api);
+        assert!(
+            matches!(gix::config_mut(Source::System, &options), Err(Error::LockTimeout(_))),
+            "section filtering exposes the invalid CLI timeout in strict mode"
+        );
+        let options = options.strict_config(false);
+        assert!(
+            matches!(gix::config_mut(Source::System, &options), Err(Error::AcquireLock(LockError::PermanentlyLocked { mode: Fail::AfterDurationWithBackoff(duration), .. })) if duration == std::time::Duration::from_millis(1000)),
+            "lenient invalid timeouts use the one-second default"
+        );
+
+        std::fs::write(
+            &global_config_path,
+            "[core]
+    configLockTimeout = invalid
+[include]
+    path = included.config
+",
+        )?;
+        std::fs::write(
+            global_config_path.with_file_name("included.config"),
+            "[core]
+    configLockTimeout = 0
+",
+        )?;
+        let mut options = options_for(Source::System)
+            .system_config_path(&global_config_path)
+            .strict_config(true);
+        options.permissions.config.includes = true;
+        assert!(
+            matches!(
+                gix::config_mut(Source::System, &options),
+                Err(Error::AcquireLock(LockError::PermanentlyLocked {
+                    mode: Fail::Immediately,
+                    ..
+                }))
+            ),
+            "expanded global includes can supply the lock timeout"
+        );
+        options.permissions.config.includes = false;
+        assert!(
+            matches!(gix::config_mut(Source::System, &options), Err(Error::LockTimeout(_))),
+            "disabling includes exposes the invalid physical timeout"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn relative_paths_remain_anchored_when_the_current_directory_changes() -> Result {
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let _cwd = gix_testtools::set_current_dir(temp.path())?;
+        let root = std::env::current_dir()?;
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir(&elsewhere)?;
+        let options = options_for(Source::System).system_config_path("global.config");
+        let mut file = gix::config_mut(Source::System, &options)?;
+        assert_eq!(
+            file.meta().path.as_deref(),
+            Some(root.join("global.config").as_path()),
+            "relative targets capture the opening directory"
+        );
+        file.set_raw_value("marker.value", "anchored")?;
+        let _elsewhere = gix_testtools::set_current_dir(&elsewhere)?;
+        file.commit()?;
+        assert!(root.join("global.config").is_file(), "commit uses the captured target");
+        assert!(
+            !elsewhere.join("global.config").exists(),
+            "the later working directory does not affect commit"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial]
+    fn global_permissions_honor_shared_repository_policy() -> Result {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let path = temp.path().join("global.config");
+        let installation = temp.path().join("installation.config");
+        std::fs::write(
+            &installation,
+            "[core]
+    sharedRepository = 0664
+",
+        )?;
+        let mut options = options_for(Source::System)
+            .system_config_path(&path)
+            .git_installation_config_path(&installation)
+            .strict_config(true);
+        options.permissions.config.git_binary = true;
+        gix::config_mut(Source::System, &options)?.commit()?;
+        assert_eq!(
+            path.metadata()?.permissions().mode() & 0o777,
+            0o664,
+            "new global files honor the sharing policy from the resolved configuration"
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let mut file = gix::config_mut(Source::System, &options)?;
+        file.set_raw_value("marker.value", "written")?;
+        file.commit()?;
+        assert_eq!(
+            path.metadata()?.permissions().mode() & 0o777,
+            0o600,
+            "editing preserves existing permissions"
+        );
+        let options = options.config_overrides(["core.sharedRepository=invalid"]);
+        assert!(
+            matches!(
+                gix::config_mut(Source::System, &options),
+                Err(Error::InvalidSharedRepository(_))
+            ),
+            "invalid sharing policies in overrides are rejected even for existing files"
+        );
+        Ok(())
+    }
+
+    fn options_for(source: Source) -> gix::open::Options {
+        let mut options = gix::open::Options::isolated();
+        match source {
+            Source::GitInstallation => options.permissions.config.git_binary = true,
+            Source::System => options.permissions.config.system = true,
+            Source::Git => options.permissions.config.git = true,
+            Source::User => options.permissions.config.user = true,
+            _ => panic!("test options require a repository-independent file"),
+        }
+        options
+    }
 }
 
 mod with_overrides {

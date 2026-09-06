@@ -209,6 +209,40 @@ impl Cache {
     }
 }
 
+/// Resolve a permitted repository-independent configuration source, including explicit and environment path overrides.
+pub(crate) fn source_path(
+    source: gix_config::Source,
+    git_installation_config_path: Option<&std::path::Path>,
+    system_config_path: Option<&std::path::Path>,
+    permissions: open::permissions::Config,
+    source_env: &mut dyn FnMut(&str) -> Option<OsString>,
+) -> Option<std::path::PathBuf> {
+    let permitted = match source {
+        gix_config::Source::GitInstallation => permissions.git_binary,
+        gix_config::Source::System => permissions.system,
+        gix_config::Source::Git => permissions.git,
+        gix_config::Source::User => permissions.user,
+        _ => false,
+    };
+    if !permitted {
+        return None;
+    }
+    if matches!(source, gix_config::Source::GitInstallation | gix_config::Source::System)
+        && source_env("GIT_CONFIG_NOSYSTEM")
+            .and_then(|value| gix_config::Boolean::try_from(value).ok())
+            .is_some_and(|value| value.0)
+    {
+        return None;
+    }
+    match source {
+        gix_config::Source::GitInstallation => git_installation_config_path,
+        gix_config::Source::System => system_config_path,
+        _ => None,
+    }
+    .map(ToOwned::to_owned)
+    .or_else(|| source.storage_location(source_env))
+}
+
 /// Load global configuration and optional repository-local configuration using the same ordering and overrides as
 /// repository opening.
 #[expect(clippy::too_many_arguments)]
@@ -231,13 +265,10 @@ pub(crate) fn load(
         identity,
         objects,
     }: open::permissions::Environment,
-    open::permissions::Config {
-        git_binary: use_installation,
-        system: use_system,
-        git: use_git,
-        user: use_user,
+    config_permissions @ open::permissions::Config {
         env: use_env,
         includes: use_includes,
+        ..
     }: open::permissions::Config,
     lossy: bool,
     lenient: bool,
@@ -258,9 +289,6 @@ pub(crate) fn load(
     };
     let git_prefix = &git_prefix;
     let mut source_env = Cache::make_source_env(environment);
-    let no_system_config = source_env("GIT_CONFIG_NOSYSTEM")
-        .and_then(|value| gix_config::Boolean::try_from(value).ok())
-        .is_some_and(|value| value.0);
     let mut metas = [
         gix_config::source::Kind::GitInstallation,
         gix_config::source::Kind::System,
@@ -268,28 +296,19 @@ pub(crate) fn load(
     ]
     .iter()
     .flat_map(|kind| kind.sources())
-    .filter_map(|source| {
-        match source {
-            gix_config::Source::GitInstallation if !use_installation || no_system_config => return None,
-            gix_config::Source::System if !use_system || no_system_config => return None,
-            gix_config::Source::Git if !use_git => return None,
-            gix_config::Source::User if !use_user => return None,
-            _ => {}
-        }
-        match source {
-            gix_config::Source::GitInstallation => git_installation_config_path,
-            gix_config::Source::System => system_config_path,
-            _ => None,
-        }
-        .map(ToOwned::to_owned)
-        .or_else(|| source.storage_location(&mut source_env))
-        .map(|p| (source, p))
-    })
-    .map(|(source, path)| gix_config::file::Metadata {
-        path: Some(path),
-        source: *source,
-        level: 0,
-        trust: gix_sec::Trust::Full,
+    .filter_map(|&source| {
+        source_path(
+            source,
+            git_installation_config_path,
+            system_config_path,
+            config_permissions,
+            &mut source_env,
+        )
+        .map(|path| {
+            gix_config::file::Metadata::from(source)
+                .at(path)
+                .with(gix_sec::Trust::Full)
+        })
     });
 
     let err_on_nonexisting_paths = false;
