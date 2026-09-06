@@ -2645,6 +2645,10 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
+        if cancel_undo_redo_on_input(&terminal_event, &mut app) {
+            dirty = true;
+            urgent = true;
+        }
         if pending_force_push.is_some()
             && let Some(input) = push_retry_input(&terminal_event)
         {
@@ -8922,6 +8926,28 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
     )
 }
 
+fn cancel_undo_redo_on_input(event: &TerminalEvent, app: &mut App) -> bool {
+    let cancel = match event {
+        TerminalEvent::Key(key) if key.kind == KeyEventKind::Release || matches!(key.code, KeyCode::Modifier(_)) => {
+            false
+        }
+        // Classify repeats without dismissing the prompt; the action decoder still ignores them.
+        TerminalEvent::Key(key) => !matches!(
+            app_action(
+                KeyEvent {
+                    kind: KeyEventKind::Press,
+                    ..*key
+                },
+                app,
+            ),
+            Some(Action::Undo | Action::Redo | Action::Cancel)
+        ),
+        TerminalEvent::FocusLost | TerminalEvent::Mouse(_) | TerminalEvent::Paste(_) => true,
+        TerminalEvent::FocusGained | TerminalEvent::Resize(_, _) => false,
+    };
+    cancel && app.cancel_undo_redo_confirmation()
+}
+
 fn entry_selection_action(key: KeyEvent) -> Option<Action> {
     if key.kind == KeyEventKind::Release {
         return None;
@@ -9027,7 +9053,7 @@ fn action_with_shortcut_groups(
     if key.kind == KeyEventKind::Release {
         return None;
     }
-    match key.code {
+    let action = match key.code {
         KeyCode::Tab => Some(Action::ToggleChangesFocus),
         KeyCode::Enter => Some(Action::OpenDiff),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
@@ -9121,7 +9147,8 @@ fn action_with_shortcut_groups(
         KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::CopyAuthor),
         KeyCode::Char('y') => Some(Action::Copy),
         _ => None,
-    }
+    };
+    action.filter(|action| key.kind == KeyEventKind::Press || !matches!(action, Action::Undo | Action::Redo))
 }
 
 fn copy_selected_path_action(
@@ -11243,6 +11270,103 @@ mod tests {
             "longer-running pagers restore tix immediately"
         );
         Ok(())
+    }
+
+    #[test]
+    fn undo_and_redo_ignore_key_repeats_and_releases() {
+        let mut app = App::new(2);
+        for (code, modifiers) in [
+            (KeyCode::Char('u'), KeyModifiers::NONE),
+            (KeyCode::Char('U'), KeyModifiers::NONE),
+            (KeyCode::Char('u'), KeyModifiers::SHIFT),
+        ] {
+            let press = KeyEvent::new(code, modifiers);
+            let action = app_action(press, &app).expect("undo/redo have shortcuts");
+            assert!(
+                app.update(action.clone()).is_empty(),
+                "the first press only arms the command"
+            );
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+                let key = KeyEvent::new_with_kind(code, modifiers, kind);
+                assert!(
+                    !cancel_undo_redo_on_input(&TerminalEvent::Key(key), &mut app),
+                    "repeats and releases preserve the prompt for a deliberate second press"
+                );
+                assert_eq!(
+                    app_action(key, &app),
+                    None,
+                    "only deliberate presses can arm or confirm undo/redo"
+                );
+            }
+            let effect = if action == Action::Undo {
+                Effect::Undo
+            } else {
+                Effect::Redo
+            };
+            assert_eq!(app.update(action), vec![effect], "a second deliberate press confirms");
+        }
+        assert_eq!(
+            app_action(
+                KeyEvent::new_with_kind(KeyCode::Char('u'), KeyModifiers::CONTROL, KeyEventKind::Repeat),
+                &app,
+            ),
+            Some(Action::HalfPageUp),
+            "holding Ctrl-u still navigates"
+        );
+    }
+
+    #[test]
+    fn undo_confirmation_cancels_on_input_that_bypasses_app_actions() {
+        let key = |code, modifiers| TerminalEvent::Key(KeyEvent::new(code, modifiers));
+        for (event, cancels) in [
+            (key(KeyCode::Char('p'), KeyModifiers::NONE), true),
+            (key(KeyCode::Char('t'), KeyModifiers::NONE), true),
+            (key(KeyCode::Char('~'), KeyModifiers::NONE), true),
+            (key(KeyCode::Char('u'), KeyModifiers::CONTROL), true),
+            (
+                TerminalEvent::Mouse(crossterm::event::MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    column: 0,
+                    row: 0,
+                    modifiers: KeyModifiers::NONE,
+                }),
+                true,
+            ),
+            (TerminalEvent::Paste("commit".into()), true),
+            (TerminalEvent::FocusLost, true),
+            (TerminalEvent::FocusGained, false),
+            (TerminalEvent::Resize(100, 30), false),
+            (
+                key(
+                    KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftShift),
+                    KeyModifiers::SHIFT,
+                ),
+                false,
+            ),
+        ] {
+            let mut app = App::new(2);
+            app.update(Action::Undo);
+            assert_eq!(cancel_undo_redo_on_input(&event, &mut app), cancels, "{event:?}");
+            assert_eq!(app.notice().is_none(), cancels, "cancellation removes the prompt");
+            assert_eq!(
+                app.update(Action::Undo),
+                if cancels { vec![] } else { vec![Effect::Undo] },
+                "{event:?} determines whether the next press rearms or confirms"
+            );
+        }
+
+        let mut app = App::new(2);
+        app.update(Action::Undo);
+        assert!(
+            !cancel_undo_redo_on_input(&key(KeyCode::Esc, KeyModifiers::NONE), &mut app),
+            "Escape stays armed until App can consume it locally"
+        );
+        assert!(!worktrunk_owns_input(&app, true, true));
+        assert!(app.update(Action::Cancel).is_empty());
+        assert!(
+            worktrunk_owns_input(&app, true, true),
+            "the following Escape can reach the picker"
+        );
     }
 
     #[test]

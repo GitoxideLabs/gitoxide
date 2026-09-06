@@ -622,6 +622,7 @@ pub(crate) struct App {
     notice: Option<Notice>,
     entry_selection: Option<String>,
     undo_position: Option<UndoPosition>,
+    undo_redo_confirmation: Option<Action>,
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
     pub(crate) actions_expanded: bool,
@@ -738,6 +739,7 @@ impl App {
             notice: None,
             entry_selection: None,
             undo_position: None,
+            undo_redo_confirmation: None,
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
             actions_expanded: false,
@@ -870,6 +872,7 @@ impl App {
     }
 
     fn leave_notice(&mut self, kind: NoticeKind, message: impl Into<String>) {
+        self.undo_redo_confirmation = None;
         self.notice = Some(Notice {
             kind,
             text: message.into(),
@@ -916,7 +919,14 @@ impl App {
         } else if self.stack_insert_base.is_some() {
             Some("stack-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
         } else {
-            None
+            self.undo_redo_confirmation.as_ref().map(|action| {
+                if *action == Action::Undo {
+                    "press u again to undo · Esc cancel"
+                } else {
+                    "press U again to redo · Esc cancel"
+                }
+                .into()
+            })
         };
         match (prompt, self.notice.as_ref()) {
             (Some(prompt), Some(notice)) if notice.text != prompt => Some(Notice {
@@ -950,6 +960,10 @@ impl App {
 
     pub(crate) fn dismiss_undo_position(&mut self) {
         self.undo_position = None;
+    }
+
+    pub(crate) fn cancel_undo_redo_confirmation(&mut self) -> bool {
+        self.undo_redo_confirmation.take().is_some()
     }
 
     pub(crate) fn configure_hidden_filter(&mut self, present: bool) {
@@ -1063,6 +1077,7 @@ impl App {
     }
 
     pub(crate) fn arm_rebase_conflict(&mut self, id: ObjectId) {
+        self.undo_redo_confirmation = None;
         self.materialize_compressed_selection();
         tracing::warn!(
             commit_id = %id,
@@ -1093,6 +1108,7 @@ impl App {
     }
 
     pub(crate) fn begin_conflict_resolution(&mut self) {
+        self.undo_redo_confirmation = None;
         self.pending_rebase_conflict = None;
         self.worktree_conflicted = true;
         self.changes_mode = Some(ChangesMode::Both);
@@ -1101,6 +1117,7 @@ impl App {
     }
 
     pub(crate) fn arm_rebase_continuation(&mut self) {
+        self.undo_redo_confirmation = None;
         self.materialize_compressed_selection();
         self.rebase_continuation_pending = true;
         self.ensure_visible();
@@ -1124,6 +1141,7 @@ impl App {
             return;
         }
         if conflicted {
+            self.undo_redo_confirmation = None;
             self.materialize_compressed_selection();
         }
         self.worktree_conflicted = conflicted;
@@ -1751,6 +1769,7 @@ impl App {
         self.changes_focus.is_none()
             && self.reachable_rows.is_none()
             && self.entry_selection.is_none()
+            && self.undo_redo_confirmation.is_none()
             && self.topological_navigation.is_none()
             && self.pending_rebase_conflict.is_none()
             && !self.rebase_continuation_pending
@@ -1774,6 +1793,7 @@ impl App {
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         self.notice = None;
+        let undo_redo_confirmation = self.undo_redo_confirmation.take();
         if !matches!(&action, Action::Undo | Action::Redo) {
             self.undo_position = None;
         }
@@ -1843,8 +1863,16 @@ impl App {
         }
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
-            Action::Undo if self.undo_redo_allowed() => return vec![Effect::Undo],
-            Action::Redo if self.undo_redo_allowed() => return vec![Effect::Redo],
+            Action::Undo | Action::Redo if self.undo_redo_allowed() => {
+                if undo_redo_confirmation.as_ref() == Some(&action) {
+                    return vec![if action == Action::Undo {
+                        Effect::Undo
+                    } else {
+                        Effect::Redo
+                    }];
+                }
+                self.undo_redo_confirmation = Some(action);
+            }
             Action::MoveUp if self.changes_focus.is_some() => self.move_changes(1, false),
             Action::MoveDown if self.changes_focus.is_some() => self.move_changes(1, true),
             Action::MoveUpBy(distance) if self.changes_focus.is_some() => self.move_changes(distance, false),
@@ -2384,6 +2412,7 @@ impl App {
                 }
             }
             Action::ForceQuit => return vec![Effect::Quit],
+            Action::Cancel if undo_redo_confirmation.is_some() => {}
             Action::Cancel if self.entry_selection.is_some() => self.entry_selection = None,
             Action::Cancel
                 if self.review_tip.is_some()
@@ -4408,9 +4437,12 @@ mod tests {
             Some("reword commit · 4 undo · 0 redo".into())
         );
 
+        assert!(app.update(Action::Undo).is_empty(), "the first press only arms undo");
+        assert_eq!(app.undo_position(), Some((4, 4, "reword commit")));
         assert_eq!(app.update(Action::Undo), vec![Effect::Undo]);
         assert_eq!(app.undo_position(), Some((4, 4, "reword commit")));
         app.leave_error("undo failed");
+        assert!(app.update(Action::Redo).is_empty(), "the first press only arms redo");
         assert_eq!(app.update(Action::Redo), vec![Effect::Redo]);
         assert_eq!(app.undo_position(), Some((4, 4, "reword commit")));
 
@@ -4425,13 +4457,93 @@ mod tests {
     }
 
     #[test]
-    fn mandatory_prompts_block_undo_without_dismissing_its_position() {
-        let mut app = App::new(2);
-        app.show_undo_position(1, 2, "reword commit");
-        app.arm_rebase_continuation();
+    fn undo_and_redo_require_two_matching_presses_for_each_operation() {
+        for (action, effect, prompt) in [
+            (Action::Undo, Effect::Undo, "press u again to undo · Esc cancel"),
+            (Action::Redo, Effect::Redo, "press U again to redo · Esc cancel"),
+        ] {
+            let mut app = App::new(2);
+            for _ in 0..2 {
+                assert!(app.update(action.clone()).is_empty(), "one press cannot change history");
+                assert_eq!(
+                    app.notice(),
+                    Some(Notice {
+                        kind: NoticeKind::Attention,
+                        text: prompt.into(),
+                    }),
+                    "the first press explains how to confirm or cancel"
+                );
+                assert_eq!(app.update(action.clone()), vec![effect.clone()]);
+                assert_eq!(app.notice(), None, "confirmation consumes the prompt");
+            }
+        }
 
-        assert!(app.update(Action::Undo).is_empty());
-        assert_eq!(app.undo_position(), Some((1, 2, "reword commit")));
+        let mut app = App::new(2);
+        for action in [Action::Undo, Action::Redo, Action::Undo, Action::Redo] {
+            assert!(app.update(action).is_empty(), "changing direction requires a new pair");
+        }
+        assert_eq!(app.update(Action::Redo), vec![Effect::Redo]);
+    }
+
+    #[test]
+    fn undo_confirmation_cancels_before_leaving_the_current_view() {
+        for focus in [None, Some(ChangePane::Tree)] {
+            let mut app = App::new(2);
+            app.changes_focus = focus;
+            app.update(Action::Undo);
+            assert!(!app.worktrunk_history_root(), "Escape must stay with the confirmation");
+            assert!(app.update(Action::Cancel).is_empty(), "Escape only cancels the prompt");
+            assert_eq!(app.state, State::Loading, "Escape does not cancel history loading");
+            assert_eq!(app.changes_focus, focus, "Escape does not leave the focused pane");
+            assert_eq!(app.notice(), None);
+            assert!(app.update(Action::Undo).is_empty(), "cancellation requires rearming");
+            app.update(Action::MoveDown);
+            assert_eq!(app.notice(), None);
+            assert!(
+                app.update(Action::Undo).is_empty(),
+                "navigation also cancels confirmation"
+            );
+            app.leave_error("background task failed");
+            assert!(app.update(Action::Undo).is_empty(), "new feedback cancels confirmation");
+        }
+    }
+
+    #[test]
+    fn mandatory_prompts_block_undo_without_dismissing_its_position() {
+        for (block, unblock) in [
+            (
+                App::arm_rebase_continuation as fn(&mut App),
+                App::clear_rebase_continuation as fn(&mut App),
+            ),
+            (|app| app.arm_rebase_conflict(id(1)), App::clear_rebase_conflict),
+            (
+                |app| app.set_worktree_conflicted(true),
+                |app| app.set_worktree_conflicted(false),
+            ),
+            (App::begin_conflict_resolution, |app| app.set_worktree_conflicted(false)),
+        ] {
+            let mut app = App::new(2);
+            app.show_undo_position(1, 2, "reword commit");
+            app.update(Action::Undo);
+            block(&mut app);
+
+            assert!(app.update(Action::Undo).is_empty());
+            assert!(
+                app.update(Action::Undo).is_empty(),
+                "a second press cannot bypass a conflict"
+            );
+            assert!(app.update(Action::Redo).is_empty());
+            assert!(
+                app.update(Action::Redo).is_empty(),
+                "redo cannot bypass a conflict either"
+            );
+            assert_eq!(app.undo_position(), Some((1, 2, "reword commit")));
+            unblock(&mut app);
+            assert!(
+                app.update(Action::Undo).is_empty(),
+                "the blocked confirmation was discarded"
+            );
+        }
     }
 
     #[test]

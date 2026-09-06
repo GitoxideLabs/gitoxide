@@ -538,6 +538,16 @@ without trading responsiveness for metadata that is not visible.
 | `s` | Verify signed, unverified commits currently visible on screen. |
 | `@` | Time-travel to the selected commit, or return through its tix pin. Terminals reporting the base key as `Shift-2` are also accepted. |
 | `x` | Select the next visible commit with the same change ID, wrapping at the end. |
+| `u u` / `U U` | Undo / redo one operation. The first press shows an informational confirmation prompt; the second matching press performs the operation. |
+
+Each undo or redo requires a new pair of matching key presses. Switching between
+`u` and `U` arms the new direction. Escape cancels the confirmation before leaving
+the current pane or returning to the worktree picker. Other keys, mouse input,
+paste, or losing terminal focus cancel it as well; modifier-only keys and resize
+events preserve it. Key repeat and release events never arm or confirm undo/redo.
+New feedback or a conflict also cancels a pending confirmation.
+Existing conflict and review restrictions still apply, and `a u` remains rebase
+update while `Ctrl-u` remains half-page navigation.
 
 Interactive history replaces known conventional-commit types with bold, colored
 symbols:
