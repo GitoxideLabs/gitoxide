@@ -435,26 +435,6 @@ pub(crate) mod convert_to_diffable {
 
     #[test]
     fn worktree_filter_skips_null_id_lookups() -> crate::Result {
-        struct NonNullObjects(crate::util::ObjectDb);
-
-        impl gix_object::Find for NonNullObjects {
-            fn try_find<'a>(
-                &self,
-                id: &gix_hash::oid,
-                buffer: &'a mut Vec<u8>,
-            ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
-                assert!(!id.is_null(), "null IDs must not be looked up in the object database");
-                gix_object::Find::try_find(&self.0, id, buffer)
-            }
-        }
-
-        impl gix_object::FindHeader for NonNullObjects {
-            fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>, gix_object::find::Error> {
-                assert!(!id.is_null(), "null IDs must not be looked up in the object database");
-                gix_object::FindHeader::try_header(&self.0, id)
-            }
-        }
-
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         std::fs::write(tmp.path().join("a"), "worktree\r\n")?;
         let mut filter = gix_diff::blob::Pipeline::new(
@@ -475,21 +455,26 @@ pub(crate) mod convert_to_diffable {
             vec![],
             default_options(),
         );
-        let objects = NonNullObjects(object_db());
-        let index_id = insert(&objects.0, "index\r\n")?;
+        let objects = object_db();
+        let index_id = insert(&objects, "index\r\n")?;
         let mut buf = Vec::new();
         for mode in [pipeline::Mode::ToGit, pipeline::Mode::ToGitUnlessBinaryToTextIsPresent] {
             for (id, expected) in [
                 (crate::fixture_hash_kind().null(), "worktree\n"),
                 (index_id, "worktree\r\n"),
             ] {
+                let objects: &dyn gix_object::FindObjectOrHeader = if id.is_null() {
+                    &gix_object::find::Never::panic_on_access()
+                } else {
+                    &objects
+                };
                 let out = filter.convert_to_diffable(
                     &id,
                     EntryKind::Blob,
                     "a".into(),
                     ResourceKind::NewOrDestination,
                     &mut |_, _| {},
-                    &objects,
+                    objects,
                     mode,
                     &mut buf,
                 )?;

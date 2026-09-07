@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::atomic::AtomicBool};
 
 use gix_hash::ObjectId;
-use gix_object::{Find, FindHeader, Write, WriteTo};
+use gix_object::{Exists, Find, FindHeader, Write, WriteTo};
 
 mod commit;
 mod encode;
@@ -94,8 +94,49 @@ fn never_writes_to_nowhere_and_finds_nothing() -> Result {
         db.try_header(&expected)?.is_none(),
         "discarded writes must not make headers readable"
     );
+    assert!(!db.exists(&expected), "discarded writes must not exist");
 
     Ok(())
+}
+
+#[test]
+fn never_fail_always_panics_on_all_object_access() {
+    let assert_panics = |operation: fn(gix_object::find::PanicAlways, ObjectId)| {
+        assert!(
+            std::panic::catch_unwind(|| {
+                operation(
+                    gix_object::find::Never::panic_on_access(),
+                    ObjectId::empty_blob(gix_hash::Kind::default()),
+                );
+            })
+            .is_err(),
+            "every object-access operation must panic"
+        );
+    };
+    assert_panics(|db, blob_id| {
+        let _ = db.try_find(&blob_id, &mut Vec::new());
+    });
+    assert_panics(|db, blob_id| {
+        let _ = db.try_header(&blob_id);
+    });
+    assert_panics(|db, blob_id| {
+        db.exists(&blob_id);
+    });
+    assert_panics(|db, _| {
+        let _ = db.write(&gix_object::Tree::default());
+    });
+    assert_panics(|db, _| {
+        let _ = db.write_buf(gix_object::Kind::Blob, b"");
+    });
+    assert_panics(|db, blob_id| {
+        let _ = db.write_buf_with_known_id(gix_object::Kind::Blob, b"", blob_id);
+    });
+    assert_panics(|db, _| {
+        let _ = db.write_stream(gix_object::Kind::Blob, 0, &mut std::io::empty());
+    });
+    assert_panics(|db, blob_id| {
+        let _ = db.write_stream_with_known_id(gix_object::Kind::Blob, 0, &mut std::io::empty(), blob_id);
+    });
 }
 
 use gix_testtools::Result;

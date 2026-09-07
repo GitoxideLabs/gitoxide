@@ -310,24 +310,6 @@ fn non_existing() -> crate::Result {
 
 #[test]
 fn worktree_filter() -> crate::Result {
-    struct NoObjectLookups;
-
-    impl gix_object::Find for NoObjectLookups {
-        fn try_find<'a>(
-            &self,
-            _id: &gix_hash::oid,
-            _buffer: &'a mut Vec<u8>,
-        ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
-            panic!("null-ID worktree resources must not look up objects");
-        }
-    }
-
-    impl gix_object::FindHeader for NoObjectLookups {
-        fn try_header(&self, _id: &gix_hash::oid) -> Result<Option<gix_object::Header>, gix_object::find::Error> {
-            panic!("null-ID worktree resources must not look up object headers");
-        }
-    }
-
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let filter = gix_filter::Pipeline::new(
         Default::default(),
@@ -361,7 +343,7 @@ fn worktree_filter() -> crate::Result {
             a_name.into(),
             ResourceKind::CommonAncestorOrBase,
             &mut |_, _| {},
-            &NoObjectLookups,
+            &gix_object::find::Never::panic_on_access(),
             mode,
             &mut buf,
         )?;
