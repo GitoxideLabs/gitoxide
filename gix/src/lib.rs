@@ -464,6 +464,8 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
 /// just like [`config()`]. Disabled sources and sources without an available path return an error.
 /// Relative paths are joined to the current directory when called.
 ///
+/// With a repository, use [`Repository::config_path()`] to also resolve local and worktree configuration paths.
+///
 /// Use this to inspect, prepare or load the file before calling [`config_mut()`]. The file and its parent directories
 /// do not have to exist. No configuration transaction is opened, no lock is acquired, and no directories are created.
 /// Discovering the Git installation path, or the system path on Windows, may invoke Git.

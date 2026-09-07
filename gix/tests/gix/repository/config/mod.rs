@@ -5,6 +5,35 @@ mod identity;
 mod remote;
 
 #[test]
+fn config_path_for_repository_sources_matches_git() -> crate::Result {
+    use gix::config::Source;
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_worktree_repo.sh")?;
+    for name in ["repo", "wt-a", "natively-bare-repo", "worktree-of-natively-bare-repo"] {
+        let repo = gix::open_opts(fixture.join(name), gix::open::Options::isolated())?;
+        for (source, filename) in [(Source::Local, "config"), (Source::Worktree, "config.worktree")] {
+            let baseline = gix_testtools::git(
+                repo.git_dir(),
+                &format!("rev-parse --path-format=absolute --git-path {filename}"),
+            )?;
+            let path = repo.config_path(source)?;
+            assert_eq!(
+                gix::path::realpath(&path)?,
+                gix::path::realpath(baseline.trim())?,
+                "{name}: local configuration is shared, while worktree configuration belongs to each Git directory"
+            );
+            if source == Source::Worktree {
+                assert!(
+                    !path.exists(),
+                    "the worktree path is available without creating a file or enabling extensions.worktreeConfig"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn big_file_threshold() -> crate::Result {
     let repo = repo("with-hasconfig");
     assert_eq!(
