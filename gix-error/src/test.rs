@@ -37,7 +37,7 @@ impl std::fmt::Debug for TestError {
             struct DebugFrame<'a>(&'a crate::Frame);
             impl std::fmt::Debug for DebugFrame<'_> {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    crate::exn::debug_frame(self.0, f)
+                    crate::error::debug_frame(self.0, f)
                 }
             }
             write!(f, "{:?}", DebugFrame(self.0.inner.frame()))

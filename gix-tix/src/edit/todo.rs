@@ -705,7 +705,7 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
             "head-ref" => {
                 let encoded = value.as_bytes().as_bstr();
                 let (name, consumed) = gix::quote::ansi_c::undo(encoded)
-                    .map_err(gix::Exn::into_error)
+                    .map_err(gix::Error::from)
                     .context("could not unquote the recorded HEAD ref")?;
                 if !encoded[consumed..].trim().is_empty() {
                     anyhow::bail!("the recorded HEAD ref has trailing data");
@@ -729,7 +729,7 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
                     .unwrap_or((false, value));
                 let encoded_name = name.as_bytes().as_bstr();
                 let (name, consumed) = gix::quote::ansi_c::undo(encoded_name)
-                    .map_err(gix::Exn::into_error)
+                    .map_err(gix::Error::from)
                     .context("could not unquote a captured ref name")?;
                 if !encoded_name[consumed..].trim().is_empty() {
                     anyhow::bail!("a captured ref name has trailing data");
@@ -1109,7 +1109,7 @@ fn parse_ref_line(line: &str) -> Result<Vec<(bool, BString)>> {
         let (marked, item) = item.strip_prefix('@').map_or((false, item), |item| (true, item));
         let encoded = item.as_bytes().as_bstr();
         let (name, consumed) = gix::quote::ansi_c::undo(encoded)
-            .map_err(gix::Exn::into_error)
+            .map_err(gix::Error::from)
             .context("could not unquote a reference name")?;
         if !encoded[consumed..].trim().is_empty() {
             anyhow::bail!("a reference name has trailing data");

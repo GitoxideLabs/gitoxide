@@ -40,9 +40,9 @@ impl<'repo> Spec<'repo> {
                 if let Some(delegate_err) = delegate.into_delayed_errors() {
                     // Keep the parser's complete graph as context and the delegate diagnostic as the primary cause.
                     // Upstream exception frames cannot be detached and reparented.
-                    Err(delegate_err.raise(err.into_error()).into_error())
+                    Err(delegate_err.raise(gix_error::Error::from(err)).into())
                 } else {
-                    Err(err.into_error())
+                    Err(gix_error::Error::from(err))
                 }
             }
             Ok(()) => delegate.into_rev_spec(),

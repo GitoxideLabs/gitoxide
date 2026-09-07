@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, Exn, bail, message};
+use gix_error::{Exn, bail, message};
 use gix_object::bstr::{BStr, BString};
 use gix_revision::{
     spec,
@@ -106,7 +106,7 @@ impl delegate::Revision for Recorder {
     ) -> Result<(), Exn> {
         self.called(Call::DisambiguatePrefix);
         if self.opts.reject_prefix {
-            bail!(message!("disambiguate_prefix rejected").raise_erased());
+            bail!(message!("disambiguate_prefix rejected"));
         }
         set_val("disambiguate_prefix", &mut self.prefix, input)?;
         if let Some(hint) = hint {
@@ -188,7 +188,7 @@ impl delegate::Kind for Recorder {
     fn kind(&mut self, kind: spec::Kind) -> Result<(), Exn> {
         self.called(Call::Kind);
         if self.opts.reject_kind {
-            bail!(message!("kind() was rejected").raise_erased());
+            bail!(message!("kind() was rejected"));
         }
         if self.kind.is_none() {
             self.kind = Some(kind);

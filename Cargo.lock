@@ -1554,7 +1554,6 @@ dependencies = [
  "futures-lite",
  "gix",
  "gix-archive",
- "gix-error",
  "gix-fsck",
  "gix-pack",
  "gix-status",
@@ -1927,7 +1926,6 @@ dependencies = [
  "bstr",
  "document-features",
  "exn",
- "gix-error",
  "insta",
 ]
 

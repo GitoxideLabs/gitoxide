@@ -5,7 +5,7 @@ use crate::{
     spec::parse::{Delegate, Error, delegate, delegate::SiblingBranch},
 };
 use bstr::{BStr, BString, ByteSlice, ByteVec};
-use gix_error::{ErrorExt, Exn, ResultExt};
+use gix_error::{ErrorExt, Exn, IteratorExt, ResultExt};
 
 /// Parse a git [`revspec`](https://git-scm.com/docs/git-rev-parse#_specifying_revisions) and call `delegate` for each token
 /// successfully parsed.
@@ -493,7 +493,11 @@ where
                     }
                 })
             })
-            .ok_or_else(|| Error::new_with_input("couldn't parse revision", input).raise_all(errors))?;
+            .ok_or_else(|| {
+                errors
+                    .into_iter()
+                    .raise(Error::new_with_input("couldn't parse revision", input))
+            })?;
     }
 
     input = {

@@ -33,7 +33,9 @@ pub(crate) mod function {
         fn noop_processor(_commit: &gix::commitgraph::file::Commit<'_>) -> std::result::Result<(), std::fmt::Error> {
             Ok(())
         }
-        let stats = g.verify_integrity(noop_processor)?;
+        let stats = g
+            .verify_integrity(noop_processor)
+            .map_err(gix::error::ChainedError::from)?;
 
         #[cfg_attr(not(feature = "serde"), allow(clippy::single_match))]
         match output_statistics {

@@ -83,7 +83,7 @@ impl ErrorHandle {
     }
 
     pub(crate) fn error(&self) -> &(dyn std::error::Error + 'static) {
-        let mut error: &(dyn std::error::Error + 'static) = crate::exn::frame_error(self.frame());
+        let mut error: &(dyn std::error::Error + 'static) = crate::error::frame_error(self.frame());
         for _ in 0..self.source_depth {
             error = error
                 .source()
@@ -97,7 +97,7 @@ impl ErrorHandle {
     }
 
     pub(crate) fn children(&self) -> Vec<Self> {
-        use crate::FrameExt;
+        use crate::error::explicit_children;
         let mut children = Vec::new();
         if !self.error().is::<crate::Error>() && self.error().source().is_some() {
             children.push(Self {
@@ -108,7 +108,7 @@ impl ErrorHandle {
         }
         if self.source_depth == 0 {
             let frame = self.frame();
-            let explicit = frame.explicit_children();
+            let explicit = explicit_children(frame);
             let offset = frame.children().len() - explicit.len();
             for index in offset..frame.children().len() {
                 let mut path = self.frame_path.clone();
@@ -126,5 +126,38 @@ impl ErrorHandle {
     #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
     pub(crate) fn is_native_source(&self) -> bool {
         self.source_depth > 0
+    }
+}
+
+impl<E: std::error::Error + Send + Sync + 'static + ?Sized> From<crate::Exn<E>> for ChainedError {
+    fn from(error: crate::Exn<E>) -> Self {
+        Self::from_frame(crate::error::into_frame(error))
+    }
+}
+
+impl ChainedError {
+    pub(crate) fn from_frame(root: Box<crate::Frame>) -> Self {
+        use crate::error::{iter_error_nodes, probable_cause_node};
+        use std::collections::VecDeque;
+        let probable_cause =
+            probable_cause_node(&root).and_then(|cause| iter_error_nodes(&root).position(|node| node.same(cause)));
+        let mut queue = VecDeque::from([(ErrorHandle::new(root.into()), None)]);
+        let mut flattened = Vec::new();
+        while let Some((error, parent)) = queue.pop_front() {
+            let index = flattened.len();
+            queue.extend(error.children().into_iter().map(|child| (child, Some(index))));
+            flattened.push((error, parent));
+        }
+        let mut source = None;
+        for (index, (error, parent)) in flattened.into_iter().enumerate().rev() {
+            source = Some(Box::new(ChainedError {
+                location: error.location(),
+                err: error,
+                is_probable_cause: probable_cause.map_or(index == 0, |cause| cause == index),
+                logical_parent: parent,
+                source,
+            }));
+        }
+        *source.expect("an exception always contains a root frame")
     }
 }

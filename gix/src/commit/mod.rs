@@ -71,7 +71,6 @@ impl From<std::convert::Infallible> for Error {
 ///
 #[cfg(feature = "revision")]
 pub mod describe {
-    use gix_error::Exn;
     use gix_hash::ObjectId;
     use gix_hashtable::HashMap;
     use std::borrow::Cow;
@@ -283,7 +282,7 @@ pub mod describe {
                     max_candidates: self.max_candidates,
                 },
             )
-            .map_err(Exn::into_error)?;
+            .map_err(gix_error::Error::from)?;
 
             Ok(outcome.map(|outcome| Resolution {
                 outcome,

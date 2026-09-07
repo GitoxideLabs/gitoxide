@@ -3,7 +3,7 @@ use crate::{
     Repository,
     ext::{ObjectIdExt, ReferenceExt},
 };
-use gix_error::{ErrorExt, Exn, ResultExt, message};
+use gix_error::{ErrorExt, Exn, IteratorExt, message};
 use gix_hash::ObjectId;
 use gix_revision::spec::{parse, parse::delegate};
 use smallvec::SmallVec;
@@ -37,17 +37,25 @@ impl<'repo> Delegate<'repo> {
             .filter_map(|(a, b)| a.take().filter(|candidates| candidates.len() > 1).zip(b))
             .map(|(candidates, prefix)| error::ambiguous(candidates, prefix, repo))
             .rev()
-            .map(|err| err.raise_erased())
+            .map(|err| err.raise().into())
             .collect();
 
         match (ambiguous_errors.pop(), ambiguous_errors.pop()) {
             (Some(one), None) => Some(one),
-            (Some(one), Some(two)) => Some(Exn::raise_all([one, two], message("Both objects were ambiguous")).erased()),
+            (Some(one), Some(two)) => Some(
+                [one, two]
+                    .into_iter()
+                    .raise(message("Both objects were ambiguous"))
+                    .into(),
+            ),
             _ => (!delayed_errors.is_empty()).then(|| {
                 if delayed_errors.len() == 1 {
                     delayed_errors.pop().expect("it's exactly one")
                 } else {
-                    Exn::raise_all(delayed_errors, message("one or more delayed errors")).erased()
+                    delayed_errors
+                        .into_iter()
+                        .raise(message("one or more delayed errors"))
+                        .into()
                 }
             }),
         }
@@ -74,8 +82,8 @@ impl<'repo> Delegate<'repo> {
                         _ => {
                             let err =
                                 error::ambiguous(candidates, prefix.expect("set when obtaining candidates"), repo)
-                                    .raise_erased();
-                            return Err(err.into_error());
+                                    .raise();
+                            return Err(gix_error::Error::from(err));
                         }
                     },
                 }
@@ -90,7 +98,7 @@ impl<'repo> Delegate<'repo> {
             pub fn malformed() -> gix_error::Error {
                 message!("The rev-spec is malformed and misses a ref name")
                     .raise()
-                    .into_error()
+                    .into()
             }
             use gix_revision::spec::Kind::*;
             Ok(match kind.unwrap_or_default() {
@@ -159,7 +167,7 @@ impl Delegate<'_> {
 
     fn disambiguate_objects_by_fallback_hint_delay_errors(&mut self, hint: Option<ObjectKindHint>) {
         fn require_object_kind(repo: &Repository, obj: &gix_hash::oid, kind: gix_object::Kind) -> Result<(), Exn> {
-            let obj = repo.find_object(obj).or_erased()?;
+            let obj = repo.find_object(obj)?;
             if obj.kind == kind {
                 Ok(())
             } else {
@@ -168,7 +176,8 @@ impl Delegate<'_> {
                     actual = obj.kind,
                     oid = obj.id.attach(repo).shorten_or_id(),
                 )
-                .raise_erased())
+                .raise()
+                .into())
             }
         }
 
@@ -232,7 +241,7 @@ impl Delegate<'_> {
                                         "Could not peel '{}' to obtain its target",
                                         ref_.name.as_bstr()
                                     ))
-                                    .erased(),
+                                    .into(),
                             );
                             None
                         }
@@ -254,8 +263,8 @@ impl Delegate<'_> {
 }
 
 fn peel(repo: &Repository, obj: &gix_hash::oid, kind: gix_object::Kind) -> Result<ObjectId, Exn> {
-    let mut obj = repo.find_object(obj).or_erased()?;
-    obj = obj.peel_to_kind(kind).or_erased()?;
+    let mut obj = repo.find_object(obj)?;
+    obj = obj.peel_to_kind(kind)?;
     debug_assert_eq!(obj.kind, kind, "bug in Object::peel_to_kind() which didn't deliver");
     Ok(obj.id)
 }

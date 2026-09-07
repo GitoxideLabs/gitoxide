@@ -784,7 +784,7 @@ fn mutations_reject_mixed_hash_kinds() -> gix_testtools::Result {
 
     let err =
         one_shot::replace(root, sha256, sha1, &objects).expect_err("the annotated object has the wrong hash kind");
-    let err = err.into_error();
+    let err = gix_error::Error::from(err);
     assert!(
         err.is_validation(),
         "an annotated-object hash mismatch is a validation error"
@@ -795,7 +795,7 @@ fn mutations_reject_mixed_hash_kinds() -> gix_testtools::Result {
         "replace reports an annotated-object hash mismatch"
     );
     let err = one_shot::replace(root, sha1, sha256, &objects).expect_err("the note has the wrong hash kind");
-    let err = err.into_error();
+    let err = gix_error::Error::from(err);
     assert!(err.is_validation(), "a note hash mismatch is a validation error");
     assert_eq!(
         err.probable_cause().to_string(),
@@ -803,7 +803,7 @@ fn mutations_reject_mixed_hash_kinds() -> gix_testtools::Result {
         "replace reports a note hash mismatch"
     );
     let err = one_shot::remove(root, sha256, &objects).expect_err("the annotated object has the wrong hash kind");
-    let err = err.into_error();
+    let err = gix_error::Error::from(err);
     assert!(
         err.is_validation(),
         "an annotated-object hash mismatch is a validation error"
@@ -876,7 +876,7 @@ fn mutations_reject_duplicate_mappings_across_layouts() -> gix_testtools::Result
 
     let err = one_shot::replace(root, other, flat_note, &objects)
         .expect_err("ambiguous existing mappings cannot be rewritten losslessly");
-    let err = err.into_error();
+    let err = gix_error::Error::from(err);
     assert!(err.is_corrupted(), "duplicate mappings indicate a corrupt notes tree");
     assert_eq!(
         err.probable_cause().to_string(),

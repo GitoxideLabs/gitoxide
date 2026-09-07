@@ -446,7 +446,7 @@ fn trim_cr(line: &[u8]) -> &[u8] {
 fn date(value: &[u8], field: &str) -> Result<gix::date::Time> {
     let value = std::str::from_utf8(value).with_context(|| format!("{field} date is not UTF-8"))?;
     gix::date::parse(value, None)
-        .map_err(|err| anyhow::Error::new(err.into_error()))
+        .map_err(|err| anyhow::Error::new(gix::Error::from(err)))
         .with_context(|| format!("could not parse {field} date"))
 }
 

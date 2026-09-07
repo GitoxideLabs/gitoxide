@@ -42,17 +42,19 @@ uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns bel
 - **Formatted messages**: `gix_error::message!("failed to read {path}")`
 - **Wrapping callee errors with context**: `.or_raise(|| message("context about what failed"))?`
 - **Standalone error (no callee)**: `Err(message("something went wrong").raise())`
-- **Wrapping an `impl Error` with context**: `err.and_raise(message("context"))`
+- **Wrapping an `impl Error` with context**: `err.raise().raise(message("context"))`
 - **Closure/callback bounds**: use `Result<T, Exn>` (bare), not `Exn<Message>`;
   inside the function, convert with `.or_raise(|| message("..."))?`;
-  inside the closure, convert typed to bare with `.or_erased()`
+  inside the closure, use `?` or `.map_err(Into::into)` to convert typed exceptions to bare `Exn`
 - **`Exn<E>` does NOT implement `std::error::Error`** — this is by design.
-  - To convert: use `.into_error()` to get `gix_error::Error` (which does implement `std::error::Error`)
-  - Example: `std::io::Error::other(exn.into_error())`
-- **In tests** returning `gix_testtools::Result` (= `Result<(), Box<dyn Error>>`), `Exn` can't be used
-  with `?` directly — use `.map_err(|e| e.into_error())?`
+  - To convert: use `gix_error::Error::from(exn)` to get `gix_error::Error` (which does implement `std::error::Error`)
+  - Example: `std::io::Error::other(gix_error::Error::from(exn))`
+- **At standard-error boundaries**, use `.map_err(gix_error::Error::from)?` to retain gitoxide diagnostics.
+  Use `.map_err(gix_error::ChainedError::from)?` when an `anyhow` source-chain walker must visit every branch.
+- `Exn`, `ErrorExt`, `ResultExt`, `OptionExt`, `IteratorExt`, `bail!`, and `ensure!` are direct upstream re-exports.
+- Aggregate multiple causes with `errors.into_iter().raise(parent)` and `IteratorExt`.
 - **Common imports**: `use gix_error::{message, ErrorExt, ResultExt};`
-- See `gix-error/src/lib.rs` module docs for a full migration guide from `thiserror`
+- See `gix-error/src/lib.rs` module docs for exception and reporting boundaries
 
 ### Commit Messages
 

@@ -44,7 +44,7 @@ impl Stream {
                 if err.kind() == ErrorKind::UnexpectedEof {
                     return Ok(None);
                 }
-                Err(err.and_raise(gix_error::message("Could not read stream entry")))
+                Err(err.raise().raise(gix_error::message("Could not read stream entry")))
             }
         }
     }
@@ -124,7 +124,7 @@ impl std::io::Read for Entry<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let buf_len = buf.len();
         if let Some(err) = self.parent.err.lock().take() {
-            return Err(std::io::Error::other(err.into_error()));
+            return Err(std::io::Error::other(gix_error::Error::from(err)));
         }
         let bytes_read = match self.remaining.as_mut() {
             None => {

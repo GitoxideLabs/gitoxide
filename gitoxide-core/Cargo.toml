@@ -55,7 +55,6 @@ gix-transport-configuration-only = { package = "gix-transport", version = "^0.59
 gix-archive-for-configuration-only = { package = "gix-archive", version = "^0.36.1", path = "../gix-archive", optional = true, features = ["tar", "tar_gz"] }
 gix-status = { version = "^0.34.1", path = "../gix-status" }
 gix-fsck = { version = "^0.25.1", path = "../gix-fsck" }
-gix-error-for-configuration-only = { package = "gix-error", version = "^0.3.2", path = "../gix-error", features = ["anyhow"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 anyhow = "1.0.102"
 thiserror = "2.0.18"
@@ -123,8 +122,6 @@ ignored = [
     "futures-lite",
     # Configuration-only dependency selected by the `archive` feature.
     "gix-archive-for-configuration-only",
-    # Configuration-only dependency used to constrain global `gix-error` feature resolution.
-    "gix-error-for-configuration-only",
     # Configuration-only dependency used to constrain global `gix-pack` feature resolution.
     "gix-pack-for-configuration-only",
     # Configuration-only dependency selected by `async-client` feature wiring.

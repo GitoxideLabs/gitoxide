@@ -39,9 +39,10 @@ impl crate::Repository {
             .may_use_commit_graph()?
             .then(|| gix_commitgraph::at(self.objects.store_ref().path().join("info")))
             .transpose()
+            .map_err(Error::from)
             .or_else(|err| match err.downcast_any_ref::<std::io::Error>() {
                 Some(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                _ => Err(err.into_error()),
+                _ => Err(err),
             })?)
     }
 }

@@ -65,7 +65,10 @@ where
                         *slot = Some(err);
                     } else {
                         drop(slot);
-                        write.channel.send(Err(std::io::Error::other(err.into_error()))).ok();
+                        write
+                            .channel
+                            .send(Err(std::io::Error::other(gix_error::Error::from(err))))
+                            .ok();
                     }
                 }
             }

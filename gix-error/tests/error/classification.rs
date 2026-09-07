@@ -11,7 +11,9 @@ fn classifications_preserve_order_duplicates_and_sources() {
             .expect_err("the maximum capacity cannot be reserved")
     }
     let err = Error::from(
-        RetryableError::new(allocation_failure()).and_raise(CorruptionError::new("corrupt input caused allocation")),
+        RetryableError::new(allocation_failure())
+            .raise()
+            .raise(CorruptionError::new("corrupt input caused allocation")),
     );
     let classifications = err.classify().collect::<Vec<_>>();
 

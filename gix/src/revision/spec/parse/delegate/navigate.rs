@@ -26,7 +26,9 @@ impl delegate::Navigate for Delegate<'_> {
         let objs = match self.objs[self.idx].as_mut() {
             Some(objs) => objs,
             None => {
-                bail!(message("Tried to navigate the commit-graph without providing an anchor first").raise_erased())
+                bail!(message(
+                    "Tried to navigate the commit-graph without providing an anchor first"
+                ))
             }
         };
         let repo = self.repo;
@@ -37,8 +39,8 @@ impl delegate::Navigate for Delegate<'_> {
                     match self
                         .repo
                         .find_object(*obj)
-                        .or_erased()
-                        .and_then(|obj| obj.peel_to_commit().or_erased())
+                        .map_err(|err| err.raise().into())
+                        .and_then(|obj| obj.peel_to_commit().map_err(|err| err.raise().into()))
                     {
                         Ok(commit) => match commit.parent_ids().nth(num.saturating_sub(1)) {
                             Some(id) => replacements.push((*obj, id.detach())),
@@ -50,7 +52,8 @@ impl delegate::Navigate for Delegate<'_> {
                                     desired = num,
                                     available = commit.parent_ids().count(),
                                 )
-                                .raise_erased(),
+                                .raise()
+                                .into(),
                             )),
                         },
                         Err(err) => errors.push((*obj, err)),
@@ -84,7 +87,7 @@ impl delegate::Navigate for Delegate<'_> {
                                         .expect("cannot fail without sorting")
                                         .skip(1)
                                         .count()
-                                ).raise_erased()
+                                ).raise().into()
                         )),
                     }
                 }
@@ -102,14 +105,14 @@ impl delegate::Navigate for Delegate<'_> {
         let mut errors = Vec::<(ObjectId, Exn)>::new();
         let objs = self.objs[self.idx]
             .as_mut()
-            .ok_or_raise_erased(|| message!("Couldn't get object at internal index {idx}", idx = self.idx))?;
+            .ok_or_raise(|| message!("Couldn't get object at internal index {idx}", idx = self.idx))?;
         let repo = self.repo;
 
         match kind {
             PeelTo::ValidObject => {
                 for obj in objs.iter() {
                     if let Err(err) = repo.find_object(*obj) {
-                        errors.push((*obj, err.raise_erased()));
+                        errors.push((*obj, err.raise().into()));
                     }
                 }
             }
@@ -130,18 +133,15 @@ impl delegate::Navigate for Delegate<'_> {
                     if path.is_empty() {
                         return Ok::<_, Exn>((tree_id, gix_object::tree::EntryKind::Tree.into()));
                     }
-                    let mut tree = repo.find_object(tree_id).or_erased()?.into_tree();
-                    let entry = tree
-                        .peel_to_entry_by_path(gix_path::from_bstr(path))
-                        .or_erased()?
-                        .ok_or_raise_erased(|| {
-                            message!(
-                                "Could not find path {path:?} in tree {tree} of parent object {object}",
-                                path = path,
-                                object = obj.attach(repo).shorten_or_id(),
-                                tree = tree_id.attach(repo).shorten_or_id(),
-                            )
-                        })?;
+                    let mut tree = repo.find_object(tree_id)?.into_tree();
+                    let entry = tree.peel_to_entry_by_path(gix_path::from_bstr(path))?.ok_or_raise(|| {
+                        message!(
+                            "Could not find path {path:?} in tree {tree} of parent object {object}",
+                            path = path,
+                            object = obj.attach(repo).shorten_or_id(),
+                            tree = tree_id.attach(repo).shorten_or_id(),
+                        )
+                    })?;
                     Ok((entry.object_id(), entry.mode()))
                 };
                 for obj in objs.iter() {
@@ -161,7 +161,7 @@ impl delegate::Navigate for Delegate<'_> {
                 for oid in objs.iter() {
                     match oid.attach(repo).object().and_then(Object::peel_tags_to_end) {
                         Ok(obj) => replacements.push((*oid, obj.id)),
-                        Err(err) => errors.push((*oid, err.raise_erased())),
+                        Err(err) => errors.push((*oid, err.raise().into())),
                     }
                 }
             }
@@ -189,7 +189,7 @@ impl delegate::Navigate for Delegate<'_> {
                 }
             }
             Err(err) => {
-                bail!(err.raise_erased());
+                bail!(err);
             }
         };
 
@@ -215,11 +215,11 @@ impl delegate::Navigate for Delegate<'_> {
                             let mut matched = false;
                             let mut count = 0;
                             let commits = iter.map(|res| {
-                                res.map_err(|err| err.raise_erased()).and_then(|commit| {
+                                res.map_err(|err| err.raise().into()).and_then(|commit| {
                                     commit
                                         .id()
                                         .object()
-                                        .map_err(|err| err.raise_erased())
+                                        .map_err(|err| err.raise().into())
                                         .map(Object::into_commit)
                                 })
                             });
@@ -250,39 +250,39 @@ impl delegate::Navigate for Delegate<'_> {
                                             "text"
                                         }
                                     )
-                                    .raise_erased(),
+                                    .raise()
+                                    .into(),
                                 ));
                             }
                         }
-                        Err(err) => errors.push((*oid, err.raise_erased())),
+                        Err(err) => errors.push((*oid, err.raise().into())),
                     }
                 }
                 handle_errors_and_replacements(&mut self.delayed_errors, objs, errors, &mut replacements)
             }
             None => {
-                let references = self.repo.references().or_erased()?;
-                let references = references.all().or_erased()?;
+                let references = self.repo.references()?;
+                let references = references.all()?;
                 let iter = self
                     .repo
                     .rev_walk(
                         references
                             .peeled()
-                            .or_raise_erased(|| message("Couldn't configure iterator for peeling"))?
+                            .or_raise(|| message("Couldn't configure iterator for peeling"))?
                             .filter_map(Result::ok)
                             .filter(|r| r.id().header().ok().is_some_and(|obj| obj.kind().is_commit()))
                             .filter_map(|r| r.detach().peeled),
                     )
                     .sorting(crate::revision::walk::Sorting::ByCommitTime(Default::default()))
-                    .all()
-                    .or_erased()?;
+                    .all()?;
                 let mut matched = false;
                 let mut count = 0;
                 let commits = iter.map(|res| {
-                    res.map_err(|err| err.raise_erased()).and_then(|commit| {
+                    res.map_err(|err| err.raise().into()).and_then(|commit| {
                         commit
                             .id()
                             .object()
-                            .map_err(|err| err.raise_erased())
+                            .map_err(|err| err.raise().into())
                             .map(Object::into_commit)
                     })
                 });
@@ -315,7 +315,8 @@ impl delegate::Navigate for Delegate<'_> {
                             "text"
                         }
                     )
-                    .raise_erased())
+                    .raise()
+                    .into())
                 }
             }
         }
@@ -334,7 +335,7 @@ impl delegate::Navigate for Delegate<'_> {
         self.unset_disambiguate_call();
         let path = to_repo_relative_path(self.repo, path)?;
         let path = path.as_ref();
-        let index = self.repo.index().or_erased()?;
+        let index = self.repo.index()?;
         match index.entry_by_path_and_stage(path, stage) {
             Some(entry) => {
                 let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
@@ -372,7 +373,8 @@ impl delegate::Navigate for Delegate<'_> {
                         .unwrap_or_default(),
                     desired_stage = stage as u8,
                 )
-                .raise_erased())
+                .raise()
+                .into())
             }
         }
     }
@@ -384,10 +386,9 @@ fn to_repo_relative_path<'a>(repo: &Repository, path: &'a BStr) -> Result<Cow<'a
     if !(path.starts_with_str("./") || path.starts_with_str("../")) {
         return Ok(path.into());
     }
-    repo.prefix()
-        .or_erased()?
-        .ok_or_raise_erased(|| message("Relative path syntax can't be used outside of a worktree"))?;
-    repo.normalize_path(path).or_erased()
+    repo.prefix()?
+        .ok_or_raise(|| message("Relative path syntax can't be used outside of a worktree"))?;
+    repo.normalize_path(path).map_err(|err| err.raise().into())
 }
 
 fn handle_errors_and_replacements(
@@ -398,9 +399,11 @@ fn handle_errors_and_replacements(
 ) -> Result<(), Exn> {
     if errors.len() == objs.len() {
         delayed_errors.extend(errors.into_iter().map(|(_, err)| err));
-        Err(delayed_errors
-            .pop()
-            .unwrap_or_else(|| message("BUG: Somehow there was no error but one was expected").raise_erased()))
+        Err(delayed_errors.pop().unwrap_or_else(|| {
+            message("BUG: Somehow there was no error but one was expected")
+                .raise()
+                .into()
+        }))
     } else {
         for (obj, err) in errors {
             if let Some(pos) = objs.iter().position(|o| o == &obj) {

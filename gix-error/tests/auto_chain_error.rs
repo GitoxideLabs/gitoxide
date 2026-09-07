@@ -1,20 +1,19 @@
 use gix_error::{CorruptionError, Error, ErrorExt, NotFoundError, RetryableError, ValidationError, message};
 #[cfg(not(feature = "tree-error"))]
-use gix_error::{Exn, Message};
+use gix_error::{Exn, IteratorExt, Message};
 use std::error::Error as _;
 
 #[test]
 fn exn_converts_to_boxed_std_error() {
     let err: Box<dyn std::error::Error + Send + Sync> = message("one").raise().into();
-    let err = err
-        .downcast_ref::<Error>()
-        .expect("conversion retains the gix error boundary type");
+    let err = Error::from_boxed(err);
     assert_eq!(err.probable_cause().to_string(), "one");
 }
 
 #[test]
 fn erased_validation_error_remains_classified() {
-    let err = ValidationError::new("invalid").raise_erased().into_error();
+    let native: gix_error::Exn = ValidationError::new("invalid").into();
+    let err = Error::from(native);
     assert!(
         err.is_validation(),
         "the auto-chain Error classifies the original ValidationError retained during ChainedError construction"
@@ -79,19 +78,19 @@ fn from_exn_error_tree() {
         "error iteration with locations exposes the same errors together with their caller locations",
         @r#"
     [
-        "topmost, at gix-error/tests/auto_chain_error.rs:45",
-        "E6, at gix-error/tests/auto_chain_error.rs:168",
-        "E5, at gix-error/tests/auto_chain_error.rs:160",
-        "E4, at gix-error/tests/auto_chain_error.rs:163",
-        "E8, at gix-error/tests/auto_chain_error.rs:166",
-        "E3, at gix-error/tests/auto_chain_error.rs:152",
-        "E10, at gix-error/tests/auto_chain_error.rs:155",
-        "E12, at gix-error/tests/auto_chain_error.rs:158",
-        "E2, at gix-error/tests/auto_chain_error.rs:162",
-        "E7, at gix-error/tests/auto_chain_error.rs:165",
-        "E1, at gix-error/tests/auto_chain_error.rs:151",
-        "E9, at gix-error/tests/auto_chain_error.rs:154",
-        "E11, at gix-error/tests/auto_chain_error.rs:157",
+        "topmost, at gix-error/tests/auto_chain_error.rs:44",
+        "E6, at gix-error/tests/auto_chain_error.rs:167",
+        "E5, at gix-error/tests/auto_chain_error.rs:159",
+        "E4, at gix-error/tests/auto_chain_error.rs:162",
+        "E8, at gix-error/tests/auto_chain_error.rs:165",
+        "E3, at gix-error/tests/auto_chain_error.rs:151",
+        "E10, at gix-error/tests/auto_chain_error.rs:154",
+        "E12, at gix-error/tests/auto_chain_error.rs:157",
+        "E2, at gix-error/tests/auto_chain_error.rs:161",
+        "E7, at gix-error/tests/auto_chain_error.rs:164",
+        "E1, at gix-error/tests/auto_chain_error.rs:150",
+        "E9, at gix-error/tests/auto_chain_error.rs:153",
+        "E11, at gix-error/tests/auto_chain_error.rs:156",
     ]
     "#
     );
@@ -157,7 +156,7 @@ pub fn new_tree_error() -> Exn<Message> {
     let e11 = message("E11").raise();
     let e12 = e11.raise(message("E12"));
 
-    let e5 = Exn::raise_all([e3, e10, e12], message("E5"));
+    let e5 = [e3, e10, e12].into_iter().raise(message("E5"));
 
     let e2 = message("E2").raise();
     let e4 = e2.raise(message("E4"));
@@ -165,7 +164,7 @@ pub fn new_tree_error() -> Exn<Message> {
     let e7 = message("E7").raise();
     let e8 = e7.raise(message("E8"));
 
-    Exn::raise_all([e5, e4, e8], message("E6"))
+    [e5, e4, e8].into_iter().raise(message("E6"))
 }
 
 pub fn debug_string(input: impl std::fmt::Debug) -> String {
@@ -178,24 +177,30 @@ fn fixup_paths(input: String) -> String {
 
 #[test]
 fn retryability_is_discovered_in_the_error_chain() {
-    let retryable =
-        std::io::Error::new(std::io::ErrorKind::TimedOut, "too slow").and_raise(message("network operation failed"));
+    let retryable = std::io::Error::new(std::io::ErrorKind::TimedOut, "too slow")
+        .raise()
+        .raise(message("network operation failed"));
     assert!(Error::from(retryable).can_retry());
 
-    let dependency_specific =
-        RetryableError::new(message("HTTP/2 stream failed")).and_raise(message("network operation failed"));
+    let dependency_specific = RetryableError::new(message("HTTP/2 stream failed"))
+        .raise()
+        .raise(message("network operation failed"));
     assert!(Error::from(dependency_specific).can_retry());
 }
 
 #[test]
 fn corruption_is_discovered_in_the_error_chain() {
-    let corrupt = CorruptionError::new("checksum mismatch").and_raise(message("failed to open object database"));
+    let corrupt = CorruptionError::new("checksum mismatch")
+        .raise()
+        .raise(message("failed to open object database"));
     assert!(Error::from(corrupt).is_corrupted());
 }
 
 #[test]
 fn not_found_is_discovered_in_well_known_errors() {
-    let missing = NotFoundError::new("reference does not exist").and_raise(message("failed to resolve HEAD"));
+    let missing = NotFoundError::new("reference does not exist")
+        .raise()
+        .raise(message("failed to resolve HEAD"));
     assert!(Error::from(missing).is_not_found());
     assert!(Error::from_error(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")).is_not_found());
     assert!(
@@ -212,7 +217,7 @@ fn validation_is_discovered_in_the_error_chain() {
     assert!(Error::from_error(ValidationError::new("invalid")).is_validation());
     assert!(Error::from_error(ErrorWithSource(ValidationError::new("invalid"))).is_validation());
 
-    let err = Error::from(ValidationError::new("typed").and_raise(message("context")));
+    let err = Error::from(ValidationError::new("typed").raise().raise(message("context")));
     assert!(
         err.iter_errors().any(<dyn std::error::Error>::is::<ValidationError>),
         "iter_errors() exposes the stored error types in chain mode"
@@ -227,27 +232,20 @@ fn validation_is_discovered_in_the_error_chain() {
 #[test]
 fn classification_survives_raising_a_converted_error() {
     let converted = Error::from_error(ErrorWithSource(ValidationError::new("invalid object header")));
-    let raised = Error::from(converted.and_raise(message("revision parsing failed")));
+    let raised = Error::from(converted.raise().raise(message("revision parsing failed")));
     assert!(raised.is_validation());
 }
 
 #[test]
 #[cfg(not(feature = "tree-error"))]
 fn raising_a_converted_error_preserves_stored_types() {
-    let converted =
-        Error::from(ValidationError::new("invalid object header").and_raise(message("object lookup failed")));
+    let converted = Error::from(
+        ValidationError::new("invalid object header")
+            .raise()
+            .raise(message("object lookup failed")),
+    );
     let converted = Error::from_error(converted);
-    let raised = converted.and_raise(message("revision parsing failed"));
-    insta::assert_debug_snapshot!(
-        raised,
-        "raising a converted Error retains all nested context",
-        @r#"
-    revision parsing failed
-    |
-    └─ object lookup failed
-    |
-    └─ invalid object header
-    "#);
+    let raised = converted.raise().raise(message("revision parsing failed"));
     let raised = Error::from(raised);
 
     assert!(

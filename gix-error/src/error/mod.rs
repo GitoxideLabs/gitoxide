@@ -148,8 +148,8 @@ fn classification_can_retry_lenient(classification: Classification<'_>) -> bool 
 
 #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
 mod _impl {
-    use crate::FrameExt;
-    use crate::exn::{debug_frame, display_frame, frame_error};
+    use crate::error::explicit_children;
+    use crate::error::{debug_frame, display_frame, frame_error};
     use crate::{DisplaySource, Error, Exn};
     use std::fmt::Formatter;
 
@@ -167,7 +167,8 @@ mod _impl {
         /// Note that if there is nothing but this error, i.e. no source or children, this error is returned.
         pub fn probable_cause(&self) -> &(dyn std::error::Error + 'static) {
             let root = self.inner.frame();
-            let cause = root.probable_cause().unwrap_or_else(|| frame_error(root));
+            let cause =
+                super::probable_cause_node(root).map_or_else(|| frame_error(root), crate::error::ErrorNode::error);
             cause.downcast_ref::<Error>().map_or(cause, Error::probable_cause)
         }
 
@@ -192,7 +193,7 @@ mod _impl {
         }
 
         fn collect_errors_with_locations(&self) -> Vec<DisplaySource<'_>> {
-            let mut queue = std::collections::VecDeque::from([crate::exn::ErrorNode::Frame(self.inner.frame())]);
+            let mut queue = std::collections::VecDeque::from([crate::error::ErrorNode::Frame(self.inner.frame())]);
             let mut out = Vec::new();
             while let Some(node) = queue.pop_front() {
                 let error = node.error();
@@ -201,7 +202,7 @@ mod _impl {
                     location: node.captured_location(),
                 });
                 if let Some(error) = error.downcast_ref::<Error>() {
-                    queue.push_back(crate::exn::ErrorNode::Frame(error.inner.frame()));
+                    queue.push_back(crate::error::ErrorNode::Frame(error.inner.frame()));
                 }
                 queue.extend(node.children());
             }
@@ -252,12 +253,12 @@ mod _impl {
     }
 
     pub(crate) enum Inner {
-        ExnAsError(Box<crate::exn::Frame>),
-        Exn(Box<crate::exn::Frame>),
+        ExnAsError(Box<crate::Frame>),
+        Exn(Box<crate::Frame>),
     }
 
     impl Inner {
-        pub(crate) fn frame(&self) -> &crate::exn::Frame {
+        pub(crate) fn frame(&self) -> &crate::Frame {
             match self {
                 Inner::ExnAsError(f) | Inner::Exn(f) => f,
             }
@@ -269,14 +270,19 @@ mod _impl {
         #[track_caller]
         pub fn from_error(error: impl std::error::Error + Send + Sync + 'static) -> Self {
             Error {
-                inner: Inner::ExnAsError(Exn::new(error).into()),
+                inner: Inner::ExnAsError(super::into_frame(Exn::new(error))),
             }
         }
 
         /// Create a new instance representing an already boxed `error`.
         #[track_caller]
         pub fn from_boxed(error: Box<dyn std::error::Error + Send + Sync + 'static>) -> Self {
-            Self::from_error(crate::Untyped::from_boxed(error))
+            match error.downcast::<crate::Frame>() {
+                Ok(frame) => Error {
+                    inner: Inner::Exn(frame),
+                },
+                Err(error) => Self::from_error(super::BoxedError::from_boxed(error)),
+            }
         }
     }
 
@@ -307,7 +313,7 @@ mod _impl {
                     (!error.is::<Error>())
                         .then(|| error.source())
                         .flatten()
-                        .or_else(|| frame.explicit_children().first().map(|frame| frame_error(frame) as _))
+                        .or_else(|| explicit_children(frame).first().map(|frame| frame_error(frame) as _))
                 }
             }
         }
@@ -319,7 +325,7 @@ mod _impl {
     {
         fn from(err: Exn<E>) -> Self {
             Error {
-                inner: Inner::Exn(err.into()),
+                inner: Inner::Exn(super::into_frame(err)),
             }
         }
     }
@@ -494,14 +500,19 @@ mod _impl {
         #[track_caller]
         pub fn from_error(error: impl std::error::Error + Send + Sync + 'static) -> Self {
             Error {
-                inner: Exn::new(error).into_chain(),
+                inner: crate::ChainedError::from(Exn::new(error)),
             }
         }
 
         /// Create a new instance representing an already boxed `error`.
         #[track_caller]
         pub fn from_boxed(error: Box<dyn std::error::Error + Send + Sync + 'static>) -> Self {
-            Self::from_error(crate::Untyped::from_boxed(error))
+            match error.downcast::<crate::Frame>() {
+                Ok(frame) => Error {
+                    inner: crate::ChainedError::from_frame(frame),
+                },
+                Err(error) => Self::from_error(super::BoxedError::from_boxed(error)),
+            }
         }
     }
 
@@ -530,7 +541,7 @@ mod _impl {
     {
         fn from(err: Exn<E>) -> Self {
             Error {
-                inner: err.into_chain(),
+                inner: crate::ChainedError::from(err),
             }
         }
     }
@@ -570,3 +581,12 @@ fn error_chain<'a>(
 ) -> impl Iterator<Item = &'a (dyn std::error::Error + 'static)> {
     std::iter::successors(Some(err), |err| err.source())
 }
+
+mod frame;
+#[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
+pub(crate) use frame::ErrorNode;
+pub(crate) use frame::{BoxedError, explicit_children, frame_error, into_frame, iter_error_nodes, probable_cause_node};
+#[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
+mod format;
+#[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
+pub(crate) use format::{debug_frame, display_frame};

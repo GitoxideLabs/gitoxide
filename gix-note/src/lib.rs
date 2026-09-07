@@ -187,7 +187,8 @@ fn validate_replace_kinds(
     if annotated_object != root || note_blob != root {
         return Err(
             ValidationError::from("Notes, annotated objects, and their root tree must use the same hash kind")
-                .raise_erased(),
+                .raise()
+                .into(),
         );
     }
     Ok(())
@@ -197,7 +198,8 @@ fn validate_annotated_object_kind(root: gix_hash::Kind, annotated_object_id: &oi
     if annotated_object_id.kind() != root {
         return Err(
             ValidationError::from("The annotated object and notes root tree must use the same hash kind")
-                .raise_erased(),
+                .raise()
+                .into(),
         );
     }
     Ok(())
@@ -325,7 +327,8 @@ impl InternalNode {
                         "Multiple notes map to object {}",
                         note.annotated_object_id
                     ))
-                    .raise_erased());
+                    .raise()
+                    .into());
                 }
                 if let Node::Subtree(subtree) = &entry
                     && subtree.contains(&note.annotated_object_id)
@@ -457,7 +460,7 @@ fn load_subtree(
     let mut buf = Vec::new();
     let tree = objects
         .find_tree(&subtree.tree_id, &mut buf)
-        .or_raise_erased(|| message!("Could not load notes tree {}", subtree.tree_id))?;
+        .or_raise(|| message!("Could not load notes tree {}", subtree.tree_id))?;
     let hex_len = subtree.tree_id.kind().len_in_hex();
     let prefix_hex_len = subtree.prefix_len * 2;
     let mut prefix_hex = gix_hash::Kind::hex_buf();
@@ -529,16 +532,17 @@ impl InternalNode {
         for entry in non_notes.iter() {
             editor
                 .upsert(entry.path.split_str("/"), entry.mode.kind(), entry.object_id)
-                .or_raise_erased(|| message("Could not restore a non-note tree entry"))?;
+                .or_raise(|| message("Could not restore a non-note tree entry"))?;
         }
         for entry in notes {
             editor
                 .upsert(entry.path.split_str("/"), entry.mode.kind(), entry.object_id)
-                .or_raise_erased(|| message("Could not add a note tree entry"))?;
+                .or_raise(|| message("Could not add a note tree entry"))?;
         }
         editor
             .write(|tree| objects.write(tree).map_err(gix_error::Error::from_boxed))
-            .or_raise_erased(|| message("Could not write the notes tree"))
+            .or_raise(|| message("Could not write the notes tree"))
+            .map_err(Into::into)
     }
 
     /// Collect entries for writing while determining the fanout below `nibble` from the current tree shape.
@@ -635,7 +639,8 @@ fn write_note_entries(notes: &[TreeEntry], level: usize, objects: &impl Write) -
     objects
         .write(&Tree { entries })
         .map_err(gix_error::Error::from_boxed)
-        .or_raise_erased(|| message("Could not write the notes tree"))
+        .or_raise(|| message("Could not write the notes tree"))
+        .map_err(Into::into)
 }
 
 fn nibble_at(id: &oid, nibble: usize) -> usize {

@@ -3,7 +3,7 @@ mod error;
 mod exn;
 
 mod utils {
-    use gix_error::{ErrorExt, Exn, Message, message};
+    use gix_error::{ErrorExt, Exn, IteratorExt, Message, message};
 
     pub fn new_tree_error() -> Exn<Message> {
         let e1 = message("E1").raise();
@@ -15,7 +15,7 @@ mod utils {
         let e11 = message("E11").raise();
         let e12 = e11.raise(message("E12"));
 
-        let e5 = Exn::raise_all([e3, e10, e12], message("E5"));
+        let e5 = [e3, e10, e12].into_iter().raise(message("E5"));
 
         let e2 = message("E2").raise();
         let e4 = e2.raise(message("E4"));
@@ -23,7 +23,7 @@ mod utils {
         let e7 = message("E7").raise();
         let e8 = e7.raise(message("E8"));
 
-        Exn::raise_all([e5, e4, e8], message("E6"))
+        [e5, e4, e8].into_iter().raise(message("E6"))
     }
 
     pub fn debug_string(input: impl std::fmt::Debug) -> String {

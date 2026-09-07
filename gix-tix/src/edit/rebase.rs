@@ -2296,15 +2296,15 @@ fn note_rewrite_edits(
         None => (ObjectId::empty_tree(repo.object_hash()), None),
     };
     let mut source_state = gix::note::plumbing::State::new(original_root, repo)
-        .map_err(gix::Exn::into_error)
+        .map_err(gix::Error::from)
         .context("could not initialize the source Git notes tree")?;
     let mut destination_state = gix::note::plumbing::State::new(original_root, repo)
-        .map_err(gix::Exn::into_error)
+        .map_err(gix::Error::from)
         .context("could not initialize the destination Git notes tree")?;
     for &(old, new) in rewrites {
         let Some(source) = source_state
             .get(&old, repo)
-            .map_err(gix::Exn::into_error)
+            .map_err(gix::Error::from)
             .context("could not find a Git note to copy")?
         else {
             continue;
@@ -2312,7 +2312,7 @@ fn note_rewrite_edits(
         let source = repo.find_blob(source).context("could not read a Git note to copy")?;
         let destination = destination_state
             .get(&new, repo)
-            .map_err(gix::Exn::into_error)
+            .map_err(gix::Error::from)
             .context("could not inspect the successor Git note")?;
         let data = match destination {
             Some(destination) => {
@@ -2329,7 +2329,7 @@ fn note_rewrite_edits(
         let note = repo.write_blob(data)?.detach();
         destination_state
             .replace(new, note, repo)
-            .map_err(gix::Exn::into_error)
+            .map_err(gix::Error::from)
             .context("could not copy a Git note onto its successor")?;
     }
     let root = destination_state.root_tree_id();
@@ -2372,11 +2372,11 @@ fn enrichment_edits(
     };
     let note = repo.write_blob(data)?.detach();
     let mut state = gix::note::plumbing::State::new(root, repo)
-        .map_err(gix::Exn::into_error)
+        .map_err(gix::Error::from)
         .context("could not initialize the tix enrichment tree")?;
     let tree = state
         .replace(object, note, repo)
-        .map_err(gix::Exn::into_error)
+        .map_err(gix::Error::from)
         .context("could not prepare the tix enrichment")?
         .tree;
     let author = repo

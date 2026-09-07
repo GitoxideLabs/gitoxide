@@ -93,14 +93,15 @@ impl Graph {
             let file_stats = file.traverse(|commit| {
                 let mut max_parent_generation = 0u32;
                 for parent_pos in commit.iter_parents() {
-                    let parent_pos = parent_pos.map_err(|err| err.raise_erased())?;
+                    let parent_pos = parent_pos?;
                     if parent_pos >= next_file_start_pos {
                         return Err(message!(
                             "Commit {} has parent position {parent_pos} that is out of range (should be in range 0-{})",
                             commit.id(),
                             Position(next_file_start_pos.0 - 1)
                         )
-                        .raise_erased());
+                        .raise()
+                        .into());
                     }
                     let parent = self.commit_at(parent_pos);
                     max_parent_generation = max(max_parent_generation, parent.generation());
@@ -115,10 +116,11 @@ impl Graph {
                         commit.id(),
                         commit.generation()
                     )
-                    .raise_erased());
+                    .raise()
+                    .into());
                 }
 
-                processor(commit).or_raise_erased(|| message!("processor failed on commit {id}", id = commit.id()))?;
+                processor(commit).or_raise(|| message!("processor failed on commit {id}", id = commit.id()))?;
 
                 Ok(())
             })?;

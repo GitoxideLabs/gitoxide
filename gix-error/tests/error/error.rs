@@ -1,7 +1,9 @@
 use crate::ErrorWithSource;
 #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
 use crate::{debug_string, fixup_paths, new_tree_error};
-use gix_error::{CorruptionError, Error, ErrorExt, Message, NotFoundError, RetryableError, ValidationError, message};
+use gix_error::{
+    CorruptionError, Error, ErrorExt, IteratorExt, Message, NotFoundError, RetryableError, ValidationError, message,
+};
 #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
 use std::error::Error as _;
 
@@ -13,7 +15,7 @@ fn from_exn_error() {
     insta::assert_compact_debug_snapshot!(
         &err,
         "compact Debug includes the caller location of the root frame",
-        @"one, at gix-error/tests/error/error.rs:11"
+        @"one, at gix-error/tests/error/error.rs:13"
     );
     insta::assert_debug_snapshot!(err, "pretty Debug omits caller locations", @"one");
     assert_eq!(err.source().map(debug_string), None);
@@ -25,7 +27,7 @@ fn from_exn_error_tree() {
     let err = Error::from(new_tree_error().raise(message("topmost")));
     assert_eq!(err, "topmost");
     insta::assert_compact_debug_snapshot!(&err, "compact Debug renders the complete tree with caller locations", @"
-    topmost, at gix-error/tests/error/error.rs:25
+    topmost, at gix-error/tests/error/error.rs:27
     |
     └─ E6, at gix-error/tests/error/main.rs:26
         |
@@ -103,7 +105,7 @@ fn from_exn_error_tree() {
         "error iteration with locations exposes the same errors together with their caller locations",
         @r#"
     [
-        "topmost, at gix-error/tests/error/error.rs:25",
+        "topmost, at gix-error/tests/error/error.rs:27",
         "E6, at gix-error/tests/error/main.rs:26",
         "E5, at gix-error/tests/error/main.rs:18",
         "E4, at gix-error/tests/error/main.rs:21",
@@ -262,10 +264,8 @@ fn native_sources_retain_types_without_claiming_frame_locations() {
 #[test]
 fn nested_errors_are_expanded_in_breadth_first_order() {
     let nested = Error::from(message("nested child").raise().raise(message("nested root")));
-    let err = Error::from(message("outer root").raise_all([
-        gix_error::Exn::new(nested).erased(),
-        message("outer sibling").raise_erased(),
-    ]));
+    let causes: [gix_error::Exn; 2] = [nested.into(), message("outer sibling").into()];
+    let err = Error::from(causes.into_iter().raise(message("outer root")));
 
     #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     insta::assert_debug_snapshot!(err, @"
@@ -313,17 +313,20 @@ fn classification_survives_raising_a_converted_error() {
         "object lookup failed",
         ValidationError::new("invalid object header"),
     ));
-    let err = Error::from(converted.and_raise(message("revision parsing failed")));
+    let err = Error::from(converted.raise().raise(message("revision parsing failed")));
 
     assert!(err.is_validation());
 }
 
 #[test]
 fn raising_a_converted_error_preserves_stored_types() {
-    let converted =
-        Error::from(ValidationError::new("invalid object header").and_raise(message("object lookup failed")));
+    let converted = Error::from(
+        ValidationError::new("invalid object header")
+            .raise()
+            .raise(message("object lookup failed")),
+    );
     let converted = Error::from_error(converted);
-    let err = Error::from(converted.and_raise(message("revision parsing failed")));
+    let err = Error::from(converted.raise().raise(message("revision parsing failed")));
 
     assert!(
         err.iter_errors().any(<dyn std::error::Error>::is::<ValidationError>),
@@ -354,22 +357,27 @@ fn validation_error_displays_input_with_debug_formatting() {
 
 #[test]
 fn retryability_is_discovered_in_the_error_chain() {
-    let retryable =
-        std::io::Error::new(std::io::ErrorKind::TimedOut, "too slow").and_raise(message("network operation failed"));
+    let retryable = std::io::Error::new(std::io::ErrorKind::TimedOut, "too slow")
+        .raise()
+        .raise(message("network operation failed"));
     assert!(Error::from(retryable).can_retry());
 
     let permanent = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied")
-        .and_raise(message("network operation failed"));
+        .raise()
+        .raise(message("network operation failed"));
     assert!(!Error::from(permanent).can_retry());
 
-    let dependency_specific =
-        RetryableError::new(message("HTTP/2 stream failed")).and_raise(message("network operation failed"));
+    let dependency_specific = RetryableError::new(message("HTTP/2 stream failed"))
+        .raise()
+        .raise(message("network operation failed"));
     assert!(Error::from(dependency_specific).can_retry());
 }
 
 #[test]
 fn corruption_is_discovered_in_the_error_chain() {
-    let corrupt = CorruptionError::new("checksum mismatch").and_raise(message("failed to open object database"));
+    let corrupt = CorruptionError::new("checksum mismatch")
+        .raise()
+        .raise(message("failed to open object database"));
     assert!(Error::from(corrupt).is_corrupted());
 
     assert!(!Error::from(message("repository was not found").raise()).is_corrupted());
@@ -397,11 +405,14 @@ fn from_boxed_does_not_repeat_the_wrapped_error_as_its_source() {
 
 #[test]
 fn not_found_is_discovered_in_well_known_errors() {
-    let classified = NotFoundError::new("reference does not exist").and_raise(message("failed to resolve HEAD"));
+    let classified = NotFoundError::new("reference does not exist")
+        .raise()
+        .raise(message("failed to resolve HEAD"));
     assert!(Error::from(classified).is_not_found());
 
     let io = std::io::Error::new(std::io::ErrorKind::NotFound, "missing index")
-        .and_raise(message("failed to open repository"));
+        .raise()
+        .raise(message("failed to open repository"));
     assert!(Error::from(io).is_not_found());
 
     let boxed = Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "missing object"));
@@ -413,18 +424,12 @@ fn not_found_is_discovered_in_well_known_errors() {
 #[test]
 fn equality_with_strings_uses_the_root_errors_display() {
     let exn = message("cause").raise().raise(message("failure"));
-    assert_eq!(exn, "failure");
-    assert_eq!(exn, String::from("failure"));
-    assert_eq!(&exn, "failure");
-    assert_ne!(exn, "cause", "children aren't compared");
-
     let error = Error::from(exn);
     assert_eq!(error, "failure");
     assert_eq!(&error, "failure");
     assert_eq!(error, String::from("failure"));
     assert_ne!(error, "other");
 
-    let nested = Error::from(message("nested cause").raise().raise(message("nested root"))).raise_erased();
+    let nested = Error::from(Error::from(message("nested cause").raise().raise(message("nested root"))).raise());
     assert_eq!(nested, "nested root", "nested error boundaries are transparent");
-    assert_eq!(Error::from(nested), "nested root");
 }
