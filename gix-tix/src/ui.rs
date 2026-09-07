@@ -93,6 +93,27 @@ pub(crate) fn draw_command_menu(
     menu: &mut Menu<CommandId>,
     commands: &[Command],
 ) -> Option<Position> {
+    draw_menu(frame, bounds, menu, " Command ", "no matching commands", |index| {
+        let command = &commands[index];
+        let group = command.group.label();
+        let mut shortcut = command.shortcut.chars();
+        let shortcut = format!(
+            "{} {}",
+            shortcut.next().expect("a command shortcut has a prefix"),
+            shortcut.next().expect("a command shortcut has a key")
+        );
+        format!("{group:<11} {}  [{shortcut}]", command.label)
+    })
+}
+
+pub(crate) fn draw_menu<T: Clone + Eq>(
+    frame: &mut Frame<'_>,
+    bounds: Rect,
+    menu: &mut Menu<T>,
+    title: &str,
+    empty: &str,
+    label: impl Fn(usize) -> String,
+) -> Option<Position> {
     if !menu.is_open() {
         return None;
     }
@@ -116,7 +137,7 @@ pub(crate) fn draw_command_menu(
         width,
         height,
     );
-    let block = Block::new().borders(Borders::ALL).title(" Command ");
+    let block = Block::new().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
@@ -139,29 +160,15 @@ pub(crate) fn draw_command_menu(
     let selected = menu.selected_visible_row();
     let mut lines = Vec::new();
     for (row, index) in menu.visible_indices().iter().copied().enumerate() {
-        let command = &commands[index];
-        let group = command.group.label();
-        let mut shortcut = command.shortcut.chars();
-        let shortcut = format!(
-            "{} {}",
-            shortcut.next().expect("a command shortcut has a prefix"),
-            shortcut.next().expect("a command shortcut has a key")
-        );
         let style = if selected == Some(row) {
             Style::default().add_modifier(Modifier::REVERSED)
         } else {
             Style::default()
         };
-        lines.push(Line::styled(
-            format!("{}  {group:<11} {}  [{shortcut}]", row + 1, command.label),
-            style,
-        ));
+        lines.push(Line::styled(format!("{}  {}", row + 1, label(index)), style));
     }
     if lines.is_empty() {
-        lines.push(Line::styled(
-            "no matching commands",
-            Style::default().add_modifier(Modifier::DIM),
-        ));
+        lines.push(Line::styled(empty, Style::default().add_modifier(Modifier::DIM)));
     }
     frame.render_widget(Paragraph::new(lines), results_area);
 
