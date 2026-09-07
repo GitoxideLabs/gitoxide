@@ -13,6 +13,7 @@ pub(crate) enum CommandId {
     Trailers,
     Refs,
     Hidden,
+    Select,
     Reword,
     NewCommit,
     NewEmptyCommit,
@@ -26,6 +27,9 @@ pub(crate) enum CommandId {
     Unstash,
     Rebase,
     RebaseUpdate,
+    #[cfg(feature = "blocking-network-client")]
+    Fetch,
+    Push,
     StartReview,
     FinishReview,
     Squash,
@@ -100,10 +104,21 @@ impl Command {
             .next_back()
             .expect("command shortcuts always contain a leaf key")
     }
+
+    pub(crate) fn search_prefix(&self) -> &'static str {
+        match self.group {
+            CommandGroup::Actions => "Actions commit",
+            CommandGroup::Enrich => "Enrich commit",
+            CommandGroup::Information if matches!(self.id, CommandId::CommitMessage | CommandId::Changes) => {
+                "Information commit"
+            }
+            group => group.label(),
+        }
+    }
 }
 
 pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_signatures: bool) -> Vec<Command> {
-    let mut out = Vec::with_capacity(35);
+    let mut out = Vec::with_capacity(36);
     let mut push = |id, group, row, label, shortcut, active, action| {
         out.push(Command {
             id,
@@ -211,6 +226,17 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
             Action::ToggleHidden,
         );
     }
+    if app.can_select_entry() {
+        push(
+            CommandId::Select,
+            CommandGroup::View,
+            0,
+            "select",
+            "vc",
+            true,
+            Action::SelectEntry,
+        );
+    }
 
     let selected_is_segment = app.selected_is_segment();
     let actions_visible =
@@ -243,8 +269,8 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
                 CommandId::NewEmptyCommit,
                 CommandGroup::Actions,
                 0,
-                "new-empty",
-                "an",
+                "N new-empty",
+                "aN",
                 true,
                 Action::NewEmptyCommit,
             );
@@ -276,8 +302,8 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
                 CommandId::Split,
                 CommandGroup::Actions,
                 0,
-                "split",
-                "ap",
+                "S split",
+                "aS",
                 true,
                 Action::Split,
             );
@@ -353,6 +379,29 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
                 "au",
                 true,
                 Action::RebaseUpdate,
+            );
+        }
+        #[cfg(feature = "blocking-network-client")]
+        if app.changes_focus.is_none() && app.can_fetch() {
+            push(
+                CommandId::Fetch,
+                CommandGroup::Actions,
+                1,
+                "F fetch",
+                "aF",
+                true,
+                Action::Fetch,
+            );
+        }
+        if app.changes_focus.is_none() && app.can_push() {
+            push(
+                CommandId::Push,
+                CommandGroup::Actions,
+                1,
+                "P push",
+                "aP",
+                true,
+                Action::Push,
             );
         }
         if app.changes_focus.is_none() && app.can_finish_review() {
@@ -633,6 +682,26 @@ mod tests {
     }
 
     #[test]
+    fn select_is_available_for_numbered_history() {
+        let mut app = App::new(1);
+        app.extend_commits(vec![row(1, &[])]);
+        let rows = app
+            .start_lane_computation()
+            .expect("the loaded row starts lane computation");
+        let (rows, graph, lane_time) = crate::app::compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, lane_time);
+
+        let select = commands(&app, &Decorations::default(), false)
+            .into_iter()
+            .find(|command| command.id == CommandId::Select)
+            .expect("numbered history offers selection by entry number");
+        assert_eq!(select.group, CommandGroup::View);
+        assert_eq!(select.label, "select");
+        assert_eq!(select.shortcut, "vc");
+        assert_eq!(select.action, Action::SelectEntry);
+    }
+
+    #[test]
     fn contextual_opposites_replace_each_other_without_becoming_the_recalled_command() {
         let mut app = App::new(2);
         app.extend_commits(vec![row(2, &[1]), row(1, &[])]);
@@ -705,6 +774,82 @@ mod tests {
             menu.selected_index(),
             None,
             "a contextual opposite does not replace the unavailable recalled command"
+        );
+    }
+
+    #[test]
+    fn commit_query_finds_every_command_applied_to_a_commit() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row(2, &[1]), row(1, &[])]);
+        app.state = State::Complete;
+        app.set_worktree_head(Some(id(2)), false);
+        app.set_head_edit_availability(false, true, false, false, false, false, false);
+
+        let commands = commands(&app, &Decorations::default(), false);
+        let items = crate::command_picker_items(&commands);
+        let expected = commands
+            .iter()
+            .filter(|command| {
+                matches!(command.group, CommandGroup::Actions | CommandGroup::Enrich)
+                    || matches!(command.id, CommandId::CommitMessage | CommandId::Changes)
+            })
+            .map(|command| command.id)
+            .collect::<Vec<_>>();
+        let mut menu = Menu::default();
+        menu.open(&items);
+        menu.paste("commit", &items);
+
+        let mut actual = Vec::new();
+        while let Some(index) = menu.selected_index() {
+            if actual.last() == Some(&commands[index].id) {
+                break;
+            }
+            actual.push(commands[index].id);
+            menu.down(&items);
+        }
+        assert_eq!(actual, expected, "commit aliases retain catalog order");
+    }
+
+    #[test]
+    fn network_actions_use_the_second_row_and_the_single_background_slot() {
+        let mut app = App::new(1);
+        app.state = State::Complete;
+        app.set_active_branch(Some("topic".into()));
+        #[cfg(feature = "blocking-network-client")]
+        app.set_fetch_remote(Some("origin".into()));
+
+        let catalog = commands(&app, &Decorations::default(), false);
+        let push = catalog
+            .iter()
+            .find(|command| command.id == CommandId::Push)
+            .expect("a remembered branch can be pushed");
+        assert_eq!(push.group, CommandGroup::Actions);
+        assert_eq!(push.row, 1);
+        assert_eq!(push.label, "P push");
+        assert_eq!(push.shortcut, "aP");
+        assert_eq!(push.action, Action::Push);
+        #[cfg(feature = "blocking-network-client")]
+        {
+            let fetch = catalog
+                .iter()
+                .find(|command| command.id == CommandId::Fetch)
+                .expect("an active branch can be fetched");
+            assert_eq!(fetch.group, CommandGroup::Actions);
+            assert_eq!(fetch.row, 1);
+            assert_eq!(fetch.label, "F fetch");
+            assert_eq!(fetch.shortcut, "aF");
+            assert_eq!(fetch.action, Action::Fetch);
+        }
+
+        app.start_background_task("pushing topic to origin…");
+        assert!(
+            !has(&commands(&app, &Decorations::default(), false), CommandId::Push),
+            "the single background-task slot hides push while occupied"
+        );
+        #[cfg(feature = "blocking-network-client")]
+        assert!(
+            !has(&commands(&app, &Decorations::default(), false), CommandId::Fetch),
+            "the single background-task slot hides fetch while occupied"
         );
     }
 }

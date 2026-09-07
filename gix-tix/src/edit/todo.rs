@@ -156,6 +156,9 @@ pub(crate) fn prepare(
     }
     let mut ref_points = scope.clone();
     ref_points.push(onto);
+    if sections.is_empty() {
+        ref_points.push(base);
+    }
     ref_points.extend(sections.iter().map(|section| section.parent));
     ref_points.sort_unstable();
     ref_points.dedup();
@@ -203,6 +206,7 @@ pub(crate) fn prepare(
     let mut body = Vec::new();
     let mut enrichments = crate::enrich::open(repo)?;
     let mut tree_enrichments = crate::enrich::open_tree(repo)?;
+    let mut written_external_refs = HashSet::new();
     for (section_index, section) in sections.iter().enumerate() {
         if section_index > 0 {
             body.push(b'\n');
@@ -214,7 +218,7 @@ pub(crate) fn prepare(
             (section.parent == onto).then_some((anchor_kind, anchor_title.as_str())),
             show_change_ids,
         )?;
-        if !scope_set.contains(&section.parent) {
+        if !scope_set.contains(&section.parent) && written_external_refs.insert(section.parent) {
             write_refs_at(&mut body, &state.expected_refs, section.parent)?;
         }
         for id in &section.commits {
@@ -245,6 +249,9 @@ pub(crate) fn prepare(
             show_change_ids,
         )?;
         write_refs_at(&mut body, &state.expected_refs, onto)?;
+        if base != onto {
+            write_refs_at(&mut body, &state.expected_refs, base)?;
+        }
     }
     write_bottom_up(&mut document, &body)?;
     document.extend_from_slice(HELP.as_bytes());
@@ -1636,6 +1643,73 @@ mod tests {
     }
 
     #[test]
+    fn shared_updated_base_refs_are_written_once_during_review() -> gix_testtools::Result {
+        let (fixture, repo) = repo()?;
+        let (_old_base, base, reviewed, _) = commits(&repo)?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["switch", "-q", "-c", "topic"])
+                .status()?
+                .success(),
+            "the review return branch is prepared"
+        );
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+        let started = super::super::review::start(fixture.path(), false, &graph, reviewed, base)?;
+        assert!(started.checkout_error.is_none(), "the review checkout succeeds");
+
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            ["core.abbrev=7", "user.name=todo author", "user.email=todo@example.com"],
+        )?;
+        let mut updated = repo.find_commit(base)?.decode()?.into_owned()?;
+        updated.parents = [base].into_iter().collect();
+        updated.message = "updated base".into();
+        let updated = repo.write_object(&updated)?.detach();
+        repo.reference(
+            "refs/heads/main",
+            updated,
+            gix::refs::transaction::PreviousValue::ExistingMustMatch(gix::refs::Target::Object(reviewed)),
+            "advance the hidden base",
+        )?;
+
+        let prepared = prepare_test(
+            &repo,
+            base,
+            updated,
+            &[
+                Commit {
+                    id: started.commit,
+                    parents: vec![base],
+                    info: "review".into(),
+                },
+                Commit {
+                    id: reviewed,
+                    parents: vec![base],
+                    info: "reviewed".into(),
+                },
+            ],
+            Some(started.commit),
+        )?;
+        let document = String::from_utf8(prepared.document.clone())?;
+        assert_eq!(
+            document.lines().filter(|line| *line == "(main)").count(),
+            1,
+            "a mutable ref at a shared fork target is emitted once"
+        );
+        let plan = parse_plan(&repo, &prepared.document)?;
+        assert!(
+            plan.expected_refs.iter().any(|reference| {
+                reference.name == started.reference && !reference.editable && reference.target == reviewed
+            }),
+            "the active review remains part of the rebase transaction"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn update_todo_roots_the_stack_at_the_hidden_tip_and_labels_only_that_heading() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
@@ -1689,6 +1763,51 @@ mod tests {
                 .map(gix::Id::detach),
             Some(onto),
             "saving the unchanged update todo rebases the stack onto the hidden tip"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn update_todo_moves_a_branch_with_no_commits_to_the_new_base() -> gix_testtools::Result {
+        let (fixture, repo) = repo()?;
+        let (base, onto, _tip, _commits) = commits(&repo)?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["switch", "-q", "-c", "empty", &base.to_string()])
+                .status()?
+                .success(),
+            "the fixture starts a branch without commits above its base"
+        );
+
+        let prepared = prepare_test(&repo, base, onto, &[], Some(base))?;
+        assert!(
+            prepared.apply_unchanged,
+            "moving an empty stack's base makes the unchanged todo actionable"
+        );
+        let document = String::from_utf8(prepared.document)?;
+        assert!(
+            document.lines().any(|line| line == "(empty)"),
+            "the branch at the old base moves with the generated todo"
+        );
+        let plan = parse_plan(&repo, document.as_bytes())?;
+        assert!(plan.steps.is_empty(), "updating an empty stack creates no commits");
+        assert_eq!(
+            plan.expected_refs
+                .iter()
+                .find(|reference| reference.name == "refs/heads/empty")
+                .and_then(|reference| reference.placement),
+            Some(rebase::PlanParent::Existing(onto)),
+            "the current branch is placed at the updated base"
+        );
+
+        let graph = super::super::loaded_graph(&repo)?;
+        rebase::perform_plan(&repo, &graph, plan)?.complete()?;
+        assert_eq!(
+            repo.head_id()?.detach(),
+            onto,
+            "the checked-out branch advances to the updated base"
         );
         Ok(())
     }

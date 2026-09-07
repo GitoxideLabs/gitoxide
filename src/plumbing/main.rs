@@ -21,7 +21,7 @@ use crate::{
         },
         show_progress,
     },
-    shared::pretty::prepare_and_run,
+    shared::pretty::{init_tracing, prepare_and_run},
 };
 
 #[cfg(feature = "gitoxide-core-async-client")]
@@ -33,23 +33,22 @@ pub mod async_util {
 
     pub fn prepare(
         verbose: bool,
-        trace: bool,
         name: &str,
         range: impl Into<Option<ProgressRange>>,
-    ) -> (
+    ) -> anyhow::Result<(
         Option<prodash::render::line::JoinHandle>,
         gix_features::progress::DoOrDiscard<prodash::tree::Item>,
-    ) {
+    )> {
         use crate::shared::{self, STANDARD_RANGE};
         shared::init_env_logger();
 
         if verbose {
-            let progress = shared::progress_tree(trace);
+            let progress = shared::progress_tree();
             let sub_progress = progress.add_child(name);
             let ui_handle = shared::setup_line_renderer_range(&progress, range.into().unwrap_or(STANDARD_RANGE));
-            (Some(ui_handle), Some(sub_progress).into())
+            Ok((Some(ui_handle), Some(sub_progress).into()))
         } else {
-            (None, None.into())
+            Ok((None, None.into()))
         }
     }
 }
@@ -59,14 +58,32 @@ pub fn main() -> Result<()> {
     let thread_limit = args.threads;
     let verbose = args.verbose;
     let format = args.format;
-    let cmd = args.cmd;
-    #[cfg_attr(not(feature = "tracing"), allow(unused_mut))]
-    #[cfg_attr(feature = "tracing", allow(unused_assignments))]
-    let mut trace = false;
     #[cfg(feature = "tracing")]
-    {
-        trace = args.trace;
-    }
+    let trace = args.trace;
+    #[cfg(not(feature = "tracing"))]
+    let trace = 0;
+    let cmd = args.cmd;
+    #[cfg(feature = "tix")]
+    let cmd = match cmd {
+        Subcommands::Tix(command) if !command.requires_repository() => {
+            return command.run_without_repository_with_trace(gix_tix::command::Invocation::GixTix, trace);
+        }
+        cmd => cmd,
+    };
+    #[cfg(feature = "tix")]
+    let command_initializes_tracing = matches!(&cmd, Subcommands::Tix(_));
+    #[cfg(not(feature = "tix"))]
+    let command_initializes_tracing = false;
+    let _trace_guard = if command_initializes_tracing {
+        None
+    } else {
+        Some(init_tracing(trace)?)
+    };
+    #[cfg(feature = "gitoxide-core-tools-corpus")]
+    let trace_output = _trace_guard
+        .as_ref()
+        .and_then(crate::shared::pretty::TraceGuard::output)
+        .unwrap_or_default();
     let object_hash = args.object_hash;
     let config = args.config;
     let repository = args.repository;
@@ -132,19 +149,7 @@ pub fn main() -> Result<()> {
         }
     };
 
-    let progress;
-    let progress_keep_open;
-    #[cfg(feature = "prodash-render-tui")]
-    {
-        progress = args.progress;
-        progress_keep_open = args.progress_keep_open;
-    }
-    #[cfg(not(feature = "prodash-render-tui"))]
-    {
-        progress = false;
-        progress_keep_open = false;
-    }
-    let auto_verbose = !progress && !args.no_verbose;
+    let auto_verbose = !args.no_verbose;
 
     let should_interrupt = Arc::new(AtomicBool::new(false));
     #[expect(unsafe_code)]
@@ -158,16 +163,12 @@ pub fn main() -> Result<()> {
 
     match cmd {
         #[cfg(feature = "tix")]
-        Subcommands::Tix(command) => command.run(repository(Mode::Lenient)?.into_sync()),
-        Subcommands::Env => prepare_and_run(
-            "env",
+        Subcommands::Tix(command) => command.run_with_repository_as_with_trace(
+            move || Ok(repository(Mode::Lenient)?.into_sync()),
+            gix_tix::command::Invocation::GixTix,
             trace,
-            verbose,
-            progress,
-            progress_keep_open,
-            None,
-            move |_progress, out, _err| core::env(out, format),
         ),
+        Subcommands::Env => prepare_and_run("env", verbose, None, move |_progress, out, _err| core::env(out, format)),
         Subcommands::Editor { paths } => core::repository::editor(repository(Mode::Lenient)?, paths),
         Subcommands::Merge(merge::Platform { cmd }) => match cmd {
             merge::SubCommands::File {
@@ -175,25 +176,17 @@ pub fn main() -> Result<()> {
                 ours,
                 base,
                 theirs,
-            } => prepare_and_run(
-                "merge-file",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
-                    core::repository::merge::file(
-                        repository(Mode::Lenient)?,
-                        out,
-                        format,
-                        resolve_with.map(Into::into),
-                        base,
-                        ours,
-                        theirs,
-                    )
-                },
-            ),
+            } => prepare_and_run("merge-file", verbose, None, move |_progress, out, _err| {
+                core::repository::merge::file(
+                    repository(Mode::Lenient)?,
+                    out,
+                    format,
+                    resolve_with.map(Into::into),
+                    base,
+                    ours,
+                    theirs,
+                )
+            }),
             merge::SubCommands::Tree {
                 opts:
                     merge::SharedOptions {
@@ -207,33 +200,25 @@ pub fn main() -> Result<()> {
                 ours,
                 base,
                 theirs,
-            } => prepare_and_run(
-                "merge-tree",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, err| {
-                    core::repository::merge::tree(
-                        repository(Mode::Lenient)?,
-                        out,
-                        err,
-                        base,
-                        ours,
-                        theirs,
-                        core::repository::merge::tree::Options {
-                            format,
-                            file_favor: file_favor.map(Into::into),
-                            in_memory,
-                            tree_favor: tree_favor.map(Into::into),
-                            debug,
-                            message,
-                            update_head,
-                        },
-                    )
-                },
-            ),
+            } => prepare_and_run("merge-tree", verbose, None, move |_progress, out, err| {
+                core::repository::merge::tree(
+                    repository(Mode::Lenient)?,
+                    out,
+                    err,
+                    base,
+                    ours,
+                    theirs,
+                    core::repository::merge::tree::Options {
+                        format,
+                        file_favor: file_favor.map(Into::into),
+                        in_memory,
+                        tree_favor: tree_favor.map(Into::into),
+                        debug,
+                        message,
+                        update_head,
+                    },
+                )
+            }),
             merge::SubCommands::Commit {
                 opts:
                     merge::SharedOptions {
@@ -244,93 +229,67 @@ pub fn main() -> Result<()> {
                     },
                 ours,
                 theirs,
-            } => prepare_and_run(
-                "merge-commit",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, err| {
-                    core::repository::merge::commit(
-                        repository(Mode::Lenient)?,
-                        out,
-                        err,
-                        ours,
-                        theirs,
-                        core::repository::merge::tree::Options {
-                            format,
-                            file_favor: file_favor.map(Into::into),
-                            tree_favor: tree_favor.map(Into::into),
-                            in_memory,
-                            debug,
-                            message: None,
-                            update_head: false,
-                        },
-                    )
-                },
-            ),
+            } => prepare_and_run("merge-commit", verbose, None, move |_progress, out, err| {
+                core::repository::merge::commit(
+                    repository(Mode::Lenient)?,
+                    out,
+                    err,
+                    ours,
+                    theirs,
+                    core::repository::merge::tree::Options {
+                        format,
+                        file_favor: file_favor.map(Into::into),
+                        tree_favor: tree_favor.map(Into::into),
+                        in_memory,
+                        debug,
+                        message: None,
+                        update_head: false,
+                    },
+                )
+            }),
         },
-        Subcommands::MergeBase(crate::plumbing::options::merge_base::Command { first, others }) => prepare_and_run(
-            "merge-base",
-            trace,
-            verbose,
-            progress,
-            progress_keep_open,
-            None,
-            move |_progress, out, _err| {
+        Subcommands::MergeBase(crate::plumbing::options::merge_base::Command { first, others }) => {
+            prepare_and_run("merge-base", verbose, None, move |_progress, out, _err| {
                 core::repository::merge_base(repository(Mode::Lenient)?, first, others, out, format)
-            },
-        ),
+            })
+        }
         Subcommands::Diff(crate::plumbing::options::diff::Platform { cmd }) => match cmd {
             crate::plumbing::options::diff::SubCommands::Tree {
                 old_treeish,
                 new_treeish,
-            } => prepare_and_run(
-                "diff-tree",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
-                    core::repository::diff::tree(repository(Mode::Lenient)?, out, old_treeish, new_treeish)
-                },
-            ),
+            } => prepare_and_run("diff-tree", verbose, None, move |_progress, out, _err| {
+                core::repository::diff::tree(repository(Mode::Lenient)?, out, old_treeish, new_treeish)
+            }),
             crate::plumbing::options::diff::SubCommands::File {
                 old_revspec,
                 new_revspec,
-            } => prepare_and_run(
-                "diff-file",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
-                    core::repository::diff::file(repository(Mode::Lenient)?, out, old_revspec, new_revspec)
-                },
-            ),
+            } => prepare_and_run("diff-file", verbose, None, move |_progress, out, _err| {
+                core::repository::diff::file(repository(Mode::Lenient)?, out, old_revspec, new_revspec)
+            }),
         },
-        Subcommands::Log(crate::plumbing::options::log::Platform { pathspec }) => prepare_and_run(
-            "log",
-            trace,
-            verbose,
-            progress,
-            progress_keep_open,
-            None,
-            move |_progress, out, _err| core::repository::log::log(repository(Mode::Lenient)?, out, pathspec),
-        ),
+        Subcommands::Log(crate::plumbing::options::log::Platform { pathspec }) => {
+            prepare_and_run("log", verbose, None, move |_progress, out, _err| {
+                core::repository::log::log(repository(Mode::Lenient)?, out, pathspec)
+            })
+        }
         Subcommands::Worktree(crate::plumbing::options::worktree::Platform { cmd }) => match cmd {
-            crate::plumbing::options::worktree::SubCommands::List => prepare_and_run(
-                "worktree-list",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| core::repository::worktree::list(repository(Mode::Lenient)?, out, format),
-            ),
+            crate::plumbing::options::worktree::SubCommands::List => {
+                prepare_and_run("worktree-list", verbose, None, move |_progress, out, _err| {
+                    core::repository::worktree::list(repository(Mode::Lenient)?, out, format)
+                })
+            }
+            crate::plumbing::options::worktree::SubCommands::Add {
+                detach,
+                path,
+                reference,
+            } => prepare_and_run("worktree-add", verbose, None, move |progress, _out, _err| {
+                core::repository::worktree::add(repository(Mode::Lenient)?, path, reference, detach, progress)
+            }),
+            crate::plumbing::options::worktree::SubCommands::Remove { force, worktree } => {
+                prepare_and_run("worktree-remove", verbose, None, move |progress, _out, _err| {
+                    core::repository::worktree::remove(repository(Mode::Lenient)?, worktree, force, progress)
+                })
+            }
         },
         Subcommands::IsClean | Subcommands::IsChanged => {
             let mode = if matches!(cmd, Subcommands::IsClean) {
@@ -338,17 +297,9 @@ pub fn main() -> Result<()> {
             } else {
                 core::repository::dirty::Mode::IsDirty
             };
-            prepare_and_run(
-                "clean",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
-                    core::repository::dirty::check(repository(Mode::Lenient)?, mode, out, format)
-                },
-            )
+            prepare_and_run("clean", verbose, None, move |_progress, out, _err| {
+                core::repository::dirty::check(repository(Mode::Lenient)?, mode, out, format)
+            })
         }
         #[cfg(feature = "gitoxide-core-tools-clean")]
         Subcommands::Clean(crate::plumbing::options::clean::Command {
@@ -363,34 +314,26 @@ pub fn main() -> Result<()> {
             pathspec_matches_result,
             skip_hidden_repositories,
             find_untracked_repositories,
-        }) => prepare_and_run(
-            "clean",
-            trace,
-            verbose,
-            progress,
-            progress_keep_open,
-            None,
-            move |_progress, out, err| {
-                core::repository::clean(
-                    repository(Mode::Lenient)?,
-                    out,
-                    err,
-                    pathspec,
-                    core::repository::clean::Options {
-                        debug,
-                        format,
-                        execute,
-                        ignored,
-                        precious,
-                        directories,
-                        repositories,
-                        pathspec_matches_result,
-                        skip_hidden_repositories: skip_hidden_repositories.map(Into::into),
-                        find_untracked_repositories: find_untracked_repositories.into(),
-                    },
-                )
-            },
-        ),
+        }) => prepare_and_run("clean", verbose, None, move |_progress, out, err| {
+            core::repository::clean(
+                repository(Mode::Lenient)?,
+                out,
+                err,
+                pathspec,
+                core::repository::clean::Options {
+                    debug,
+                    format,
+                    execute,
+                    ignored,
+                    precious,
+                    directories,
+                    repositories,
+                    pathspec_matches_result,
+                    skip_hidden_repositories: skip_hidden_repositories.map(Into::into),
+                    find_untracked_repositories: find_untracked_repositories.into(),
+                },
+            )
+        }),
         Subcommands::Status(crate::plumbing::options::status::Platform {
             ignored,
             untracked,
@@ -400,112 +343,88 @@ pub fn main() -> Result<()> {
             no_write,
             pathspec,
             index_worktree_renames,
-        }) => prepare_and_run(
-            "status",
-            trace,
-            auto_verbose,
-            progress,
-            progress_keep_open,
-            None,
-            move |progress, out, err| {
-                use crate::plumbing::options::status::Submodules;
-                core::repository::status::show(
-                    repository(Mode::Lenient)?,
-                    pathspec,
-                    out,
-                    err,
-                    progress,
-                    core::repository::status::Options {
-                        format: match status_format.unwrap_or_default() {
-                            crate::plumbing::options::status::Format::Simplified => {
-                                core::repository::status::Format::Simplified
-                            }
-                            crate::plumbing::options::status::Format::PorcelainV2 => {
-                                core::repository::status::Format::PorcelainV2
-                            }
-                        },
-                        ignored: ignored.map(|ignored| match ignored.unwrap_or_default() {
-                            crate::plumbing::options::status::Ignored::Matching => {
-                                core::repository::status::Ignored::Matching
-                            }
-                            crate::plumbing::options::status::Ignored::Collapsed => {
-                                core::repository::status::Ignored::Collapsed
-                            }
-                        }),
-                        untracked: untracked.map(|mode| match mode.unwrap_or_default() {
-                            crate::plumbing::options::status::Untracked::No => gix::status::UntrackedFiles::None,
-                            crate::plumbing::options::status::Untracked::Normal => {
-                                gix::status::UntrackedFiles::Collapsed
-                            }
-                            crate::plumbing::options::status::Untracked::All => gix::status::UntrackedFiles::Files,
-                        }),
-                        output_format: format,
-                        statistics,
-                        thread_limit: thread_limit.or(cfg!(target_os = "macos").then_some(3)), // TODO: make this a configurable when in `gix`, this seems to be optimal on MacOS, linux scales though! MacOS also scales if reading a lot of files for refresh index
-                        allow_write: !no_write,
-                        index_worktree_renames: index_worktree_renames.map(|percentage| percentage.unwrap_or(0.5)),
-                        submodules: submodules.map(|submodules| match submodules {
-                            Submodules::All => core::repository::status::Submodules::All,
-                            Submodules::RefChange => core::repository::status::Submodules::RefChange,
-                            Submodules::Modifications => core::repository::status::Submodules::Modifications,
-                            Submodules::None => core::repository::status::Submodules::None,
-                        }),
+        }) => prepare_and_run("status", auto_verbose, None, move |progress, out, err| {
+            use crate::plumbing::options::status::Submodules;
+            core::repository::status::show(
+                repository(Mode::Lenient)?,
+                pathspec,
+                out,
+                err,
+                progress,
+                core::repository::status::Options {
+                    format: match status_format.unwrap_or_default() {
+                        crate::plumbing::options::status::Format::Simplified => {
+                            core::repository::status::Format::Simplified
+                        }
+                        crate::plumbing::options::status::Format::PorcelainV2 => {
+                            core::repository::status::Format::PorcelainV2
+                        }
                     },
-                )
-            },
-        ),
+                    ignored: ignored.map(|ignored| match ignored.unwrap_or_default() {
+                        crate::plumbing::options::status::Ignored::Matching => {
+                            core::repository::status::Ignored::Matching
+                        }
+                        crate::plumbing::options::status::Ignored::Collapsed => {
+                            core::repository::status::Ignored::Collapsed
+                        }
+                    }),
+                    untracked: untracked.map(|mode| match mode.unwrap_or_default() {
+                        crate::plumbing::options::status::Untracked::No => gix::status::UntrackedFiles::None,
+                        crate::plumbing::options::status::Untracked::Normal => gix::status::UntrackedFiles::Collapsed,
+                        crate::plumbing::options::status::Untracked::All => gix::status::UntrackedFiles::Files,
+                    }),
+                    output_format: format,
+                    statistics,
+                    thread_limit: thread_limit.or(cfg!(target_os = "macos").then_some(3)), // TODO: make this a configurable when in `gix`, this seems to be optimal on MacOS, linux scales though! MacOS also scales if reading a lot of files for refresh index
+                    allow_write: !no_write,
+                    index_worktree_renames: index_worktree_renames.map(|percentage| percentage.unwrap_or(0.5)),
+                    submodules: submodules.map(|submodules| match submodules {
+                        Submodules::All => core::repository::status::Submodules::All,
+                        Submodules::RefChange => core::repository::status::Submodules::RefChange,
+                        Submodules::Modifications => core::repository::status::Submodules::Modifications,
+                        Submodules::None => core::repository::status::Submodules::None,
+                    }),
+                },
+            )
+        }),
         Subcommands::Dirwalk(crate::plumbing::options::dirwalk::Platform {
             statistics,
             untracked,
             pathspec,
-        }) => prepare_and_run(
-            "dirwalk",
-            trace,
-            auto_verbose,
-            progress,
-            progress_keep_open,
-            None,
-            move |_progress, out, err| {
-                core::repository::dirwalk::walk(
-                    repository(Mode::Lenient)?,
-                    pathspec,
-                    out,
-                    err,
-                    core::repository::dirwalk::Options {
-                        output_format: format,
-                        statistics,
-                        untracked: match untracked {
-                            crate::plumbing::options::dirwalk::Untracked::Collapsed => {
-                                core::repository::dirwalk::Untracked::Collapsed
-                            }
-                            crate::plumbing::options::dirwalk::Untracked::Matching => {
-                                core::repository::dirwalk::Untracked::Matching
-                            }
-                        },
+        }) => prepare_and_run("dirwalk", auto_verbose, None, move |_progress, out, err| {
+            core::repository::dirwalk::walk(
+                repository(Mode::Lenient)?,
+                pathspec,
+                out,
+                err,
+                core::repository::dirwalk::Options {
+                    output_format: format,
+                    statistics,
+                    untracked: match untracked {
+                        crate::plumbing::options::dirwalk::Untracked::Collapsed => {
+                            core::repository::dirwalk::Untracked::Collapsed
+                        }
+                        crate::plumbing::options::dirwalk::Untracked::Matching => {
+                            core::repository::dirwalk::Untracked::Matching
+                        }
                     },
-                )
-            },
-        ),
+                },
+            )
+        }),
         Subcommands::Submodule(platform) => match platform
             .cmds
             .unwrap_or(crate::plumbing::options::submodule::Subcommands::List { dirty_suffix: None })
         {
-            crate::plumbing::options::submodule::Subcommands::List { dirty_suffix } => prepare_and_run(
-                "submodule-list",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
+            crate::plumbing::options::submodule::Subcommands::List { dirty_suffix } => {
+                prepare_and_run("submodule-list", verbose, None, move |_progress, out, _err| {
                     core::repository::submodule::list(
                         repository(Mode::Lenient)?,
                         out,
                         format,
                         dirty_suffix.map(|suffix| suffix.unwrap_or_else(|| "dirty".to_string())),
                     )
-                },
-            ),
+                })
+            }
         },
         #[cfg(feature = "gitoxide-core-tools-archive")]
         Subcommands::Archive(crate::plumbing::options::archive::Platform {
@@ -516,50 +435,42 @@ pub fn main() -> Result<()> {
             add_virtual_file,
             output_file,
             treeish,
-        }) => prepare_and_run(
-            "archive",
-            trace,
-            auto_verbose,
-            progress,
-            progress_keep_open,
-            None,
-            move |progress, _out, _err| {
-                if add_virtual_file.len() % 2 != 0 {
-                    anyhow::bail!(
-                        "Virtual files must be specified in pairs of two: slash/separated/path content, got {}",
-                        add_virtual_file.join(", ")
-                    )
-                }
-                core::repository::archive::stream(
-                    repository(Mode::Lenient)?,
-                    &output_file,
-                    treeish.as_deref(),
-                    progress,
-                    core::repository::archive::Options {
-                        add_paths: add_path,
-                        prefix,
-                        files: add_virtual_file
-                            .as_chunks::<2>()
-                            .0
-                            .iter()
-                            .map(|c| (c[0].clone(), c[1].clone()))
-                            .collect(),
-                        format: format.map(|f| match f {
-                            crate::plumbing::options::archive::Format::Internal => {
-                                gix::worktree::archive::Format::InternalTransientNonPersistable
-                            }
-                            crate::plumbing::options::archive::Format::Tar => gix::worktree::archive::Format::Tar,
-                            crate::plumbing::options::archive::Format::TarGz => {
-                                gix::worktree::archive::Format::TarGz { compression_level }
-                            }
-                            crate::plumbing::options::archive::Format::Zip => {
-                                gix::worktree::archive::Format::Zip { compression_level }
-                            }
-                        }),
-                    },
+        }) => prepare_and_run("archive", auto_verbose, None, move |progress, _out, _err| {
+            if add_virtual_file.len() % 2 != 0 {
+                anyhow::bail!(
+                    "Virtual files must be specified in pairs of two: slash/separated/path content, got {}",
+                    add_virtual_file.join(", ")
                 )
-            },
-        ),
+            }
+            core::repository::archive::stream(
+                repository(Mode::Lenient)?,
+                &output_file,
+                treeish.as_deref(),
+                progress,
+                core::repository::archive::Options {
+                    add_paths: add_path,
+                    prefix,
+                    files: add_virtual_file
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|c| (c[0].clone(), c[1].clone()))
+                        .collect(),
+                    format: format.map(|f| match f {
+                        crate::plumbing::options::archive::Format::Internal => {
+                            gix::worktree::archive::Format::InternalTransientNonPersistable
+                        }
+                        crate::plumbing::options::archive::Format::Tar => gix::worktree::archive::Format::Tar,
+                        crate::plumbing::options::archive::Format::TarGz => {
+                            gix::worktree::archive::Format::TarGz { compression_level }
+                        }
+                        crate::plumbing::options::archive::Format::Zip => {
+                            gix::worktree::archive::Format::Zip { compression_level }
+                        }
+                    }),
+                },
+            )
+        }),
         Subcommands::Branch(platform) => match platform.cmd {
             branch::Subcommands::List { all } => {
                 use core::repository::branch::list;
@@ -567,73 +478,47 @@ pub fn main() -> Result<()> {
                 let kind = if all { list::Kind::All } else { list::Kind::Local };
                 let options = list::Options { kind };
 
-                prepare_and_run(
-                    "branch-list",
-                    trace,
-                    auto_verbose,
-                    progress,
-                    progress_keep_open,
-                    None,
-                    move |_progress, out, _err| {
-                        core::repository::branch::list(repository(Mode::Lenient)?, out, format, options)
-                    },
-                )
+                prepare_and_run("branch-list", auto_verbose, None, move |_progress, out, _err| {
+                    core::repository::branch::list(repository(Mode::Lenient)?, out, format, options)
+                })
             }
         },
         #[cfg(feature = "gitoxide-core-tools-corpus")]
-        Subcommands::Corpus(crate::plumbing::options::corpus::Platform { db, path, cmd }) => {
-            let reverse_trace_lines = progress;
-            prepare_and_run(
-                "corpus",
-                trace,
-                auto_verbose,
-                progress,
-                progress_keep_open,
-                core::corpus::PROGRESS_RANGE,
-                move |progress, _out, _err| {
-                    let mut engine = core::corpus::Engine::open_or_create(
-                        db,
-                        core::corpus::engine::State {
-                            gitoxide_version: option_env!("GIX_VERSION")
-                                .ok_or_else(|| anyhow::anyhow!("GIX_VERSION must be set in build-script"))?
-                                .into(),
-                            progress,
-                            trace_to_progress: trace,
-                            reverse_trace_lines,
-                        },
-                    )?;
-                    match cmd {
-                        crate::plumbing::options::corpus::SubCommands::Run {
-                            dry_run,
-                            repo_sql_suffix,
-                            include_task,
-                        } => engine.run(path, thread_limit, dry_run, repo_sql_suffix, include_task),
-                        crate::plumbing::options::corpus::SubCommands::Refresh => engine.refresh(path),
-                    }
-                },
-            )
-        }
+        Subcommands::Corpus(crate::plumbing::options::corpus::Platform { db, path, cmd }) => prepare_and_run(
+            "corpus",
+            auto_verbose,
+            core::corpus::PROGRESS_RANGE,
+            move |root_progress, _out, _err| {
+                let mut engine = core::corpus::Engine::open_or_create(
+                    db,
+                    core::corpus::engine::State {
+                        gitoxide_version: option_env!("GIX_VERSION")
+                            .ok_or_else(|| anyhow::anyhow!("GIX_VERSION must be set in build-script"))?
+                            .into(),
+                        progress: root_progress,
+                        trace,
+                        trace_output,
+                    },
+                )?;
+                match cmd {
+                    crate::plumbing::options::corpus::SubCommands::Run {
+                        dry_run,
+                        repo_sql_suffix,
+                        include_task,
+                    } => engine.run(path, thread_limit, dry_run, repo_sql_suffix, include_task),
+                    crate::plumbing::options::corpus::SubCommands::Refresh => engine.refresh(path),
+                }
+            },
+        ),
         Subcommands::CommitGraph(cmd) => match cmd {
-            commitgraph::Subcommands::List { long_hashes, spec } => prepare_and_run(
-                "commitgraph-list",
-                trace,
-                auto_verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
+            commitgraph::Subcommands::List { long_hashes, spec } => {
+                prepare_and_run("commitgraph-list", auto_verbose, None, move |_progress, out, _err| {
                     core::repository::commitgraph::list(repository(Mode::Lenient)?, spec, out, long_hashes, format)
-                },
-            )
-            .map(|_| ()),
-            commitgraph::Subcommands::Verify { statistics } => prepare_and_run(
-                "commitgraph-verify",
-                trace,
-                auto_verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, err| {
+                })
+                .map(|_| ())
+            }
+            commitgraph::Subcommands::Verify { statistics } => {
+                prepare_and_run("commitgraph-verify", auto_verbose, None, move |_progress, out, err| {
                     let output_statistics = if statistics { Some(format) } else { None };
                     core::repository::commitgraph::verify(
                         repository(Mode::Lenient)?,
@@ -643,9 +528,9 @@ pub fn main() -> Result<()> {
                             output_statistics,
                         },
                     )
-                },
-            )
-            .map(|_| ()),
+                })
+                .map(|_| ())
+            }
         },
         #[cfg(feature = "gitoxide-core-blocking-client")]
         Subcommands::Clone(crate::plumbing::options::clone::Platform {
@@ -669,10 +554,7 @@ pub fn main() -> Result<()> {
             };
             prepare_and_run(
                 "clone",
-                trace,
                 auto_verbose,
-                progress,
-                progress_keep_open,
                 core::repository::clone::PROGRESS_RANGE,
                 move |progress, out, err| core::repository::clone(remote, directory, config, progress, out, err, opts),
             )
@@ -699,25 +581,26 @@ pub fn main() -> Result<()> {
             };
             prepare_and_run(
                 "fetch",
-                trace,
                 auto_verbose,
-                progress,
-                progress_keep_open,
                 core::repository::fetch::PROGRESS_RANGE,
                 move |progress, out, err| {
                     core::repository::fetch(repository(Mode::LenientWithGitInstallConfig)?, progress, out, err, opts)
                 },
             )
         }
-        Subcommands::ConfigTree => show_progress(),
-        Subcommands::Credential(cmd) => core::repository::credential(
-            repository(Mode::StrictWithGitInstallConfig).ok(),
-            match cmd {
-                credential::Subcommands::Fill => gix::credentials::program::main::Action::Get,
-                credential::Subcommands::Approve => gix::credentials::program::main::Action::Store,
-                credential::Subcommands::Reject => gix::credentials::program::main::Action::Erase,
-            },
-        ),
+        Subcommands::ConfigTree => {
+            prepare_and_run("config-tree", false, None, move |_progress, _out, _err| show_progress())
+        }
+        Subcommands::Credential(cmd) => prepare_and_run("credential", false, None, move |_progress, _out, _err| {
+            core::repository::credential(
+                repository(Mode::StrictWithGitInstallConfig).ok(),
+                match cmd {
+                    credential::Subcommands::Fill => gix::credentials::program::main::Action::Get,
+                    credential::Subcommands::Approve => gix::credentials::program::main::Action::Store,
+                    credential::Subcommands::Reject => gix::credentials::program::main::Action::Erase,
+                },
+            )
+        }),
         #[cfg(any(feature = "gitoxide-core-async-client", feature = "gitoxide-core-blocking-client"))]
         Subcommands::Remote(crate::plumbing::options::remote::Platform {
             name,
@@ -726,17 +609,21 @@ pub fn main() -> Result<()> {
         }) => {
             use crate::plumbing::options::remote;
             match cmd {
-                remote::Subcommands::Url { all, push } => core::repository::remote::url(
-                    repository(Mode::LenientWithGitInstallConfig)?,
-                    name.as_deref(),
-                    if push {
-                        gix::remote::Direction::Push
-                    } else {
-                        gix::remote::Direction::Fetch
-                    },
-                    all,
-                    std::io::stdout(),
-                ),
+                remote::Subcommands::Url { all, push } => {
+                    prepare_and_run("remote-url", false, None, move |_progress, out, _err| {
+                        core::repository::remote::url(
+                            repository(Mode::LenientWithGitInstallConfig)?,
+                            name.as_deref(),
+                            if push {
+                                gix::remote::Direction::Push
+                            } else {
+                                gix::remote::Direction::Fetch
+                            },
+                            all,
+                            out,
+                        )
+                    })
+                }
                 remote::Subcommands::Refs | remote::Subcommands::RefMap { .. } => {
                     let kind = match cmd {
                         remote::Subcommands::Refs => core::repository::remote::refs::Kind::Remote,
@@ -758,10 +645,7 @@ pub fn main() -> Result<()> {
                     {
                         prepare_and_run(
                             "remote-refs",
-                            trace,
                             auto_verbose,
-                            progress,
-                            progress_keep_open,
                             core::repository::remote::refs::PROGRESS_RANGE,
                             move |progress, out, err| {
                                 core::repository::remote::refs(
@@ -779,10 +663,9 @@ pub fn main() -> Result<()> {
                     {
                         let (_handle, progress) = async_util::prepare(
                             auto_verbose,
-                            trace,
                             "remote-refs",
                             Some(core::repository::remote::refs::PROGRESS_RANGE),
-                        );
+                        )?;
                         futures_lite::future::block_on(core::repository::remote::refs(
                             repository(Mode::LenientWithGitInstallConfig)?,
                             kind,
@@ -796,14 +679,8 @@ pub fn main() -> Result<()> {
             }
         }
         Subcommands::Config(config::Platform { filter, cmd }) => match cmd {
-            Some(config::Subcommands::Show) | None => prepare_and_run(
-                "config-show",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
+            Some(config::Subcommands::Show) | None => {
+                prepare_and_run("config-show", verbose, None, move |_progress, out, _err| {
                     core::repository::config::show(
                         repository(Mode::LenientWithGitInstallConfig)?,
                         filter,
@@ -811,75 +688,45 @@ pub fn main() -> Result<()> {
                         format,
                         out,
                     )
-                },
-            )
-            .map(|_| ()),
-            Some(config::Subcommands::List) => prepare_and_run(
-                "config-list-files",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
+                })
+                .map(|_| ())
+            }
+            Some(config::Subcommands::List) => {
+                prepare_and_run("config-list-files", verbose, None, move |_progress, out, _err| {
                     core::repository::config::list_files(
                         repository(Mode::LenientWithGitInstallConfig)?,
                         config,
                         format,
                         out,
                     )
-                },
-            )
-            .map(|_| ()),
+                })
+                .map(|_| ())
+            }
             Some(config::Subcommands::Fmt {
                 in_place,
                 in_file,
                 out_file,
-            }) => prepare_and_run(
-                "config-fmt",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
-                    let repo = in_file
-                        .is_none()
-                        .then(|| repository(Mode::LenientWithGitInstallConfig))
-                        .transpose()?;
-                    core::repository::config::fmt(repo, in_file, out_file, in_place, out)
-                },
-            )
+            }) => prepare_and_run("config-fmt", verbose, None, move |_progress, out, _err| {
+                let repo = in_file
+                    .is_none()
+                    .then(|| repository(Mode::LenientWithGitInstallConfig))
+                    .transpose()?;
+                core::repository::config::fmt(repo, in_file, out_file, in_place, out)
+            })
             .map(|_| ()),
         },
         Subcommands::Free(subcommands) => match subcommands {
-            free::Subcommands::Discover => prepare_and_run(
-                "discover",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| core::discover(&repository_path, out),
-            ),
-            free::Subcommands::Trust { paths } => prepare_and_run(
-                "trust",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| core::trust(&paths, out),
-            ),
+            free::Subcommands::Discover => prepare_and_run("discover", verbose, None, move |_progress, out, _err| {
+                core::discover(&repository_path, out)
+            }),
+            free::Subcommands::Trust { paths } => {
+                prepare_and_run("trust", verbose, None, move |_progress, out, _err| {
+                    core::trust(&paths, out)
+                })
+            }
             free::Subcommands::CommitGraph(cmd) => match cmd {
-                free::commitgraph::Subcommands::Verify { path, statistics } => prepare_and_run(
-                    "commitgraph-verify",
-                    trace,
-                    auto_verbose,
-                    progress,
-                    progress_keep_open,
-                    None,
-                    move |_progress, out, err| {
+                free::commitgraph::Subcommands::Verify { path, statistics } => {
+                    prepare_and_run("commitgraph-verify", auto_verbose, None, move |_progress, out, err| {
                         let output_statistics = if statistics { Some(format) } else { None };
                         core::commitgraph::verify(
                             path,
@@ -889,9 +736,9 @@ pub fn main() -> Result<()> {
                                 output_statistics,
                             },
                         )
-                    },
-                )
-                .map(|_| ()),
+                    })
+                    .map(|_| ())
+                }
             },
             free::Subcommands::Index(free::index::Platform {
                 object_hash,
@@ -903,54 +750,32 @@ pub fn main() -> Result<()> {
                     index_output_path,
                     skip_hash,
                     file,
-                } => prepare_and_run(
-                    "index-from-list",
-                    trace,
-                    verbose,
-                    progress,
-                    progress_keep_open,
-                    None,
-                    move |_progress, _out, _err| {
-                        core::repository::index::from_list(file, index_output_path, force, skip_hash)
-                    },
-                ),
+                } => prepare_and_run("index-from-list", verbose, None, move |_progress, _out, _err| {
+                    core::repository::index::from_list(file, index_output_path, force, skip_hash)
+                }),
                 free::index::Subcommands::CheckoutExclusive {
                     directory,
                     empty_files,
                     repository,
                     keep_going,
-                } => prepare_and_run(
-                    "index-checkout",
-                    trace,
-                    auto_verbose,
-                    progress,
-                    progress_keep_open,
-                    None,
-                    move |progress, _out, err| {
-                        core::index::checkout_exclusive(
-                            index_path,
-                            directory,
-                            repository,
-                            err,
-                            progress,
-                            &should_interrupt,
-                            core::index::checkout_exclusive::Options {
-                                index: core::index::Options { object_hash, format },
-                                empty_files,
-                                keep_going,
-                                thread_limit,
-                            },
-                        )
-                    },
-                ),
-                free::index::Subcommands::Info { no_details } => prepare_and_run(
-                    "index-info",
-                    trace,
-                    verbose,
-                    progress,
-                    progress_keep_open,
-                    None,
-                    move |_progress, out, err| {
+                } => prepare_and_run("index-checkout", auto_verbose, None, move |progress, _out, err| {
+                    core::index::checkout_exclusive(
+                        index_path,
+                        directory,
+                        repository,
+                        err,
+                        progress,
+                        &should_interrupt,
+                        core::index::checkout_exclusive::Options {
+                            index: core::index::Options { object_hash, format },
+                            empty_files,
+                            keep_going,
+                            thread_limit,
+                        },
+                    )
+                }),
+                free::index::Subcommands::Info { no_details } => {
+                    prepare_and_run("index-info", verbose, None, move |_progress, out, err| {
                         core::index::information(
                             index_path,
                             out,
@@ -960,29 +785,20 @@ pub fn main() -> Result<()> {
                                 extension_details: !no_details,
                             },
                         )
-                    },
-                ),
-                free::index::Subcommands::Verify => prepare_and_run(
-                    "index-verify",
-                    trace,
-                    auto_verbose,
-                    progress,
-                    progress_keep_open,
-                    None,
-                    move |_progress, out, _err| {
+                    })
+                }
+                free::index::Subcommands::Verify => {
+                    prepare_and_run("index-verify", auto_verbose, None, move |_progress, out, _err| {
                         core::index::verify(index_path, out, core::index::Options { object_hash, format })
-                    },
-                ),
+                    })
+                }
             },
             free::Subcommands::Mailmap {
                 cmd: free::mailmap::Platform { path, cmd },
             } => match cmd {
                 free::mailmap::Subcommands::Verify => prepare_and_run(
                     "mailmap-verify",
-                    trace,
                     auto_verbose,
-                    progress,
-                    progress_keep_open,
                     core::mailmap::PROGRESS_RANGE,
                     move |_progress, out, _err| core::mailmap::verify(path, format, out),
                 ),
@@ -996,10 +812,7 @@ pub fn main() -> Result<()> {
                     url,
                 } => prepare_and_run(
                     "remote-refs",
-                    trace,
                     verbose,
-                    progress,
-                    progress_keep_open,
                     core::remote::PROGRESS_RANGE,
                     move |progress, out, _err| {
                         core::remote::refs(
@@ -1033,10 +846,7 @@ pub fn main() -> Result<()> {
                     let has_tips = !tips.is_empty();
                     prepare_and_run(
                         "pack-create",
-                        trace,
                         verbose,
-                        progress,
-                        progress_keep_open,
                         core::pack::create::PROGRESS_RANGE,
                         move |progress, out, _err| {
                             let input = if has_tips { None } else { stdin_or_bail()?.into() };
@@ -1068,7 +878,7 @@ pub fn main() -> Result<()> {
                     refs_directory,
                 } => {
                     let (_handle, progress) =
-                        async_util::prepare(verbose, trace, "pack-receive", core::pack::receive::PROGRESS_RANGE);
+                        async_util::prepare(verbose, "pack-receive", core::pack::receive::PROGRESS_RANGE)?;
                     let fut = core::pack::receive(
                         protocol,
                         &url,
@@ -1095,10 +905,7 @@ pub fn main() -> Result<()> {
                     refs_directory,
                 } => prepare_and_run(
                     "pack-receive",
-                    trace,
                     verbose,
-                    progress,
-                    progress_keep_open,
                     core::pack::receive::PROGRESS_RANGE,
                     move |progress, out, _err| {
                         core::pack::receive(
@@ -1125,30 +932,22 @@ pub fn main() -> Result<()> {
                     pack_path,
                     object_path,
                     verify,
-                } => prepare_and_run(
-                    "pack-explode",
-                    trace,
-                    auto_verbose,
-                    progress,
-                    progress_keep_open,
-                    None,
-                    move |progress, _out, _err| {
-                        core::pack::explode::pack_or_pack_index(
-                            pack_path,
-                            object_path,
-                            check,
-                            progress,
-                            core::pack::explode::Context {
-                                thread_limit,
-                                delete_pack,
-                                sink_compress,
-                                verify,
-                                should_interrupt,
-                                object_hash,
-                            },
-                        )
-                    },
-                ),
+                } => prepare_and_run("pack-explode", auto_verbose, None, move |progress, _out, _err| {
+                    core::pack::explode::pack_or_pack_index(
+                        pack_path,
+                        object_path,
+                        check,
+                        progress,
+                        core::pack::explode::Context {
+                            thread_limit,
+                            delete_pack,
+                            sink_compress,
+                            verify,
+                            should_interrupt,
+                            object_hash,
+                        },
+                    )
+                }),
                 free::pack::Subcommands::Verify {
                     args:
                         free::pack::VerifyOptions {
@@ -1160,10 +959,7 @@ pub fn main() -> Result<()> {
                     path,
                 } => prepare_and_run(
                     "pack-verify",
-                    trace,
                     auto_verbose,
-                    progress,
-                    progress_keep_open,
                     verify::PROGRESS_RANGE,
                     move |progress, out, err| {
                         let mode = verify_mode(decode, re_encode);
@@ -1189,19 +985,13 @@ pub fn main() -> Result<()> {
                     match cmd {
                         free::pack::multi_index::Subcommands::Entries => prepare_and_run(
                             "pack-multi-index-entries",
-                            trace,
                             verbose,
-                            progress,
-                            progress_keep_open,
                             core::pack::multi_index::PROGRESS_RANGE,
                             move |_progress, out, _err| core::pack::multi_index::entries(multi_index_path, format, out),
                         ),
                         free::pack::multi_index::Subcommands::Info => prepare_and_run(
                             "pack-multi-index-info",
-                            trace,
                             verbose,
-                            progress,
-                            progress_keep_open,
                             core::pack::multi_index::PROGRESS_RANGE,
                             move |_progress, out, err| {
                                 core::pack::multi_index::info(multi_index_path, format, out, err)
@@ -1209,10 +999,7 @@ pub fn main() -> Result<()> {
                         ),
                         free::pack::multi_index::Subcommands::Verify => prepare_and_run(
                             "pack-multi-index-verify",
-                            trace,
                             auto_verbose,
-                            progress,
-                            progress_keep_open,
                             core::pack::multi_index::PROGRESS_RANGE,
                             move |progress, _out, _err| {
                                 core::pack::multi_index::verify(multi_index_path, progress, &should_interrupt)
@@ -1220,10 +1007,7 @@ pub fn main() -> Result<()> {
                         ),
                         free::pack::multi_index::Subcommands::Create { index_paths } => prepare_and_run(
                             "pack-multi-index-create",
-                            trace,
                             verbose,
-                            progress,
-                            progress_keep_open,
                             core::pack::multi_index::PROGRESS_RANGE,
                             move |progress, _out, _err| {
                                 core::pack::multi_index::create(
@@ -1244,10 +1028,7 @@ pub fn main() -> Result<()> {
                         directory,
                     } => prepare_and_run(
                         "pack-index-create",
-                        trace,
                         verbose,
-                        progress,
-                        progress_keep_open,
                         core::pack::index::PROGRESS_RANGE,
                         move |progress, out, _err| {
                             use gitoxide_core::pack::index::PathOrRead;
@@ -1290,10 +1071,7 @@ pub fn main() -> Result<()> {
                 },
         } => prepare_and_run(
             "verify",
-            trace,
             auto_verbose,
-            progress,
-            progress_keep_open,
             core::repository::verify::PROGRESS_RANGE,
             move |progress, out, _err| {
                 core::repository::verify::integrity(
@@ -1318,10 +1096,7 @@ pub fn main() -> Result<()> {
                 long_hashes,
             } => prepare_and_run(
                 "revision-list",
-                trace,
                 auto_verbose,
-                progress,
-                progress_keep_open,
                 core::repository::revision::list::PROGRESS_RANGE,
                 move |progress, out, _err| {
                     core::repository::revision::list(
@@ -1342,24 +1117,17 @@ pub fn main() -> Result<()> {
             ),
             revision::Subcommands::PreviousBranches => prepare_and_run(
                 "revision-previousbranches",
-                trace,
                 verbose,
-                progress,
-                progress_keep_open,
                 None,
                 move |_progress, out, _err| {
                     core::repository::revision::previous_branches(repository(Mode::Lenient)?, out, format)
                 },
             ),
-            revision::Subcommands::Explain { spec } => prepare_and_run(
-                "revision-explain",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| core::repository::revision::explain(spec, out),
-            ),
+            revision::Subcommands::Explain { spec } => {
+                prepare_and_run("revision-explain", verbose, None, move |_progress, out, _err| {
+                    core::repository::revision::explain(spec, out)
+                })
+            }
             revision::Subcommands::Resolve {
                 specs,
                 explain,
@@ -1367,80 +1135,52 @@ pub fn main() -> Result<()> {
                 tree_mode,
                 reference,
                 blob_format,
-            } => prepare_and_run(
-                "revision-parse",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
-                    core::repository::revision::resolve(
-                        repository(Mode::Strict)?,
-                        specs,
-                        out,
-                        core::repository::revision::resolve::Options {
-                            format,
-                            explain,
-                            cat_file,
-                            show_reference: reference,
-                            tree_mode: match tree_mode {
-                                revision::resolve::TreeMode::Raw => core::repository::revision::resolve::TreeMode::Raw,
-                                revision::resolve::TreeMode::Pretty => {
-                                    core::repository::revision::resolve::TreeMode::Pretty
-                                }
-                            },
-                            blob_format: match blob_format {
-                                revision::resolve::BlobFormat::Git => {
-                                    core::repository::revision::resolve::BlobFormat::Git
-                                }
-                                revision::resolve::BlobFormat::Worktree => {
-                                    core::repository::revision::resolve::BlobFormat::Worktree
-                                }
-                                revision::resolve::BlobFormat::Diff => {
-                                    core::repository::revision::resolve::BlobFormat::Diff
-                                }
-                                revision::resolve::BlobFormat::DiffOrGit => {
-                                    core::repository::revision::resolve::BlobFormat::DiffOrGit
-                                }
-                            },
+            } => prepare_and_run("revision-parse", verbose, None, move |_progress, out, _err| {
+                core::repository::revision::resolve(
+                    repository(Mode::Strict)?,
+                    specs,
+                    out,
+                    core::repository::revision::resolve::Options {
+                        format,
+                        explain,
+                        cat_file,
+                        show_reference: reference,
+                        tree_mode: match tree_mode {
+                            revision::resolve::TreeMode::Raw => core::repository::revision::resolve::TreeMode::Raw,
+                            revision::resolve::TreeMode::Pretty => {
+                                core::repository::revision::resolve::TreeMode::Pretty
+                            }
                         },
-                    )
-                },
-            ),
+                        blob_format: match blob_format {
+                            revision::resolve::BlobFormat::Git => core::repository::revision::resolve::BlobFormat::Git,
+                            revision::resolve::BlobFormat::Worktree => {
+                                core::repository::revision::resolve::BlobFormat::Worktree
+                            }
+                            revision::resolve::BlobFormat::Diff => {
+                                core::repository::revision::resolve::BlobFormat::Diff
+                            }
+                            revision::resolve::BlobFormat::DiffOrGit => {
+                                core::repository::revision::resolve::BlobFormat::DiffOrGit
+                            }
+                        },
+                    },
+                )
+            }),
         },
-        Subcommands::Cat { revspec } => prepare_and_run(
-            "cat",
-            trace,
-            verbose,
-            progress,
-            progress_keep_open,
-            None,
-            move |_progress, out, _err| core::repository::cat(repository(Mode::Lenient)?, &revspec, out),
-        ),
+        Subcommands::Cat { revspec } => prepare_and_run("cat", verbose, None, move |_progress, out, _err| {
+            core::repository::cat(repository(Mode::Lenient)?, &revspec, out)
+        }),
         Subcommands::Commit(cmd) => match cmd {
-            commit::Subcommands::Verify { rev_spec } => prepare_and_run(
-                "commit-verify",
-                trace,
-                auto_verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, _out, _err| {
+            commit::Subcommands::Verify { rev_spec } => {
+                prepare_and_run("commit-verify", auto_verbose, None, move |_progress, _out, _err| {
                     core::repository::commit::verify(repository(Mode::Lenient)?, rev_spec.as_deref())
-                },
-            ),
-            commit::Subcommands::Sign { rev_spec } => prepare_and_run(
-                "commit-sign",
-                trace,
-                auto_verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
+                })
+            }
+            commit::Subcommands::Sign { rev_spec } => {
+                prepare_and_run("commit-sign", auto_verbose, None, move |_progress, out, _err| {
                     core::repository::commit::sign(repository(Mode::Lenient)?, rev_spec.as_deref(), out)
-                },
-            ),
+                })
+            }
             commit::Subcommands::Describe {
                 annotated_tags,
                 all_refs,
@@ -1451,75 +1191,49 @@ pub fn main() -> Result<()> {
                 max_candidates,
                 rev_spec,
                 dirty_suffix,
-            } => prepare_and_run(
-                "commit-describe",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, err| {
-                    core::repository::commit::describe(
-                        repository(Mode::Strict)?,
-                        rev_spec.as_deref(),
-                        out,
-                        err,
-                        core::repository::commit::describe::Options {
-                            all_tags: !annotated_tags,
-                            all_refs,
-                            long_format: long,
-                            first_parent,
-                            statistics,
-                            max_candidates,
-                            always,
-                            dirty_suffix: dirty_suffix.map(|suffix| suffix.unwrap_or_else(|| "dirty".to_string())),
-                        },
-                    )
-                },
-            ),
+            } => prepare_and_run("commit-describe", verbose, None, move |_progress, out, err| {
+                core::repository::commit::describe(
+                    repository(Mode::Strict)?,
+                    rev_spec.as_deref(),
+                    out,
+                    err,
+                    core::repository::commit::describe::Options {
+                        all_tags: !annotated_tags,
+                        all_refs,
+                        long_format: long,
+                        first_parent,
+                        statistics,
+                        max_candidates,
+                        always,
+                        dirty_suffix: dirty_suffix.map(|suffix| suffix.unwrap_or_else(|| "dirty".to_string())),
+                    },
+                )
+            }),
         },
         Subcommands::Tag(platform) => match platform.cmds {
-            Some(tag::Subcommands::List) | None => prepare_and_run(
-                "tag-list",
-                trace,
-                auto_verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| core::repository::tag::list(repository(Mode::Lenient)?, out, format),
-            ),
+            Some(tag::Subcommands::List) | None => {
+                prepare_and_run("tag-list", auto_verbose, None, move |_progress, out, _err| {
+                    core::repository::tag::list(repository(Mode::Lenient)?, out, format)
+                })
+            }
         },
         Subcommands::Tree(cmd) => match cmd {
             tree::Subcommands::Entries {
                 treeish,
                 recursive,
                 extended,
-            } => prepare_and_run(
-                "tree-entries",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| {
-                    core::repository::tree::entries(
-                        repository(Mode::Strict)?,
-                        treeish.as_deref(),
-                        recursive,
-                        extended,
-                        format,
-                        out,
-                    )
-                },
-            ),
-            tree::Subcommands::Info { treeish, extended } => prepare_and_run(
-                "tree-info",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, err| {
+            } => prepare_and_run("tree-entries", verbose, None, move |_progress, out, _err| {
+                core::repository::tree::entries(
+                    repository(Mode::Strict)?,
+                    treeish.as_deref(),
+                    recursive,
+                    extended,
+                    format,
+                    out,
+                )
+            }),
+            tree::Subcommands::Info { treeish, extended } => {
+                prepare_and_run("tree-info", verbose, None, move |_progress, out, err| {
                     core::repository::tree::info(
                         repository(Mode::Strict)?,
                         treeish.as_deref(),
@@ -1528,16 +1242,13 @@ pub fn main() -> Result<()> {
                         out,
                         err,
                     )
-                },
-            ),
+                })
+            }
         },
         Subcommands::Odb(cmd) => match cmd {
             odb::Subcommands::Stats { extra_header_lookup } => prepare_and_run(
                 "odb-stats",
-                trace,
                 auto_verbose,
-                progress,
-                progress_keep_open,
                 core::repository::odb::statistics::PROGRESS_RANGE,
                 move |progress, out, err| {
                     core::repository::odb::statistics(
@@ -1553,67 +1264,33 @@ pub fn main() -> Result<()> {
                     )
                 },
             ),
-            odb::Subcommands::Entries => prepare_and_run(
-                "odb-entries",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, _err| core::repository::odb::entries(repository(Mode::Strict)?, format, out),
-            ),
-            odb::Subcommands::Info => prepare_and_run(
-                "odb-info",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, err| core::repository::odb::info(repository(Mode::Strict)?, format, out, err),
-            ),
+            odb::Subcommands::Entries => prepare_and_run("odb-entries", verbose, None, move |_progress, out, _err| {
+                core::repository::odb::entries(repository(Mode::Strict)?, format, out)
+            }),
+            odb::Subcommands::Info => prepare_and_run("odb-info", verbose, None, move |_progress, out, err| {
+                core::repository::odb::info(repository(Mode::Strict)?, format, out, err)
+            }),
         },
-        Subcommands::Fsck(fsck::Platform { spec }) => prepare_and_run(
-            "fsck",
-            trace,
-            auto_verbose,
-            progress,
-            progress_keep_open,
-            None,
-            move |_progress, out, _err| core::repository::fsck(repository(Mode::Strict)?, spec, out),
-        ),
+        Subcommands::Fsck(fsck::Platform { spec }) => {
+            prepare_and_run("fsck", auto_verbose, None, move |_progress, out, _err| {
+                core::repository::fsck(repository(Mode::Strict)?, spec, out)
+            })
+        }
         Subcommands::Mailmap(cmd) => match cmd {
-            mailmap::Subcommands::Entries => prepare_and_run(
-                "mailmap-entries",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, err| {
+            mailmap::Subcommands::Entries => {
+                prepare_and_run("mailmap-entries", verbose, None, move |_progress, out, err| {
                     core::repository::mailmap::entries(repository(Mode::Lenient)?, format, out, err)
-                },
-            ),
-            mailmap::Subcommands::Check { contacts } => prepare_and_run(
-                "mailmap-check",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, err| {
+                })
+            }
+            mailmap::Subcommands::Check { contacts } => {
+                prepare_and_run("mailmap-check", verbose, None, move |_progress, out, err| {
                     core::repository::mailmap::check(repository(Mode::Lenient)?, format, contacts, out, err)
-                },
-            ),
+                })
+            }
         },
         Subcommands::Attributes(cmd) => match cmd {
-            attributes::Subcommands::Query { statistics, pathspec } => prepare_and_run(
-                "attributes-query",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, err| {
+            attributes::Subcommands::Query { statistics, pathspec } => {
+                prepare_and_run("attributes-query", verbose, None, move |_progress, out, err| {
                     let repo = repository(Mode::Strict)?;
                     let pathspecs = if pathspec.is_empty() {
                         PathsOrPatterns::Paths(Box::new(
@@ -1629,14 +1306,11 @@ pub fn main() -> Result<()> {
                         err,
                         core::repository::attributes::query::Options { format, statistics },
                     )
-                },
-            ),
+                })
+            }
             attributes::Subcommands::ValidateBaseline { statistics, no_ignore } => prepare_and_run(
                 "attributes-validate-baseline",
-                trace,
                 auto_verbose,
-                progress,
-                progress_keep_open,
                 None,
                 move |progress, out, err| {
                     core::repository::attributes::validate_baseline(
@@ -1662,36 +1336,28 @@ pub fn main() -> Result<()> {
                 patterns,
                 paths,
                 show_ignore_patterns,
-            } => prepare_and_run(
-                "exclude-query",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, err| {
-                    let repo = repository(Mode::Strict)?;
-                    let paths = if paths.is_empty() {
-                        PathsOrPatterns::Paths(Box::new(
-                            stdin_or_bail()?.byte_lines().filter_map(Result::ok).map(BString::from),
-                        ))
-                    } else {
-                        PathsOrPatterns::Patterns(paths)
-                    };
-                    core::repository::exclude::query(
-                        repo,
-                        paths,
-                        out,
-                        err,
-                        core::repository::exclude::query::Options {
-                            format,
-                            show_ignore_patterns,
-                            overrides: patterns,
-                            statistics,
-                        },
-                    )
-                },
-            ),
+            } => prepare_and_run("exclude-query", verbose, None, move |_progress, out, err| {
+                let repo = repository(Mode::Strict)?;
+                let paths = if paths.is_empty() {
+                    PathsOrPatterns::Paths(Box::new(
+                        stdin_or_bail()?.byte_lines().filter_map(Result::ok).map(BString::from),
+                    ))
+                } else {
+                    PathsOrPatterns::Patterns(paths)
+                };
+                core::repository::exclude::query(
+                    repo,
+                    paths,
+                    out,
+                    err,
+                    core::repository::exclude::query::Options {
+                        format,
+                        show_ignore_patterns,
+                        overrides: patterns,
+                        statistics,
+                    },
+                )
+            }),
         },
         Subcommands::Index(cmd) => match cmd {
             index::Subcommands::Entries {
@@ -1701,108 +1367,80 @@ pub fn main() -> Result<()> {
                 statistics,
                 recurse_submodules,
                 pathspec,
-            } => prepare_and_run(
-                "index-entries",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, out, err| {
-                    core::repository::index::entries(
-                        repository(Mode::Lenient)?,
-                        pathspec,
-                        out,
-                        err,
-                        core::repository::index::entries::Options {
-                            format,
-                            simple: match entry_format {
-                                index::entries::Format::Simple => true,
-                                index::entries::Format::Rich => false,
-                            },
-                            attributes: if no_attributes {
-                                None
-                            } else {
-                                Some(if attributes_from_index {
-                                    core::repository::index::entries::Attributes::Index
-                                } else {
-                                    core::repository::index::entries::Attributes::WorktreeAndIndex
-                                })
-                            },
-                            recurse_submodules,
-                            statistics,
+            } => prepare_and_run("index-entries", verbose, None, move |_progress, out, err| {
+                core::repository::index::entries(
+                    repository(Mode::Lenient)?,
+                    pathspec,
+                    out,
+                    err,
+                    core::repository::index::entries::Options {
+                        format,
+                        simple: match entry_format {
+                            index::entries::Format::Simple => true,
+                            index::entries::Format::Rich => false,
                         },
-                    )
-                },
-            ),
+                        attributes: if no_attributes {
+                            None
+                        } else {
+                            Some(if attributes_from_index {
+                                core::repository::index::entries::Attributes::Index
+                            } else {
+                                core::repository::index::entries::Attributes::WorktreeAndIndex
+                            })
+                        },
+                        recurse_submodules,
+                        statistics,
+                    },
+                )
+            }),
             index::Subcommands::FromTree {
                 force,
                 index_output_path,
                 skip_hash,
                 spec,
-            } => prepare_and_run(
-                "index-from-tree",
-                trace,
-                verbose,
-                progress,
-                progress_keep_open,
-                None,
-                move |_progress, _out, _err| {
-                    core::repository::index::from_tree(
-                        repository(Mode::Strict)?,
-                        spec,
-                        index_output_path,
-                        force,
-                        skip_hash,
-                    )
-                },
-            ),
+            } => prepare_and_run("index-from-tree", verbose, None, move |_progress, _out, _err| {
+                core::repository::index::from_tree(repository(Mode::Strict)?, spec, index_output_path, force, skip_hash)
+            }),
         },
         Subcommands::Blame {
             statistics,
             file,
             ranges,
             since,
-        } => prepare_and_run(
-            "blame",
-            trace,
-            verbose,
-            progress,
-            progress_keep_open,
-            None,
-            move |_progress, out, err| {
-                let repo = repository(Mode::Lenient)?;
-                let diff_algorithm = repo.diff_algorithm()?;
+        } => prepare_and_run("blame", verbose, None, move |_progress, out, err| {
+            let repo = repository(Mode::Lenient)?;
+            let diff_algorithm = repo.diff_algorithm()?;
 
-                core::repository::blame::blame_file(
-                    repo,
-                    &file,
-                    gix::blame::Options {
-                        diff_algorithm,
-                        ranges: gix::blame::BlameRanges::from_one_based_inclusive_ranges(ranges)?,
-                        since,
-                        rewrites: Some(gix::diff::Rewrites::default()),
-                        debug_track_path: false,
-                    },
-                    out,
-                    statistics.then_some(err),
-                )
-            },
-        ),
+            core::repository::blame::blame_file(
+                repo,
+                &file,
+                gix::blame::Options {
+                    diff_algorithm,
+                    ranges: gix::blame::BlameRanges::from_one_based_inclusive_ranges(ranges)?,
+                    since,
+                    rewrites: Some(gix::diff::Rewrites::default()),
+                    debug_track_path: false,
+                },
+                out,
+                statistics.then_some(err),
+            )
+        }),
         Subcommands::Completions { shell, out_dir } => {
-            let mut app = Args::command();
+            prepare_and_run("completions", false, None, move |_progress, out, _err| {
+                let mut app = Args::command();
 
-            let shell = shell
-                .or_else(clap_complete::Shell::from_env)
-                .ok_or_else(|| anyhow!("The shell could not be derived from the environment"))?;
+                let shell = shell
+                    .or_else(clap_complete::Shell::from_env)
+                    .ok_or_else(|| anyhow!("The shell could not be derived from the environment"))?;
 
-            let bin_name = app.get_name().to_owned();
-            if let Some(out_dir) = out_dir {
-                clap_complete::generate_to(shell, &mut app, bin_name, &out_dir)?;
-            } else {
-                clap_complete::generate(shell, &mut app, bin_name, &mut std::io::stdout());
-            }
-            Ok(())
+                let bin_name = app.get_name().to_owned();
+                if let Some(out_dir) = out_dir {
+                    clap_complete::generate_to(shell, &mut app, bin_name, &out_dir)?;
+                } else {
+                    clap_complete::generate(shell, &mut app, bin_name, out);
+                }
+                Ok(())
+            })
         }
     }?;
     Ok(())
@@ -1830,8 +1468,55 @@ mod tests {
 
     #[test]
     fn clap() {
-        use clap::CommandFactory;
+        use clap::{CommandFactory, Parser};
+
         Args::command().debug_assert();
+        for flag in ["--progress", "--progress-keep-open"] {
+            assert!(
+                Args::try_parse_from(["gix", flag, "env"]).is_err(),
+                "removed option {flag} stays unavailable"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "tracing")]
+    fn trace_is_repeatable_bounded_and_independent() {
+        use clap::Parser;
+
+        for (argument, expected) in [("env", 0), ("-t", 1), ("-tt", 2), ("-ttt", 3), ("-tttt", 4)] {
+            let arguments = if expected == 0 {
+                vec!["gix", argument]
+            } else {
+                vec!["gix", argument, "env"]
+            };
+            assert_eq!(
+                Args::try_parse_from(arguments)
+                    .expect("supported trace level parses")
+                    .trace,
+                expected
+            );
+        }
+        assert_eq!(
+            Args::try_parse_from(["gix", "--trace", "--trace", "env"])
+                .expect("the long flag can be repeated")
+                .trace,
+            2
+        );
+        assert_eq!(
+            Args::try_parse_from(["gix", "-ttttt", "env"])
+                .expect_err("trace output has only four levels")
+                .kind(),
+            clap::error::ErrorKind::ValueValidation
+        );
+        assert!(Args::try_parse_from(["gix", "-t", "--verbose", "env"]).is_ok());
+        assert!(Args::try_parse_from(["gix", "-t", "--no-verbose", "env"]).is_ok());
+        assert_eq!(
+            Args::try_parse_from(["gix", "--threads", "2", "env"])
+                .expect("threads retains its long option")
+                .threads,
+            Some(2)
+        );
     }
 
     #[test]
@@ -1854,6 +1539,18 @@ mod tests {
             );
         }
 
+        #[cfg(feature = "tracing")]
+        {
+            let args = Args::try_parse_from(["gix", "-tt", "tix"]).expect("tix inherits the outer trace flag");
+            assert_eq!(args.trace, 2);
+            assert_eq!(
+                Args::try_parse_from(["gix", "tix", "-t"])
+                    .expect_err("embedded tix does not repeat the trace flag")
+                    .kind(),
+                clap::error::ErrorKind::UnknownArgument
+            );
+        }
+
         for arguments in [
             vec!["gix", "tix", "-x", "main", "--hide", "tag", "topic"],
             vec!["gix", "tix", "amend"],
@@ -1865,6 +1562,20 @@ mod tests {
                     Subcommands::Tix(_)
                 ),
                 "the complete tix command is delegated"
+            );
+        }
+        for (arguments, requires_repository) in [
+            (vec!["gix", "tix", "worktrunk"], true),
+            (vec!["gix", "tix", "worktrunk", "shell-init", "bash"], false),
+        ] {
+            let Subcommands::Tix(command) = Args::try_parse_from(arguments).expect("worktrunk command parses").cmd
+            else {
+                panic!("worktrunk routes to the tix command")
+            };
+            assert_eq!(
+                command.requires_repository(),
+                requires_repository,
+                "repository discovery is required exactly when the worktrunk command needs it"
             );
         }
         assert_eq!(

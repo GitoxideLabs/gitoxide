@@ -18,9 +18,8 @@ mod travel;
 
 /// Arguments and commands shared by the standalone `tix` binary and `gix tix`.
 #[derive(Debug, clap::Args)]
-#[command(args_conflicts_with_subcommands = true)]
 pub struct Platform {
-    /// Draw on the normal screen so panic output remains visible.
+    /// Debug the interactive UI on the normal screen; use `tix show` for one-off queries.
     #[arg(long)]
     no_alt_screen: bool,
     /// Exit after the final frame, optionally replaying read-only INPUTS first.
@@ -75,6 +74,52 @@ enum Command {
     /// Generate or apply a self-contained history-rebase todo.
     #[command(subcommand)]
     Rebase(rebase::Command),
+    /// Switch between this repository's worktrees.
+    #[command(visible_alias = "wt")]
+    Worktrunk {
+        #[command(subcommand)]
+        command: Option<WorktrunkCommand>,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum WorktrunkCommand {
+    /// Print the fully populated worktree table without opening the terminal UI.
+    Show,
+    /// Switch to an existing worktree, or create one for a local branch.
+    #[command(group(
+        clap::ArgGroup::new("switch_target")
+            .multiple(false)
+            .args(["target", "new_branch"])
+    ))]
+    Switch {
+        /// Existing worktree path or local branch; omit to open the picker.
+        #[arg(value_name = "TARGET")]
+        target: Option<OsString>,
+        /// Create this local branch at the logical Tix HEAD, or use it if it exists.
+        #[arg(long, value_name = "NAME")]
+        new_branch: Option<OsString>,
+        /// Path at which to create a worktree for a local branch.
+        #[arg(long, value_name = "PATH", requires = "switch_target")]
+        path: Option<PathBuf>,
+    },
+    /// Remove a linked worktree and its associated branch when safe.
+    Remove {
+        /// Worktree path or unique trailing path; omit to remove the current linked worktree.
+        #[arg(value_name = "TARGET")]
+        target: Option<PathBuf>,
+        /// Discard changes; repeat to also override a worktree lock.
+        #[arg(short = 'f', action = clap::ArgAction::Count)]
+        force: u8,
+        /// Delete the associated branch even if it is not merged into the inferred default branch.
+        #[arg(short = 'D', long)]
+        force_delete: bool,
+    },
+    /// Print the `wt` function for SHELL.
+    ShellInit {
+        #[arg(value_enum)]
+        shell: crate::worktrunk::shell::Shell,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -171,19 +216,105 @@ struct CopyInsert {
     about = "Browse or edit commit history",
     after_long_help = "Commands which open an editor use Git's normal editor selection. Set GIT_EDITOR=<command> to override it."
 )]
-struct Cli {
+pub struct Cli {
+    /// Display tracing output; repeat for more detail and a flat format.
+    #[arg(
+        short = 't',
+        long,
+        action = clap::ArgAction::Count,
+        value_parser = clap::value_parser!(u8).range(0..=4)
+    )]
+    trace: u8,
     #[command(flatten)]
     platform: Platform,
 }
 
 /// Parse the standalone `tix` command line.
-pub fn parse() -> Platform {
-    Cli::parse_from(gix::env::args_os()).platform
+pub fn parse() -> Cli {
+    Cli::parse_from(gix::env::args_os())
+}
+
+/// The executable through which the shared command was invoked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Invocation {
+    Tix,
+    GixTix,
+}
+
+impl Invocation {
+    fn shell_backend(self) -> crate::worktrunk::shell::Backend {
+        match self {
+            Invocation::Tix => crate::worktrunk::shell::Backend::Tix,
+            Invocation::GixTix => crate::worktrunk::shell::Backend::GixTix,
+        }
+    }
 }
 
 impl Platform {
+    /// Return whether running this command requires repository discovery.
+    pub fn requires_repository(&self) -> bool {
+        !matches!(
+            self.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::ShellInit { .. })
+            })
+        )
+    }
+
+    /// Run a repository-free command.
+    pub fn run_without_repository(self, invocation: Invocation) -> Result<()> {
+        self.run_without_repository_with_trace(invocation, 0)
+    }
+
+    /// Run a repository-free command with inherited tracing verbosity.
+    pub fn run_without_repository_with_trace(self, invocation: Invocation, trace: u8) -> Result<()> {
+        self.validate_command_options()?;
+        let _log_guard = crate::logging::init(trace)?;
+        self.run_without_repository_initialized(invocation)
+    }
+
+    fn run_without_repository_initialized(self, invocation: Invocation) -> Result<()> {
+        match self.command {
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::ShellInit { shell }),
+            }) => print_shell_init(shell, invocation),
+            _ => anyhow::bail!("this command requires a repository"),
+        }
+    }
+
     /// Run this command against `repository`.
     pub fn run(self, repository: gix::ThreadSafeRepository) -> Result<()> {
+        self.run_as(repository, Invocation::Tix)
+    }
+
+    /// Run this command against `repository` using the given executable identity.
+    pub fn run_as(self, repository: gix::ThreadSafeRepository, invocation: Invocation) -> Result<()> {
+        self.run_as_with_trace(repository, invocation, 0)
+    }
+
+    /// Run this command with inherited tracing verbosity.
+    pub fn run_as_with_trace(
+        self,
+        repository: gix::ThreadSafeRepository,
+        invocation: Invocation,
+        trace: u8,
+    ) -> Result<()> {
+        self.run_with_repository_as_with_trace(|| Ok(repository), invocation, trace)
+    }
+
+    /// Initialize tracing before obtaining and running against a repository.
+    pub fn run_with_repository_as_with_trace(
+        self,
+        repository: impl FnOnce() -> Result<gix::ThreadSafeRepository>,
+        invocation: Invocation,
+        trace: u8,
+    ) -> Result<()> {
+        self.validate_command_options()?;
+        let _log_guard = crate::logging::init(trace)?;
+        self.run_as_initialized(repository()?, invocation)
+    }
+
+    fn run_as_initialized(self, repository: gix::ThreadSafeRepository, invocation: Invocation) -> Result<()> {
         let Platform {
             no_alt_screen,
             quit_on_finish,
@@ -192,7 +323,7 @@ impl Platform {
             revisions,
         } = self;
         let Some(command) = command else {
-            return crate::run(
+            return crate::run_without_logging(
                 repository,
                 revisions,
                 crate::Options {
@@ -207,9 +338,34 @@ impl Platform {
         let command = match command {
             Command::RefTree(args) => return print_ref_tree(&repository, args),
             Command::Show(args) => return show(&repository, args),
+            Command::Worktrunk { command } => {
+                return match command {
+                    None => crate::worktrunk::run(repository.into_sync(), None, None, false, quit_on_finish),
+                    Some(WorktrunkCommand::Show) => crate::worktrunk::show(&repository, std::io::stdout().lock()),
+                    Some(WorktrunkCommand::Switch {
+                        target,
+                        new_branch,
+                        path,
+                    }) => {
+                        let create_branch_if_missing = new_branch.is_some();
+                        crate::worktrunk::run(
+                            repository.into_sync(),
+                            new_branch.or(target),
+                            path,
+                            create_branch_if_missing,
+                            quit_on_finish,
+                        )
+                    }
+                    Some(WorktrunkCommand::Remove {
+                        target,
+                        force,
+                        force_delete,
+                    }) => crate::worktrunk::remove::run(repository, target, force, force_delete),
+                    Some(WorktrunkCommand::ShellInit { shell }) => print_shell_init(shell, invocation),
+                };
+            }
             command => command,
         };
-        let _log_guard = crate::logging::init();
         match command {
             Command::RefTree(_) | Command::Show(_) => unreachable!("display commands return before logging"),
             Command::Amend(args) => {
@@ -218,7 +374,7 @@ impl Platform {
                 let amended = if args.index {
                     crate::edit::head::amend_index_reporting(repository, &graph)?
                 } else {
-                    crate::edit::head::perform_reporting(repository, &graph, crate::edit::head::Kind::Amend)?
+                    crate::edit::head::amend_reporting(repository, &graph)?
                 };
                 match amended {
                     Some(outcome) => {
@@ -261,9 +417,61 @@ impl Platform {
             Command::New(args) => return new::run(repository, args),
             Command::Enrich(command) => return enrich::run(repository, command),
             Command::Rebase(command) => return rebase::run(repository, command),
+            Command::Worktrunk { .. } => unreachable!("worktrunk returns before logging"),
         }
         Ok(())
     }
+
+    fn validate_command_options(&self) -> Result<()> {
+        if self.command.is_some() {
+            let opens_worktree_picker = matches!(
+                self.command,
+                Some(Command::Worktrunk {
+                    command: None
+                        | Some(WorktrunkCommand::Switch {
+                            target: None,
+                            new_branch: None,
+                            path: None,
+                        }),
+                })
+            );
+            anyhow::ensure!(
+                !self.no_alt_screen
+                    && (self.quit_on_finish.is_none() || opens_worktree_picker)
+                    && self.hide.is_empty()
+                    && self.revisions.is_empty(),
+                "history-view options cannot be combined with a command; use `--` before a command-named revision"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Cli {
+    /// Run the standalone command.
+    pub fn run(self) -> Result<()> {
+        if !self.platform.requires_repository() {
+            return self
+                .platform
+                .run_without_repository_with_trace(Invocation::Tix, self.trace);
+        }
+        self.platform.run_with_repository_as_with_trace(
+            || {
+                let current_dir = std::env::current_dir().context("could not determine current directory")?;
+                gix::ThreadSafeRepository::discover_with_environment_overrides(current_dir)
+                    .context("could not discover repository")
+            },
+            Invocation::Tix,
+            self.trace,
+        )
+    }
+}
+
+fn print_shell_init(shell: crate::worktrunk::shell::Shell, invocation: Invocation) -> Result<()> {
+    std::io::stdout()
+        .lock()
+        .write_all(crate::worktrunk::shell::generate(shell, invocation.shell_backend()).as_bytes())
+        .context("could not write worktrunk shell integration")
 }
 
 fn print_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<()> {
@@ -402,6 +610,7 @@ fn write_history(
 
     let mailmap = repository.open_mailmap();
     let lanes = app.render_lanes(0..app.rows.len());
+    let head = crate::decoration_head(&decorations);
     let enrichment_gutter = app
         .rows
         .iter()
@@ -417,6 +626,7 @@ fn write_history(
         .unwrap_or_default();
     let ambiguity_gutter = (!change_ids.ambiguous.is_empty()).then(|| Line::raw("💥").width());
     let render_line = |index: usize, row: &crate::app::SharedCommitRow| {
+        let is_head = head == Some(row.id);
         let metadata = crate::ui::plain_history_metadata(
             &app,
             row,
@@ -448,9 +658,15 @@ fn write_history(
             .hidden_branch_behind(row.id)
             .map(|behind| format!(" ⇣{behind}"))
             .unwrap_or_default();
-        let line = format!("{gutter}{}{metadata}{behind}", lanes.lane(index));
-        let base = (app.visual_count(index) == Some(0))
-            .then(|| format!("base {enrichment_marker}{ambiguity_marker}{metadata}{behind}"));
+        let lane = lanes.lane(index);
+        let marked_lane = is_head.then(|| lane.replacen(['●', '◆'], "@", 1));
+        let line = format!("{gutter}{}{metadata}{behind}", marked_lane.as_deref().unwrap_or(lane));
+        let base = (app.visual_count(index) == Some(0)).then(|| {
+            format!(
+                "base {}{enrichment_marker}{ambiguity_marker}{metadata}{behind}",
+                if is_head { "@ " } else { "" }
+            )
+        });
         (line, base)
     };
     let width = app
@@ -511,8 +727,8 @@ fn copy_insert(repository: gix::Repository, args: CopyInsert) -> Result<()> {
         OsString::from(source.to_string()),
         OsString::from(target.to_string()),
     ];
-    let graph = crate::edit::loaded_view_graph_with(&repository, &revisions)?;
-    let plan = crate::edit::rebase::copy_insert_plan(&repository, &graph, source, target)?;
+    let graph = crate::edit::loaded_explicit_view_graph(&repository, &revisions, &[])?;
+    let plan = crate::edit::rebase::copy_insert_plan(&repository, &graph, source, target, false)?;
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
     match crate::edit::rebase::perform_plan(&repository, &graph, plan)? {
@@ -612,7 +828,7 @@ fn edit_head(
         graph,
         kind,
         selected_paths.map(|paths| (paths, None)),
-        false,
+        crate::edit::rebase::PendingCheckout::Reject,
         |_| {},
     )? {
         Some(outcome) => {
@@ -814,6 +1030,76 @@ mod tests {
     }
 
     #[test]
+    fn standalone_trace_is_repeatable_but_bounded() {
+        for (argument, expected) in [("tix", 0), ("-t", 1), ("-tt", 2), ("-ttt", 3), ("-tttt", 4)] {
+            let arguments = if expected == 0 {
+                vec![argument]
+            } else {
+                vec!["tix", argument]
+            };
+            assert_eq!(
+                Cli::try_parse_from(arguments)
+                    .expect("supported trace level parses")
+                    .trace,
+                expected
+            );
+        }
+        assert_eq!(
+            Cli::try_parse_from(["tix", "--trace", "--trace"])
+                .expect("the long flag can be repeated")
+                .trace,
+            2
+        );
+        assert_eq!(
+            Cli::try_parse_from(["tix", "-ttttt"])
+                .expect_err("trace output has only four levels")
+                .kind(),
+            ErrorKind::ValueValidation
+        );
+        assert!(
+            {
+                let cli = Cli::try_parse_from(["tix", "-t", "amend"]).expect("trace can precede a command");
+                cli.platform.validate_command_options().is_ok()
+                    && matches!(cli.platform.command, Some(Command::Amend(_)))
+            },
+            "standalone-only flags do not turn command names into revisions"
+        );
+        for arguments in [
+            &["tix", "--no-alt-screen", "amend"][..],
+            &["tix", "-x", "main", "amend"][..],
+        ] {
+            let cli = Cli::try_parse_from(arguments).expect("the unsafe combination reaches validation");
+            assert!(
+                cli.platform.validate_command_options().is_err(),
+                "history-view options cannot silently turn a command-looking revision into a command"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_trace_is_initialized_before_repository_discovery() {
+        let mut discovered = false;
+        let err = Cli::try_parse_from(["tix"])
+            .expect("history view parses")
+            .platform
+            .run_with_repository_as_with_trace(
+                || {
+                    discovered = true;
+                    anyhow::bail!("repository discovery should not run")
+                },
+                Invocation::GixTix,
+                5,
+            )
+            .expect_err("an invalid programmatic trace level is rejected");
+
+        assert!(
+            err.to_string().contains("trace level must be between one and four"),
+            "the trace error is retained: {err:#}"
+        );
+        assert!(!discovered, "tracing is initialized before repository discovery");
+    }
+
+    #[test]
     fn parses_tui_options_and_top_level_commands() {
         let cli = Cli::try_parse_from([
             "tix",
@@ -835,6 +1121,11 @@ mod tests {
             "positional revisions remain visible tips"
         );
         assert!(cli.platform.command.is_none(), "omitting a command launches the TUI");
+        let help = Cli::command().render_help().to_string();
+        assert!(
+            help.contains("Debug the interactive UI") && help.contains("use `tix show` for one-off queries"),
+            "top-level help reserves no-alt-screen for debugging and directs one-off queries to show"
+        );
 
         let cli = Cli::try_parse_from(["tix", "--quit-on-finish=jjjl"]).expect("diagnostic inputs parse");
         assert_eq!(cli.platform.quit_on_finish.as_deref(), Some("jjjl"));
@@ -1245,6 +1536,139 @@ mod tests {
     }
 
     #[test]
+    fn parses_worktrunk_commands_and_repository_requirements() {
+        let picker = Cli::try_parse_from(["tix", "worktrunk"])
+            .expect("bare worktrunk opens the picker")
+            .platform;
+        assert!(picker.requires_repository());
+        assert!(matches!(picker.command, Some(Command::Worktrunk { command: None })));
+
+        let alias = Cli::try_parse_from(["tix", "wt", "switch"])
+            .expect("the visible alias and target-less switch open the picker")
+            .platform;
+        assert!(
+            Cli::try_parse_from(["tix", "--quit-on-finish", "wt", "switch"])
+                .expect("worktree picker diagnostics parse")
+                .platform
+                .validate_command_options()
+                .is_ok(),
+            "quit-on-finish can exercise the worktree picker"
+        );
+        assert!(matches!(
+            alias.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Switch {
+                    target: None,
+                    new_branch: None,
+                    path: None,
+                })
+            })
+        ));
+
+        let show = Cli::try_parse_from(["tix", "wt", "show"])
+            .expect("non-interactive worktree display parses")
+            .platform;
+        assert!(matches!(
+            show.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Show)
+            })
+        ));
+
+        let switch = Cli::try_parse_from(["tix", "worktrunk", "switch", "topic", "--path", "../topic"])
+            .expect("explicit branch and worktree path parse")
+            .platform;
+        let Some(Command::Worktrunk {
+            command:
+                Some(WorktrunkCommand::Switch {
+                    target,
+                    new_branch: None,
+                    path,
+                }),
+        }) = switch.command
+        else {
+            panic!("worktrunk switch was expected")
+        };
+        assert_eq!(target.as_deref(), Some(OsStr::new("topic")));
+        assert_eq!(path.as_deref(), Some(std::path::Path::new("../topic")));
+
+        let create = Cli::try_parse_from(["tix", "wt", "switch", "--new-branch", "topic", "--path", "../topic"])
+            .expect("a new branch and its worktree path parse")
+            .platform;
+        assert!(matches!(
+            create.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Switch {
+                    target: None,
+                    new_branch: Some(branch),
+                    path: Some(_),
+                })
+            }) if branch == "topic"
+        ));
+        assert!(
+            Cli::try_parse_from(["tix", "wt", "switch", "topic", "--new-branch", "other"]).is_err(),
+            "a positional target and new branch are mutually exclusive"
+        );
+        assert!(
+            Cli::try_parse_from(["tix", "worktrunk", "switch", "--path", "../topic"]).is_err(),
+            "a creation path requires a local-branch target"
+        );
+
+        let remove = Cli::try_parse_from(["tix", "wt", "remove"])
+            .expect("target-less worktree removal parses")
+            .platform;
+        assert!(matches!(
+            remove.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Remove {
+                    target: None,
+                    force: 0,
+                    force_delete: false,
+                })
+            })
+        ));
+
+        let remove = Cli::try_parse_from(["tix", "wt", "remove", "topic", "-ff", "-D"])
+            .expect("worktree removal options parse")
+            .platform;
+        assert!(matches!(
+            remove.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Remove {
+                    target: Some(target),
+                    force: 2,
+                    force_delete: true,
+                })
+            }) if target == std::path::Path::new("topic")
+        ));
+
+        let shell_init = Cli::try_parse_from(["tix", "wt", "shell-init", "pwsh"])
+            .expect("shell-init and shell aliases parse")
+            .platform;
+        assert!(!shell_init.requires_repository());
+        assert!(matches!(
+            shell_init.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::ShellInit {
+                    shell: crate::worktrunk::shell::Shell::PowerShell,
+                })
+            })
+        ));
+        assert!(
+            Cli::command().render_help().to_string().contains("wt"),
+            "top-level help advertises the worktrunk alias"
+        );
+        assert!(
+            crate::worktrunk::shell::generate(
+                crate::worktrunk::shell::Shell::Bash,
+                Invocation::GixTix.shell_backend(),
+            )
+            .contains("gix tix worktrunk"),
+            "embedded invocation generates an embedded shell wrapper"
+        );
+    }
+
+    #[test]
     fn copy_insert_command_rewrites_the_target_stack_and_is_undoable() -> gix_testtools::Result {
         fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
             let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
@@ -1565,6 +1989,11 @@ mod tests {
             &["rebase"],
             &["rebase", "todo"],
             &["rebase", "apply"],
+            &["worktrunk"],
+            &["worktrunk", "show"],
+            &["worktrunk", "switch"],
+            &["worktrunk", "remove"],
+            &["worktrunk", "shell-init"],
         ] {
             for help in ["-h", "--help"] {
                 let arguments = std::iter::once("tix").chain(command.iter().copied()).chain([help]);
@@ -1961,6 +2390,66 @@ mod tests {
             "the hidden boundary row is included"
         );
         assert!(!output.contains('\u{1b}'), "plain output contains no terminal escapes");
+        Ok(())
+    }
+
+    #[test]
+    fn show_marks_attached_and_detached_head() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let head = repository.head_id()?.detach();
+        let short_head = head.to_hex_with_len(7).to_string();
+        let render = |repository: &gix::Repository, hidden: &str| -> gix_testtools::Result<String> {
+            let mut output = Vec::new();
+            write_history(repository, &[], &[OsString::from(hidden)], &mut output)?;
+            Ok(String::from_utf8(output)?)
+        };
+
+        let attached = render(&repository, "v1")?;
+        let attached_line = attached
+            .lines()
+            .find(|line| line.contains(&short_head))
+            .context("attached HEAD is shown")?;
+        let attached_graph = attached_line
+            .split_once(&short_head)
+            .context("attached HEAD has graph output")?
+            .0;
+        assert!(
+            attached_graph.contains('@'),
+            "attached HEAD has a direct marker: {attached_line:?}"
+        );
+        assert!(
+            attached_line.contains("@main"),
+            "the checked-out branch label remains: {attached_line:?}"
+        );
+
+        let status = ProcessCommand::new("git")
+            .current_dir(fixture.path())
+            .args(["checkout", "-q", "--detach", "HEAD"])
+            .status()?;
+        assert!(status.success(), "git detaches HEAD");
+        drop(repository);
+        let repository = crate::test_repository::open(fixture.path())?;
+
+        let detached = render(&repository, "v1")?;
+        let detached_line = detached
+            .lines()
+            .find(|line| line.contains(&short_head))
+            .context("detached HEAD is shown")?;
+        let detached_graph = detached_line
+            .split_once(&short_head)
+            .context("detached HEAD has graph output")?
+            .0;
+        assert!(
+            detached_graph.contains('@'),
+            "detached HEAD has a direct marker: {detached_line:?}"
+        );
+
+        let base = render(&repository, "HEAD")?;
+        assert!(
+            base.lines().any(|line| line.contains(&format!("base @ {short_head}"))),
+            "a HEAD base separator retains the marker: {base:?}"
+        );
         Ok(())
     }
 

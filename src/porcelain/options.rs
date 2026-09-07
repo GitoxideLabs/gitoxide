@@ -10,18 +10,9 @@ pub struct Args {
     #[clap(long, short = 'q')]
     pub quiet: bool,
 
-    /// Bring up a terminal user interface displaying progress visually.
-    #[clap(long, conflicts_with("quiet"))]
-    pub progress: bool,
     /// The number of threads to use. If unset or 0, use the command default; repository discovery uses 8 on macOS.
     #[clap(short = 't', long)]
     pub threads: Option<usize>,
-
-    /// The progress TUI will stay up even though the work is already completed.
-    ///
-    /// Use this to be able to read progress messages or additional information visible in the TUI log pane.
-    #[clap(long, conflicts_with("quiet"), requires("progress"))]
-    pub progress_keep_open: bool,
 
     #[clap(subcommand)]
     pub cmd: Subcommands,

@@ -57,14 +57,16 @@ impl<T> Default for Menu<T> {
 
 impl<T: Clone + Eq> Menu<T> {
     pub(crate) fn open(&mut self, items: &[Item<'_, T>]) {
+        let selected = self.last_submitted.clone();
+        self.open_selected(items, selected.as_ref());
+    }
+
+    pub(crate) fn open_selected(&mut self, items: &[Item<'_, T>], selected: Option<&T>) {
         self.open = true;
         self.query.clear();
         self.cursor = 0;
         self.matches = (0..items.len()).collect();
-        self.selection = self
-            .last_submitted
-            .as_ref()
-            .and_then(|last| items.iter().position(|item| &item.value == last));
+        self.selection = selected.and_then(|selected| items.iter().position(|item| &item.value == selected));
         self.selected_value = self.selection.map(|selection| items[selection].value.clone());
         self.window = 0;
         self.keep_selection_visible();
@@ -92,15 +94,22 @@ impl<T: Clone + Eq> Menu<T> {
         &self.matches[self.window..end]
     }
 
+    pub(crate) fn matching_indices(&self) -> &[usize] {
+        &self.matches
+    }
+
     pub(crate) fn set_visible_rows(&mut self, rows: usize) {
         self.visible_rows = rows.min(MAX_VISIBLE_ROWS);
         self.keep_selection_visible();
     }
 
-    #[cfg(test)]
     pub(crate) fn selected_index(&self) -> Option<usize> {
         self.selection
             .and_then(|selection| self.matches.get(selection).copied())
+    }
+
+    pub(crate) fn selected_match(&self) -> Option<usize> {
+        self.selection
     }
 
     pub(crate) fn selected_visible_row(&self) -> Option<usize> {
@@ -184,9 +193,13 @@ impl<T: Clone + Eq> Menu<T> {
     }
 
     pub(crate) fn up(&mut self, items: &[Item<'_, T>]) {
+        self.up_by(1, items);
+    }
+
+    pub(crate) fn up_by(&mut self, amount: usize, items: &[Item<'_, T>]) {
         self.sync(items);
         self.selection = match self.selection {
-            Some(selection) => Some(selection.saturating_sub(1)),
+            Some(selection) => Some(selection.saturating_sub(amount)),
             None if !self.matches.is_empty() => Some(self.matches.len() - 1),
             None => None,
         };
@@ -195,9 +208,17 @@ impl<T: Clone + Eq> Menu<T> {
     }
 
     pub(crate) fn down(&mut self, items: &[Item<'_, T>]) {
+        self.down_by(1, items);
+    }
+
+    pub(crate) fn down_by(&mut self, amount: usize, items: &[Item<'_, T>]) {
         self.sync(items);
         self.selection = match self.selection {
-            Some(selection) => Some((selection + 1).min(self.matches.len().saturating_sub(1))),
+            Some(selection) => Some(
+                selection
+                    .saturating_add(amount)
+                    .min(self.matches.len().saturating_sub(1)),
+            ),
             None if !self.matches.is_empty() => Some(0),
             None => None,
         };
