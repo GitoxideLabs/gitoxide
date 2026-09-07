@@ -2701,7 +2701,14 @@ fn metadata_columns<'a>(
                 } else {
                     name
                 },
-                decoration_style(decoration.kind),
+                match decoration.kind {
+                    DecorationKind::Local
+                    | DecorationKind::Remote
+                    | DecorationKind::HeadPinBranch
+                    | DecorationKind::CurrentWorktreeBranch
+                    | DecorationKind::WorktreeBranch => color(Color::Yellow),
+                    kind => decoration_style(kind),
+                },
             ));
         }
         refs.push(Span::raw(") "));
@@ -5288,10 +5295,20 @@ mod tests {
             "the graph @ already identifies the current detached worktree"
         );
         assert!(!row.contains("HEAD"), "a worktree label replaces textual HEAD");
-        let x = row.find("main@").expect("the worktree label is visible") as u16;
-        assert_eq!(terminal.backend().buffer()[(x, 0)].fg, Color::LightBlue);
-        let x = row.find("@current").expect("the current branch label is visible") as u16;
-        assert_eq!(terminal.backend().buffer()[(x, 0)].fg, Color::Cyan);
+        for label in ["main@", "@current"] {
+            let x = row.find(label).expect("the checked-out branch label is visible") as u16;
+            assert_eq!(
+                terminal.backend().buffer()[(x, 0)].fg,
+                Color::Yellow,
+                "checked-out branches share the history branch color"
+            );
+        }
+        let x = row.find("detached@").expect("the detached worktree label is visible") as u16;
+        assert_eq!(
+            terminal.backend().buffer()[(x, 0)].fg,
+            Color::LightBlue,
+            "detached worktree labels retain their existing color"
+        );
 
         app.update(Action::ToggleRefs);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
@@ -8011,7 +8028,7 @@ mod tests {
     }
 
     #[test]
-    fn uses_the_tig_palette_without_coloring_the_selection() -> Result<(), Box<dyn std::error::Error>> {
+    fn uses_the_history_palette_without_coloring_the_selection() -> Result<(), Box<dyn std::error::Error>> {
         let id = gix::ObjectId::Sha1([1; 20]);
         let commit = Commit {
             id,
@@ -8040,6 +8057,14 @@ mod tests {
                 Decoration {
                     name: "origin/main".into(),
                     kind: DecorationKind::Remote,
+                },
+                Decoration {
+                    name: "remembered".into(),
+                    kind: DecorationKind::HeadPinBranch,
+                },
+                Decoration {
+                    name: "tag: light".into(),
+                    kind: DecorationKind::Tag,
                 },
                 Decoration {
                     name: "tag: v1".into(),
@@ -8096,11 +8121,22 @@ mod tests {
             line.spans.iter().all(|span| span.content != "HEAD"),
             "the graph marker makes textual HEAD redundant"
         );
-        assert_eq!(style("main"), Style::default().fg(Color::Cyan));
-        assert_eq!(style("origin/main"), Style::default().fg(Color::Yellow));
+        for label in ["main", "origin/main", "★remembered"] {
+            assert_eq!(
+                style(label),
+                Style::default().fg(Color::Yellow),
+                "history uses one color for every branch kind"
+            );
+        }
+        assert_eq!(
+            style("tag: light"),
+            Style::default().fg(Color::Magenta),
+            "lightweight tags retain their existing color"
+        );
         assert_eq!(
             style("tag: v1"),
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            "annotated tags retain their existing color and weight"
         );
         assert_eq!(style("refs/stash"), Style::default().fg(Color::Blue));
 

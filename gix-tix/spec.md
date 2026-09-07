@@ -326,10 +326,12 @@ without trading responsiveness for metadata that is not visible.
   visible. While the row is unselected, its title is shown in reverse video and
   `@` is bold; the selected row's normal inversion replaces that title emphasis
   while keeping `@` bold.
-- Local branches checked out in other worktrees are displayed as `short-name@`
-  in light blue instead of their plain branch decoration. The current worktree's
-  symbolic branch is displayed as `@short-name` in the local-reference color.
-  A detached foreign worktree is shown as `directory@` at its actual `HEAD`,
+- Branch labels use yellow throughout history, including local, remote-tracking,
+  checked-out, and remembered branches. Tags use magenta, with bold text for
+  annotated tags.
+- Local branches checked out in other worktrees are displayed as `short-name@`.
+  The current worktree's symbolic branch is displayed as `@short-name`.
+  A detached foreign worktree is shown as `directory@` in light blue at its actual `HEAD`,
   without a pin marker. Its symbolic HEAD pin is shown separately as `★branch`
   at that branch's actual tip. The worktree administration name is used when no
   directory basename is available. A detached current worktree is identified by
