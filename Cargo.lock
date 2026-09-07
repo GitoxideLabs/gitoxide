@@ -1214,6 +1214,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "exn"
+version = "0.4.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5592af4187305bf22dc9aa258f98612f6aea4d86e49ea83e6fb2dbe91a5993"
+
+[[package]]
 name = "expect-test"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1920,6 +1926,7 @@ dependencies = [
  "anyhow",
  "bstr",
  "document-features",
+ "exn",
  "gix-error",
  "insta",
 ]
