@@ -900,6 +900,10 @@ views.
   current committer. When Git's configured author differs from `Author`, a
   commented `ConfiguredAuthor` directly below it can be uncommented to override
   `Author` while retaining `AuthorDate`.
+- The document appends the same commented Git-style per-path diffstat as
+  new-commit editors, including churn, signed net line counts, and totals. Counts
+  compare the selected commit with its first parent, or the empty tree for a
+  root. Pending rebases use their recorded original parent.
 - `CommentChar` is a non-empty single-line byte prefix, defaults to `;`, and is
   recognized only at column zero. Parsing removes those lines and applies
   Git-style whitespace cleanup.
