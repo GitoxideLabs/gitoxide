@@ -456,13 +456,47 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
     )
 }
 
-/// Lock and open one configuration file available without a repository, selected by its source.
+/// Return the path at which a configuration file is expected without a repository, selected by its source.
 ///
 /// Supported sources are [`GitInstallation`](config::Source::GitInstallation), [`System`](config::Source::System),
 /// [`Git`](config::Source::Git) (the XDG Git configuration), and [`User`](config::Source::User).
 /// Path selection honors the configuration permissions, environment permissions and explicit paths in `options`,
 /// just like [`config()`]. Disabled sources and sources without an available path return an error.
-/// Relative paths are resolved against the current directory when called.
+/// Relative paths are joined to the current directory when called.
+///
+/// Use this to inspect, prepare or load the file before calling [`config_mut()`]. The file and its parent directories
+/// do not have to exist. No configuration transaction is opened, no lock is acquired, and no directories are created.
+/// Discovering the Git installation path, or the system path on Windows, may invoke Git.
+pub fn config_path(
+    source: config::Source,
+    options: &open::Options,
+) -> Result<std::path::PathBuf, config::file_mut::Error> {
+    use config::file_mut::Error;
+
+    if !matches!(
+        source,
+        config::Source::GitInstallation | config::Source::System | config::Source::Git | config::Source::User
+    ) {
+        return Err(Error::UnsupportedSource(source));
+    }
+    let path = config::cache::source_path(
+        source,
+        options.git_installation_config_path.as_deref(),
+        options.system_config_path.as_deref(),
+        options.permissions.config,
+        &mut config::Cache::make_source_env(options.permissions.env),
+    )
+    .ok_or(Error::SourceUnavailable(source))?;
+    Ok(if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().map_err(Error::CurrentDir)?.join(path)
+    })
+}
+
+/// Lock and open one configuration file available without a repository, selected by its source.
+///
+/// The path is selected by [`config_path()`], which can be used to inspect or prepare the file before opening it.
 ///
 /// The lock timeout comes from `core.configLockTimeout` in [`config(None, options)`](config()), honoring section filtering
 /// and leniency, and defaults to one second. Includes and runtime overrides can affect the timeout, but the returned file
@@ -485,27 +519,7 @@ pub fn config_mut(
     source: config::Source,
     options: &open::Options,
 ) -> Result<config::FileTransaction, config::file_mut::Error> {
-    use config::file_mut::Error;
-
-    if !matches!(
-        source,
-        config::Source::GitInstallation | config::Source::System | config::Source::Git | config::Source::User
-    ) {
-        return Err(Error::UnsupportedSource(source));
-    }
-    let path = config::cache::source_path(
-        source,
-        options.git_installation_config_path.as_deref(),
-        options.system_config_path.as_deref(),
-        options.permissions.config,
-        &mut config::Cache::make_source_env(options.permissions.env),
-    )
-    .ok_or(Error::SourceUnavailable(source))?;
-    let path = if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir().map_err(Error::CurrentDir)?.join(path)
-    };
+    let path = config_path(source, options)?;
     let resolved = config(None, options)?;
     let filter = options.filter_config_section.unwrap_or(config::section::is_trusted);
     let lock_mode = config::cache::access::config_lock_timeout(&resolved, options.lenient_config, filter)?;

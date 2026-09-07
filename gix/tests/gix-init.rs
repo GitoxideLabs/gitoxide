@@ -133,6 +133,50 @@ mod config_mut {
 
     #[test]
     #[serial]
+    fn path_lookup_does_not_open_configuration() -> Result {
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let _cwd = gix_testtools::set_current_dir(temp.path())?;
+        let path = std::env::current_dir()?.join("missing/global.config");
+        let options = options_for(Source::System)
+            .system_config_path("missing/global.config")
+            .strict_config(true)
+            .config_overrides(["core.configLockTimeout=invalid", "core.sharedRepository=invalid"]);
+
+        assert_eq!(
+            gix::config_path(Source::System, &options)?,
+            path,
+            "relative paths are anchored without requiring a file or its parent directory"
+        );
+        assert_eq!(
+            std::fs::read_dir(temp.path())?.count(),
+            0,
+            "path lookup creates neither directories nor files"
+        );
+
+        std::fs::create_dir(path.parent().expect("config parent"))?;
+        std::fs::write(&path, "[unterminated")?;
+        let lock_path = path.with_extension("config.lock");
+        std::fs::write(&lock_path, "held")?;
+        assert_eq!(
+            gix::config_path(Source::System, &options)?,
+            path,
+            "malformed configuration, invalid overrides and existing locks do not affect path lookup"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path)?,
+            "[unterminated",
+            "the file is untouched"
+        );
+        assert_eq!(
+            std::fs::read_to_string(lock_path)?,
+            "held",
+            "the existing lock is untouched"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
     fn edits_one_physical_file_losslessly_without_a_repository() -> Result {
         let temp = gix_testtools::tempfile::tempdir()?;
         let _cwd = gix_testtools::set_current_dir(temp.path())?;
@@ -239,6 +283,11 @@ mod config_mut {
                 .system_config_path(&system);
             options.permissions.env.home = Permission::Allow;
             options.permissions.env.xdg_config_home = Permission::Allow;
+            assert_eq!(
+                gix::config_path(source, &options)?,
+                path,
+                "path lookup predicts the transaction target before the file exists"
+            );
             let mut file = gix::config_mut(source, &options)?;
             assert_eq!(
                 file.meta().path.as_deref(),
@@ -304,6 +353,11 @@ mod config_mut {
                 Some(expected.as_path()),
                 "Git environment overrides select the target"
             );
+            assert_eq!(
+                gix::config_path(source, &options)?,
+                *expected,
+                "path lookup honors environment overrides even while the target is locked"
+            );
         }
 
         for source in [Source::GitInstallation, Source::System] {
@@ -316,6 +370,11 @@ mod config_mut {
                 file.meta().path.as_deref(),
                 Some(explicit.as_path()),
                 "explicit options take precedence over environment paths"
+            );
+            assert_eq!(
+                gix::config_path(source, &options)?,
+                explicit,
+                "path lookup honors explicit options even while the target is locked"
             );
             drop(file);
             let _no_system = Env::new().set("GIT_CONFIG_NOSYSTEM", "true");
