@@ -438,6 +438,11 @@ pub(crate) enum Action {
     Review,
     ForkCommit,
     Attach,
+    AutoMerge,
+    Remerge,
+    RemoveFromAutoMerge,
+    RemoveAutoMergeInput,
+    ApplyAutoMerge(crate::edit::auto_merge::Selection),
     TimeTravel,
     TogglePin,
     VerifySignatures,
@@ -462,6 +467,7 @@ pub(crate) enum Effect {
     OpenDiff(ChangePane, usize),
     OpenCommitDiff(TreeDiffTarget),
     Reword(ObjectId),
+    AutoMerge(crate::edit::auto_merge::Selection),
     NewCommit {
         parent: Option<ObjectId>,
         empty: bool,
@@ -669,6 +675,12 @@ pub(crate) struct App {
     pub(crate) selection_relation: Option<SelectionRelation>,
     pub(crate) related_history_options: Vec<crate::history::RelatedHistory>,
     pub(crate) related_history_picker: crate::menu::Menu<gix::refs::Target>,
+    pub(crate) auto_merges: HashMap<ObjectId, crate::edit::auto_merge::Definition>,
+    auto_merge_source: Option<ObjectId>,
+    auto_merge_input_tips: HashSet<ObjectId>,
+    pub(crate) auto_merge_options: Vec<crate::edit::auto_merge::Selection>,
+    pub(crate) auto_merge_picker: crate::menu::Menu<crate::edit::auto_merge::Selection>,
+    pub(crate) auto_merge_picker_title: &'static str,
     hidden_branch_updates: HashMap<ObjectId, (usize, ObjectId)>,
     change_ids: HashMap<ObjectId, ChangeId>,
     duplicate_change_ids: HashSet<ObjectId>,
@@ -788,6 +800,12 @@ impl App {
             selection_relation: None,
             related_history_options: Vec::new(),
             related_history_picker: crate::menu::Menu::default(),
+            auto_merges: HashMap::new(),
+            auto_merge_source: None,
+            auto_merge_input_tips: HashSet::new(),
+            auto_merge_options: Vec::new(),
+            auto_merge_picker: crate::menu::Menu::default(),
+            auto_merge_picker_title: " AutoMerge ",
             hidden_branch_updates: HashMap::new(),
             change_ids: HashMap::new(),
             duplicate_change_ids: HashSet::new(),
@@ -1170,6 +1188,61 @@ impl App {
 
     pub(crate) fn set_known_merge_descendants(&mut self, ids: HashSet<ObjectId>) {
         self.known_merge_descendants = ids;
+    }
+
+    pub(crate) fn set_auto_merges(
+        &mut self,
+        graph: &crate::history::HistoryGraph,
+        decorations: &crate::history::Decorations,
+        pins: &[crate::history::Pin],
+    ) {
+        use crate::history::DecorationKind as Kind;
+        self.auto_merges = graph
+            .auto_merges
+            .iter()
+            .filter(|(id, _)| graph.is_in_edit_scope(**id))
+            .map(|(id, definition)| (*id, definition.clone()))
+            .collect();
+        self.auto_merge_input_tips = self
+            .auto_merges
+            .values()
+            .flat_map(|definition| &definition.inputs)
+            .filter_map(|input| crate::edit::auto_merge::decorated_tip(&input.reference, decorations, pins))
+            .collect();
+        self.auto_merge_source = decorations
+            .iter()
+            .find_map(|(id, names)| names.iter().any(|name| name.kind == Kind::Head).then_some(*id))
+            .filter(|head| {
+                let mut names: HashSet<BString> = decorations
+                    .get(head)
+                    .into_iter()
+                    .flatten()
+                    .filter(|decoration| {
+                        matches!(
+                            decoration.kind,
+                            Kind::Local | Kind::CurrentWorktreeBranch | Kind::WorktreeBranch | Kind::HeadPinBranch
+                        )
+                    })
+                    .map(|decoration| {
+                        let mut name = BString::from("refs/heads/");
+                        name.extend_from_slice(&decoration.name);
+                        name
+                    })
+                    .collect();
+                for pin in pins
+                    .iter()
+                    .filter(|pin| pin.id == *head && !pin.is_head() && !pin.is_review_return())
+                {
+                    names.insert(
+                        pin.target
+                            .try_name()
+                            .filter(|name| name.category() == Some(gix::refs::Category::LocalBranch))
+                            .map_or_else(|| pin.name.as_bstr().to_owned(), |name| name.as_bstr().to_owned()),
+                    );
+                }
+                names.len() == 1
+            });
+        self.update_hidden_branch_targets();
     }
 
     pub(crate) fn worktree_head_has_descendants(&self, id: ObjectId) -> bool {
@@ -1808,6 +1881,7 @@ impl App {
     pub(crate) fn worktrunk_history_root(&self) -> bool {
         self.changes_focus.is_none()
             && !self.related_history_picker.is_open()
+            && !self.auto_merge_picker.is_open()
             && self.reachable_rows.is_none()
             && self.entry_selection.is_none()
             && self.undo_redo_confirmation.is_none()
@@ -1875,6 +1949,11 @@ impl App {
                 | Action::Review
                 | Action::ForkCommit
                 | Action::Attach
+                | Action::AutoMerge
+                | Action::Remerge
+                | Action::RemoveFromAutoMerge
+                | Action::RemoveAutoMergeInput
+                | Action::ApplyAutoMerge(_)
         );
         #[cfg(feature = "blocking-network-client")]
         let keeps_actions_open = keeps_actions_open || matches!(&action, Action::Fetch);
@@ -2403,6 +2482,14 @@ impl App {
                 )];
             }
             Action::Attach if self.can_attach() => return vec![Effect::Attach],
+            Action::ApplyAutoMerge(selection) => return vec![Effect::AutoMerge(selection)],
+            Action::Remerge if self.can_remerge() => {
+                return vec![Effect::AutoMerge(crate::edit::auto_merge::Selection {
+                    merge_commit_id: self.worktree_head.expect("remerge requires HEAD"),
+                    change: crate::edit::auto_merge::Change::Remerge,
+                    label: String::new(),
+                })];
+            }
             Action::TimeTravel if self.can_time_travel() => {
                 return vec![Effect::TimeTravel(
                     self.rows[self.selected.expect("time-travel requires a selection")].id,
@@ -2416,7 +2503,7 @@ impl App {
             Action::PinHistoryTarget(target) if self.related_history_commit().is_some() => {
                 return vec![Effect::PinHistoryTarget(target)];
             }
-            Action::ToggleTodo if self.can_reword() => {
+            Action::ToggleTodo if self.can_enrich() => {
                 return vec![Effect::ToggleTodo(
                     self.rows[self.selected.expect("todo requires a selection")].id,
                 )];
@@ -2426,7 +2513,7 @@ impl App {
                     return vec![Effect::ToggleChecksPass(id)];
                 }
             }
-            Action::EditNote if self.can_reword() => {
+            Action::EditNote if self.can_enrich() => {
                 return vec![Effect::EditNote(
                     self.rows[self.selected.expect("note requires a selection")].id,
                 )];
@@ -2585,11 +2672,11 @@ impl App {
             } else if !visible_parents.contains(&row.id) {
                 Some(State {
                     leaf: Some(row.id),
-                    has_merge: row.parent_ids.len() > 1,
+                    has_merge: row.parent_ids.len() > 1 && !self.auto_merges.contains_key(&row.id),
                 })
             } else {
                 states.get(&row.id).copied().map(|mut state| {
-                    state.has_merge |= row.parent_ids.len() > 1;
+                    state.has_merge |= row.parent_ids.len() > 1 && !self.auto_merges.contains_key(&row.id);
                     state
                 })
             };
@@ -3166,7 +3253,10 @@ impl App {
 
     fn is_squash_target(&self, index: usize) -> bool {
         self.rows.get(index).is_some_and(|row| {
-            !self.is_row_hidden(index) && row.parent_ids.len() == 1 && !self.known_merge_descendants.contains(&row.id)
+            !self.is_row_hidden(index)
+                && row.parent_ids.len() == 1
+                && !self.known_merge_descendants.contains(&row.id)
+                && !self.auto_merges.contains_key(&row.id)
         })
     }
 
@@ -3212,12 +3302,78 @@ impl App {
         self.state == State::Complete && self.reword_shortcut_visible()
     }
 
-    pub(crate) fn reword_shortcut_visible(&self) -> bool {
-        self.changes_focus.is_none()
+    pub(crate) fn can_enrich(&self) -> bool {
+        self.state == State::Complete
+            && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
                 !self.hidden_rows.contains(&row.id) && !self.known_merge_descendants.contains(&row.id)
             })
+    }
+
+    pub(crate) fn reword_shortcut_visible(&self) -> bool {
+        self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
+                !self.hidden_rows.contains(&row.id)
+                    && !self.known_merge_descendants.contains(&row.id)
+                    && !self.auto_merges.contains_key(&row.id)
+            })
+    }
+
+    pub(crate) fn can_auto_merge(&self) -> bool {
+        self.auto_merge_selection().is_some_and(|id| {
+            Some(id) == self.worktree_head && (self.auto_merges.contains_key(&id) || Some(id) == self.auto_merge_source)
+        })
+    }
+
+    pub(crate) fn can_remerge(&self) -> bool {
+        self.auto_merge_selection()
+            .is_some_and(|id| Some(id) == self.worktree_head && self.auto_merges.contains_key(&id))
+    }
+
+    pub(crate) fn can_remove_from_auto_merge(&self) -> bool {
+        self.auto_merge_selection()
+            .is_some_and(|id| self.auto_merge_input_tips.contains(&id))
+    }
+
+    pub(crate) fn can_remove_auto_merge_input(&self) -> bool {
+        self.auto_merge_selection()
+            .is_some_and(|id| self.auto_merges.contains_key(&id))
+    }
+
+    fn auto_merge_selection(&self) -> Option<ObjectId> {
+        self.related_history_commit().filter(|_| {
+            self.worktree_changes_available
+                && !self.worktree_conflicted
+                && self.pending_rebase_conflict.is_none()
+                && !self.rebase_continuation_pending
+        })
+    }
+
+    pub(crate) fn open_auto_merge_picker(
+        &mut self,
+        options: Vec<crate::edit::auto_merge::Selection>,
+        title: &'static str,
+    ) -> Option<Action> {
+        self.auto_merge_picker.close();
+        self.auto_merge_options = options;
+        self.auto_merge_picker_title = title;
+        match self.auto_merge_options.as_slice() {
+            [] => {
+                self.leave_attention("no matching AutoMerge inputs");
+                None
+            }
+            [only] => Some(Action::ApplyAutoMerge(only.clone())),
+            options => {
+                let items: Vec<_> = options
+                    .iter()
+                    .map(|option| crate::menu::Item::new(&option.label, option.clone()))
+                    .collect();
+                self.auto_merge_picker.open(&items);
+                None
+            }
+        }
     }
 
     pub(crate) fn can_create_commit(&self) -> bool {
@@ -3307,6 +3463,7 @@ impl App {
                 .is_some_and(|source| {
                     !self.hidden_rows.contains(&source.id)
                         && source.parent_ids.len() == 1
+                        && !self.auto_merges.contains_key(&source.id)
                         && !self.known_merge_descendants.contains(&source.id)
                         && self.rows.iter().enumerate().any(|(index, target)| {
                             target.id != source.id
@@ -3354,6 +3511,7 @@ impl App {
         };
         !self.is_row_hidden(source_index)
             && source.parent_ids.len() == 1
+            && !self.auto_merges.contains_key(&source.id)
             && (copy || Some(source.id) == self.worktree_head && !self.known_merge_descendants.contains(&source.id))
             && self
                 .rows
@@ -3522,6 +3680,7 @@ impl App {
                 !self.hidden_rows.contains(&row.id)
                     && Some(row.id) == self.worktree_head
                     && !self.known_merge_descendants.contains(&row.id)
+                    && !self.auto_merges.contains_key(&row.id)
             })
     }
 

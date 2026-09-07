@@ -17,6 +17,7 @@ use gix::{
     },
 };
 
+use super::auto_merge;
 use crate::history::HistoryGraph;
 
 const ORIGINAL_PARENT: &[u8] = b"tix-rebase-parent";
@@ -402,6 +403,7 @@ struct Prepared {
     pins: Vec<ObjectId>,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     enrichment: Option<(ObjectId, BString)>,
+    input_refs: HashMap<gix::refs::FullName, super::undo::State>,
 }
 
 pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[ObjectId]) -> Result<Vec<ExpectedRef>> {
@@ -447,6 +449,8 @@ pub(crate) fn squash_plan(
     source: ObjectId,
     target: ObjectId,
 ) -> Result<Plan> {
+    auto_merge::ensure_editable(&repo.find_commit(source)?.decode()?.into_owned()?)?;
+    auto_merge::ensure_editable(&repo.find_commit(target)?.decode()?.into_owned()?)?;
     if source == target || !graph.is_ancestor(target, source) {
         anyhow::bail!("the squash target must be a strict ancestor of the source");
     }
@@ -473,7 +477,7 @@ pub(crate) fn squash_plan(
         let parents = graph
             .parents_of(*id)
             .context("an affected squash commit is incomplete")?;
-        if parents.len() > 1 {
+        if parents.len() > 1 && !graph.auto_merges.contains_key(id) {
             anyhow::bail!("descendant merge commits cannot be squashed");
         }
         non_leaves.extend(parents.into_iter().filter(|parent| scope_set.contains(parent)));
@@ -551,6 +555,7 @@ pub(crate) fn copy_insert_plan(
     target: ObjectId,
     target_is_read_only: bool,
 ) -> Result<Plan> {
+    auto_merge::ensure_editable(&repo.find_commit(source)?.decode()?.into_owned()?)?;
     let source_parents = graph
         .parents_of(source)
         .context("the copy source is not in the loaded history")?;
@@ -580,7 +585,10 @@ pub(crate) fn copy_insert_plan(
     let mut step_by_id = HashMap::with_capacity(scope.len());
     for id in &scope {
         let parents = graph.parents_of(*id).context("an affected copy commit is incomplete")?;
-        let [parent] = parents.as_slice() else {
+        let Some(parent) = parents
+            .first()
+            .filter(|_| parents.len() == 1 || graph.auto_merges.contains_key(id))
+        else {
             anyhow::bail!("copying a commit cannot rewrite root or merge commits");
         };
         let parent = if *parent == target {
@@ -684,7 +692,10 @@ pub(crate) fn stack_insert_plan(
     loop {
         let id = *stack.last().expect("a stack always contains HEAD");
         let parents = graph.parents_of(id).context("a moved stack commit is incomplete")?;
-        let [parent] = parents.as_slice() else {
+        let Some(parent) = parents
+            .first()
+            .filter(|_| parents.len() == 1 || graph.auto_merges.contains_key(&id))
+        else {
             anyhow::bail!("moving a stack requires every commit to have exactly one parent");
         };
         stack_parent.insert(id, *parent);
@@ -730,7 +741,10 @@ pub(crate) fn stack_insert_plan(
     let mut new_parent = HashMap::with_capacity(scope.len());
     for id in &scope {
         let parents = graph.parents_of(*id).context("an affected move commit is incomplete")?;
-        let [parent] = parents.as_slice() else {
+        let Some(parent) = parents
+            .first()
+            .filter(|_| parents.len() == 1 || graph.auto_merges.contains_key(id))
+        else {
             anyhow::bail!("moving a stack cannot rewrite root or merge commits");
         };
         new_parent.insert(
@@ -1081,7 +1095,7 @@ fn perform_inner(
         Edit::Repeat { base, .. } => (Some(base), None, false, false, false, false, true, None),
     };
 
-    let affected = match root.filter(|_| !forked) {
+    let mut affected = match root.filter(|_| !forked) {
         Some(root) => graph
             .descendants_in_parent_order(root)
             .context("the edited commit is not in the loaded history")?,
@@ -1099,7 +1113,7 @@ fn perform_inner(
     } else {
         None
     };
-    let checkout_path: HashSet<_> = checkout
+    let mut checkout_path: HashSet<_> = checkout
         .into_iter()
         .flat_map(|checkout| {
             affected
@@ -1108,6 +1122,27 @@ fn perform_inner(
                 .filter(move |id| graph.is_ancestor(*id, checkout))
         })
         .collect();
+    if repeat {
+        checkout_path = auto_merge::checkout_path(&repo, graph, repeat_checkout)?;
+    }
+    let mut auto = if graph.auto_merges.is_empty() {
+        auto_merge::Preparation {
+            refs: Default::default(),
+            optional: HashSet::new(),
+            eager: HashSet::new(),
+        }
+    } else {
+        checkout_path = auto_merge::checkout_path(&repo, graph, repeat_checkout.or(checkout))?;
+        auto_merge::prepare(
+            &repo,
+            graph,
+            &mut affected,
+            repeat_checkout.or(checkout),
+            root.filter(|id| tree_mode == Tree::CherryPick && graph.auto_merges.contains_key(id)),
+        )?
+    };
+    progress.total =
+        affected.len() + usize::from(split_upper.is_some()) + usize::from((inserted || forked) && affected.is_empty());
     if !repeat && !checkout_path.is_empty() {
         let checkout = checkout.expect("a non-empty checkout path has a checkout");
         let review_boundary =
@@ -1129,7 +1164,14 @@ fn perform_inner(
             reject_pending_checkout_path(&repo, id, review_boundary, |id| graph.is_in_edit_scope(id))?;
         }
     }
-    validate(&repo, graph, &affected, removed, repeat, tree_mode)?;
+    validate(
+        &repo,
+        graph,
+        &affected,
+        removed,
+        repeat.then_some(root).flatten(),
+        tree_mode,
+    )?;
 
     let signing = repo
         .commit_signing_options_if_enabled()
@@ -1191,7 +1233,7 @@ fn perform_inner(
         pending.retain(|id| Some(*id) != root);
     }
     for old_id in pending {
-        let old_parents = graph.parents_of(old_id).context("an affected commit is incomplete")?;
+        let old_parents = auto_merge::parents(&repo, graph, old_id)?;
         let mut commit = if Some(old_id) == root {
             match replacement.clone() {
                 Some(commit) => commit,
@@ -1213,8 +1255,64 @@ fn perform_inner(
         };
         let new_parents: Vec<_> = old_parents
             .iter()
-            .filter_map(|parent| rewritten.get(parent).copied().unwrap_or(Some(*parent)))
+            .filter_map(|parent| auto_merge::mapped(*parent, &rewritten))
             .collect();
+        if auto_merge::is_auto_merge(&commit) {
+            let original = repo.find_commit(old_id)?.decode()?.into_owned()?;
+            let eager = conflict.is_none() && auto.eager.contains(&old_id);
+            match auto_merge::rebuild(&repo, &mut commit, &mut auto.refs, &rewritten, None, eager)? {
+                auto_merge::Rebuilt::Empty => {
+                    if Some(old_id) == root {
+                        selected = Some(old_id);
+                    }
+                    progress.processed += 1;
+                    report(None, progress);
+                    continue;
+                }
+                auto_merge::Rebuilt::Collapse(commit_id) => {
+                    rewritten.insert(old_id, Some(commit_id));
+                    if Some(old_id) == root {
+                        selected = Some(commit_id);
+                    }
+                }
+                auto_merge::Rebuilt::Commit => {
+                    for parent in &commit.parents {
+                        anyhow::ensure!(
+                            !auto_merge::contains(&repo, old_id, *parent)?,
+                            "an AutoMerge cannot track itself or its descendants"
+                        );
+                    }
+                    if commit == original && !is_pending(&commit) {
+                        if Some(old_id) == root {
+                            selected = Some(old_id);
+                        }
+                    } else {
+                        let state = if eager {
+                            CommitState::Unmarked(Signature::RedoIfNeeded)
+                        } else {
+                            CommitState::Pending {
+                                original_parent: old_parents.first().copied(),
+                            }
+                        };
+                        let (commit_id, signing_time) =
+                            write_commit_timed(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
+                        if let Some(elapsed) = signing_time {
+                            progress.signed += 1;
+                            progress.signing_time += elapsed;
+                        }
+                        rewritten.insert(old_id, Some(commit_id));
+                        note_rewrites.push((old_id, commit_id));
+                        if Some(old_id) == root {
+                            selected = Some(commit_id);
+                        }
+                    }
+                }
+            }
+            eager_checkout_rewrite |= eager && checkout_path.contains(&old_id);
+            progress.processed += 1;
+            report(Some(old_id), progress);
+            continue;
+        }
         if Some(old_id) != root && old_parents == new_parents && !is_pending(&commit) {
             progress.processed += 1;
             report(None, progress);
@@ -1223,16 +1321,23 @@ fn perform_inner(
         let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
         let original_parents =
             recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
+        let optional = auto.optional.contains(&old_id) && !checkout_path.contains(&old_id);
+        let parent_pending = new_parents
+            .first()
+            .map(|parent| -> Result<bool> { Ok(is_pending(&repo.find_commit(*parent)?.decode()?.into_owned()?)) })
+            .transpose()?
+            .unwrap_or(false);
         let eager = conflict.is_none()
+            && !parent_pending
             && if repeat {
-                repeat_checkout.is_some_and(|checkout| graph.is_ancestor(old_id, checkout))
+                checkout_path.contains(&old_id) || optional
             } else {
-                Some(old_id) != root && checkout_path.contains(&old_id)
+                Some(old_id) != root && (checkout_path.contains(&old_id) || optional)
             };
         eager_checkout_rewrite |= !repeat && eager;
         let mut commit_tree_mode = if eager {
             Tree::CherryPick
-        } else if repeat || conflict.is_some() {
+        } else if repeat || conflict.is_some() || optional {
             Tree::LeaveAsIsAndMark
         } else {
             tree_mode
@@ -1265,6 +1370,7 @@ fn perform_inner(
             commit_tree_mode,
         )?;
         let mut new_conflict = None;
+        let mut optional_conflict = false;
         commit.tree = match rewritten_tree {
             TreeRewrite::Complete(tree) => tree,
             TreeRewrite::Conflict {
@@ -1272,11 +1378,16 @@ fn perform_inner(
                 merged,
                 conflicts,
             } => {
-                new_conflict = Some((merged, conflicts));
-                ours
+                if optional {
+                    optional_conflict = true;
+                    commit.tree
+                } else {
+                    new_conflict = Some((merged, conflicts));
+                    ours
+                }
             }
         };
-        if let Some(started) = cherry_pick_started.filter(|_| new_conflict.is_none()) {
+        if let Some(started) = cherry_pick_started.filter(|_| new_conflict.is_none() && !optional_conflict) {
             progress.cherry_picked += 1;
             progress.cherry_pick_time += started.elapsed();
         }
@@ -1284,6 +1395,7 @@ fn perform_inner(
         let pending = commit_tree_mode == Tree::LeaveAsIsAndMark
             || (commit_tree_mode == Tree::LeaveAsIsAndMarkDescendants && Some(old_id) != root)
             || conflict.is_some()
+            || optional_conflict
             || new_conflict.is_some();
         let preserve_pending_root = recorded_parent.is_some() && pending_checkout == PendingCheckout::Reject;
         let is_conflicting_commit = new_conflict.is_some();
@@ -1343,7 +1455,10 @@ fn perform_inner(
 
     let marked = (!forked && matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants))
         || conflict.is_some();
-    let checkout_after_finish = conflict.is_some();
+    let checkout_after_finish = conflict.is_some()
+        || tree_mode == Tree::CherryPick
+            && root != checkout
+            && root.is_some_and(|id| graph.auto_merges.contains_key(&id));
     let skip_worktree_transitions = !eager_checkout_rewrite
         && (inserted
             || forked
@@ -1381,6 +1496,7 @@ fn perform_inner(
         },
         delete_refs,
         enrichment: None,
+        input_refs: auto.refs.observed,
     };
     let enrichment = prepare_enrichment(&mut prepared, enrichment_headers)?;
     let perform = match conflict {
@@ -1419,13 +1535,35 @@ pub(super) fn finish_review_with_progress(
         .to_owned()?;
     repo = repo.with_object_memory();
 
-    let review_ids = graph
+    let review_descendants = graph
         .descendants_in_parent_order(review)
         .context("the review commit is not in the loaded history")?;
-    let review_set: HashSet<_> = review_ids.iter().copied().collect();
-    let natural_ids: Vec<_> = graph
-        .descendants_in_parent_order(tip)
-        .context("the reviewed commit is not in the loaded history")?
+    // Only the ordinary review additions are inserted into the reviewed history.
+    // Derived merges must wait for all input refs, including the reviewed tip.
+    let mut review_set = HashSet::new();
+    let review_ids: Vec<_> = review_descendants
+        .iter()
+        .copied()
+        .filter(|id| {
+            let ordinary = !graph.auto_merges.contains_key(id)
+                && (*id == review
+                    || graph
+                        .parents_of(*id)
+                        .is_some_and(|parents| parents.iter().all(|parent| review_set.contains(parent))));
+            if ordinary {
+                review_set.insert(*id);
+            }
+            ordinary
+        })
+        .collect();
+    let mut affected = review_descendants;
+    affected.extend(
+        graph
+            .descendants_in_parent_order(tip)
+            .context("the reviewed commit is not in the loaded history")?,
+    );
+    let mut auto = auto_merge::prepare(&repo, graph, &mut affected, checkout.as_ref().map(|(id, _)| *id), None)?;
+    let natural_ids: Vec<_> = affected
         .into_iter()
         .filter(|id| *id != tip && !review_set.contains(id))
         .collect();
@@ -1434,7 +1572,7 @@ pub(super) fn finish_review_with_progress(
         ..Progress::default()
     };
     report(progress);
-    let checkout_path: HashSet<_> = if repo.workdir().is_some() {
+    let mut checkout_path: HashSet<_> = if repo.workdir().is_some() {
         checkout
             .as_ref()
             .map(|(checkout, _)| {
@@ -1448,6 +1586,9 @@ pub(super) fn finish_review_with_progress(
     } else {
         HashSet::new()
     };
+    if !graph.auto_merges.is_empty() {
+        checkout_path = auto_merge::checkout_path(&repo, graph, checkout.as_ref().map(|(id, _)| *id))?;
+    }
     if !checkout_path.is_empty() {
         reject_pending_checkout_path(
             &repo,
@@ -1457,11 +1598,8 @@ pub(super) fn finish_review_with_progress(
         )?;
     }
     for id in review_ids.iter().chain(&natural_ids) {
-        if graph
-            .parents_of(*id)
-            .context("a review descendant is incomplete")?
-            .len()
-            > 1
+        if auto_merge::parents(&repo, graph, *id)?.len() > 1
+            && !auto_merge::is_auto_merge(&repo.find_commit(*id)?.decode()?.into_owned()?)
         {
             anyhow::bail!("review finish cannot rewrite merge descendants");
         }
@@ -1527,8 +1665,43 @@ pub(super) fn finish_review_with_progress(
 
     rewritten.insert(tip, Some(finished_review));
     for old in natural_ids {
-        let old_parents = graph.parents_of(old).context("a reviewed descendant is incomplete")?;
+        let old_parents = auto_merge::parents(&repo, graph, old)?;
         let mut commit = repo.find_commit(old)?.decode()?.into_owned()?;
+        if auto_merge::is_auto_merge(&commit) {
+            let original = commit.clone();
+            let eager = conflict.is_none() && auto.eager.contains(&old);
+            let commit_id = match auto_merge::rebuild(&repo, &mut commit, &mut auto.refs, &rewritten, None, eager)? {
+                auto_merge::Rebuilt::Empty => old,
+                auto_merge::Rebuilt::Collapse(commit_id) => commit_id,
+                auto_merge::Rebuilt::Commit => {
+                    if commit == original && !is_pending(&commit) {
+                        old
+                    } else {
+                        let state = if eager {
+                            CommitState::Unmarked(Signature::RedoIfNeeded)
+                        } else {
+                            CommitState::Pending {
+                                original_parent: old_parents.first().copied(),
+                            }
+                        };
+                        let (commit_id, signing_time) =
+                            write_commit_timed(&repo, commit, Some(old), &committer, state, signing.clone())?;
+                        if let Some(elapsed) = signing_time {
+                            progress.signed += 1;
+                            progress.signing_time += elapsed;
+                        }
+                        commit_id
+                    }
+                }
+            };
+            rewritten.insert(old, Some(commit_id));
+            if old != commit_id {
+                note_rewrites.push((old, commit_id));
+            }
+            progress.processed += 1;
+            report(progress);
+            continue;
+        }
         let new_parents: Vec<_> = old_parents
             .iter()
             .filter_map(|parent| {
@@ -1542,7 +1715,13 @@ pub(super) fn finish_review_with_progress(
         let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
         let original_parents =
             recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
-        let eager = conflict.is_none() && checkout_path.contains(&old);
+        let optional = auto.optional.contains(&old) && !checkout_path.contains(&old);
+        let parent_pending = new_parents
+            .first()
+            .map(|parent| -> Result<_> { Ok(is_pending(&repo.find_commit(*parent)?.decode()?.into_owned()?)) })
+            .transpose()?
+            .unwrap_or(false);
+        let eager = conflict.is_none() && !parent_pending && (checkout_path.contains(&old) || optional);
         let mut mode = if eager {
             Tree::CherryPick
         } else {
@@ -1560,6 +1739,7 @@ pub(super) fn finish_review_with_progress(
         }
         let cherry_pick_started = eager.then(Instant::now);
         let mut new_conflict = None;
+        let mut optional_conflict = false;
         commit.tree = match rewritten_tree(&repo, &commit, &original_parents, &new_parents, mode)? {
             TreeRewrite::Complete(tree) => tree,
             TreeRewrite::Conflict {
@@ -1567,16 +1747,21 @@ pub(super) fn finish_review_with_progress(
                 merged,
                 conflicts,
             } => {
-                new_conflict = Some((merged, conflicts));
-                ours
+                if optional {
+                    optional_conflict = true;
+                    commit.tree
+                } else {
+                    new_conflict = Some((merged, conflicts));
+                    ours
+                }
             }
         };
-        if let Some(started) = cherry_pick_started.filter(|_| new_conflict.is_none()) {
+        if let Some(started) = cherry_pick_started.filter(|_| new_conflict.is_none() && !optional_conflict) {
             progress.cherry_picked += 1;
             progress.cherry_pick_time += started.elapsed();
         }
         commit.parents = new_parents.into_iter().collect();
-        let pending = !(eager || finalize_empty) || conflict.is_some() || new_conflict.is_some();
+        let pending = !(eager || finalize_empty) || conflict.is_some() || new_conflict.is_some() || optional_conflict;
         let (new, signing_time) = write_commit_timed(
             &repo,
             commit,
@@ -1626,6 +1811,7 @@ pub(super) fn finish_review_with_progress(
         pins: Vec::new(),
         delete_refs,
         enrichment: None,
+        input_refs: auto.refs.observed,
     };
     match conflict {
         Some((original, merged_tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
@@ -1650,6 +1836,8 @@ pub(crate) fn perform_plan_with_progress(
     mut plan: Plan,
     mut report: impl FnMut(Progress),
 ) -> Result<PlanPerform> {
+    let mut auto_refs = auto_merge::expand_plan(repo, graph, &mut plan)?;
+    let dependencies = auto_merge::order_plan(repo, &mut plan, &mut auto_refs)?;
     let mut progress = Progress::for_plan(&plan);
     report(progress);
     let mut repo = repo.clone();
@@ -1674,7 +1862,8 @@ pub(crate) fn perform_plan_with_progress(
     let mut picked = HashSet::new();
     for step in &plan.steps {
         if let PlanCommit::Copy(id) = step.commit
-            && graph.parents_of(id).context("a copied commit is incomplete")?.len() != 1
+            && (graph.parents_of(id).context("a copied commit is incomplete")?.len() != 1
+                || auto_merge::is_auto_merge(&repo.find_commit(id)?.decode()?.into_owned()?))
         {
             anyhow::bail!("copying a commit requires it to have exactly one parent");
         }
@@ -1686,7 +1875,11 @@ pub(crate) fn perform_plan_with_progress(
             if !scope.contains(&id) || !picked.insert(id) {
                 anyhow::bail!("a rebase plan contains an invalid or duplicate pick");
             }
-            if graph.parents_of(id).context("a picked commit is incomplete")?.len() > 1 {
+            let automatic = auto_merge::is_auto_merge(&repo.find_commit(id)?.decode()?.into_owned()?);
+            if automatic && step.squash.contains(&id) {
+                anyhow::bail!("an AutoMerge cannot be squashed");
+            }
+            if auto_merge::parents(&repo, graph, id)?.len() > 1 && !automatic {
                 anyhow::bail!("merge commits cannot be picked by the rebase editor");
             }
         }
@@ -1712,10 +1905,31 @@ pub(crate) fn perform_plan_with_progress(
         reject_pending_checkout_path(&repo, head, None, |id| scope.contains(&id))?;
     }
     let mut eager = HashSet::new();
+    let automatic: HashSet<_> = plan
+        .steps
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| match step.commit {
+            PlanCommit::Pick(commit_id) => Some((index, commit_id)),
+            _ => None,
+        })
+        .map(|(index, commit_id)| -> Result<_> {
+            Ok((
+                index,
+                auto_merge::is_auto_merge(&repo.find_commit(commit_id)?.decode()?.into_owned()?),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter_map(|(index, automatic)| automatic.then_some(index))
+        .collect();
     let mut cursor = checkout_target;
     while let Some(PlanParent::Step(index)) = cursor {
         if !eager.insert(index) {
             anyhow::bail!("the checkout ancestry contains a cycle");
+        }
+        if automatic.contains(&index) {
+            break;
         }
         cursor = match plan.steps.get(index).context("the checkout step is missing")?.parent {
             parent @ PlanParent::Step(_) => Some(parent),
@@ -1723,6 +1937,24 @@ pub(crate) fn perform_plan_with_progress(
         };
     }
 
+    let mut optional = HashSet::new();
+    let mut inputs: Vec<_> = eager
+        .iter()
+        .copied()
+        .filter(|index| automatic.contains(index))
+        .collect();
+    let mut visited = HashSet::new();
+    while let Some(index) = inputs.pop() {
+        if !visited.insert(index) {
+            continue;
+        }
+        for &parent in &dependencies[index] {
+            if !eager.contains(&parent) {
+                optional.insert(parent);
+            }
+            inputs.push(parent);
+        }
+    }
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
     let mut note_rewrites = Vec::new();
     let mut produced = Vec::with_capacity(plan.steps.len());
@@ -1730,6 +1962,54 @@ pub(crate) fn perform_plan_with_progress(
     let mut conflict = None;
     let mut marked = false;
     for (index, step) in plan.steps.iter().enumerate() {
+        if automatic.contains(&index)
+            && let PlanCommit::Pick(old_id) = step.commit
+        {
+            let original = repo.find_commit(old_id)?.decode()?.into_owned()?;
+            let mut commit = original.clone();
+            let materialize = conflict.is_none() && (eager.contains(&index) || optional.contains(&index));
+            let refs = auto_merge::plan_refs(&plan.expected_refs, &produced);
+            let new_id =
+                match auto_merge::rebuild(&repo, &mut commit, &mut auto_refs, &rewritten, Some(&refs), materialize)? {
+                    auto_merge::Rebuilt::Empty => old_id,
+                    auto_merge::Rebuilt::Collapse(commit_id) => commit_id,
+                    auto_merge::Rebuilt::Commit => {
+                        for parent in &commit.parents {
+                            anyhow::ensure!(
+                                !auto_merge::contains(&repo, old_id, *parent)?,
+                                "an AutoMerge cannot track itself or its descendants"
+                            );
+                        }
+                        if commit == original && !is_pending(&commit) {
+                            old_id
+                        } else {
+                            let state = if materialize {
+                                CommitState::Unmarked(Signature::RedoIfNeeded)
+                            } else {
+                                marked = true;
+                                CommitState::Pending {
+                                    original_parent: original.parents.first().copied(),
+                                }
+                            };
+                            let (commit_id, signing_time) =
+                                write_commit_timed(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
+                            if let Some(elapsed) = signing_time {
+                                progress.signed += 1;
+                                progress.signing_time += elapsed;
+                            }
+                            commit_id
+                        }
+                    }
+                };
+            rewritten.insert(old_id, Some(new_id));
+            if old_id != new_id {
+                note_rewrites.push((old_id, new_id));
+            }
+            produced.push(new_id);
+            progress.processed += 1;
+            report(progress);
+            continue;
+        }
         let mut resolved_head = None;
         let parent = match step.parent {
             PlanParent::Existing(id) => {
@@ -1738,8 +2018,14 @@ pub(crate) fn perform_plan_with_progress(
             }
             PlanParent::Step(parent) => *produced.get(parent).context("a fork points to a later commit")?,
         };
+        let optional_input = optional.contains(&index) && !eager.contains(&index) && step.squash.is_empty();
+        let parent_pending = is_pending(&repo.find_commit(parent)?.decode()?.into_owned()?);
         let eager = conflict.is_none()
-            && (matches!(step.commit, PlanCommit::Copy(_)) || eager.contains(&index) || !step.squash.is_empty());
+            && !(optional_input && parent_pending)
+            && (matches!(step.commit, PlanCommit::Copy(_))
+                || eager.contains(&index)
+                || optional_input
+                || !step.squash.is_empty());
         let mut commit = match &step.commit {
             PlanCommit::Pick(id) | PlanCommit::Copy(id) => repo
                 .find_commit(*id)
@@ -1789,7 +2075,7 @@ pub(crate) fn perform_plan_with_progress(
         }
         let graph_parents = match step.commit {
             PlanCommit::Pick(id) | PlanCommit::Copy(id) | PlanCommit::Resolved(id) => {
-                graph.parents_of(id).context("a picked commit is incomplete")?
+                auto_merge::parents(&repo, graph, id)?
             }
             PlanCommit::Empty(_) => vec![parent],
         };
@@ -1824,6 +2110,7 @@ pub(crate) fn perform_plan_with_progress(
             ))
         .then(Instant::now);
         let mut step_conflict = None;
+        let mut optional_conflict = false;
         commit.tree = match rewritten_tree(&repo, &commit, &replay_parents, &[parent], mode)? {
             TreeRewrite::Complete(tree) => tree,
             TreeRewrite::Conflict {
@@ -1836,11 +2123,16 @@ pub(crate) fn perform_plan_with_progress(
                 else {
                     unreachable!("empty commits cannot conflict")
                 };
-                step_conflict = Some((original, merged, conflicts, None));
-                ours
+                if optional_input {
+                    optional_conflict = true;
+                    commit.tree
+                } else {
+                    step_conflict = Some((original, merged, conflicts, None));
+                    ours
+                }
             }
         };
-        if let Some(started) = cherry_pick_started.filter(|_| step_conflict.is_none()) {
+        if let Some(started) = cherry_pick_started.filter(|_| step_conflict.is_none() && !optional_conflict) {
             progress.cherry_picked += 1;
             progress.cherry_pick_time += started.elapsed();
         }
@@ -1869,7 +2161,7 @@ pub(crate) fn perform_plan_with_progress(
             squashed.push((*id, source, replay_parents));
         }
         let mut applied_squash = 0;
-        if !squashed.is_empty() && conflict.is_none() && step_conflict.is_none() {
+        if !squashed.is_empty() && conflict.is_none() && step_conflict.is_none() && !optional_conflict {
             for (squash_index, (id, source, replay_parents)) in squashed.iter().enumerate() {
                 let old_base = parent_tree(&repo, replay_parents.first().copied())?;
                 let started = Instant::now();
@@ -1899,7 +2191,7 @@ pub(crate) fn perform_plan_with_progress(
         commit.parents = [parent].into_iter().collect();
         let state = if step_conflict.is_some() {
             CommitState::Unmarked(Signature::InvalidateExisting)
-        } else if eager || finalize_empty {
+        } else if (eager || finalize_empty) && !optional_conflict {
             CommitState::Unmarked(Signature::RedoIfNeeded)
         } else {
             marked = true;
@@ -1989,6 +2281,9 @@ pub(crate) fn perform_plan_with_progress(
 
     let mut primary_children = HashMap::new();
     for (index, step) in plan.steps.iter().enumerate() {
+        if automatic.contains(&index) {
+            continue;
+        }
         let parent = match step.parent {
             PlanParent::Existing(id) => id,
             PlanParent::Step(parent) => produced[parent],
@@ -2016,14 +2311,7 @@ pub(crate) fn perform_plan_with_progress(
         }
     }
 
-    let planned_non_leaves: HashSet<_> = plan
-        .steps
-        .iter()
-        .filter_map(|step| match step.parent {
-            PlanParent::Step(index) => Some(index),
-            PlanParent::Existing(_) => None,
-        })
-        .collect();
+    let planned_non_leaves: HashSet<_> = dependencies.iter().flatten().copied().collect();
     let mut pins = Vec::new();
     for (index, id) in produced.iter().copied().enumerate() {
         if planned_non_leaves.contains(&index)
@@ -2060,6 +2348,7 @@ pub(crate) fn perform_plan_with_progress(
         pins,
         delete_refs,
         enrichment: None,
+        input_refs: auto_refs.observed,
     };
     tracing::info!(
         total = progress.total,
@@ -2224,6 +2513,15 @@ impl Prepared {
             .take_object_memory()
             .context("candidate object memory was unavailable")?;
 
+        if self.checkout_after_finish
+            && let Some(selected) = self.selected
+            && let Some(workdir) = self.repo.workdir()
+        {
+            let old_tree = self.repo.head_commit()?.tree_id()?.detach();
+            let new_tree = self.repo.find_commit(selected)?.tree_id()?.detach();
+            super::forget::preflight_tree_transition(&self.repo, workdir, old_tree, new_tree)?;
+        }
+
         let transitions = worktree_transitions(
             &self.repo,
             &self.rewritten,
@@ -2270,6 +2568,7 @@ impl Prepared {
             self.expected_refs.take(),
             (&self.pins, &self.delete_refs),
             resource_edits,
+            &self.input_refs,
         )?;
         for (transitioned, transition) in transitions.iter().enumerate() {
             if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.old, transition.new)
@@ -2566,24 +2865,27 @@ fn validate(
     graph: &HistoryGraph,
     affected: &[ObjectId],
     removed: bool,
-    repeat: bool,
+    repeat: Option<ObjectId>,
     tree: Tree,
 ) -> Result<()> {
     for (position, id) in affected.iter().enumerate() {
-        let parents = graph.parents_of(*id).context("an affected commit is incomplete")?;
-        if parents.len() > 1 && (position > 0 || removed || tree == Tree::CherryPick) {
+        let parents = auto_merge::parents(repo, graph, *id)?;
+        if parents.len() > 1
+            && (position > 0 || removed || tree == Tree::CherryPick)
+            && !auto_merge::is_auto_merge(&repo.find_commit(*id)?.decode()?.into_owned()?)
+        {
             anyhow::bail!("descendant merge commits cannot be rebased");
         }
-        if repeat && position == 0 {
+        if repeat == Some(*id) {
             let commit = repo.find_commit(*id)?.decode()?.into_owned()?;
-            if !is_pending(&commit) {
+            if !is_pending(&commit) && !auto_merge::is_auto_merge(&commit) {
                 anyhow::bail!("the root of a repeated rebase must be pending");
             }
         }
     }
-    if repeat
-        && let Some(base) = affected.first()
-        && let Some(parent) = graph.parents_of(*base).and_then(|parents| parents.first().copied())
+    if let Some(base) = repeat
+        && !auto_merge::is_auto_merge(&repo.find_commit(base)?.decode()?.into_owned()?)
+        && let Some(parent) = graph.parents_of(base).and_then(|parents| parents.first().copied())
         && is_pending(&repo.find_commit(parent)?.decode()?.into_owned()?)
     {
         anyhow::bail!("the parent of a repeated rebase must not be pending");
@@ -2600,6 +2902,9 @@ fn reject_pending_checkout_path(
     let mut seen = HashSet::new();
     while is_in_scope(id) && seen.insert(id) {
         let commit = repo.find_commit(id)?.decode()?.into_owned()?;
+        if auto_merge::is_auto_merge(&commit) {
+            break;
+        }
         if is_pending(&commit) {
             anyhow::bail!("the current checkout has a pending rebase; time-travel to HEAD before editing it");
         }
@@ -2992,6 +3297,7 @@ fn update_refs(
     expected_refs: Option<Vec<ExpectedRef>>,
     resources: (&[ObjectId], &[(gix::refs::FullName, Target)]),
     stash_edits: super::stash::RewriteEdits,
+    input_refs: &HashMap<gix::refs::FullName, super::undo::State>,
 ) -> Result<UpdatedRefs> {
     let (pins, delete_refs) = resources;
     let mut edits = stash_edits.forward;
@@ -3108,6 +3414,40 @@ fn update_refs(
             log_change(),
         ));
     }
+    let mut verify_only = HashSet::new();
+    for (name, state) in input_refs {
+        let expected = match state {
+            super::undo::State::Missing => PreviousValue::MustNotExist,
+            super::undo::State::Object(commit_id) => PreviousValue::MustExistAndMatch(Target::Object(*commit_id)),
+            super::undo::State::Symbolic(target) => PreviousValue::MustExistAndMatch(Target::Symbolic(target.clone())),
+        };
+        if let Some(edit) = edits.iter_mut().find(|edit| edit.name == *name) {
+            match &mut edit.change {
+                gix::refs::transaction::Change::Update { expected: previous, .. }
+                | gix::refs::transaction::Change::Delete { expected: previous, .. } => {
+                    anyhow::ensure!(
+                        *previous == expected,
+                        "AutoMerge input {} changed during preparation",
+                        name.shorten()
+                    );
+                }
+            }
+        } else {
+            // Reflog-only symbolic updates hold a ref lock and check its state without
+            // publishing a value or writing a reflog. The unused self-target also keeps
+            // absent refs locked: Delete does not support MustNotExist.
+            edits.push(RefEdit::update_with_log(
+                name.clone(),
+                Target::Symbolic(name.clone()),
+                expected,
+                LogChange {
+                    mode: RefLog::Only,
+                    ..LogChange::default()
+                },
+            ));
+            verify_only.insert(name.clone());
+        }
+    }
     if edits.is_empty() {
         return Ok(UpdatedRefs::default());
     }
@@ -3115,7 +3455,8 @@ fn update_refs(
     let applied = repo
         .edit_references_as(edits, Some(committer.to_ref(&mut time)))
         .context("could not update references after rebasing")?;
-    let changes = super::undo::changes_from_edits(applied)?;
+    let changes =
+        super::undo::changes_from_edits(applied.into_iter().filter(|edit| !verify_only.contains(&edit.name)))?;
     ref_rewrites.sort_by(|a, b| a.name.cmp(&b.name));
     ref_rewrites.dedup();
     Ok(UpdatedRefs {
