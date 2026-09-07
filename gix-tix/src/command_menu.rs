@@ -13,6 +13,7 @@ pub(crate) enum CommandId {
     Trailers,
     Refs,
     Hidden,
+    RelatedHistory,
     Select,
     Reword,
     NewCommit,
@@ -235,6 +236,17 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
             "vc",
             true,
             Action::SelectEntry,
+        );
+    }
+    if app.related_history_commit().is_some() {
+        push(
+            CommandId::RelatedHistory,
+            CommandGroup::View,
+            0,
+            "show related history",
+            "vo",
+            true,
+            Action::ShowRelatedHistory,
         );
     }
 
@@ -699,6 +711,14 @@ mod tests {
         assert_eq!(select.label, "select");
         assert_eq!(select.shortcut, "vc");
         assert_eq!(select.action, Action::SelectEntry);
+
+        let related = commands(&app, &Decorations::default(), false)
+            .into_iter()
+            .find(|command| command.id == CommandId::RelatedHistory)
+            .expect("completed history offers related targets");
+        assert_eq!(related.group, CommandGroup::View);
+        assert_eq!(related.shortcut, "vo");
+        assert_eq!(related.action, Action::ShowRelatedHistory);
     }
 
     #[test]
