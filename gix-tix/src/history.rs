@@ -960,11 +960,11 @@ pub(crate) fn view_scope(
     } else if hidden_tips.is_empty() {
         HashSet::new()
     } else {
-        let mut parents = Vec::new();
+        let mut boundary = view_tips.to_vec();
         for id in &visible {
-            extend_parents(*id, &mut parents);
+            extend_parents(*id, &mut boundary);
         }
-        parents.into_iter().filter(|id| !visible.contains(id)).collect()
+        boundary.into_iter().filter(|id| !visible.contains(id)).collect()
     };
     (visible, boundary)
 }
@@ -1365,14 +1365,12 @@ pub(crate) fn load(
     if !rows.is_empty() && !emit(Event::Commits(LoadedCommits { rows, attributions })) {
         return Ok(());
     }
-    if graph.stored_order.is_empty() {
+    if !hidden_revisions.is_empty() {
         connected.extend(
             tips.iter()
                 .copied()
                 .filter(|commit_id| connected_seen.insert(*commit_id)),
         );
-    }
-    if !hidden_revisions.is_empty() {
         connected.retain(|id| graph.index(*id).is_none_or(|index| !states[index.as_usize()].emitted));
         let mut rows = Vec::with_capacity(connected.len());
         let mut attributions = Vec::new();
@@ -3007,6 +3005,50 @@ mod tests {
                 "only hidden tips are retained as rows"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_hidden_tip_is_loaded_beside_visible_history() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let main_id = repo.rev_parse_single("main")?.detach();
+        let topic_id = repo.rev_parse_single("topic")?.detach();
+        let base_id = repo.rev_parse_single("topic^")?.detach();
+        let root_id = repo.rev_parse_single("topic^^")?.detach();
+        crate::ref_tree::pin_references(&repo, main_id, &[DecorationKind::Local])?;
+
+        let events = loaded(fixture.path(), &["topic"], &["main"])?;
+        let mut visible = HashSet::new();
+        let mut boundary = HashSet::new();
+        for event in &events {
+            match event {
+                Event::Commits(commits) => visible.extend(commits.rows.iter().map(|row| row.id)),
+                Event::HiddenCommits(commits) => boundary.extend(commits.rows.iter().map(|row| row.id)),
+                _ => {}
+            }
+        }
+        assert_eq!(visible, HashSet::from([topic_id]), "pinning preserves hidden ancestry");
+        assert_eq!(
+            boundary,
+            HashSet::from([main_id, base_id]),
+            "the hidden pin and the visible stack's base are both displayed after restarting"
+        );
+        let graph = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Complete(graph) => Some(graph),
+                _ => None,
+            })
+            .expect("loading completes with a graph");
+        assert!(
+            graph.is_in_edit_scope(main_id),
+            "the pinned boundary is in the edit scope"
+        );
+        assert!(
+            !graph.is_in_edit_scope(root_id),
+            "ancestry below the displayed boundaries stays out of scope"
+        );
         Ok(())
     }
 
