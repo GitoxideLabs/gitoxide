@@ -115,9 +115,10 @@ impl TryFrom<BString> for Color {
 /// Discriminating enum for names of [`Color`] values.
 ///
 /// `git-config` supports the eight standard colors, their bright variants, an
-/// ANSI color code, or a 24-bit hex value prefixed with an octothorpe/hash.
-/// Color names and the `bright` prefix are matched case-insensitively, and
-/// `bright` may only precede one of the eight standard colors.
+/// ANSI color code, or a hex value prefixed with an octothorpe/hash. The hex value
+/// is either 24-bit, like `#ff11bb`, or the 12-bit shorthand `#f1b`, which stands
+/// for the same color. Color names and the `bright` prefix are matched
+/// case-insensitively, and `bright` may only precede one of the eight standard colors.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum Name {
     /// The `normal` color name.
@@ -209,6 +210,25 @@ impl serde::Serialize for Name {
     }
 }
 
+/// Parse the digits behind a `#` the way `git` does, which is either a 24-bit value
+/// like `ff11bb`, or its 12-bit shorthand `f1b`, where each digit stands for a doubled
+/// pair. Any other length is rejected, as is a digit that isn't hexadecimal.
+fn parse_hex(hex: &[u8]) -> Option<(u8, u8, u8)> {
+    fn nibble(b: u8) -> Option<u8> {
+        char::from(b).to_digit(16).map(|d| d as u8)
+    }
+
+    match *hex {
+        [r, g, b] => Some((nibble(r)? * 0x11, nibble(g)? * 0x11, nibble(b)? * 0x11)),
+        [r1, r0, g1, g0, b1, b0] => Some((
+            nibble(r1)? << 4 | nibble(r0)?,
+            nibble(g1)? << 4 | nibble(g0)?,
+            nibble(b1)? << 4 | nibble(b0)?,
+        )),
+        _ => None,
+    }
+}
+
 impl FromStr for Name {
     type Err = Error;
 
@@ -255,21 +275,10 @@ impl FromStr for Name {
             return Ok(Self::Ansi(v));
         }
 
-        if let Some(s) = s.strip_prefix('#')
-            && s.len() == 6
-            && s.is_char_boundary(2)
-            && s.is_char_boundary(4)
-            && s.is_char_boundary(6)
+        if let Some(hex) = s.strip_prefix('#')
+            && let Some((r, g, b)) = parse_hex(hex.as_bytes())
         {
-            let rgb = (
-                u8::from_str_radix(&s[..2], 16),
-                u8::from_str_radix(&s[2..4], 16),
-                u8::from_str_radix(&s[4..], 16),
-            );
-
-            if let (Ok(r), Ok(g), Ok(b)) = rgb {
-                return Ok(Self::Rgb(r, g, b));
-            }
+            return Ok(Self::Rgb(r, g, b));
         }
 
         Err(color_err(s))

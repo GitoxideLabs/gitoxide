@@ -81,6 +81,33 @@ mod name {
         assert_eq!(Name::from_str("#ff0010"), Ok(Name::Rgb(255, 0, 16)));
         assert_eq!(Name::from_str("#ffffff"), Ok(Name::Rgb(255, 255, 255)));
         assert_eq!(Name::from_str("#000000"), Ok(Name::Rgb(0, 0, 0)));
+        assert_eq!(Name::from_str("#FF0010"), Ok(Name::Rgb(255, 0, 16)));
+    }
+
+    #[test]
+    fn hex_shorthand_doubles_each_digit() {
+        // Values recorded from `git -c foo.bar=<input> config --type=color foo.bar` on
+        // git 2.50.1, which emits `\x1b[38;2;<r>;<g>;<b>m`.
+        for (input, expected, long_form) in [
+            ("#f1b", Name::Rgb(0xff, 0x11, 0xbb), "#ff11bb"),
+            ("#abc", Name::Rgb(0xaa, 0xbb, 0xcc), "#aabbcc"),
+            ("#000", Name::Rgb(0x00, 0x00, 0x00), "#000000"),
+            ("#fff", Name::Rgb(0xff, 0xff, 0xff), "#ffffff"),
+            ("#aBc", Name::Rgb(0xaa, 0xbb, 0xcc), "#aabbcc"),
+        ] {
+            let actual = Name::from_str(input);
+            assert_eq!(actual, Ok(expected), "{input:?}");
+            assert_eq!(
+                actual,
+                Name::from_str(long_form),
+                "{input:?}: the shorthand and the long form it stands for are the same color"
+            );
+            assert_eq!(
+                actual.expect("the shorthand parses, as asserted above").to_string(),
+                long_form,
+                "{input:?}: a shorthand renders back as the long form, since `Name::Rgb` keeps no record of which spelling it came from"
+            );
+        }
     }
 
     #[test]
@@ -92,9 +119,23 @@ mod name {
         assert!(Name::from_str("bright").is_err());
         assert!(Name::from_str("256").is_err());
         assert!(Name::from_str("#").is_err());
-        assert!(Name::from_str("#fff").is_err());
         assert!(Name::from_str("#gggggg").is_err());
         assert!(Name::from_str("#=»©=").is_err());
+
+        for input in ["#ab", "#abcd", "#abcde", "#abcdefa", "#aabbccddeeff"] {
+            assert!(
+                Name::from_str(input).is_err(),
+                "{input} has neither three nor six digits, and `git` rejects it too"
+            );
+        }
+        assert!(
+            Name::from_str("#ggg").is_err(),
+            "a three-digit value still has to be hexadecimal"
+        );
+        assert!(
+            Name::from_str("#-12").is_err(),
+            "a sign is not a hex digit, so it cannot fill one of the three slots"
+        );
     }
 }
 
