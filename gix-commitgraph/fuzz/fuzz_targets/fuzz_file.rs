@@ -11,7 +11,7 @@ fn fuzz(data: &[u8]) -> Result<()> {
         d.copy_from_slice(data);
         d.make_read_only()?
     };
-    let file = File::new(data, "does not matter".into()).map_err(|e| gix_error::Error::from(e))?;
+    let file = File::new(data, "does not matter".into()).map_err(|err| anyhow::Error::from_boxed(err.into()))?;
 
     _ = black_box(file.iter_base_graph_ids().count());
     _ = black_box(file.iter_commits().count());
