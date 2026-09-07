@@ -4934,6 +4934,45 @@ mod tests {
     }
 
     #[test]
+    fn ref_tree_pin_refresh_selects_a_hidden_tip_beside_visible_history() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2])]);
+        app.extend_hidden_commits(vec![row_with_parents(2, &[1])]);
+        complete(&mut app);
+
+        let rows = app
+            .start_refresh(
+                vec![row_with_parents(5, &[4]), row_with_parents(4, &[2]), row(1)].into(),
+                &[id(3)],
+                &[id(5)],
+                false,
+            )
+            .expect("ref-tree expansion caches the hidden branch");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(3), id(2)],
+            "caching the ref-tree does not expose hidden history"
+        );
+
+        app.select_commit_after_refresh(id(5));
+        let rows = app
+            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(3), id(5)], &[id(5)], false)
+            .expect("pinning reprojects the cached history");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<HashSet<_>>(),
+            HashSet::from([id(3), id(2), id(5)]),
+            "the hidden pin appears alongside the visible stack without exposing its ancestry"
+        );
+        let selected = app.selected.expect("the pinned boundary is selected");
+        assert_eq!(app.rows[selected].id, id(5), "selection follows the reference-tree pin");
+        assert!(app.is_row_hidden(selected), "the pinned tip keeps boundary semantics");
+    }
+
+    #[test]
     fn lane_computation_keeps_cached_parents_outside_the_current_view() {
         let mut app = App::new(3);
         app.extend_commits(vec![row_with_parents(2, &[1])]);
