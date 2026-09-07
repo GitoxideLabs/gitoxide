@@ -106,6 +106,12 @@ pub(crate) struct SelectionRef {
     pub upstream: Option<Option<ObjectId>>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RelatedHistory {
+    pub target: gix::refs::Target,
+    pub label: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct CommitIndex(u32);
 
@@ -570,6 +576,76 @@ impl HistoryGraph {
             .map(|(visible, _)| crate::app::SelectionRelation::Visible(visible))
     }
 
+    pub(crate) fn related_history(
+        &self,
+        repo: &gix::Repository,
+        selected_id: ObjectId,
+        refs: &RefSnapshot,
+    ) -> Result<Vec<RelatedHistory>> {
+        let mut choices = Vec::new();
+        let mut seen = HashSet::new();
+        let mut add = |target: gix::refs::Target, relation, outside| {
+            if !seen.insert(target.clone()) {
+                return;
+            }
+            let name = match &target {
+                gix::refs::Target::Symbolic(name) => name.shorten().to_str_lossy().into_owned(),
+                gix::refs::Target::Object(commit_id) => commit_id.to_hex_with_len(7).to_string(),
+            };
+            choices.push(RelatedHistory {
+                target,
+                label: format!("{name} · {relation} · {outside} outside view"),
+            });
+        };
+
+        for &tip_id in &refs.hidden_tips {
+            let Some((outside, _, bases)) = self.paint_with_bases(tip_id, &refs.view_tips) else {
+                continue;
+            };
+            if outside == 0 || !bases.contains(&selected_id) {
+                continue;
+            }
+            let mut named = false;
+            for (name, target) in &refs.hidden {
+                if target.try_id() == Some(&tip_id) {
+                    add(gix::refs::Target::Symbolic(name.clone().try_into()?), "hidden", outside);
+                    named = true;
+                }
+            }
+            if !named {
+                add(gix::refs::Target::Object(tip_id), "hidden", outside);
+            }
+        }
+        for local in self
+            .index(selected_id)
+            .and_then(|index| self.tracking.get(&index))
+            .into_iter()
+            .flatten()
+        {
+            let mut name = BString::from("refs/heads/");
+            name.push_str(&local.name);
+            let Some(branch) = repo.try_find_reference(name.as_bstr())? else {
+                continue;
+            };
+            let Some(name) = branch
+                .remote_tracking_ref_name(gix::remote::Direction::Fetch)
+                .transpose()?
+            else {
+                continue;
+            };
+            let Some(mut upstream) = repo.try_find_reference(name.as_ref())? else {
+                continue;
+            };
+            let upstream_id = upstream.peel_to_commit()?.id;
+            let Some((outside, _)) = self.ahead_behind(upstream_id, &refs.view_tips) else {
+                continue;
+            };
+            add(gix::refs::Target::Symbolic(name), "upstream", outside);
+        }
+        choices.sort_by(|a, b| a.label.cmp(&b.label));
+        Ok(choices)
+    }
+
     pub(crate) fn hidden_branch_updates(
         &self,
         view_tips: &[ObjectId],
@@ -929,7 +1005,7 @@ impl HistoryGraph {
     }
 }
 
-/// Return the visible commits and their displayed hidden boundary.
+/// Return the editable commits and the hidden commits needed to connect the view tips to their bases.
 pub(crate) fn view_scope(
     view_tips: &[ObjectId],
     hidden_tips: &[ObjectId],
@@ -949,9 +1025,9 @@ pub(crate) fn view_scope(
         reachable
     }
 
-    let visible = reachable_from(view_tips, &mut extend_parents);
+    let reachable = reachable_from(view_tips, &mut extend_parents);
     let hidden = reachable_from(hidden_tips, &mut extend_parents);
-    let visible: HashSet<_> = visible.difference(&hidden).copied().collect();
+    let visible: HashSet<_> = reachable.difference(&hidden).copied().collect();
     let boundary = if visible.is_empty() {
         if view_tips.is_empty() { hidden_tips } else { view_tips }
             .iter()
@@ -960,11 +1036,17 @@ pub(crate) fn view_scope(
     } else if hidden_tips.is_empty() {
         HashSet::new()
     } else {
-        let mut boundary = view_tips.to_vec();
+        let mut boundary = Vec::new();
         for id in &visible {
             extend_parents(*id, &mut boundary);
         }
-        boundary.into_iter().filter(|id| !visible.contains(id)).collect()
+        let mut boundary: HashSet<_> = boundary.into_iter().filter(|id| !visible.contains(id)).collect();
+        if view_tips.iter().any(|id| hidden.contains(id)) {
+            let shared = reachable_from(&boundary.iter().copied().collect::<Vec<_>>(), &mut extend_parents);
+            boundary.extend(reachable.difference(&shared).copied().filter(|id| hidden.contains(id)));
+            boundary.extend(view_tips.iter().copied().filter(|id| hidden.contains(id)));
+        }
+        boundary
     };
     (visible, boundary)
 }
@@ -1205,6 +1287,21 @@ pub(crate) fn load(
         return Ok(());
     }
     let hidden = hidden_frontier(&mut graph, repo, commit_graph.as_ref(), &tips, &hidden_tips, &shallow)?;
+    if tips.iter().any(|id| hidden.contains(id)) {
+        // A requested hidden tip meets the frontier at itself. Also walk from the
+        // other tips to cache the hidden paths down to their shared bases.
+        let visible_tips: Vec<_> = tips.iter().copied().filter(|id| !hidden.contains(id)).collect();
+        if !visible_tips.is_empty() {
+            hidden_frontier(
+                &mut graph,
+                repo,
+                commit_graph.as_ref(),
+                &visible_tips,
+                &hidden_tips,
+                &shallow,
+            )?;
+        }
+    }
     let local_refs = local_refs_by_target(repo)?;
     let mut tracking = HashMap::new();
     let mut states = vec![Node::default(); graph.commits.len()];
@@ -1371,6 +1468,14 @@ pub(crate) fn load(
                 .copied()
                 .filter(|commit_id| connected_seen.insert(*commit_id)),
         );
+        let (_, boundary) = view_scope(&tips, &hidden_tips, |id, out| {
+            if let Some(parents) = graph.parents_of(id) {
+                out.extend(parents);
+            }
+        });
+        let mut revealed: Vec<_> = boundary.into_iter().filter(|id| connected_seen.insert(*id)).collect();
+        revealed.sort_unstable();
+        connected.extend(revealed);
         connected.retain(|id| graph.index(*id).is_none_or(|index| !states[index.as_usize()].emitted));
         let mut rows = Vec::with_capacity(connected.len());
         let mut attributions = Vec::new();
@@ -2462,6 +2567,100 @@ mod tests {
     }
 
     #[test]
+    fn related_history_lists_all_hidden_branches_and_unnamed_tips() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let main_id = repo.rev_parse_single("main")?.detach();
+        let base_id = repo.rev_parse_single("topic^")?.detach();
+        let next_id = repo
+            .commit(
+                "refs/heads/next",
+                "next main",
+                repo.find_commit(main_id)?.tree_id()?,
+                [main_id],
+            )?
+            .detach();
+        let mut graph = HistoryGraph::default();
+        let refs = graph.refresh_graph(&repo, &["topic".into()], &["main".into(), "next".into()])?;
+        let choices = graph.related_history(&repo, base_id, &refs)?;
+        assert_eq!(
+            choices,
+            [
+                RelatedHistory {
+                    target: gix::refs::Target::Symbolic("refs/heads/main".try_into()?),
+                    label: "main · hidden · 2 outside view".into(),
+                },
+                RelatedHistory {
+                    target: gix::refs::Target::Symbolic("refs/heads/next".try_into()?),
+                    label: "next · hidden · 3 outside view".into(),
+                },
+            ],
+            "all hidden branches sharing a base remain individually selectable"
+        );
+        assert_eq!(
+            graph.hidden_branch_updates(&refs.view_tips, refs.hidden_tips.iter().copied()),
+            HashMap::from([(base_id, (3, next_id))]),
+            "the existing base indicator still uses the largest relation"
+        );
+        let refs = snapshot(&repo, &["topic".into()], &[main_id.to_string().into()], false)?;
+        let choices = graph.related_history(&repo, base_id, &refs)?;
+        assert_eq!(choices.len(), 1, "an unnamed hidden tip is one option");
+        assert_eq!(choices[0].target, gix::refs::Target::Object(main_id));
+        assert!(
+            graph
+                .related_history(&repo, repo.rev_parse_single("topic")?.detach(), &refs)?
+                .is_empty(),
+            "hidden branches are offered at their common base"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn related_history_uses_tracking_refspecs_and_deduplicates_upstreams() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            [
+                "remote.origin.url=.",
+                "remote.origin.fetch=+refs/heads/*:refs/remotes/mirror/*",
+                "branch.topic.remote=origin",
+                "branch.topic.merge=refs/heads/main",
+                "branch.topic-alias.remote=origin",
+                "branch.topic-alias.merge=refs/heads/main",
+            ],
+        )?;
+        let main_id = repo.rev_parse_single("main")?.detach();
+        let topic_id = repo.rev_parse_single("topic")?.detach();
+        for (name, commit_id) in [
+            ("refs/remotes/mirror/main", main_id),
+            ("refs/heads/topic-alias", topic_id),
+        ] {
+            repo.reference(
+                name,
+                commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "test related refs",
+            )?;
+        }
+        let mut graph = HistoryGraph::default();
+        let refs = graph.refresh_graph(&repo, &["topic".into()], &[])?;
+        assert_eq!(
+            graph.related_history(&repo, topic_id, &refs)?,
+            [RelatedHistory {
+                target: gix::refs::Target::Symbolic("refs/remotes/mirror/main".try_into()?),
+                label: "mirror/main · upstream · 2 outside view".into(),
+            }],
+            "branches sharing one configured upstream produce a single symbolic pin target"
+        );
+        repo.find_reference("refs/remotes/mirror/main")?.delete()?;
+        assert!(
+            graph.related_history(&repo, topic_id, &refs)?.is_empty(),
+            "a disappeared tracking ref cannot be pinned by its stale commit ID"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn ignores_missing_hidden_revisions_only_if_another_one_resolves() -> gix_testtools::Result {
         let fixture = fixture()?;
         let repo = crate::test_repository::open(&fixture)?;
@@ -3009,10 +3208,11 @@ mod tests {
     }
 
     #[test]
-    fn pinned_hidden_tip_is_loaded_beside_visible_history() -> gix_testtools::Result {
+    fn pinned_hidden_history_is_loaded_through_its_shared_base() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
         let main_id = repo.rev_parse_single("main")?.detach();
+        let side_commit_id = repo.rev_parse_single("main^2")?.detach();
         let topic_id = repo.rev_parse_single("topic")?.detach();
         let base_id = repo.rev_parse_single("topic^")?.detach();
         let root_id = repo.rev_parse_single("topic^^")?.detach();
@@ -3028,11 +3228,11 @@ mod tests {
                 _ => {}
             }
         }
-        assert_eq!(visible, HashSet::from([topic_id]), "pinning preserves hidden ancestry");
+        assert_eq!(visible, HashSet::from([topic_id]), "hidden ancestry stays read-only");
         assert_eq!(
             boundary,
-            HashSet::from([main_id, base_id]),
-            "the hidden pin and the visible stack's base are both displayed after restarting"
+            HashSet::from([main_id, side_commit_id, base_id]),
+            "the pin reveals its hidden history through the shared base after restarting"
         );
         let graph = events
             .iter()
@@ -3042,8 +3242,10 @@ mod tests {
             })
             .expect("loading completes with a graph");
         assert!(
-            graph.is_in_edit_scope(main_id),
-            "the pinned boundary is in the edit scope"
+            [main_id, side_commit_id, base_id]
+                .into_iter()
+                .all(|commit_id| graph.is_in_edit_scope(commit_id)),
+            "all displayed hidden commits are in the edit scope"
         );
         assert!(
             !graph.is_in_edit_scope(root_id),

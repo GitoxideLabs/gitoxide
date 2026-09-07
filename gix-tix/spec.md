@@ -279,8 +279,11 @@ without trading responsiveness for metadata that is not visible.
 
 - Hidden ancestry is removed from the selectable view by default. Direct parents
   that connect visible history to hidden history remain as boundary rows. Hidden
-  view tips, including pins, also remain as boundaries even when another stack
-  has visible commits, without exposing the hidden tips' ancestry.
+  view tips, including pins, reveal their hidden commits down to those shared
+  bases, using the same boundary styling and read-only behavior. Older shared
+  ancestry stays hidden. The projection follows the current view tips, including
+  after restarting Tix; unpinning hides any rows no remaining tip needs. With no
+  visible stack, only the applicable hidden tips are shown.
 - Boundary rows retain graph styling but use terminal-default colors, are dimmed,
   and can be selected, paged to, restored as a selection, copied, and inspected.
   They cannot be reworded, forgotten, or signature-verified. During review-base
@@ -525,6 +528,7 @@ without trading responsiveness for metadata that is not visible.
 | `v d` | Cycle author dates, committer dates, and no dates. |
 | `v i` | Cycle commit IDs, change IDs, and no explicit IDs. |
 | `v c` | Prompt for a displayed entry number and select it within the current tree. |
+| `v o` | Pin and select related history; choose a target when several are available. |
 | `v s` | Toggle full actors/emails and titles. |
 | `v e` | Cycle all attribution, author only, and no names, skipping inert states. |
 | `v t` | Toggle attribution trailers. |
@@ -654,6 +658,21 @@ The Enter key is written as `<enter>` throughout.
 
 ### Command menu
 
+- View **show related history**, also available as `v o`, offers related targets
+  for the selected history commit. At a shared base it includes every hidden
+  branch or unnamed hidden tip with commits outside the view; at a local branch
+  tip it includes each configured upstream resolved through its fetch refspec.
+  Targets are deduplicated by reference identity, with their relationship and
+  the number of commits outside the current view shown in the chooser.
+  One target is pinned immediately. Multiple targets use the searchable picker,
+  with the command menu's typing, navigation, numbered choices, and Escape
+  cancellation. No targets produces an informational message.
+  Opening a target creates or reuses an ordinary symbolic pin for a reference
+  or a direct pin for a commit ID, then selects its current tip after refresh.
+  Hidden targets reveal their connecting history through the ordinary pinned
+  view projection, retaining the base's styling and read-only behavior. The
+  checkout stays unchanged. Created pins use the normal undo history and remain
+  available after restarting Tix.
 - Bare `p` opens a centered command menu from the main history UI, including
   while a changes block has focus. In the reference tree, `p` pins the selection
   and returns to history, just like `<enter>`.
