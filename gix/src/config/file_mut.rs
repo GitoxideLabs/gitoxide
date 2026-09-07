@@ -7,7 +7,7 @@ use std::{
 
 use super::FileTransaction;
 
-/// The error produced when opening or committing a [`FileTransaction`].
+/// The error produced by [`crate::config_path()`] or when opening or committing a [`FileTransaction`].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]
 pub enum Error {
