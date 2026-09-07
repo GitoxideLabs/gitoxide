@@ -530,7 +530,7 @@ without trading responsiveness for metadata that is not visible.
 | `r` | Hide reference labels or restore the mode visible when they were hidden. |
 | `m`/`]` | Toggle the commit-message view. |
 | `p` | Open the command menu from history or a focused changes block. |
-| `Shift-P` | Cycle the comparison parent while Tree has focus. |
+| `Shift-P` | Push the active branch from history or Worktree without a prefix; cycle the comparison parent while Tree has focus. |
 | `? e` | Cycle the tree/worktree changes display. |
 | `Shift-R` | Explicitly refresh the revision view and visible worktree status. |
 | `y` | Copy the selected change ID when shown, otherwise the commit ID; copy the selected raw path when a changes block is focused. |
@@ -1382,8 +1382,10 @@ views.
   `a h` attaches the remembered branch at detached `HEAD` when available.
 - The active branch for network actions is the attached `HEAD` branch, or the
   branch remembered by `refs/worktree/tix/pins/HEAD` while detached.
-- `a Shift-P` is available whenever there is an active branch and runs
-  `git push <remote> <branch>` for it. The remote follows
+- `Shift-P` pushes from history or a focused Worktree block without an actions
+  prefix; `a Shift-P` also pushes while Tree has focus. An open command popup
+  consumes `Shift-P` as query text. Push is available whenever there is an active
+  branch and runs `git push <remote> <branch>` for it. The remote follows
   Git's `branch.<name>.pushRemote`, `remote.pushDefault`, then
   `branch.<name>.remote` precedence, falling back to the sole remote, `origin`,
   or the literal `origin` when none is configured. If Git rejects the initial

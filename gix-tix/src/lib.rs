@@ -8917,13 +8917,19 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
             });
         }
     }
-    action_with_shortcut_groups(
+    let action = action_with_shortcut_groups(
         key,
         app.history_display_expanded,
         app.actions_expanded,
         app.enrich_expanded,
         app.information_expanded || app.changes_focus.is_some(),
-    )
+    );
+    match action {
+        Some(Action::Push) if app.changes_focus == Some(ChangePane::Tree) && !app.actions_expanded => {
+            Some(Action::CycleChangesParent)
+        }
+        action => action,
+    }
 }
 
 fn cancel_undo_redo_on_input(event: &TerminalEvent, app: &mut App) -> bool {
@@ -9097,12 +9103,10 @@ fn action_with_shortcut_groups(
         }
         KeyCode::Char('e') if actions_expanded => Some(Action::Amend),
         KeyCode::Char('l') if actions_expanded => Some(Action::Spill),
-        KeyCode::Char('P') if actions_expanded => Some(Action::Push),
-        KeyCode::Char('p') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Push),
+        KeyCode::Char('P') => Some(Action::Push),
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Push),
         KeyCode::Char('d') if actions_expanded => Some(Action::Forget),
         KeyCode::Char('i') if actions_expanded => Some(Action::TogglePin),
-        KeyCode::Char('P') => Some(Action::CycleChangesParent),
-        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
@@ -9572,20 +9576,30 @@ mod tests {
             false,
         ));
 
-        let app = App::new(1);
+        let mut app = App::new(1);
+        app.state = State::Complete;
+        app.set_active_branch(Some("topic".into()));
         let commands = command_menu::commands(&app, &Decorations::default(), false);
         let items = command_picker_items(&commands);
-        let mut menu = Menu::default();
-        menu.open(&items);
-        assert_eq!(
-            command_menu_input(
-                &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
-                &mut menu,
-                &commands,
-            ),
-            CommandMenuInput::Handled
-        );
-        assert_eq!(menu.query(), "p", "an open command menu receives p as query text");
+        for (character, modifiers) in [
+            ('p', KeyModifiers::NONE),
+            ('P', KeyModifiers::NONE),
+            ('p', KeyModifiers::SHIFT),
+        ] {
+            let mut menu = Menu::default();
+            menu.open(&items);
+            assert_eq!(
+                command_menu_input(
+                    &TerminalEvent::Key(KeyEvent::new(KeyCode::Char(character), modifiers)),
+                    &mut menu,
+                    &commands,
+                ),
+                CommandMenuInput::Handled,
+                "p and Shift-P edit the query even when pushing is available"
+            );
+            assert_eq!(menu.query(), character.to_string());
+            assert!(menu.is_open(), "typing does not submit or dismiss the command popup");
+        }
     }
 
     #[test]
@@ -11601,6 +11615,16 @@ mod tests {
                 None,
                 "p remains available to the command-menu opener regardless of the active menu"
             );
+            for key in [
+                KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT),
+            ] {
+                assert_eq!(
+                    action_with_shortcut_groups(key, history, actions, enrich, information),
+                    Some(Action::Push),
+                    "Shift-P pushes regardless of the active prefix menu"
+                );
+            }
         }
         assert_eq!(
             action_with_shortcut_groups(
@@ -11682,7 +11706,7 @@ mod tests {
             assert_eq!(
                 action_with_shortcut_groups(key, false, true, false, false),
                 Some(Action::Push),
-                "Shift-P pushes only after the actions prefix"
+                "Shift-P also pushes after the actions prefix"
             );
         }
         #[cfg(feature = "blocking-network-client")]
@@ -11704,8 +11728,8 @@ mod tests {
                 false,
                 false,
             ),
-            Some(Action::CycleChangesParent),
-            "bare Shift-P keeps cycling the compared parent"
+            Some(Action::Push),
+            "bare Shift-P pushes without an actions prefix"
         );
         for (history, actions, enrich, expected) in [
             (true, false, false, Action::ToggleName),
@@ -11785,11 +11809,11 @@ mod tests {
         assert_eq!(action(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)), None);
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE)),
-            Some(Action::CycleChangesParent)
+            Some(Action::Push)
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT)),
-            Some(Action::CycleChangesParent)
+            Some(Action::Push)
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)), None);
         assert_eq!(
@@ -11884,6 +11908,35 @@ mod tests {
             None,
             "repository-changing submenu actions are not replayed"
         );
+    }
+
+    #[test]
+    fn shift_p_pushes_directly_and_preserves_the_tree_parent_shortcut() {
+        for key in [
+            KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT),
+        ] {
+            let mut app = App::new(1);
+            app.state = State::Complete;
+            app.set_active_branch(Some("topic".into()));
+            for focus in [None, Some(ChangePane::Worktree)] {
+                app.changes_focus = focus;
+                let action = app_action(key, &app).expect("Shift-P is a direct shortcut");
+                assert_eq!(
+                    app.update(action),
+                    vec![Effect::Push("topic".into())],
+                    "Shift-P pushes from history and Worktree without a prefix"
+                );
+            }
+            app.changes_focus = Some(ChangePane::Tree);
+            assert_eq!(
+                app_action(key, &app),
+                Some(Action::CycleChangesParent),
+                "Tree retains its local comparison-parent shortcut"
+            );
+            app.actions_expanded = true;
+            assert_eq!(app_action(key, &app), Some(Action::Push), "a Shift-P explicitly pushes");
+        }
     }
 
     #[test]
