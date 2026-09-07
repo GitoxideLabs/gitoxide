@@ -104,6 +104,7 @@ pub(crate) fn document_with_author(
     let commit = commit.decode().context("could not decode commit to reword")?;
     let parent_commit_id = rebase::marked_parent_ref(&commit)?.unwrap_or_else(|| commit.parents().next());
     let mut commit = commit.into_owned().context("could not own commit to reword")?;
+    super::auto_merge::ensure_editable(&commit)?;
     if let Some(author) = author {
         commit.author = actor(author, commit.author.time, "author")?;
     }
@@ -281,6 +282,7 @@ pub(crate) fn apply_conflict_reporting(
     let author = actor(edit.author, edit.author_time, "author")?;
     let commit_changed = author != commit.author || edit.message != commit.message;
     let (rebased, enrichment, enrich_change) = if commit_changed {
+        super::auto_merge::ensure_editable(&commit)?;
         commit.author = author;
         commit.committer = actor(edit.committer, edit.committer_time, "committer")?;
         commit.message = edit.message;
@@ -338,6 +340,7 @@ pub(crate) fn apply_message_reporting(
         .context("could not decode commit to reword")?
         .into_owned()
         .context("could not own commit to reword")?;
+    super::auto_merge::ensure_editable(&commit)?;
     let changed_author = author
         .map(|author| actor(author, commit.author.time, "author"))
         .transpose()?;

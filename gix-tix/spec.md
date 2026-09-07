@@ -1119,6 +1119,61 @@ views.
   forgets only the in-memory continuation and leaves the partially applied
   repository untouched; Ctrl-C still exits immediately.
 
+### AutoMerge
+
+- `a Shift-M` creates an AutoMerge at the selected `HEAD` when exactly one local
+  branch or ordinary pin names it. A symbolic pin of the same local branch does
+  not count twice. The source refs stay where they are and the result is checked
+  out detached. The same action adds inputs when HEAD is already an AutoMerge.
+- Inputs are chosen with the command popup's fuzzy picker. Its initial order is
+  local branches, ordinary pins, remote branches, then tags which peel to commits.
+  Choosing an ancestor of HEAD changes nothing and explains why. Inputs retain
+  insertion order; a ref can subscribe only once. An AutoMerge cannot subscribe
+  to itself or its descendants, including through a branch attachment.
+- Each live input remains a Git parent. Inputs are merged in order; a conflict
+  mutes that input's entire contribution, including files which merged cleanly,
+  and merging continues with later inputs. Muted parents are excluded from the
+  intermediate ancestry used to calculate later merge bases. The generated
+  title lists contributions, for example `✔️ A 💥 B ✔️ 📌`; pins show only their
+  symbol. Reword, amend, spill, split, and squash cannot edit generated content.
+  Ordinary descendants and separate notes/enrichments remain editable.
+- A repeated `tix-auto-merge` commit header stores each input's full ref name,
+  last resolved commit, and included/muted state. This identity survives process
+  restarts, signing, and lazy rebases, including when several subscriptions
+  converge onto one Git parent. Distinct ref subscriptions never collapse merely
+  because their commit IDs coincide.
+- Remerging resolves every subscribed ref afresh, following external advances,
+  resets, and force rewrites. Deleted refs and their old parents are pruned.
+  One surviving subscription collapses the AutoMerge to that tip; zero surviving
+  subscriptions retain the previous result with an explanatory notice.
+- Tix edits, rebases, and branch attachment maintain dependent AutoMerges in the
+  current history projection, including offscreen commits and inputs outside the
+  projection. Unrelated histories belonging to other worktrees are not expanded.
+  Generated commits away from the checkout ancestry may remain lazily rebased.
+  `a Shift-U` explicitly remerges the selected AutoMerge HEAD. Traveling onto an
+  AutoMerge or an ordinary descendant also refreshes changes made outside Tix.
+  Watchers only refresh display data and never initiate a remerge.
+- Travel replays pending inputs independently. An input whose replay conflicts
+  keeps its original tree and replay-base metadata and is muted; other inputs
+  can still complete. Direct travel to that input offers normal conflict
+  resolution. If every input remains pending, the merge uses their common-base
+  tree, or the empty tree when no common base exists.
+- `a x` removes a selected input tip from an AutoMerge. Multiple memberships open
+  a picker naming both the input ref and the AutoMerge, so even converged refs
+  remain distinguishable. `a Shift-X` at an AutoMerge selects an input to remove.
+  These actions remove subscriptions without deleting input refs. Automatic
+  checkout cleanup never consumes a subscribed ordinary pin.
+- AutoMerges remain ordinary `pick` lines in rebase todos. Their parents derive
+  from the named refs' planned destinations across all fork sections; deleting
+  a pick drops that AutoMerge. Other merge commits retain their rebase restrictions.
+  Derived updates, input replays, notes, signing, ref checks, checkout preflights,
+  and undo use the shared edit machinery and one grouped undo operation.
+- History loading inspects AutoMerge headers throughout the editable projection,
+  independently of viewport text loading, and caches both positive and negative
+  results by immutable commit ID. Idle application state retains detached recipes
+  and picker data only. Pin-consuming checkouts may reload the current projection
+  to determine which pins must be retained.
+
 ### Reviews
 
 - `a r` starts a review from any non-boundary commit without merge descendants.
@@ -1171,6 +1226,8 @@ views.
   descendants retain exact trees and are signed without pending markers. With one
   review-side leaf, the reviewed tip's prior descendants are lazily reparented
   after it; with multiple leaves they branch directly after the finished review.
+  AutoMerge boundaries and their descendants rebuild after the input refs settle;
+  they do not become insertion points for the reviewed history.
   The review ref is deleted in the same atomic ref/worktree transaction.
 - If the recorded review return ref is missing, finishing leaves the repository
   untouched and limits navigation to visible non-review commits descended from
@@ -1208,7 +1265,7 @@ views.
 ### Transactional rebases
 
 - All edits share one in-memory rebase primitive.
-  Forks are preserved, descendant merges are rejected, and all commit/tree
+  Forks are preserved, ordinary descendant merges are rejected, and all commit/tree
   preparation—including cherry-pick conflict detection—finishes before objects
   become reachable through refs.
 - `Tree::LeaveAsIs` rewrites parentage without changing trees;
@@ -1407,6 +1464,9 @@ views.
   stack-insert for the linear ancestry from the selected commit through `HEAD`,
   `a f` creates and travels to a standalone child of the selected commit, and
   `a h` attaches the remembered branch at detached `HEAD` when available.
+  `a Shift-M` creates or extends AutoMerge, `a Shift-U` remerges it, `a x` removes
+  the selected input from an AutoMerge, and `a Shift-X` removes an input from the
+  selected AutoMerge.
 - The active branch for network actions is the attached `HEAD` branch, or the
   branch remembered by `refs/worktree/tix/pins/HEAD` while detached.
 - `Shift-P` pushes from history or a focused Worktree block without an actions
@@ -1483,7 +1543,7 @@ views.
   every former direct child of the target above it. A visible target may be an
   ancestor, descendant, or in unrelated history; selecting `HEAD` or its current
   parent is a no-op. An unchanged merge target is permitted, but any move that
-  would rewrite a merge is unavailable. Mutable refs, pins, Git notes,
+  would rewrite an ordinary merge is unavailable. Mutable refs, pins, Git notes,
   enrichments, review resources, and attached or detached checkout state follow
   their rewritten commits.
   Move-insert uses the history-todo conflict and continuation rules.

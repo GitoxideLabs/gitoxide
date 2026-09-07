@@ -36,6 +36,7 @@ pub(crate) fn prepare(mut repo: gix::Repository, todo: bool) -> Result<Prepared>
         .context("could not decode HEAD commit")?
         .into_owned()
         .context("could not own HEAD commit")?;
+    super::auto_merge::ensure_editable(&source)?;
     let mut create = create::prepare_from(repo.clone(), Some(target), create::Source::Default, None, todo)?;
     repo.objects.set_object_memory(std::mem::take(&mut create.objects));
 

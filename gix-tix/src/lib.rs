@@ -2020,6 +2020,7 @@ fn event_loop(
                         );
                         app.set_known_descendants(history.commits_with_descendants());
                         app.set_known_merge_descendants(history.commits_with_merge_descendants());
+                        app.set_auto_merges(history, &decorations, &ref_snapshot.pins);
                         ref_tree.rebuild(history, &ref_snapshot, &decorations);
                         active_worktree_preview = Some(index);
                         activated_worktree = Some(index);
@@ -2161,6 +2162,7 @@ fn event_loop(
                         );
                         app.set_known_descendants(graph.commits_with_descendants());
                         app.set_known_merge_descendants(graph.commits_with_merge_descendants());
+                        app.set_auto_merges(&graph, &decorations, &ref_snapshot.pins);
                         history_graph = Some(graph);
                         refresh_receiver = None;
                         dirty = true;
@@ -2172,6 +2174,7 @@ fn event_loop(
                     }
                     app.set_known_descendants(graph.commits_with_descendants());
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
+                    app.set_auto_merges(&graph, &result.decorations, &result.refs.pins);
                     app.set_worktree_branch(
                         (!repository_is_bare)
                             .then(|| current_worktree_branch(&result.refs))
@@ -2548,6 +2551,7 @@ fn event_loop(
                     history_finished = true;
                     app.set_known_descendants(graph.commits_with_descendants());
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
+                    app.set_auto_merges(&graph, &decorations, &ref_snapshot.pins);
                     ref_tree.rebuild(&graph, &ref_snapshot, &decorations);
                     history_graph = Some(graph);
                     update_hidden_branch_updates(&mut app, history_graph.as_ref(), &ref_snapshot);
@@ -2949,6 +2953,7 @@ fn event_loop(
             && !app.entry_selection_active()
             && !app.topological_navigation_active()
             && !app.related_history_picker.is_open()
+            && !app.auto_merge_picker.is_open()
             && opens_command_menu(&terminal_event, command_picker.is_open(), ref_tree.is_active())
         {
             let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
@@ -3158,7 +3163,28 @@ fn event_loop(
                 _ => {}
             }
         }
-        let command_action = if focused && app.related_history_picker.is_open() && !diagnostic_input {
+        let command_action = if focused && app.auto_merge_picker.is_open() && !diagnostic_input {
+            let items: Vec<_> = app
+                .auto_merge_options
+                .iter()
+                .map(|option| MenuItem::new(&option.label, option.clone()))
+                .collect();
+            let input = menu_input(&terminal_event, &mut app.auto_merge_picker, &items);
+            if !app.auto_merge_picker.is_open()
+                && let TerminalEvent::Key(key) = &terminal_event
+            {
+                command_picker_key = Some(key.code);
+            }
+            match input {
+                MenuInput::Pass => None,
+                MenuInput::Handled => {
+                    dirty = true;
+                    urgent = true;
+                    continue;
+                }
+                MenuInput::Submit(selection) => Some(Action::ApplyAutoMerge(selection)),
+            }
+        } else if focused && app.related_history_picker.is_open() && !diagnostic_input {
             let items: Vec<_> = app
                 .related_history_options
                 .iter()
@@ -3642,6 +3668,65 @@ fn event_loop(
         let Some(mut action) = action else {
             continue;
         };
+        if matches!(
+            action,
+            Action::AutoMerge | Action::RemoveFromAutoMerge | Action::RemoveAutoMergeInput
+        ) {
+            let available = match action {
+                Action::AutoMerge => app.can_auto_merge(),
+                Action::RemoveFromAutoMerge => app.can_remove_from_auto_merge(),
+                _ => app.can_remove_auto_merge_input(),
+            };
+            if !available {
+                continue;
+            }
+            let selected_commit_id = app.rows[app.selected.context("AutoMerge requires a selection")?].id;
+            let adding = action == Action::AutoMerge;
+            let from_merge = action == Action::RemoveAutoMergeInput;
+            app.update(action);
+            dirty = true;
+            urgent = true;
+            let result = open_repository(&repository_path, repository_is_bare, false).and_then(|repository| {
+                if adding {
+                    Ok(edit::auto_merge::choices(&repository)?
+                        .into_iter()
+                        .map(|choice| edit::auto_merge::Selection {
+                            merge_commit_id: selected_commit_id,
+                            change: edit::auto_merge::Change::Add(choice.reference),
+                            label: choice.label,
+                        })
+                        .collect())
+                } else {
+                    edit::auto_merge::removals(
+                        &repository,
+                        history_graph.as_ref().context("history graph is unavailable")?,
+                        selected_commit_id,
+                        from_merge,
+                    )
+                }
+            });
+            match result {
+                Ok(options) => {
+                    let Some(next) = app.open_auto_merge_picker(
+                        options,
+                        if adding {
+                            " Pick a ref to merge "
+                        } else if from_merge {
+                            " Remove an input "
+                        } else {
+                            " Remove from which AutoMerge? "
+                        },
+                    ) else {
+                        continue;
+                    };
+                    action = next;
+                }
+                Err(err) => {
+                    app.leave_error(format!("AutoMerge: {err:#}"));
+                    continue;
+                }
+            }
+        }
         if action == Action::ShowRelatedHistory {
             let Some(commit_id) = app.related_history_commit() else {
                 continue;
@@ -3895,6 +3980,84 @@ fn event_loop(
                         Ok(true) => app.focus_history(),
                         Err(err) => app.leave_error(format!("diff: {err:#}")),
                         Ok(false) => {}
+                    }
+                }
+                Effect::AutoMerge(selection) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let result = history_graph
+                        .as_ref()
+                        .context("AutoMerge requires a completed history graph")
+                        .and_then(|graph| {
+                            run_with_todo_progress(terminal, |report| {
+                                let repository = open_repository(&repository_path, repository_is_bare, false)?;
+                                edit::auto_merge::perform(
+                                    &repository,
+                                    graph,
+                                    selection.merge_commit_id,
+                                    selection.change,
+                                    report,
+                                )
+                            })
+                        });
+                    match result {
+                        Ok(edit::auto_merge::Operation {
+                            result: None, notice, ..
+                        }) => app.leave_attention(notice),
+                        Ok(edit::auto_merge::Operation {
+                            result: Some(edit::rebase::Perform::Complete(outcome)),
+                            checkout,
+                            notice,
+                        }) => {
+                            let selected = outcome.selected;
+                            let (message, changes) = if checkout {
+                                match edit::time_travel::checkout_plan_reporting(
+                                    &repository_path,
+                                    repository_is_bare,
+                                    &outcome,
+                                    &revisions,
+                                    false,
+                                ) {
+                                    Ok((_, changes)) => (notice, changes),
+                                    Err(err) => (
+                                        format!("AutoMerge applied, checkout failed: {err:#}"),
+                                        outcome.ref_changes,
+                                    ),
+                                }
+                            } else {
+                                (notice, outcome.ref_changes)
+                            };
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "AutoMerge",
+                                &changes,
+                                message,
+                            );
+                            if let Some(selected) = selected {
+                                app.select_commit_after_refresh(selected);
+                            }
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
+                        }
+                        Ok(edit::auto_merge::Operation {
+                            result: Some(edit::rebase::Perform::Conflict(conflict)),
+                            ..
+                        }) => {
+                            let conflict = edit::time_travel::Conflict::from_rebase(
+                                conflict,
+                                &repository_path,
+                                repository_is_bare,
+                                &revisions,
+                                false,
+                            );
+                            let original = conflict.original();
+                            app.arm_rebase_conflict(original);
+                            app.select_commit(original);
+                            pending_rebase_conflict = Some(conflict);
+                        }
+                        Err(err) => app.leave_error(format!("AutoMerge: {err:#}")),
                     }
                 }
                 Effect::Reword(id) => {
@@ -6735,6 +6898,15 @@ fn draw(
             let items = command_picker_items(&commands);
             command_picker.sync(&items);
             ui::draw_command_menu(&mut frame, history, command_picker, &commands)
+        } else if app.auto_merge_picker.is_open() {
+            ui::draw_menu(
+                &mut frame,
+                history,
+                &mut app.auto_merge_picker,
+                app.auto_merge_picker_title,
+                "no matching inputs",
+                |index| app.auto_merge_options[index].label.clone(),
+            )
         } else if app.related_history_picker.is_open() {
             ui::draw_menu(
                 &mut frame,
@@ -9168,6 +9340,8 @@ fn action_with_shortcut_groups(
         KeyCode::Char('b') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::Rebase)
         }
+        KeyCode::Char('U') if actions_expanded => Some(Action::Remerge),
+        KeyCode::Char('u') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Remerge),
         KeyCode::Char('U') => Some(Action::Redo),
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Redo),
         KeyCode::Char('u')
@@ -9181,7 +9355,16 @@ fn action_with_shortcut_groups(
         KeyCode::Char('s') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Split),
         KeyCode::Char('s') if actions_expanded => Some(Action::Squash),
         KeyCode::Char('y') if actions_expanded => Some(Action::CopyInsert),
+        KeyCode::Char('M') if actions_expanded => Some(Action::AutoMerge),
+        KeyCode::Char('m') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => {
+            Some(Action::AutoMerge)
+        }
         KeyCode::Char('m') if actions_expanded => Some(Action::MoveInsert),
+        KeyCode::Char('X') if actions_expanded => Some(Action::RemoveAutoMergeInput),
+        KeyCode::Char('x') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => {
+            Some(Action::RemoveAutoMergeInput)
+        }
+        KeyCode::Char('x') if actions_expanded => Some(Action::RemoveFromAutoMerge),
         KeyCode::Char('t') if actions_expanded => Some(Action::StackInsert),
         #[cfg(feature = "blocking-network-client")]
         KeyCode::Char('F') if actions_expanded => Some(Action::Fetch),
@@ -11864,6 +12047,21 @@ mod tests {
             ),
             (KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE), Action::Split),
             (KeyEvent::new(KeyCode::Char('s'), KeyModifiers::SHIFT), Action::Split),
+            (KeyEvent::new(KeyCode::Char('M'), KeyModifiers::NONE), Action::AutoMerge),
+            (
+                KeyEvent::new(KeyCode::Char('m'), KeyModifiers::SHIFT),
+                Action::AutoMerge,
+            ),
+            (KeyEvent::new(KeyCode::Char('U'), KeyModifiers::NONE), Action::Remerge),
+            (KeyEvent::new(KeyCode::Char('u'), KeyModifiers::SHIFT), Action::Remerge),
+            (
+                KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
+                Action::RemoveAutoMergeInput,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('x'), KeyModifiers::SHIFT),
+                Action::RemoveAutoMergeInput,
+            ),
         ] {
             assert_eq!(
                 action_with_shortcut_groups(key, false, true, false, false),
@@ -11882,6 +12080,7 @@ mod tests {
             ('f', Action::ForkCommit),
             ('h', Action::Attach),
             ('z', Action::Stash),
+            ('x', Action::RemoveFromAutoMerge),
         ] {
             assert_eq!(
                 action_with_shortcut_groups(
