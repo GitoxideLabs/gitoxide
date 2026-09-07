@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use anyhow::{Context, Result};
 use gix::bstr::{BString, ByteSlice};
 
@@ -98,13 +100,10 @@ pub(crate) fn document_with_author(
         .editor_command()
         .context("could not prepare Git editor")?
         .context("no Git editor is available")?;
-    let mut commit = repo
-        .find_commit(id)
-        .context("could not find commit to reword")?
-        .decode()
-        .context("could not decode commit to reword")?
-        .into_owned()
-        .context("could not own commit to reword")?;
+    let commit = repo.find_commit(id).context("could not find commit to reword")?;
+    let commit = commit.decode().context("could not decode commit to reword")?;
+    let parent_commit_id = rebase::marked_parent_ref(&commit)?.unwrap_or_else(|| commit.parents().next());
+    let mut commit = commit.into_owned().context("could not own commit to reword")?;
     if let Some(author) = author {
         commit.author = actor(author, commit.author.time, "author")?;
     }
@@ -137,7 +136,25 @@ pub(crate) fn document_with_author(
         out.push(b'\n');
     }
     write_missing_agent_trailers(&mut out, repo, &commit.message)?;
+    let mut changes = crate::load_changes_without_lines(repo, crate::app::TreeDiffTarget::Commit { id, parent: 0 })?;
+    if changes.parent.is_none() {
+        changes.parent = parent_commit_id.map(|commit_id| crate::ComparedParent {
+            index: 0,
+            total: 1,
+            id: commit_id,
+        });
+    }
+    out.extend_from_slice(b"\n; Changes in this commit:\n");
+    write_diff_summary(&mut out, repo, changes)?;
     Ok((editor, out))
+}
+
+pub(super) fn write_diff_summary(out: &mut Vec<u8>, repo: &gix::Repository, mut changes: crate::Changes) -> Result<()> {
+    let line_counts = crate::add_line_counts(repo, &mut changes)?;
+    for line in crate::ui::commit_diff_summary(&changes, &line_counts, changes.lines_added, changes.lines_removed) {
+        writeln!(out, "; {line}")?;
+    }
+    Ok(())
 }
 
 fn missing_agent_trailers(message: &[u8]) -> [bool; 2] {
@@ -589,6 +606,119 @@ mod tests {
     use std::process::Command;
 
     use super::*;
+
+    fn diffstat(document: &[u8]) -> &[u8] {
+        let heading = b"\n; Changes in this commit:\n";
+        let start = document
+            .find(heading)
+            .expect("reword documents include commented diff statistics");
+        &document[start + heading.len()..]
+    }
+
+    #[test]
+    fn document_shows_committed_line_counts_without_changing_the_message() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["commit", "-q", "-m", "replace tracked line"])
+                .status()?
+                .success(),
+            "commit the staged replacement while leaving different unstaged and untracked contents"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        let commit_id = repository.head_id()?.detach();
+        let root_commit_id = repository.rev_parse_single("HEAD^")?.detach();
+        // Store a newline in a tree path without checking it out on platforms that reject such names.
+        let mut unusual = repository.find_commit(commit_id)?.decode()?.into_owned()?;
+        let mut tree = repository.find_tree(unusual.tree)?.edit()?;
+        tree.upsert(
+            b"line\nbreak".as_bstr(),
+            gix::objs::tree::EntryKind::Blob,
+            repository.write_blob(b"line\n")?,
+        )?;
+        unusual.tree = tree.write()?.detach();
+        unusual.parents = [commit_id].into_iter().collect();
+        let unusual_commit_id = repository.write_object(&unusual)?.detach();
+        for (commit_id, stat, comparison) in [
+            (
+                commit_id,
+                ";  tracked | 2 +- 0\n",
+                format!("; vs parent {} · ", root_commit_id.to_hex_with_len(7)),
+            ),
+            (root_commit_id, ";  tracked | 1 + +1\n", "; root · ".into()),
+            (
+                unusual_commit_id,
+                ";  linebreak | 1 + +1\n",
+                format!("; vs parent {} · ", commit_id.to_hex_with_len(7)),
+            ),
+        ] {
+            let (_, document) = document(&repository, commit_id)?;
+            let summary = diffstat(&document);
+            assert!(
+                summary.find(stat).is_some(),
+                "the editor shows the committed churn and signed net count: {}",
+                summary.as_bstr()
+            );
+            assert!(
+                summary.find(&comparison).is_some(),
+                "the summary identifies its parent or the empty-tree comparison"
+            );
+            assert!(
+                summary.lines().all(|line| line.starts_with(b"; ")),
+                "every statistics line is an editor comment"
+            );
+            assert_eq!(
+                parse(&document)?.message,
+                repository.find_commit(commit_id)?.message_raw()?,
+                "statistics and trailer suggestions never enter the commit message"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn document_diffstat_uses_the_first_merge_parent_and_recorded_rebase_parent() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let merge_commit_id = repository.rev_parse_single("main")?.detach();
+        let parent_commit_id = repository.rev_parse_single("main^")?.detach();
+        let (_, merge_document) = document(&repository, merge_commit_id)?;
+        let summary = diffstat(&merge_document);
+        assert!(
+            summary.find(";  merged | 1 + +1\n").is_some()
+                && summary
+                    .find(format!("; vs parent 1/2 {} · ", parent_commit_id.to_hex_with_len(7)))
+                    .is_some(),
+            "merge statistics use and identify the first parent: {}",
+            summary.as_bstr()
+        );
+
+        for revision in ["topic", "v1^{}"] {
+            let commit_id = repository.rev_parse_single(revision)?.detach();
+            let (_, original_document) = document(&repository, commit_id)?;
+            let mut pending = repository.find_commit(commit_id)?.decode()?.into_owned()?;
+            let original_parent_commit_id = pending
+                .parents
+                .first()
+                .copied()
+                .unwrap_or_else(|| gix::ObjectId::null(repository.object_hash()));
+            pending.parents = [merge_commit_id].into_iter().collect();
+            pending.extra_headers.push((
+                "tix-rebase-parent".into(),
+                original_parent_commit_id.to_hex().to_string().into(),
+            ));
+            let pending_commit_id = repository.write_object(&pending)?.detach();
+            let (_, pending_document) = document(&repository, pending_commit_id)?;
+            assert_eq!(
+                diffstat(&pending_document),
+                diffstat(&original_document),
+                "pending commits retain their original diff and comparison label, including roots"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn parses_the_edit_document() -> gix_testtools::Result {
