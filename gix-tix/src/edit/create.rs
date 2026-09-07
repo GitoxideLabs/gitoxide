@@ -2,8 +2,7 @@ use anyhow::{Context, Result};
 use gix::{ObjectId, bstr::ByteSlice};
 
 use crate::{
-    ChangeGroup, ChangeKind, ComparedParent, add_line_counts, load_tree_changes_without_lines,
-    load_worktree_changes_without_lines, ui,
+    ChangeGroup, ChangeKind, ComparedParent, load_tree_changes_without_lines, load_worktree_changes_without_lines,
 };
 
 use super::{rebase, reword};
@@ -121,13 +120,12 @@ fn prepare_inner(
     };
 
     let new_tree = repo.find_tree(tree).context("could not load the candidate tree")?;
-    let mut changes = load_tree_changes_without_lines(
+    let changes = load_tree_changes_without_lines(
         &repo,
         parent.map(|_| &baseline),
         &new_tree,
         parent.map(|id| ComparedParent { index: 0, total: 1, id }),
     )?;
-    let line_counts = add_line_counts(&repo, &mut changes)?;
     let mut document = Vec::new();
     reword::write_headers(
         &mut document,
@@ -142,13 +140,7 @@ fn prepare_inner(
     document.extend_from_slice(b"\nwhat\n\nwhy\n");
     reword::write_missing_agent_trailers(&mut document, &repo, b"what\n\nwhy\n")?;
     document.extend_from_slice(b"\n; Changes to be committed:\n");
-    for line in ui::commit_diff_summary(&changes, &line_counts, changes.lines_added, changes.lines_removed) {
-        document.extend_from_slice(b"; ");
-        for span in line.spans {
-            document.extend_from_slice(span.content.as_bytes());
-        }
-        document.push(b'\n');
-    }
+    reword::write_diff_summary(&mut document, &repo, changes)?;
     drop(new_tree);
     drop(baseline);
     drop(index);
