@@ -39,6 +39,10 @@ pub(crate) enum CommandId {
     StackInsert,
     ForkCommit,
     Attach,
+    AutoMerge,
+    Remerge,
+    RemoveFromAutoMerge,
+    RemoveAutoMergeInput,
     Todo,
     Note,
     ChecksPass,
@@ -254,6 +258,40 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
     let actions_visible =
         !selected_is_segment && (app.changes_focus != Some(crate::app::ChangePane::Worktree) || app.can_amend());
     if actions_visible {
+        for (id, available, label, shortcut, action) in [
+            (
+                CommandId::AutoMerge,
+                app.can_auto_merge(),
+                "M AutoMerge",
+                "aM",
+                Action::AutoMerge,
+            ),
+            (
+                CommandId::Remerge,
+                app.can_remerge(),
+                "U remerge",
+                "aU",
+                Action::Remerge,
+            ),
+            (
+                CommandId::RemoveFromAutoMerge,
+                app.can_remove_from_auto_merge(),
+                "x remove from AutoMerge",
+                "ax",
+                Action::RemoveFromAutoMerge,
+            ),
+            (
+                CommandId::RemoveAutoMergeInput,
+                app.can_remove_auto_merge_input(),
+                "X remove input",
+                "aX",
+                Action::RemoveAutoMergeInput,
+            ),
+        ] {
+            if available {
+                push(id, CommandGroup::Actions, 1, label, shortcut, true, action);
+            }
+        }
         if app.changes_focus.is_none() && app.reword_shortcut_visible() {
             push(
                 CommandId::Reword,
@@ -506,7 +544,7 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
     }
 
     if !selected_is_segment && let Some(row) = app.selected.and_then(|index| app.rows.get(index)) {
-        if app.can_reword() {
+        if app.can_enrich() {
             push(
                 CommandId::Todo,
                 CommandGroup::Enrich,
@@ -653,6 +691,122 @@ mod tests {
 
     fn has(commands: &[Command], id: CommandId) -> bool {
         commands.iter().any(|command| command.id == id)
+    }
+
+    #[test]
+    fn auto_merge_actions_follow_selection_and_keep_enrichment_available() -> gix_testtools::Result {
+        use crate::edit::auto_merge::{Change, Definition, Input, Selection};
+        let mut app = App::new(4);
+        app.extend_commits(vec![row(4, &[2, 3]), row(3, &[1]), row(2, &[1]), row(1, &[])]);
+        app.state = State::Complete;
+        app.set_worktree_head(Some(id(4)), false);
+        app.set_head_edit_availability(true, true, false, false, false, true, true);
+        let definition = Definition {
+            inputs: vec![
+                Input {
+                    reference: "refs/heads/A".try_into()?,
+                    commit_id: id(2),
+                    muted: false,
+                },
+                Input {
+                    reference: "refs/heads/C".try_into()?,
+                    commit_id: id(3),
+                    muted: false,
+                },
+            ],
+        };
+        let mut graph = crate::history::HistoryGraph::from_test_commits(&[
+            (id(1), vec![]),
+            (id(2), vec![id(1)]),
+            (id(3), vec![id(1)]),
+            (id(4), vec![id(2), id(3)]),
+        ]);
+        graph.auto_merges.insert(id(4), definition);
+        let decorations = Decorations::from([
+            (
+                id(4),
+                vec![Decoration {
+                    name: "HEAD".into(),
+                    kind: DecorationKind::Head,
+                }],
+            ),
+            (
+                id(2),
+                vec![Decoration {
+                    name: "A".into(),
+                    kind: DecorationKind::Local,
+                }],
+            ),
+            (
+                id(3),
+                vec![Decoration {
+                    name: "C".into(),
+                    kind: DecorationKind::Local,
+                }],
+            ),
+        ]);
+        app.set_auto_merges(&graph, &decorations, &[]);
+        app.set_known_merge_descendants(graph.commits_with_merge_descendants());
+        let catalog = commands(&app, &decorations, false);
+        for available in [
+            CommandId::AutoMerge,
+            CommandId::Remerge,
+            CommandId::RemoveAutoMergeInput,
+            CommandId::Todo,
+            CommandId::Note,
+        ] {
+            assert!(
+                has(&catalog, available),
+                "AutoMerge actions and enrichments are available at its HEAD"
+            );
+        }
+        for unavailable in [
+            CommandId::Reword,
+            CommandId::Amend,
+            CommandId::Spill,
+            CommandId::Split,
+            CommandId::Squash,
+        ] {
+            assert!(
+                !has(&catalog, unavailable),
+                "generated content cannot be edited directly"
+            );
+        }
+        app.select_commit(id(2));
+        let catalog = commands(&app, &decorations, false);
+        assert!(has(&catalog, CommandId::RemoveFromAutoMerge));
+        assert!(
+            has(&catalog, CommandId::Reword),
+            "an input is editable despite its AutoMerge descendant"
+        );
+        assert!(!has(&catalog, CommandId::AutoMerge), "creation requires HEAD");
+        let options = vec![
+            Selection {
+                merge_commit_id: id(4),
+                change: Change::Remove("refs/heads/A".try_into()?),
+                label: "A · first merge".into(),
+            },
+            Selection {
+                merge_commit_id: id(5),
+                change: Change::Remove("refs/heads/A".try_into()?),
+                label: "A · second merge".into(),
+            },
+        ];
+        assert_eq!(
+            app.open_auto_merge_picker(options.clone(), " Remove from AutoMerge "),
+            None
+        );
+        let items: Vec<_> = options
+            .iter()
+            .map(|option| crate::menu::Item::new(&option.label, option.clone()))
+            .collect();
+        app.auto_merge_picker.paste("scnd", &items);
+        assert_eq!(
+            app.auto_merge_picker.submit_selected(&items),
+            Some(options[1].clone()),
+            "the shared picker fuzzy-matches a membership"
+        );
+        Ok(())
     }
 
     #[test]

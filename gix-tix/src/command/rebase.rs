@@ -136,6 +136,7 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
         },
     )?;
     let graph = graph.context("history traversal did not produce a graph")?;
+    app.set_auto_merges(&graph, &decorations, &refs.pins);
     crate::update_hidden_branch_updates(&mut app, Some(&graph), &refs);
     let mut candidates = app.hidden_rebase_candidates();
     if candidates.len() != 1 {
@@ -207,7 +208,9 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
         println!("no rebase performed: the todo was cancelled");
         return Ok(());
     };
-    let graph = HistoryGraph::for_commits(&repo, &parsed.plan.scope)?;
+    let mut scope = edit::loaded_view_graph(&repo)?.edit_commit_ids();
+    scope.extend_from_slice(&parsed.plan.scope);
+    let graph = HistoryGraph::for_commits(&repo, &scope)?;
     let repository_path = repo.git_dir().to_owned();
     let bare = repo.is_bare();
     let tips = parsed.tips;
@@ -418,6 +421,84 @@ mod tests {
         assert!(
             String::from_utf8(prepared.document)?.contains("# Rebase from"),
             "the inferred local default branch provides the rebase base"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn auto_merges_round_trip_as_picks_and_can_be_dropped() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let source_commit_id = repo.head_id()?.detach();
+        let graph = edit::loaded_view_graph(&repo)?;
+        let operation = edit::auto_merge::perform(
+            &repo,
+            &graph,
+            source_commit_id,
+            edit::auto_merge::Change::Add("refs/heads/C".try_into()?),
+            |_| {},
+        )?;
+        let outcome = operation.result.context("creation prepares a merge")?.complete()?;
+        edit::time_travel::checkout_plan_reporting(fixture.path(), false, &outcome, &[], false)?;
+        let merge_commit_id = repo.head_id()?.detach();
+        let prepared = prepare(
+            &repo,
+            &Todo {
+                hide: vec!["main".into()],
+                no_auto_hide: true,
+                onto: None,
+                update_base: false,
+                edit_and_apply: false,
+                materialize_conflicts: None,
+                tips: Vec::new(),
+            },
+        )?;
+        let parsed = todo::parse(&repo, &prepared.document)?.context("the generated todo is actionable")?;
+        assert_eq!(
+            parsed
+                .plan
+                .checkout
+                .as_ref()
+                .and_then(|checkout| match checkout.target {
+                    rebase::PlanParent::Step(index) => Some(&parsed.plan.steps[index].commit),
+                    _ => None,
+                }),
+            Some(&rebase::PlanCommit::Pick(merge_commit_id)),
+            "the generated todo keeps checkout at AutoMerge: {}",
+            String::from_utf8_lossy(&prepared.document)
+        );
+        assert!(
+            parsed
+                .plan
+                .steps
+                .iter()
+                .any(|step| step.commit == rebase::PlanCommit::Pick(merge_commit_id)),
+            "AutoMerge uses the ordinary pick syntax"
+        );
+        apply_document(repo.clone(), &prepared.document, None)?;
+        assert_eq!(
+            repo.head_id()?,
+            merge_commit_id,
+            "unchanged inputs keep the generated commit ID"
+        );
+
+        let merge_pick = format!("`@pick {}", crate::change_id::display_short(&repo, merge_commit_id)?);
+        let source_pick = format!("`pick {}", crate::change_id::display_short(&repo, source_commit_id)?);
+        let dropped = String::from_utf8(prepared.document)?
+            .lines()
+            .filter(|line| !line.starts_with(&merge_pick))
+            .map(|line| line.replacen(&source_pick, &source_pick.replacen("`pick", "`@pick", 1), 1))
+            .collect::<Vec<_>>()
+            .join("\n");
+        apply_document(repo.clone(), dropped.as_bytes(), None)?;
+        assert!(
+            edit::auto_merge::Definition::from_commit(&repo.head_commit()?.decode()?.into_owned()?)?.is_none(),
+            "deleting the pick drops the AutoMerge"
+        );
+        assert_eq!(
+            repo.find_reference("refs/heads/A")?.peel_to_commit()?.id,
+            source_commit_id,
+            "dropping a merge keeps its input ref"
         );
         Ok(())
     }

@@ -160,6 +160,8 @@ pub(crate) struct HistoryGraph {
     edit_scope: HashSet<ObjectId>,
     tracking: HashMap<CommitIndex, Vec<SelectionRef>>,
     relations: HashMap<(CommitIndex, CommitIndex), (usize, usize)>,
+    auto_merge_checked: HashSet<ObjectId>,
+    pub(crate) auto_merges: HashMap<ObjectId, crate::edit::auto_merge::Definition>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -235,6 +237,7 @@ impl HistoryGraph {
         }
         graph.set_current_view(ids);
         graph.edit_scope.extend(ids.iter().copied());
+        graph.inspect_auto_merges(repo)?;
         Ok(graph)
     }
 
@@ -279,6 +282,34 @@ impl HistoryGraph {
         self.edit_scope.contains(&id)
     }
 
+    pub(crate) fn edit_commit_ids(&self) -> Vec<ObjectId> {
+        self.commits
+            .iter()
+            .filter(|commit| self.edit_scope.contains(&commit.id))
+            .map(|commit| commit.id)
+            .collect()
+    }
+
+    fn inspect_auto_merges(&mut self, repo: &gix::Repository) -> Result<()> {
+        for commit_id in self.edit_commit_ids() {
+            if self.auto_merge_checked.contains(&commit_id) {
+                continue;
+            }
+            let commit = repo.find_commit(commit_id)?;
+            let decoded = commit.decode()?;
+            if let Some(definition) = crate::edit::auto_merge::Definition::from_headers(
+                decoded
+                    .extra_headers
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_ref())),
+            )? {
+                self.auto_merges.insert(commit_id, definition);
+            }
+            self.auto_merge_checked.insert(commit_id);
+        }
+        Ok(())
+    }
+
     pub(crate) fn is_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> bool {
         let (Some(ancestor), Some(descendant)) = (self.index(ancestor), self.index(descendant)) else {
             return false;
@@ -319,7 +350,11 @@ impl HistoryGraph {
         let mut pending: Vec<_> = self
             .commits
             .iter()
-            .filter(|commit| commit.state & NODE_IN_VIEW != 0 && commit.parents.len() > 1)
+            .filter(|commit| {
+                commit.state & NODE_IN_VIEW != 0
+                    && commit.parents.len() > 1
+                    && !self.auto_merges.contains_key(&commit.id)
+            })
             .flat_map(|commit| {
                 let range = commit.parents.clone();
                 self.parents[range.start as usize..range.end as usize].iter().copied()
@@ -981,6 +1016,7 @@ impl HistoryGraph {
         }
         self.tracking.extend(tracking);
         self.switch_view(&refs.view_tips, &refs.hidden_tips);
+        self.inspect_auto_merges(repo)?;
         let decorations = match authors {
             Some(_) => decorations(repo, &refs.pins, &refs.worktrees)?,
             None => Decorations::new(),
@@ -1268,6 +1304,7 @@ pub(crate) fn load(
         }
         emit(Event::VisibleComplete);
         graph.switch_view(&tips, &hidden_tips);
+        graph.inspect_auto_merges(repo)?;
         emit(Event::Complete(graph));
         return Ok(());
     }
@@ -1484,6 +1521,7 @@ pub(crate) fn load(
     emit(Event::VisibleComplete);
     graph.tracking = tracking;
     graph.switch_view(&tips, &hidden_tips);
+    graph.inspect_auto_merges(repo)?;
     emit(Event::Complete(graph));
     Ok(())
 }

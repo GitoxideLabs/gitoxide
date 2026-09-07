@@ -100,6 +100,7 @@ fn perform_inner(
         .context("editing requires an existing HEAD commit")?
         .detach();
     let mut commit = repo.find_commit(head)?.decode()?.into_owned()?;
+    super::auto_merge::ensure_editable(&commit)?;
     repo.workdir().context("editing HEAD requires a worktree")?;
     repo.commit_signing_options_if_enabled()
         .context("could not resolve commit signing configuration")?;

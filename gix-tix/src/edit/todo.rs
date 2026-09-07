@@ -17,6 +17,7 @@ const HELP: &str = r#"
 
 - Read the editable plan from bottom to top. Each fork separator is the base of the stack above it. Blank lines are ignored.
 - `pick <id>` keeps a commit. Delete its line to drop it, or move the line to reorder it. Each listed commit may be picked only once.
+- AutoMerge picks rebuild from their named inputs' final reference positions, including inputs in other fork sections. Conflicting inputs remain parents but their trees are muted. Delete the AutoMerge pick to drop it; its generated tree and title cannot be squashed or edited directly.
 - `squash <id>` folds a commit into the following command below it in the same fork. Its full message is retained with a source heading, and additional authors become `Co-authored-by` trailers.
 - A centered `fork <id>` separator starts the stack above it at an existing commit or a commit picked below it. The selected hidden boundary is labelled `(base)` with its title; a newer hidden tip used by rebase-update is `(updated-base)`, and an explicit command-line target is `(onto)`. Other fork separators stay terse. Delete a separator to continue its commits on the stack below; add one to create a fork. A listed commit must be picked below before it can be a fork target.
 - `empty <title>` creates an empty commit with the text after the command as its title.
@@ -119,8 +120,12 @@ pub(crate) fn prepare(
     let mut has_pending = false;
     while let Some(id) = cursor {
         let commit = by_id.get(&id).context("the checkout ancestry is incomplete")?;
-        if rebase::is_pending(&repo.find_commit(id)?.decode()?.into_owned()?) {
+        let decoded = repo.find_commit(id)?.decode()?.into_owned()?;
+        if rebase::is_pending(&decoded) {
             has_pending = true;
+            break;
+        }
+        if super::auto_merge::is_auto_merge(&decoded) {
             break;
         }
         cursor = commit

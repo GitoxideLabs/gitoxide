@@ -30,6 +30,7 @@ pub(crate) fn prepare(mut repo: gix::Repository, todo: bool) -> Result<Prepared>
     }
 
     let mut source = repo.find_commit(target)?.decode()?.into_owned()?;
+    super::auto_merge::ensure_editable(&source)?;
     let mut create = create::prepare_from(repo.clone(), Some(target), create::Source::Default, None, todo)?;
     repo.objects.set_object_memory(std::mem::take(&mut create.objects));
 
