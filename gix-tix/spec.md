@@ -278,7 +278,9 @@ without trading responsiveness for metadata that is not visible.
 ### Hidden history
 
 - Hidden ancestry is removed from the selectable view by default. Direct parents
-  that connect visible history to hidden history remain as boundary rows.
+  that connect visible history to hidden history remain as boundary rows. Hidden
+  view tips, including pins, also remain as boundaries even when another stack
+  has visible commits, without exposing the hidden tips' ancestry.
 - Boundary rows retain graph styling but use terminal-default colors, are dimmed,
   and can be selected, paged to, restored as a selection, copied, and inspected.
   They cannot be reworded, forgotten, or signature-verified. During review-base
