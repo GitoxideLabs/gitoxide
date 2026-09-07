@@ -397,6 +397,8 @@ pub(crate) enum Action {
     SubmitEntrySelection,
     Refresh,
     ToggleHidden,
+    ShowRelatedHistory,
+    PinHistoryTarget(gix::refs::Target),
     ToggleHistoryDisplay,
     ToggleRefTree,
     ToggleActions,
@@ -506,6 +508,7 @@ pub(crate) enum Effect {
     Attach,
     TimeTravel(ObjectId),
     TogglePin(ObjectId),
+    PinHistoryTarget(gix::refs::Target),
     ToggleTodo(ObjectId),
     ToggleChecksPass(ObjectId),
     EditNote(ObjectId),
@@ -664,6 +667,8 @@ pub(crate) struct App {
     pub(crate) signature_failures: usize,
     signature_verification_running: bool,
     pub(crate) selection_relation: Option<SelectionRelation>,
+    pub(crate) related_history_options: Vec<crate::history::RelatedHistory>,
+    pub(crate) related_history_picker: crate::menu::Menu<gix::refs::Target>,
     hidden_branch_updates: HashMap<ObjectId, (usize, ObjectId)>,
     change_ids: HashMap<ObjectId, ChangeId>,
     duplicate_change_ids: HashSet<ObjectId>,
@@ -781,6 +786,8 @@ impl App {
             signature_failures: 0,
             signature_verification_running: false,
             selection_relation: None,
+            related_history_options: Vec::new(),
+            related_history_picker: crate::menu::Menu::default(),
             hidden_branch_updates: HashMap::new(),
             change_ids: HashMap::new(),
             duplicate_change_ids: HashSet::new(),
@@ -1765,8 +1772,42 @@ impl App {
         self.entry_selection.is_some()
     }
 
+    pub(crate) fn related_history_commit(&self) -> Option<ObjectId> {
+        if self.state != State::Complete
+            || self.deferred_history_state.unwrap_or(self.state) != State::Complete
+            || self.changes_focus.is_some()
+            || self.reachable_rows.is_some()
+            || self.selected_is_segment()
+        {
+            return None;
+        }
+        self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id)
+    }
+
+    pub(crate) fn open_related_history(&mut self, options: Vec<crate::history::RelatedHistory>) -> Option<Action> {
+        self.update(Action::ShowRelatedHistory);
+        self.related_history_picker.close();
+        self.related_history_options = options;
+        match self.related_history_options.as_slice() {
+            [] => {
+                self.leave_attention("no related history at the selected commit");
+                None
+            }
+            [only] => Some(Action::PinHistoryTarget(only.target.clone())),
+            options => {
+                let items: Vec<_> = options
+                    .iter()
+                    .map(|option| crate::menu::Item::new(&option.label, option.target.clone()))
+                    .collect();
+                self.related_history_picker.open(&items);
+                None
+            }
+        }
+    }
+
     pub(crate) fn worktrunk_history_root(&self) -> bool {
         self.changes_focus.is_none()
+            && !self.related_history_picker.is_open()
             && self.reachable_rows.is_none()
             && self.entry_selection.is_none()
             && self.undo_redo_confirmation.is_none()
@@ -2372,6 +2413,9 @@ impl App {
                     return vec![Effect::TogglePin(id)];
                 }
             }
+            Action::PinHistoryTarget(target) if self.related_history_commit().is_some() => {
+                return vec![Effect::PinHistoryTarget(target)];
+            }
             Action::ToggleTodo if self.can_reword() => {
                 return vec![Effect::ToggleTodo(
                     self.rows[self.selected.expect("todo requires a selection")].id,
@@ -2850,6 +2894,8 @@ impl App {
         self.hidden_branch_targets.clear();
         self.hidden_rebase_bases.clear();
         self.hidden_branch_updates.clear();
+        self.related_history_picker.close();
+        self.related_history_options.clear();
         self.clear_change_ids();
         self.pending_hidden_rows = None;
         self.titles = Vec::new();
@@ -4934,7 +4980,7 @@ mod tests {
     }
 
     #[test]
-    fn ref_tree_pin_refresh_selects_a_hidden_tip_beside_visible_history() {
+    fn ref_tree_pin_refresh_reveals_hidden_history_through_the_base() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(3, &[2])]);
         app.extend_hidden_commits(vec![row_with_parents(2, &[1])]);
@@ -4964,12 +5010,100 @@ mod tests {
         app.finish_lane_computation(rows, graph, time);
         assert_eq!(
             app.rows.iter().map(|row| row.id).collect::<HashSet<_>>(),
-            HashSet::from([id(3), id(2), id(5)]),
-            "the hidden pin appears alongside the visible stack without exposing its ancestry"
+            HashSet::from([id(3), id(2), id(4), id(5)]),
+            "the hidden pin reveals its ancestry down to the shared base"
         );
         let selected = app.selected.expect("the pinned boundary is selected");
         assert_eq!(app.rows[selected].id, id(5), "selection follows the reference-tree pin");
-        assert!(app.is_row_hidden(selected), "the pinned tip keeps boundary semantics");
+        for (index, row) in app.rows.iter().enumerate() {
+            assert_eq!(
+                app.is_row_hidden(index),
+                row.id != id(3),
+                "the revealed commits keep the same styling and read-only state as the base"
+            );
+        }
+
+        for (tips, expected) in [
+            (vec![id(3), id(4), id(5)], HashSet::from([id(3), id(2), id(4), id(5)])),
+            (vec![id(3), id(4)], HashSet::from([id(3), id(2), id(4)])),
+            (vec![id(3)], HashSet::from([id(3), id(2)])),
+        ] {
+            let rows = app
+                .start_refresh(Vec::<LoadedCommit>::new().into(), &tips, &[id(5)], false)
+                .expect("changing pins reprojects the cached history");
+            let (rows, graph, time) = compute_lanes(rows);
+            app.finish_lane_computation(rows, graph, time);
+            assert_eq!(
+                app.rows.iter().map(|row| row.id).collect::<HashSet<_>>(),
+                expected,
+                "unpinning retains only the hidden range still needed by another pin"
+            );
+        }
+    }
+
+    #[test]
+    fn pinned_hidden_merge_does_not_reveal_older_shared_ancestry() {
+        let mut app = App::new(10);
+        let rows = app
+            .start_refresh(
+                vec![
+                    row_with_parents(7, &[5, 6]),
+                    row_with_parents(6, &[2]),
+                    row_with_parents(5, &[3]),
+                    row_with_parents(4, &[3]),
+                    row_with_parents(3, &[1]),
+                    row_with_parents(2, &[1]),
+                    row(1),
+                ]
+                .into(),
+                &[id(4), id(7)],
+                &[id(7)],
+                false,
+            )
+            .expect("the pinned merge joins history at the hidden base");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<HashSet<_>>(),
+            (2..=7).map(id).collect(),
+            "a merge's side history is shown without leaking older ancestry around the base"
+        );
+    }
+
+    #[test]
+    fn related_history_opens_a_picker_only_for_multiple_targets() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row(1)]);
+        complete(&mut app);
+        app.configure_hidden_filter(true);
+        app.history_display_expanded = true;
+        let choice = |n| crate::history::RelatedHistory {
+            target: gix::refs::Target::Object(id(n)),
+            label: format!("hidden {n}"),
+        };
+
+        let action = app.open_related_history(vec![choice(2)]);
+        assert_eq!(action, Some(Action::PinHistoryTarget(gix::refs::Target::Object(id(2)))));
+        assert!(!app.related_history_picker.is_open(), "one target bypasses the picker");
+        assert_eq!(
+            app.update(action.expect("the unique target produces an action")),
+            vec![Effect::PinHistoryTarget(gix::refs::Target::Object(id(2)))],
+            "opening related history requests an ordinary pin"
+        );
+        assert!(!app.show_hidden, "pinning does not override hidden-history filtering");
+        assert!(!app.history_display_expanded, "opening history closes the view prefix");
+
+        assert_eq!(app.open_related_history(vec![choice(2), choice(3)]), None);
+        assert!(
+            app.related_history_picker.is_open(),
+            "multiple targets require a choice"
+        );
+        assert!(!app.worktrunk_history_root(), "Escape belongs to the open picker");
+        assert_eq!(app.open_related_history(Vec::new()), None);
+        assert!(
+            !app.related_history_picker.is_open(),
+            "no targets create no picker or pin"
+        );
     }
 
     #[test]

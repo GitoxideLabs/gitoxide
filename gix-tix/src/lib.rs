@@ -1969,6 +1969,8 @@ fn event_loop(
                         ref_tree_refresh_pending = false;
                         refresh_expand_hidden = false;
                         return_to_history_after_refresh = None;
+                        app.related_history_picker.close();
+                        app.related_history_options.clear();
                         history_status_deadline = None;
                         fill_repository.path.clone_from(&repository_path);
                         fill_repository.bare = repository_is_bare;
@@ -2946,6 +2948,7 @@ fn event_loop(
             && !diagnostic_input
             && !app.entry_selection_active()
             && !app.topological_navigation_active()
+            && !app.related_history_picker.is_open()
             && opens_command_menu(&terminal_event, command_picker.is_open(), ref_tree.is_active())
         {
             let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
@@ -3155,7 +3158,28 @@ fn event_loop(
                 _ => {}
             }
         }
-        let command_action = if focused && command_picker.is_open() && !diagnostic_input {
+        let command_action = if focused && app.related_history_picker.is_open() && !diagnostic_input {
+            let items: Vec<_> = app
+                .related_history_options
+                .iter()
+                .map(|option| MenuItem::new(&option.label, option.target.clone()))
+                .collect();
+            let input = menu_input(&terminal_event, &mut app.related_history_picker, &items);
+            if !app.related_history_picker.is_open()
+                && let TerminalEvent::Key(key) = &terminal_event
+            {
+                command_picker_key = Some(key.code);
+            }
+            match input {
+                MenuInput::Pass => None,
+                MenuInput::Handled => {
+                    dirty = true;
+                    urgent = true;
+                    continue;
+                }
+                MenuInput::Submit(target) => Some(Action::PinHistoryTarget(target)),
+            }
+        } else if focused && command_picker.is_open() && !diagnostic_input {
             let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
             let input = command_menu_input(&terminal_event, &mut command_picker, &commands);
             if !command_picker.is_open()
@@ -3615,9 +3639,35 @@ fn event_loop(
             urgent = true;
             continue;
         }
-        let Some(action) = action else {
+        let Some(mut action) = action else {
             continue;
         };
+        if action == Action::ShowRelatedHistory {
+            let Some(commit_id) = app.related_history_commit() else {
+                continue;
+            };
+            dirty = true;
+            urgent = true;
+            let result = open_repository(&repository_path, repository_is_bare, false).and_then(|repository| {
+                history_graph
+                    .as_ref()
+                    .context("history graph is unavailable")?
+                    .related_history(&repository, commit_id, &ref_snapshot)
+            });
+            match result {
+                Ok(options) => {
+                    let Some(next) = app.open_related_history(options) else {
+                        continue;
+                    };
+                    action = next;
+                }
+                Err(err) => {
+                    app.update(Action::ShowRelatedHistory);
+                    app.leave_error(format!("related history: {err:#}"));
+                    continue;
+                }
+            }
+        }
         if action == Action::ToggleRefTree {
             app.dismiss_undo_position();
             if ref_tree.is_active() {
@@ -4867,6 +4917,25 @@ fn event_loop(
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
+                    }
+                }
+                Effect::PinHistoryTarget(target) => {
+                    let result = open_repository(&repository_path, repository_is_bare, false)
+                        .and_then(|repository| pin_history_target(&repository, target));
+                    match result {
+                        Ok((pin, _created, changes)) => {
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "pin related history",
+                                &changes,
+                                "pinned related history",
+                            );
+                            app.select_commit_after_refresh(pin.id);
+                            refresh_pending = true;
+                        }
+                        Err(err) => app.leave_error(format!("pin related history: {err:#}")),
                     }
                 }
                 Effect::TogglePin(id) => {
@@ -6252,15 +6321,26 @@ fn remove_worktree_progress_snapshot(source: &BackgroundProgressSource) -> app::
 }
 
 fn decoration_successor(selected: gix::ObjectId, current: &Decorations, next: &Decorations) -> Option<gix::ObjectId> {
-    let selected = current.get(&selected)?;
+    let selected_decorations = current.get(&selected)?;
     let mut matches = next.iter().filter_map(|(id, decorations)| {
         decorations
             .iter()
-            .any(|decoration| selected.contains(decoration))
+            .any(|decoration| selected_decorations.contains(decoration))
             .then_some(*id)
     });
     let successor = matches.next()?;
-    matches.all(|candidate| candidate == successor).then_some(successor)
+    (successor != selected && matches.all(|candidate| candidate == successor)).then_some(successor)
+}
+
+fn pin_history_target(
+    repository: &gix::Repository,
+    target: gix::refs::Target,
+) -> Result<(history::Pin, bool, Vec<edit::undo::RefChange>)> {
+    let commit_id = match &target {
+        gix::refs::Target::Symbolic(name) => repository.find_reference(name.as_ref())?.peel_to_commit()?.id,
+        gix::refs::Target::Object(commit_id) => repository.find_commit(*commit_id)?.id,
+    };
+    edit::time_travel::create_or_reuse_pin_reporting(repository, target, commit_id, "tix related history")
 }
 
 fn update_hidden_branch_updates(app: &mut App, graph: Option<&HistoryGraph>, refs: &history::RefSnapshot) {
@@ -6655,6 +6735,15 @@ fn draw(
             let items = command_picker_items(&commands);
             command_picker.sync(&items);
             ui::draw_command_menu(&mut frame, history, command_picker, &commands)
+        } else if app.related_history_picker.is_open() {
+            ui::draw_menu(
+                &mut frame,
+                history,
+                &mut app.related_history_picker,
+                " Related history ",
+                "no matching references",
+                |index| app.related_history_options[index].label.clone(),
+            )
         } else {
             None
         };
@@ -8651,11 +8740,13 @@ fn action(key: KeyEvent) -> Option<Action> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-enum CommandMenuInput {
+enum MenuInput<T> {
     Pass,
     Handled,
-    Submit(Action),
+    Submit(T),
 }
+
+type CommandMenuInput = MenuInput<Action>;
 
 fn command_picker_items(commands: &[MenuCommand]) -> Vec<MenuItem<'_, CommandId>> {
     commands
@@ -8701,30 +8792,45 @@ fn swallow_command_menu_key_event(event: &TerminalEvent, suppressed: &mut Option
 
 fn command_menu_input(event: &TerminalEvent, menu: &mut Menu<CommandId>, commands: &[MenuCommand]) -> CommandMenuInput {
     let items = command_picker_items(commands);
+    match menu_input(event, menu, &items) {
+        MenuInput::Pass => CommandMenuInput::Pass,
+        MenuInput::Handled => CommandMenuInput::Handled,
+        MenuInput::Submit(id) => CommandMenuInput::Submit(
+            commands
+                .iter()
+                .find(|command| command.id == id)
+                .expect("a submitted command came from the current catalog")
+                .action
+                .clone(),
+        ),
+    }
+}
+
+fn menu_input<T: Clone + Eq>(event: &TerminalEvent, menu: &mut Menu<T>, items: &[MenuItem<'_, T>]) -> MenuInput<T> {
     match event {
-        TerminalEvent::FocusGained | TerminalEvent::FocusLost | TerminalEvent::Resize(_, _) => CommandMenuInput::Pass,
-        TerminalEvent::Mouse(_) => CommandMenuInput::Handled,
+        TerminalEvent::FocusGained | TerminalEvent::FocusLost | TerminalEvent::Resize(_, _) => MenuInput::Pass,
+        TerminalEvent::Mouse(_) => MenuInput::Handled,
         TerminalEvent::Paste(text) => {
-            menu.paste(text, &items);
-            CommandMenuInput::Handled
+            menu.paste(text, items);
+            MenuInput::Handled
         }
-        TerminalEvent::Key(key) if key.kind == KeyEventKind::Release => CommandMenuInput::Handled,
+        TerminalEvent::Key(key) if key.kind == KeyEventKind::Release => MenuInput::Handled,
         TerminalEvent::Key(key) if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) => {
-            CommandMenuInput::Pass
+            MenuInput::Pass
         }
         TerminalEvent::Key(key) => {
             let selected = match key.code {
                 KeyCode::Esc => {
                     menu.close();
-                    return CommandMenuInput::Handled;
+                    return MenuInput::Handled;
                 }
-                KeyCode::Enter => menu.submit_selected(&items),
+                KeyCode::Enter => menu.submit_selected(items),
                 KeyCode::Up => {
-                    menu.up(&items);
+                    menu.up(items);
                     None
                 }
                 KeyCode::Down => {
-                    menu.down(&items);
+                    menu.down(items);
                     None
                 }
                 KeyCode::Left => {
@@ -8744,11 +8850,11 @@ fn command_menu_input(event: &TerminalEvent, menu: &mut Menu<CommandId>, command
                     None
                 }
                 KeyCode::Backspace => {
-                    menu.backspace(&items);
+                    menu.backspace(items);
                     None
                 }
                 KeyCode::Delete => {
-                    menu.delete(&items);
+                    menu.delete(items);
                     None
                 }
                 KeyCode::Char('p') if key.kind == KeyEventKind::Repeat && menu.query().is_empty() => None,
@@ -8756,24 +8862,15 @@ fn command_menu_input(event: &TerminalEvent, menu: &mut Menu<CommandId>, command
                     if digit.is_ascii_digit()
                         && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
                 {
-                    menu.submit_digit(digit, &items)
+                    menu.submit_digit(digit, items)
                 }
                 KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                    menu.insert(character, &items);
+                    menu.insert(character, items);
                     None
                 }
                 _ => None,
             };
-            selected.map_or(CommandMenuInput::Handled, |id| {
-                CommandMenuInput::Submit(
-                    commands
-                        .iter()
-                        .find(|command| command.id == id)
-                        .expect("a submitted command came from the current catalog")
-                        .action
-                        .clone(),
-                )
-            })
+            selected.map_or(MenuInput::Handled, MenuInput::Submit)
         }
     }
 }
@@ -9128,6 +9225,7 @@ fn action_with_shortcut_groups(
         KeyCode::Char('d') if history_display_expanded => Some(Action::ToggleDate),
         KeyCode::Char('i') if history_display_expanded => Some(Action::CycleIds),
         KeyCode::Char('c') if history_display_expanded => Some(Action::SelectEntry),
+        KeyCode::Char('o') if history_display_expanded => Some(Action::ShowRelatedHistory),
         KeyCode::Char('s') if history_display_expanded => Some(Action::ToggleEmail),
         KeyCode::Char('e') if history_display_expanded => Some(Action::ToggleName),
         KeyCode::Char('t') if history_display_expanded => Some(Action::ToggleTrailers),
@@ -9537,6 +9635,98 @@ mod tests {
     }
 
     #[test]
+    fn related_history_picker_filters_and_consumes_escape() -> gix_testtools::Result {
+        let main = gix::refs::Target::Symbolic("refs/remotes/origin/main".try_into()?);
+        let topic = gix::refs::Target::Symbolic("refs/remotes/origin/topic".try_into()?);
+        let items = [
+            MenuItem::new("origin/main", main),
+            MenuItem::new("origin/topic", topic.clone()),
+        ];
+        let mut menu = Menu::default();
+        menu.open(&items);
+        assert_eq!(
+            menu_input(
+                &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+                &mut menu,
+                &items
+            ),
+            MenuInput::Handled,
+            "p filters related refs instead of opening the command popup"
+        );
+        assert_eq!(menu.query(), "p");
+        assert_eq!(
+            menu_input(
+                &TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+                &mut menu,
+                &items
+            ),
+            MenuInput::Submit(topic),
+            "Enter submits the filtered reference identity"
+        );
+        menu.open(&items);
+        assert_eq!(
+            menu_input(
+                &TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+                &mut menu,
+                &items
+            ),
+            MenuInput::Handled,
+            "Escape closes the picker without reaching history's cancellation action"
+        );
+        assert!(!menu.is_open());
+        Ok(())
+    }
+
+    #[test]
+    fn pin_related_history_reuses_symbolic_pins_and_resolves_their_current_tip() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let head_id = repository.head_id()?.detach();
+        let topic_id = repository.rev_parse_single("topic")?.detach();
+        let target = gix::refs::Target::Symbolic("refs/heads/topic".try_into()?);
+        let (first, created, changes) = pin_history_target(&repository, target.clone())?;
+        assert!(created, "the first request creates an ordinary symbolic pin");
+        assert_eq!(changes.len(), 1, "the pin can be undone through the existing undo log");
+        let next_id = repository
+            .commit(
+                "refs/heads/topic",
+                "advance topic",
+                repository.find_commit(topic_id)?.tree_id()?,
+                [topic_id],
+            )?
+            .detach();
+        let (again, created, changes) = pin_history_target(&repository, target)?;
+        assert!(!created && changes.is_empty(), "reopening a related ref reuses its pin");
+        assert_eq!(again.name, first.name);
+        assert_eq!(
+            again.id, next_id,
+            "a moving reference is resolved again before selection"
+        );
+        let (fixed, _, _) = pin_history_target(&repository, gix::refs::Target::Object(topic_id))?;
+        assert_eq!(
+            fixed.target,
+            gix::refs::Target::Object(topic_id),
+            "commit IDs remain fixed pins"
+        );
+        assert_eq!(
+            repository.head_id()?.detach(),
+            head_id,
+            "pinning preserves the checkout"
+        );
+        let refs = history::snapshot(&repository, &[], &["topic".into()], false)?;
+        assert!(
+            refs.view_tips.contains(&next_id),
+            "ordinary pins augment the normal history tips"
+        );
+        assert_eq!(
+            refs.hidden_tips,
+            [next_id],
+            "the hidden ref remains configured and excluded"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn command_menu_opener_accepts_only_an_unmodified_history_press_while_closed() {
         assert!(opens_command_menu(
             &TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
@@ -9832,6 +10022,11 @@ mod tests {
         let next = Decorations::from([(new, vec![decoration])]);
 
         assert_eq!(decoration_successor(old, &current, &next), Some(new));
+        assert_eq!(
+            decoration_successor(old, &current, &current),
+            None,
+            "unchanged refs must not replace an explicitly requested selection such as a related pin"
+        );
     }
 
     #[test]
@@ -11561,6 +11756,7 @@ mod tests {
             ('d', Action::ToggleDate),
             ('i', Action::CycleIds),
             ('c', Action::SelectEntry),
+            ('o', Action::ShowRelatedHistory),
             ('s', Action::ToggleEmail),
             ('e', Action::ToggleName),
             ('t', Action::ToggleTrailers),
