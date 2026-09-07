@@ -250,7 +250,7 @@
 //! [`Exn::raise()`] already nests the current `Exn<E>` as a child of a new `Exn<T>`,
 //! so there is no need to erase the type first. Use [`ErrorExt::and_raise()`] as shorthand:
 //! ```rust,ignore
-//! // WRONG — double-boxes and discards type information:
+//! // Unnecessary — erasure is only needed when crossing an untyped boundary:
 //! io_err.raise().erased().raise(message("context"))
 //!
 //! // OK — raise() nests the Exn<io::Error> as a child of Exn<Message> directly:
@@ -314,17 +314,16 @@
 mod exn;
 
 pub use bstr;
-pub use exn::{BoxedResultExt, ErrorExt, Exn, Frame, OptionExt, ResultExt, Something, Untyped};
+pub use exn::{BoxedResultExt, ErrorExt, Exn, Frame, FrameExt, OptionExt, ResultExt, Something, Untyped};
 
 /// An error type that wraps an inner type-erased boxed `std::error::Error` or an `Exn` frame.
 ///
 /// In that, it's similar to `anyhow`, but with support for tracking the call site and trees of errors.
 ///
-/// # Warning: `source()` information is stringified and type-erased
+/// # Native error sources
 ///
-/// All `source()` values when created with [`Error::from_error()`] are turned into frames,
-/// but lose their type information completely. An existing `Error` is retained as a nested error instead.
-/// This is because they are only seen as reference and thus can't be stored.
+/// Upstream construction snapshots native source messages. This boundary traverses the original sources instead,
+/// preserving their concrete types and avoiding duplicate snapshot nodes. Nested `Error` values retain their graphs.
 ///
 /// # The `auto-chain-error` feature
 ///

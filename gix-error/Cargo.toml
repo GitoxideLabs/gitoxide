@@ -14,8 +14,7 @@ rust-version = "1.88"
 [features]
 ## The [`Exn`](crate::Exn) type converts to [`anyhow::Error`] natively so `?` can be used directly.
 ##
-## Otherwise, it would have to be manually converted via
-## [`into_box()`](crate::Exn::into_box()) or [`into_inner()`](crate::Exn::into_inner()).
+## Otherwise, convert through [`into_error()`](crate::Exn::into_error()).
 anyhow = ["dep:anyhow"]
 ## The [`Error`](crate::Error) type is always flattening the [`Exn`](crate::Exn) error tree
 ## into a chain of errors, while keeping their locations and runtime type-information.
@@ -29,13 +28,13 @@ path = "tests/auto_chain_error.rs"
 required-features = ["auto-chain-error"]
 
 [dependencies]
+exn = "=0.4.0-rc.1"
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 
 anyhow = { version = "1.0.102", optional = true }
 document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
-exn = "=0.4.0-rc.1"
 gix-error = { path = ".", features = ["anyhow"] }
 insta = "1.46.3"
 

@@ -58,8 +58,8 @@ fn fully_failed_disambiguation_still_yields_an_ambiguity_error() {
     ValidationError { message: "delegate.peel_until(ObjectKind(Tag)) failed", input: Some("{tag}") }
     |
     └─ Message("Short id 0000000000 is ambiguous. Candidates are:\n\t0000000000e commit 2005-04-07 \"a2onsxbvj\"\n\t0000000000c tree\n\t0000000000b blob")
-        |
-        └─ NotFound { oid: Prefix { bytes: Sha1(0000000000c00000000000000000000000000000), hex_len: 11 }, actual: Tree, expected: Tag }
+    |
+    └─ NotFound { oid: Prefix { bytes: Sha1(0000000000c00000000000000000000000000000), hex_len: 11 }, actual: Tree, expected: Tag }
     "#);
     use std::error::Error;
     assert_eq!(

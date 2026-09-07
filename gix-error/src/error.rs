@@ -148,6 +148,8 @@ fn classification_can_retry_lenient(classification: Classification<'_>) -> bool 
 
 #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
 mod _impl {
+    use crate::FrameExt;
+    use crate::exn::{debug_frame, display_frame, frame_error};
     use crate::{DisplaySource, Error, Exn};
     use std::fmt::Formatter;
 
@@ -158,14 +160,14 @@ mod _impl {
         /// This is the first error yielded by [`Self::iter_errors()`] and is distinct from
         /// [`Self::probable_cause()`].
         pub fn error(&self) -> &(dyn std::error::Error + 'static) {
-            self.inner.frame().error()
+            frame_error(self.inner.frame())
         }
 
         /// Return the error that is most likely the root cause, based on heuristics.
         /// Note that if there is nothing but this error, i.e. no source or children, this error is returned.
         pub fn probable_cause(&self) -> &(dyn std::error::Error + 'static) {
             let root = self.inner.frame();
-            let cause = root.probable_cause().unwrap_or_else(|| root.error());
+            let cause = root.probable_cause().unwrap_or_else(|| frame_error(root));
             cause.downcast_ref::<Error>().map_or(cause, Error::probable_cause)
         }
 
@@ -281,8 +283,8 @@ mod _impl {
     impl std::fmt::Display for Error {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match &self.inner {
-                Inner::ExnAsError(err) => std::fmt::Display::fmt(err.error(), f),
-                Inner::Exn(frame) => std::fmt::Display::fmt(frame, f),
+                Inner::ExnAsError(err) => std::fmt::Display::fmt(frame_error(err), f),
+                Inner::Exn(frame) => display_frame(frame, f),
             }
         }
     }
@@ -290,8 +292,8 @@ mod _impl {
     impl std::fmt::Debug for Error {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match &self.inner {
-                Inner::ExnAsError(err) => std::fmt::Debug::fmt(err.error(), f),
-                Inner::Exn(frame) => std::fmt::Debug::fmt(frame, f),
+                Inner::ExnAsError(err) => std::fmt::Debug::fmt(frame_error(err), f),
+                Inner::Exn(frame) => debug_frame(frame, f),
             }
         }
     }
@@ -301,11 +303,11 @@ mod _impl {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match &self.inner {
                 Inner::ExnAsError(frame) | Inner::Exn(frame) => {
-                    let error = frame.error();
+                    let error = frame_error(frame);
                     (!error.is::<Error>())
                         .then(|| error.source())
                         .flatten()
-                        .or_else(|| frame.children().first().map(|frame| frame.error() as _))
+                        .or_else(|| frame.explicit_children().first().map(|frame| frame_error(frame) as _))
                 }
             }
         }
@@ -313,7 +315,7 @@ mod _impl {
 
     impl<E> From<Exn<E>> for Error
     where
-        E: std::error::Error + Send + Sync + 'static,
+        E: std::error::Error + Send + Sync + 'static + ?Sized,
     {
         fn from(err: Exn<E>) -> Self {
             Error {
@@ -524,7 +526,7 @@ mod _impl {
 
     impl<E> From<Exn<E>> for Error
     where
-        E: std::error::Error + Send + Sync + 'static,
+        E: std::error::Error + Send + Sync + 'static + ?Sized,
     {
         fn from(err: Exn<E>) -> Self {
             Error {

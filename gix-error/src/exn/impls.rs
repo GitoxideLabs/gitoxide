@@ -15,201 +15,241 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
-use std::marker::PhantomData;
 use std::ops::Deref;
 use std::panic::Location;
 
 use crate::concrete::chain::ErrorHandle;
-use crate::{ChainedError, Exn, write_location};
+use crate::{ChainedError, Exn, Frame, write_location};
 
 impl<E: Error + Send + Sync + 'static> From<E> for Exn<E> {
     #[track_caller]
     fn from(error: E) -> Self {
-        Exn::new(error)
+        Self::new(error)
+    }
+}
+
+impl<E: Error + Send + Sync + 'static> From<E> for Exn {
+    #[track_caller]
+    fn from(error: E) -> Self {
+        Exn { inner: error.into() }
+    }
+}
+
+impl<E: Error + Send + Sync + 'static> From<Exn<E>> for Exn {
+    fn from(error: Exn<E>) -> Self {
+        Exn {
+            inner: error.inner.into(),
+        }
+    }
+}
+
+impl<E: Error + Send + Sync + 'static> From<Exn<E>> for ::exn::Exn {
+    fn from(error: Exn<E>) -> Self {
+        error.inner.into()
+    }
+}
+
+impl<E: Error + Send + Sync + 'static + ?Sized> From<Exn<E>> for ::exn::Exn<E> {
+    fn from(error: Exn<E>) -> Self {
+        error.inner
     }
 }
 
 impl<E: Error + Send + Sync + 'static> Exn<E> {
-    /// Create a new exception with the given error.
+    /// Construct an exception using upstream storage and caller tracking.
     ///
-    /// Its [source chain](Error::source) is retained by `error` and traversed lazily for formatting, downcasting, and
-    /// conversion. Native sources are not copied into owned [`Frame`] values and keep their concrete types.
-    ///
-    /// See also [`ErrorExt::raise`](crate::ErrorExt) for a fluent way to convert an error into an `Exn` instance.
+    /// Upstream snapshots native source messages. Gitoxide's traversal and formatting use the original native
+    /// sources instead, preserving their concrete types and distinguishing them from explicitly raised frames.
     #[track_caller]
     pub fn new(error: E) -> Self {
-        let frame = Frame {
-            error: Box::new(error),
-            location: Location::caller(),
-            children: Vec::new(),
-        };
-
-        Self {
-            frame: Box::new(frame),
-            phantom: PhantomData,
-        }
+        Self::from_upstream(::exn::Exn::new(error))
     }
 
-    /// Create a new exception with the given error and children.
+    /// Construct a parent over all errors or exceptions in `children`, in iteration order.
     #[track_caller]
-    pub fn raise_all<T, I>(children: I, err: E) -> Self
+    pub fn raise_all(children: impl IntoIterator<Item: Into<::exn::Exn>>, error: E) -> Self {
+        use ::exn::IteratorExt;
+        Self::from_upstream(children.into_iter().raise(error))
+    }
+}
+
+impl<E: Error + Send + Sync + 'static + ?Sized> Exn<E> {
+    /// Wrap an upstream exception without reallocating its tree.
+    pub fn from_upstream(inner: ::exn::Exn<E>) -> Self {
+        Exn { inner }
+    }
+
+    /// Add a new typed parent to this exception.
+    #[track_caller]
+    pub fn raise<T: Error + Send + Sync + 'static>(self, error: T) -> Exn<T> {
+        Exn::from_upstream(self.inner.raise(error))
+    }
+
+    /// Erase the root marker without allocating or changing the frame tree.
+    pub fn erased(self) -> Exn
     where
-        T: Error + Send + Sync + 'static,
-        I: IntoIterator,
-        I::Item: Into<Exn<T>>,
+        ::exn::Exn<E>: Into<::exn::Exn>,
     {
-        let mut new_exn = Exn::new(err);
-        for exn in children {
-            let exn = exn.into();
-            new_exn.frame.children.push(*exn.frame);
-        }
-        new_exn
-    }
-
-    /// Raise a new exception; this will make the current exception a child of the new one.
-    #[track_caller]
-    pub fn raise<T: Error + Send + Sync + 'static>(self, err: T) -> Exn<T> {
-        let mut new_exn = Exn::new(err);
-        new_exn.frame.children.push(*self.frame);
-        new_exn
-    }
-
-    /// Use the current exception as the head of a chain, adding `err` to its children.
-    #[track_caller]
-    pub fn chain<T: Error + Send + Sync + 'static>(mut self, err: impl Into<Exn<T>>) -> Exn<E> {
-        let err = err.into();
-        self.frame.children.push(*err.frame);
-        self
-    }
-
-    /// Use the current exception the head of a chain, adding `errors` to its children.
-    #[track_caller]
-    pub fn chain_all<T, I>(mut self, errors: I) -> Exn<E>
-    where
-        T: Error + Send + Sync + 'static,
-        I: IntoIterator,
-        I::Item: Into<Exn<T>>,
-    {
-        for err in errors {
-            let err = err.into();
-            self.frame.children.push(*err.frame);
-        }
-        self
-    }
-
-    /// Drain all explicitly added child frames of this error as untyped [`Exn`].
-    ///
-    /// Native [`Error::source()`] values remain owned by their error and aren't drainable frames. This is useful if one
-    /// wants to re-organise explicitly raised errors and the error layout is well known.
-    pub fn drain_children(&mut self) -> impl Iterator<Item = Exn> + '_ {
-        self.frame.children.drain(..).map(Exn::from)
-    }
-
-    /// Erase the type of this instance and turn it into a bare `Exn`.
-    pub fn erased(self) -> Exn {
-        let untyped_frame = {
-            let Frame {
-                error,
-                location,
-                children,
-            } = *self.frame;
-            // Unfortunately, we have to double-box here.
-            // TODO: figure out tricks to make this unnecessary.
-            let error = Untyped(error);
-            Frame {
-                error: Box::new(error),
-                location,
-                children,
-            }
-        };
         Exn {
-            frame: Box::new(untyped_frame),
-            phantom: Default::default(),
+            inner: self.inner.into(),
         }
     }
 
-    /// Return the current exception.
-    pub fn error(&self) -> &E {
-        self.frame
-            .error
-            .downcast_ref()
-            .expect("the owned frame always matches the compile-time error type")
+    /// Return the current root error.
+    pub fn error(&self) -> &E
+    where
+        ::exn::Exn<E>: Deref<Target = E>,
+    {
+        &self.inner
     }
 
-    /// Discard all error context and return the underlying error in a Box.
-    ///
-    /// This is useful to retain the allocation, as internally it's also stored in a box,
-    /// when comparing it to [`Self::into_inner()`].
-    pub fn into_box(self) -> Box<E> {
-        match self.frame.error.downcast() {
-            Ok(err) => err,
-            Err(_) => unreachable!("The type in the frame is always the type of this instance"),
-        }
-    }
-
-    /// Discard all error context and return the underlying error.
-    ///
-    /// This may be needed to obtain something that once again implements `Error`.
-    /// Note that this destroys the internal Box and moves the value back onto the stack.
-    pub fn into_inner(self) -> E {
-        *self.into_box()
-    }
-
-    /// Turn ourselves into a top-level [Error] that implements [`std::error::Error`].
-    ///
-    /// [Error]: crate::Error
+    /// Convert to gitoxide's standard-error boundary, preserving the complete error graph.
     pub fn into_error(self) -> crate::Error {
         self.into()
     }
 
-    /// Convert this error tree into a chain of errors, breadth first, which flattens the tree
-    /// but retains all type dynamic type information.
-    ///
-    /// This is useful for inter-op with `anyhow`.
-    pub fn into_chain(self) -> crate::ChainedError {
+    /// Flatten the complete graph into a standard source chain in breadth-first order.
+    pub fn into_chain(self) -> ChainedError {
         self.into()
     }
 
-    /// Return the underlying exception frame.
+    /// Return the upstream frame, including its native-source snapshots.
     pub fn frame(&self) -> &Frame {
-        &self.frame
+        self.inner.frame()
     }
 
-    /// Iterate over all explicitly created frames in breadth-first order. The first frame is this instance, followed by
-    /// all explicitly raised children. Native [`Error::source()`] values are not frames.
+    /// Iterate over explicitly raised frames in breadth-first order.
     pub fn iter(&self) -> impl Iterator<Item = &Frame> {
         self.frame().iter_frames()
     }
 
-    /// Find the first stored error or native source that downcasts to `T` in breadth-first order.
+    /// Find a stored error or native source of type `T` in breadth-first order.
     pub fn downcast_any_ref<T: Error + 'static>(&self) -> Option<&T> {
-        self.frame
-            .iter_error_nodes()
-            .find_map(|node| node.error().downcast_ref())
+        iter_error_nodes(self.frame()).find_map(|node| node.error().downcast_ref())
     }
 }
 
-impl<E> Deref for Exn<E>
+impl<E: Error + Send + Sync + 'static + ?Sized> Deref for Exn<E>
 where
-    E: Error + Send + Sync + 'static,
+    ::exn::Exn<E>: Deref<Target = E>,
 {
     type Target = E;
-
-    fn deref(&self) -> &Self::Target {
-        self.error()
+    fn deref(&self) -> &E {
+        &self.inner
     }
 }
 
-impl<E: Error + Send + Sync + 'static> fmt::Debug for Exn<E> {
+impl<E: Error + Send + Sync + 'static + ?Sized> fmt::Debug for Exn<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_frame_recursive(f, self.frame(), "", ErrorMode::Display, TreeMode::Linearize)
+        debug_frame(self.frame(), f)
     }
 }
 
-impl fmt::Debug for Frame {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_frame_recursive(f, self, "", ErrorMode::Display, TreeMode::Linearize)
+pub(crate) fn debug_frame(frame: &Frame, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write_frame_recursive(f, frame, "", ErrorMode::Display, TreeMode::Linearize)
+}
+
+pub(crate) fn display_frame(frame: &Frame, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    if f.alternate() {
+        write_frame_recursive(f, frame, "", ErrorMode::Debug, TreeMode::Verbatim)
+    } else {
+        fmt::Display::fmt(frame_error(frame), f)
     }
+}
+
+impl<E: Error + Send + Sync + 'static + ?Sized> fmt::Display for Exn<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        display_frame(self.frame(), f)
+    }
+}
+
+impl<E: Error + Send + Sync + 'static + ?Sized> PartialEq<str> for Exn<E> {
+    fn eq(&self, other: &str) -> bool {
+        crate::root_error_eq(frame_error(self.frame()), other)
+    }
+}
+
+impl<E: Error + Send + Sync + 'static + ?Sized> PartialEq<&str> for Exn<E> {
+    fn eq(&self, other: &&str) -> bool {
+        <Self as PartialEq<str>>::eq(self, other)
+    }
+}
+
+impl<E: Error + Send + Sync + 'static + ?Sized> PartialEq<String> for Exn<E> {
+    fn eq(&self, other: &String) -> bool {
+        <Self as PartialEq<str>>::eq(self, other)
+    }
+}
+
+impl<E: Error + Send + Sync + 'static + ?Sized> From<Exn<E>> for Box<Frame> {
+    fn from(error: Exn<E>) -> Self {
+        // exn 0.4's boxed standard-error conversion transfers its root Frame without another allocation.
+        let boxed: Box<dyn Error + Send + Sync> = error.inner.into();
+        boxed.downcast().expect("exn's boxed conversion owns its root Frame")
+    }
+}
+
+impl<E: Error + Send + Sync + 'static + ?Sized> From<Exn<E>> for Box<dyn Error + Send + Sync> {
+    fn from(error: Exn<E>) -> Self {
+        Box::new(error.into_error())
+    }
+}
+
+#[cfg(feature = "anyhow")]
+impl<E: Error + Send + Sync + 'static + ?Sized> From<Exn<E>> for anyhow::Error {
+    fn from(error: Exn<E>) -> Self {
+        error.into_chain().into()
+    }
+}
+
+/// Unwrap the adapter used to store already boxed standard errors.
+pub(crate) fn frame_error(frame: &Frame) -> &(dyn Error + Send + Sync + 'static) {
+    let mut error = frame.error();
+    while let Some(boxed) = error.downcast_ref::<Untyped>() {
+        error = boxed.0.as_ref();
+    }
+    error
+}
+
+/// Gitoxide's navigation policy for upstream exception frames.
+pub trait FrameExt {
+    /// Return explicitly raised children, excluding upstream snapshots of native sources.
+    fn explicit_children(&self) -> &[Frame];
+    /// Iterate over explicitly raised frames in breadth-first order, starting at this frame.
+    fn iter_frames(&self) -> impl Iterator<Item = &Frame>;
+    /// Select the most likely cause, including concrete native sources, or `None` for a leaf.
+    fn probable_cause(&self) -> Option<&(dyn Error + 'static)>;
+}
+
+impl FrameExt for Frame {
+    fn explicit_children(&self) -> &[Frame] {
+        // exn prepends one snapshot subtree whenever a root has a native source. Traverse the original source instead.
+        // Like the source-path handles used below, this assumes native source relationships remain stable.
+        let skip = usize::from(self.error().source().is_some());
+        &self.children()[skip..]
+    }
+
+    fn iter_frames(&self) -> impl Iterator<Item = &Frame> {
+        let mut queue = VecDeque::from([self]);
+        std::iter::from_fn(move || {
+            let frame = queue.pop_front()?;
+            queue.extend(frame.explicit_children());
+            Some(frame)
+        })
+    }
+
+    fn probable_cause(&self) -> Option<&(dyn Error + 'static)> {
+        probable_cause_node(self).map(ErrorNode::error)
+    }
+}
+
+fn iter_error_nodes(frame: &Frame) -> impl Iterator<Item = ErrorNode<'_>> {
+    let mut queue = VecDeque::from([ErrorNode::Frame(frame)]);
+    std::iter::from_fn(move || {
+        let node = queue.pop_front()?;
+        queue.extend(node.children());
+        Some(node)
+    })
 }
 
 #[derive(Copy, Clone)]
@@ -241,18 +281,17 @@ fn write_error_node_recursive(
     err_mode: ErrorMode,
     tree_mode: TreeMode,
 ) -> fmt::Result {
+    // Nested boundaries are expanded below; formatting their whole graph here would print the same causes twice.
+    let mut error = node.error();
+    while let Some(nested) = error.downcast_ref::<crate::Error>() {
+        error = nested.error();
+    }
     match err_mode {
-        ErrorMode::Display => fmt::Display::fmt(node.error(), f),
-        ErrorMode::Debug => write!(f, "{:?}", node.error()),
+        ErrorMode::Display => fmt::Display::fmt(error, f),
+        ErrorMode::Debug => write!(f, "{error:?}"),
     }?;
     if !f.alternate() {
         write_location(f, node.location())?;
-    }
-
-    if let Some(err) = node.error().downcast_ref::<crate::Error>() {
-        for source in err.iter_errors().filter(|source| !source.is::<crate::Error>()).skip(1) {
-            write!(f, "\n{prefix}|\n{prefix}└─ {source}")?;
-        }
     }
 
     let children = node.children();
@@ -281,84 +320,17 @@ fn write_error_node_recursive(
         }
     }
 
+    if let Some(err) = node.error().downcast_ref::<crate::Error>() {
+        for source in err.iter_errors().filter(|source| !source.is::<crate::Error>()).skip(1) {
+            write!(f, "\n{prefix}|\n{prefix}└─ ")?;
+            match err_mode {
+                ErrorMode::Display => fmt::Display::fmt(source, f),
+                ErrorMode::Debug => write!(f, "{source:?}"),
+            }?;
+        }
+    }
+
     Ok(())
-}
-
-impl<E: Error + Send + Sync + 'static> fmt::Display for Exn<E> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.frame, f)
-    }
-}
-
-impl<E: Error + Send + Sync + 'static> PartialEq<str> for Exn<E> {
-    fn eq(&self, other: &str) -> bool {
-        crate::root_error_eq(self.frame().error(), other)
-    }
-}
-
-impl<E: Error + Send + Sync + 'static> PartialEq<&str> for Exn<E> {
-    fn eq(&self, other: &&str) -> bool {
-        <Self as PartialEq<str>>::eq(self, other)
-    }
-}
-
-impl<E: Error + Send + Sync + 'static> PartialEq<String> for Exn<E> {
-    fn eq(&self, other: &String) -> bool {
-        <Self as PartialEq<str>>::eq(self, other)
-    }
-}
-
-impl fmt::Display for Frame {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() {
-            // Avoid printing alternate versions of the debug info, keep it in one line, also print the tree.
-            write_frame_recursive(f, self, "", ErrorMode::Debug, TreeMode::Verbatim)
-        } else {
-            fmt::Display::fmt(self.error(), f)
-        }
-    }
-}
-
-/// A frame in the exception tree.
-pub struct Frame {
-    /// The error that occurred at this frame.
-    error: Box<dyn Error + Send + Sync + 'static>,
-    /// The source code location where this exception frame was created.
-    location: &'static Location<'static>,
-    /// Explicitly raised child exception frames.
-    children: Vec<Frame>,
-}
-
-impl Frame {
-    /// Return the error as a reference to [`Error`].
-    ///
-    /// If the error was [erased](crate::Exn::erased), this is the original error,
-    /// so it can still be downcast to its actual type.
-    pub fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
-        let mut error = &*self.error;
-        while let Some(erased) = error.downcast_ref::<Untyped>() {
-            error = &*erased.0;
-        }
-        error
-    }
-
-    /// Return the source code location where this exception frame was created.
-    /// Return the frame location used when formatting this node.
-    ///
-    /// A frame returns its own captured location. A native source inherits the location of the frame whose error owns its
-    /// source chain, providing formatting context even though no location was captured for the source itself. In contrast,
-    /// `captured_location()` reports only locations belonging to the node itself.
-    pub fn location(self) -> &'static Location<'static> {
-        self.location
-    }
-
-    /// Return explicitly raised child frames.
-    ///
-    /// Native [`Error::source()`] values are borrowed from [`Self::error()`] and traversed lazily, so they aren't owned
-    /// `Frame` children.
-    pub fn children(&self) -> &[Frame] {
-        &self.children
-    }
 }
 
 /// A borrowed node that lets one traversal visit both explicit exception frames and native [`Error::source()`] chains.
@@ -378,7 +350,7 @@ pub(crate) enum ErrorNode<'a> {
 impl<'a> ErrorNode<'a> {
     pub(crate) fn error(self) -> &'a (dyn Error + 'static) {
         match self {
-            ErrorNode::Frame(frame) => frame.error(),
+            ErrorNode::Frame(frame) => frame_error(frame),
             ErrorNode::Source { error, .. } => error,
         }
     }
@@ -390,7 +362,7 @@ impl<'a> ErrorNode<'a> {
     /// `captured_location()` reports only locations belonging to the node itself.
     pub(crate) fn location(self) -> &'static Location<'static> {
         match self {
-            ErrorNode::Frame(frame) => frame.location,
+            ErrorNode::Frame(frame) => frame.location(),
             ErrorNode::Source { location, .. } => location,
         }
     }
@@ -402,7 +374,7 @@ impl<'a> ErrorNode<'a> {
     #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     pub(crate) fn captured_location(self) -> Option<&'static Location<'static>> {
         match self {
-            ErrorNode::Frame(frame) => Some(frame.location),
+            ErrorNode::Frame(frame) => Some(frame.location()),
             ErrorNode::Source { .. } => None,
         }
     }
@@ -423,7 +395,7 @@ impl<'a> ErrorNode<'a> {
             children.push(ErrorNode::Source { error, location });
         }
         if let ErrorNode::Frame(frame) = self {
-            children.extend(frame.children.iter().map(ErrorNode::Frame));
+            children.extend(frame.explicit_children().iter().map(ErrorNode::Frame));
         }
         children
     }
@@ -433,168 +405,62 @@ impl<'a> ErrorNode<'a> {
     }
 }
 
-/// Navigation
-impl Frame {
-    /// Find the best possible cause:
+fn probable_cause_node(frame: &Frame) -> Option<ErrorNode<'_>> {
+    /// Perform a recursive depth-first, post-order walk to select a probable-cause candidate.
     ///
-    /// * in a linear chain of a single error each, it's the last-most error
-    /// * in trees, find the deepest-possible error that has the most leafs as children
-    ///
-    /// Native [`Error::source()`] values participate as borrowed children. Return `None` if there are no children.
-    pub fn probable_cause(&self) -> Option<&(dyn Error + 'static)> {
-        self.probable_cause_node().map(ErrorNode::error)
-    }
+    /// The returned tuple contains the number of leaves below `node`, the depth of the selected candidate, and the
+    /// candidate itself. After visiting all children, the current node competes with the best descendant: the candidate
+    /// representing more leaves wins, with greater depth breaking ties. Exact ties between siblings retain the first
+    /// child in traversal order.
+    fn walk(node: ErrorNode<'_>, depth: usize) -> (usize, usize, ErrorNode<'_>) {
+        let children = node.children();
+        if children.is_empty() {
+            return (1, depth, node);
+        }
 
-    pub(crate) fn probable_cause_node(&self) -> Option<ErrorNode<'_>> {
-        /// Perform a recursive depth-first, post-order walk to select a probable-cause candidate.
-        ///
-        /// The returned tuple contains the number of leaves below `node`, the depth of the selected candidate, and the
-        /// candidate itself. After visiting all children, the current node competes with the best descendant: the candidate
-        /// representing more leaves wins, with greater depth breaking ties. Exact ties between siblings retain the first
-        /// child in traversal order.
-        fn walk(node: ErrorNode<'_>, depth: usize) -> (usize, usize, ErrorNode<'_>) {
-            let children = node.children();
-            if children.is_empty() {
-                return (1, depth, node);
-            }
+        let mut total_leafs = 0;
+        let mut best: Option<(usize, usize, ErrorNode<'_>)> = None;
 
-            let mut total_leafs = 0;
-            let mut best: Option<(usize, usize, ErrorNode<'_>)> = None;
+        for child in children {
+            let (leafs, child_depth, candidate) = walk(child, depth + 1);
+            total_leafs += leafs;
 
-            for child in children {
-                let (leafs, child_depth, candidate) = walk(child, depth + 1);
-                total_leafs += leafs;
-
-                match best {
-                    None => best = Some((leafs, child_depth, candidate)),
-                    Some((best_leafs, best_depth, _)) => {
-                        if leafs > best_leafs || (leafs == best_leafs && child_depth > best_depth) {
-                            best = Some((leafs, child_depth, candidate));
-                        }
-                    }
-                }
-            }
-
-            let self_candidate = (total_leafs, depth, node);
             match best {
-                None => self_candidate,
-                Some(best_child) => {
-                    if total_leafs > best_child.0 || (total_leafs == best_child.0 && depth > best_child.1) {
-                        self_candidate
-                    } else {
-                        best_child
+                None => best = Some((leafs, child_depth, candidate)),
+                Some((best_leafs, best_depth, _)) => {
+                    if leafs > best_leafs || (leafs == best_leafs && child_depth > best_depth) {
+                        best = Some((leafs, child_depth, candidate));
                     }
                 }
             }
         }
 
-        let root = ErrorNode::Frame(self);
-        let children = root.children();
-        if children.iter().all(|child| child.children().is_empty())
-            && let Some(last) = children.last()
-        {
-            return Some(*last);
-        }
-
-        let cause = walk(root, 0).2;
-        (!cause.same(root)).then_some(cause)
-    }
-
-    /// Iterate over all explicitly created frames in breadth-first order. The first frame is this instance, followed by
-    /// all explicitly raised children. Native [`Error::source()`] values are not frames.
-    pub fn iter_frames(&self) -> impl Iterator<Item = &Frame> + '_ {
-        let mut queue = std::collections::VecDeque::new();
-        queue.push_back(self);
-        BreadthFirstFrames { queue }
-    }
-
-    pub(crate) fn iter_error_nodes(&self) -> BreadthFirstErrorNodes<'_> {
-        let mut queue = VecDeque::new();
-        queue.push_back(ErrorNode::Frame(self));
-        BreadthFirstErrorNodes { queue }
-    }
-}
-
-/// Breadth-first iterator over explicitly created `Frame`s.
-pub struct BreadthFirstFrames<'a> {
-    queue: std::collections::VecDeque<&'a Frame>,
-}
-
-impl<'a> Iterator for BreadthFirstFrames<'a> {
-    type Item = &'a Frame;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let frame = self.queue.pop_front()?;
-        for child in frame.children() {
-            self.queue.push_back(child);
-        }
-        Some(frame)
-    }
-}
-
-pub(crate) struct BreadthFirstErrorNodes<'a> {
-    queue: VecDeque<ErrorNode<'a>>,
-}
-
-impl<'a> Iterator for BreadthFirstErrorNodes<'a> {
-    type Item = ErrorNode<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let node = self.queue.pop_front()?;
-        self.queue.extend(node.children());
-        Some(node)
-    }
-}
-
-impl<E> From<Exn<E>> for Box<Frame>
-where
-    E: Error + Send + Sync + 'static,
-{
-    fn from(err: Exn<E>) -> Self {
-        err.frame
-    }
-}
-
-impl<E> From<Exn<E>> for Box<dyn Error + Send + Sync + 'static>
-where
-    E: Error + Send + Sync + 'static,
-{
-    fn from(err: Exn<E>) -> Self {
-        Box::new(err.into_error())
-    }
-}
-
-#[cfg(feature = "anyhow")]
-impl<E> From<Exn<E>> for anyhow::Error
-where
-    E: Error + Send + Sync + 'static,
-{
-    fn from(err: Exn<E>) -> Self {
-        anyhow::Error::from(err.into_chain())
-    }
-}
-
-impl<E> From<Exn<E>> for Frame
-where
-    E: Error + Send + Sync + 'static,
-{
-    fn from(err: Exn<E>) -> Self {
-        *err.frame
-    }
-}
-
-impl From<Frame> for Exn {
-    fn from(frame: Frame) -> Self {
-        Exn {
-            frame: Box::new(frame),
-            phantom: Default::default(),
+        let self_candidate = (total_leafs, depth, node);
+        match best {
+            None => self_candidate,
+            Some(best_child) => {
+                if total_leafs > best_child.0 || (total_leafs == best_child.0 && depth > best_child.1) {
+                    self_candidate
+                } else {
+                    best_child
+                }
+            }
         }
     }
+
+    let root = ErrorNode::Frame(frame);
+    let children = root.children();
+    if children.iter().all(|child| child.children().is_empty())
+        && let Some(last) = children.last()
+    {
+        return Some(*last);
+    }
+
+    let cause = walk(root, 0).2;
+    (!cause.same(root)).then_some(cause)
 }
 
-/// A marker to show that type information is not available,
-/// while storing all extractable information about the erased type.
-/// It's the default type for [Exn].
+/// An adapter for storing an already boxed standard error. Bare [`Exn`] uses upstream type erasure instead.
 pub struct Untyped(Box<dyn Error + Send + Sync + 'static>);
 
 impl Untyped {
@@ -638,132 +504,28 @@ impl fmt::Debug for Something {
 
 impl Error for Something {}
 
-impl<E> From<Exn<E>> for ChainedError
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
-    fn from(err: Exn<E>) -> Self {
-        let probable_cause = err
-            .frame
-            .probable_cause_node()
-            .and_then(|cause| err.frame.iter_error_nodes().position(|node| node.same(cause)));
-        let flattened = flatten_error_nodes(*err.frame);
+impl<E: Error + Send + Sync + 'static + ?Sized> From<Exn<E>> for ChainedError {
+    fn from(error: Exn<E>) -> Self {
+        let root: Box<Frame> = error.into();
+        let probable_cause =
+            probable_cause_node(&root).and_then(|cause| iter_error_nodes(&root).position(|node| node.same(cause)));
+        let mut queue = VecDeque::from([(ErrorHandle::new(root.into()), None)]);
+        let mut flattened = Vec::new();
+        while let Some((error, parent)) = queue.pop_front() {
+            let index = flattened.len();
+            queue.extend(error.children().into_iter().map(|child| (child, Some(index))));
+            flattened.push((error, parent));
+        }
         let mut source = None;
-        let leaves_to_root = flattened.into_iter().enumerate().rev();
-        for (index, node) in leaves_to_root {
+        for (index, (error, parent)) in flattened.into_iter().enumerate().rev() {
             source = Some(Box::new(ChainedError {
-                err: node.error,
-                location: node.location,
+                location: error.location(),
+                err: error,
                 is_probable_cause: probable_cause.map_or(index == 0, |cause| cause == index),
-                logical_parent: node.logical_parent,
+                logical_parent: parent,
                 source,
             }));
         }
-        *source.expect("an Exn always contains its root error")
-    }
-}
-
-struct OwnedErrorNode {
-    error: ErrorHandle,
-    location: &'static Location<'static>,
-    logical_parent: Option<usize>,
-}
-
-/// Consume an exception-frame tree and flatten its errors into logical breadth-first order for [`ChainedError`].
-///
-/// Each frame's direct native [`Error::source()`] is queued before its explicitly raised child frames, and subsequent
-/// native sources continue as children of the preceding source. Every output node retains an owning [`ErrorHandle`], the
-/// frame location used for formatting, and the output index of its logical parent so the tree relationships can later be
-/// reconstructed. Native sources inherit their owning frame's location.
-///
-/// A nested [`crate::Error`] is retained as one node without following its compatibility `source()` chain. Its internal
-/// graph is expanded separately by the [`crate::Error`] traversal APIs, avoiding a partial and duplicated representation.
-fn flatten_error_nodes(root: Frame) -> Vec<OwnedErrorNode> {
-    enum Pending {
-        Frame {
-            frame: Frame,
-            logical_parent: Option<usize>,
-        },
-        Source {
-            error: ErrorHandle,
-            location: &'static Location<'static>,
-            logical_parent: usize,
-        },
-    }
-
-    let mut queue = VecDeque::from([Pending::Frame {
-        frame: root,
-        logical_parent: None,
-    }]);
-    let mut out = Vec::new();
-    while let Some(node) = queue.pop_front() {
-        let node_index = out.len();
-        match node {
-            Pending::Frame {
-                frame:
-                    Frame {
-                        error,
-                        location,
-                        children,
-                    },
-                logical_parent,
-            } => {
-                let error = ErrorHandle::new(unerase(error));
-                if !error.error().is::<crate::Error>()
-                    && let Some(source) = error.source()
-                {
-                    queue.push_back(Pending::Source {
-                        error: source,
-                        location,
-                        logical_parent: node_index,
-                    });
-                }
-                queue.extend(children.into_iter().map(|frame| Pending::Frame {
-                    frame,
-                    logical_parent: Some(node_index),
-                }));
-                out.push(OwnedErrorNode {
-                    error,
-                    location,
-                    logical_parent,
-                });
-            }
-            Pending::Source {
-                error,
-                location,
-                logical_parent,
-            } => {
-                if !error.error().is::<crate::Error>()
-                    && let Some(source) = error.source()
-                {
-                    queue.push_back(Pending::Source {
-                        error: source,
-                        location,
-                        logical_parent: node_index,
-                    });
-                }
-                out.push(OwnedErrorNode {
-                    error,
-                    location,
-                    logical_parent: Some(logical_parent),
-                });
-            }
-        }
-    }
-    out
-}
-
-/// Remove all type-erasure markers before storing an error in a [`ChainedError`].
-///
-/// [`Untyped::source()`] deliberately forwards to the wrapped error's source to keep
-/// the marker transparent. Storing the marker itself in the chain would therefore
-/// hide a wrapped leaf error from source traversal and classification. Unwrapping it
-/// here retains the original runtime type without changing those source semantics.
-fn unerase(mut error: Box<dyn Error + Send + Sync + 'static>) -> Box<dyn Error + Send + Sync + 'static> {
-    loop {
-        match error.downcast::<Untyped>() {
-            Ok(untyped) => error = untyped.0,
-            Err(typed) => return typed,
-        }
+        *source.expect("an exception always contains a root frame")
     }
 }

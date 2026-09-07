@@ -586,7 +586,7 @@ pub mod validate {
 
     impl Validate for Time {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            gix_date::parse(value.to_str()?, gix_date::Zoned::now().into()).map_err(gix_error::Exn::into_inner)?;
+            gix_date::parse(value.to_str()?, gix_date::Zoned::now().into()).map_err(gix_error::Exn::into_error)?;
             Ok(())
         }
     }

@@ -20,9 +20,13 @@ mod ext;
 pub use ext::{BoxedResultExt, ErrorExt, OptionExt, ResultExt};
 
 mod impls;
+pub use ::exn::Frame;
 #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
 pub(crate) use impls::ErrorNode;
-pub use impls::{Frame, Something, Untyped};
+pub(crate) use impls::frame_error;
+pub use impls::{FrameExt, Something, Untyped};
+#[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
+pub(crate) use impls::{debug_frame, display_frame};
 
 mod macros;
 
@@ -34,11 +38,11 @@ mod macros;
 ///
 /// # Native error sources
 ///
-/// Values reached through [`std::error::Error::source()`] remain owned by their original errors and are traversed by
-/// reference, preserving their concrete types. They aren't exception frames and therefore have no captured call site of
-/// their own.
+/// Values reached through [`std::error::Error::source()`] remain owned by their original errors. Upstream also snapshots their messages at construction, but gitoxide
+/// traverses the original sources for formatting and classification to preserve concrete types. Use
+/// [`FrameExt::explicit_children()`] to skip those snapshots when inspecting explicitly raised frames.
 ///
-/// # `Exn` == `Exn<Untyped>`
+/// # Bare `Exn`
 ///
 /// `Exn` act's like `Box<dyn std::error::Error + Send + Sync + 'static>`, but with the capability
 /// to store a tree of errors along with their *call sites*.
@@ -71,10 +75,6 @@ mod macros;
 /// * locations: ❌
 /// * error display: Debug
 /// * tree mode: verbatim
-pub struct Exn<E: std::error::Error + Send + Sync + 'static = Untyped> {
-    // trade one more indirection for less stack size
-    frame: Box<Frame>,
-    phantom: PhantomData<E>,
+pub struct Exn<E: std::error::Error + Send + Sync + 'static + ?Sized = dyn std::error::Error + Send + Sync> {
+    inner: ::exn::Exn<E>,
 }
-
-use std::marker::PhantomData;

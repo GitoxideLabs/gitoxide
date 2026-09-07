@@ -55,9 +55,7 @@ macro_rules! bail {
 /// ```
 /// # fn has_permission(_: &u32, _: &u32) -> bool { true }
 /// # type User = u32;
-/// # let user = 0;
 /// # type Resource = u32;
-/// # let resource = 0;
 /// use std::error::Error;
 /// use std::fmt;
 ///
@@ -74,11 +72,13 @@ macro_rules! bail {
 ///
 /// impl Error for PermissionDenied {}
 ///
+/// # fn wrapper(user: User, resource: Resource) -> Result<(), gix_error::Exn<PermissionDenied>> {
 /// ensure!(
 ///     has_permission(&user, &resource),
 ///     PermissionDenied(user, resource),
 /// );
 /// # Ok(())
+/// # }
 /// ```
 #[macro_export]
 macro_rules! ensure {

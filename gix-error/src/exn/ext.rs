@@ -12,181 +12,135 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::exn::Exn;
+use crate::Exn;
 
-/// A trait bound of the supported error type of [`Exn`].
+/// Convenience methods for raising standard errors using upstream exception storage.
 pub trait ErrorExt: std::error::Error + Send + Sync + 'static {
-    /// Raise this error as a new exception.
+    /// Raise this error and capture the caller location.
     #[track_caller]
     fn raise(self) -> Exn<Self>
     where
         Self: Sized,
     {
-        Exn::new(self)
+        Exn::from_upstream(::exn::ErrorExt::raise(self))
     }
 
-    /// Raise this error as a child of a new exception with the given context error.
-    ///
-    /// This is a shorthand for `self.raise().raise(context)` — it wraps `self` in an [`Exn`]
-    /// and immediately nests it under a new `Exn<T>` headed by `context`.
-    ///
-    /// ```rust,ignore
-    /// // Instead of:
-    /// io_err.raise().raise(message("could not read file"))
-    ///
-    /// // Write:
-    /// io_err.and_raise(message("could not read file"))
-    /// ```
+    /// Raise this error under a new typed context.
     #[track_caller]
     fn and_raise<T: std::error::Error + Send + Sync + 'static>(self, context: T) -> Exn<T>
     where
         Self: Sized,
     {
-        Exn::new(self).raise(context)
+        self.raise().raise(context)
     }
 
-    /// Raise this error as a new exception, with type erasure.
+    /// Raise this error with an erased root marker.
     #[track_caller]
     fn raise_erased(self) -> Exn
     where
         Self: Sized,
     {
-        Exn::new(self).erased()
+        self.into()
     }
 
-    /// Raise this error as a new exception, with `sources` as causes.
+    /// Raise this error over all the provided causes, in iteration order.
     #[track_caller]
-    fn raise_all<T, I>(self, sources: I) -> Exn<Self>
+    fn raise_all(self, sources: impl IntoIterator<Item: Into<::exn::Exn>>) -> Exn<Self>
     where
         Self: Sized,
-        T: std::error::Error + Send + Sync + 'static,
-        I: IntoIterator,
-        I::Item: Into<Exn<T>>,
     {
         Exn::raise_all(sources, self)
     }
 }
 
-impl<T> ErrorExt for T where T: std::error::Error + Send + Sync + 'static {}
+impl<T: std::error::Error + Send + Sync + 'static> ErrorExt for T {}
 
-/// An extension trait for [`Option`] to provide raising new exceptions on `None`.
+/// Contextualize missing values with exceptions.
 pub trait OptionExt {
-    /// The `Some` type.
+    /// The present value type.
     type Some;
 
-    /// Construct a new [`Exn`] on the `None` variant.
-    fn ok_or_raise<A, F>(self, err: F) -> Result<Self::Some, Exn<A>>
-    where
-        A: std::error::Error + Send + Sync + 'static,
-        F: FnOnce() -> A;
+    /// Construct an exception when the value is absent.
+    fn ok_or_raise<A: std::error::Error + Send + Sync + 'static>(
+        self,
+        error: impl FnOnce() -> A,
+    ) -> Result<Self::Some, Exn<A>>;
 
-    /// Construct a new [`Exn`] on the `None` variant, with type erasure.
-    fn ok_or_raise_erased<A, F>(self, err: F) -> Result<Self::Some, Exn>
-    where
-        A: std::error::Error + Send + Sync + 'static,
-        F: FnOnce() -> A;
+    /// Construct a type-erased exception when the value is absent.
+    fn ok_or_raise_erased<A: std::error::Error + Send + Sync + 'static>(
+        self,
+        error: impl FnOnce() -> A,
+    ) -> Result<Self::Some, Exn>;
 }
 
 impl<T> OptionExt for Option<T> {
     type Some = T;
 
     #[track_caller]
-    fn ok_or_raise<A, F>(self, err: F) -> Result<T, Exn<A>>
-    where
-        A: std::error::Error + Send + Sync + 'static,
-        F: FnOnce() -> A,
-    {
-        match self {
-            Some(v) => Ok(v),
-            None => Err(Exn::new(err())),
-        }
+    fn ok_or_raise<A: std::error::Error + Send + Sync + 'static>(self, error: impl FnOnce() -> A) -> Result<T, Exn<A>> {
+        ::exn::OptionExt::ok_or_raise(self, error).map_err(Exn::from_upstream)
     }
 
     #[track_caller]
-    fn ok_or_raise_erased<A, F>(self, err: F) -> Result<T, Exn>
-    where
-        A: std::error::Error + Send + Sync + 'static,
-        F: FnOnce() -> A,
-    {
-        self.ok_or_raise(err).map_err(Exn::erased)
+    fn ok_or_raise_erased<A: std::error::Error + Send + Sync + 'static>(
+        self,
+        error: impl FnOnce() -> A,
+    ) -> Result<T, Exn> {
+        self.ok_or_raise(error).map_err(Exn::erased)
     }
 }
 
-/// An extension trait for [`Result`] to provide context information on [`Exn`]s.
+/// Add context to standard errors and typed or erased exceptions.
 pub trait ResultExt {
-    /// The `Ok` type.
+    /// The successful value type.
     type Success;
 
-    /// The `Err` type that would be wrapped in an [`Exn`].
-    type Error: std::error::Error + Send + Sync + 'static;
+    /// Add a new typed parent to an error.
+    fn or_raise<A: std::error::Error + Send + Sync + 'static>(
+        self,
+        error: impl FnOnce() -> A,
+    ) -> Result<Self::Success, Exn<A>>;
 
-    /// Raise a new exception on the [`Exn`] inside the [`Result`].
-    ///
-    /// Apply [`Exn::raise`] on the `Err` variant, refer to it for more information.
-    fn or_raise<A, F>(self, err: F) -> Result<Self::Success, Exn<A>>
-    where
-        A: std::error::Error + Send + Sync + 'static,
-        F: FnOnce() -> A;
-
-    /// Raise a new exception on the [`Exn`] inside the [`Result`], but erase its type.
-    ///
-    /// Apply [`Exn::erased`] on the `Err` variant, refer to it for more information.
+    /// Erase the root type, preserving its tree and runtime error types.
     fn or_erased(self) -> Result<Self::Success, Exn>;
 
-    /// Raise a new exception on the [`Exn`] inside the [`Result`], and type-erase the result.
-    ///
-    /// Apply [`Exn::raise`] and [`Exn::erased`] on the `Err` variant, refer to it for more information.
-    fn or_raise_erased<A, F>(self, err: F) -> Result<Self::Success, Exn>
-    where
-        A: std::error::Error + Send + Sync + 'static,
-        F: FnOnce() -> A;
+    /// Add a parent and erase the resulting root marker.
+    fn or_raise_erased<A: std::error::Error + Send + Sync + 'static>(
+        self,
+        error: impl FnOnce() -> A,
+    ) -> Result<Self::Success, Exn>;
 }
 
-impl<T, E> ResultExt for Result<T, E>
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
+impl<T, E: Into<Exn>> ResultExt for Result<T, E> {
     type Success = T;
-    type Error = E;
 
     #[track_caller]
-    fn or_raise<A, F>(self, err: F) -> Result<Self::Success, Exn<A>>
-    where
-        A: std::error::Error + Send + Sync + 'static,
-        F: FnOnce() -> A,
-    {
+    fn or_raise<A: std::error::Error + Send + Sync + 'static>(self, error: impl FnOnce() -> A) -> Result<T, Exn<A>> {
+        ::exn::ResultExt::or_raise(self.or_erased().map_err(|error| error.inner), error).map_err(Exn::from_upstream)
+    }
+
+    #[track_caller]
+    fn or_erased(self) -> Result<T, Exn> {
         match self {
-            Ok(v) => Ok(v),
-            Err(e) => Err(Exn::new(e).raise(err())),
+            Ok(value) => Ok(value),
+            Err(error) => Err(error.into()),
         }
     }
 
     #[track_caller]
-    fn or_erased(self) -> Result<Self::Success, Exn> {
-        match self {
-            Ok(v) => Ok(v),
-            Err(e) => Err(Exn::new(e).erased()),
-        }
-    }
-
-    #[track_caller]
-    fn or_raise_erased<A, F>(self, err: F) -> Result<Self::Success, Exn>
-    where
-        A: std::error::Error + Send + Sync + 'static,
-        F: FnOnce() -> A,
-    {
-        self.or_raise(err).map_err(Exn::erased)
+    fn or_raise_erased<A: std::error::Error + Send + Sync + 'static>(
+        self,
+        error: impl FnOnce() -> A,
+    ) -> Result<T, Exn> {
+        self.or_raise(error).map_err(Exn::erased)
     }
 }
 
-/// Extension methods for results containing an already boxed error.
-///
-/// This complements [`ResultExt`], whose blanket implementation cannot accept boxed trait objects.
+/// Conversion for boxed standard errors, which do not satisfy the standard error blanket bound.
 pub trait BoxedResultExt {
-    /// The `Ok` type.
+    /// The successful value type.
     type Success;
-
-    /// Type-erase the boxed error inside the [`Result`].
+    /// Raise the boxed error with an erased root marker.
     fn or_erased(self) -> Result<Self::Success, Exn>;
 }
 
@@ -194,47 +148,10 @@ impl<T> BoxedResultExt for Result<T, Box<dyn std::error::Error + Send + Sync + '
     type Success = T;
 
     #[track_caller]
-    fn or_erased(self) -> Result<Self::Success, Exn> {
+    fn or_erased(self) -> Result<T, Exn> {
         match self {
-            Ok(v) => Ok(v),
-            Err(e) => Err(Exn::new(crate::Untyped::from_boxed(e))),
+            Ok(value) => Ok(value),
+            Err(error) => Err(crate::Untyped::from_boxed(error).into()),
         }
-    }
-}
-
-impl<T, E> ResultExt for Result<T, Exn<E>>
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
-    type Success = T;
-    type Error = E;
-
-    #[track_caller]
-    fn or_raise<A, F>(self, err: F) -> Result<Self::Success, Exn<A>>
-    where
-        A: std::error::Error + Send + Sync + 'static,
-        F: FnOnce() -> A,
-    {
-        match self {
-            Ok(v) => Ok(v),
-            Err(e) => Err(e.raise(err())),
-        }
-    }
-
-    #[track_caller]
-    fn or_erased(self) -> Result<Self::Success, Exn> {
-        match self {
-            Ok(v) => Ok(v),
-            Err(e) => Err(e.erased()),
-        }
-    }
-
-    #[track_caller]
-    fn or_raise_erased<A, F>(self, err: F) -> Result<Self::Success, Exn>
-    where
-        A: std::error::Error + Send + Sync + 'static,
-        F: FnOnce() -> A,
-    {
-        self.or_raise(err).map_err(Exn::erased)
     }
 }

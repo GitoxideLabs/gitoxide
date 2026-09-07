@@ -36,10 +36,11 @@ impl<'repo> Spec<'repo> {
     ) -> Result<Self, gix_error::Error> {
         let mut delegate = Delegate::new(repo, opts);
         match gix_revision::spec::parse(spec.into(), &mut delegate) {
-            Err(mut err) => {
+            Err(err) => {
                 if let Some(delegate_err) = delegate.into_delayed_errors() {
-                    let sources: Vec<_> = err.drain_children().collect();
-                    Err(err.chain(delegate_err.chain_all(sources)).into_error())
+                    // Keep the parser's complete graph as context and the delegate diagnostic as the primary cause.
+                    // Upstream exception frames cannot be detached and reparented.
+                    Err(delegate_err.raise(err.into_error()).into_error())
                 } else {
                     Err(err.into_error())
                 }

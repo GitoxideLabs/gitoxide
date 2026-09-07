@@ -33,7 +33,15 @@ impl From<TestError> for Error {
 impl std::fmt::Debug for TestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
-        return write!(f, "{:?}", self.0.inner.frame());
+        {
+            struct DebugFrame<'a>(&'a crate::Frame);
+            impl std::fmt::Debug for DebugFrame<'_> {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    crate::exn::debug_frame(self.0, f)
+                }
+            }
+            write!(f, "{:?}", DebugFrame(self.0.inner.frame()))
+        }
 
         #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
         {

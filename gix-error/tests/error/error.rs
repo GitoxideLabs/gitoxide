@@ -232,9 +232,12 @@ fn native_sources_retain_types_without_claiming_frame_locations() {
     );
 
     let err = Error::from(
-        ErrorWithSource("root", ErrorWithSource("root source", message("root source leaf")))
+        ErrorWithSource("explicit child", message("child source"))
             .raise()
-            .chain(ErrorWithSource("explicit child", message("child source"))),
+            .raise(ErrorWithSource(
+                "root",
+                ErrorWithSource("root source", message("root source leaf")),
+            )),
     );
     assert_eq!(
         err.iter_errors().map(ToString::to_string).collect::<Vec<_>>(),
@@ -258,26 +261,22 @@ fn native_sources_retain_types_without_claiming_frame_locations() {
 
 #[test]
 fn nested_errors_are_expanded_in_breadth_first_order() {
-    let nested = Error::from(message("nested root").raise().chain(message("nested child")));
-    let err = Error::from(
-        message("outer root")
-            .raise()
-            .chain(nested)
-            .chain(message("outer sibling")),
-    );
+    let nested = Error::from(message("nested child").raise().raise(message("nested root")));
+    let err = Error::from(message("outer root").raise_all([
+        gix_error::Exn::new(nested).erased(),
+        message("outer sibling").raise_erased(),
+    ]));
 
     #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
-    insta::assert_debug_snapshot!(err, @r#"
+    insta::assert_debug_snapshot!(err, @"
     outer root
     |
-    └─ Message("nested root")
-    |
-    └─ Message("nested child")
+    └─ nested root
     |   |
     |   └─ nested child
     |
     └─ outer sibling
-    "#);
+    ");
 
     fn name(error: &(dyn std::error::Error + 'static)) -> String {
         if let Some(error) = error.downcast_ref::<Error>() {

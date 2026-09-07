@@ -57,47 +57,70 @@ impl std::error::Error for ChainedError {
     }
 }
 
-/// An owning handle to either an error or one of its borrowed native sources.
+/// A shared owner and a path to an error in an upstream exception tree.
 ///
-/// Keeping the source-chain root in an [`Arc`] makes every source reachable for the lifetime of the flattened chain.
-/// A handle cannot store both that owner and a reference borrowed from its [`std::error::Error::source()`] chain without
-/// becoming self-referential. Instead, `source_depth` records how many `source()` links lead from `owner` to the error
-/// represented by this handle: zero represents `owner`, one represents `owner.source()`, and so on. [`Self::error()`]
-/// follows that path whenever the borrowed error is needed.
-///
-/// Resolving a handle assumes that an error's source chain remains stable while the owning error is alive, as conventional
-/// [`std::error::Error`] implementations do.
+/// Upstream frames are read-only. Keeping the entire tree alive lets flattened nodes borrow their original errors
+/// without cloning errors or losing types. Frame indices and native source depths avoid self-referential references.
 pub(crate) struct ErrorHandle {
-    /// The error that owns the complete native source chain.
-    owner: Arc<dyn std::error::Error + Send + Sync + 'static>,
-    /// The number of [`std::error::Error::source()`] links to follow from `owner` to reach this handle's error.
+    owner: Arc<crate::Frame>,
+    frame_path: Vec<usize>,
     source_depth: usize,
 }
 
 impl ErrorHandle {
-    pub(crate) fn new(error: Box<dyn std::error::Error + Send + Sync + 'static>) -> Self {
-        ErrorHandle {
-            owner: error.into(),
+    pub(crate) fn new(owner: Arc<crate::Frame>) -> Self {
+        Self {
+            owner,
+            frame_path: Vec::new(),
             source_depth: 0,
         }
     }
 
+    fn frame(&self) -> &crate::Frame {
+        self.frame_path
+            .iter()
+            .fold(self.owner.as_ref(), |frame, &index| &frame.children()[index])
+    }
+
     pub(crate) fn error(&self) -> &(dyn std::error::Error + 'static) {
-        let mut error: &(dyn std::error::Error + 'static) = self.owner.as_ref();
+        let mut error: &(dyn std::error::Error + 'static) = crate::exn::frame_error(self.frame());
         for _ in 0..self.source_depth {
             error = error
                 .source()
-                .expect("a captured source path remains stable while its owning error is alive");
+                .expect("native source paths remain stable while their owner is alive");
         }
         error
     }
 
-    pub(crate) fn source(&self) -> Option<Self> {
-        self.error().source()?;
-        Some(ErrorHandle {
-            owner: Arc::clone(&self.owner),
-            source_depth: self.source_depth + 1,
-        })
+    pub(crate) fn location(&self) -> &'static Location<'static> {
+        self.frame().location()
+    }
+
+    pub(crate) fn children(&self) -> Vec<Self> {
+        use crate::FrameExt;
+        let mut children = Vec::new();
+        if !self.error().is::<crate::Error>() && self.error().source().is_some() {
+            children.push(Self {
+                owner: Arc::clone(&self.owner),
+                frame_path: self.frame_path.clone(),
+                source_depth: self.source_depth + 1,
+            });
+        }
+        if self.source_depth == 0 {
+            let frame = self.frame();
+            let explicit = frame.explicit_children();
+            let offset = frame.children().len() - explicit.len();
+            for index in offset..frame.children().len() {
+                let mut path = self.frame_path.clone();
+                path.push(index);
+                children.push(Self {
+                    owner: Arc::clone(&self.owner),
+                    frame_path: path,
+                    source_depth: 0,
+                });
+            }
+        }
+        children
     }
 
     #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]

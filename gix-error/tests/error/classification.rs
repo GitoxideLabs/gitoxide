@@ -32,9 +32,9 @@ fn classifications_preserve_order_duplicates_and_sources() {
     assert!(classifications[2].error().is::<std::collections::TryReserveError>());
 
     let duplicate = Error::from(
-        ValidationError::new("first")
+        ValidationError::new("second")
             .raise()
-            .chain(ValidationError::new("second")),
+            .raise(ValidationError::new("first")),
     );
     assert_eq!(
         duplicate.classify().map(|item| item.class()).collect::<Vec<_>>(),

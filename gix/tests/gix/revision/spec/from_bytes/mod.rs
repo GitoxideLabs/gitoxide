@@ -225,12 +225,12 @@ fn invalid_head() {
     delegate.peel_until(Path("file")) failed
     |
     └─ Could not peel 'HEAD' to obtain its target
-        |
-        └─ Could not follow a single level of a symbolic reference
-        |   |
-        |   └─ The ref partially named "refs/heads/main" could not be found
-        |
-        └─ Couldn't get object at internal index 0
+    |
+    └─ Could not follow a single level of a symbolic reference
+    |
+    └─ The ref partially named "refs/heads/main" could not be found
+    |
+    └─ Couldn't get object at internal index 0
     "#);
 
     let err = parse_spec("HEAD", &repo).unwrap_err();
