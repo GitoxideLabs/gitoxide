@@ -106,6 +106,7 @@ fn perform_inner(
         .context("could not decode HEAD commit")?
         .into_owned()
         .context("could not own HEAD commit")?;
+    super::auto_merge::ensure_editable(&commit)?;
     repo.workdir().context("editing HEAD requires a worktree")?;
     repo.commit_signing_options_if_enabled()
         .context("could not resolve commit signing configuration")?;

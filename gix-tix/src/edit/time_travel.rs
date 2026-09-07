@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::OsString,
     fmt::Write as _,
     path::{Path, PathBuf},
@@ -361,6 +361,11 @@ where
     }
     let mut ref_changes = Vec::new();
     let pins = history::all_pins(&repository)?;
+    let input_pins = if pins.iter().any(|pin| !pin.is_head() && !pin.is_review_return()) {
+        super::auto_merge::input_pins(&repository, revisions)?
+    } else {
+        HashSet::new()
+    };
     let destination_pin = selected_pin(&pins, selected);
     let direct_head_pin = if reference.is_none() {
         pins.into_iter().find(|pin| {
@@ -455,7 +460,7 @@ where
             return Ok((Some(notice), ref_changes));
         }
     };
-    if let Some(pin) = destination_pin {
+    if let Some(pin) = destination_pin.filter(|pin| !input_pins.contains(&pin.name)) {
         match delete_pin_reporting(&repository, &pin) {
             Ok(mut changes) => ref_changes.append(&mut changes),
             Err(err) => notice = format!("{notice}; destination pin remains: {err:#}"),
@@ -470,7 +475,7 @@ where
         }
         Err(err) => notice = format!("{notice}; HEAD-pin reconciliation failed: {err:#}"),
     }
-    if let Some((provisional, _)) = provisional {
+    if let Some((provisional, _)) = provisional.filter(|(pin, _)| !input_pins.contains(&pin.name)) {
         let snapshot = history::snapshot_ignoring_pin(
             &repository,
             revisions,
@@ -577,7 +582,29 @@ pub(crate) fn attach_reporting(
     let remembered = remembered_branch(&repository)?;
     validate_attach(&repository, head_id, &remembered)?;
 
+    let hidden = history::available_hidden_revisions(&repository, &[], true)?.0;
+    let mut graph = super::loaded_explicit_view_graph(&repository, revisions, &hidden)?;
+    let mut dependent = Vec::new();
+    for (&merge_commit_id, definition) in &graph.auto_merges {
+        for input in &definition.inputs {
+            if super::auto_merge::follows_reference(&repository, &input.reference, &remembered.branch)? {
+                anyhow::ensure!(
+                    !super::auto_merge::contains(&repository, merge_commit_id, head_id)?,
+                    "attaching this branch would make an AutoMerge track itself or its descendants"
+                );
+                dependent.push(merge_commit_id);
+                break;
+            }
+        }
+    }
+
     let pins = history::all_pins(&repository)?;
+    let input_pins: HashSet<_> = graph
+        .auto_merges
+        .values()
+        .flat_map(|definition| &definition.inputs)
+        .map(|input| input.reference.clone())
+        .collect();
     let destination_pin = selected_pin(&pins, head_id);
     let mut ref_changes = Vec::new();
     let provisional = if remembered.branch_tip != head_id && !contains(&repository, remembered.branch_tip, head_id) {
@@ -621,19 +648,49 @@ pub(crate) fn attach_reporting(
     };
     let mut attach_changes = super::undo::changes_from_edits(applied)?;
     ref_changes.append(&mut attach_changes);
+    let maintain = (|| -> Result<()> {
+        while let Some(base) = dependent.pop() {
+            let outcome = super::rebase::perform(
+                &repository,
+                &graph,
+                super::rebase::Edit::Repeat {
+                    base,
+                    checkout: head_id,
+                },
+                super::rebase::Signature::RedoIfNeeded,
+                super::rebase::Tree::LeaveAsIsAndMark,
+            )?
+            .complete()?;
+            ref_changes.extend(outcome.ref_changes.iter().cloned());
+            dependent = dependent.into_iter().filter_map(|id| outcome.map(id)).collect();
+            let ids: Vec<_> = graph
+                .edit_commit_ids()
+                .into_iter()
+                .filter_map(|id| outcome.map(id))
+                .collect();
+            graph = history::HistoryGraph::for_commits(&repository, &ids)?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = maintain {
+        return Err(match super::undo::apply_reversed_changes(&repository, &ref_changes) {
+            Ok(()) => err,
+            Err(rollback) => err.context(format!("attach rollback failed: {rollback:#}")),
+        });
+    }
 
     let mut notice = format!(
         "attached {} at {}",
         remembered.branch.shorten(),
         head_id.to_hex_with_len(7)
     );
-    if let Some(pin) = destination_pin {
+    if let Some(pin) = destination_pin.filter(|pin| !input_pins.contains(&pin.name)) {
         match delete_pin_reporting(&repository, &pin) {
             Ok(mut changes) => ref_changes.append(&mut changes),
             Err(err) => notice = format!("{notice}; destination pin remains: {err:#}"),
         }
     }
-    if let Some((pin, _)) = provisional {
+    if let Some((pin, _)) = provisional.filter(|(pin, _)| !input_pins.contains(&pin.name)) {
         let snapshot =
             history::snapshot_ignoring_pin(&repository, revisions, &[], include_worktrees, Some(pin.name.as_bstr()));
         let snapshot = match snapshot {
@@ -787,7 +844,7 @@ pub(crate) fn perform_reporting_rebased(
     let mut original_ids = HashMap::new();
     let mut ref_rewrites = Vec::new();
     let mut ref_changes = Vec::new();
-    let mut pending = pending_base(&repository, selected)?;
+    let mut pending = refresh_base(graph, selected).or(pending_base(&repository, selected)?);
     while let Some(base) = pending {
         let graph = completed_graph.as_ref().unwrap_or(graph);
         let mut rebased = Vec::new();
@@ -839,15 +896,13 @@ pub(crate) fn perform_reporting_rebased(
             .context("could not reopen repository after completing a pending rebase")?;
         pending = pending_base(&repository, selected)?;
         if pending.is_some() {
-            let affected = rebased
+            let mut ids: Vec<_> = graph
+                .edit_commit_ids()
                 .into_iter()
-                .map(|(id, _original)| {
-                    outcome
-                        .map(id)
-                        .context("a pending rebase commit disappeared while completing time-travel")
-                })
-                .collect::<Result<Vec<_>>>()?;
-            completed_graph = Some(history::HistoryGraph::for_commits(&repository, &affected)?);
+                .filter_map(|id| outcome.map(id))
+                .collect();
+            ids.extend(rebased.into_iter().filter_map(|(id, _)| outcome.map(id)));
+            completed_graph = Some(history::HistoryGraph::for_commits(&repository, &ids)?);
         }
     }
     let workdir = repository
@@ -1003,7 +1058,7 @@ fn pending_base(repository: &gix::Repository, selected: ObjectId) -> Result<Opti
             .context("could not inspect a time-travel destination for a pending rebase")?
             .decode()?
             .into_owned()?;
-        if !super::rebase::is_pending(&commit) {
+        if super::auto_merge::is_auto_merge(&commit) || !super::rebase::is_pending(&commit) {
             break;
         }
         base = Some(current);
@@ -1013,6 +1068,21 @@ fn pending_base(repository: &gix::Repository, selected: ObjectId) -> Result<Opti
         current = parent;
     }
     Ok(base)
+}
+
+fn refresh_base(graph: &history::HistoryGraph, selected: ObjectId) -> Option<ObjectId> {
+    let mut cursor = Some(selected);
+    let mut seen = HashSet::new();
+    while let Some(commit_id) = cursor {
+        if !seen.insert(commit_id) {
+            break;
+        }
+        if graph.auto_merges.contains_key(&commit_id) {
+            return Some(commit_id);
+        }
+        cursor = graph.parents_of(commit_id).and_then(|parents| parents.first().copied());
+    }
+    None
 }
 
 fn selected_pin(pins: &[history::Pin], selected: ObjectId) -> Option<history::Pin> {
