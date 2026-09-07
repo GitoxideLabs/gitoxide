@@ -6,6 +6,98 @@ use serial_test::serial;
 
 #[test]
 #[serial]
+fn config_path_uses_repository_options_for_global_sources() -> gix_testtools::Result {
+    use gix::config::{Source, file_mut::Error};
+
+    let fixture = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?)?;
+    let git_dir = fixture.join("bare-repo");
+    let missing = fixture.join("missing");
+    let installation = missing.join("installation.config");
+    let system = missing.join("system.config");
+    let global = missing.join("global.config");
+    let _env = Env::new()
+        .set("GIT_CONFIG_GLOBAL", global.to_string_lossy())
+        .set("GIT_CONFIG_SYSTEM", "ignored.config")
+        .set("GIT_CONFIG_NOSYSTEM", "0");
+    let mut options = gix::open::Options::isolated()
+        .git_installation_config_path(&installation)
+        .system_config_path(&system);
+    options.permissions.config.git_binary = true;
+    options.permissions.config.system = true;
+    options.permissions.config.git = true;
+    options.permissions.config.user = true;
+    options.permissions.env.git_prefix = gix::sec::Permission::Allow;
+    let repo = gix::open_opts(&git_dir, options)?;
+    for (source, expected) in [
+        (Source::GitInstallation, installation),
+        (Source::System, system),
+        (Source::Git, global.clone()),
+        (Source::User, global),
+    ] {
+        assert_eq!(
+            repo.config_path(source)?,
+            expected,
+            "{source:?} honors the repository's explicit paths and environment permissions"
+        );
+    }
+    assert!(!missing.exists(), "path lookup does not create files or directories");
+
+    let repo = gix::open_opts(&git_dir, gix::open::Options::isolated())?;
+    for source in [Source::GitInstallation, Source::System, Source::Git, Source::User] {
+        assert!(
+            matches!(repo.config_path(source), Err(Error::SourceUnavailable(actual)) if actual == source),
+            "{source:?} remains unavailable when disabled by the repository's permissions"
+        );
+    }
+    for source in [Source::Env, Source::Cli, Source::Api, Source::EnvOverride] {
+        assert!(
+            matches!(repo.config_path(source), Err(Error::UnsupportedSource(actual)) if actual == source),
+            "{source:?} has no physical configuration file even with a repository"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn config_paths_use_the_opening_cwd() -> gix_testtools::Result {
+    use gix::config::Source;
+
+    let fixture = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?)?;
+    let _cwd = gix_testtools::set_current_dir(&fixture)?;
+    let _env = Env::new()
+        .set("GIT_CONFIG_GLOBAL", "missing/global.config")
+        .set("GIT_CONFIG_NOSYSTEM", "0");
+    let mut options = gix::open::Options::isolated()
+        .git_installation_config_path("missing/installation.config")
+        .system_config_path("missing/system.config");
+    options.permissions.config.git_binary = true;
+    options.permissions.config.system = true;
+    options.permissions.config.git = true;
+    options.permissions.config.user = true;
+    options.permissions.env.git_prefix = gix::sec::Permission::Allow;
+    let repo = gix::open_opts("bare-repo", options)?;
+    std::env::set_current_dir(fixture.join("bare-repo"))?;
+
+    for (source, path) in [
+        (Source::Local, "bare-repo/config"),
+        (Source::Worktree, "bare-repo/config.worktree"),
+        (Source::GitInstallation, "missing/installation.config"),
+        (Source::System, "missing/system.config"),
+        (Source::Git, "missing/global.config"),
+        (Source::User, "missing/global.config"),
+    ] {
+        assert_eq!(
+            repo.config_path(source)?,
+            repo.current_dir().join(path),
+            "{source:?} resolves relative paths against the opening CWD whether or not the file exists"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[serial]
 fn config_file_paths_use_the_cwd_captured_while_opening() -> gix_testtools::Result {
     let fixture = gix_testtools::scripted_fixture_writable("make_config_repo.sh")?;
     let elsewhere = gix_testtools::tempfile::tempdir()?;

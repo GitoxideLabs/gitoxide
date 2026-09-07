@@ -24,6 +24,40 @@ impl crate::Repository {
         config::Snapshot { repo: self }
     }
 
+    /// Return the path at which a configuration file is expected, selected by its source.
+    ///
+    /// [`Local`](config::Source::Local) selects `config` in the [`common_dir()`](Self::common_dir), and
+    /// [`Worktree`](config::Source::Worktree) selects `config.worktree` in the [`git_dir()`](Self::git_dir),
+    /// even if `extensions.worktreeConfig` is disabled. Other sources use the same path selection as [`crate::config_path()`]
+    /// with this repository's [`open_options()`](Self::open_options), including their permissions and explicit paths.
+    /// Relative paths are resolved against the current directory captured when this repository was opened.
+    /// Sources without a physical file or a permitted path return an error.
+    ///
+    /// The file and its parent directories do not have to exist. No [configuration transaction](config::FileTransaction)
+    /// is opened, no lock is acquired, and no directories are created. Pass the path to
+    /// [`config_file_mut()`](Self::config_file_mut) to edit it.
+    pub fn config_path(&self, source: config::Source) -> Result<std::path::PathBuf, config::file_mut::Error> {
+        use config::{Source, file_mut::Error};
+
+        let path = match source {
+            Source::Local => self.common_dir().join("config"),
+            Source::Worktree => self.git_dir().join("config.worktree"),
+            Source::GitInstallation | Source::System | Source::Git | Source::User => {
+                let options = self.open_options();
+                config::cache::source_path(
+                    source,
+                    options.git_installation_config_path.as_deref(),
+                    options.system_config_path.as_deref(),
+                    options.permissions.config,
+                    &mut config::Cache::make_source_env(options.permissions.env),
+                )
+                .ok_or(Error::SourceUnavailable(source))?
+            }
+            _ => return Err(Error::UnsupportedSource(source)),
+        };
+        Ok(self.current_dir().join(path))
+    }
+
     /// Lock and open `path` as one physical configuration file without expanding its includes.
     ///
     /// Relative paths are resolved against the current directory captured when this repository was opened. Dropping the
