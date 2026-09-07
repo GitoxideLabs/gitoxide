@@ -343,7 +343,7 @@ fn worktree_filter() -> crate::Result {
             a_name.into(),
             ResourceKind::CommonAncestorOrBase,
             &mut |_, _| {},
-            &gix_object::find::Never,
+            &gix_object::find::Never::panic_on_access(),
             mode,
             &mut buf,
         )?;

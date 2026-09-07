@@ -456,6 +456,69 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
     )
 }
 
+/// Lock and open one configuration file available without a repository, selected by its source.
+///
+/// Supported sources are [`GitInstallation`](config::Source::GitInstallation), [`System`](config::Source::System),
+/// [`Git`](config::Source::Git) (the XDG Git configuration), and [`User`](config::Source::User).
+/// Path selection honors the configuration permissions, environment permissions and explicit paths in `options`,
+/// just like [`config()`]. Disabled sources and sources without an available path return an error.
+/// Relative paths are resolved against the current directory when called.
+///
+/// The lock timeout comes from `core.configLockTimeout` in [`config(None, options)`](config()), honoring section filtering
+/// and leniency, and defaults to one second. Includes and runtime overrides can affect the timeout, but the returned file
+/// contains only the selected physical file, parsed strictly and losslessly even with `lossy_config` enabled.
+///
+/// Missing files start empty; their parent directories must already exist. Existing file permissions are preserved, and
+/// new files apply `core.sharedRepository` from the same resolved configuration, honoring section filtering.
+/// Invalid sharing policies return an error.
+/// Dropping the transaction discards edits and releases its lock; [`commit()`](config::FileTransaction::commit()) writes
+/// the file atomically without updating existing repository instances.
+///
+/// ```no_run
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut file = gix::config_mut(gix::config::Source::User, &gix::open::Options::default())?;
+/// file.set_raw_value("user.name", "Ada Lovelace")?;
+/// file.commit()?;
+/// # Ok(()) }
+/// ```
+pub fn config_mut(
+    source: config::Source,
+    options: &open::Options,
+) -> Result<config::FileTransaction, config::file_mut::Error> {
+    use config::file_mut::Error;
+
+    if !matches!(
+        source,
+        config::Source::GitInstallation | config::Source::System | config::Source::Git | config::Source::User
+    ) {
+        return Err(Error::UnsupportedSource(source));
+    }
+    let path = config::cache::source_path(
+        source,
+        options.git_installation_config_path.as_deref(),
+        options.system_config_path.as_deref(),
+        options.permissions.config,
+        &mut config::Cache::make_source_env(options.permissions.env),
+    )
+    .ok_or(Error::SourceUnavailable(source))?;
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().map_err(Error::CurrentDir)?.join(path)
+    };
+    let resolved = config(None, options)?;
+    let filter = options.filter_config_section.unwrap_or(config::section::is_trusted);
+    let lock_mode = config::cache::access::config_lock_timeout(&resolved, options.lenient_config, filter)?;
+    let shared_repository_permissions = config::file_mut::shared_repository_permissions(&resolved, filter)?;
+    config::FileTransaction::open(
+        path,
+        source,
+        gix_sec::Trust::Full,
+        lock_mode,
+        shared_repository_permissions,
+    )
+}
+
 ///
 pub mod create;
 

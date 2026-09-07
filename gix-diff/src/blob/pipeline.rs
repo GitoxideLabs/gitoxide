@@ -214,8 +214,10 @@ impl Pipeline {
     /// `attributes` must be returning the attributes at `rela_path`, and `objects` must be usable if `kind` is
     /// a resource in the object database, i.e. has no worktree root available.
     ///
-    /// If `id` [is null](gix_hash::ObjectId::is_null()) or the file in question doesn't exist in the worktree in case
-    /// [a root](WorktreeRoots) is present, then `out` will be left cleared and [Outcome::data] will be `None`.
+    /// If a [worktree root](WorktreeRoots) is present, read the file from there. A non-null `id` is used to look up
+    /// its index version for line-ending conversion. Null IDs are never looked up in `objects`.
+    /// If the worktree file doesn't exist, or no root is present and `id` [is null](gix_hash::ObjectId::is_null()),
+    /// then `out` will be left cleared and [Outcome::data] will be `None`.
     ///
     /// Note that `mode` is trusted, and we will not re-validate that the entry in the worktree actually is of that mode.
     ///
@@ -343,7 +345,12 @@ impl Pipeline {
                                                     file,
                                                     gix_path::from_bstr(rela_path).as_ref(),
                                                     attributes,
-                                                    &mut |buf| objects.try_find(id, buf).map(|obj| obj.map(|_| ())),
+                                                    &mut |buf| {
+                                                        if id.is_null() {
+                                                            return Ok(None);
+                                                        }
+                                                        objects.try_find(id, buf).map(|obj| obj.map(|_| ()))
+                                                    },
                                                 )?;
 
                                                 match res {

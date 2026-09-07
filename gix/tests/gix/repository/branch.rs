@@ -56,7 +56,11 @@ fn deletes_a_batch_and_all_of_its_local_config_without_inspecting_commits() -> c
     repo.config_snapshot_mut()
         .append_config(["test.inMemory=retained"], gix_config::Source::Api)?;
 
-    repo.delete_local_branches([direct.clone(), symbolic.clone()])?;
+    assert_eq!(
+        repo.delete_local_branches([symbolic.clone(), direct.clone(), symbolic.clone()])?,
+        vec![direct.clone(), symbolic.clone()],
+        "loose and dangling symbolic branches are returned once, in name order"
+    );
 
     assert!(
         repo.try_find_reference(direct.as_ref())?.is_none(),
@@ -144,7 +148,15 @@ fn missing_branches_are_successful_and_their_config_is_removed() -> crate::Resul
         "all branch sections are loaded before deletion"
     );
 
-    repo.delete_local_branches([existing.clone(), missing.clone(), reserved_for_creation.clone()])?;
+    assert!(
+        !repo.common_dir().join("refs/heads/d1").exists(),
+        "the existing branch is stored only in packed refs"
+    );
+    assert_eq!(
+        repo.delete_local_branches([existing.clone(), missing.clone(), reserved_for_creation.clone()])?,
+        vec![existing.clone()],
+        "only the existing packed branch is reported as deleted"
+    );
 
     assert!(
         repo.try_find_reference(existing.as_ref())?.is_none(),
@@ -174,6 +186,15 @@ fn missing_branches_are_successful_and_their_config_is_removed() -> crate::Resul
     assert!(
         repo.branch_names().is_empty(),
         "configuration for existing, missing, and creation-reserved branch names is removed from memory"
+    );
+    assert!(
+        repo.delete_local_branches([existing, missing, reserved_for_creation])?
+            .is_empty(),
+        "repeating the deletion reports no branches"
+    );
+    assert!(
+        repo.delete_local_branches([])?.is_empty(),
+        "an empty batch reports no branches"
     );
     Ok(())
 }
@@ -227,7 +248,11 @@ fn linked_worktree_branches_are_protected_and_common_config_is_updated() -> crat
         linked_repo.branch_names().contains("delete-from-linked"),
         "the common branch configuration is loaded into the linked repository"
     );
-    linked_repo.delete_local_branches([deletable.clone()])?;
+    assert_eq!(
+        linked_repo.delete_local_branches([deletable.clone()])?,
+        vec![deletable.clone()],
+        "linked worktrees report branches deleted from the common store"
+    );
     assert!(linked_repo.try_find_reference(deletable.as_ref())?.is_none());
     assert!(
         !std::fs::read_to_string(main.common_dir().join("config"))?.contains("delete-from-linked"),

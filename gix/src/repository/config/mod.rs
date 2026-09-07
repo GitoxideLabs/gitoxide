@@ -42,7 +42,13 @@ impl crate::Repository {
         let lock_mode = self.config.config_lock_timeout()?;
         let shared_repository_permissions =
             config::file_mut::shared_repository_permissions(&self.config.resolved, self.filter_config_section())?;
-        config::FileTransaction::open(path, self.git_dir_trust(), lock_mode, shared_repository_permissions)
+        config::FileTransaction::open(
+            path,
+            config::Source::Local,
+            self.git_dir_trust(),
+            lock_mode,
+            shared_repository_permissions,
+        )
     }
 
     /// Return the editor program selected by Git's precedence rules.

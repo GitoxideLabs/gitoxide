@@ -18,8 +18,9 @@ pub use tree::root::Tree;
 
 /// A locked, mutable physical configuration file.
 ///
+/// Create one with [`crate::config_mut()`] or [`Repository::config_file_mut()`].
 /// Includes are not expanded. Dropping this value releases the lock and discards all changes;
-/// [`commit()`](Self::commit()) writes them atomically. The owning repository is not updated.
+/// [`commit()`](Self::commit()) writes them atomically. Existing repository instances are not updated.
 pub struct FileTransaction {
     pub(crate) lock: gix_lock::File,
     pub(crate) config: gix_config::File,
