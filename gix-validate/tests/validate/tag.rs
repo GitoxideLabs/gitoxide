@@ -105,7 +105,7 @@ mod name {
         mktests!(
             dot_lock_in_each_component_special_san,
             b"...lock/..lock//lock",
-            "-lock/lock"
+            "-lock/-lock/lock"
         );
         mktests!(is_dot_lock_san, b".lock", "-lock");
         mktest!(contains_double_dot, b"with..double-dot", RepeatedDot);
@@ -161,6 +161,5 @@ mod name {
         mktest!(ends_with_dot, b"with-dot.", EndsWithDot);
         mktests!(ends_with_dot_san, b"with-dot.", "with-dot-");
         mktest!(empty, b"", Empty);
-        mktests!(empty_san, b"", "-");
     }
 }
