@@ -211,35 +211,27 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
     let mut scope = edit::loaded_view_graph(&repo)?.edit_commit_ids();
     scope.extend_from_slice(&parsed.plan.scope);
     let graph = HistoryGraph::for_commits(&repo, &scope)?;
-    let repository_path = repo.git_dir().to_owned();
-    let bare = repo.is_bare();
     let tips = parsed.tips;
-    match rebase::perform_plan(&repo, &graph, parsed.plan)? {
+    let revisions = mapped_revisions(&tips, Some);
+    match rebase::perform_plan_with_progress(
+        &repo,
+        &graph,
+        parsed.plan,
+        rebase::CheckoutOptions {
+            revisions: &revisions,
+            ..Default::default()
+        },
+        |_| {},
+    )? {
         rebase::PlanPerform::Complete(outcome) => {
-            let revisions = mapped_revisions(&tips, |id| outcome.map(id));
-            let changes = if let Some(selected) = outcome.selected {
-                let (notice, changes) = match edit::time_travel::checkout_plan_reporting(
-                    &repository_path,
-                    bare,
-                    &outcome,
-                    &revisions,
-                    false,
-                ) {
-                    Ok(result) => result,
-                    Err(err) => {
-                        super::record_undo(&repo, "rebase history", Ok(outcome.ref_changes));
-                        return Err(err);
-                    }
-                };
-                let notice = notice.unwrap_or_else(|| "rebased history".into());
-                println!("{}", super::notice_with_change_id(&repo, &notice, selected)?);
-                changes
+            let notice = outcome.notice.as_deref().unwrap_or("rebased history");
+            if let Some(selected) = outcome.selected {
+                println!("{}", super::notice_with_change_id(&repo, notice, selected)?);
             } else {
-                println!("rebased history");
-                outcome.ref_changes.clone()
-            };
+                println!("{notice}");
+            }
             super::print_ref_rewrites(&repo, &outcome.ref_rewrites)?;
-            super::record_undo(&repo, "rebase history", Ok(changes));
+            super::record_undo(&repo, "rebase history", Ok(outcome.ref_changes));
             Ok(())
         }
         rebase::PlanPerform::Conflict(conflict) => {
@@ -287,13 +279,7 @@ pub(super) fn handle_plan_conflict(
             .write_all(&continuation)
             .with_context(|| format!("could not write continuation rebase todo at {}", destination.display()))?;
     }
-    let materialized = edit::time_travel::materialize_plan_conflict_reporting(
-        conflict,
-        repo.git_dir(),
-        repo.is_bare(),
-        &revisions,
-        false,
-    );
+    let materialized = edit::time_travel::materialize_plan_conflict_reporting(conflict, &revisions, false);
     let (notice, _, ref_rewrites, ref_changes) = match materialized {
         Ok(materialized) => materialized,
         Err(err) => {
@@ -436,10 +422,11 @@ mod tests {
             &graph,
             source_commit_id,
             edit::auto_merge::Change::Add("refs/heads/C".try_into()?),
+            rebase::CheckoutOptions::default(),
             |_| {},
         )?;
-        let outcome = operation.result.context("creation prepares a merge")?.complete()?;
-        edit::time_travel::checkout_plan_reporting(fixture.path(), false, &outcome, &[], false)?;
+        operation.result.context("creation prepares a merge")?.complete()?;
+
         let merge_commit_id = repo.head_id()?.detach();
         let prepared = prepare(
             &repo,

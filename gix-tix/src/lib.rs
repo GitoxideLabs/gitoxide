@@ -3493,13 +3493,7 @@ fn event_loop(
                     .take()
                     .expect("a pending todo conflict was checked before accepting it");
                 let plan = conflict.continuation_plan();
-                match edit::time_travel::materialize_plan_conflict_reporting(
-                    conflict,
-                    &repository_path,
-                    repository_is_bare,
-                    &revisions,
-                    false,
-                ) {
+                match edit::time_travel::materialize_plan_conflict_reporting(conflict, &revisions, false) {
                     Ok((notice, id, _, mut ref_changes)) => {
                         pending_todo_ref_changes.append(&mut ref_changes);
                         pending_todo_rebase_plan = Some(plan);
@@ -3585,35 +3579,16 @@ fn event_loop(
                 repository.object_cache_size(None);
                 stage_resolved_conflict_paths(&repository)?;
                 let graph = HistoryGraph::for_commits(&repository, &plan.scope)?;
-                run_rebase_plan(terminal, repository.into_sync(), &graph, plan.clone())
+                run_rebase_plan(terminal, repository.into_sync(), &graph, plan.clone(), &revisions)
             })();
             match result {
                 Ok(edit::rebase::PlanPerform::Complete(outcome)) => {
-                    let checkout = if outcome.selected.is_some() {
-                        edit::time_travel::checkout_plan_reporting(
-                            &repository_path,
-                            repository_is_bare,
-                            &outcome,
-                            &revisions,
-                            false,
-                        )
-                    } else {
-                        Ok((None, outcome.ref_changes.clone()))
-                    };
                     app.clear_rebase_conflict();
                     app.clear_rebase_continuation();
                     app.set_worktree_conflicted(false);
                     let mut changes = std::mem::take(&mut pending_todo_ref_changes);
-                    let message = match checkout {
-                        Ok((notice, mut outcome_changes)) => {
-                            changes.append(&mut outcome_changes);
-                            notice.unwrap_or_else(|| "rebased history".into())
-                        }
-                        Err(err) => {
-                            changes.extend(outcome.ref_changes.iter().cloned());
-                            format!("rebase applied, checkout failed: {err:#}")
-                        }
-                    };
+                    changes.extend(outcome.ref_changes);
+                    let message = outcome.notice.unwrap_or_else(|| "rebased history".into());
                     leave_recorded_success(
                         &mut app,
                         &repository_path,
@@ -3996,6 +3971,10 @@ fn event_loop(
                                     graph,
                                     selection.merge_commit_id,
                                     selection.change,
+                                    edit::rebase::CheckoutOptions {
+                                        revisions: &revisions,
+                                        ..Default::default()
+                                    },
                                     report,
                                 )
                             })
@@ -4006,34 +3985,16 @@ fn event_loop(
                         }) => app.leave_attention(notice),
                         Ok(edit::auto_merge::Operation {
                             result: Some(edit::rebase::Perform::Complete(outcome)),
-                            checkout,
                             notice,
                         }) => {
                             let selected = outcome.selected;
-                            let (message, changes) = if checkout {
-                                match edit::time_travel::checkout_plan_reporting(
-                                    &repository_path,
-                                    repository_is_bare,
-                                    &outcome,
-                                    &revisions,
-                                    false,
-                                ) {
-                                    Ok((_, changes)) => (notice, changes),
-                                    Err(err) => (
-                                        format!("AutoMerge applied, checkout failed: {err:#}"),
-                                        outcome.ref_changes,
-                                    ),
-                                }
-                            } else {
-                                (notice, outcome.ref_changes)
-                            };
                             leave_recorded_success(
                                 &mut app,
                                 &repository_path,
                                 repository_is_bare,
                                 "AutoMerge",
-                                &changes,
-                                message,
+                                &outcome.ref_changes,
+                                notice,
                             );
                             if let Some(selected) = selected {
                                 app.select_commit_after_refresh(selected);
@@ -4045,13 +4006,7 @@ fn event_loop(
                             result: Some(edit::rebase::Perform::Conflict(conflict)),
                             ..
                         }) => {
-                            let conflict = edit::time_travel::Conflict::from_rebase(
-                                conflict,
-                                &repository_path,
-                                repository_is_bare,
-                                &revisions,
-                                false,
-                            );
+                            let conflict = edit::time_travel::Conflict::from_rebase(conflict, &revisions, false);
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
@@ -4115,13 +4070,7 @@ fn event_loop(
                             }
                         }
                         Ok(Some(edit::reword::Perform::Conflict(rebase))) => {
-                            let conflict = edit::time_travel::Conflict::from_rebase(
-                                rebase,
-                                &repository_path,
-                                repository_is_bare,
-                                &revisions,
-                                false,
-                            );
+                            let conflict = edit::time_travel::Conflict::from_rebase(rebase, &revisions, false);
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
@@ -4172,13 +4121,7 @@ fn event_loop(
                             refresh_pending = true;
                         }
                         Ok(Some(edit::rebase::Perform::Conflict(rebase))) => {
-                            let conflict = edit::time_travel::Conflict::from_rebase(
-                                rebase,
-                                &repository_path,
-                                repository_is_bare,
-                                &revisions,
-                                false,
-                            );
+                            let conflict = edit::time_travel::Conflict::from_rebase(rebase, &revisions, false);
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
@@ -4276,13 +4219,7 @@ fn event_loop(
                             }
                         }
                         Ok(Some(edit::rebase::Perform::Conflict(rebase))) => {
-                            let conflict = edit::time_travel::Conflict::from_rebase(
-                                rebase,
-                                &repository_path,
-                                repository_is_bare,
-                                &revisions,
-                                false,
-                            );
+                            let conflict = edit::time_travel::Conflict::from_rebase(rebase, &revisions, false);
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
@@ -4536,13 +4473,8 @@ fn event_loop(
                             refresh_pending = true;
                         }
                         Ok(edit::forget::Perform::Conflict(conflict)) => {
-                            let conflict = edit::time_travel::Conflict::from_rebase(
-                                conflict.into_rebase(),
-                                &repository_path,
-                                repository_is_bare,
-                                &revisions,
-                                false,
-                            );
+                            let conflict =
+                                edit::time_travel::Conflict::from_rebase(conflict.into_rebase(), &revisions, false);
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
@@ -4573,49 +4505,23 @@ fn event_loop(
                                 base,
                                 onto,
                                 todo_commits?,
+                                &revisions,
                                 enhanced_keyboard,
                             )
                         });
                     match result {
                         Ok(Some(edit::rebase::PlanPerform::Complete(outcome))) => {
-                            let notice = if outcome.selected.is_some() {
-                                edit::time_travel::checkout_plan_reporting(
-                                    &repository_path,
-                                    repository_is_bare,
-                                    &outcome,
-                                    &revisions,
-                                    false,
-                                )
-                            } else {
-                                Ok((None, outcome.ref_changes.clone()))
-                            };
-                            match notice {
-                                Ok((notice, changes)) => {
-                                    leave_recorded_success(
-                                        &mut app,
-                                        &repository_path,
-                                        repository_is_bare,
-                                        "rebase history",
-                                        &changes,
-                                        notice.unwrap_or_else(|| "rebased history".to_owned()),
-                                    );
-                                    app.select_commit_after_refresh(base);
-                                    invalidate_worktree_changes(&mut worktree_changes);
-                                    refresh_pending = true;
-                                }
-                                Err(err) => {
-                                    leave_recorded_success(
-                                        &mut app,
-                                        &repository_path,
-                                        repository_is_bare,
-                                        "rebase history",
-                                        &outcome.ref_changes,
-                                        format!("rebase applied, checkout failed: {err:#}"),
-                                    );
-                                    invalidate_worktree_changes(&mut worktree_changes);
-                                    refresh_pending = true;
-                                }
-                            }
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "rebase history",
+                                &outcome.ref_changes,
+                                outcome.notice.unwrap_or_else(|| "rebased history".into()),
+                            );
+                            app.select_commit_after_refresh(base);
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
                         }
                         Ok(Some(edit::rebase::PlanPerform::Conflict(conflict))) => {
                             let id = conflict.commit();
@@ -4645,42 +4551,19 @@ fn event_loop(
                             .context("could not open repository to squash commits")?;
                         repository.object_cache_size(None);
                         let plan = edit::rebase::squash_plan(&repository, graph, source, target)?;
-                        run_rebase_plan(terminal, repository.into_sync(), graph, plan)
+                        run_rebase_plan(terminal, repository.into_sync(), graph, plan, &revisions)
                     })();
                     match result {
                         Ok(edit::rebase::PlanPerform::Complete(outcome)) => {
                             let combined = outcome.map(target).unwrap_or(target);
-                            let notice = if outcome.selected.is_some() {
-                                edit::time_travel::checkout_plan_reporting(
-                                    &repository_path,
-                                    repository_is_bare,
-                                    &outcome,
-                                    &revisions,
-                                    false,
+                            let message = outcome.notice.unwrap_or_else(|| {
+                                format!(
+                                    "squashed {} into {}",
+                                    source.to_hex_with_len(7),
+                                    combined.to_hex_with_len(7),
                                 )
-                            } else {
-                                Ok((None, outcome.ref_changes.clone()))
-                            };
-                            let (message, changes) = notice.map_or_else(
-                                |err| {
-                                    (
-                                        format!("squash applied, checkout failed: {err:#}"),
-                                        outcome.ref_changes.clone(),
-                                    )
-                                },
-                                |(notice, changes)| {
-                                    (
-                                        notice.unwrap_or_else(|| {
-                                            format!(
-                                                "squashed {} into {}",
-                                                source.to_hex_with_len(7),
-                                                combined.to_hex_with_len(7)
-                                            )
-                                        }),
-                                        changes,
-                                    )
-                                },
-                            );
+                            });
+                            let changes = outcome.ref_changes;
                             leave_recorded_success(
                                 &mut app,
                                 &repository_path,
@@ -4759,7 +4642,7 @@ fn event_loop(
                                 target_is_read_only,
                             )?
                         };
-                        run_rebase_plan(terminal, repository.into_sync(), graph, plan)
+                        run_rebase_plan(terminal, repository.into_sync(), graph, plan, &revisions)
                     })();
                     match result {
                         Ok(edit::rebase::PlanPerform::Complete(outcome)) => {
@@ -4768,42 +4651,23 @@ fn event_loop(
                             } else {
                                 outcome.map(source).unwrap_or(source)
                             };
-                            let notice = edit::time_travel::checkout_plan_reporting(
-                                &repository_path,
-                                repository_is_bare,
-                                &outcome,
-                                &revisions,
-                                false,
-                            );
-                            let (message, changes) = notice.map_or_else(
-                                |err| {
-                                    (
-                                        format!("insert applied, checkout failed: {err:#}"),
-                                        outcome.ref_changes.clone(),
+                            let message = outcome.notice.unwrap_or_else(|| {
+                                if copy {
+                                    format!(
+                                        "copied {} as {} above {}",
+                                        source.to_hex_with_len(7),
+                                        inserted.to_hex_with_len(7),
+                                        target.to_hex_with_len(7)
                                     )
-                                },
-                                |(notice, changes)| {
-                                    (
-                                        notice.unwrap_or_else(|| {
-                                            if copy {
-                                                format!(
-                                                    "copied {} as {} above {}",
-                                                    source.to_hex_with_len(7),
-                                                    inserted.to_hex_with_len(7),
-                                                    target.to_hex_with_len(7)
-                                                )
-                                            } else {
-                                                format!(
-                                                    "inserted {} above {}",
-                                                    inserted.to_hex_with_len(7),
-                                                    target.to_hex_with_len(7)
-                                                )
-                                            }
-                                        }),
-                                        changes,
+                                } else {
+                                    format!(
+                                        "inserted {} above {}",
+                                        inserted.to_hex_with_len(7),
+                                        target.to_hex_with_len(7)
                                     )
-                                },
-                            );
+                                }
+                            });
+                            let changes = outcome.ref_changes;
                             leave_recorded_success(
                                 &mut app,
                                 &repository_path,
@@ -4891,23 +4755,26 @@ fn event_loop(
                                 let mut repo = open_repository(&repository_path, repository_is_bare, false)
                                     .context("could not open repository to finish review")?;
                                 repo.object_cache_size(None);
-                                edit::review::finish_with_progress(repo, graph, id, return_to, report)
+                                edit::review::finish_with_progress(
+                                    repo,
+                                    graph,
+                                    id,
+                                    return_to,
+                                    edit::rebase::CheckoutOptions {
+                                        revisions: &revisions,
+                                        ..Default::default()
+                                    },
+                                    report,
+                                )
                             })
                         });
                     match result {
                         Ok(edit::review::Finish::Complete(finished)) => {
                             let undo_cleared = clear_undo_history(&repository_path, repository_is_bare);
-                            let checkout = edit::time_travel::checkout_plan_reporting(
-                                &repository_path,
-                                repository_is_bare,
-                                &finished.outcome,
-                                &revisions,
-                                false,
-                            );
-                            let mut message = checkout.map_or_else(
-                                |err| format!("review applied, return checkout failed: {err:#}"),
-                                |(_, _changes)| format!("finished review as {}", finished.commit.to_hex_with_len(7)),
-                            );
+                            let mut message = format!("finished review as {}", finished.commit.to_hex_with_len(7));
+                            if let Some(notice) = finished.outcome.notice {
+                                message = format!("{message}; {notice}");
+                            }
                             if let Err(err) = undo_cleared {
                                 message = format!("{message}; undo history: {err:#}");
                             }
@@ -4925,13 +4792,7 @@ fn event_loop(
                             }
                         }
                         Ok(edit::review::Finish::Conflict(rebase)) => {
-                            let conflict = edit::time_travel::Conflict::from_rebase(
-                                rebase,
-                                &repository_path,
-                                repository_is_bare,
-                                &revisions,
-                                false,
-                            );
+                            let conflict = edit::time_travel::Conflict::from_rebase(rebase, &revisions, false);
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
@@ -7554,6 +7415,7 @@ fn rebase_history(
     base: gix::ObjectId,
     onto: gix::ObjectId,
     commits: Vec<edit::todo::Commit>,
+    revisions: &[OsString],
     enhanced_keyboard: bool,
 ) -> Result<Option<edit::rebase::PlanPerform>> {
     let (prepared, editor) = {
@@ -7593,7 +7455,7 @@ fn rebase_history(
     let Some(parsed) = edit::todo::parse(&repository, &edited)? else {
         return Ok(None);
     };
-    run_rebase_plan(terminal, repository.into_sync(), graph, parsed.plan).map(Some)
+    run_rebase_plan(terminal, repository.into_sync(), graph, parsed.plan, revisions).map(Some)
 }
 
 fn stage_resolved_conflict_paths(repository: &gix::Repository) -> Result<()> {
@@ -7803,11 +7665,21 @@ fn run_rebase_plan(
     repository: gix::ThreadSafeRepository,
     graph: &HistoryGraph,
     plan: edit::rebase::Plan,
+    revisions: &[OsString],
 ) -> Result<edit::rebase::PlanPerform> {
     run_with_todo_progress(terminal, move |report| {
         let mut repository = repository.to_thread_local();
         repository.object_cache_size(None);
-        edit::rebase::perform_plan_with_progress(&repository, graph, plan, report)
+        edit::rebase::perform_plan_with_progress(
+            &repository,
+            graph,
+            plan,
+            edit::rebase::CheckoutOptions {
+                revisions,
+                ..Default::default()
+            },
+            report,
+        )
     })
 }
 
@@ -13342,7 +13214,6 @@ mod tests {
         let graph = HistoryGraph::for_commits(&repository, &plan.scope)?;
         let outcome = edit::rebase::perform_plan(&repository, &graph, plan)?.complete()?;
         let resolved = outcome.map(head).context("the conflicted commit is retained")?;
-        edit::time_travel::checkout_plan(fixture.path(), false, &outcome, &[], false)?;
 
         let repository = test_repository::open(fixture.path())?;
         assert_eq!(repository.head_id()?, resolved, "HEAD selects the resolved commit");

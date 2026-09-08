@@ -218,7 +218,7 @@ fn perform_inner(
                 &mut report,
             )?
         }
-        _ => rebase::perform_with_progress(&repo, graph, edit, signature, tree_mode, &mut report)?,
+        _ => rebase::perform_with_progress(&repo, graph, edit, signature, tree_mode, None, &mut report)?,
     };
     Ok(Some(performed.complete()?))
 }
