@@ -8,6 +8,8 @@ use std::{
 /// Instantiate a `Graph` from various sources.
 impl Graph {
     /// Instantiate a commit graph from `path` which may be a directory containing graph files or the graph file itself.
+    ///
+    /// Filesystem errors retain their [`std::io::Error`] source, including when `path` does not exist.
     pub fn at(path: &Path) -> Result<Self, Exn<Message>> {
         Self::try_from(path)
     }
@@ -85,11 +87,14 @@ impl TryFrom<&Path> for Graph {
     type Error = Exn<Message>;
 
     fn try_from(path: &Path) -> Result<Self, Self::Error> {
-        if path.is_file() {
+        let metadata = path
+            .metadata()
+            .or_raise(|| message!("Could not access commit-graph path at '{}'", path.display()))?;
+        if metadata.is_file() {
             // Assume we are looking at `.git/objects/info/commit-graph` or
             // `.git/objects/info/commit-graphs/graph-*.graph`.
             Self::from_file(path)
-        } else if path.is_dir() {
+        } else if metadata.is_dir() {
             if path.join("commit-graph-chain").is_file() {
                 Self::from_commit_graphs_dir(path)
             } else {
