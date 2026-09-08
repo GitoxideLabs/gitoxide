@@ -524,7 +524,9 @@ pub(crate) fn attach_reporting(
     let mut dependent = Vec::new();
     for (&merge_commit_id, definition) in &graph.auto_merges {
         for input in &definition.inputs {
-            if super::auto_merge::follows_reference(&repository, &input.reference, &remembered.branch)? {
+            if let Some(name) = input.source.reference()
+                && super::auto_merge::follows_reference(&repository, name, &remembered.branch)?
+            {
                 anyhow::ensure!(
                     !super::auto_merge::contains(&repository, merge_commit_id, head_id)?,
                     "attaching this branch would make an AutoMerge track itself or its descendants"
@@ -540,7 +542,7 @@ pub(crate) fn attach_reporting(
         .auto_merges
         .values()
         .flat_map(|definition| &definition.inputs)
-        .map(|input| input.reference.clone())
+        .filter_map(|input| input.source.reference().cloned())
         .collect();
     let destination_pin = selected_pin(&pins, head_id);
     let mut ref_changes = Vec::new();
@@ -585,6 +587,7 @@ pub(crate) fn attach_reporting(
     };
     let mut attach_changes = super::undo::changes_from_edits(applied)?;
     ref_changes.append(&mut attach_changes);
+    let mut remerge_notice = None;
     let maintain = (|| -> Result<()> {
         while let Some(base) = dependent.pop() {
             let outcome = super::rebase::perform(
@@ -598,6 +601,9 @@ pub(crate) fn attach_reporting(
                 super::rebase::Tree::LeaveAsIsAndMark,
             )?
             .complete()?;
+            if let Some(notice) = &outcome.notice {
+                append_notice(&mut remerge_notice, notice.clone());
+            }
             ref_changes.extend(outcome.ref_changes.iter().cloned());
             dependent = dependent.into_iter().filter_map(|id| outcome.map(id)).collect();
             let ids: Vec<_> = graph
@@ -605,7 +611,12 @@ pub(crate) fn attach_reporting(
                 .into_iter()
                 .filter_map(|id| outcome.map(id))
                 .collect();
-            graph = history::HistoryGraph::for_commits(&repository, &ids)?;
+            let mut next_graph = history::HistoryGraph::for_commits(&repository, &ids)?;
+            next_graph.bounded_history = graph
+                .bounded_history
+                .as_ref()
+                .map(|ids| ids.iter().filter_map(|id| outcome.map(*id)).collect());
+            graph = next_graph;
         }
         Ok(())
     })();
@@ -621,6 +632,9 @@ pub(crate) fn attach_reporting(
         remembered.branch.shorten(),
         head_id.to_hex_with_len(7)
     );
+    if let Some(remerge_notice) = remerge_notice {
+        notice = format!("{notice}; {remerge_notice}");
+    }
     if let Some(pin) = destination_pin.filter(|pin| !input_pins.contains(&pin.name)) {
         match delete_pin_reporting(&repository, &pin) {
             Ok(mut changes) => ref_changes.append(&mut changes),
@@ -778,6 +792,7 @@ pub(crate) fn perform_reporting_rebased(
     let crosses_review_boundary =
         source_review.as_ref().map(|review| review.root) != destination_review.as_ref().map(|review| review.root);
     let mut completed_graph = None;
+    let mut remerge_notice = None;
     let mut original_ids = HashMap::new();
     let mut ref_rewrites = Vec::new();
     let mut ref_changes = Vec::new();
@@ -815,6 +830,9 @@ pub(crate) fn perform_reporting_rebased(
             }
         };
         ref_rewrites.extend(outcome.ref_rewrites.iter().cloned());
+        if let Some(notice) = &outcome.notice {
+            append_notice(&mut remerge_notice, notice.clone());
+        }
         ref_changes.extend(outcome.ref_changes.iter().cloned());
         for &(old, original) in &rebased {
             if let Some(new) = outcome.map(old) {
@@ -837,7 +855,12 @@ pub(crate) fn perform_reporting_rebased(
                 .filter_map(|id| outcome.map(id))
                 .collect();
             ids.extend(rebased.into_iter().filter_map(|(id, _)| outcome.map(id)));
-            completed_graph = Some(history::HistoryGraph::for_commits(&repository, &ids)?);
+            let mut next_graph = history::HistoryGraph::for_commits(&repository, &ids)?;
+            next_graph.bounded_history = graph
+                .bounded_history
+                .as_ref()
+                .map(|ids| ids.iter().filter_map(|id| outcome.map(*id)).collect());
+            completed_graph = Some(next_graph);
         }
     }
     let workdir = repository
@@ -885,6 +908,9 @@ pub(crate) fn perform_reporting_rebased(
         }
     };
     ref_changes.append(&mut checkout_changes);
+    if let Some(remerge_notice) = remerge_notice {
+        append_notice(&mut notice, remerge_notice);
+    }
     if let Some(saved) = saved
         && let Some(warning) = saved.warning
     {
@@ -982,7 +1008,7 @@ fn apply_review_stash(
     super::stash::apply(repository_path, bare, workdir, stash)
 }
 
-fn append_notice(notice: &mut Option<String>, addition: String) {
+pub(super) fn append_notice(notice: &mut Option<String>, addition: String) {
     match notice {
         Some(notice) => write!(notice, "; {addition}").expect("writing to a string cannot fail"),
         None => *notice = Some(addition),

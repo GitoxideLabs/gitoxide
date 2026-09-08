@@ -249,7 +249,23 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
         !selected_is_segment && (app.changes_focus != Some(crate::app::ChangePane::Worktree) || app.can_amend());
     if actions_visible {
         for (id, available, label) in [
-            (CommandId::AutoMerge, app.can_auto_merge(), "M AutoMerge"),
+            (
+                CommandId::AutoMerge,
+                app.can_auto_merge(),
+                if app
+                    .related_history_commit()
+                    .and_then(|id| decorations.get(&id))
+                    .is_some_and(|names| {
+                        names
+                            .iter()
+                            .any(|name| name.kind == crate::history::DecorationKind::Head)
+                    })
+                {
+                    "M AutoMerge"
+                } else {
+                    "M AutoMerge into HEAD"
+                },
+            ),
             (CommandId::Remerge, app.can_remerge(), "U remerge"),
             (
                 CommandId::RemoveFromAutoMerge,
@@ -426,21 +442,29 @@ mod tests {
 
     #[test]
     fn auto_merge_actions_follow_selection_and_keep_enrichment_available() -> gix_testtools::Result {
-        use crate::edit::auto_merge::{Change, Definition, Input, Selection};
-        let mut app = App::new(4);
-        app.extend_commits(vec![row(4, &[2, 3]), row(3, &[1]), row(2, &[1]), row(1, &[])]);
+        use crate::edit::auto_merge::{Change, Definition, Input, InputSource, Selection};
+        let mut app = App::new(6);
+        app.extend_commits(vec![
+            row(6, &[4]),
+            row(5, &[1]),
+            row(4, &[2, 3]),
+            row(3, &[1]),
+            row(2, &[1]),
+            row(1, &[]),
+        ]);
         app.state = State::Complete;
         app.set_worktree_head(Some(id(4)), false);
+        app.select_commit(id(4));
         app.set_head_edit_availability(true, true, false, false, false, true, true);
         let definition = Definition {
             inputs: vec![
                 Input {
-                    reference: "refs/heads/A".try_into()?,
+                    source: InputSource::Reference("refs/heads/A".try_into()?),
                     commit_id: id(2),
                     muted: false,
                 },
                 Input {
-                    reference: "refs/heads/C".try_into()?,
+                    source: InputSource::Change(id(3).into()),
                     commit_id: id(3),
                     muted: false,
                 },
@@ -451,6 +475,8 @@ mod tests {
             (id(2), vec![id(1)]),
             (id(3), vec![id(1)]),
             (id(4), vec![id(2), id(3)]),
+            (id(5), vec![id(1)]),
+            (id(6), vec![id(4)]),
         ]);
         graph.auto_merges.insert(id(4), definition);
         let decorations = Decorations::from([
@@ -510,16 +536,39 @@ mod tests {
             has(&catalog, CommandId::Reword),
             "an input is editable despite its AutoMerge descendant"
         );
-        assert!(!has(&catalog, CommandId::AutoMerge), "creation requires HEAD");
+        assert!(
+            !has(&catalog, CommandId::AutoMerge),
+            "the input is already reachable from HEAD"
+        );
+        app.select_commit(id(3));
+        assert!(app.can_remove_from_auto_merge(), "unnamed change inputs offer removal");
+        assert!(!app.can_auto_merge(), "all HEAD parents are already included");
+        app.select_commit(id(5));
+        let catalog = commands(&app, &decorations, false);
+        assert_eq!(
+            catalog
+                .iter()
+                .find(|command| command.id == CommandId::AutoMerge)
+                .map(|command| command.label),
+            Some("M AutoMerge into HEAD"),
+            "an unrelated selected commit can be added to HEAD"
+        );
+        app.select_commit(id(6));
+        assert!(!app.can_auto_merge(), "an AutoMerge descendant would introduce a cycle");
+        graph.auto_merges.clear();
+        app.set_auto_merges(&graph, &decorations, &[]);
+        assert!(app.can_auto_merge(), "a descendant of an ordinary HEAD can be merged");
+        app.select_commit(id(4));
+        assert!(app.can_auto_merge(), "an unnamed ordinary HEAD can create an AutoMerge");
         let options = vec![
             Selection {
                 merge_commit_id: id(4),
-                change: Change::Remove("refs/heads/A".try_into()?),
+                change: Change::Remove(InputSource::Reference("refs/heads/A".try_into()?)),
                 label: "A · first merge".into(),
             },
             Selection {
                 merge_commit_id: id(5),
-                change: Change::Remove("refs/heads/A".try_into()?),
+                change: Change::Remove(InputSource::Reference("refs/heads/A".try_into()?)),
                 label: "A · second merge".into(),
             },
         ];

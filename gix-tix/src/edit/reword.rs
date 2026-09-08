@@ -40,6 +40,7 @@ pub(super) struct Edit<'a> {
 pub(crate) struct Outcome {
     pub target: gix::ObjectId,
     pub commit: Option<gix::ObjectId>,
+    pub notice: Option<String>,
     pub enrichment: Option<crate::enrich::Enrichment>,
     pub ref_rewrites: Vec<rebase::RefRewrite>,
     pub ref_changes: Vec<super::undo::RefChange>,
@@ -305,9 +306,9 @@ pub(crate) fn apply_conflict_reporting(
         .as_ref()
         .and_then(|outcome| outcome.selected)
         .filter(|new_id| *new_id != old_id);
-    let (ref_rewrites, mut ref_changes) = rebased.map_or_else(
-        || (Vec::new(), Vec::new()),
-        |outcome| (outcome.ref_rewrites, outcome.ref_changes),
+    let (notice, ref_rewrites, mut ref_changes) = rebased.map_or_else(
+        || (None, Vec::new(), Vec::new()),
+        |outcome| (outcome.notice, outcome.ref_rewrites, outcome.ref_changes),
     );
     if let Some(change) = enrich_change {
         ref_changes.push(change);
@@ -315,6 +316,7 @@ pub(crate) fn apply_conflict_reporting(
     Ok(Perform::Complete(Outcome {
         target: old_id,
         commit,
+        notice,
         enrichment,
         ref_rewrites,
         ref_changes,
@@ -348,6 +350,7 @@ pub(crate) fn apply_message_reporting(
         return Ok(Outcome {
             target: old_id,
             commit: None,
+            notice: None,
             enrichment: None,
             ref_rewrites: Vec::new(),
             ref_changes: Vec::new(),
@@ -361,6 +364,7 @@ pub(crate) fn apply_message_reporting(
     Ok(Outcome {
         target: old_id,
         commit: outcome.selected.filter(|new_id| *new_id != old_id),
+        notice: outcome.notice,
         enrichment: None,
         ref_rewrites: outcome.ref_rewrites,
         ref_changes: outcome.ref_changes,

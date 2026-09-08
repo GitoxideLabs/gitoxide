@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail, ensure};
 use gix::{
     ObjectId,
     bstr::{BStr, BString, ByteSlice, ByteVec},
+    hash::ChangeId,
     refs::FullName,
 };
 
@@ -11,9 +12,44 @@ use super::{rebase, undo};
 
 const HEADER: &str = "tix-auto-merge";
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum InputSource {
+    Reference(FullName),
+    Change(ChangeId),
+}
+
+impl InputSource {
+    pub(crate) fn reference(&self) -> Option<&FullName> {
+        match self {
+            Self::Reference(name) => Some(name),
+            Self::Change(_) => None,
+        }
+    }
+
+    fn is_static(&self) -> bool {
+        self.reference().is_some_and(|name| {
+            matches!(
+                name.category(),
+                Some(gix::refs::Category::Tag | gix::refs::Category::RemoteBranch)
+            )
+        })
+    }
+
+    fn label(&self) -> BString {
+        match self {
+            Self::Change(change_id) => change_id.to_reverse_hex_with_len(7).to_string().into(),
+            Self::Reference(name) if name.as_bstr().starts_with(crate::history::PIN_PREFIX) => "📌".into(),
+            Self::Reference(name) if name.category() == Some(gix::refs::Category::Tag) => {
+                format!("tag: {}", name.shorten()).into()
+            }
+            Self::Reference(name) => name.shorten().to_owned(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Input {
-    pub reference: FullName,
+    pub source: InputSource,
     pub commit_id: ObjectId,
     pub muted: bool,
 }
@@ -52,22 +88,25 @@ impl Definition {
                 Some(b"muted") => true,
                 _ => bail!("AutoMerge input has an invalid merge state"),
             };
-            let reference: FullName = fields
-                .next()
-                .context("AutoMerge input has no reference")?
-                .as_bstr()
-                .try_into()
-                .context("AutoMerge input has an invalid reference")?;
-            ensure!(
-                allowed_ref(reference.as_bstr()),
-                "AutoMerge input names an internal or unsupported reference"
-            );
-            ensure!(
-                seen.insert(reference.clone()),
-                "AutoMerge input is listed more than once"
-            );
+            let source = fields.next().context("AutoMerge input has no identity")?;
+            let source = if let Some(change_id) = source.strip_prefix(b"change-id ") {
+                InputSource::Change(
+                    ChangeId::from_reverse_hex(change_id).context("AutoMerge input has an invalid change ID")?,
+                )
+            } else {
+                let reference: FullName = source
+                    .as_bstr()
+                    .try_into()
+                    .context("AutoMerge input has an invalid reference")?;
+                ensure!(
+                    allowed_ref(reference.as_bstr()),
+                    "AutoMerge input names an internal or unsupported reference"
+                );
+                InputSource::Reference(reference)
+            };
+            ensure!(seen.insert(source.clone()), "AutoMerge input is listed more than once");
             inputs.push(Input {
-                reference,
+                source,
                 commit_id,
                 muted,
             });
@@ -83,7 +122,10 @@ impl Definition {
                 input.commit_id,
                 if input.muted { "muted" } else { "included" }
             ));
-            value.push_str(input.reference.as_bstr());
+            match &input.source {
+                InputSource::Reference(name) => value.push_str(name.as_bstr()),
+                InputSource::Change(change_id) => value.push_str(format!("change-id {change_id}")),
+            }
             commit.extra_headers.push((HEADER.into(), value));
         }
     }
@@ -95,14 +137,7 @@ impl Definition {
                 title.push(b' ');
             }
             title.push_str(if input.muted { "💥 " } else { "✔️ " });
-            if input.reference.as_bstr().starts_with(crate::history::PIN_PREFIX) {
-                title.push_str("📌");
-            } else {
-                if input.reference.category() == Some(gix::refs::Category::Tag) {
-                    title.push_str("tag: ");
-                }
-                title.push_str(input.reference.shorten());
-            }
+            title.push_str(input.source.label());
         }
         title
     }
@@ -145,9 +180,94 @@ pub(crate) fn mapped(mut commit_id: ObjectId, rewritten: &HashMap<ObjectId, Opti
 #[derive(Default)]
 pub(crate) struct References {
     observed: HashMap<FullName, undo::State>,
+    candidates: Option<Vec<ObjectId>>,
+    change_ids: Option<HashMap<ChangeId, Vec<ObjectId>>>,
+    placements: HashMap<ObjectId, rebase::RefDestination>,
+    ambiguous: HashMap<ObjectId, ChangeId>,
 }
 
 impl References {
+    pub(crate) fn for_graph(graph: &crate::history::HistoryGraph) -> Self {
+        Self {
+            candidates: graph.bounded_history.clone(),
+            ..Self::default()
+        }
+    }
+
+    /// Record logical rewrites, excluding ref-only moves such as inserting a child.
+    pub(super) fn rewritten(&mut self, old_commit_id: ObjectId, new_commit_id: Option<ObjectId>) {
+        self.placements.insert(
+            old_commit_id,
+            new_commit_id.map_or(rebase::RefDestination::Delete, rebase::RefDestination::Existing),
+        );
+    }
+
+    pub(super) fn notice(&self) -> Option<String> {
+        let mut changes: Vec<_> = self.ambiguous.values().map(ToString::to_string).collect();
+        changes.sort();
+        changes.dedup();
+        (!changes.is_empty()).then(|| {
+            format!(
+                "ambiguous AutoMerge change IDs {}; kept their current inputs",
+                changes.join(", ")
+            )
+        })
+    }
+
+    pub(crate) fn resolve_input(
+        &mut self,
+        repo: &gix::Repository,
+        input: &Input,
+        rewritten: &HashMap<ObjectId, Option<ObjectId>>,
+        planned: Option<(&[rebase::PlanRef], &[ObjectId])>,
+    ) -> Result<Option<ObjectId>> {
+        let change_id = match &input.source {
+            InputSource::Reference(name) => return self.resolve(repo, name, rewritten, planned),
+            InputSource::Change(change_id) => *change_id,
+        };
+        let mut commit_id = input.commit_id;
+        if !self.placements.contains_key(&commit_id) {
+            if self.change_ids.is_none()
+                && let Some(candidates) = &self.candidates
+            {
+                let mut changes = HashMap::<_, Vec<_>>::new();
+                for &candidate_commit_id in candidates {
+                    let matches = changes
+                        .entry(crate::change_id::for_commit(repo, candidate_commit_id)?)
+                        .or_default();
+                    if !matches.contains(&candidate_commit_id) {
+                        matches.push(candidate_commit_id);
+                    }
+                }
+                self.change_ids = Some(changes);
+            }
+            if let Some(matches) = self.change_ids.as_ref().and_then(|changes| changes.get(&change_id)) {
+                match matches.as_slice() {
+                    [unique] => commit_id = *unique,
+                    _ => {
+                        self.ambiguous.insert(input.commit_id, change_id);
+                    }
+                }
+            }
+        }
+        let mut seen = HashSet::new();
+        while let Some(destination) = self.placements.get(&commit_id) {
+            ensure!(seen.insert(commit_id), "AutoMerge input rewrites contain a cycle");
+            self.ambiguous.remove(&input.commit_id);
+            let Some(next_commit_id) = destination.resolve(planned.map_or(&[], |(_, produced)| produced))? else {
+                return Ok(None);
+            };
+            if crate::change_id::for_commit(repo, next_commit_id)? != change_id {
+                return Ok(None);
+            }
+            if next_commit_id == commit_id || matches!(destination, rebase::RefDestination::Step(_)) {
+                return Ok(Some(next_commit_id));
+            }
+            commit_id = next_commit_id;
+        }
+        Ok(Some(commit_id))
+    }
+
     pub(crate) fn resolve(
         &mut self,
         repo: &gix::Repository,
@@ -221,7 +341,7 @@ pub(crate) fn rebuild(
     let mut definition = Definition::from_commit(commit)?.context("the commit is not an AutoMerge")?;
     let mut inputs = Vec::with_capacity(definition.inputs.len());
     for mut input in definition.inputs {
-        if let Some(commit_id) = refs.resolve(repo, &input.reference, rewritten, planned)? {
+        if let Some(commit_id) = refs.resolve_input(repo, &input, rewritten, planned)? {
             input.commit_id = commit_id;
             inputs.push(input);
         }
@@ -333,8 +453,12 @@ pub(crate) fn prepare(
     checkout: Option<ObjectId>,
     force: Option<ObjectId>,
 ) -> Result<Preparation> {
-    let mut refs = References::default();
+    let mut refs = References::for_graph(graph);
     let mut included: HashSet<_> = affected.iter().copied().collect();
+    // Exact edits take precedence during dependency discovery as well as replay.
+    for &commit_id in &included {
+        refs.rewritten(commit_id, Some(commit_id));
+    }
     let required = checkout_path(repo, graph, checkout)?;
     let mut eager = HashSet::new();
     let mut queue = Vec::new();
@@ -346,12 +470,10 @@ pub(crate) fn prepare(
             }
             let mut affected_input = false;
             for input in &definition.inputs {
-                if !matches!(
-                    input.reference.category(),
-                    Some(gix::refs::Category::Tag | gix::refs::Category::RemoteBranch)
-                ) && refs
-                    .resolve(repo, &input.reference, &HashMap::new(), None)?
-                    .is_some_and(|commit_id| included.contains(&commit_id))
+                if !input.source.is_static()
+                    && refs
+                        .resolve_input(repo, input, &HashMap::new(), None)?
+                        .is_some_and(|commit_id| included.contains(&commit_id))
                 {
                     affected_input = true;
                 }
@@ -364,6 +486,7 @@ pub(crate) fn prepare(
             {
                 for commit_id in graph.descendants_in_parent_order(merge_commit_id).into_iter().flatten() {
                     if included.insert(commit_id) {
+                        refs.rewritten(commit_id, Some(commit_id));
                         affected.push(commit_id);
                     }
                 }
@@ -382,6 +505,7 @@ pub(crate) fn prepare(
             continue;
         }
         if included.insert(merge_commit_id) {
+            refs.rewritten(merge_commit_id, Some(merge_commit_id));
             affected.push(merge_commit_id);
         }
         let definition = match graph.auto_merges.get(&merge_commit_id) {
@@ -390,11 +514,8 @@ pub(crate) fn prepare(
                 .context("an AutoMerge dependency lost its recipe")?,
         };
         for input in definition.inputs {
-            let mut cursor = refs.resolve(repo, &input.reference, &HashMap::new(), None)?;
-            if matches!(
-                input.reference.category(),
-                Some(gix::refs::Category::Tag | gix::refs::Category::RemoteBranch)
-            ) {
+            let mut cursor = refs.resolve_input(repo, &input, &HashMap::new(), None)?;
+            if input.source.is_static() {
                 continue;
             }
             let mut seen = HashSet::new();
@@ -410,6 +531,7 @@ pub(crate) fn prepare(
                 }
                 optional.insert(commit_id);
                 if included.insert(commit_id) {
+                    refs.rewritten(commit_id, Some(commit_id));
                     affected.push(commit_id);
                 }
                 cursor = commit.parents.first().copied();
@@ -417,6 +539,8 @@ pub(crate) fn prepare(
         }
     }
     *affected = ordered(repo, graph, affected, &mut refs)?;
+    // Only report ambiguities encountered while rebuilding the affected merges.
+    refs.ambiguous.clear();
     Ok(Preparation { refs, optional, eager })
 }
 
@@ -438,7 +562,7 @@ fn ordered(
         {
             let mut parents = Vec::new();
             for input in definition.inputs {
-                if let Some(parent) = refs.resolve(repo, &input.reference, &HashMap::new(), None)? {
+                if let Some(parent) = refs.resolve_input(repo, &input, &HashMap::new(), None)? {
                     ensure!(
                         !contains(repo, commit_id, parent)?,
                         "an AutoMerge cannot track itself or its descendants"
@@ -509,23 +633,26 @@ pub(crate) fn removals(
     from_merge: bool,
 ) -> Result<Vec<Selection>> {
     let mut choices = Vec::new();
-    let mut refs = References::default();
+    let mut refs = References::for_graph(graph);
     for (&merge_commit_id, definition) in &graph.auto_merges {
         if !graph.is_in_edit_scope(merge_commit_id) || from_merge && merge_commit_id != selected_commit_id {
             continue;
         }
         for input in &definition.inputs {
-            if !from_merge && refs.resolve(repo, &input.reference, &HashMap::new(), None)? != Some(selected_commit_id) {
+            if !(from_merge || matches!(input.source, InputSource::Change(_)) && input.commit_id == selected_commit_id)
+                && refs.resolve_input(repo, input, &HashMap::new(), None)? != Some(selected_commit_id)
+            {
                 continue;
             }
-            let label = if input.reference.as_bstr().starts_with(crate::history::PIN_PREFIX) {
-                format!("📌 {}", input.reference.shorten())
-            } else {
-                input.reference.shorten().to_str_lossy().into_owned()
+            let label = match &input.source {
+                InputSource::Reference(name) if name.as_bstr().starts_with(crate::history::PIN_PREFIX) => {
+                    format!("📌 {}", name.shorten())
+                }
+                source => source.label().to_string(),
             };
             choices.push(Selection {
                 merge_commit_id,
-                change: Change::Remove(input.reference.clone()),
+                change: Change::Remove(input.source.clone()),
                 label: if from_merge {
                     label
                 } else {
@@ -582,8 +709,10 @@ pub(super) fn input_pins(repo: &gix::Repository, revisions: &[std::ffi::OsString
         .auto_merges
         .into_values()
         .flat_map(|definition| definition.inputs)
-        .filter(|input| input.reference.as_bstr().starts_with(crate::history::PIN_PREFIX))
-        .map(|input| input.reference)
+        .filter_map(|input| match input.source {
+            InputSource::Reference(name) if name.as_bstr().starts_with(crate::history::PIN_PREFIX) => Some(name),
+            _ => None,
+        })
         .collect())
 }
 
@@ -650,29 +779,73 @@ pub(crate) fn choices(repo: &gix::Repository) -> Result<Vec<Choice>> {
     Ok(choices)
 }
 
-pub(crate) fn source(repo: &gix::Repository, head_commit_id: ObjectId) -> Result<Option<FullName>> {
-    let mut inputs = HashSet::new();
-    for choice in choices(repo)? {
-        if choice.commit_id != head_commit_id {
+fn sources(repo: &gix::Repository, commit_id: ObjectId) -> Result<Vec<Choice>> {
+    let mut inputs = Vec::new();
+    let mut seen = HashSet::new();
+    for mut choice in choices(repo)? {
+        if choice.commit_id != commit_id {
             continue;
         }
-        if choice.reference.category() == Some(gix::refs::Category::LocalBranch) {
-            inputs.insert(choice.reference);
-        } else if choice.reference.as_bstr().starts_with(crate::history::PIN_PREFIX) {
+        if choice.reference.as_bstr().starts_with(crate::history::PIN_PREFIX) {
             let reference = repo.find_reference(choice.reference.as_ref())?;
-            inputs.insert(match reference.target().try_name() {
-                Some(name) if name.category() == Some(gix::refs::Category::LocalBranch) => name.to_owned(),
-                _ => choice.reference,
-            });
+            if let Some(name) = reference.target().try_name()
+                && name.category() == Some(gix::refs::Category::LocalBranch)
+            {
+                choice.reference = name.to_owned();
+                choice.label = name.shorten().to_string();
+            }
+        } else if choice.reference.category() != Some(gix::refs::Category::LocalBranch) {
+            continue;
+        }
+        if seen.insert(choice.reference.clone()) {
+            inputs.push(choice);
         }
     }
-    Ok((inputs.len() == 1).then(|| inputs.into_iter().next()).flatten())
+    Ok(inputs)
+}
+
+pub(crate) fn additions(repo: &gix::Repository, selected_commit_id: ObjectId) -> Result<Vec<Selection>> {
+    let head_commit_id = repo.head_id()?.detach();
+    let inputs = if selected_commit_id == head_commit_id {
+        choices(repo)?
+    } else {
+        ensure!(
+            !contains(repo, selected_commit_id, head_commit_id)?,
+            "the selected commit is already an ancestor of HEAD"
+        );
+        if is_auto_merge(&repo.head_commit()?.decode()?.into_owned()?) {
+            ensure!(
+                !contains(repo, head_commit_id, selected_commit_id)?,
+                "an AutoMerge cannot track itself or its descendants"
+            );
+        }
+        let sources = sources(repo, selected_commit_id)?;
+        if sources.is_empty() {
+            return Ok(vec![Selection {
+                merge_commit_id: head_commit_id,
+                change: Change::AddCommit(selected_commit_id),
+                label: crate::change_id::for_commit(repo, selected_commit_id)?
+                    .to_reverse_hex_with_len(7)
+                    .to_string(),
+            }]);
+        }
+        sources
+    };
+    Ok(inputs
+        .into_iter()
+        .map(|choice| Selection {
+            merge_commit_id: head_commit_id,
+            change: Change::Add(choice.reference),
+            label: choice.label,
+        })
+        .collect())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Change {
     Add(FullName),
-    Remove(FullName),
+    AddCommit(ObjectId),
+    Remove(InputSource),
     Remerge,
 }
 
@@ -711,29 +884,44 @@ pub(crate) fn perform(
     let mut definition = match previous {
         Some(definition) => definition,
         None => {
-            ensure!(matches!(change, Change::Add(_)), "the selection is not an AutoMerge");
-            let reference =
-                source(repo, head_commit_id)?.context("AutoMerge requires exactly one local branch or pin at HEAD")?;
+            ensure!(
+                matches!(change, Change::Add(_) | Change::AddCommit(_)),
+                "the selection is not an AutoMerge"
+            );
+            let source = match sources(repo, head_commit_id)?.as_slice() {
+                [only] => InputSource::Reference(only.reference.clone()),
+                _ => InputSource::Change(crate::change_id::for_commit(repo, head_commit_id)?),
+            };
             Definition {
                 inputs: vec![Input {
-                    reference,
+                    source,
                     commit_id: head_commit_id,
                     muted: false,
                 }],
             }
         }
     };
-    let mut references = References::default();
+    let mut references = References::for_graph(graph);
     let notice = match change {
-        Change::Add(reference) => {
-            ensure!(allowed_ref(reference.as_bstr()), "unsupported AutoMerge input");
-            let commit_id = references
-                .resolve(repo, &reference, &HashMap::new(), None)?
-                .context("the selected input reference disappeared")?;
+        adding @ (Change::Add(_) | Change::AddCommit(_)) => {
+            let (source, commit_id) = match adding {
+                Change::Add(reference) => {
+                    ensure!(allowed_ref(reference.as_bstr()), "unsupported AutoMerge input");
+                    let commit_id = references
+                        .resolve(repo, &reference, &HashMap::new(), None)?
+                        .context("the selected input reference disappeared")?;
+                    (InputSource::Reference(reference), commit_id)
+                }
+                Change::AddCommit(commit_id) => (
+                    InputSource::Change(crate::change_id::for_commit(repo, commit_id)?),
+                    commit_id,
+                ),
+                _ => unreachable!("only additions are matched"),
+            };
             if contains(repo, commit_id, head_commit_id)? {
                 return Ok(Operation {
                     result: None,
-                    notice: format!("{} is already an ancestor of HEAD; no input added", reference.shorten()),
+                    notice: format!("{} is already an ancestor of HEAD; no input added", source.label()),
                 });
             }
             if !created {
@@ -742,21 +930,23 @@ pub(crate) fn perform(
                     "an AutoMerge cannot track itself or its descendants"
                 );
             }
-            if !definition.inputs.iter().any(|input| input.reference == reference) {
+            if let Some(input) = definition.inputs.iter_mut().find(|input| input.source == source) {
+                input.commit_id = commit_id;
+            } else {
                 definition.inputs.push(Input {
-                    reference,
+                    source,
                     commit_id,
                     muted: false,
                 });
             }
             "AutoMerge updated"
         }
-        Change::Remove(reference) => {
+        Change::Remove(source) => {
             let before = definition.inputs.len();
-            definition.inputs.retain(|input| input.reference != reference);
+            definition.inputs.retain(|input| input.source != source);
             ensure!(
                 before != definition.inputs.len(),
-                "the selected ref is no longer an input of this AutoMerge"
+                "the selection is no longer an input of this AutoMerge"
             );
             "input removed from AutoMerge"
         }
@@ -789,6 +979,7 @@ pub(crate) fn perform(
         selected_commit_id
     };
     let mut expanded = crate::history::HistoryGraph::for_commits(&repo, &ids)?;
+    expanded.bounded_history.clone_from(&graph.bounded_history);
     expanded.auto_merges.insert(target, definition.clone());
     let eager = created || head_commit_id == selected_commit_id;
     let result = rebase::perform_with_progress(
@@ -808,12 +999,10 @@ pub(crate) fn perform(
         rebase::Perform::Complete(outcome) if !created && outcome.ref_changes.is_empty() => {
             let mut any_live = false;
             for input in &definition.inputs {
-                any_live |= references
-                    .resolve(&repo, &input.reference, &HashMap::new(), None)?
-                    .is_some();
+                any_live |= references.resolve_input(&repo, input, &HashMap::new(), None)?.is_some();
             }
             if !any_live {
-                "no input refs remain; AutoMerge unchanged"
+                "no inputs remain; AutoMerge unchanged"
             } else {
                 "AutoMerge is already up to date"
             }
@@ -861,9 +1050,12 @@ pub(crate) fn expand_plan(
             continue;
         }
         for input in &definition.inputs {
+            let Some(reference) = input.source.reference() else {
+                continue;
+            };
             let mut affected_ref = false;
             for expected in &plan.expected_refs {
-                affected_ref |= follows_reference(repo, &input.reference, &expected.name)?;
+                affected_ref |= follows_reference(repo, reference, &expected.name)?;
             }
             if affected_ref {
                 for commit_id in graph.descendants_in_parent_order(merge_commit_id).into_iter().flatten() {
@@ -925,7 +1117,7 @@ pub(crate) fn expand_plan(
     Ok(preparation.refs)
 }
 
-/// Resolve the complete todo before execution: named inputs may be in a later fork section.
+/// Resolve the complete todo before execution: inputs may be in a later fork section.
 pub(crate) fn order_plan(
     repo: &gix::Repository,
     plan: &mut rebase::Plan,
@@ -1007,6 +1199,8 @@ pub(crate) fn order_plan(
         expected.destination = target.into();
     }
     let mut dependencies = Vec::with_capacity(plan.steps.len());
+    let scope: HashSet<_> = plan.scope.iter().copied().collect();
+    let mut placements = HashMap::new();
     for step in &plan.steps {
         let definition = match step.commit {
             rebase::PlanCommit::Pick(commit_id) => {
@@ -1018,7 +1212,33 @@ pub(crate) fn order_plan(
         if let Some(definition) = definition {
             ensure!(step.squash.is_empty(), "an AutoMerge cannot be squashed into");
             for input in definition.inputs {
-                let mut name = input.reference;
+                let mut name = match &input.source {
+                    InputSource::Reference(name) => name.clone(),
+                    InputSource::Change(change_id) => {
+                        let commit_id = if scope.contains(&input.commit_id) {
+                            input.commit_id
+                        } else {
+                            refs.resolve_input(repo, &input, &HashMap::new(), None)?
+                                .expect("change inputs remain until a rewrite removes them")
+                        };
+                        if scope.contains(&commit_id) {
+                            let destination = match positions.get(&commit_id).copied() {
+                                Some(index)
+                                    if matches!(plan.steps[index].commit,
+                                        rebase::PlanCommit::Pick(retained) | rebase::PlanCommit::Resolved(retained)
+                                        if crate::change_id::for_commit(repo, retained)? == *change_id
+                                    ) =>
+                                {
+                                    parents.push(index);
+                                    rebase::RefDestination::Step(index)
+                                }
+                                _ => rebase::RefDestination::Delete,
+                            };
+                            placements.insert(input.commit_id, destination);
+                        }
+                        continue;
+                    }
+                };
                 let mut seen = HashSet::new();
                 loop {
                     ensure!(
@@ -1092,6 +1312,15 @@ pub(crate) fn order_plan(
         if let Some(placement) = reference.destination.placement() {
             reference.destination = parent(placement).into();
         }
+    }
+    for (commit_id, destination) in placements {
+        refs.placements.insert(
+            commit_id,
+            match destination {
+                rebase::RefDestination::Step(index) => rebase::RefDestination::Step(remap[index]),
+                destination => destination,
+            },
+        );
     }
     Ok(order
         .iter()

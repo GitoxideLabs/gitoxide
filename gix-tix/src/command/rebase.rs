@@ -208,9 +208,11 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
         println!("no rebase performed: the todo was cancelled");
         return Ok(());
     };
-    let mut scope = edit::loaded_view_graph(&repo)?.edit_commit_ids();
+    let view = edit::loaded_view_graph(&repo)?;
+    let mut scope = view.edit_commit_ids();
     scope.extend_from_slice(&parsed.plan.scope);
-    let graph = HistoryGraph::for_commits(&repo, &scope)?;
+    let mut graph = HistoryGraph::for_commits(&repo, &scope)?;
+    graph.bounded_history = view.bounded_history;
     let tips = parsed.tips;
     let revisions = mapped_revisions(&tips, Some);
     match rebase::perform_plan_with_progress(
@@ -226,9 +228,9 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
         rebase::PlanPerform::Complete(outcome) => {
             let notice = outcome.notice.as_deref().unwrap_or("rebased history");
             if let Some(selected) = outcome.selected {
-                println!("{}", super::notice_with_change_id(&repo, notice, selected)?);
+                eprintln!("{}", super::notice_with_change_id(&repo, notice, selected)?);
             } else {
-                println!("{notice}");
+                eprintln!("{notice}");
             }
             super::print_ref_rewrites(&repo, &outcome.ref_rewrites)?;
             super::record_undo(&repo, "rebase history", Ok(outcome.ref_changes));
