@@ -153,7 +153,7 @@ impl References {
         repo: &gix::Repository,
         name: &FullName,
         rewritten: &HashMap<ObjectId, Option<ObjectId>>,
-        planned: Option<&[rebase::ExpectedRef]>,
+        planned: Option<(&[rebase::PlanRef], &[ObjectId])>,
     ) -> Result<Option<ObjectId>> {
         let mut name = name.clone();
         let mut seen = HashSet::new();
@@ -170,14 +170,16 @@ impl References {
                     state
                 }
             };
-            if let Some(expected) = planned.into_iter().flatten().find(|expected| expected.name == name) {
+            if let Some((planned, produced)) = planned
+                && let Some(expected) = planned.iter().find(|expected| expected.name == name)
+            {
                 ensure!(
                     state == expected.old.map_or(undo::State::Missing, undo::State::Object),
                     "AutoMerge input {} changed since the rebase todo was prepared",
                     name.shorten()
                 );
-                // Plan placements have already been resolved to their final object IDs.
-                return Ok(expected.new);
+                // Existing destinations are literal, never remapped through another rewrite.
+                return expected.destination.resolve(produced);
             }
             match state {
                 undo::State::Missing => return Ok(None),
@@ -218,7 +220,7 @@ pub(crate) fn rebuild(
     commit: &mut gix::objs::Commit,
     refs: &mut References,
     rewritten: &HashMap<ObjectId, Option<ObjectId>>,
-    planned: Option<&[rebase::ExpectedRef]>,
+    planned: Option<(&[rebase::PlanRef], &[ObjectId])>,
     eager: bool,
 ) -> Result<Rebuilt> {
     let mut definition = Definition::from_commit(commit)?.context("the commit is not an AutoMerge")?;
@@ -946,7 +948,11 @@ pub(crate) fn order_plan(
         .iter()
         .map(|step| step.parent)
         .chain(plan.checkout.iter().map(|checkout| checkout.target))
-        .chain(plan.expected_refs.iter().filter_map(|expected| expected.placement))
+        .chain(
+            plan.expected_refs
+                .iter()
+                .filter_map(|expected| expected.destination.placement()),
+        )
     {
         if let rebase::PlanParent::Step(index) = parent {
             ensure!(index < plan.steps.len(), "a rebase plan points to a missing step");
@@ -980,10 +986,10 @@ pub(crate) fn order_plan(
         .filter_map(|(index, automatic)| automatic.then_some(index))
         .collect();
     for expected in &mut plan.expected_refs {
-        if expected.placement.is_some() || expected.new.is_none() {
+        let rebase::RefDestination::Follow { tip } = expected.destination else {
             continue;
-        }
-        let mut commit_id = expected.target;
+        };
+        let mut commit_id = expected.source;
         let mut seen = HashSet::new();
         let mut target = loop {
             ensure!(seen.insert(commit_id), "a dropped input has cyclic ancestry");
@@ -998,7 +1004,7 @@ pub(crate) fn order_plan(
             };
             commit_id = parent.detach();
         };
-        if expected.follows_tip {
+        if tip {
             let mut followed = HashSet::new();
             while let Some(index) = plan
                 .steps
@@ -1010,7 +1016,7 @@ pub(crate) fn order_plan(
                 target = rebase::PlanParent::Step(index);
             }
         }
-        expected.placement = Some(target);
+        expected.destination = target.into();
     }
     let mut dependencies = Vec::with_capacity(plan.steps.len());
     for step in &plan.steps {
@@ -1032,16 +1038,8 @@ pub(crate) fn order_plan(
                         "AutoMerge input has a symbolic reference cycle"
                     );
                     if let Some(expected) = plan.expected_refs.iter().find(|expected| expected.name == name) {
-                        if expected.new.is_some() || expected.placement.is_some() {
-                            match expected.placement {
-                                Some(rebase::PlanParent::Step(index)) => parents.push(index),
-                                Some(rebase::PlanParent::Existing(_)) => {}
-                                None => {
-                                    if let Some(index) = positions.get(&expected.target) {
-                                        parents.push(*index);
-                                    }
-                                }
-                            }
+                        if let rebase::RefDestination::Step(index) = expected.destination {
+                            parents.push(index);
                         }
                         break;
                     }
@@ -1103,28 +1101,14 @@ pub(crate) fn order_plan(
         checkout.target = parent(checkout.target);
     }
     for reference in &mut plan.expected_refs {
-        reference.placement = reference.placement.map(parent);
+        if let Some(placement) = reference.destination.placement() {
+            reference.destination = parent(placement).into();
+        }
     }
     Ok(order
         .iter()
         .map(|index| dependencies[*index].iter().map(|parent| remap[*parent]).collect())
         .collect())
-}
-
-pub(crate) fn plan_refs(expected: &[rebase::ExpectedRef], produced: &[ObjectId]) -> Vec<rebase::ExpectedRef> {
-    expected
-        .iter()
-        .map(|expected| {
-            let mut expected = expected.clone();
-            if let Some(placement) = expected.placement {
-                expected.new = match placement {
-                    rebase::PlanParent::Existing(commit_id) => Some(commit_id),
-                    rebase::PlanParent::Step(index) => produced.get(index).copied(),
-                };
-            }
-            expected
-        })
-        .collect()
 }
 
 #[cfg(test)]
