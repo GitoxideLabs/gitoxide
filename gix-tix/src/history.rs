@@ -158,6 +158,8 @@ pub(crate) struct HistoryGraph {
     by_id: HashMap<ObjectId, CommitIndex>,
     stored_order: Vec<CommitIndex>,
     edit_scope: HashSet<ObjectId>,
+    /// Active history bounded by hidden tips, retained separately when an edit expands its scope.
+    pub(crate) bounded_history: Option<Vec<ObjectId>>,
     tracking: HashMap<CommitIndex, Vec<SelectionRef>>,
     relations: HashMap<(CommitIndex, CommitIndex), (usize, usize)>,
     auto_merge_checked: HashSet<ObjectId>,
@@ -467,6 +469,7 @@ impl HistoryGraph {
         });
         self.edit_scope = visible;
         self.edit_scope.extend(boundary);
+        self.bounded_history = (!hidden_tips.is_empty()).then(|| self.edit_commit_ids());
     }
 
     fn parent_ids(&self, index: CommitIndex) -> gix::traverse::commit::ParentIds {
