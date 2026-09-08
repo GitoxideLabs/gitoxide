@@ -1258,7 +1258,7 @@ fn perform_inner(
         pending.retain(|id| Some(*id) != root);
     }
     for old_id in pending {
-        let old_parents = auto_merge::parents(&repo, graph, old_id)?;
+        let old_parents = graph.parents_or_load(&repo, old_id)?;
         let mut commit = match replacement.as_ref().filter(|_| Some(old_id) == root) {
             Some(commit) => commit.clone(),
             None => repo.find_commit(old_id)?.decode()?.into_owned()?,
@@ -1531,7 +1531,7 @@ pub(super) fn finish_review_with_progress(
         )?;
     }
     for id in review_ids.iter().chain(&natural_ids) {
-        if auto_merge::parents(&repo, graph, *id)?.len() > 1
+        if graph.parents_or_load(&repo, *id)?.len() > 1
             && !auto_merge::is_auto_merge(&repo.find_commit(*id)?.decode()?.into_owned()?)
         {
             anyhow::bail!("review finish cannot rewrite merge descendants");
@@ -1592,7 +1592,7 @@ pub(super) fn finish_review_with_progress(
 
     rewritten.insert(tip, Some(finished_review));
     for old in natural_ids {
-        let old_parents = auto_merge::parents(&repo, graph, old)?;
+        let old_parents = graph.parents_or_load(&repo, old)?;
         let mut commit = repo.find_commit(old)?.decode()?.into_owned()?;
         if auto_merge::is_auto_merge(&commit) {
             let eager = conflict.is_none() && auto.eager.contains(&old);
@@ -1757,7 +1757,7 @@ pub(crate) fn perform_plan_with_progress(
             if automatic && step.squash.contains(&id) {
                 anyhow::bail!("an AutoMerge cannot be squashed");
             }
-            if auto_merge::parents(&repo, graph, id)?.len() > 1 && !automatic {
+            if graph.parents_or_load(&repo, id)?.len() > 1 && !automatic {
                 anyhow::bail!("merge commits cannot be picked by the rebase editor");
             }
         }
@@ -1919,7 +1919,7 @@ pub(crate) fn perform_plan_with_progress(
         }
         let graph_parents = match step.commit {
             PlanCommit::Pick(id) | PlanCommit::Copy(id) | PlanCommit::Resolved(id) => {
-                auto_merge::parents(&repo, graph, id)?
+                graph.parents_or_load(&repo, id)?
             }
             PlanCommit::Empty(_) => vec![parent],
         };
@@ -2622,7 +2622,7 @@ fn validate(
     tree: Tree,
 ) -> Result<()> {
     for (position, id) in affected.iter().enumerate() {
-        let parents = auto_merge::parents(repo, graph, *id)?;
+        let parents = graph.parents_or_load(repo, *id)?;
         if parents.len() > 1
             && (position > 0 || removed || tree == Tree::CherryPick)
             && !auto_merge::is_auto_merge(&repo.find_commit(*id)?.decode()?.into_owned()?)
