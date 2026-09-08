@@ -1349,8 +1349,6 @@ pub(crate) fn draw_with_worktree(
         emphasize_prefix(&mut view_prefix_spans[1..]);
     }
     let mut ordered = vec![Span::raw(history_position(app))];
-    ordered.push(Span::raw(" · "));
-    ordered.extend(shortcut("p command", 'p', true));
     if selected_segment {
         ordered.push(Span::raw(" · <enter> expand"));
     }
@@ -1497,7 +1495,6 @@ fn time_travel_label(app: &App, decorations: &Decorations) -> Option<&'static st
 
 fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<usize> {
     let mut width = history_position(app).chars().count();
-    width += 3 + "p command".len();
     let selected_segment = app.selected_is_segment();
     if selected_segment {
         width += " · <enter> expand".chars().count();
@@ -3820,8 +3817,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let computing = rendered_line(&terminal, 1);
         assert!(
-            computing.contains("1 commits · p command · view · actions · enrich · copy")
-                && computing.contains("computing"),
+            computing.contains("1 commits · view · actions · enrich · copy") && computing.contains("computing"),
             "expired deferral reveals computation progress"
         );
         assert_ne!(computing, completed, "visible progress changes the footer");
@@ -4525,7 +4521,7 @@ mod tests {
             "todo commit metadata uses the author date and excludes separately represented refs"
         );
 
-        let footer_text = "#0 · p command · view · actions · enrich · copy · refs · ? · quit";
+        let footer_text = "#0 · view · actions · enrich · copy · refs · ? · quit";
         let selected_line = "      > @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..selected_line.chars().count() as u16 {
@@ -4550,7 +4546,6 @@ mod tests {
         expected[(selected_line.chars().count() as u16 + 2, 0)]
             .set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         for (label, key) in [
-            ("p command", 'p'),
             ("view", 'v'),
             ("actions", 'a'),
             ("enrich", 'n'),
@@ -4936,7 +4931,7 @@ mod tests {
         })?;
 
         let footer = rendered_line(&terminal, 2);
-        let compact = "0 commits · p command · view · actions · enrich · copy · refs · ? · Esc cancel · quit";
+        let compact = "0 commits · view · actions · enrich · copy · refs · ? · Esc cancel · quit";
         assert_eq!(footer.trim_end(), compact, "the footer keeps every prefix compact");
         let view = "author date · ids · emails · names · mailmap · trailers · refs · show hidden";
         let popup = rendered_line(&terminal, 1);
