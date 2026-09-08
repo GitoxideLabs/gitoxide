@@ -86,6 +86,67 @@ fn assorted() -> crate::Result {
 }
 
 #[test]
+#[cfg(windows)]
+fn drive_relative_paths_use_the_supplied_directory_on_the_same_drive() -> crate::Result {
+    for cwd in [r"C:\gix-realpath-test-base", r"\\?\C:\gix-realpath-test-base"] {
+        let cwd = Path::new(cwd);
+        for (input, suffix) in [
+            ("C:", ""),
+            ("C:repo", "repo"),
+            ("c:repo", "repo"),
+            (r"C:repo\..\other", "other"),
+        ] {
+            assert_eq!(
+                realpath_opts(Path::new(input), cwd, 0)?,
+                cwd.join(suffix),
+                "{input} uses the supplied directory on its drive, including verbatim directories"
+            );
+        }
+        assert_eq!(
+            realpath_opts(Path::new(r"C:\repo"), cwd, 0)?,
+            Path::new(r"C:\repo"),
+            "a fully qualified path still ignores the supplied directory"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(windows)]
+fn drive_relative_paths_use_windows_drive_directories_when_needed() -> crate::Result {
+    for input in ["C:", "C:gix-realpath-test-missing", "D:gix-realpath-test-missing"] {
+        let input = Path::new(input);
+        let expected = std::path::absolute(input)?;
+        assert_eq!(
+            gix_path::realpath(input)?,
+            expected,
+            "the convenience function agrees with Windows drive-directory lookup"
+        );
+        assert_eq!(
+            realpath_opts(input, Path::new(r"Z:\unrelated"), 40)?,
+            expected,
+            "a directory on another drive cannot supply the base, so it's looked up as escape hatch"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn parent_components_are_resolved_after_symlinks() -> crate::Result {
+    let tmp = canonicalized_tempdir()?;
+    let target = tmp.path().join("target/nested");
+    std::fs::create_dir_all(&target)?;
+    let link = tmp.path().join("link");
+    create_symlink(&link, &target)?;
+    assert_eq!(
+        gix_path::realpath(link.join("../file"))?,
+        tmp.path().join("target/file"),
+        "making paths absolute must not normalize away a parent component before resolving its preceding symlink"
+    );
+    Ok(())
+}
+
+#[test]
 fn link_cycle_is_detected() -> crate::Result {
     let tmp_dir = canonicalized_tempdir()?;
     let dir = tmp_dir.path();
