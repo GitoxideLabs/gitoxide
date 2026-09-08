@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    ffi::OsString,
     path::PathBuf,
     process::Command,
     time::{Duration, Instant},
@@ -319,10 +320,15 @@ impl PlanConflict {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CheckoutOptions<'a> {
+    pub revisions: &'a [OsString],
+    pub include_worktrees: bool,
+}
+
 pub(crate) struct Outcome {
     pub selected: Option<ObjectId>,
-    pub checkout_reference: Option<gix::refs::FullName>,
-    pub deferred_ref_deletions: Vec<(gix::refs::FullName, ObjectId)>,
+    pub notice: Option<String>,
     pub ref_rewrites: Vec<RefRewrite>,
     pub ref_changes: Vec<super::undo::RefChange>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
@@ -368,75 +374,51 @@ impl Conflict {
         self.original
     }
 
-    pub(crate) fn persist(mut self) -> Result<PersistedConflict> {
-        let outcome = self.prepared.finish()?;
-        Ok(PersistedConflict {
-            repo: self.prepared.repo,
-            conflicts: self.conflicts,
-            merged_tree: self.merged_tree,
-            commit: self.commit,
-            deferred_ref_deletions: outcome.deferred_ref_deletions,
-            ref_rewrites: outcome.ref_rewrites,
-            ref_changes: outcome.ref_changes,
-            rewritten: outcome.rewritten,
-        })
+    pub(crate) fn persist(mut self, checkout: CheckoutOptions<'_>) -> Result<Outcome> {
+        self.prepared.selected = Some(self.commit);
+        self.prepared.checkout_reference = None;
+        self.prepared
+            .finish(Some(checkout), Some((self.merged_tree, &self.conflicts)))
     }
 }
 
-pub(crate) struct PersistedConflict {
-    repo: gix::Repository,
-    conflicts: Vec<gix::merge::tree::Conflict>,
+fn materialize_conflict(
+    repo: &gix::Repository,
+    commit_id: ObjectId,
     merged_tree: ObjectId,
-    pub(crate) commit: ObjectId,
-    pub(crate) deferred_ref_deletions: Vec<(gix::refs::FullName, ObjectId)>,
-    pub(crate) ref_rewrites: Vec<RefRewrite>,
-    pub(crate) ref_changes: Vec<super::undo::RefChange>,
-    rewritten: HashMap<ObjectId, Option<ObjectId>>,
-}
-
-impl PersistedConflict {
-    pub(crate) fn map(&self, id: ObjectId) -> Option<ObjectId> {
-        self.rewritten.get(&id).copied().unwrap_or(Some(id))
+    conflicts: &[gix::merge::tree::Conflict],
+) -> Result<()> {
+    let mut index = repo
+        .index_from_tree(&merged_tree)
+        .context("could not prepare the conflicting index")?;
+    if !gix::merge::tree::apply_index_entries(
+        conflicts,
+        gix::merge::tree::TreatAsUnresolved::git(),
+        &mut index,
+        gix::merge::tree::apply_index_entries::RemovalMode::Prune,
+    ) {
+        anyhow::bail!("could not apply conflict stages to the prepared index");
     }
-
-    pub(crate) fn materialize(&mut self) -> Result<()> {
-        let mut index = self
-            .repo
-            .index_from_tree(&self.merged_tree)
-            .context("could not prepare the conflicting index")?;
-        if !gix::merge::tree::apply_index_entries(
-            &self.conflicts,
-            gix::merge::tree::TreatAsUnresolved::git(),
-            &mut index,
-            gix::merge::tree::apply_index_entries::RemovalMode::Prune,
-        ) {
-            anyhow::bail!("could not apply conflict stages to the prepared index");
-        }
-        index.remove_tree();
-        let ours_tree = self
-            .repo
-            .find_commit(self.commit)
-            .context("could not find the conflicting commit")?
-            .tree_id()
-            .context("could not read the conflicting commit tree")?
-            .detach();
-        let workdir = self
-            .repo
-            .workdir()
-            .context("materializing a conflict requires a worktree")?;
-        super::forget::apply_tree_transition(workdir, ours_tree, self.merged_tree)
-            .context("could not check out the conflicting merge result")?;
-        if let Err(err) = index
-            .write(gix::index::write::Options::default())
-            .context("could not write the conflicting index")
-        {
-            return match super::forget::apply_tree_transition(workdir, self.merged_tree, ours_tree) {
-                Ok(()) => Err(err),
-                Err(rollback) => Err(err.context(format!("conflict checkout rollback failed: {rollback:#}"))),
-            };
-        }
-        Ok(())
+    index.remove_tree();
+    let ours_tree = repo
+        .find_commit(commit_id)
+        .context("could not find the conflicting commit")?
+        .tree_id()
+        .context("could not read the conflicting commit tree")?
+        .detach();
+    let workdir = repo.workdir().context("materializing a conflict requires a worktree")?;
+    super::forget::apply_tree_transition(workdir, ours_tree, merged_tree)
+        .context("could not check out the conflicting merge result")?;
+    if let Err(err) = index
+        .write(gix::index::write::Options::default())
+        .context("could not write the conflicting index")
+    {
+        return match super::forget::apply_tree_transition(workdir, merged_tree, ours_tree) {
+            Ok(()) => Err(err),
+            Err(rollback) => Err(err.context(format!("conflict checkout rollback failed: {rollback:#}"))),
+        };
     }
+    Ok(())
 }
 
 struct Prepared {
@@ -452,7 +434,7 @@ struct Prepared {
     committer: gix::actor::Signature,
     expected_refs: Option<Vec<PlanRef>>,
     checkout_reference: Option<gix::refs::FullName>,
-    checkout_after_finish: bool,
+    departure: Option<(ObjectId, Option<ObjectId>)>,
     pins: Vec<ObjectId>,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     enrichment: Option<(ObjectId, BString)>,
@@ -905,6 +887,7 @@ pub(crate) fn perform(
         edit,
         signature,
         tree_mode,
+        None,
         Vec::new(),
         None,
         PendingCheckout::Reject,
@@ -920,6 +903,7 @@ pub(crate) fn perform_with_progress(
     edit: Edit,
     signature: Signature,
     tree_mode: Tree,
+    checkout: Option<CheckoutOptions<'_>>,
     mut report: impl FnMut(Progress),
 ) -> Result<Perform> {
     perform_inner(
@@ -928,6 +912,7 @@ pub(crate) fn perform_with_progress(
         edit,
         signature,
         tree_mode,
+        checkout,
         Vec::new(),
         None,
         PendingCheckout::Reject,
@@ -952,6 +937,7 @@ pub(crate) fn perform_with_enrichment(
         edit,
         signature,
         tree_mode,
+        None,
         Vec::new(),
         None,
         PendingCheckout::Reject,
@@ -975,6 +961,7 @@ pub(crate) fn perform_with_enrichment_and_progress(
         edit,
         signature,
         tree_mode,
+        None,
         Vec::new(),
         None,
         PendingCheckout::Reject,
@@ -997,6 +984,7 @@ pub(super) fn perform_finalizing_pending_checkout_with_progress(
         edit,
         signature,
         tree_mode,
+        None,
         Vec::new(),
         None,
         PendingCheckout::FinalizeEditedHead,
@@ -1020,6 +1008,7 @@ pub(crate) fn perform_reporting_rebased(
         edit,
         signature,
         tree_mode,
+        None,
         Vec::new(),
         None,
         PendingCheckout::Reject,
@@ -1048,6 +1037,7 @@ pub(super) fn perform_resetting_index_paths_with_progress(
         edit,
         signature,
         tree_mode,
+        None,
         Vec::new(),
         Some(paths),
         PendingCheckout::Reject,
@@ -1072,6 +1062,7 @@ pub(super) fn perform_resetting_index_paths_finalizing_pending_checkout_with_pro
         edit,
         signature,
         tree_mode,
+        None,
         Vec::new(),
         Some(paths),
         PendingCheckout::FinalizeEditedHead,
@@ -1096,6 +1087,7 @@ pub(super) fn perform_deleting_refs_with_progress(
         edit,
         signature,
         tree_mode,
+        None,
         deletions,
         None,
         PendingCheckout::Reject,
@@ -1115,6 +1107,7 @@ fn perform_inner(
     edit: Edit,
     signature: Signature,
     tree_mode: Tree,
+    checkout_options: Option<CheckoutOptions<'_>>,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     reset_index_paths: Option<Vec<BString>>,
     pending_checkout: PendingCheckout,
@@ -1409,10 +1402,6 @@ fn perform_inner(
 
     let marked = (!forked && matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants))
         || conflict.is_some();
-    let checkout_after_finish = conflict.is_some()
-        || tree_mode == Tree::CherryPick
-            && root != checkout
-            && root.is_some_and(|id| graph.auto_merges.contains_key(&id));
     let skip_worktree_transitions = !eager_checkout_rewrite
         && (inserted
             || forked
@@ -1443,7 +1432,7 @@ fn perform_inner(
         committer,
         expected_refs: None,
         checkout_reference: None,
-        checkout_after_finish,
+        departure: None,
         pins: if forked {
             selected.into_iter().collect()
         } else {
@@ -1462,7 +1451,7 @@ fn perform_inner(
             commit,
             original,
         }),
-        None => Perform::Complete(prepared.finish()?),
+        None => Perform::Complete(prepared.finish(checkout_options, None)?),
     };
     Ok((perform, enrichment))
 }
@@ -1477,6 +1466,7 @@ pub(super) fn finish_review_with_progress(
     review_ref: gix::refs::FullName,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     checkout: Option<(ObjectId, Option<gix::refs::FullName>)>,
+    checkout_options: CheckoutOptions<'_>,
     mut report: impl FnMut(Progress),
 ) -> Result<Perform> {
     let mut repo = repo.clone();
@@ -1708,7 +1698,7 @@ pub(super) fn finish_review_with_progress(
         committer,
         expected_refs: None,
         checkout_reference,
-        checkout_after_finish: conflict.is_some(),
+        departure: None,
         pins: Vec::new(),
         delete_refs,
         enrichment: None,
@@ -1722,12 +1712,12 @@ pub(super) fn finish_review_with_progress(
             commit,
             original,
         })),
-        None => Ok(Perform::Complete(prepared.finish()?)),
+        None => Ok(Perform::Complete(prepared.finish(Some(checkout_options), None)?)),
     }
 }
 
 pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: Plan) -> Result<PlanPerform> {
-    perform_plan_with_progress(repo, graph, plan, |_| {})
+    perform_plan_with_progress(repo, graph, plan, CheckoutOptions::default(), |_| {})
 }
 
 #[tracing::instrument(skip_all, fields(base = %plan.base, steps = plan.steps.len()))]
@@ -1735,6 +1725,7 @@ pub(crate) fn perform_plan_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     mut plan: Plan,
+    checkout_options: CheckoutOptions<'_>,
     mut report: impl FnMut(Progress),
 ) -> Result<PlanPerform> {
     let mut auto_refs = auto_merge::expand_plan(repo, graph, &mut plan)?;
@@ -2170,7 +2161,7 @@ pub(crate) fn perform_plan_with_progress(
         committer,
         expected_refs: Some(expected_refs.clone()),
         checkout_reference: plan.checkout.as_ref().and_then(|checkout| checkout.reference.clone()),
-        checkout_after_finish: false,
+        departure: None,
         pins,
         delete_refs,
         enrichment: None,
@@ -2186,7 +2177,9 @@ pub(crate) fn perform_plan_with_progress(
         "prepared rebase plan"
     );
     let Some((original, merged_tree, conflicts, commit, conflict_step, conflict_remaining_squash)) = conflict else {
-        return Ok(PlanPerform::Complete(prepared.finish()?));
+        return Ok(PlanPerform::Complete(
+            prepared.finish(plan.checkout.as_ref().map(|_| checkout_options), None)?,
+        ));
     };
 
     let continuation_start = checkout_target
@@ -2210,7 +2203,10 @@ pub(crate) fn perform_plan_with_progress(
     }
     prepared.selected = None;
     prepared.checkout_reference = None;
-    prepared.checkout_after_finish = true;
+    prepared.departure = prepared.repo.head()?.id().map(|id| {
+        let commit_id = id.detach();
+        (commit_id, rewritten.get(&commit_id).copied().unwrap_or(Some(commit_id)))
+    });
     prepared.reset_indices.clear();
     prepared.rewritten = final_refs
         .iter()
@@ -2275,7 +2271,11 @@ impl Prepared {
         Ok(())
     }
 
-    fn finish(&mut self) -> Result<Outcome> {
+    fn finish(
+        &mut self,
+        checkout: Option<CheckoutOptions<'_>>,
+        materialized: Option<(ObjectId, &[gix::merge::tree::Conflict])>,
+    ) -> Result<Outcome> {
         let mut resource_edits = super::stash::rewrite_edits(&self.repo, &self.stash_rewritten, &self.removed)?;
         let note_edits = note_rewrite_edits(&self.repo, &self.note_rewrites, &self.committer)?;
         let enrichment_edits = self
@@ -2298,14 +2298,21 @@ impl Prepared {
             .take_object_memory()
             .context("candidate object memory was unavailable")?;
 
-        if self.checkout_after_finish
-            && let Some(selected) = self.selected
-            && let Some(workdir) = self.repo.workdir()
-        {
+        let checkout_index = if checkout.is_some() {
+            let selected = self
+                .selected
+                .context("checkout completion requires a selected commit")?;
+            let workdir = self.repo.workdir().context("checkout completion requires a worktree")?;
+            if let Some(reference) = &self.checkout_reference {
+                super::time_travel::ensure_branch_is_available(&self.repo, reference.as_ref())?;
+            }
             let old_tree = self.repo.head_commit()?.tree_id()?.detach();
             let new_tree = self.repo.find_commit(selected)?.tree_id()?.detach();
             super::forget::preflight_tree_transition(&self.repo, workdir, old_tree, new_tree)?;
-        }
+            Some(IndexBackup::capture(self.repo.index_path().to_owned())?)
+        } else {
+            None
+        };
 
         let transitions = worktree_transitions(
             &self.repo,
@@ -2331,7 +2338,7 @@ impl Prepared {
         if let (Some(expected_refs), Some(current_ref)) = (&mut self.expected_refs, current_ref) {
             if expected_refs.iter().any(|expected| {
                 expected.name == current_ref && expected.old.is_some() && expected.destination == RefDestination::Delete
-            }) && (self.repo.workdir().is_none() || (self.selected.is_none() && !self.checkout_after_finish))
+            }) && checkout.is_none()
             {
                 anyhow::bail!("cannot delete the checked-out branch without selecting another checkout");
             }
@@ -2372,21 +2379,85 @@ impl Prepared {
         for index in 0..index_resets.len() {
             if let Err(mut err) = reset_index(&mut index_resets[index], self.reset_index_paths.as_deref()) {
                 for applied in index_resets[..=index].iter().rev() {
-                    if let Err(restore) = std::fs::write(&applied.index, &applied.before) {
+                    if let Err(restore) = applied.backup.restore() {
                         err = err.context(format!("index rollback failed: {restore}"));
                     }
                 }
                 return rollback(&self.repo, &self.committer, &transitions, &updated_refs.rollback, err);
             }
         }
-        Ok(Outcome {
+        let mut outcome = Outcome {
             selected: self.selected,
-            checkout_reference: self.checkout_reference.clone(),
-            deferred_ref_deletions,
+            notice: None,
             ref_rewrites: updated_refs.rewritten,
             ref_changes: updated_refs.changes,
             rewritten: std::mem::take(&mut self.rewritten),
-        })
+        };
+        if let Some(options) = checkout {
+            let selected = outcome.selected.expect("checkout was preflighted");
+            let completed = (|| -> Result<()> {
+                let revisions: Vec<_> = options
+                    .revisions
+                    .iter()
+                    .filter_map(|revision| {
+                        match revision
+                            .to_str()
+                            .and_then(|value| ObjectId::from_hex(value.as_bytes()).ok())
+                        {
+                            Some(commit_id) => outcome.map(commit_id).map(|id| OsString::from(id.to_string())),
+                            None => Some(revision.clone()),
+                        }
+                    })
+                    .collect();
+                let (notice, changes) = super::time_travel::move_head_to_reporting(
+                    self.repo.git_dir(),
+                    self.repo.is_bare(),
+                    selected,
+                    self.checkout_reference.as_ref(),
+                    &revisions,
+                    options.include_worktrees,
+                    |id| {
+                        self.departure
+                            .filter(|(old, _)| *old == id)
+                            .map_or_else(|| outcome.map(id), |(_, new)| new)
+                    },
+                )?;
+                outcome.notice = notice;
+                outcome.ref_changes.extend(changes);
+                outcome.ref_changes.extend(super::time_travel::delete_deferred_refs(
+                    self.repo.git_dir(),
+                    self.repo.is_bare(),
+                    &deferred_ref_deletions,
+                )?);
+                if let Some((merged_tree, conflicts)) = materialized {
+                    materialize_conflict(&self.repo, selected, merged_tree, conflicts)?;
+                    outcome.notice = Some(format!(
+                        "{}; ready to resolve conflicts",
+                        outcome
+                            .notice
+                            .take()
+                            .unwrap_or_else(|| format!("checked out {}", selected.to_hex_with_len(7)))
+                    ));
+                }
+                Ok(())
+            })();
+            if let Err(mut err) = completed {
+                if let Err(rollback) = super::undo::rollback_with_worktrees(&self.repo, &outcome.ref_changes) {
+                    err = err.context(format!("operation rollback failed: {rollback:#}"));
+                }
+                for backup in index_resets
+                    .iter()
+                    .map(|reset| &reset.backup)
+                    .chain(checkout_index.as_ref())
+                {
+                    if let Err(restore) = backup.restore() {
+                        err = err.context(format!("index rollback failed: {restore}"));
+                    }
+                }
+                return Err(err);
+            }
+        }
+        Ok(outcome)
     }
 }
 
@@ -2575,12 +2646,10 @@ fn index_resets(
         if let Some(workdir) = worktree_repo.workdir().filter(|path| path.is_dir()).map(PathBuf::from) {
             let index = worktree_repo.index_path();
             let index_path = index.to_owned();
-            let before = std::fs::read(index).context("could not preserve an affected index")?;
             out.push(IndexReset {
                 repo: worktree_repo,
                 workdir,
-                index: index_path,
-                before,
+                backup: IndexBackup::capture(index_path)?,
                 new,
             });
         }
@@ -2591,9 +2660,34 @@ fn index_resets(
 struct IndexReset {
     repo: gix::Repository,
     workdir: PathBuf,
-    index: PathBuf,
-    before: Vec<u8>,
+    backup: IndexBackup,
     new: ObjectId,
+}
+
+struct IndexBackup {
+    path: PathBuf,
+    contents: Option<Vec<u8>>,
+}
+
+impl IndexBackup {
+    fn capture(path: PathBuf) -> Result<Self> {
+        let contents = match std::fs::read(&path) {
+            Ok(contents) => Some(contents),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err).context("could not preserve an affected index"),
+        };
+        Ok(Self { path, contents })
+    }
+
+    fn restore(&self) -> std::io::Result<()> {
+        match &self.contents {
+            Some(contents) => std::fs::write(&self.path, contents),
+            None => match std::fs::remove_file(&self.path) {
+                Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err),
+                _ => Ok(()),
+            },
+        }
+    }
 }
 
 fn reset_index(reset: &mut IndexReset, paths: Option<&[BString]>) -> Result<()> {
@@ -3312,7 +3406,6 @@ fn update_refs(
             log_change(),
         ));
     }
-    let mut verify_only = HashSet::new();
     for (name, state) in input_refs {
         let expected = match state {
             super::undo::State::Missing => PreviousValue::MustNotExist,
@@ -3320,16 +3413,13 @@ fn update_refs(
             super::undo::State::Symbolic(target) => PreviousValue::MustExistAndMatch(Target::Symbolic(target.clone())),
         };
         if let Some(edit) = edits.iter_mut().find(|edit| edit.name == *name) {
-            match &mut edit.change {
-                gix::refs::transaction::Change::Update { expected: previous, .. }
-                | gix::refs::transaction::Change::Delete { expected: previous, .. } => {
-                    anyhow::ensure!(
-                        *previous == expected,
-                        "AutoMerge input {} changed during preparation",
-                        name.shorten()
-                    );
-                }
-            }
+            anyhow::ensure!(
+                matches!(&edit.change,
+                    gix::refs::transaction::Change::Update { expected: previous, .. }
+                    | gix::refs::transaction::Change::Delete { expected: previous, .. } if *previous == expected),
+                "AutoMerge input {} changed during preparation",
+                name.shorten()
+            );
         } else {
             // Reflog-only symbolic updates hold a ref lock and check its state without
             // publishing a value or writing a reflog. The unused self-target also keeps
@@ -3343,7 +3433,6 @@ fn update_refs(
                     ..LogChange::default()
                 },
             ));
-            verify_only.insert(name.clone());
         }
     }
     if edits.is_empty() {
@@ -3353,8 +3442,7 @@ fn update_refs(
     let applied = repo
         .edit_references_as(edits, Some(committer.to_ref(&mut time)))
         .context("could not update references after rebasing")?;
-    let changes =
-        super::undo::changes_from_edits(applied.into_iter().filter(|edit| !verify_only.contains(&edit.name)))?;
+    let changes = super::undo::changes_from_edits(applied)?;
     ref_rewrites.sort_by(|a, b| a.name.cmp(&b.name));
     ref_rewrites.dedup();
     Ok(UpdatedRefs {
@@ -3455,6 +3543,57 @@ mod tests {
         )?)
     }
 
+    #[test]
+    fn checkout_failure_rolls_back_the_rewrite_and_index() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let index = std::fs::read(repo.index_path())?;
+        std::fs::write(repo.git_dir().join("HEAD.lock"), b"checkout contention")?;
+        let result = perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![PlanStep {
+                    parent: PlanParent::Existing(base),
+                    commit: PlanCommit::Pick(tip),
+                    squash: Vec::new(),
+                }],
+                checkout: Some(PlanCheckout {
+                    target: PlanParent::Step(0),
+                    reference: None,
+                }),
+                expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
+            },
+        );
+        assert!(result.is_err(), "completion includes the refused checkout");
+        assert_eq!(repo.head_id()?, tip, "publication is rolled back when checkout fails");
+        assert_eq!(
+            repo.find_reference("refs/patches/middle")?.id(),
+            middle,
+            "other refs are restored too"
+        );
+        assert_eq!(
+            std::fs::read(repo.index_path())?,
+            index,
+            "the original index is restored exactly"
+        );
+        assert!(
+            fixture.path().join("middle").is_file(),
+            "the original worktree is restored"
+        );
+        assert!(
+            crate::history::all_pins(&repo)?.is_empty(),
+            "failed completion leaves no provisional pins"
+        );
+        Ok(())
+    }
+
     fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
         let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
         if output.status.success() {
@@ -3507,6 +3646,7 @@ mod tests {
             Edit::Replace { target: middle, commit },
             Signature::RedoIfNeeded,
             Tree::LeaveAsIs,
+            None,
             |update| progress.push(update),
         )?
         .complete()?;
@@ -4143,7 +4283,7 @@ mod tests {
         else {
             return Err("the enriched edit should suspend on its checkout conflict".into());
         };
-        let persisted = conflict.persist()?;
+        let persisted = conflict.persist(CheckoutOptions::default())?;
         assert!(
             persisted
                 .ref_changes
@@ -4390,6 +4530,7 @@ mod tests {
                 }),
                 expected_refs,
             },
+            CheckoutOptions::default(),
             |update| progress.push(update),
         )?
         .complete()?;
@@ -4423,7 +4564,7 @@ mod tests {
         );
         assert_eq!(middle_commit.parents.first().copied(), Some(new_tip));
 
-        let empty_id = repo.head_id()?.detach();
+        let empty_id = repo.find_reference("refs/heads/main")?.id().detach();
         let empty = repo.find_commit(empty_id)?.decode()?.into_owned()?;
         assert_eq!(
             empty.message, b"checkpoint",
@@ -4435,18 +4576,6 @@ mod tests {
             empty.tree, middle_commit.tree,
             "the empty commit reuses its parent tree"
         );
-        assert!(
-            !repo.head()?.is_detached(),
-            "the branch remains checked out after rebasing"
-        );
-        assert!(
-            crate::history::all_pins(&repo)?.is_empty(),
-            "the referenced leaf needs no pin"
-        );
-        let repository_path = repo.git_dir().to_owned();
-        drop(repo);
-        super::super::time_travel::checkout_without_replay(&repository_path, false, new_tip, &[], false)?;
-        let repo = open(fixture.path())?;
         assert!(
             repo.head()?.is_detached(),
             "moving @ below the branch tip detaches HEAD"
@@ -4528,6 +4657,7 @@ mod tests {
                 }),
                 expected_refs: capture_refs(&repo, &[clean, checkout, descendant], &[descendant])?,
             },
+            CheckoutOptions::default(),
             |update| progress.push(update),
         )?
         .complete()?;
@@ -4592,6 +4722,7 @@ mod tests {
                 checkout: None,
                 expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
             },
+            CheckoutOptions::default(),
             |update| progress.push(update),
         )?
         .complete()?;
@@ -4941,18 +5072,17 @@ mod tests {
         );
         assert_eq!(outcome.selected, Some(copied), "copy-insert selects the new copy");
         assert!(
-            outcome.checkout_reference.is_none(),
+            repo.head()?.is_detached(),
             "copy-insert detaches instead of moving the source branch"
         );
         assert_eq!(outcome.map(source), Some(source), "copying does not rewrite the source");
-        assert_eq!(repo.head_id()?, source, "copying elsewhere leaves HEAD at the source");
+        assert_eq!(repo.head_id()?, copied, "copy-insert checks out the new copy");
         assert_eq!(repo.find_reference("refs/heads/main")?.id(), source);
         assert_eq!(repo.find_reference("refs/heads/destination")?.id(), rewritten_child);
         assert_eq!(git_note(&repo, source)?.as_deref(), Some(b"source note".as_slice()));
         assert_eq!(git_note(&repo, copied)?.as_deref(), Some(b"source note".as_slice()));
-        let repository_path = repo.git_dir().to_owned();
         drop(repo);
-        super::super::time_travel::checkout_plan(&repository_path, false, &outcome, &[], false)?;
+
         let repo = open(fixture.path())?;
         assert!(
             repo.head()?.is_detached(),
@@ -5056,7 +5186,7 @@ mod tests {
             "the copy becomes another child of the hidden base"
         );
         assert_eq!(
-            outcome.checkout_reference.as_ref().map(gix::refs::FullName::as_bstr),
+            repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
             Some(b"refs/heads/empty".as_bstr()),
             "HEAD stays attached to the branch advanced by the paste"
         );
@@ -5210,8 +5340,6 @@ mod tests {
             Some(rewritten_tip),
             "HEAD is reinserted above its former descendant"
         );
-        let repository_path = repo.git_dir().to_owned();
-        super::super::time_travel::checkout_plan(&repository_path, false, &outcome, &[], false)?;
         let repo = open(fixture.path())?;
         assert!(repo.head()?.is_detached(), "a detached checkout remains detached");
         assert_eq!(repo.head_id()?, moved);
@@ -5330,6 +5458,7 @@ mod tests {
                 checkout: None,
                 expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
             },
+            CheckoutOptions::default(),
             |progress| updates.push(progress),
         )?
         .complete()?;
@@ -5450,8 +5579,11 @@ mod tests {
                 "{name} follows the first continuation"
             );
         }
-        let pins = crate::history::all_pins(&repo)?;
-        assert_eq!(pins.len(), 1, "the secondary leaf receives one pin");
+        let pins: Vec<_> = crate::history::all_pins(&repo)?
+            .into_iter()
+            .filter(|pin| !pin.is_head())
+            .collect();
+        assert_eq!(pins.len(), 1, "the secondary leaf receives one ordinary pin");
         assert_eq!(
             repo.find_commit(pins[0].id)?.parent_ids().next().map(gix::Id::detach),
             outcome.map(tip),

@@ -2031,7 +2031,6 @@ mod tests {
         );
         let graph = super::super::loaded_graph(&repo)?;
         let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
-        super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
 
         assert!(repo.head()?.referent_name().is_none(), "HEAD is detached");
         assert_eq!(
@@ -2078,7 +2077,6 @@ mod tests {
         let graph = super::super::loaded_graph(&repo)?;
         let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
         let selected = outcome.selected.context("the todo retains its checkout")?;
-        super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
 
         assert_eq!(
             repo.find_reference("refs/heads/outside")?.id(),
@@ -2136,8 +2134,6 @@ mod tests {
         let selected = outcome.selected.context("the rewritten todo retains @")?;
         assert_ne!(selected, tip, "dropping the middle commit rewrites the checked-out tip");
 
-        super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
-
         assert_eq!(repo.head_id()?, selected, "HEAD reaches the rewritten successor");
         assert!(
             crate::history::all_pins(&repo)?.iter().all(|pin| pin.id != tip),
@@ -2158,15 +2154,18 @@ mod tests {
         let plan = parse_plan(&repo, &edited)?;
         let graph = super::super::loaded_graph(&repo)?;
         let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
-        assert!(
-            repo.try_find_reference("refs/heads/main")?.is_some(),
-            "the checked-out branch remains until checkout succeeds"
-        );
-        super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
         assert!(repo.head()?.referent_name().is_none(), "HEAD is detached");
         assert!(
             repo.try_find_reference("refs/heads/main")?.is_none(),
             "the departed current branch is deleted"
+        );
+        assert!(
+            outcome.ref_changes.iter().any(|change| {
+                change.name.as_bstr() == b"refs/heads/main"
+                    && change.before == super::super::undo::State::Object(tip)
+                    && change.after == super::super::undo::State::Missing
+            }),
+            "undo includes the deletion performed after checkout"
         );
         Ok(())
     }

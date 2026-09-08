@@ -28,20 +28,18 @@ fn graph(repo: &gix::Repository) -> Result<crate::history::HistoryGraph> {
 }
 
 fn apply(repo: &gix::Repository, selected_commit_id: ObjectId, change: Change) -> Result<(ObjectId, String)> {
-    let operation = perform(repo, &graph(repo)?, selected_commit_id, change, |_| {})?;
+    let operation = perform(
+        repo,
+        &graph(repo)?,
+        selected_commit_id,
+        change,
+        rebase::CheckoutOptions::default(),
+        |_| {},
+    )?;
     let Some(result) = operation.result else {
         return Ok((selected_commit_id, operation.notice));
     };
     let outcome = result.complete()?;
-    if operation.checkout {
-        super::super::time_travel::checkout_plan_reporting(
-            repo.workdir().context("fixture has a worktree")?,
-            false,
-            &outcome,
-            &[],
-            false,
-        )?;
-    }
     Ok((
         outcome.selected.context("AutoMerge has a selected result")?,
         operation.notice,
@@ -383,7 +381,7 @@ fn a_todo_conflict_continuation_maintains_auto_merge_descendants() -> gix_testto
         vec![merge_commit_id],
         false,
     )?;
-    super::super::time_travel::materialize_plan_conflict_reporting(conflict, fixture.path(), false, &[], false)?;
+    super::super::time_travel::materialize_plan_conflict_reporting(conflict, &[], false)?;
     std::fs::write(fixture.path().join("shared"), "resolved A and B\n")?;
     let staged = std::process::Command::new("git")
         .current_dir(fixture.path())
@@ -393,13 +391,13 @@ fn a_todo_conflict_continuation_maintains_auto_merge_descendants() -> gix_testto
     let parsed = super::super::todo::parse(&repo, &continuation.document)?.context("the continuation parses")?;
     let mut ids = graph(&repo)?.edit_commit_ids();
     ids.extend_from_slice(&parsed.plan.scope);
-    let continued = rebase::perform_plan(
+    rebase::perform_plan(
         &repo,
         &crate::history::HistoryGraph::for_commits(&repo, &ids)?,
         parsed.plan,
     )?
     .complete()?;
-    super::super::time_travel::checkout_plan_reporting(fixture.path(), false, &continued, &[], false)?;
+
     let merged = input(&repo, "combined")?.commit_id;
     let definition = Definition::from_commit(&repo.find_commit(merged)?.decode()?.into_owned()?)?
         .expect("the continuation retains the AutoMerge");
@@ -588,6 +586,7 @@ fn dirty_checkout_and_concurrent_ref_changes_abort_without_moving_refs() -> gix_
             &graph(&repo)?,
             a.commit_id,
             Change::Add(c.reference.clone()),
+            rebase::CheckoutOptions::default(),
             |_| {}
         )
         .is_err(),
@@ -605,6 +604,7 @@ fn dirty_checkout_and_concurrent_ref_changes_abort_without_moving_refs() -> gix_
         &graph(&repo)?,
         a.commit_id,
         Change::Add(c.reference.clone()),
+        rebase::CheckoutOptions::default(),
         |progress| {
             if progress.processed > 0 && !raced {
                 repo.reference(
@@ -713,6 +713,7 @@ fn generated_content_and_self_subscriptions_are_rejected() -> gix_testtools::Res
             &graph(&repo)?,
             a.commit_id,
             Change::Add(input(&repo, "C")?.reference),
+            rebase::CheckoutOptions::default(),
             |_| {}
         )
         .is_err()
@@ -741,7 +742,15 @@ fn generated_content_and_self_subscriptions_are_rejected() -> gix_testtools::Res
         "external self-reference",
     )?;
     assert!(
-        perform(&repo, &graph(&repo)?, merge_commit_id, Change::Remerge, |_| {}).is_err(),
+        perform(
+            &repo,
+            &graph(&repo)?,
+            merge_commit_id,
+            Change::Remerge,
+            rebase::CheckoutOptions::default(),
+            |_| {}
+        )
+        .is_err(),
         "external self-subscriptions are rejected too"
     );
     assert_eq!(repo.head_id()?, merge_commit_id);
@@ -783,10 +792,11 @@ fn creation_and_checkout_share_one_undo_step() -> gix_testtools::Result {
         &graph(&repo)?,
         a.commit_id,
         Change::Add(input(&repo, "C")?.reference),
+        rebase::CheckoutOptions::default(),
         |_| {},
     )?;
     let outcome = operation.result.context("creation prepares a merge")?.complete()?;
-    let (_, changes) = super::super::time_travel::checkout_plan_reporting(fixture.path(), false, &outcome, &[], false)?;
+    let changes = outcome.ref_changes;
     let merge_commit_id = repo.head_id()?.detach();
     assert!(fixture.path().join("c").is_file());
     undo::record(&repo, "AutoMerge", &changes)?;
@@ -898,7 +908,7 @@ fn finishing_review_updates_merges_in_both_the_review_and_return_histories() -> 
     else {
         panic!("review finishing restores the existing return AutoMerge")
     };
-    super::super::time_travel::checkout_plan_reporting(fixture.path(), false, &finished.outcome, &[], false)?;
+
     assert_eq!(
         repo.head_id()?,
         finished

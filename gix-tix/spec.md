@@ -1300,10 +1300,13 @@ views.
   timestamp for the operation.
 - Ordinary edits retarget mutable local refs pointing into the rewritten set.
   History todos instead use their explicit reference lines. Ref changes use
-  compare-and-swap transactions; a checkout failure rolls back already-applied
-  worktree transitions and the ref transaction, except that deleting the branch
-  being departed necessarily follows the successful checkout. Newly written
-  unreachable objects may remain for normal Git garbage collection.
+  compare-and-swap transactions. One operation owns publication, requested checkout,
+  pin cleanup, deferred branch deletion, and accepted conflict materialization;
+  completion returns their combined undo changes. Checkout failure rolls back
+  refs and worktrees and restores the original index. A failing post-checkout hook
+  after Git has reached the destination reports a warning and retains the completed
+  checkout in undo history. Newly written unreachable objects may remain for normal
+  Git garbage collection.
 - A suspended conflict temporarily owns a cloned repository with object memory
   while awaiting an explicit `<enter>` or `Esc` choice. Dropping it writes nothing;
   accepting it consumes the repository immediately after persisting the commit at

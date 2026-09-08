@@ -35,16 +35,25 @@ pub(crate) struct RefChange {
 }
 
 impl RefChange {
-    pub(crate) fn from_edit(edit: &RefEdit) -> Result<Self> {
-        let (before, after) = match &edit.change {
-            Change::Update { expected, new, .. } => (state_from_expected(expected)?, state_from_target(new)),
-            Change::Delete { expected, .. } => (state_from_expected(expected)?, State::Missing),
+    pub(crate) fn from_edit(edit: &RefEdit) -> Result<Option<Self>> {
+        let (before, after) = if let Change::Update { expected, new, log } = &edit.change {
+            if log.mode == RefLog::Only {
+                return Ok(None);
+            }
+            (state_from_expected(expected)?, state_from_target(new))
+        } else if let Change::Delete { expected, log } = &edit.change {
+            if *log == RefLog::Only {
+                return Ok(None);
+            }
+            (state_from_expected(expected)?, State::Missing)
+        } else {
+            return Ok(None);
         };
-        Ok(RefChange {
+        Ok(Some(RefChange {
             name: edit.name.clone(),
             before,
             after,
-        })
+        }))
     }
 
     fn reversed(&self) -> Self {
@@ -80,35 +89,32 @@ impl Plan {
     }
 
     pub(crate) fn apply_with_worktrees(self, repo: &gix::Repository) -> Result<()> {
-        let transitions = worktree_transitions(repo, &self.changes)?;
-        for transition in &transitions {
-            super::forget::preflight_tree_transition(
-                &transition.repo,
-                &transition.workdir,
-                transition.old,
-                transition.new,
-            )
-            .context("local changes prevent undo/redo; stash them manually and retry")?;
-        }
-        for (applied, transition) in transitions.iter().enumerate() {
-            if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.old, transition.new)
-            {
-                return Err(rollback_transitions(
-                    &transitions[..=applied],
-                    err.context("could not align a worktree with the undo queue"),
-                ));
-            }
-        }
-        if let Err(err) = repo.edit_references(self.edits) {
-            return Err(rollback_transitions(
-                &transitions,
-                anyhow::Error::new(err).context("could not atomically move references and the undo cursor"),
-            ));
-        }
-        Ok(())
+        apply_with_worktrees(repo, &self.changes, self.edits)
     }
 }
 
+fn apply_with_worktrees(repo: &gix::Repository, changes: &[RefChange], edits: Vec<RefEdit>) -> Result<()> {
+    let transitions = worktree_transitions(repo, changes)?;
+    for transition in &transitions {
+        super::forget::preflight_tree_transition(&transition.repo, &transition.workdir, transition.old, transition.new)
+            .context("local changes prevent undo/redo; stash them manually and retry")?;
+    }
+    for (applied, transition) in transitions.iter().enumerate() {
+        if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.old, transition.new) {
+            return Err(rollback_transitions(
+                &transitions[..=applied],
+                err.context("could not align a worktree with the undo queue"),
+            ));
+        }
+    }
+    if let Err(err) = repo.edit_references(edits) {
+        return Err(rollback_transitions(
+            &transitions,
+            anyhow::Error::new(err).context("could not atomically move references and the undo cursor"),
+        ));
+    }
+    Ok(())
+}
 pub(crate) fn is_queue_ref(name: &BStr) -> bool {
     name.as_bytes() == TIP_REF.as_bytes() || name.as_bytes() == CURSOR_REF.as_bytes()
 }
@@ -207,6 +213,16 @@ pub(crate) fn apply_reversed_changes(repo: &gix::Repository, changes: &[RefChang
         .map(|_| ())
 }
 
+/// Roll back a completed publication together with every checkout it affected.
+pub(crate) fn rollback_with_worktrees(repo: &gix::Repository, changes: &[RefChange]) -> Result<()> {
+    let changes: Vec<_> = normalize_changes(changes.iter().cloned())?
+        .into_iter()
+        .map(|change| change.reversed())
+        .collect();
+    let edits = changes.iter().map(checked_edit).collect::<Result<Vec<_>>>()?;
+    apply_with_worktrees(repo, &changes, edits)
+}
+
 pub(crate) fn state(repo: &gix::Repository, name: &FullNameRef) -> Result<State> {
     Ok(match repo.try_find_reference(name)? {
         Some(reference) => state_from_target_ref(reference.target()),
@@ -222,7 +238,7 @@ pub(crate) fn changes_from_edits(edits: impl IntoIterator<Item = RefEdit>) -> Re
     normalize_changes(
         edits
             .into_iter()
-            .map(|edit| RefChange::from_edit(&edit))
+            .filter_map(|edit| RefChange::from_edit(&edit).transpose())
             .collect::<Result<Vec<_>>>()?,
     )
 }

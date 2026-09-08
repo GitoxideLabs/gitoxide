@@ -103,6 +103,7 @@ pub(crate) fn apply_reporting(
         },
         rebase::Signature::InvalidateExisting,
         rebase::Tree::LeaveAsIsAndMark,
+        None,
         report,
     )?
     .complete()?;
