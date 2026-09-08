@@ -141,10 +141,10 @@ pub(crate) fn mapped(mut commit_id: ObjectId, rewritten: &HashMap<ObjectId, Opti
     Some(commit_id)
 }
 
-/// The read set belongs to one bounded operation, and is verified with its ref transaction.
+/// ponytail: snapshot input refs per operation; a later remerge picks up concurrent changes.
 #[derive(Default)]
 pub(crate) struct References {
-    pub observed: HashMap<FullName, undo::State>,
+    observed: HashMap<FullName, undo::State>,
 }
 
 impl References {
@@ -162,6 +162,12 @@ impl References {
                 seen.insert(name.clone()),
                 "AutoMerge input has a symbolic reference cycle"
             );
+            if let Some((planned, produced)) = planned
+                && let Some(expected) = planned.iter().find(|expected| expected.name == name)
+            {
+                // Existing destinations are literal, never remapped through another rewrite.
+                return expected.destination.resolve(produced);
+            }
             let state = match self.observed.get(&name) {
                 Some(state) => state.clone(),
                 None => {
@@ -170,17 +176,6 @@ impl References {
                     state
                 }
             };
-            if let Some((planned, produced)) = planned
-                && let Some(expected) = planned.iter().find(|expected| expected.name == name)
-            {
-                ensure!(
-                    state == expected.old.map_or(undo::State::Missing, undo::State::Object),
-                    "AutoMerge input {} changed since the rebase todo was prepared",
-                    name.shorten()
-                );
-                // Existing destinations are literal, never remapped through another rewrite.
-                return expected.destination.resolve(produced);
-            }
             match state {
                 undo::State::Missing => return Ok(None),
                 undo::State::Symbolic(target) => name = target,

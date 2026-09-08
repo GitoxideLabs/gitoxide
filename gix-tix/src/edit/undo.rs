@@ -36,18 +36,15 @@ pub(crate) struct RefChange {
 
 impl RefChange {
     pub(crate) fn from_edit(edit: &RefEdit) -> Result<Option<Self>> {
-        let (before, after) = if let Change::Update { expected, new, log } = &edit.change {
-            if log.mode == RefLog::Only {
-                return Ok(None);
+        let (before, after) = match &edit.change {
+            Change::Update { expected, new, log } if log.mode == RefLog::AndReference => {
+                (state_from_expected(expected)?, state_from_target(new))
             }
-            (state_from_expected(expected)?, state_from_target(new))
-        } else if let Change::Delete { expected, log } = &edit.change {
-            if *log == RefLog::Only {
-                return Ok(None);
-            }
-            (state_from_expected(expected)?, State::Missing)
-        } else {
-            return Ok(None);
+            Change::Delete {
+                expected,
+                log: RefLog::AndReference,
+            } => (state_from_expected(expected)?, State::Missing),
+            _ => return Ok(None),
         };
         Ok(Some(RefChange {
             name: edit.name.clone(),
