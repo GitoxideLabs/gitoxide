@@ -21,7 +21,7 @@ pub(crate) enum CommandId {
     Amend,
     Spill,
     Split,
-    Forget,
+    Delete,
     Discard,
     Pin,
     Unpin,
@@ -83,12 +83,12 @@ const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
         (Id::Amend, Actions, "ae", Action::Amend),
         (Id::Spill, Actions, "al", Action::Spill),
         (Id::Split, Actions, "aS", Action::Split),
-        (Id::Forget, Actions, "ad", Action::Forget),
-        (Id::Discard, Actions, "ad", Action::Forget),
+        (Id::Delete, Actions, "ad", Action::Delete),
+        (Id::Discard, Actions, "ad", Action::Delete),
         (Id::Pin, Actions, "ai", Action::TogglePin),
         (Id::Unpin, Actions, "ai", Action::TogglePin),
-        (Id::Stash, Actions, "az", Action::Stash),
-        (Id::Unstash, Actions, "az", Action::Stash),
+        (Id::Stash, Actions, "aT", Action::Stash),
+        (Id::Unstash, Actions, "aT", Action::Stash),
         (Id::Rebase, Actions, "ab", Action::Rebase),
         (Id::RebaseUpdate, Actions, "au", Action::RebaseUpdate),
         #[cfg(feature = "blocking-network-client")]
@@ -103,7 +103,7 @@ const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
         (Id::ForkCommit, Actions, "af", Action::ForkCommit),
         (Id::Attach, Actions, "ah", Action::Attach),
         (Id::AutoMerge, Actions, "aM", Action::AutoMerge),
-        (Id::Remerge, Actions, "aU", Action::Remerge),
+        (Id::Remerge, Actions, "aR", Action::Remerge),
         (Id::RemoveFromAutoMerge, Actions, "ax", Action::RemoveFromAutoMerge),
         (Id::RemoveAutoMergeInput, Actions, "aX", Action::RemoveAutoMergeInput),
         (Id::Todo, Enrich, "nt", Action::ToggleTodo),
@@ -265,21 +265,21 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
                             .any(|name| name.kind == crate::history::DecorationKind::Head)
                     })
                 {
-                    "M AutoMerge"
+                    "AutoMerge"
                 } else {
-                    "M AutoMerge into HEAD"
+                    "AutoMerge into HEAD"
                 },
             ),
-            (CommandId::Remerge, app.can_remerge(), "U remerge"),
+            (CommandId::Remerge, app.can_remerge(), "Remerge"),
             (
                 CommandId::RemoveFromAutoMerge,
                 app.can_remove_from_auto_merge(),
-                "x remove from AutoMerge",
+                "exclude from AutoMerge",
             ),
             (
                 CommandId::RemoveAutoMergeInput,
                 app.can_remove_auto_merge_input(),
-                "X remove input",
+                "eXclude input",
             ),
         ] {
             if available {
@@ -293,7 +293,7 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
             push(CommandId::NewCommit, 0, "new", true);
         }
         if app.changes_focus.is_none() && app.can_create_empty_commit() {
-            push(CommandId::NewEmptyCommit, 0, "N new-empty", true);
+            push(CommandId::NewEmptyCommit, 0, "New-empty", true);
         }
         if app.can_amend() {
             push(CommandId::Amend, 0, "amend", true);
@@ -302,10 +302,10 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
             push(CommandId::Spill, 0, "spill", true);
         }
         if app.can_split() {
-            push(CommandId::Split, 0, "S split", true);
+            push(CommandId::Split, 0, "Split", true);
         }
-        if app.changes_focus.is_none() && app.can_forget() {
-            push(CommandId::Forget, 0, "d forget", true);
+        if app.changes_focus.is_none() && app.can_delete() {
+            push(CommandId::Delete, 0, "delete", true);
         }
         if app.changes_focus.is_none()
             && let Some(selected) = app.selected.and_then(|index| app.rows.get(index))
@@ -324,9 +324,9 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
         }
 
         if app.changes_focus.is_none() && app.can_stash() {
-            push(CommandId::Stash, 1, "z stash", true);
+            push(CommandId::Stash, 1, "sTash", true);
         } else if app.changes_focus.is_none() && app.can_unstash() {
-            push(CommandId::Unstash, 1, "z unstash", true);
+            push(CommandId::Unstash, 1, "unsTash", true);
         }
         if app.changes_focus.is_none() && app.can_rebase() {
             push(CommandId::Rebase, 1, "rebase", true);
@@ -336,10 +336,10 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
         }
         #[cfg(feature = "blocking-network-client")]
         if app.changes_focus.is_none() && app.can_fetch() {
-            push(CommandId::Fetch, 1, "F fetch", true);
+            push(CommandId::Fetch, 1, "Fetch", true);
         }
         if app.changes_focus.is_none() && app.can_push() {
-            push(CommandId::Push, 1, "P push", true);
+            push(CommandId::Push, 1, "Push", true);
         }
         if app.changes_focus.is_none() && app.can_finish_review() {
             push(CommandId::FinishReview, 1, "finish-review", true);
@@ -460,7 +460,7 @@ mod tests {
         app.update(Action::ToggleActions);
         assert!(app.actions_expanded, "the worktree actions prefix can be opened");
         let catalog = commands(&app, &Decorations::default(), false);
-        assert!(!has(&catalog, CommandId::Forget), "history deletion stays hidden");
+        assert!(!has(&catalog, CommandId::Delete), "history deletion stays hidden");
         let items = crate::command_picker_items(&catalog);
         let mut menu = Menu::default();
         for query in ["discard", "a dscrd", "worktree"] {
@@ -493,13 +493,13 @@ mod tests {
         ));
         assert!(
             app.update(shortcut.clone()).is_empty(),
-            "tree focus does not discard or forget"
+            "tree focus does not discard or delete"
         );
         app.changes_focus = None;
         assert_eq!(
             app.update(shortcut),
-            vec![Effect::Forget(id(1))],
-            "history retains forget"
+            vec![Effect::Delete(id(1))],
+            "history retains delete"
         );
         app.changes_focus = Some(ChangePane::Worktree);
         app.set_changes_layout(ChangesLayout::SideBySide, false, false);
@@ -618,7 +618,7 @@ mod tests {
                 .iter()
                 .find(|command| command.id == CommandId::AutoMerge)
                 .map(|command| command.label),
-            Some("M AutoMerge into HEAD"),
+            Some("AutoMerge into HEAD"),
             "an unrelated selected commit can be added to HEAD"
         );
         app.select_commit(id(6));
@@ -847,7 +847,7 @@ mod tests {
             .expect("a remembered branch can be pushed");
         assert_eq!(push.group, CommandGroup::Actions);
         assert_eq!(push.row, 1);
-        assert_eq!(push.label, "P push");
+        assert_eq!(push.label, "Push");
         assert_eq!(push.shortcut, "aP");
         assert_eq!(push.action, Action::Push);
         #[cfg(feature = "blocking-network-client")]
@@ -858,7 +858,7 @@ mod tests {
                 .expect("an active branch can be fetched");
             assert_eq!(fetch.group, CommandGroup::Actions);
             assert_eq!(fetch.row, 1);
-            assert_eq!(fetch.label, "F fetch");
+            assert_eq!(fetch.label, "Fetch");
             assert_eq!(fetch.shortcut, "aF");
             assert_eq!(fetch.action, Action::Fetch);
         }

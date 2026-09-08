@@ -286,7 +286,7 @@ without trading responsiveness for metadata that is not visible.
   visible stack, only the applicable hidden tips are shown.
 - Boundary rows retain graph styling but use terminal-default colors, are dimmed,
   and can be selected, paged to, restored as a selection, copied, and inspected.
-  They cannot be reworded, forgotten, or signature-verified. During review-base
+  They cannot be reworded, deleted, or signature-verified. During review-base
   selection, only an eligible base boundary remains selectable among hidden rows.
   They may be used for time travel or as the parent of an independent fork commit.
   A boundary whose visible descendants contain no merge commit offers the
@@ -789,9 +789,9 @@ paging retains priority, and undo/redo still ignore key-repeat events.
   attached history; returning through that pin consumes it. Nested trees use the
   nearest review-root ancestor.
 - When loaded worktree status shows staged, unstaged, or untracked changes without
-  conflicts, the actions menu offers `z stash` at the selected `@` entry. Missing or
-  stale worktree status hides the action instead of performing another status
-  query. Saving uses Git with `--include-untracked`, leaves ignored files alone,
+  conflicts, the actions menu offers `sTash` (`a Shift-T`) at the selected `@`
+  entry. Missing or stale worktree status hides the action instead of performing
+  another status query. Saving uses Git with `--include-untracked`, leaves ignored files alone,
   preserves the ordinary stash stack, and records the stash commit at
   `refs/tix/stash/<full-commit-id>`. A commit can retain only one such stash.
   `tix stash` performs this operation directly at `HEAD` with the same checks.
@@ -803,9 +803,10 @@ paging retains priority, and undo/redo still ignore key-repeat events.
   stashes retain their review-tree identity and namespace. An active automatic
   review stash likewise shows `🎁` on the review leaf whose worktree state it
   saved, without exposing its internal reference or stash commit to traversal.
-- At a selected `@` with a commit stash, the actions menu offers `z unstash` even
-  when other worktree changes are present. It applies and consumes the stash in
-  place through the same path used when time travel returns to that commit.
+- At a selected `@` with a commit stash, the actions menu offers `unsTash`
+  (`a Shift-T`) even when other worktree changes are present. It applies and
+  consumes the stash in place through the same path used when time travel returns
+  to that commit.
 - Rewriting a commit atomically renames its commit-stash association alongside
   other reference updates. Dropping a stashed commit, converging multiple stashes
   onto one result, or overwriting an existing destination stash is rejected before
@@ -1191,7 +1192,7 @@ views.
   current history projection, including offscreen commits and inputs outside the
   projection. Unrelated histories belonging to other worktrees are not expanded.
   Generated commits away from the checkout ancestry may remain lazily rebased.
-  `a Shift-U` explicitly remerges the selected AutoMerge HEAD. Traveling onto an
+  `a Shift-R` explicitly remerges the selected AutoMerge HEAD. Traveling onto an
   AutoMerge or an ordinary descendant also refreshes changes made outside Tix.
   Watchers only refresh display data and never initiate a remerge.
 - Travel replays pending inputs independently. An input whose replay conflicts
@@ -1199,10 +1200,11 @@ views.
   can still complete. Direct travel to that input offers normal conflict
   resolution. If every input remains pending, the merge uses their common-base
   tree, or the empty tree when no common base exists.
-- `a x` removes a selected input tip from an AutoMerge, including unnamed inputs.
+- `a x` (`exclude from AutoMerge`) removes a selected input tip from an AutoMerge,
+  including unnamed inputs.
   Multiple memberships open a picker naming the input ref or abbreviated change
   ID and the AutoMerge, so even converged refs remain distinguishable.
-  `a Shift-X` at an AutoMerge selects an input to remove.
+  `a Shift-X` (`eXclude input`) at an AutoMerge selects an input to remove.
   These actions remove subscriptions without deleting input refs. Automatic
   checkout cleanup never consumes a subscribed ordinary pin.
 - AutoMerges remain ordinary `pick` lines in rebase todos. Their parents derive
@@ -1289,7 +1291,7 @@ views.
   maps the chosen commit through that rewrite, and checks it out detached, while
   Escape cancels recovery.
   Hidden, unrelated, and review commits are not selectable return targets.
-- Forget is unavailable for a review commit with descendants. Forgetting a review
+- Delete is unavailable for a review commit with descendants. Deleting a review
   leaf cancels the review: tracked review changes are discarded, its recorded
   return checkout is restored, and the departure pin is consumed. Finishing a
   review or dropping one through a rebase todo also deletes its review ref and
@@ -1297,13 +1299,11 @@ views.
   headers and resources. Review stash refs are internal: they are not traversal
   tips or named decorations, but their saved review leaf carries a `🎁` marker.
 
-### Forget commits
+### Delete commits
 
-- `e`, then `d`, is available after history completion for a selected non-merge
-  commit with no known merge descendant. The first `d` arms a
-  yellow notice asking for `d` again; the second performs it. Navigation, refresh,
-  cancellation, selection changes, and other commands disarm confirmation.
-- Forgetting does not require a worktree. Linear descendants are reparented with
+- `a d` immediately deletes a selected non-merge commit after history completion
+  when it has no known ordinary merge descendant.
+- Deleting does not require a worktree. Linear descendants are reparented with
   unchanged trees and marked for lazy replay; mutable refs throughout the
   rewritten stack move atomically. Tags and remote-tracking refs remain unchanged.
 - When the selected commit is the current worktree `HEAD`, Git preflights and
@@ -1311,7 +1311,7 @@ views.
   tracked delta. Conflicting staged, tracked, or untracked state refuses the
   operation; unrelated untracked content survives. When `HEAD` is unrelated, only
   refs move and the worktree is untouched.
-- Forgetting an attached root deletes the branch and leaves symbolic `HEAD`
+- Deleting an attached root deletes the branch and leaves symbolic `HEAD`
   unborn. A selected detached root is rejected because it cannot produce a valid
   unborn `HEAD`. Success refreshes history and selects the parent when present.
 
@@ -1358,7 +1358,7 @@ views.
   while awaiting an explicit `<enter>` or `Esc` choice. Dropping it writes nothing;
   accepting it consumes the repository immediately after persisting the commit at
   the ours tree and materializing the retained merge result in the worktree and index.
-  Forget, reword, commit insertion, review finishing, and other shared-rebase
+  Delete, reword, commit insertion, review finishing, and other shared-rebase
   callers propagate this same suspended result instead of completing their ref
   transaction first. Thus a checkout-path conflict is reported by the initiating
   edit itself, and `Esc` leaves its repository snapshot unchanged.
@@ -1513,20 +1513,25 @@ views.
 ### Commit and action shortcuts
 
 - `a` toggles a two-line shortcut group with commit operations above general
-  actions. `a o` rewords, `a w` creates a rebased child, `a Shift-N` creates an
+  actions. Each action underlines its shortcut letter within its verb, capitalizing
+  that letter for Shift bindings, as in `New-empty`, `Split`, `Fetch`, `Push`,
+  `AutoMerge`, `Remerge`, `sTash`, `unsTash`, and `eXclude`. No action label has a
+  separate shortcut-letter prefix. The command picker uses the same labels and
+  matches them without case sensitivity.
+- `a o` rewords, `a w` creates a rebased child, `a Shift-N` creates an
   empty child, `a e` amends `@`, `a l` spills `@`, `a Shift-S` splits staged from
-  unstaged changes, and `a d` forgets a top commit when each action is available.
+  unstaged changes, and `a d` deletes a commit when each action is available.
   With a Worktree path selected, `a d` discards that path's changes instead.
   `a b` rebases an eligible hidden base,
   `a u` rebases it onto the newer hidden branch tip when available, `a r` starts
-  or finishes a review, `a s` squashes the selected commit, `a z` stashes or
+  or finishes a review, `a s` squashes the selected commit, `a Shift-T` stashes or
   restores changes at `@`, `a y` starts copy-insert from the selected commit,
   `a m` starts move-insert from selected `HEAD`, `a t` starts
   stack-insert for the linear ancestry from the selected commit through `HEAD`,
   `a f` creates and travels to a standalone child of the selected commit, and
   `a h` attaches the remembered branch at detached `HEAD` when available.
   `a Shift-M` creates or extends AutoMerge at HEAD, or adds a selected nonancestor
-  commit to HEAD. `a Shift-U` remerges it, `a x` removes
+  commit to HEAD. `a Shift-R` remerges it, `a x` removes
   the selected input from an AutoMerge, and `a Shift-X` removes an input from the
   selected AutoMerge.
 - The active branch for network actions is the attached `HEAD` branch, or the
@@ -1738,7 +1743,7 @@ views.
   the notice becomes a two-tone progress bar: the applied share is bright on the
   left and the redo share is dim on the right. A fully applied queue is entirely
   bright, while its start and an empty queue are entirely dim; attention and
-  failure notices retain the same progress in their respective hues. Forget,
+  failure notices retain the same progress in their respective hues. Delete,
   review selection and recovery, suspended
   conflicts, and paused rebases retain their notice until resolved; pane-specific
   errors remain in their pane status line.
