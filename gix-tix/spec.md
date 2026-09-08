@@ -655,6 +655,10 @@ the `?` group; quit is always last.
 All status lines embed and underline a shortcut character in its action label when
 possible; keys that cannot be expressed naturally in the label remain explicit.
 The Enter key is written as `<enter>` throughout.
+Grouped shortcut keys and actions are declared once in the command catalog and
+shared by menus, footer hints, and keyboard dispatch. A base letter with Shift
+and its uppercase key event have the same meaning in every group. Control-key
+paging retains priority, and undo/redo still ignore key-repeat events.
 
 ### Command menu
 
