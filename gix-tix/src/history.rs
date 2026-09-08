@@ -268,7 +268,8 @@ impl HistoryGraph {
         self.commits[index.as_usize()].id
     }
 
-    pub(crate) fn parents(&self, index: CommitIndex) -> &[CommitIndex] {
+    /// Cached edges for traversal; an unloaded frontier has no known edges.
+    pub(crate) fn known_parents(&self, index: CommitIndex) -> &[CommitIndex] {
         let range = self.commits[index.as_usize()].parents.clone();
         &self.parents[range.start as usize..range.end as usize]
     }
@@ -326,7 +327,7 @@ impl HistoryGraph {
             if std::mem::replace(&mut seen[index.as_usize()], true) {
                 continue;
             }
-            pending.extend_from_slice(self.parents(index));
+            pending.extend_from_slice(self.known_parents(index));
         }
         false
     }
@@ -344,9 +345,23 @@ impl HistoryGraph {
             .collect()
     }
 
+    /// `None` means unloaded or unknown; an empty list means a loaded root or shallow boundary.
     pub(crate) fn parents_of(&self, id: ObjectId) -> Option<Vec<ObjectId>> {
         let index = self.index(id)?;
-        Some(self.parents(index).iter().map(|parent| self.id(*parent)).collect())
+        (self.commits[index.as_usize()].state & NODE_LOADED != 0).then(|| {
+            self.known_parents(index)
+                .iter()
+                .map(|parent| self.id(*parent))
+                .collect()
+        })
+    }
+
+    /// Read missing ancestry without changing the cached graph or its editable scope.
+    pub(crate) fn parents_or_load(&self, repo: &gix::Repository, commit_id: ObjectId) -> Result<Vec<ObjectId>> {
+        match self.parents_of(commit_id) {
+            Some(parents) => Ok(parents),
+            None => Ok(repo.find_commit(commit_id)?.parent_ids().map(gix::Id::detach).collect()),
+        }
     }
 
     pub(crate) fn commits_with_merge_descendants(&self) -> HashSet<ObjectId> {
@@ -367,7 +382,7 @@ impl HistoryGraph {
         while let Some(index) = pending.pop() {
             if ancestors.insert(index) {
                 pending.extend(
-                    self.parents(index)
+                    self.known_parents(index)
                         .iter()
                         .copied()
                         .filter(|parent| self.commits[parent.as_usize()].state & NODE_IN_VIEW != 0),
@@ -378,18 +393,18 @@ impl HistoryGraph {
     }
 
     pub(crate) fn descendants_in_parent_order(&self, root: ObjectId) -> Option<Vec<ObjectId>> {
-        let root = self.index(root)?;
-        if self.commits[root.as_usize()].state & NODE_IN_VIEW == 0 {
+        if !self.is_in_edit_scope(root) {
             return None;
         }
+        let root = self.index(root)?;
         let mut included = HashSet::from([root]);
         loop {
             let mut changed = false;
             for index in 0..self.commits.len() {
                 let index = CommitIndex::new(index).expect("an existing graph index fits into u32");
-                if self.commits[index.as_usize()].state & NODE_IN_VIEW == 0
+                if !self.is_in_edit_scope(self.id(index))
                     || included.contains(&index)
-                    || !self.parents(index).iter().any(|parent| included.contains(parent))
+                    || !self.known_parents(index).iter().any(|parent| included.contains(parent))
                 {
                     continue;
                 }
@@ -406,7 +421,7 @@ impl HistoryGraph {
             for index in &included {
                 if out.contains(index)
                     || self
-                        .parents(*index)
+                        .known_parents(*index)
                         .iter()
                         .any(|parent| included.contains(parent) && !out.contains(parent))
                 {
@@ -431,7 +446,7 @@ impl HistoryGraph {
                 continue;
             }
             self.commits[index.as_usize()].state |= NODE_IN_VIEW;
-            pending.extend_from_slice(self.parents(index));
+            pending.extend_from_slice(self.known_parents(index));
         }
     }
 
@@ -447,7 +462,7 @@ impl HistoryGraph {
     fn set_edit_scope(&mut self, view_tips: &[ObjectId], hidden_tips: &[ObjectId]) {
         let (visible, boundary) = view_scope(view_tips, hidden_tips, |id, out| {
             if let Some(index) = self.index(id) {
-                out.extend(self.parents(index).iter().map(|parent| self.id(*parent)));
+                out.extend(self.known_parents(index).iter().map(|parent| self.id(*parent)));
             }
         });
         self.edit_scope = visible;
@@ -455,7 +470,10 @@ impl HistoryGraph {
     }
 
     fn parent_ids(&self, index: CommitIndex) -> gix::traverse::commit::ParentIds {
-        self.parents(index).iter().map(|parent| self.id(*parent)).collect()
+        self.known_parents(index)
+            .iter()
+            .map(|parent| self.id(*parent))
+            .collect()
     }
 
     fn ensure_commit(
@@ -748,7 +766,7 @@ impl HistoryGraph {
                 propagated |= STALE;
                 flags[index.as_usize()] = propagated;
             }
-            for &parent in self.parents(index) {
+            for &parent in self.known_parents(index) {
                 let parent_flags = &mut flags[parent.as_usize()];
                 let previous = *parent_flags;
                 if previous & propagated != propagated {
@@ -924,7 +942,7 @@ impl HistoryGraph {
             let stop = !should_store
                 && self.commits[index.as_usize()].state & NODE_COMPLETE != 0
                 && (delta & EXPAND == 0 || was_stored && !expand.contains(&id));
-            let parent_indices = self.parents(index).to_vec();
+            let parent_indices = self.known_parents(index).to_vec();
             if should_store {
                 if let Some(names) = local_refs.get(&id) {
                     let tracked = resolve_tracking(repo, names)?;
@@ -1180,7 +1198,7 @@ fn hidden_frontier(
             propagated |= STALE;
             flags[index.as_usize()] = propagated;
         }
-        let parents = graph.parents(index).to_vec();
+        let parents = graph.known_parents(index).to_vec();
         for parent in parents {
             let parent_id = graph.id(parent);
             let parent = graph.ensure_commit(repo, cache, shallow, parent_id, &mut buf)?;
@@ -1381,7 +1399,7 @@ pub(crate) fn load(
         if hidden.is_empty() {
             graph.commits[index.as_usize()].state |= NODE_COMPLETE;
         }
-        let parent_indices = graph.parents(index).to_vec();
+        let parent_indices = graph.known_parents(index).to_vec();
         let parent_ids = graph.parent_ids(index);
         let generation = graph.commits[index.as_usize()].generation();
         if should_emit && let Some(names) = local_refs.get(&id) {
@@ -3355,6 +3373,33 @@ mod tests {
 
         assert!(graph.is_in_edit_scope(tip), "the requested commit is in the edit scope");
         assert!(graph.index(parent).is_some(), "the requested commit's parent is known");
+        assert_eq!(graph.parents_of(tip), Some(vec![parent]), "loaded edges are available");
+        assert_eq!(
+            graph.parents_of(parent),
+            None,
+            "an unloaded frontier is not a root commit"
+        );
+        let root = repo.rev_parse_single("topic^^")?.detach();
+        assert_eq!(
+            graph.parents_or_load(&repo, parent)?,
+            [root],
+            "a frontier can be read on demand"
+        );
+        assert_eq!(
+            graph.parents_of(parent),
+            None,
+            "an ancestry read does not expand the cache"
+        );
+        assert_eq!(
+            HistoryGraph::for_commits(&repo, &[root])?.parents_of(root),
+            Some(Vec::new()),
+            "a loaded root has a known empty parent list"
+        );
+        assert_eq!(
+            graph.descendants_in_parent_order(parent),
+            None,
+            "interning an ancestor does not make it an editable rewrite root"
+        );
         assert!(
             !graph.is_in_edit_scope(parent),
             "an interned parent stays outside the explicit edit scope"
@@ -3658,7 +3703,7 @@ mod tests {
         let repo = crate::test_repository::open(fixture.path())?;
         let index = graph.index(main).expect("the tracking tip was scheduled");
         let fake_parent = graph.intern(id(255)).expect("the small test graph fits in u32");
-        let mut parents = graph.parents(index).to_vec();
+        let mut parents = graph.known_parents(index).to_vec();
         parents.push(fake_parent);
         let start = graph.parents.len() as u32;
         graph.parents.extend(parents);

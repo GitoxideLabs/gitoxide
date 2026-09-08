@@ -998,13 +998,13 @@ impl Overview {
                 if !included.insert(index) {
                     break;
                 }
-                current = graph.parents(index).first().copied();
+                current = graph.known_parents(index).first().copied();
             }
         }
         let mut children = vec![Vec::new(); graph.commit_count()];
         for child in included.iter().copied() {
             if let Some(parent) = graph
-                .parents(child)
+                .known_parents(child)
                 .first()
                 .copied()
                 .filter(|parent| included.contains(parent))
@@ -1019,7 +1019,7 @@ impl Overview {
                 anchors.contains(index)
                     || children[index.as_usize()].len() != 1
                     || graph
-                        .parents(*index)
+                        .known_parents(*index)
                         .first()
                         .is_none_or(|parent| !included.contains(parent))
             })
@@ -1058,7 +1058,7 @@ impl Overview {
         let mut roots = Vec::new();
         for child in 0..nodes.len() {
             let mut hidden = Vec::new();
-            let mut parent = graph.parents(nodes[child].commit).first().copied();
+            let mut parent = graph.known_parents(nodes[child].commit).first().copied();
             while let Some(index) = parent.filter(|index| included.contains(index)) {
                 if let Some(parent_node) = by_commit.get(&index).copied() {
                     nodes[child].parent = Some(parent_node);
@@ -1071,7 +1071,7 @@ impl Overview {
                     break;
                 }
                 hidden.push(index);
-                parent = graph.parents(index).first().copied();
+                parent = graph.known_parents(index).first().copied();
             }
             if nodes[child].parent.is_none() {
                 roots.push(child);
@@ -1128,13 +1128,13 @@ impl Overlay {
                 continue;
             }
             total += 1;
-            pending.extend_from_slice(graph.parents(index));
+            pending.extend_from_slice(graph.known_parents(index));
         }
         let mut first_parent = vec![false; graph.commit_count()];
         let mut current = Some(selected_commit);
         while let Some(index) = current {
             first_parent[index.as_usize()] = true;
-            current = graph.parents(index).first().copied();
+            current = graph.known_parents(index).first().copied();
         }
         let mut counts = vec![None; overview.nodes.len()];
         counts[selected] = Some(total);
@@ -1187,7 +1187,7 @@ impl Overlay {
                     continue;
                 }
                 count += 1;
-                pending.extend_from_slice(graph.parents(index));
+                pending.extend_from_slice(graph.known_parents(index));
             }
             self.counts[node] = Some(count);
         }
