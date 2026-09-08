@@ -61,7 +61,7 @@ struct State {
     checkout_allowed: bool,
     head_ref: Option<gix::refs::FullName>,
     edit_refs: bool,
-    expected_refs: Vec<rebase::ExpectedRef>,
+    expected_refs: Vec<rebase::PlanRef>,
     resolved: Option<ObjectId>,
     continuation_sources: Vec<ObjectId>,
 }
@@ -433,8 +433,8 @@ fn write_state(out: &mut Vec<u8>, state: &State) {
             format!(
                 "ref {} {} {} {} {}\n",
                 old,
-                reference.target,
-                reference.follows_tip,
+                reference.source,
+                matches!(reference.destination, rebase::RefDestination::Follow { tip: true }),
                 reference.editable,
                 name.to_str_lossy()
             )
@@ -451,25 +451,25 @@ fn write_state(out: &mut Vec<u8>, state: &State) {
     out.push(b'\n');
 }
 
-fn write_refs_at(out: &mut Vec<u8>, refs: &[rebase::ExpectedRef], target: ObjectId) -> Result<()> {
+fn write_refs_at(out: &mut Vec<u8>, refs: &[rebase::PlanRef], target: ObjectId) -> Result<()> {
     let names = refs
         .iter()
-        .filter(|reference| reference.editable && reference.target == target)
+        .filter(|reference| reference.editable && reference.source == target)
         .map(|reference| &reference.name)
         .collect::<Vec<_>>();
     write_ref_line(out, refs, names)
 }
 
-fn write_plan_refs_at(out: &mut Vec<u8>, refs: &[rebase::ExpectedRef], target: rebase::PlanParent) -> Result<()> {
+fn write_plan_refs_at(out: &mut Vec<u8>, refs: &[rebase::PlanRef], target: rebase::PlanParent) -> Result<()> {
     let names = refs
         .iter()
-        .filter(|reference| reference.placement == Some(target))
+        .filter(|reference| reference.destination.placement() == Some(target))
         .map(|reference| &reference.name)
         .collect::<Vec<_>>();
     write_ref_line(out, refs, names)
 }
 
-fn write_ref_line(out: &mut Vec<u8>, refs: &[rebase::ExpectedRef], mut names: Vec<&gix::refs::FullName>) -> Result<()> {
+fn write_ref_line(out: &mut Vec<u8>, refs: &[rebase::PlanRef], mut names: Vec<&gix::refs::FullName>) -> Result<()> {
     if names.is_empty() {
         return Ok(());
     }
@@ -486,7 +486,7 @@ fn write_ref_line(out: &mut Vec<u8>, refs: &[rebase::ExpectedRef], mut names: Ve
     Ok(())
 }
 
-fn ref_display_name(name: &gix::refs::FullName, refs: &[rebase::ExpectedRef]) -> BString {
+fn ref_display_name(name: &gix::refs::FullName, refs: &[rebase::PlanRef]) -> BString {
     let short = name.shorten();
     if refs
         .iter()
@@ -747,14 +747,12 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
                     anyhow::bail!("a captured ref name has trailing data");
                 }
                 let name = gix::refs::FullName::try_from(name.as_ref()).context("a captured ref name is invalid")?;
-                expected_refs.push(rebase::ExpectedRef {
+                expected_refs.push(rebase::PlanRef {
                     name,
                     old,
-                    target,
-                    new: old,
-                    follows_tip,
+                    source: target,
+                    destination: rebase::RefDestination::Follow { tip: follows_tip },
                     editable,
-                    placement: None,
                 });
             }
             "resolved" => {
@@ -801,7 +799,7 @@ fn validate_state(repo: &gix::Repository, state: &State) -> Result<()> {
         if !refs.insert(reference.name.as_bstr()) {
             anyhow::bail!("the rebase state contains duplicate refs");
         }
-        if !scope.contains(&reference.target) && reference.target != state.base && reference.target != state.onto {
+        if !scope.contains(&reference.source) && reference.source != state.base && reference.source != state.onto {
             anyhow::bail!("a captured ref does not logically point into the rebase scope");
         }
     }
@@ -1049,8 +1047,9 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
     if state.edit_refs {
         for reference in &mut state.expected_refs {
             if reference.editable {
-                reference.new = None;
-                reference.placement = ref_targets.remove(&reference.name);
+                reference.destination = ref_targets
+                    .remove(&reference.name)
+                    .map_or(rebase::RefDestination::Delete, Into::into);
             }
         }
     }
@@ -1136,7 +1135,7 @@ fn parse_ref_line(line: &str) -> Result<Vec<(bool, BString)>> {
 
 fn resolve_ref_name(
     repo: &gix::Repository,
-    refs: &mut Vec<rebase::ExpectedRef>,
+    refs: &mut Vec<rebase::PlanRef>,
     input: &gix::bstr::BStr,
 ) -> Result<gix::refs::FullName> {
     let mut matches = refs
@@ -1180,14 +1179,12 @@ fn resolve_ref_name(
                 .context("an existing symbolic reference outside the editable history cannot be moved")
         })
         .transpose()?;
-    refs.push(rebase::ExpectedRef {
+    refs.push(rebase::PlanRef {
         name: name.clone(),
         old,
-        target: old.unwrap_or(repo.head_id()?.detach()),
-        new: old,
-        follows_tip: false,
+        source: old.unwrap_or(repo.head_id()?.detach()),
+        destination: rebase::RefDestination::Delete,
         editable: true,
-        placement: None,
     });
     Ok(name)
 }
@@ -1458,14 +1455,12 @@ mod tests {
             checkout_allowed: true,
             head_ref: Some(name.clone()),
             edit_refs: true,
-            expected_refs: vec![rebase::ExpectedRef {
+            expected_refs: vec![rebase::PlanRef {
                 name: name.clone(),
                 old: Some(middle),
-                target: middle,
-                new: Some(middle),
-                follows_tip: true,
+                source: middle,
+                destination: rebase::RefDestination::Follow { tip: true },
                 editable: true,
-                placement: None,
             }],
             resolved: None,
             continuation_sources: Vec::new(),
@@ -1707,7 +1702,7 @@ mod tests {
         let plan = parse_plan(&repo, &prepared.document)?;
         assert!(
             plan.expected_refs.iter().any(|reference| {
-                reference.name == started.reference && !reference.editable && reference.target == reviewed
+                reference.name == started.reference && !reference.editable && reference.source == reviewed
             }),
             "the active review remains part of the rebase transaction"
         );
@@ -1802,7 +1797,7 @@ mod tests {
             plan.expected_refs
                 .iter()
                 .find(|reference| reference.name == "refs/heads/empty")
-                .and_then(|reference| reference.placement),
+                .and_then(|reference| reference.destination.placement()),
             Some(rebase::PlanParent::Existing(onto)),
             "the current branch is placed at the updated base"
         );
@@ -1915,14 +1910,12 @@ mod tests {
                     target: rebase::PlanParent::Step(0),
                     reference: Some(branch.clone()),
                 }),
-                expected_refs: vec![rebase::ExpectedRef {
+                expected_refs: vec![rebase::PlanRef {
                     name: branch.clone(),
                     old: None,
-                    target: middle,
-                    new: Some(middle),
-                    follows_tip: false,
+                    source: middle,
+                    destination: rebase::RefDestination::Step(0),
                     editable: true,
-                    placement: Some(rebase::PlanParent::Step(0)),
                 }],
             },
             vec![middle],
@@ -1956,7 +1949,7 @@ mod tests {
         assert!(
             plan.expected_refs.iter().any(|reference| reference.name == branch
                 && reference.old.is_none()
-                && reference.placement == Some(rebase::PlanParent::Step(0))),
+                && reference.destination == rebase::RefDestination::Step(0)),
             "a pending branch creation retains its nonexistence check and placement"
         );
         Ok(())
