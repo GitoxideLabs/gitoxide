@@ -73,6 +73,27 @@ without trading responsiveness for metadata that is not visible.
   the logical Tix HEAD, while reusing it unchanged if it already exists.
   Creation returns the canonical path recorded by Git so later selection of the
   same worktree is stable.
+- `tix worktrunk switch --detach [COMMIT] [--path PATH]` creates a new linked
+  worktree with a detached `HEAD`. `-d` is the short form of `--detach`, and it
+  cannot be combined with `--new-branch`. `COMMIT` accepts a full or abbreviated
+  commit hash or another Git revision resolving to a commit. Omitting it uses
+  the source's actual `HEAD`, even when a symbolic Tix HEAD pin remembers a
+  branch at a different commit. The new worktree starts with that commit's
+  checked-out tree and index. Without `--path`, the destination is beside the
+  main worktree as `<repository>.<seven-digit-commit-hash>`; occupied paths gain
+  `-2`, `-3`, and so on, so repeated invocations create separate worktrees.
+  Successful creation hands off or prints the canonical destination just like
+  branch-based creation. Invalid or non-commit targets and an unborn default
+  `HEAD` fail before creating a worktree.
+  If the source worktree already has any valid Tix pins, creation adds an
+  ordinary symbolic pin there targeting `worktrees/<new-worktree-id>/HEAD`.
+  The pin follows later commits and checkouts in the new worktree, including
+  changes made outside Tix, and brings that tip into the source's history.
+  The new worktree receives no pins. Sources without pins and bare repositories
+  gain none. The relationship consists solely of this pin;
+  there is no separate parent/offspring metadata. A failure to create the
+  worktree adds no pin; a later pinning failure reports the already-created
+  worktree's path.
 - `tix worktrunk remove [TARGET] [-f...] [-D|--force-delete]` removes a linked
   worktree with Git's force levels: no `-f` protects changes and submodules, one
   `-f` discards them, and two or more also override a lock. An omitted target
