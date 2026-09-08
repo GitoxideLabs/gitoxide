@@ -407,13 +407,13 @@ fn materialize_conflict(
         .context("could not read the conflicting commit tree")?
         .detach();
     let workdir = repo.workdir().context("materializing a conflict requires a worktree")?;
-    super::forget::apply_tree_transition(workdir, ours_tree, merged_tree)
+    super::delete::apply_tree_transition(workdir, ours_tree, merged_tree)
         .context("could not check out the conflicting merge result")?;
     if let Err(err) = index
         .write(gix::index::write::Options::default())
         .context("could not write the conflicting index")
     {
-        return match super::forget::apply_tree_transition(workdir, merged_tree, ours_tree) {
+        return match super::delete::apply_tree_transition(workdir, merged_tree, ours_tree) {
             Ok(()) => Err(err),
             Err(rollback) => Err(err.context(format!("conflict checkout rollback failed: {rollback:#}"))),
         };
@@ -2314,7 +2314,7 @@ impl Prepared {
             }
             let old_tree = self.repo.head_commit()?.tree_id()?.detach();
             let new_tree = self.repo.find_commit(selected)?.tree_id()?.detach();
-            super::forget::preflight_tree_transition(&self.repo, workdir, old_tree, new_tree)?;
+            super::delete::preflight_tree_transition(&self.repo, workdir, old_tree, new_tree)?;
             Some(IndexBackup::capture(self.repo.index_path().to_owned())?)
         } else {
             None
@@ -2330,7 +2330,7 @@ impl Prepared {
             .then(|| index_resets(&self.repo, &self.rewritten, &self.reset_indices))
             .transpose()?;
         for transition in &transitions {
-            super::forget::preflight_tree_transition(
+            super::delete::preflight_tree_transition(
                 &transition.repo,
                 &transition.workdir,
                 transition.old,
@@ -2369,7 +2369,7 @@ impl Prepared {
             resource_edits,
         )?;
         for (transitioned, transition) in transitions.iter().enumerate() {
-            if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.old, transition.new)
+            if let Err(err) = super::delete::apply_tree_transition(&transition.workdir, transition.old, transition.new)
             {
                 return rollback(
                     &self.repo,
@@ -2602,7 +2602,7 @@ fn rollback<T>(
 ) -> Result<T> {
     let mut failures = Vec::new();
     for transition in transitions.iter().rev() {
-        if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.new, transition.old) {
+        if let Err(err) = super::delete::apply_tree_transition(&transition.workdir, transition.new, transition.old) {
             failures.push(format!("worktree rollback failed: {err:#}"));
         }
     }

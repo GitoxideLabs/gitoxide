@@ -84,8 +84,8 @@ fn load_graph(
 
 pub(crate) mod auto_merge;
 pub(crate) mod create;
+pub(crate) mod delete;
 pub(crate) mod discard;
-pub(crate) mod forget;
 pub(crate) mod head;
 pub(crate) mod rebase;
 pub(crate) mod review;
