@@ -99,14 +99,56 @@ pub(crate) struct PlanStep {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ExpectedRef {
+pub(crate) struct PlanRef {
     pub name: gix::refs::FullName,
     pub old: Option<ObjectId>,
-    pub target: ObjectId,
-    pub new: Option<ObjectId>,
-    pub follows_tip: bool,
+    /// The logical origin in the todo, which can differ from the observed ref after a conflict.
+    pub source: ObjectId,
+    pub destination: RefDestination,
     pub editable: bool,
-    pub placement: Option<PlanParent>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RefDestination {
+    Delete,
+    Existing(ObjectId),
+    Step(usize),
+    /// Follow the source's rewrite, optionally through inserted children. Resolved before replay.
+    Follow {
+        tip: bool,
+    },
+}
+
+impl From<PlanParent> for RefDestination {
+    fn from(parent: PlanParent) -> Self {
+        match parent {
+            PlanParent::Existing(commit_id) => Self::Existing(commit_id),
+            PlanParent::Step(index) => Self::Step(index),
+        }
+    }
+}
+
+impl RefDestination {
+    pub(crate) fn placement(self) -> Option<PlanParent> {
+        match self {
+            Self::Existing(commit_id) => Some(PlanParent::Existing(commit_id)),
+            Self::Step(index) => Some(PlanParent::Step(index)),
+            Self::Delete | Self::Follow { .. } => None,
+        }
+    }
+
+    pub(crate) fn resolve(self, produced: &[ObjectId]) -> Result<Option<ObjectId>> {
+        match self {
+            Self::Delete => Ok(None),
+            Self::Existing(commit_id) => Ok(Some(commit_id)),
+            Self::Step(index) => Ok(Some(
+                *produced
+                    .get(index)
+                    .context("a reference points to an unproduced step")?,
+            )),
+            Self::Follow { .. } => anyhow::bail!("reference following must be resolved before replay"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -121,7 +163,7 @@ pub(crate) struct Plan {
     pub scope: Vec<ObjectId>,
     pub steps: Vec<PlanStep>,
     pub checkout: Option<PlanCheckout>,
-    pub expected_refs: Vec<ExpectedRef>,
+    pub expected_refs: Vec<PlanRef>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -200,20 +242,22 @@ impl PlanConflict {
             .expected_refs
             .iter()
             .filter(|expected| !self.final_refs.contains(&expected.name))
-            .map(|expected| ExpectedRef {
+            .map(|expected| PlanRef {
                 name: expected.name.clone(),
                 old: expected.old,
-                target: expected.new.expect("continued refs have a target"),
-                new: expected.new,
-                follows_tip: expected.follows_tip,
+                source: expected
+                    .destination
+                    .resolve(&self.produced)
+                    .expect("the plan was produced")
+                    .expect("continued refs have a target"),
                 editable: expected.editable,
-                placement: expected.placement.map(|target| match target {
-                    PlanParent::Existing(id) => PlanParent::Existing(id),
-                    PlanParent::Step(index) if index < self.continuation_start => {
-                        PlanParent::Existing(self.produced[index])
+                destination: match expected.destination {
+                    RefDestination::Step(index) if index < self.continuation_start => {
+                        RefDestination::Existing(self.produced[index])
                     }
-                    PlanParent::Step(index) => PlanParent::Step(index - self.continuation_start),
-                }),
+                    RefDestination::Step(index) => RefDestination::Step(index - self.continuation_start),
+                    destination => destination,
+                },
             })
             .collect();
         let mut scope = self.produced[self.continuation_start..].to_vec();
@@ -397,7 +441,7 @@ struct Prepared {
     stash_rewritten: HashMap<ObjectId, Option<ObjectId>>,
     removed: HashSet<ObjectId>,
     committer: gix::actor::Signature,
-    expected_refs: Option<Vec<ExpectedRef>>,
+    expected_refs: Option<Vec<PlanRef>>,
     checkout_reference: Option<gix::refs::FullName>,
     checkout_after_finish: bool,
     pins: Vec<ObjectId>,
@@ -406,7 +450,7 @@ struct Prepared {
     input_refs: HashMap<gix::refs::FullName, super::undo::State>,
 }
 
-pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[ObjectId]) -> Result<Vec<ExpectedRef>> {
+pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[ObjectId]) -> Result<Vec<PlanRef>> {
     let scope: HashSet<_> = scope.iter().copied().collect();
     let tips: HashSet<_> = tips.iter().copied().collect();
     let mut out = Vec::new();
@@ -428,15 +472,15 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[O
             continue;
         };
         if scope.contains(&old) && seen.insert(reference.name().to_owned()) {
-            out.push(ExpectedRef {
+            out.push(PlanRef {
                 name: reference.name().to_owned(),
                 old: Some(old),
-                target: old,
-                new: Some(old),
-                follows_tip: tips.contains(&old),
+                source: old,
+                destination: RefDestination::Follow {
+                    tip: tips.contains(&old),
+                },
                 editable: !reference.name().as_bstr().starts_with(crate::history::PIN_PREFIX)
                     && !reference.name().as_bstr().starts_with(crate::history::REVIEW_PREFIX),
-                placement: None,
             });
         }
     }
@@ -513,8 +557,8 @@ pub(crate) fn squash_plan(
     let mut expected_refs = capture_refs(repo, &scope, &tips)?;
     let source_tip_target = PlanParent::Step(step_by_id[&source_parent]);
     for expected in &mut expected_refs {
-        if expected.target == source && expected.follows_tip {
-            expected.placement = Some(source_tip_target);
+        if expected.source == source && expected.destination == (RefDestination::Follow { tip: true }) {
+            expected.destination = source_tip_target.into();
         }
     }
     let head = repo.head()?;
@@ -533,7 +577,7 @@ pub(crate) fn squash_plan(
                     expected_refs
                         .iter()
                         .find(|expected| expected.name == *name)
-                        .and_then(|expected| expected.placement)
+                        .and_then(|expected| expected.destination.placement())
                 })
                 .unwrap_or(PlanParent::Step(step_by_id[&id]));
             PlanCheckout { target, reference }
@@ -635,13 +679,13 @@ pub(crate) fn copy_insert_plan(
         None
     };
     if target_is_read_only || target_is_head {
-        for expected in expected_refs.iter_mut().filter(|expected| expected.target == target) {
-            expected.follows_tip = false;
+        for expected in expected_refs.iter_mut().filter(|expected| expected.source == target) {
+            expected.destination = RefDestination::Follow { tip: false };
             if checkout_reference
                 .as_ref()
                 .is_some_and(|reference| reference == &expected.name)
             {
-                expected.placement = Some(PlanParent::Step(0));
+                expected.destination = RefDestination::Step(0);
             }
         }
     }
@@ -814,10 +858,10 @@ pub(crate) fn stack_insert_plan(
         .collect();
     let mut expected_refs = capture_refs(repo, &ref_scope, &tips)?;
     for expected in &mut expected_refs {
-        if target_is_read_only && expected.target == target {
-            expected.follows_tip = false;
-        } else if stack_set.contains(&expected.target) {
-            expected.placement = Some(PlanParent::Step(step_by_id[&expected.target]));
+        if target_is_read_only && expected.source == target {
+            expected.destination = RefDestination::Follow { tip: false };
+        } else if stack_set.contains(&expected.source) {
+            expected.destination = RefDestination::Step(step_by_id[&expected.source]);
         }
     }
     let head = repo.head()?;
@@ -1889,7 +1933,7 @@ pub(crate) fn perform_plan_with_progress(
         plan.checkout
             .as_ref()
             .map(|checkout| checkout.target)
-            .or(infer_plan_checkout(&repo, graph, &plan)?)
+            .or(infer_plan_checkout(&repo, &plan)?)
     } else {
         None
     };
@@ -1968,39 +2012,44 @@ pub(crate) fn perform_plan_with_progress(
             let original = repo.find_commit(old_id)?.decode()?.into_owned()?;
             let mut commit = original.clone();
             let materialize = conflict.is_none() && (eager.contains(&index) || optional.contains(&index));
-            let refs = auto_merge::plan_refs(&plan.expected_refs, &produced);
-            let new_id =
-                match auto_merge::rebuild(&repo, &mut commit, &mut auto_refs, &rewritten, Some(&refs), materialize)? {
-                    auto_merge::Rebuilt::Empty => old_id,
-                    auto_merge::Rebuilt::Collapse(commit_id) => commit_id,
-                    auto_merge::Rebuilt::Commit => {
-                        for parent in &commit.parents {
-                            anyhow::ensure!(
-                                !auto_merge::contains(&repo, old_id, *parent)?,
-                                "an AutoMerge cannot track itself or its descendants"
-                            );
-                        }
-                        if commit == original && !is_pending(&commit) {
-                            old_id
-                        } else {
-                            let state = if materialize {
-                                CommitState::Unmarked(Signature::RedoIfNeeded)
-                            } else {
-                                marked = true;
-                                CommitState::Pending {
-                                    original_parent: original.parents.first().copied(),
-                                }
-                            };
-                            let (commit_id, signing_time) =
-                                write_commit_timed(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
-                            if let Some(elapsed) = signing_time {
-                                progress.signed += 1;
-                                progress.signing_time += elapsed;
-                            }
-                            commit_id
-                        }
+            let new_id = match auto_merge::rebuild(
+                &repo,
+                &mut commit,
+                &mut auto_refs,
+                &rewritten,
+                Some((&plan.expected_refs, &produced)),
+                materialize,
+            )? {
+                auto_merge::Rebuilt::Empty => old_id,
+                auto_merge::Rebuilt::Collapse(commit_id) => commit_id,
+                auto_merge::Rebuilt::Commit => {
+                    for parent in &commit.parents {
+                        anyhow::ensure!(
+                            !auto_merge::contains(&repo, old_id, *parent)?,
+                            "an AutoMerge cannot track itself or its descendants"
+                        );
                     }
-                };
+                    if commit == original && !is_pending(&commit) {
+                        old_id
+                    } else {
+                        let state = if materialize {
+                            CommitState::Unmarked(Signature::RedoIfNeeded)
+                        } else {
+                            marked = true;
+                            CommitState::Pending {
+                                original_parent: original.parents.first().copied(),
+                            }
+                        };
+                        let (commit_id, signing_time) =
+                            write_commit_timed(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
+                        if let Some(elapsed) = signing_time {
+                            progress.signed += 1;
+                            progress.signing_time += elapsed;
+                        }
+                        commit_id
+                    }
+                }
+            };
             rewritten.insert(old_id, Some(new_id));
             if old_id != new_id {
                 note_rewrites.push((old_id, new_id));
@@ -2279,37 +2328,18 @@ pub(crate) fn perform_plan_with_progress(
         rewritten.insert(dropped, ancestor.or(Some(plan.base)));
     }
 
-    let mut primary_children = HashMap::new();
-    for (index, step) in plan.steps.iter().enumerate() {
-        if automatic.contains(&index) {
-            continue;
-        }
-        let parent = match step.parent {
-            PlanParent::Existing(id) => id,
-            PlanParent::Step(parent) => produced[parent],
-        };
-        primary_children.entry(parent).or_insert(produced[index]);
-    }
-    for expected in &mut plan.expected_refs {
-        if let Some(target) = expected.placement {
-            expected.new = Some(match target {
-                PlanParent::Existing(id) => id,
-                PlanParent::Step(index) => *produced.get(index).context("a reference points to a missing step")?,
-            });
-        } else if expected.new.is_some() {
-            let mut target = rewritten
-                .get(&expected.target)
-                .copied()
-                .flatten()
-                .unwrap_or(expected.target);
-            if expected.follows_tip {
-                while let Some(child) = primary_children.get(&target) {
-                    target = *child;
-                }
-            }
-            expected.new = Some(target);
-        }
-    }
+    let expected_refs: Vec<_> = plan
+        .expected_refs
+        .iter()
+        .map(|expected| {
+            let mut expected = expected.clone();
+            expected.destination = expected
+                .destination
+                .resolve(&produced)?
+                .map_or(RefDestination::Delete, RefDestination::Existing);
+            Ok(expected)
+        })
+        .collect::<Result<_>>()?;
 
     let planned_non_leaves: HashSet<_> = dependencies.iter().flatten().copied().collect();
     let mut pins = Vec::new();
@@ -2322,7 +2352,9 @@ pub(crate) fn perform_plan_with_progress(
         {
             continue;
         }
-        let referenced = plan.expected_refs.iter().any(|expected| expected.new == Some(id));
+        let referenced = expected_refs
+            .iter()
+            .any(|expected| expected.destination == RefDestination::Existing(id));
         if !referenced {
             pins.push(id);
         }
@@ -2342,7 +2374,7 @@ pub(crate) fn perform_plan_with_progress(
         stash_rewritten: rewritten.clone(),
         removed,
         committer,
-        expected_refs: Some(plan.expected_refs.clone()),
+        expected_refs: Some(expected_refs.clone()),
         checkout_reference: plan.checkout.as_ref().and_then(|checkout| checkout.reference.clone()),
         checkout_after_finish: false,
         pins,
@@ -2371,10 +2403,9 @@ pub(crate) fn perform_plan_with_progress(
         .map_or(conflict_step, |_| 0);
     let affected_steps: HashSet<_> = (continuation_start..plan.steps.len()).collect();
     let affected_ids: HashSet<_> = affected_steps.iter().map(|index| produced[*index]).collect();
-    let final_refs: Vec<_> = plan
-        .expected_refs
+    let final_refs: Vec<_> = expected_refs
         .iter()
-        .filter(|expected| expected.new.is_none_or(|new| !affected_ids.contains(&new)))
+        .filter(|expected| !matches!(expected.destination, RefDestination::Existing(commit_id) if affected_ids.contains(&commit_id)))
         .cloned()
         .collect();
     let final_ref_names = final_refs.iter().map(|expected| expected.name.clone()).collect();
@@ -2389,8 +2420,8 @@ pub(crate) fn perform_plan_with_progress(
     prepared.reset_indices.clear();
     prepared.rewritten = final_refs
         .iter()
-        .filter_map(|expected| expected.old.map(|old| (old, expected.new)))
-        .collect();
+        .filter_map(|expected| expected.old.map(|old| Ok((old, expected.destination.resolve(&[])?))))
+        .collect::<Result<_>>()?;
     prepared.expected_refs = Some(final_refs);
     prepared.pins.retain(|id| !affected_ids.contains(id));
     Ok(PlanPerform::Conflict(PlanConflict {
@@ -2411,54 +2442,14 @@ pub(crate) fn perform_plan_with_progress(
     }))
 }
 
-fn infer_plan_checkout(repo: &gix::Repository, graph: &HistoryGraph, plan: &Plan) -> Result<Option<PlanParent>> {
+fn infer_plan_checkout(repo: &gix::Repository, plan: &Plan) -> Result<Option<PlanParent>> {
     let head = repo.head()?;
-    let Some(name) = head.referent_name() else {
-        return Ok(None);
-    };
-    let Some(expected) = plan
-        .expected_refs
-        .iter()
-        .find(|expected| expected.name.as_bstr() == name.as_bstr())
-    else {
-        return Ok(None);
-    };
-    if let Some(target) = expected.placement {
-        return Ok(Some(target));
-    }
-    let scope: HashSet<_> = plan.scope.iter().copied().collect();
-    let mut source = expected.target;
-    let mut target = loop {
-        if let Some(index) = plan.steps.iter().position(|step| {
-            matches!(
-                step.commit,
-                PlanCommit::Pick(candidate) | PlanCommit::Resolved(candidate) if candidate == source
-            ) || step.squash.contains(&source)
-        }) {
-            break Some(PlanParent::Step(index));
-        }
-        if !scope.contains(&source) {
-            break Some(PlanParent::Existing(source));
-        }
-        let Some(parent) = graph
-            .parents_of(source)
-            .context("a dropped checkout commit is incomplete")?
-            .first()
-            .copied()
-        else {
-            break Some(PlanParent::Existing(plan.base));
-        };
-        source = parent;
-    };
-    if expected.follows_tip {
-        while let Some(parent) = target {
-            let Some(index) = plan.steps.iter().position(|step| step.parent == parent) else {
-                break;
-            };
-            target = Some(PlanParent::Step(index));
-        }
-    }
-    Ok(target.filter(|target| matches!(target, PlanParent::Step(_))))
+    Ok(head.referent_name().and_then(|name| {
+        plan.expected_refs
+            .iter()
+            .find(|expected| expected.name.as_bstr() == name.as_bstr())
+            .and_then(|expected| expected.destination.placement())
+    }))
 }
 
 fn prepare_enrichment(
@@ -2544,15 +2535,16 @@ impl Prepared {
         let current_ref = head.referent_name().map(ToOwned::to_owned);
         let mut deferred_ref_deletions = Vec::new();
         if let (Some(expected_refs), Some(current_ref)) = (&mut self.expected_refs, current_ref) {
-            if expected_refs
-                .iter()
-                .any(|expected| expected.name == current_ref && expected.old.is_some() && expected.new.is_none())
-                && (self.repo.workdir().is_none() || (self.selected.is_none() && !self.checkout_after_finish))
+            if expected_refs.iter().any(|expected| {
+                expected.name == current_ref && expected.old.is_some() && expected.destination == RefDestination::Delete
+            }) && (self.repo.workdir().is_none() || (self.selected.is_none() && !self.checkout_after_finish))
             {
                 anyhow::bail!("cannot delete the checked-out branch without selecting another checkout");
             }
             expected_refs.retain(|expected| {
-                let defer = expected.name == current_ref && expected.old.is_some() && expected.new.is_none();
+                let defer = expected.name == current_ref
+                    && expected.old.is_some()
+                    && expected.destination == RefDestination::Delete;
                 if defer {
                     deferred_ref_deletions.push((expected.name.clone(), expected.old.expect("checked above")));
                 }
@@ -3216,7 +3208,7 @@ struct Transition {
 fn worktree_transitions(
     repo: &gix::Repository,
     rewritten: &HashMap<ObjectId, Option<ObjectId>>,
-    expected_refs: Option<&[ExpectedRef]>,
+    expected_refs: Option<&[PlanRef]>,
     inserted: bool,
 ) -> Result<Vec<Transition>> {
     if inserted {
@@ -3247,7 +3239,7 @@ fn worktree_transitions(
             expected_refs.and_then(|refs| refs.iter().find(|expected| expected.name.as_bstr() == name.as_bstr()))
         });
         let new = match planned {
-            Some(expected) if expected.new.is_none() => {
+            Some(expected) if expected.destination == RefDestination::Delete => {
                 if worktree_repo.git_dir() == repo.git_dir() {
                     continue;
                 }
@@ -3256,7 +3248,7 @@ fn worktree_transitions(
                     expected.name.shorten()
                 );
             }
-            Some(expected) => Some(expected.new),
+            Some(expected) => Some(expected.destination.resolve(&[])?),
             None => rewritten.get(&old).copied(),
         };
         let Some(new) = new else { continue };
@@ -3294,7 +3286,7 @@ fn update_refs(
     unborn: bool,
     inserted: Option<ObjectId>,
     committer: &gix::actor::Signature,
-    expected_refs: Option<Vec<ExpectedRef>>,
+    expected_refs: Option<Vec<PlanRef>>,
     resources: (&[ObjectId], &[(gix::refs::FullName, Target)]),
     stash_edits: super::stash::RewriteEdits,
     input_refs: &HashMap<gix::refs::FullName, super::undo::State>,
@@ -3304,7 +3296,11 @@ fn update_refs(
     let mut rollback = stash_edits.rollback;
     let mut ref_rewrites = Vec::new();
     if let Some(expected_refs) = expected_refs {
-        for ExpectedRef { name, old, new, .. } in expected_refs {
+        for PlanRef {
+            name, old, destination, ..
+        } in expected_refs
+        {
+            let new = destination.resolve(&[])?;
             if delete_refs.iter().any(|(delete, _)| delete == &name) {
                 continue;
             }
@@ -5614,11 +5610,10 @@ mod tests {
     fn a_plan_without_checkout_does_not_infer_detached_head() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
-        let graph = super::super::loaded_graph(&repo)?;
         let base = repo.rev_parse_single("HEAD~2")?.detach();
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
         let tip = repo.head_id()?.detach();
-        let plan = Plan {
+        let mut plan = Plan {
             base,
             scope: vec![middle, tip],
             steps: vec![
@@ -5636,15 +5631,16 @@ mod tests {
             checkout: None,
             expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
         };
+        auto_merge::order_plan(&repo, &mut plan, &mut auto_merge::References::default())?;
         assert_eq!(
-            infer_plan_checkout(&repo, &graph, &plan)?,
+            infer_plan_checkout(&repo, &plan)?,
             Some(PlanParent::Step(1)),
             "an attached branch preserves its implicit checkout"
         );
 
         git(fixture.path(), &["checkout", "-q", "--detach", &tip.to_string()])?;
         assert_eq!(
-            infer_plan_checkout(&repo, &graph, &plan)?,
+            infer_plan_checkout(&repo, &plan)?,
             None,
             "a detached HEAD never supplies an implicit checkout"
         );
@@ -5807,7 +5803,7 @@ mod tests {
             .iter_mut()
             .find(|reference| reference.name == "refs/heads/linked")
             .expect("the linked branch is captured");
-        linked_ref.new = None;
+        linked_ref.destination = RefDestination::Delete;
         let err = match perform_plan(
             &repo,
             &graph,
@@ -5832,8 +5828,7 @@ mod tests {
             .iter_mut()
             .find(|reference| reference.name == "refs/heads/linked")
             .expect("the linked branch is captured");
-        linked_ref.new = None;
-        linked_ref.placement = Some(PlanParent::Step(0));
+        linked_ref.destination = RefDestination::Step(0);
         let outcome = perform_plan(
             &repo,
             &graph,

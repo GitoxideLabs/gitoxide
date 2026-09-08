@@ -1431,6 +1431,10 @@ views.
   rows coalesced to at most 60 fps. Command-line time travel does not animate.
 - Displayed mutable refs follow their explicit locations in the edited todo;
   omission deletes them and newly named refs require nonexistence. Refs checked
+  by the transaction retain their observed state separately from their planned
+  destination: deletion, an existing commit, or a step result. Automatic
+  following is resolved once before replay; an unproduced step is an error,
+  never a deleted AutoMerge input. Refs checked
   out by linked worktrees are displayed normally and may move, with their index
   and worktree updated through the same preflighted transition as other rebases,
   but may not be deleted. The current worktree's branch may be deleted only when
