@@ -3569,7 +3569,8 @@ fn event_loop(
                     .context("could not reopen repository to continue the rebase")?;
                 repository.object_cache_size(None);
                 stage_resolved_conflict_paths(&repository)?;
-                let graph = HistoryGraph::for_commits(&repository, &plan.scope)?;
+                let mut graph = HistoryGraph::for_commits(&repository, &plan.scope)?;
+                graph.bounded_history = history_graph.as_ref().and_then(|graph| graph.bounded_history.clone());
                 run_rebase_plan(terminal, repository.into_sync(), &graph, plan.clone(), &revisions)
             })();
             match result {
@@ -3654,14 +3655,7 @@ fn event_loop(
             urgent = true;
             let result = open_repository(&repository_path, repository_is_bare, false).and_then(|repository| {
                 if adding {
-                    Ok(edit::auto_merge::choices(&repository)?
-                        .into_iter()
-                        .map(|choice| edit::auto_merge::Selection {
-                            merge_commit_id: selected_commit_id,
-                            change: edit::auto_merge::Change::Add(choice.reference),
-                            label: choice.label,
-                        })
-                        .collect())
+                    edit::auto_merge::additions(&repository, selected_commit_id)
                 } else {
                     edit::auto_merge::removals(
                         &repository,
@@ -4021,6 +4015,7 @@ fn event_loop(
                         Ok(Some(edit::reword::Perform::Complete(edit::reword::Outcome {
                             target,
                             commit: Some(new_id),
+                            notice,
                             ref_changes,
                             ..
                         }))) => {
@@ -4030,11 +4025,13 @@ fn event_loop(
                                 repository_is_bare,
                                 "reword commit",
                                 &ref_changes,
-                                format!(
-                                    "reworded {} as {}",
-                                    target.to_hex_with_len(7),
-                                    new_id.to_hex_with_len(7)
-                                ),
+                                notice.unwrap_or_else(|| {
+                                    format!(
+                                        "reworded {} as {}",
+                                        target.to_hex_with_len(7),
+                                        new_id.to_hex_with_len(7)
+                                    )
+                                }),
                             );
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
@@ -4106,7 +4103,9 @@ fn event_loop(
                                 repository_is_bare,
                                 if empty { "create empty commit" } else { "create commit" },
                                 &outcome.ref_changes,
-                                format!("created {}", new_id.to_hex_with_len(7)),
+                                outcome
+                                    .notice
+                                    .unwrap_or_else(|| format!("created {}", new_id.to_hex_with_len(7))),
                             );
                             app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
@@ -4239,7 +4238,9 @@ fn event_loop(
                                 repository_is_bare,
                                 "split commit",
                                 &outcome.ref_changes,
-                                format!("split {} as {}", id.to_hex_with_len(7), new_id.to_hex_with_len(7)),
+                                outcome.notice.unwrap_or_else(|| {
+                                    format!("split {} as {}", id.to_hex_with_len(7), new_id.to_hex_with_len(7))
+                                }),
                             );
                             invalidate_worktree_changes(&mut worktree_changes);
                             app.select_commit_after_refresh(new_id);
@@ -4327,8 +4328,9 @@ fn event_loop(
                             let record_undo = pending.as_ref().is_none_or(|pending| pending.record_undo);
                             let mut changes = pending.map(|pending| pending.ref_changes).unwrap_or_default();
                             changes.extend(outcome.ref_changes.iter().cloned());
-                            let message =
-                                format!("{verb}ed {} as {}", id.to_hex_with_len(7), new_id.to_hex_with_len(7));
+                            let message = outcome.notice.unwrap_or_else(|| {
+                                format!("{verb}ed {} as {}", id.to_hex_with_len(7), new_id.to_hex_with_len(7))
+                            });
                             if record_undo {
                                 leave_recorded_success(
                                     &mut app,
@@ -4442,7 +4444,9 @@ fn event_loop(
                                     }
                                 }
                                 Ok(None) => {
-                                    let message = format!("forgot {}", id.to_hex_with_len(7));
+                                    let message = outcome
+                                        .notice
+                                        .unwrap_or_else(|| format!("forgot {}", id.to_hex_with_len(7)));
                                     if cancels_review {
                                         app.leave_success(message);
                                     } else {

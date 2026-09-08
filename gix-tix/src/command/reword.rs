@@ -144,6 +144,9 @@ pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Resu
 }
 
 fn finish(repository: &gix::Repository, outcome: crate::edit::reword::Outcome) -> Result<()> {
+    if let Some(notice) = &outcome.notice {
+        eprintln!("{notice}");
+    }
     match outcome.commit {
         Some(id) => println!("{}", crate::change_id::display(repository, id, 7)?),
         None => println!("no reword performed: the edited commit was unchanged"),
@@ -154,6 +157,9 @@ fn finish(repository: &gix::Repository, outcome: crate::edit::reword::Outcome) -
 }
 
 fn finish_editor(repository: &gix::Repository, outcome: crate::edit::reword::Outcome) -> Result<()> {
+    if let Some(notice) = &outcome.notice {
+        eprintln!("{notice}");
+    }
     let title = if outcome.commit.is_some() {
         "reword commit"
     } else {
