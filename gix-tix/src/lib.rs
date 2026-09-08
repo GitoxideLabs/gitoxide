@@ -9031,8 +9031,7 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
         return topological_selection_action(key);
     }
     if key.kind != KeyEventKind::Release {
-        let shifted =
-            key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('H' | 'J' | 'K' | 'L'));
+        let shifted = key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('J' | 'K' | 'L'));
         if shifted {
             if app.changes_focus.is_none() {
                 match key.code {
@@ -9044,7 +9043,7 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
                 match key.code {
                     KeyCode::Up | KeyCode::Char('k' | 'K') => return Some(Action::MoveUp),
                     KeyCode::Down | KeyCode::Char('j' | 'J') => return Some(Action::MoveDown),
-                    KeyCode::Left | KeyCode::Char('h' | 'H') => return Some(Action::ScrollLeft),
+                    KeyCode::Left => return Some(Action::ScrollLeft),
                     KeyCode::Right | KeyCode::Char('l' | 'L') => return Some(Action::ScrollRight),
                     _ => {}
                 }
@@ -9262,6 +9261,7 @@ fn action_with_shortcut_groups(
         KeyCode::Char('u') => Some(Action::Undo),
         KeyCode::Char('U') => Some(Action::Redo),
         KeyCode::Char('P') => Some(Action::Push),
+        KeyCode::Char('H') => Some(Action::ToggleHidden),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
@@ -9809,6 +9809,8 @@ mod tests {
             ('p', KeyModifiers::NONE),
             ('P', KeyModifiers::NONE),
             ('p', KeyModifiers::SHIFT),
+            ('H', KeyModifiers::NONE),
+            ('h', KeyModifiers::SHIFT),
         ] {
             let mut menu = Menu::default();
             menu.open(&items);
@@ -9819,7 +9821,7 @@ mod tests {
                     &commands,
                 ),
                 CommandMenuInput::Handled,
-                "p and Shift-P edit the query even when pushing is available"
+                "direct shortcut letters edit the query while the command popup is open"
             );
             assert_eq!(menu.query(), character.to_string());
             assert!(menu.is_open(), "typing does not submit or dismiss the command popup");
@@ -11845,14 +11847,22 @@ mod tests {
                 None,
                 "p remains available to the command-menu opener regardless of the active menu"
             );
-            for key in [
-                KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
-                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT),
+            for (key, expected) in [
+                (KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE), Action::Push),
+                (KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT), Action::Push),
+                (
+                    KeyEvent::new(KeyCode::Char('H'), KeyModifiers::NONE),
+                    Action::ToggleHidden,
+                ),
+                (
+                    KeyEvent::new(KeyCode::Char('h'), KeyModifiers::SHIFT),
+                    Action::ToggleHidden,
+                ),
             ] {
                 assert_eq!(
                     action_with_shortcut_groups(key, history, actions, enrich, information),
-                    Some(Action::Push),
-                    "Shift-P pushes regardless of the active prefix menu"
+                    Some(expected),
+                    "direct shortcuts work regardless of the active prefix menu"
                 );
             }
         }
@@ -12097,7 +12107,7 @@ mod tests {
             (false, false, true, false),
             (false, false, false, true),
         ] {
-            for letter in ['r', 'y', 'f', 'm', 'u', 'n', 's', 'x'] {
+            for letter in ['r', 'y', 'f', 'm', 'u', 'n', 's', 'x', 'h', 'p'] {
                 assert_eq!(
                     action_with_shortcut_groups(
                         KeyEvent::new(KeyCode::Char(letter), KeyModifiers::SHIFT),
@@ -12218,6 +12228,36 @@ mod tests {
     }
 
     #[test]
+    fn shift_h_toggles_hidden_history_from_history_and_changes() {
+        for key in [
+            KeyEvent::new(KeyCode::Char('H'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::SHIFT),
+        ] {
+            let mut app = App::new(1);
+            app.state = State::Complete;
+            app.configure_hidden_filter(true);
+            for focus in [None, Some(ChangePane::Tree), Some(ChangePane::Worktree)] {
+                app.changes_focus = focus;
+                for show_hidden in [false, true] {
+                    app.show_hidden = show_hidden;
+                    let action = app_action(key, &app).expect("Shift-H is a direct shortcut");
+                    assert_eq!(
+                        app.update(action),
+                        vec![Effect::Reload(!show_hidden)],
+                        "Shift-H toggles hidden history without a prefix from any pane"
+                    );
+                }
+                assert_eq!(
+                    app_action(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE), &app),
+                    Some(Action::ScrollLeft),
+                    "ordinary h still pans the focused pane"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn shift_applies_topology_to_directions_and_viewport_movement_to_pages() {
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         let shifted = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
@@ -12274,7 +12314,7 @@ mod tests {
         app.changes_focus = Some(ChangePane::Tree);
         app.history_display_expanded = true;
         assert_eq!(
-            app_action(key(KeyCode::Char('H')), &app),
+            app_action(shifted(KeyCode::Left), &app),
             Some(Action::ScrollLeft),
             "shifted directions remain pane-local while changes are focused"
         );

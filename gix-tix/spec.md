@@ -319,9 +319,11 @@ without trading responsiveness for metadata that is not visible.
   leaves retain the boundary commit's ordinary parent diff. Enter opens the same
   complete branch diff, labelled `<base>..<leaf>`.
 - Hidden revisions do not change the default reference display mode.
-- `v`, then `h`, toggles the full hidden projection. Toggling preserves the
-  selected commit when it still exists and otherwise selects the newest
-  selectable row.
+- `Shift-H`, or `v` then `h`, toggles the full hidden projection. The direct
+  shortcut works from history and focused changes panes, including while a
+  shortcut group is open. An open command popup consumes it as query text.
+  Toggling preserves the selected commit when it still exists and otherwise
+  selects the newest selectable row.
 - When a hidden revspec names a local branch, its best common base with the
   visible tips permanently shows `⇣N` after the commit title when that branch has
   `N` commits not reachable from the view. The terminal edge pushes the marker
@@ -555,7 +557,7 @@ without trading responsiveness for metadata that is not visible.
 | `v t` | Toggle attribution trailers. |
 | `v m` | Toggle mailmap resolution. |
 | `v r` | Cycle all, normal, and no reference labels. |
-| `v h` | Show or hide configured hidden ancestry. |
+| `Shift-H` / `v h` | Show or hide configured hidden ancestry from history or a focused changes pane. |
 | `r` | Hide reference labels or restore the mode visible when they were hidden. |
 | `m`/`]` | Toggle the commit-message view. |
 | `p` | Open the command menu from history or a focused changes block. |
@@ -568,6 +570,11 @@ without trading responsiveness for metadata that is not visible.
 | `@` | Time-travel to the selected commit, or return through its tix pin. Terminals reporting the base key as `Shift-2` are also accepted. |
 | `x` | Select the next visible commit with the same change ID, wrapping at the end. |
 | `u u` / `U U` | Undo / redo one operation. The first press shows an informational confirmation prompt; the second matching press performs the operation. |
+
+The `?` information group documents the direct hidden-history and push shortcuts
+alongside its other controls. It shows `sHow hidden` or `Hide hidden` when hidden
+ancestry is configured, and `Push` when available from history or Worktree.
+The underlined capital letters work without a prefix.
 
 Each undo or redo requires a new pair of matching key presses. Switching between
 `u` and `U` arms the new direction. Escape cancels the confirmation before leaving

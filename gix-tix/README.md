@@ -9,6 +9,20 @@ After all, I intentionally didn't look at the code.
 
 And from what I can tell, it does what I want it to, and seems to be worth maintaining.
 
+## Keyboard shortcuts
+
+Press `?` for keyboard help or `p` for the searchable command menu. The `v`, `a`,
+and `n` groups contain display controls, actions, and enrichment commands.
+These shortcuts also work directly, without a prefix:
+
+| Key | Action |
+| --- | --- |
+| `H` (`Shift+H`) | Toggle configured hidden history from history or a changes pane. |
+| `P` (`Shift+P`) | Push the active branch from history or Worktree. In Tree, cycle the comparison parent; `a P` pushes from there. |
+
+See the [full keyboard reference](spec.md#navigation-and-display-controls) for
+navigation and the remaining direct shortcuts.
+
 ## Worktrees
 
 `tix worktrunk` (or `tix wt`) opens a worktree picker with the selected
