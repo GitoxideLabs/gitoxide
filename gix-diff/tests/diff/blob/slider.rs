@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, hash::Hash, path::Path};
+use std::{
+    collections::BTreeMap,
+    hash::Hash,
+    path::{Path, PathBuf},
+};
 
 use gix_diff::blob::{self, Algorithm, InternedInput, diff_with_slider_heuristics};
 use gix_object::bstr::ByteSlice;
@@ -6,6 +10,12 @@ use pretty_assertions::StrComparison;
 
 #[test]
 fn baseline() -> gix_testtools::Result {
+    let should_assert_strictly = std::env::var_os("GIX_DIFF_SLIDER_STRICT").is_some();
+    if let Some(case) = try_single_case(should_assert_strictly)? {
+        eprintln!("{}", selected_case_report(&case)?);
+        return Ok(());
+    }
+
     let smoke_cases = cases_from_fixture("make_diff_for_sliders_smoke_repo.sh", false)?;
     assert!(
         !smoke_cases.is_empty(),
@@ -17,7 +27,6 @@ fn baseline() -> gix_testtools::Result {
         "the built-in slider baseline must be classified as exact"
     );
 
-    let should_assert_strictly = std::env::var_os("GIX_DIFF_SLIDER_STRICT").is_some();
     let cases = cases_from_fixture("make_diff_for_sliders_repo.sh", !should_assert_strictly)?;
 
     if cases.is_empty() {
@@ -34,6 +43,110 @@ fn baseline() -> gix_testtools::Result {
     Ok(())
 }
 
+fn try_single_case(should_assert_strictly: bool) -> gix_testtools::Result<Option<Case>> {
+    fn case_from_fixture(fixture: &str, selected_file_name: &str) -> gix_testtools::Result<Option<Case>> {
+        let worktree_path = crate::scripted_fixture_read_only(fixture)?;
+        let asset_dir = worktree_path.join("assets");
+
+        let dir = std::fs::read_dir(&worktree_path)?;
+
+        for entry in dir {
+            let entry = entry?;
+            if entry.file_name() == selected_file_name {
+                return read_fixture(&worktree_path, &asset_dir, entry, false);
+            }
+        }
+
+        Ok(None)
+    }
+    let selected_file_name = match std::env::var("GIX_DIFF_SLIDER_CASE") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    if selected_file_name.is_empty() {
+        return Err("GIX_DIFF_SLIDER_CASE must not be empty".into());
+    }
+    if should_assert_strictly {
+        return Err("GIX_DIFF_SLIDER_CASE and GIX_DIFF_SLIDER_STRICT cannot be used together".into());
+    }
+
+    let case = case_from_fixture("make_diff_for_sliders_repo.sh", &selected_file_name)?;
+    if case.is_none() {
+        return Err(format!(
+            "No primary slider baseline matched {selected_file_name:?}. \
+             Use an exact '<old>-<new>.<algorithm>.baseline' filename \
+             and ensure the external fixture has been generated."
+        )
+        .into());
+    }
+    Ok(case)
+}
+
+fn read_fixture(
+    worktree_path: &Path,
+    asset_dir: &Path,
+    entry: std::fs::DirEntry,
+    read_no_indent: bool,
+) -> gix_testtools::Result<Option<Case>> {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let project_root = crate_root
+        .parent()
+        .expect("gix-diff is directly inside the workspace root");
+    let entry_file_name = entry.file_name();
+    let Some(baseline::DirEntry {
+        file_name,
+        algorithm,
+        old_data,
+        new_data,
+    }) = baseline::parse_dir_entry(asset_dir, &entry_file_name)?
+    else {
+        return Ok(None);
+    };
+
+    let input = InternedInput::new(
+        old_data.to_str().expect("BUG: we don't have non-ascii here"),
+        new_data.to_str().expect("BUG: we don't have non-ascii here"),
+    );
+
+    let gix_no_postprocess = {
+        let diff = blob::Diff::compute(algorithm, &input);
+        render_unidiff(&diff, &input)?
+    };
+
+    let gix_postprocess_no_heuristic = {
+        let mut diff = blob::Diff::compute(algorithm, &input);
+        diff.postprocess_no_heuristic(&input);
+        render_unidiff(&diff, &input)?
+    };
+
+    let gix_postprocess_slider_heuristics = {
+        let diff = diff_with_slider_heuristics(algorithm, &input);
+        render_unidiff(&diff, &input)?
+    };
+
+    let baseline_path = worktree_path.join(&file_name);
+    let baseline = std::fs::read(&baseline_path)?;
+    let baseline = crate::blob::skip_header_and_fold_to_unidiff(&baseline);
+    let baseline_path = crate_root.join(&baseline_path).strip_prefix(project_root)?.to_owned();
+    let git_no_indent_heuristic = if read_no_indent {
+        read_no_indent_baseline(worktree_path, &file_name)?
+    } else {
+        None
+    };
+
+    Ok(Some(Case {
+        file_name,
+        baseline_path,
+        algorithm,
+        git_postprocess_indent_heuristic: baseline,
+        git_no_indent_heuristic,
+        gix_no_postprocess,
+        gix_postprocess_no_heuristic,
+        gix_postprocess_slider_heuristics,
+    }))
+}
+
 fn cases_from_fixture(fixture: &str, read_no_indent: bool) -> gix_testtools::Result<Vec<Case>> {
     let worktree_path = crate::scripted_fixture_read_only(fixture)?;
     let asset_dir = worktree_path.join("assets");
@@ -43,55 +156,9 @@ fn cases_from_fixture(fixture: &str, read_no_indent: bool) -> gix_testtools::Res
 
     for entry in dir {
         let entry = entry?;
-        let Some(baseline::DirEntry {
-            file_name,
-            algorithm,
-            old_data,
-            new_data,
-        }) = baseline::parse_dir_entry(&asset_dir, &entry.file_name())?
-        else {
-            continue;
-        };
-
-        let input = InternedInput::new(
-            old_data.to_str().expect("BUG: we don't have non-ascii here"),
-            new_data.to_str().expect("BUG: we don't have non-ascii here"),
-        );
-
-        let gix_no_postprocess = {
-            let diff = blob::Diff::compute(algorithm, &input);
-            render_unidiff(&diff, &input)?
-        };
-
-        let gix_postprocess_no_heuristic = {
-            let mut diff = blob::Diff::compute(algorithm, &input);
-            diff.postprocess_no_heuristic(&input);
-            render_unidiff(&diff, &input)?
-        };
-
-        let gix_postprocess_slider_heuristics = {
-            let diff = diff_with_slider_heuristics(algorithm, &input);
-            render_unidiff(&diff, &input)?
-        };
-
-        let baseline_path = worktree_path.join(&file_name);
-        let baseline = std::fs::read(baseline_path)?;
-        let baseline = crate::blob::skip_header_and_fold_to_unidiff(&baseline);
-        let git_no_indent_heuristic = if read_no_indent {
-            read_no_indent_baseline(&worktree_path, &file_name)?
-        } else {
-            None
-        };
-
-        cases.push(Case {
-            file_name,
-            algorithm,
-            git_postprocess_indent_heuristic: baseline,
-            git_no_indent_heuristic,
-            gix_no_postprocess,
-            gix_postprocess_no_heuristic,
-            gix_postprocess_slider_heuristics,
-        });
+        if let Some(case) = read_fixture(&worktree_path, &asset_dir, entry, read_no_indent)? {
+            cases.push(case);
+        }
     }
 
     Ok(cases)
@@ -99,6 +166,8 @@ fn cases_from_fixture(fixture: &str, read_no_indent: bool) -> gix_testtools::Res
 
 struct Case {
     file_name: String,
+    /// Location of the generated baseline, relative to the workspace root.
+    baseline_path: PathBuf,
     algorithm: Algorithm,
     /// The primary Git baseline, generated with `--indent-heuristic` and used for the pass/fail comparison.
     git_postprocess_indent_heuristic: String,
@@ -198,6 +267,32 @@ fn render_unidiff<T: AsRef<[u8]> + Hash + Eq>(diff: &blob::Diff, input: &Interne
         blob::unified_diff::ContextSize::symmetrical(3),
     )
     .consume()
+}
+
+/// Format one explicitly selected case without treating a diff mismatch as a test failure.
+fn selected_case_report(case: &Case) -> gix_testtools::Result<String> {
+    let mut report = format!(
+        "Selected baseline: {}
+Algorithm: {:?}
+Left: gix with slider heuristics
+Right: Git with indent heuristic
+
+",
+        case.baseline_path.display(),
+        case.algorithm,
+    );
+    if case.gix_postprocess_slider_heuristics == case.git_postprocess_indent_heuristic {
+        report.push_str("Outputs match.");
+    } else {
+        report.push_str(
+            &StrComparison::new(
+                &case.gix_postprocess_slider_heuristics,
+                &case.git_postprocess_indent_heuristic,
+            )
+            .to_string(),
+        );
+    }
+    Ok(report)
 }
 
 fn read_no_indent_baseline(worktree_path: &Path, primary_file_name: &str) -> std::io::Result<Option<String>> {
@@ -552,6 +647,7 @@ mod baseline {
         fn classify(gix: &str, git: &str) -> Classification {
             Case {
                 file_name: "synthetic.myers.baseline".into(),
+                baseline_path: "synthetic.myers.baseline".into(),
                 algorithm: Algorithm::Myers,
                 git_postprocess_indent_heuristic: git.into(),
                 git_no_indent_heuristic: None,

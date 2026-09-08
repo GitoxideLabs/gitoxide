@@ -50,3 +50,21 @@ corpus, `--count 2024` produces 3,094 cases after duplicate blob pairs are remov
 
 The default report prints all mismatch categories without failing. Set `GIX_DIFF_SLIDER_STRICT=1` to require a
 non-empty external baseline and fail on any mismatch. The small built-in baseline always runs strictly.
+
+### Inspect one case
+
+Copy a primary baseline filename from the report and select it explicitly:
+
+```shell
+GIX_DIFF_SLIDER_CASE='<old>-<new>.myers.baseline' \
+  cargo test -p gix-diff --test diff blob::slider::baseline -- --exact --nocapture
+```
+
+The selector must match the complete filename, including the algorithm and `.baseline` suffix.
+Inspection replaces the aggregate report with a `StrComparison` between the two
+unified diffs: Gitoxide with slider heuristics on the left and Git with the indent heuristic on the right.
+Matching output is reported explicitly. A mismatch doesn't fail inspection; an empty, missing,
+or ambiguous selection does.
+
+`GIX_DIFF_SLIDER_CASE` cannot be combined with `GIX_DIFF_SLIDER_STRICT`. Only the selected external case is loaded and
+diffed when `GIX_DIFF_SLIDER_CASE` is given.
