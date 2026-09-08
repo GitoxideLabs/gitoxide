@@ -2391,7 +2391,7 @@ fn active_prefix_popup(
         logical_rows = Some(vec![command_items(commands, CommandGroup::Enrich, 0)]);
     }
     if app.information_expanded {
-        let information = commands
+        let mut information: Vec<_> = commands
             .iter()
             .filter(|command| command.group == CommandGroup::Information)
             .map(|command| {
@@ -2414,6 +2414,16 @@ fn active_prefix_popup(
                 }
             })
             .collect();
+        if app.has_hidden_filter {
+            information.push(shortcut(
+                if app.show_hidden { "Hide hidden" } else { "sHow hidden" },
+                'H',
+                app.show_hidden,
+            ));
+        }
+        if app.changes_focus != Some(ChangePane::Tree) && app.can_push() {
+            information.push(shortcut("Push", 'P', true));
+        }
         let mut navigation = vec![shortcut("p command", 'p', true)];
         if !selected_segment && (app.tree_changes_visible || app.worktree_changes_visible) {
             navigation.push(vec![match focus_feedback {
@@ -4969,7 +4979,7 @@ mod tests {
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(rendered_line(&terminal, 2).trim_end(), compact);
-        let information = "[ title · ref-tree · message · changes";
+        let information = "[ title · ref-tree · message · changes · sHow hidden";
         let navigation =
             "p command · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff";
         assert!(rendered_line(&terminal, 0).contains(information));
@@ -4983,6 +4993,22 @@ mod tests {
                     .modifier
                     .contains(Modifier::REVERSED),
                 "the popup row is reversed"
+            );
+        }
+        app.state = State::Complete;
+        app.set_active_branch(Some("topic".into()));
+        app.show_hidden = true;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let information = rendered_line(&terminal, 0);
+        for label in ["Hide hidden", "Push"] {
+            let key_column = information[..information.find(label).expect("direct shortcuts are documented in ?")]
+                .chars()
+                .count() as u16;
+            assert!(
+                terminal.backend().buffer()[(key_column, 0)]
+                    .modifier
+                    .contains(Modifier::UNDERLINED),
+                "{label} embeds its capitalized shortcut in the verb"
             );
         }
         Ok(())
