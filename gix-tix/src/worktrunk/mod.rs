@@ -825,14 +825,76 @@ where
         .to_owned())
 }
 
-fn default_path(repository: &gix::Repository, short_branch: &gix::bstr::BStr) -> Result<PathBuf> {
+/// Create a detached worktree and, if the source uses pins, pin the new worktree's HEAD there.
+fn create_detached<P>(
+    repository: &gix::Repository,
+    target: &OsStr,
+    path_override: Option<&Path>,
+    progress: P,
+    interrupt: &AtomicBool,
+) -> Result<PathBuf>
+where
+    P: gix::progress::NestedProgress,
+    P::SubProgress: gix::progress::NestedProgress + 'static,
+{
+    let target = gix::path::os_str_into_bstr(target).context("detached target is not valid UTF-8")?;
+    let (commit_id, _) = crate::history::resolve_revision(repository, target)
+        .with_context(|| format!("could not resolve detached worktree commit {target}"))?;
+    let pin_worktree = repository.workdir().is_some() && !crate::history::all_pins(repository)?.is_empty();
+    let destination = match path_override {
+        Some(path) => absolute(path)?,
+        None => {
+            let default = default_path(repository, commit_id.to_hex_with_len(7).to_string().as_str().into())?;
+            let mut destination = default.clone();
+            let mut number = 2;
+            while destination
+                .try_exists()
+                .with_context(|| format!("could not inspect worktree destination {}", destination.display()))?
+            {
+                let mut path = default.as_os_str().to_owned();
+                path.push(format!("-{number}"));
+                destination = path.into();
+                number += 1;
+            }
+            destination
+        }
+    };
+    let (worktree, _) = repository
+        .create_worktree(
+            &destination,
+            gix::worktree::create::Head::Detached(commit_id),
+            progress,
+            interrupt,
+        )
+        .with_context(|| format!("could not create worktree at {}", destination.display()))?;
+    if pin_worktree {
+        let linked = worktree
+            .worktree()
+            .context("created worktree has no worktree directory")?;
+        let name = linked.id().context("created worktree has no linked worktree ID")?;
+        let target = gix::refs::Category::LinkedPseudoRef { name }.to_full_name("HEAD")?;
+        crate::edit::time_travel::create_or_reuse_pin(
+            repository,
+            gix::refs::Target::Symbolic(target),
+            commit_id,
+            "tix worktrunk: pin detached worktree",
+        )
+        .with_context(|| format!("created worktree at {} but could not pin it", destination.display()))?;
+    }
+    Ok(worktree
+        .workdir()
+        .context("created worktree has no worktree directory")?
+        .to_owned())
+}
+
+fn default_path(repository: &gix::Repository, suffix: &gix::bstr::BStr) -> Result<PathBuf> {
     let main = repository.main_repo().context("could not open the main repository")?;
     let base = main.workdir().unwrap_or_else(|| main.git_dir());
     let parent = base.parent().context("repository path has no parent directory")?;
     let name = base.file_name().context("repository path has no file name")?;
     let mut destination = name.to_os_string();
     destination.push(".");
-    let mut suffix = short_branch.to_owned();
+    let mut suffix = suffix.to_owned();
     for byte in suffix.iter_mut() {
         if matches!(*byte, b'/' | b'\\') {
             *byte = b'-';
@@ -848,18 +910,29 @@ pub(crate) fn run(
     target: Option<OsString>,
     path: Option<PathBuf>,
     create_branch_if_missing: bool,
+    detach: bool,
     quit_on_finish: Option<String>,
 ) -> Result<()> {
     let repository = repository.to_thread_local();
-    if let Some(target) = target {
-        let selected = resolve_or_create(
-            &repository,
-            &target,
-            path.as_deref(),
-            create_branch_if_missing,
-            gix::progress::Discard,
-            &AtomicBool::default(),
-        )?;
+    if let Some(target) = target.or_else(|| detach.then(|| "HEAD".into())) {
+        let selected = if detach {
+            create_detached(
+                &repository,
+                &target,
+                path.as_deref(),
+                gix::progress::Discard,
+                &AtomicBool::default(),
+            )?
+        } else {
+            resolve_or_create(
+                &repository,
+                &target,
+                path.as_deref(),
+                create_branch_if_missing,
+                gix::progress::Discard,
+                &AtomicBool::default(),
+            )?
+        };
         if !write_shell_handoff(&selected)? {
             println!("{}", selected.display());
         }
@@ -1408,6 +1481,242 @@ mod tests {
                 "the canonical path recorded by Git is handed off"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn detached_creation_uses_head_or_a_commit_and_unique_default_paths() -> gix_testtools::Result {
+        let (temp, repository) = fixture()?;
+        let base_commit_id = repository.head_id()?.detach();
+        let source = repository.workdir().expect("fixture has a worktree");
+        std::fs::write(source.join("tracked"), "base\nhead\n")?;
+        git(source, &["commit", "-am", "head"])?;
+        let head_commit_id = repository.head_id()?.detach();
+        let interrupt = AtomicBool::default();
+
+        for suffix in [String::new(), "-2".into()] {
+            let path = create_detached(
+                &repository,
+                OsStr::new("HEAD"),
+                None,
+                gix::progress::Discard,
+                &interrupt,
+            )?;
+            assert_eq!(
+                path,
+                gix::path::realpath(
+                    temp.path()
+                        .join(format!("repo.{}{suffix}", head_commit_id.to_hex_with_len(7)))
+                )?,
+                "each invocation creates a new worktree beside the main worktree"
+            );
+            let worktree = crate::test_repository::open(&path)?;
+            assert!(worktree.head()?.is_detached(), "creation leaves HEAD detached");
+            assert_eq!(worktree.head_id()?, head_commit_id, "HEAD supplies the starting commit");
+            assert_eq!(std::fs::read_to_string(path.join("tracked"))?, "base\nhead\n");
+            git(&path, &["diff-index", "--exit-code", "HEAD", "--"])?;
+            assert!(
+                crate::history::all_pins(&worktree)?.is_empty(),
+                "new worktrees have no pins"
+            );
+        }
+
+        let destination = temp.path().join("experiment with spaces");
+        let path = create_detached(
+            &repository,
+            OsStr::new(&base_commit_id.to_hex_with_len(7).to_string()),
+            Some(&destination),
+            gix::progress::Discard,
+            &interrupt,
+        )?;
+        let worktree = crate::test_repository::open(&path)?;
+        assert_eq!(
+            path,
+            gix::path::realpath(&destination)?,
+            "the path override is canonicalized"
+        );
+        assert!(worktree.head()?.is_detached(), "an explicit commit also detaches HEAD");
+        assert_eq!(
+            worktree.head_id()?,
+            base_commit_id,
+            "an abbreviated hash selects the commit"
+        );
+        assert_eq!(std::fs::read_to_string(path.join("tracked"))?, "base\n");
+        git(&path, &["diff-index", "--exit-code", "HEAD", "--"])?;
+        assert!(
+            crate::history::all_pins(&repository)?.is_empty(),
+            "a source without pins does not acquire one"
+        );
+        let refs = repository
+            .references()?
+            .all()?
+            .map(|reference| reference.map(|reference| reference.name().as_bstr().to_owned()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            refs,
+            [b"refs/heads/main".as_bstr()],
+            "no branch or relationship ref is created"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn detached_offspring_pin_follows_head_and_is_private_to_the_source() -> gix_testtools::Result {
+        for linked_source in [false, true] {
+            let (temp, repository) = fixture()?;
+            let base_commit_id = repository.head_id()?.detach();
+            let main = repository.workdir().expect("fixture has a worktree");
+            std::fs::write(main.join("tracked"), "base\nbranch\n")?;
+            git(main, &["commit", "-am", "branch"])?;
+            let branch_commit_id = repository.head_id()?.detach();
+            let interrupt = AtomicBool::default();
+            let source_path = if linked_source {
+                create_detached(
+                    &repository,
+                    OsStr::new(&base_commit_id.to_string()),
+                    Some(&temp.path().join("source")),
+                    gix::progress::Discard,
+                    &interrupt,
+                )?
+            } else {
+                git(main, &["switch", "--detach", &base_commit_id.to_string()])?;
+                main.to_owned()
+            };
+            let source = crate::test_repository::open(&source_path)?;
+            crate::edit::time_travel::create_named_pin(
+                &source,
+                crate::history::HEAD_PIN_NAME.as_bstr().try_into()?,
+                gix::refs::Target::Symbolic("refs/heads/main".try_into()?),
+                branch_commit_id,
+                "remember source branch",
+            )?;
+            assert_eq!(logical_head(&source)?.commit_id, Some(branch_commit_id));
+
+            let path = create_detached(&source, OsStr::new("HEAD"), None, gix::progress::Discard, &interrupt)?;
+            let worktree = crate::test_repository::open(&path)?;
+            assert!(worktree.head()?.is_detached(), "the offspring starts detached");
+            assert_eq!(
+                worktree.head_id()?,
+                base_commit_id,
+                "detached creation uses physical HEAD even when the remembered branch has advanced"
+            );
+            let linked = worktree.worktree().expect("the offspring has a worktree");
+            let target = gix::refs::Target::Symbolic(
+                format!("worktrees/{}/HEAD", linked.id().expect("the offspring is linked")).try_into()?,
+            );
+            let pins = crate::history::all_pins(&source)?;
+            assert_eq!(
+                pins.len(),
+                2,
+                "the source gains one ordinary pin alongside its HEAD pin"
+            );
+            let pin = pins
+                .iter()
+                .find(|pin| pin.target == target)
+                .expect("source pins the child HEAD");
+            assert!(
+                crate::history::all_pins(&worktree)?.is_empty(),
+                "the pin belongs to the source"
+            );
+            if linked_source {
+                assert!(
+                    crate::history::all_pins(&repository)?.is_empty(),
+                    "linked-source pins stay private"
+                );
+            }
+
+            std::fs::write(path.join("tracked"), "base\nexperiment\n")?;
+            git(&path, &["commit", "-am", "experiment"])?;
+            let advanced_commit_id = worktree.head_id()?.detach();
+            assert_ne!(advanced_commit_id, base_commit_id, "the child advances independently");
+            let source = crate::test_repository::open(&source_path)?;
+            let mut reference = source.find_reference(pin.name.as_ref())?;
+            assert_eq!(reference.target().into_owned(), target, "the pin remains symbolic");
+            assert_eq!(
+                reference.peel_to_id()?,
+                advanced_commit_id,
+                "the pin follows commits made outside tix"
+            );
+            assert!(
+                crate::history::snapshot(&source, &[], &[], false)?
+                    .view_tips
+                    .contains(&advanced_commit_id),
+                "the offspring's new tip participates in the source history"
+            );
+            assert_eq!(source.head_id()?, base_commit_id, "the source checkout stays in place");
+            assert_eq!(
+                source.find_reference("refs/heads/main")?.id(),
+                branch_commit_id,
+                "the branch stays in place"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn detached_creation_failure_leaves_no_worktree_or_pin() -> gix_testtools::Result {
+        let (temp, repository) = fixture()?;
+        let commit_id = repository.head_id()?.detach();
+        crate::edit::time_travel::create_or_reuse_pin(
+            &repository,
+            gix::refs::Target::Object(commit_id),
+            commit_id,
+            "source pin",
+        )?;
+        let pins = crate::history::all_pins(&repository)?;
+        let destination = temp.path().join("invalid");
+        for target in ["missing-commit", "HEAD:tracked", "HEAD^{tree}"] {
+            assert!(
+                create_detached(
+                    &repository,
+                    OsStr::new(target),
+                    Some(&destination),
+                    gix::progress::Discard,
+                    &AtomicBool::default(),
+                )
+                .is_err(),
+                "{target} does not resolve to a commit"
+            );
+            assert!(!destination.exists(), "invalid targets do not create directories");
+        }
+        let source = repository.workdir().expect("fixture has a worktree");
+        git(source, &["switch", "--orphan", "unborn"])?;
+        assert!(
+            create_detached(
+                &repository,
+                OsStr::new("HEAD"),
+                Some(&destination),
+                gix::progress::Discard,
+                &AtomicBool::default(),
+            )
+            .is_err(),
+            "an unborn HEAD cannot supply a starting commit"
+        );
+        assert!(!destination.exists(), "an unborn HEAD does not create a directory");
+        git(source, &["switch", "main"])?;
+        std::fs::create_dir(&destination)?;
+        std::fs::write(destination.join("keep"), "existing contents")?;
+        assert!(
+            create_detached(
+                &repository,
+                OsStr::new("HEAD"),
+                Some(&destination),
+                gix::progress::Discard,
+                &AtomicBool::default(),
+            )
+            .is_err(),
+            "an explicit destination with files is protected"
+        );
+        assert_eq!(std::fs::read_to_string(destination.join("keep"))?, "existing contents");
+        assert!(
+            repository.worktrees()?.is_empty(),
+            "failed creation leaves no worktree registration"
+        );
+        assert_eq!(
+            crate::history::all_pins(&repository)?,
+            pins,
+            "failed creation never adds a pin"
+        );
         Ok(())
     }
 
