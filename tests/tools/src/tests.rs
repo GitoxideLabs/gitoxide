@@ -60,7 +60,19 @@ fn configure_command_clears_external_config() {
         .filter(|line| !line.starts_with("command line:\t"))
         .collect();
     let status = output.status.code().expect("terminated normally");
-    assert_eq!(lines, Vec::<&str>::new(), "should be no config variables from files");
+    let (isolated, external): (Vec<_>, Vec<_>) = lines
+        .into_iter()
+        .partition(|line| line.starts_with("file:") && line.contains("isolated-global.gitconfig\t"));
+    assert_eq!(
+        external,
+        Vec::<&str>::new(),
+        "should be no config variables from files other than the isolated global config"
+    );
+    assert_eq!(
+        isolated.len(),
+        ISOLATED_GIT_CONFIG.len(),
+        "the isolation comes from the global config file: {isolated:?}"
+    );
     assert_eq!(status, 0, "reading the config should succeed");
 }
 

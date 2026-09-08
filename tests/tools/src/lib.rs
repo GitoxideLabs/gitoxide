@@ -8,6 +8,13 @@
 //! Valid values are the names of hash functions supported by `gix_hash::Kind` (e.g., `sha1`, `sha256`).
 //! If not set, the default hash function via `gix_hash::Kind::default()` is used.
 //!
+//! ## Script Isolation
+//!
+//! Fixture scripts and [`git()`] run with a global configuration file in `tests/fixtures/generated-do-not-edit/`
+//! that disables signing and automatic maintenance and sets `init.defaultBranch=main`. A script's own
+//! `GIT_CONFIG_COUNT` entries add to that configuration instead of replacing it, and a script that writes
+//! global configuration fails.
+//!
 
 //! ## Feature Flags
 #![cfg_attr(
@@ -1729,6 +1736,7 @@ where
                     eprintln!("stderr: {}", output.stderr.as_bstr());
                     return Err(format!("fixture script of {cmd:?} failed").into());
                 }
+                assert_isolated_global_config_unchanged()?;
             }
             if let Some(mut f) = post_process_closure {
                 f(fixture_state).map(Some)
@@ -1797,6 +1805,7 @@ pub fn git(current_dir: impl AsRef<Path>, arguments: &str) -> Result<String> {
         )
         .into());
     }
+    assert_isolated_global_config_unchanged()?;
     Ok(String::from_utf8(output.stdout)?)
 }
 
@@ -1945,10 +1954,63 @@ fn push_normalized_oid(
     out.push(')');
 }
 
-#[cfg(windows)]
-const NULL_DEVICE: &str = "nul"; // See `gix_path::env::git::NULL_DEVICE` on why this form is used.
-#[cfg(not(windows))]
-const NULL_DEVICE: &str = "/dev/null";
+/// The global Git configuration file holding [`ISOLATED_GIT_CONFIG`], written once per process into
+/// `tests/fixtures/generated-do-not-edit/`.
+///
+/// A file rather than `GIT_CONFIG_COUNT` variables, so a script setting `GIT_CONFIG_COUNT` for its own
+/// purposes layers on top of the isolation instead of dropping it.
+static ISOLATED_GLOBAL_CONFIG: LazyLock<PathBuf> = LazyLock::new(|| {
+    let dir = env::current_dir()
+        .expect("the current directory is accessible")
+        .join(fixture_base())
+        .join("generated-do-not-edit");
+    std::fs::create_dir_all(&dir).expect("the generated fixture directory can be created");
+    let path = dir.join("isolated-global.gitconfig");
+    write_isolated_global_config(&path).expect("the isolated global config can be written");
+    path
+});
+
+fn write_isolated_global_config(path: &Path) -> std::io::Result<()> {
+    let contents = git_config_file_contents(ISOLATED_GIT_CONFIG);
+    if std::fs::read(path).is_ok_and(|current| current == contents.as_bytes()) {
+        return Ok(());
+    }
+    // Written aside and renamed into place, so concurrent test processes never observe a partial file.
+    let tmp = path.with_extension(format!("gitconfig.{}", std::process::id()));
+    std::fs::write(&tmp, contents)?;
+    std::fs::rename(tmp, path)
+}
+
+/// Fail if a script or `git` invocation changed the isolated global configuration, restoring it for whatever
+/// runs next so the mistake stays contained to the offender.
+fn assert_isolated_global_config_unchanged() -> Result {
+    let path = &*ISOLATED_GLOBAL_CONFIG;
+    if std::fs::read(path)? == git_config_file_contents(ISOLATED_GIT_CONFIG).as_bytes() {
+        return Ok(());
+    }
+    write_isolated_global_config(path)?;
+    Err(format!(
+        "The global Git configuration at '{}' was modified. Fixtures must not write global configuration, use `git config --local` or `git -c` instead.",
+        path.display()
+    )
+    .into())
+}
+
+/// Render `config` as the contents of a Git configuration file.
+fn git_config_file_contents(config: &[(&str, &str)]) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for (key, value) in config {
+        let (section, name) = key.rsplit_once('.').expect("config keys have a section and a name");
+        match section.split_once('.') {
+            Some((section, subsection)) => writeln!(out, "[{section} \"{subsection}\"]"),
+            None => writeln!(out, "[{section}]"),
+        }
+        .expect("writing to a string cannot fail");
+        writeln!(out, "\t{name} = {value}").expect("writing to a string cannot fail");
+    }
+    out
+}
 
 /// Ensure fixture scripts resolve `git` to the same executable used by direct helpers and version checks.
 ///
@@ -1995,8 +2057,10 @@ fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             "XDG_CONFIG_HOME",
             script_result_directory.join(".gix-testtools-xdg-config"),
         )
+        // Ambient command-scope configuration would layer on top of the isolation file just like a script's own.
+        .env_remove("GIT_CONFIG_COUNT")
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+        .env("GIT_CONFIG_GLOBAL", &*ISOLATED_GLOBAL_CONFIG)
         .env("GIT_TERMINAL_PROMPT", "false")
         .env("GIT_AUTHOR_DATE", "2000-01-01 00:00:00 +0000")
         .env("GIT_AUTHOR_EMAIL", "author@example.com")
@@ -2004,8 +2068,7 @@ fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         .env("GIT_COMMITTER_DATE", "2000-01-02 00:00:00 +0000")
         .env("GIT_COMMITTER_EMAIL", "committer@example.com")
         .env("GIT_COMMITTER_NAME", "committer")
-        .env("GIT_DEFAULT_HASH", object_hash.to_string());
-    apply_git_config_by_environment(cmd, ISOLATED_GIT_CONFIG)
+        .env("GIT_DEFAULT_HASH", object_hash.to_string())
 }
 
 /// Apply command-scoped Git `config` to `cmd`, and return it.
