@@ -729,22 +729,12 @@ fn copy_insert(repository: gix::Repository, args: CopyInsert) -> Result<()> {
     ];
     let graph = crate::edit::loaded_explicit_view_graph(&repository, &revisions, &[])?;
     let plan = crate::edit::rebase::copy_insert_plan(&repository, &graph, source, target, false)?;
-    let repository_path = repository.git_dir().to_owned();
-    let bare = repository.is_bare();
     match crate::edit::rebase::perform_plan(&repository, &graph, plan)? {
         crate::edit::rebase::PlanPerform::Complete(outcome) => {
             let copied = outcome.selected.context("copy-insert did not produce a selection")?;
-            let (_, changes) =
-                match crate::edit::time_travel::checkout_plan_reporting(&repository_path, bare, &outcome, &[], false) {
-                    Ok(result) => result,
-                    Err(err) => {
-                        record_undo(&repository, "copy-insert commit", Ok(outcome.ref_changes));
-                        return Err(err).context("copy-insert applied, but could not check out the copied commit");
-                    }
-                };
             println!("{}", crate::change_id::display(&repository, copied, 7)?);
             print_ref_rewrites(&repository, &outcome.ref_rewrites)?;
-            record_undo(&repository, "copy-insert commit", Ok(changes));
+            record_undo(&repository, "copy-insert commit", Ok(outcome.ref_changes));
             Ok(())
         }
         crate::edit::rebase::PlanPerform::Conflict(conflict) => rebase::handle_plan_conflict(
