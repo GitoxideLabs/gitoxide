@@ -9200,111 +9200,67 @@ fn action_with_shortcut_groups(
     if key.kind == KeyEventKind::Release {
         return None;
     }
-    let action = match key.code {
+    let code = match key.code {
+        KeyCode::Char(letter) if key.modifiers.contains(KeyModifiers::SHIFT) => KeyCode::Char(match letter {
+            '2' => '@',
+            '/' => '?',
+            letter => letter.to_ascii_uppercase(),
+        }),
+        code => code,
+    };
+    let action = match code {
         KeyCode::Tab => Some(Action::ToggleChangesFocus),
         KeyCode::Enter => Some(Action::OpenDiff),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
+        KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
+        KeyCode::Char('b' | 'B') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::PageUp),
+        KeyCode::Char('f' | 'F') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::PageDown),
+        KeyCode::Char('u' | 'U') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::HalfPageUp),
+        KeyCode::Char('d' | 'D') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::HalfPageDown),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('a') => Some(Action::ToggleActions),
-        KeyCode::Char('n') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleEnrich),
+        KeyCode::Char('n') => Some(Action::ToggleEnrich),
         KeyCode::Char('?') => Some(Action::ToggleInformation),
-        KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleInformation),
-        KeyCode::Char('b') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(Action::Rebase)
-        }
-        KeyCode::Char('U') if actions_expanded => Some(Action::Remerge),
-        KeyCode::Char('u') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Remerge),
+        _ => None,
+    }
+    .or_else(|| {
+        let KeyCode::Char(letter) = code else { return None };
+        use command_menu::CommandGroup::{Actions, Enrich, Information, View};
+        [
+            (actions_expanded, Actions),
+            (history_display_expanded, View),
+            (enrich_expanded, Enrich),
+            (information_expanded, Information),
+        ]
+        .into_iter()
+        .filter(|(expanded, _)| *expanded)
+        .find_map(|(_, group)| command_menu::shortcut_action(group, letter))
+    })
+    .or(match code {
+        KeyCode::Char('u') => Some(Action::Undo),
         KeyCode::Char('U') => Some(Action::Redo),
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Redo),
-        KeyCode::Char('u')
-            if actions_expanded && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
-        {
-            Some(Action::RebaseUpdate)
-        }
-        KeyCode::Char('u') if !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Undo),
-        KeyCode::Char('r') if actions_expanded => Some(Action::Review),
-        KeyCode::Char('S') if actions_expanded => Some(Action::Split),
-        KeyCode::Char('s') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Split),
-        KeyCode::Char('s') if actions_expanded => Some(Action::Squash),
-        KeyCode::Char('y') if actions_expanded => Some(Action::CopyInsert),
-        KeyCode::Char('M') if actions_expanded => Some(Action::AutoMerge),
-        KeyCode::Char('m') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(Action::AutoMerge)
-        }
-        KeyCode::Char('m') if actions_expanded => Some(Action::MoveInsert),
-        KeyCode::Char('X') if actions_expanded => Some(Action::RemoveAutoMergeInput),
-        KeyCode::Char('x') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(Action::RemoveAutoMergeInput)
-        }
-        KeyCode::Char('x') if actions_expanded => Some(Action::RemoveFromAutoMerge),
-        KeyCode::Char('t') if actions_expanded => Some(Action::StackInsert),
-        #[cfg(feature = "blocking-network-client")]
-        KeyCode::Char('F') if actions_expanded => Some(Action::Fetch),
-        #[cfg(feature = "blocking-network-client")]
-        KeyCode::Char('f') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Fetch),
-        KeyCode::Char('f') if actions_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(Action::ForkCommit)
-        }
-        KeyCode::Char('h') if actions_expanded => Some(Action::Attach),
-        KeyCode::Char('z') if actions_expanded => Some(Action::Stash),
-        KeyCode::Char('o') if actions_expanded => Some(Action::Reword),
-        KeyCode::Char('w') if actions_expanded => Some(Action::NewCommit),
-        KeyCode::Char('N') if actions_expanded => Some(Action::NewEmptyCommit),
-        KeyCode::Char('n') if actions_expanded && key.modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(Action::NewEmptyCommit)
-        }
-        KeyCode::Char('e') if actions_expanded => Some(Action::Amend),
-        KeyCode::Char('l') if actions_expanded => Some(Action::Spill),
         KeyCode::Char('P') => Some(Action::Push),
-        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Push),
-        KeyCode::Char('d') if actions_expanded => Some(Action::Forget),
-        KeyCode::Char('i') if actions_expanded => Some(Action::TogglePin),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::MoveDown),
         KeyCode::Char('x') => Some(Action::CycleDuplicate),
-        KeyCode::Char('h') if history_display_expanded => Some(Action::ToggleHidden),
         KeyCode::Char('h') => Some(Action::ScrollLeft),
         KeyCode::Char('l') => Some(Action::ScrollRight),
-        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::PageUp),
-        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::PageDown),
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::HalfPageUp),
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::HalfPageDown),
         KeyCode::PageUp => Some(Action::PageUp),
         KeyCode::PageDown => Some(Action::PageDown),
-        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Last),
-        KeyCode::Char('g') if enrich_expanded => Some(Action::EditGitNote),
         KeyCode::Home | KeyCode::Char('g') => Some(Action::First),
         KeyCode::End | KeyCode::Char('G') => Some(Action::Last),
-        KeyCode::Char('d') if history_display_expanded => Some(Action::ToggleDate),
-        KeyCode::Char('i') if history_display_expanded => Some(Action::CycleIds),
-        KeyCode::Char('c') if history_display_expanded => Some(Action::SelectEntry),
-        KeyCode::Char('o') if history_display_expanded => Some(Action::ShowRelatedHistory),
-        KeyCode::Char('s') if history_display_expanded => Some(Action::ToggleEmail),
-        KeyCode::Char('e') if history_display_expanded => Some(Action::ToggleName),
-        KeyCode::Char('t') if history_display_expanded => Some(Action::ToggleTrailers),
-        KeyCode::Char('m') if history_display_expanded => Some(Action::ToggleMailmap),
         KeyCode::Char('R') => Some(Action::Refresh),
-        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Refresh),
-        KeyCode::Char('r') if history_display_expanded => Some(Action::CycleRefs),
-        KeyCode::Char('e') if enrich_expanded => Some(Action::ToggleChecksPass),
-        KeyCode::Char('t') if enrich_expanded => Some(Action::ToggleTodo),
-        KeyCode::Char('o') if enrich_expanded => Some(Action::EditNote),
-        KeyCode::Char('e') if information_expanded => Some(Action::ToggleChanges),
         KeyCode::Char('@') => Some(Action::TimeTravel),
-        KeyCode::Char('2') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::TimeTravel),
-        KeyCode::Char('m') => Some(Action::ToggleCommit),
+        KeyCode::Char('m' | ']') => Some(Action::ToggleCommit),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('t') => Some(Action::ToggleRefTree),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
-        KeyCode::Char(']') => Some(Action::ToggleCommit),
         KeyCode::Char('Y') => Some(Action::CopyAuthor),
-        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::CopyAuthor),
         KeyCode::Char('y') => Some(Action::Copy),
         _ => None,
-    };
+    });
     action.filter(|action| key.kind == KeyEventKind::Press || !matches!(action, Action::Undo | Action::Redo))
 }
 
@@ -12106,6 +12062,37 @@ mod tests {
             action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
             Some(Action::CycleDuplicate)
         );
+    }
+
+    #[test]
+    fn shifted_command_keys_have_the_same_meaning_in_both_terminal_encodings() {
+        for (view, actions, enrich, information) in [
+            (false, false, false, false),
+            (true, false, false, false),
+            (false, true, false, false),
+            (false, false, true, false),
+            (false, false, false, true),
+        ] {
+            for letter in ['r', 'y', 'f', 'm', 'u', 'n', 's', 'x'] {
+                assert_eq!(
+                    action_with_shortcut_groups(
+                        KeyEvent::new(KeyCode::Char(letter), KeyModifiers::SHIFT),
+                        view,
+                        actions,
+                        enrich,
+                        information,
+                    ),
+                    action_with_shortcut_groups(
+                        KeyEvent::new(KeyCode::Char(letter.to_ascii_uppercase()), KeyModifiers::NONE),
+                        view,
+                        actions,
+                        enrich,
+                        information,
+                    ),
+                    "Shift-{letter} must not depend on how the terminal encodes it"
+                );
+            }
+        }
     }
 
     #[test]
