@@ -473,6 +473,7 @@ pub(crate) enum Effect {
         empty: bool,
     },
     Amend(ObjectId),
+    Discard(usize),
     Stash(ObjectId),
     Unstash(ObjectId),
     Spill(ObjectId),
@@ -2098,7 +2099,9 @@ impl App {
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
             Action::ToggleHistoryDisplay => self.history_display_expanded = !self.history_display_expanded,
-            Action::ToggleActions if !self.selected_is_segment() => self.actions_expanded = !self.actions_expanded,
+            Action::ToggleActions if self.actions_visible() => {
+                self.actions_expanded = !self.actions_expanded;
+            }
             Action::ToggleEnrich if !self.selected_is_segment() => self.enrich_expanded = !self.enrich_expanded,
             Action::ToggleInformation => self.information_expanded = !self.information_expanded,
             Action::CycleRefs => {
@@ -2365,6 +2368,10 @@ impl App {
                 return vec![Effect::Split(
                     self.rows[self.selected.expect("split requires a selection")].id,
                 )];
+            }
+            Action::Forget if self.can_discard() => {
+                self.actions_expanded = false;
+                return vec![Effect::Discard(self.worktree_changes.selected)];
             }
             Action::Forget if self.can_forget() => {
                 let id = self.rows[self.selected.expect("forget requires a selection")].id;
@@ -3685,6 +3692,17 @@ impl App {
                 Some(ChangePane::Worktree) => self.worktree_path_amend_available,
                 Some(ChangePane::Tree) => false,
             }
+    }
+
+    pub(crate) fn can_discard(&self) -> bool {
+        self.worktree_changes_available
+            && self.changes_focus == Some(ChangePane::Worktree)
+            && self.worktree_changes_visible
+    }
+
+    pub(crate) fn actions_visible(&self) -> bool {
+        self.can_discard()
+            || (!self.selected_is_segment() && (self.changes_focus != Some(ChangePane::Worktree) || self.can_amend()))
     }
 
     pub(crate) fn can_stash(&self) -> bool {

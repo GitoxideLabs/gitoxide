@@ -1329,7 +1329,7 @@ pub(crate) fn draw_with_worktree(
     let mut footer_spans = vec![Span::raw(status)];
     let mut time_travel = None;
     let mut actions_prefix_spans = Vec::new();
-    if !selected_segment && (app.changes_focus != Some(ChangePane::Worktree) || app.can_amend()) {
+    if app.actions_visible() {
         time_travel = time_travel_label(app, decorations);
         actions_prefix_spans.push(Span::raw(" · "));
         actions_prefix_spans.push(Span::styled("a", Style::default().add_modifier(Modifier::UNDERLINED)));
@@ -1507,7 +1507,7 @@ fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<us
     width += "view".len();
     let mut active = app.history_display_expanded.then_some(view);
 
-    let actions_visible = !selected_segment && (app.changes_focus != Some(ChangePane::Worktree) || app.can_amend());
+    let actions_visible = app.actions_visible();
     if actions_visible {
         width += 3;
         let actions = width;
@@ -2381,8 +2381,7 @@ fn active_prefix_popup(
     let mut logical_rows = app
         .history_display_expanded
         .then(|| vec![command_items(commands, CommandGroup::View, 0)]);
-    if !selected_segment && (app.changes_focus != Some(ChangePane::Worktree) || app.can_amend()) && app.actions_expanded
-    {
+    if app.actions_visible() && app.actions_expanded {
         logical_rows = Some(vec![
             command_items(commands, CommandGroup::Actions, 0),
             command_items(commands, CommandGroup::Actions, 1),
@@ -5156,7 +5155,37 @@ mod tests {
             popup.contains(" amend "),
             "worktree focus keeps the scoped edit visible: {popup}"
         );
+        assert!(popup.contains("discard"), "worktree paths offer discard: {popup}");
         assert!(!popup.contains("spill"), "worktree paths cannot be spilled");
+
+        app.set_worktree_head(Some(gix::ObjectId::Sha1([2; 20])), false);
+        terminal.draw(|frame| {
+            let area = frame.area();
+            super::draw_with_worktree(
+                frame,
+                area,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&worktree),
+            );
+        })?;
+        let popup = rendered_line(&terminal, 5);
+        assert!(
+            popup.contains("discard"),
+            "discard is available away from HEAD: {popup}"
+        );
+        assert!(
+            !popup.contains("amend"),
+            "discard does not depend on amend availability"
+        );
+        assert!(
+            rendered_line(&terminal, 7).contains("actions"),
+            "the footer advertises actions"
+        );
+        app.set_worktree_head(Some(id), false);
 
         app.changes_focus = None;
         terminal.draw(|frame| {
