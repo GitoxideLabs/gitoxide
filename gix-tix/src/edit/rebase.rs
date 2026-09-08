@@ -91,6 +91,15 @@ pub(crate) enum PlanCommit {
     Empty(BString),
 }
 
+impl PlanCommit {
+    fn source(&self) -> Option<ObjectId> {
+        match self {
+            Self::Pick(commit_id) | Self::Copy(commit_id) | Self::Resolved(commit_id) => Some(*commit_id),
+            Self::Empty(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlanStep {
     pub parent: PlanParent,
@@ -1217,16 +1226,8 @@ fn perform_inner(
         tree_mode,
     )?;
 
-    let signing = repo
-        .commit_signing_options_if_enabled()
-        .context("could not resolve commit signing configuration")?;
-    let committer = repo
-        .committer()
-        .context("no Git committer is configured")?
-        .context("could not resolve the Git committer")?
-        .to_owned()
-        .context("could not own the Git committer")?;
     repo = repo.with_object_memory();
+    let replay = Replay::new(&repo)?;
 
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
     let mut note_rewrites = Vec::new();
@@ -1237,18 +1238,7 @@ fn perform_inner(
     if inserted || forked {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
-        let (id, signing_time) = write_commit_timed(
-            &repo,
-            commit,
-            None,
-            &committer,
-            CommitState::Unmarked(signature),
-            signing.clone(),
-        )?;
-        if let Some(elapsed) = signing_time {
-            progress.signed += 1;
-            progress.signing_time += elapsed;
-        }
+        let id = replay.write(commit, None, CommitState::Unmarked(signature), &mut progress)?;
         progress.processed += 1;
         report(None, progress);
         selected = Some(id);
@@ -1278,79 +1268,30 @@ fn perform_inner(
     }
     for old_id in pending {
         let old_parents = auto_merge::parents(&repo, graph, old_id)?;
-        let mut commit = if Some(old_id) == root {
-            match replacement.clone() {
-                Some(commit) => commit,
-                None => repo
-                    .find_commit(old_id)
-                    .context("could not find commit to rewrite")?
-                    .decode()
-                    .context("could not decode commit to rewrite")?
-                    .into_owned()
-                    .context("could not own commit to rewrite")?,
-            }
-        } else {
-            repo.find_commit(old_id)
-                .context("could not find descendant commit")?
+        let mut commit = match replacement.as_ref().filter(|_| Some(old_id) == root) {
+            Some(commit) => commit.clone(),
+            None => repo
+                .find_commit(old_id)
+                .context("could not find a commit to rewrite")?
                 .decode()
-                .context("could not decode descendant commit")?
+                .context("could not decode a commit to rewrite")?
                 .into_owned()
-                .context("could not own descendant commit")?
+                .context("could not own a commit to rewrite")?,
         };
         let new_parents: Vec<_> = old_parents
             .iter()
             .filter_map(|parent| auto_merge::mapped(*parent, &rewritten))
             .collect();
         if auto_merge::is_auto_merge(&commit) {
-            let original = repo.find_commit(old_id)?.decode()?.into_owned()?;
             let eager = conflict.is_none() && auto.eager.contains(&old_id);
-            match auto_merge::rebuild(&repo, &mut commit, &mut auto.refs, &rewritten, None, eager)? {
-                auto_merge::Rebuilt::Empty => {
-                    if Some(old_id) == root {
-                        selected = Some(old_id);
-                    }
-                    progress.processed += 1;
-                    report(None, progress);
-                    continue;
-                }
-                auto_merge::Rebuilt::Collapse(commit_id) => {
-                    rewritten.insert(old_id, Some(commit_id));
-                    if Some(old_id) == root {
-                        selected = Some(commit_id);
-                    }
-                }
-                auto_merge::Rebuilt::Commit => {
-                    for parent in &commit.parents {
-                        anyhow::ensure!(
-                            !auto_merge::contains(&repo, old_id, *parent)?,
-                            "an AutoMerge cannot track itself or its descendants"
-                        );
-                    }
-                    if commit == original && !is_pending(&commit) {
-                        if Some(old_id) == root {
-                            selected = Some(old_id);
-                        }
-                    } else {
-                        let state = if eager {
-                            CommitState::Unmarked(Signature::RedoIfNeeded)
-                        } else {
-                            CommitState::Pending {
-                                original_parent: old_parents.first().copied(),
-                            }
-                        };
-                        let (commit_id, signing_time) =
-                            write_commit_timed(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
-                        if let Some(elapsed) = signing_time {
-                            progress.signed += 1;
-                            progress.signing_time += elapsed;
-                        }
-                        rewritten.insert(old_id, Some(commit_id));
-                        note_rewrites.push((old_id, commit_id));
-                        if Some(old_id) == root {
-                            selected = Some(commit_id);
-                        }
-                    }
-                }
+            let (new_id, _) =
+                replay.auto_merge(old_id, commit, &mut auto.refs, &rewritten, None, eager, &mut progress)?;
+            if new_id != old_id {
+                rewritten.insert(old_id, Some(new_id));
+                note_rewrites.push((old_id, new_id));
+            }
+            if Some(old_id) == root {
+                selected = Some(new_id);
             }
             eager_checkout_rewrite |= eager && checkout_path.contains(&old_id);
             progress.processed += 1;
@@ -1401,10 +1342,11 @@ fn perform_inner(
             commit_tree_mode = Tree::CherryPick;
             finalized_empty.insert(old_id);
         }
-        let cherry_pick_started = eager.then(Instant::now);
-        let rewritten_tree = rewritten_tree(
-            &repo,
-            &commit,
+        let ReplayedTree {
+            conflict: new_conflict,
+            muted: optional_conflict,
+        } = replay.tree(
+            &mut commit,
             if commit_tree_mode == Tree::CherryPick {
                 &original_parents
             } else {
@@ -1412,30 +1354,9 @@ fn perform_inner(
             },
             &new_parents,
             commit_tree_mode,
+            optional,
+            eager.then_some(&mut progress),
         )?;
-        let mut new_conflict = None;
-        let mut optional_conflict = false;
-        commit.tree = match rewritten_tree {
-            TreeRewrite::Complete(tree) => tree,
-            TreeRewrite::Conflict {
-                ours,
-                merged,
-                conflicts,
-            } => {
-                if optional {
-                    optional_conflict = true;
-                    commit.tree
-                } else {
-                    new_conflict = Some((merged, conflicts));
-                    ours
-                }
-            }
-        };
-        if let Some(started) = cherry_pick_started.filter(|_| new_conflict.is_none() && !optional_conflict) {
-            progress.cherry_picked += 1;
-            progress.cherry_pick_time += started.elapsed();
-        }
-        commit.parents = new_parents.into_iter().collect();
         let pending = commit_tree_mode == Tree::LeaveAsIsAndMark
             || (commit_tree_mode == Tree::LeaveAsIsAndMarkDescendants && Some(old_id) != root)
             || conflict.is_some()
@@ -1457,12 +1378,7 @@ fn perform_inner(
         } else {
             CommitState::Unmarked(signature)
         };
-        let (new_id, signing_time) =
-            write_commit_timed(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
-        if let Some(elapsed) = signing_time {
-            progress.signed += 1;
-            progress.signing_time += elapsed;
-        }
+        let new_id = replay.write(commit, Some(old_id), state, &mut progress)?;
         progress.processed += 1;
         report(Some(old_id), progress);
         if new_id != old_id {
@@ -1475,18 +1391,12 @@ fn perform_inner(
         if Some(old_id) == root {
             if let Some(mut upper) = split_upper.take() {
                 upper.parents = [new_id].into_iter().collect();
-                let (upper_id, signing_time) = write_commit_timed(
-                    &repo,
+                let upper_id = replay.write(
                     upper,
                     None,
-                    &committer,
                     CommitState::Unmarked(Signature::RedoIfNeeded),
-                    signing.clone(),
+                    &mut progress,
                 )?;
-                if let Some(elapsed) = signing_time {
-                    progress.signed += 1;
-                    progress.signing_time += elapsed;
-                }
                 progress.processed += 1;
                 report(None, progress);
                 rewritten.insert(old_id, Some(upper_id));
@@ -1515,6 +1425,7 @@ fn perform_inner(
     if skip_worktree_transitions {
         reset_indices.extend(finalized_empty);
     }
+    let committer = replay.committer;
     let mut prepared = Prepared {
         repo,
         reset_indices,
@@ -1569,15 +1480,8 @@ pub(super) fn finish_review_with_progress(
     mut report: impl FnMut(Progress),
 ) -> Result<Perform> {
     let mut repo = repo.clone();
-    let signing = repo
-        .commit_signing_options_if_enabled()
-        .context("could not resolve commit signing configuration")?;
-    let committer = repo
-        .committer()
-        .context("no Git committer is configured")?
-        .context("could not resolve the Git committer")?
-        .to_owned()?;
     repo = repo.with_object_memory();
+    let replay = Replay::new(&repo)?;
 
     let review_descendants = graph
         .descendants_in_parent_order(review)
@@ -1668,18 +1572,12 @@ pub(super) fn finish_review_with_progress(
         if *old == review {
             super::review::remove_identity(&mut commit, review_ref.as_bstr());
         }
-        let (new, signing_time) = write_commit_timed(
-            &repo,
+        let new = replay.write(
             commit,
             Some(*old),
-            &committer,
             CommitState::Unmarked(Signature::RedoIfNeeded),
-            signing.clone(),
+            &mut progress,
         )?;
-        if let Some(elapsed) = signing_time {
-            progress.signed += 1;
-            progress.signing_time += elapsed;
-        }
         progress.processed += 1;
         report(progress);
         if new != *old {
@@ -1712,32 +1610,9 @@ pub(super) fn finish_review_with_progress(
         let old_parents = auto_merge::parents(&repo, graph, old)?;
         let mut commit = repo.find_commit(old)?.decode()?.into_owned()?;
         if auto_merge::is_auto_merge(&commit) {
-            let original = commit.clone();
             let eager = conflict.is_none() && auto.eager.contains(&old);
-            let commit_id = match auto_merge::rebuild(&repo, &mut commit, &mut auto.refs, &rewritten, None, eager)? {
-                auto_merge::Rebuilt::Empty => old,
-                auto_merge::Rebuilt::Collapse(commit_id) => commit_id,
-                auto_merge::Rebuilt::Commit => {
-                    if commit == original && !is_pending(&commit) {
-                        old
-                    } else {
-                        let state = if eager {
-                            CommitState::Unmarked(Signature::RedoIfNeeded)
-                        } else {
-                            CommitState::Pending {
-                                original_parent: old_parents.first().copied(),
-                            }
-                        };
-                        let (commit_id, signing_time) =
-                            write_commit_timed(&repo, commit, Some(old), &committer, state, signing.clone())?;
-                        if let Some(elapsed) = signing_time {
-                            progress.signed += 1;
-                            progress.signing_time += elapsed;
-                        }
-                        commit_id
-                    }
-                }
-            };
+            let (commit_id, _) =
+                replay.auto_merge(old, commit, &mut auto.refs, &rewritten, None, eager, &mut progress)?;
             rewritten.insert(old, Some(commit_id));
             if old != commit_id {
                 note_rewrites.push((old, commit_id));
@@ -1781,36 +1656,21 @@ pub(super) fn finish_review_with_progress(
         if finalize_empty {
             mode = Tree::CherryPick;
         }
-        let cherry_pick_started = eager.then(Instant::now);
-        let mut new_conflict = None;
-        let mut optional_conflict = false;
-        commit.tree = match rewritten_tree(&repo, &commit, &original_parents, &new_parents, mode)? {
-            TreeRewrite::Complete(tree) => tree,
-            TreeRewrite::Conflict {
-                ours,
-                merged,
-                conflicts,
-            } => {
-                if optional {
-                    optional_conflict = true;
-                    commit.tree
-                } else {
-                    new_conflict = Some((merged, conflicts));
-                    ours
-                }
-            }
-        };
-        if let Some(started) = cherry_pick_started.filter(|_| new_conflict.is_none() && !optional_conflict) {
-            progress.cherry_picked += 1;
-            progress.cherry_pick_time += started.elapsed();
-        }
-        commit.parents = new_parents.into_iter().collect();
+        let ReplayedTree {
+            conflict: new_conflict,
+            muted: optional_conflict,
+        } = replay.tree(
+            &mut commit,
+            &original_parents,
+            &new_parents,
+            mode,
+            optional,
+            eager.then_some(&mut progress),
+        )?;
         let pending = !(eager || finalize_empty) || conflict.is_some() || new_conflict.is_some() || optional_conflict;
-        let (new, signing_time) = write_commit_timed(
-            &repo,
+        let new = replay.write(
             commit,
             Some(old),
-            &committer,
             if pending {
                 CommitState::Pending {
                     original_parent: recorded_parent.flatten().or_else(|| old_parents.first().copied()),
@@ -1818,12 +1678,8 @@ pub(super) fn finish_review_with_progress(
             } else {
                 CommitState::Unmarked(Signature::RedoIfNeeded)
             },
-            signing.clone(),
+            &mut progress,
         )?;
-        if let Some(elapsed) = signing_time {
-            progress.signed += 1;
-            progress.signing_time += elapsed;
-        }
         progress.processed += 1;
         report(progress);
         if new != old {
@@ -1838,6 +1694,7 @@ pub(super) fn finish_review_with_progress(
     let (selected, checkout_reference) = checkout.map_or((finished_review, None), |(old, reference)| {
         (rewritten.get(&old).copied().flatten().unwrap_or(old), reference)
     });
+    let committer = replay.committer;
     let mut prepared = Prepared {
         repo,
         reset_indices: HashSet::new(),
@@ -1885,22 +1742,14 @@ pub(crate) fn perform_plan_with_progress(
     let mut progress = Progress::for_plan(&plan);
     report(progress);
     let mut repo = repo.clone();
-    let signing = repo
-        .commit_signing_options_if_enabled()
-        .context("could not resolve commit signing configuration")?;
     let author = repo
         .author()
         .context("no Git author is configured")?
         .context("could not resolve the Git author")?
         .to_owned()
         .context("could not own the Git author")?;
-    let committer = repo
-        .committer()
-        .context("no Git committer is configured")?
-        .context("could not resolve the Git committer")?
-        .to_owned()
-        .context("could not own the Git committer")?;
     repo = repo.with_object_memory();
+    let replay = Replay::new(&repo)?;
 
     let scope: HashSet<_> = plan.scope.iter().copied().collect();
     let mut picked = HashSet::new();
@@ -2009,47 +1858,18 @@ pub(crate) fn perform_plan_with_progress(
         if automatic.contains(&index)
             && let PlanCommit::Pick(old_id) = step.commit
         {
-            let original = repo.find_commit(old_id)?.decode()?.into_owned()?;
-            let mut commit = original.clone();
+            let commit = repo.find_commit(old_id)?.decode()?.into_owned()?;
             let materialize = conflict.is_none() && (eager.contains(&index) || optional.contains(&index));
-            let new_id = match auto_merge::rebuild(
-                &repo,
-                &mut commit,
+            let (new_id, pending) = replay.auto_merge(
+                old_id,
+                commit,
                 &mut auto_refs,
                 &rewritten,
                 Some((&plan.expected_refs, &produced)),
                 materialize,
-            )? {
-                auto_merge::Rebuilt::Empty => old_id,
-                auto_merge::Rebuilt::Collapse(commit_id) => commit_id,
-                auto_merge::Rebuilt::Commit => {
-                    for parent in &commit.parents {
-                        anyhow::ensure!(
-                            !auto_merge::contains(&repo, old_id, *parent)?,
-                            "an AutoMerge cannot track itself or its descendants"
-                        );
-                    }
-                    if commit == original && !is_pending(&commit) {
-                        old_id
-                    } else {
-                        let state = if materialize {
-                            CommitState::Unmarked(Signature::RedoIfNeeded)
-                        } else {
-                            marked = true;
-                            CommitState::Pending {
-                                original_parent: original.parents.first().copied(),
-                            }
-                        };
-                        let (commit_id, signing_time) =
-                            write_commit_timed(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
-                        if let Some(elapsed) = signing_time {
-                            progress.signed += 1;
-                            progress.signing_time += elapsed;
-                        }
-                        commit_id
-                    }
-                }
-            };
+                &mut progress,
+            )?;
+            marked |= pending;
             rewritten.insert(old_id, Some(new_id));
             if old_id != new_id {
                 note_rewrites.push((old_id, new_id));
@@ -2111,7 +1931,7 @@ pub(crate) fn perform_plan_with_progress(
                 tree: parent_tree(&repo, Some(parent))?,
                 parents: [parent].into_iter().collect(),
                 author: author.clone(),
-                committer: committer.clone(),
+                committer: replay.committer.clone(),
                 encoding: None,
                 message: title.clone(),
                 extra_headers: Vec::new(),
@@ -2152,43 +1972,26 @@ pub(crate) fn perform_plan_with_progress(
         } else {
             Tree::LeaveAsIsAndMark
         };
-        let cherry_pick_started = (eager
-            && matches!(
-                step.commit,
-                PlanCommit::Pick(_) | PlanCommit::Copy(_) | PlanCommit::Resolved(_)
-            ))
-        .then(Instant::now);
-        let mut step_conflict = None;
-        let mut optional_conflict = false;
-        commit.tree = match rewritten_tree(&repo, &commit, &replay_parents, &[parent], mode)? {
-            TreeRewrite::Complete(tree) => tree,
-            TreeRewrite::Conflict {
-                ours,
+        let ReplayedTree {
+            conflict: tree_conflict,
+            muted: optional_conflict,
+        } = replay.tree(
+            &mut commit,
+            &replay_parents,
+            &[parent],
+            mode,
+            optional_input,
+            (eager && step.commit.source().is_some()).then_some(&mut progress),
+        )?;
+        let mut step_conflict = tree_conflict.map(|(merged, conflicts)| {
+            (
+                step.commit.source().expect("empty commits cannot conflict"),
                 merged,
                 conflicts,
-            } => {
-                let (PlanCommit::Pick(original) | PlanCommit::Copy(original) | PlanCommit::Resolved(original)) =
-                    step.commit
-                else {
-                    unreachable!("empty commits cannot conflict")
-                };
-                if optional_input {
-                    optional_conflict = true;
-                    commit.tree
-                } else {
-                    step_conflict = Some((original, merged, conflicts, None));
-                    ours
-                }
-            }
-        };
-        if let Some(started) = cherry_pick_started.filter(|_| step_conflict.is_none() && !optional_conflict) {
-            progress.cherry_picked += 1;
-            progress.cherry_pick_time += started.elapsed();
-        }
-        if matches!(
-            step.commit,
-            PlanCommit::Pick(_) | PlanCommit::Copy(_) | PlanCommit::Resolved(_)
-        ) {
+                None,
+            )
+        });
+        if step.commit.source().is_some() {
             progress.processed += 1;
             report(progress);
         }
@@ -2237,7 +2040,6 @@ pub(crate) fn perform_plan_with_progress(
             }
             squash_message(&repo, &mut commit, &squashed[..applied_squash])?;
         }
-        commit.parents = [parent].into_iter().collect();
         let state = if step_conflict.is_some() {
             CommitState::Unmarked(Signature::InvalidateExisting)
         } else if (eager || finalize_empty) && !optional_conflict {
@@ -2248,16 +2050,7 @@ pub(crate) fn perform_plan_with_progress(
                 original_parent: recorded_parent.flatten().or_else(|| graph_parents.first().copied()),
             }
         };
-        let predecessor = match step.commit {
-            PlanCommit::Pick(id) | PlanCommit::Copy(id) | PlanCommit::Resolved(id) => Some(id),
-            PlanCommit::Empty(_) => None,
-        };
-        let (new_id, signing_time) =
-            write_commit_timed(&repo, commit, predecessor, &committer, state, signing.clone())?;
-        if let Some(elapsed) = signing_time {
-            progress.signed += 1;
-            progress.signing_time += elapsed;
-        }
+        let new_id = replay.write(commit, step.commit.source(), state, &mut progress)?;
         if matches!(step.commit, PlanCommit::Empty(_)) {
             progress.processed += 1;
         }
@@ -2363,6 +2156,7 @@ pub(crate) fn perform_plan_with_progress(
         PlanParent::Existing(id) => id,
         PlanParent::Step(index) => produced[index],
     });
+    let committer = replay.committer;
     let mut prepared = Prepared {
         repo,
         reset_indices: marked.then_some(plan.base).into_iter().collect(),
@@ -3145,52 +2939,160 @@ pub(crate) fn is_pending(commit: &gix::objs::Commit) -> bool {
             .any(|(name, value)| is_signature(name) && value.is_empty())
 }
 
-fn write_commit_timed(
-    repo: &gix::Repository,
-    mut commit: gix::objs::Commit,
-    predecessor: Option<ObjectId>,
-    committer: &gix::actor::Signature,
-    state: CommitState,
+/// Bounded execution shared by edits, review completion, and todo replay.
+struct Replay<'repo> {
+    repo: &'repo gix::Repository,
+    committer: gix::actor::Signature,
     signing: Option<gix::objs::signature::sign::Options>,
-) -> Result<(ObjectId, Option<Duration>)> {
-    if let Some(predecessor) = predecessor {
-        crate::change_id::inherit(repo, &mut commit, predecessor)?;
+}
+
+struct ReplayedTree {
+    conflict: Option<(ObjectId, Vec<gix::merge::tree::Conflict>)>,
+    muted: bool,
+}
+
+impl<'repo> Replay<'repo> {
+    fn new(repo: &'repo gix::Repository) -> Result<Self> {
+        Ok(Self {
+            repo,
+            committer: repo
+                .committer()
+                .context("no Git committer is configured")?
+                .context("could not resolve the Git committer")?
+                .to_owned()
+                .context("could not own the Git committer")?,
+            signing: repo
+                .commit_signing_options_if_enabled()
+                .context("could not resolve commit signing configuration")?,
+        })
     }
-    commit.committer = committer.clone();
-    let signature = match state {
-        CommitState::Unmarked(signature) => {
-            marker(&mut commit, false, None);
-            signature
+
+    fn tree(
+        &self,
+        commit: &mut gix::objs::Commit,
+        old_parents: &[ObjectId],
+        new_parents: &[ObjectId],
+        mode: Tree,
+        optional: bool,
+        progress: Option<&mut Progress>,
+    ) -> Result<ReplayedTree> {
+        let started = progress.as_ref().map(|_| Instant::now());
+        let mut replayed = ReplayedTree {
+            conflict: None,
+            muted: false,
+        };
+        commit.tree = match rewritten_tree(self.repo, commit, old_parents, new_parents, mode)? {
+            TreeRewrite::Complete(tree) => tree,
+            TreeRewrite::Conflict {
+                ours,
+                merged,
+                conflicts,
+            } => {
+                if optional {
+                    replayed.muted = true;
+                    commit.tree
+                } else {
+                    replayed.conflict = Some((merged, conflicts));
+                    ours
+                }
+            }
+        };
+        if replayed.conflict.is_none()
+            && !replayed.muted
+            && let Some((progress, started)) = progress.zip(started)
+        {
+            progress.cherry_picked += 1;
+            progress.cherry_pick_time += started.elapsed();
         }
-        CommitState::Pending { original_parent } => {
-            marker(&mut commit, true, original_parent);
-            Signature::InvalidateExisting
+        commit.parents = new_parents.iter().copied().collect();
+        Ok(replayed)
+    }
+
+    /// Return the resulting commit and whether it was written with a pending replay marker.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "derived replay needs the operation's ref read set and final placements"
+    )]
+    fn auto_merge(
+        &self,
+        old_id: ObjectId,
+        mut commit: gix::objs::Commit,
+        refs: &mut auto_merge::References,
+        rewritten: &HashMap<ObjectId, Option<ObjectId>>,
+        planned: Option<(&[PlanRef], &[ObjectId])>,
+        eager: bool,
+        progress: &mut Progress,
+    ) -> Result<(ObjectId, bool)> {
+        match auto_merge::rebuild(self.repo, &mut commit, refs, rewritten, planned, eager)? {
+            auto_merge::Rebuilt::Empty => return Ok((old_id, false)),
+            auto_merge::Rebuilt::Collapse(commit_id) => return Ok((commit_id, false)),
+            auto_merge::Rebuilt::Commit => {}
         }
-    };
-    let had_signature = commit.extra_headers.iter().any(|(name, _)| is_signature(name));
-    commit.extra_headers.retain(|(name, _)| !is_signature(name));
-    let mut signing_time = None;
-    commit = match (signature, signing) {
-        (Signature::RedoIfNeeded, Some(options)) => {
-            let started = Instant::now();
-            let signed = commit.sign(options).context("could not sign rebased commit")?;
-            signing_time = Some(started.elapsed());
-            signed
+        for parent in &commit.parents {
+            anyhow::ensure!(
+                !auto_merge::contains(self.repo, old_id, *parent)?,
+                "an AutoMerge cannot track itself or its descendants"
+            );
         }
-        (Signature::InvalidateExisting, Some(_)) if had_signature => {
-            let field = gix::objs::commit::signature_field_name(commit.tree.kind());
-            commit.extra_headers.push((field.into(), BString::default()));
-            commit
+        let original = self.repo.find_commit(old_id)?.decode()?.into_owned()?;
+        if commit == original && !is_pending(&commit) {
+            return Ok((old_id, false));
         }
-        (Signature::Remove, _) => commit,
-        _ => commit,
-    };
-    Ok((
-        repo.write_object(&commit)
+        let state = if eager {
+            CommitState::Unmarked(Signature::RedoIfNeeded)
+        } else {
+            CommitState::Pending {
+                original_parent: original.parents.first().copied(),
+            }
+        };
+        Ok((self.write(commit, Some(old_id), state, progress)?, !eager))
+    }
+
+    fn write(
+        &self,
+        mut commit: gix::objs::Commit,
+        predecessor: Option<ObjectId>,
+        state: CommitState,
+        progress: &mut Progress,
+    ) -> Result<ObjectId> {
+        if let Some(predecessor) = predecessor {
+            crate::change_id::inherit(self.repo, &mut commit, predecessor)?;
+        }
+        commit.committer = self.committer.clone();
+        let signature = match state {
+            CommitState::Unmarked(signature) => {
+                marker(&mut commit, false, None);
+                signature
+            }
+            CommitState::Pending { original_parent } => {
+                marker(&mut commit, true, original_parent);
+                Signature::InvalidateExisting
+            }
+        };
+        let had_signature = commit.extra_headers.iter().any(|(name, _)| is_signature(name));
+        commit.extra_headers.retain(|(name, _)| !is_signature(name));
+        commit = match (signature, self.signing.clone()) {
+            (Signature::RedoIfNeeded, Some(options)) => {
+                let started = Instant::now();
+                let signed = commit.sign(options).context("could not sign rebased commit")?;
+                progress.signed += 1;
+                progress.signing_time += started.elapsed();
+                signed
+            }
+            (Signature::InvalidateExisting, Some(_)) if had_signature => {
+                let field = gix::objs::commit::signature_field_name(commit.tree.kind());
+                commit.extra_headers.push((field.into(), BString::default()));
+                commit
+            }
+            (Signature::Remove, _) => commit,
+            _ => commit,
+        };
+        Ok(self
+            .repo
+            .write_object(&commit)
             .context("could not prepare rebased commit")?
-            .detach(),
-        signing_time,
-    ))
+            .detach())
+    }
 }
 
 fn is_signature(name: &BString) -> bool {

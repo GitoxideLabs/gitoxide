@@ -1168,6 +1168,9 @@ views.
   a pick drops that AutoMerge. Other merge commits retain their rebase restrictions.
   Derived updates, input replays, notes, signing, ref checks, checkout preflights,
   and undo use the shared edit machinery and one grouped undo operation.
+  Edits, review completion, and todos use the same bounded executor for tree
+  application, optional-input conflicts, AutoMerge rebuilding, replay markers,
+  change-ID inheritance, and signing. Their planning rules remain independent.
 - History loading inspects AutoMerge headers throughout the editable projection,
   independently of viewport text loading, and caches both positive and negative
   results by immutable commit ID. Idle application state retains detached recipes
