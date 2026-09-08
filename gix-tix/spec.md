@@ -868,6 +868,15 @@ views.
 - `Tab` cycles focus in visual order through visible changes blocks and history.
   Inactive blocks, including paths and borders, are dimmed. Only the focused
   block shows its distinct status line.
+- A selected Worktree path offers `Actions discard` (`a d`), regardless of the
+  selected history entry. Unstaged changes restore that path from the index;
+  untracked and intent-to-add files are removed. Staged or conflicted changes
+  reset that path in both the index and worktree to HEAD, including any unstaged
+  edits to the same path. An unborn HEAD uses the empty tree. Renames restore
+  their source and remove their destination; copies only remove the destination.
+  Paths are literal, unrelated paths and history remain unchanged, and stale
+  selections or unsupported submodule changes report an error. Discard closes the
+  actions group, refreshes the changes panes, and reports its result in a notice.
 - `Shift-P` cycles the comparison parent while Tree has focus. Merge commits are
   compared to one parent at a time; root commits compare against an empty tree.
 - Repeated history keys, including printable `j`/`k` reported through enhanced
@@ -1507,6 +1516,7 @@ views.
   actions. `a o` rewords, `a w` creates a rebased child, `a Shift-N` creates an
   empty child, `a e` amends `@`, `a l` spills `@`, `a Shift-S` splits staged from
   unstaged changes, and `a d` forgets a top commit when each action is available.
+  With a Worktree path selected, `a d` discards that path's changes instead.
   `a b` rebases an eligible hidden base,
   `a u` rebases it onto the newer hidden branch tip when available, `a r` starts
   or finishes a review, `a s` squashes the selected commit, `a z` stashes or

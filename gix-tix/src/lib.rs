@@ -4364,6 +4364,25 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("{verb}: {err:#}")),
                     }
                 }
+                Effect::Discard(selected) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let result = worktree_changes
+                        .as_ref()
+                        .and_then(|(_, changes)| changes.paths.get(selected))
+                        .context("selected worktree path is no longer available")
+                        .and_then(|change| {
+                            let repository = open_repository(&repository_path, repository_is_bare, false)
+                                .context("could not open repository for discard")?;
+                            edit::discard::perform(&repository, change)?;
+                            Ok(format!("discarded changes to {}", change.path))
+                        });
+                    match result {
+                        Ok(notice) => app.leave_success(notice),
+                        Err(err) => app.leave_error(format!("discard: {err:#}")),
+                    }
+                    invalidate_worktree_changes(&mut worktree_changes);
+                }
                 Effect::Stash(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
