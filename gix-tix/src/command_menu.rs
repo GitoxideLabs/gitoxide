@@ -62,6 +62,67 @@ pub(crate) enum CommandGroup {
     Information,
 }
 
+const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
+    use CommandGroup::{Actions, Enrich, Information, View};
+    use CommandId as Id;
+    &[
+        (Id::Date, View, "vd", Action::ToggleDate),
+        (Id::Ids, View, "vi", Action::CycleIds),
+        (Id::Emails, View, "vs", Action::ToggleEmail),
+        (Id::Names, View, "ve", Action::ToggleName),
+        (Id::Mailmap, View, "vm", Action::ToggleMailmap),
+        (Id::Trailers, View, "vt", Action::ToggleTrailers),
+        (Id::Refs, View, "vr", Action::CycleRefs),
+        (Id::Hidden, View, "vh", Action::ToggleHidden),
+        (Id::RelatedHistory, View, "vo", Action::ShowRelatedHistory),
+        (Id::Select, View, "vc", Action::SelectEntry),
+        (Id::Reword, Actions, "ao", Action::Reword),
+        (Id::NewCommit, Actions, "aw", Action::NewCommit),
+        (Id::NewEmptyCommit, Actions, "aN", Action::NewEmptyCommit),
+        (Id::Amend, Actions, "ae", Action::Amend),
+        (Id::Spill, Actions, "al", Action::Spill),
+        (Id::Split, Actions, "aS", Action::Split),
+        (Id::Forget, Actions, "ad", Action::Forget),
+        (Id::Pin, Actions, "ai", Action::TogglePin),
+        (Id::Unpin, Actions, "ai", Action::TogglePin),
+        (Id::Stash, Actions, "az", Action::Stash),
+        (Id::Unstash, Actions, "az", Action::Stash),
+        (Id::Rebase, Actions, "ab", Action::Rebase),
+        (Id::RebaseUpdate, Actions, "au", Action::RebaseUpdate),
+        #[cfg(feature = "blocking-network-client")]
+        (Id::Fetch, Actions, "aF", Action::Fetch),
+        (Id::Push, Actions, "aP", Action::Push),
+        (Id::StartReview, Actions, "ar", Action::Review),
+        (Id::FinishReview, Actions, "ar", Action::Review),
+        (Id::Squash, Actions, "as", Action::Squash),
+        (Id::CopyInsert, Actions, "ay", Action::CopyInsert),
+        (Id::MoveInsert, Actions, "am", Action::MoveInsert),
+        (Id::StackInsert, Actions, "at", Action::StackInsert),
+        (Id::ForkCommit, Actions, "af", Action::ForkCommit),
+        (Id::Attach, Actions, "ah", Action::Attach),
+        (Id::AutoMerge, Actions, "aM", Action::AutoMerge),
+        (Id::Remerge, Actions, "aU", Action::Remerge),
+        (Id::RemoveFromAutoMerge, Actions, "ax", Action::RemoveFromAutoMerge),
+        (Id::RemoveAutoMergeInput, Actions, "aX", Action::RemoveAutoMergeInput),
+        (Id::Todo, Enrich, "nt", Action::ToggleTodo),
+        (Id::Note, Enrich, "no", Action::EditNote),
+        (Id::ChecksPass, Enrich, "ne", Action::ToggleChecksPass),
+        (Id::GitNote, Enrich, "ng", Action::EditGitNote),
+        (Id::VerifySignatures, Information, "?s", Action::VerifySignatures),
+        (Id::Alignment, Information, "?[", Action::ToggleAlign),
+        (Id::RefTree, Information, "?t", Action::ToggleRefTree),
+        (Id::CommitMessage, Information, "?m", Action::ToggleCommit),
+        (Id::Changes, Information, "?e", Action::ToggleChanges),
+    ]
+};
+
+pub(crate) fn shortcut_action(group: CommandGroup, key: char) -> Option<Action> {
+    BINDINGS
+        .iter()
+        .find(|(_, candidate, shortcut, _)| *candidate == group && shortcut.ends_with(key))
+        .map(|(_, _, _, action)| action.clone())
+}
+
 impl CommandGroup {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -124,15 +185,19 @@ impl Command {
 
 pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_signatures: bool) -> Vec<Command> {
     let mut out = Vec::with_capacity(36);
-    let mut push = |id, group, row, label, shortcut, active, action| {
+    let mut push = |id, row, label, active| {
+        let (_, group, shortcut, action) = BINDINGS
+            .iter()
+            .find(|(candidate, ..)| *candidate == id)
+            .expect("every command has a binding");
         out.push(Command {
             id,
-            group,
+            group: *group,
             row,
             label,
             shortcut,
             active,
-            action,
+            action: action.clone(),
         });
     };
 
@@ -141,233 +206,86 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
         DateMode::Committer => ("committer date", true),
         DateMode::None => ("date", false),
     };
-    push(
-        CommandId::Date,
-        CommandGroup::View,
-        0,
-        date_label,
-        "vd",
-        date_active,
-        Action::ToggleDate,
-    );
+    push(CommandId::Date, 0, date_label, date_active);
     let (ids_label, ids_active) = match (app.id_mode, app.effective_id_mode()) {
         (IdMode::Off, IdMode::Change) => ("auto change ids", true),
         (IdMode::Commit, _) => ("commit ids", true),
         (IdMode::Change, _) => ("change ids", true),
         (IdMode::Off, _) => ("ids", false),
     };
-    push(
-        CommandId::Ids,
-        CommandGroup::View,
-        0,
-        ids_label,
-        "vi",
-        ids_active,
-        Action::CycleIds,
-    );
-    push(
-        CommandId::Emails,
-        CommandGroup::View,
-        0,
-        "emails",
-        "vs",
-        app.show_emails,
-        Action::ToggleEmail,
-    );
+    push(CommandId::Ids, 0, ids_label, ids_active);
+    push(CommandId::Emails, 0, "emails", app.show_emails);
     let (names_label, names_active) = match app.name_mode {
         NameMode::All => ("names", true),
         NameMode::Author => ("name", true),
         NameMode::None => ("name", false),
     };
-    push(
-        CommandId::Names,
-        CommandGroup::View,
-        0,
-        names_label,
-        "ve",
-        names_active,
-        Action::ToggleName,
-    );
-    push(
-        CommandId::Mailmap,
-        CommandGroup::View,
-        0,
-        "mailmap",
-        "vm",
-        app.use_mailmap,
-        Action::ToggleMailmap,
-    );
-    push(
-        CommandId::Trailers,
-        CommandGroup::View,
-        0,
-        "trailers",
-        "vt",
-        app.show_trailers,
-        Action::ToggleTrailers,
-    );
+    push(CommandId::Names, 0, names_label, names_active);
+    push(CommandId::Mailmap, 0, "mailmap", app.use_mailmap);
+    push(CommandId::Trailers, 0, "trailers", app.show_trailers);
     let refs_label = match app.ref_mode {
         RefMode::All => "all refs",
         RefMode::Default => "refs",
         RefMode::None => "no refs",
     };
-    push(
-        CommandId::Refs,
-        CommandGroup::View,
-        0,
-        refs_label,
-        "vr",
-        app.ref_mode != RefMode::None,
-        Action::CycleRefs,
-    );
+    push(CommandId::Refs, 0, refs_label, app.ref_mode != RefMode::None);
     if app.has_hidden_filter {
         push(
             CommandId::Hidden,
-            CommandGroup::View,
             0,
             if app.show_hidden { "hide hidden" } else { "show hidden" },
-            "vh",
             app.show_hidden,
-            Action::ToggleHidden,
         );
     }
     if app.can_select_entry() {
-        push(
-            CommandId::Select,
-            CommandGroup::View,
-            0,
-            "select",
-            "vc",
-            true,
-            Action::SelectEntry,
-        );
+        push(CommandId::Select, 0, "select", true);
     }
     if app.related_history_commit().is_some() {
-        push(
-            CommandId::RelatedHistory,
-            CommandGroup::View,
-            0,
-            "show related history",
-            "vo",
-            true,
-            Action::ShowRelatedHistory,
-        );
+        push(CommandId::RelatedHistory, 0, "show related history", true);
     }
 
     let selected_is_segment = app.selected_is_segment();
     let actions_visible =
         !selected_is_segment && (app.changes_focus != Some(crate::app::ChangePane::Worktree) || app.can_amend());
     if actions_visible {
-        for (id, available, label, shortcut, action) in [
-            (
-                CommandId::AutoMerge,
-                app.can_auto_merge(),
-                "M AutoMerge",
-                "aM",
-                Action::AutoMerge,
-            ),
-            (
-                CommandId::Remerge,
-                app.can_remerge(),
-                "U remerge",
-                "aU",
-                Action::Remerge,
-            ),
+        for (id, available, label) in [
+            (CommandId::AutoMerge, app.can_auto_merge(), "M AutoMerge"),
+            (CommandId::Remerge, app.can_remerge(), "U remerge"),
             (
                 CommandId::RemoveFromAutoMerge,
                 app.can_remove_from_auto_merge(),
                 "x remove from AutoMerge",
-                "ax",
-                Action::RemoveFromAutoMerge,
             ),
             (
                 CommandId::RemoveAutoMergeInput,
                 app.can_remove_auto_merge_input(),
                 "X remove input",
-                "aX",
-                Action::RemoveAutoMergeInput,
             ),
         ] {
             if available {
-                push(id, CommandGroup::Actions, 1, label, shortcut, true, action);
+                push(id, 1, label, true);
             }
         }
         if app.changes_focus.is_none() && app.reword_shortcut_visible() {
-            push(
-                CommandId::Reword,
-                CommandGroup::Actions,
-                0,
-                "reword",
-                "ao",
-                true,
-                Action::Reword,
-            );
+            push(CommandId::Reword, 0, "reword", true);
         }
         if app.changes_focus.is_none() && app.can_create_commit() {
-            push(
-                CommandId::NewCommit,
-                CommandGroup::Actions,
-                0,
-                "new",
-                "aw",
-                true,
-                Action::NewCommit,
-            );
+            push(CommandId::NewCommit, 0, "new", true);
         }
         if app.changes_focus.is_none() && app.can_create_empty_commit() {
-            push(
-                CommandId::NewEmptyCommit,
-                CommandGroup::Actions,
-                0,
-                "N new-empty",
-                "aN",
-                true,
-                Action::NewEmptyCommit,
-            );
+            push(CommandId::NewEmptyCommit, 0, "N new-empty", true);
         }
         if app.can_amend() {
-            push(
-                CommandId::Amend,
-                CommandGroup::Actions,
-                0,
-                "amend",
-                "ae",
-                true,
-                Action::Amend,
-            );
+            push(CommandId::Amend, 0, "amend", true);
         }
         if app.can_spill() {
-            push(
-                CommandId::Spill,
-                CommandGroup::Actions,
-                0,
-                "spill",
-                "al",
-                true,
-                Action::Spill,
-            );
+            push(CommandId::Spill, 0, "spill", true);
         }
         if app.can_split() {
-            push(
-                CommandId::Split,
-                CommandGroup::Actions,
-                0,
-                "S split",
-                "aS",
-                true,
-                Action::Split,
-            );
+            push(CommandId::Split, 0, "S split", true);
         }
         if app.changes_focus.is_none() && app.can_forget() {
-            push(
-                CommandId::Forget,
-                CommandGroup::Actions,
-                0,
-                "d forget",
-                "ad",
-                true,
-                Action::Forget,
-            );
+            push(CommandId::Forget, 0, "d forget", true);
         }
         if app.changes_focus.is_none()
             && let Some(selected) = app.selected.and_then(|index| app.rows.get(index))
@@ -379,221 +297,66 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
             });
             push(
                 if pinned { CommandId::Unpin } else { CommandId::Pin },
-                CommandGroup::Actions,
                 0,
                 if pinned { "unpin" } else { "pin" },
-                "ai",
                 true,
-                Action::TogglePin,
             );
         }
 
         if app.changes_focus.is_none() && app.can_stash() {
-            push(
-                CommandId::Stash,
-                CommandGroup::Actions,
-                1,
-                "z stash",
-                "az",
-                true,
-                Action::Stash,
-            );
+            push(CommandId::Stash, 1, "z stash", true);
         } else if app.changes_focus.is_none() && app.can_unstash() {
-            push(
-                CommandId::Unstash,
-                CommandGroup::Actions,
-                1,
-                "z unstash",
-                "az",
-                true,
-                Action::Stash,
-            );
+            push(CommandId::Unstash, 1, "z unstash", true);
         }
         if app.changes_focus.is_none() && app.can_rebase() {
-            push(
-                CommandId::Rebase,
-                CommandGroup::Actions,
-                1,
-                "rebase",
-                "ab",
-                true,
-                Action::Rebase,
-            );
+            push(CommandId::Rebase, 1, "rebase", true);
         }
         if app.changes_focus.is_none() && app.can_rebase_update() {
-            push(
-                CommandId::RebaseUpdate,
-                CommandGroup::Actions,
-                1,
-                "rebase-update",
-                "au",
-                true,
-                Action::RebaseUpdate,
-            );
+            push(CommandId::RebaseUpdate, 1, "rebase-update", true);
         }
         #[cfg(feature = "blocking-network-client")]
         if app.changes_focus.is_none() && app.can_fetch() {
-            push(
-                CommandId::Fetch,
-                CommandGroup::Actions,
-                1,
-                "F fetch",
-                "aF",
-                true,
-                Action::Fetch,
-            );
+            push(CommandId::Fetch, 1, "F fetch", true);
         }
         if app.changes_focus.is_none() && app.can_push() {
-            push(
-                CommandId::Push,
-                CommandGroup::Actions,
-                1,
-                "P push",
-                "aP",
-                true,
-                Action::Push,
-            );
+            push(CommandId::Push, 1, "P push", true);
         }
         if app.changes_focus.is_none() && app.can_finish_review() {
-            push(
-                CommandId::FinishReview,
-                CommandGroup::Actions,
-                1,
-                "finish-review",
-                "ar",
-                true,
-                Action::Review,
-            );
+            push(CommandId::FinishReview, 1, "finish-review", true);
         } else if app.changes_focus.is_none() && app.can_review() {
-            push(
-                CommandId::StartReview,
-                CommandGroup::Actions,
-                1,
-                "review",
-                "ar",
-                true,
-                Action::Review,
-            );
+            push(CommandId::StartReview, 1, "review", true);
         }
         if app.changes_focus.is_none() && app.can_squash() {
-            push(
-                CommandId::Squash,
-                CommandGroup::Actions,
-                1,
-                "squash",
-                "as",
-                true,
-                Action::Squash,
-            );
+            push(CommandId::Squash, 1, "squash", true);
         }
         if app.changes_focus.is_none() && app.can_copy_insert() {
-            push(
-                CommandId::CopyInsert,
-                CommandGroup::Actions,
-                1,
-                "copy-insert",
-                "ay",
-                true,
-                Action::CopyInsert,
-            );
+            push(CommandId::CopyInsert, 1, "copy-insert", true);
         }
         if app.changes_focus.is_none() && app.can_move_insert() {
-            push(
-                CommandId::MoveInsert,
-                CommandGroup::Actions,
-                1,
-                "move-insert",
-                "am",
-                true,
-                Action::MoveInsert,
-            );
+            push(CommandId::MoveInsert, 1, "move-insert", true);
         }
         if app.changes_focus.is_none() && app.can_stack_insert() {
-            push(
-                CommandId::StackInsert,
-                CommandGroup::Actions,
-                1,
-                "stack-insert",
-                "at",
-                true,
-                Action::StackInsert,
-            );
+            push(CommandId::StackInsert, 1, "stack-insert", true);
         }
         if app.changes_focus.is_none() && app.can_fork_commit() {
-            push(
-                CommandId::ForkCommit,
-                CommandGroup::Actions,
-                1,
-                "fork",
-                "af",
-                true,
-                Action::ForkCommit,
-            );
+            push(CommandId::ForkCommit, 1, "fork", true);
         }
         if app.changes_focus.is_none() && app.can_attach() {
-            push(
-                CommandId::Attach,
-                CommandGroup::Actions,
-                1,
-                "attach",
-                "ah",
-                true,
-                Action::Attach,
-            );
+            push(CommandId::Attach, 1, "attach", true);
         }
     }
 
     if !selected_is_segment && let Some(row) = app.selected.and_then(|index| app.rows.get(index)) {
         if app.can_enrich() {
-            push(
-                CommandId::Todo,
-                CommandGroup::Enrich,
-                0,
-                "todo",
-                "nt",
-                app.todo(row.id),
-                Action::ToggleTodo,
-            );
-            push(
-                CommandId::Note,
-                CommandGroup::Enrich,
-                0,
-                "note",
-                "no",
-                app.note(row.id).is_some(),
-                Action::EditNote,
-            );
+            push(CommandId::Todo, 0, "todo", app.todo(row.id));
+            push(CommandId::Note, 0, "note", app.note(row.id).is_some());
         }
-        push(
-            CommandId::ChecksPass,
-            CommandGroup::Enrich,
-            0,
-            "checks-pass",
-            "ne",
-            app.checks_pass(row.id),
-            Action::ToggleChecksPass,
-        );
-        push(
-            CommandId::GitNote,
-            CommandGroup::Enrich,
-            0,
-            "git note",
-            "ng",
-            !app.notes(row.id).is_empty(),
-            Action::EditGitNote,
-        );
+        push(CommandId::ChecksPass, 0, "checks-pass", app.checks_pass(row.id));
+        push(CommandId::GitNote, 0, "git note", !app.notes(row.id).is_empty());
     }
 
     if app.signature_failures > 0 || has_verifiable_signatures {
-        push(
-            CommandId::VerifySignatures,
-            CommandGroup::Information,
-            0,
-            "verify signatures",
-            "?s",
-            true,
-            Action::VerifySignatures,
-        );
+        push(CommandId::VerifySignatures, 0, "verify signatures", true);
     }
     let (alignment_label, alignment_active) = match app.alignment {
         Alignment::Title => ("[ title", true),
@@ -601,43 +364,11 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
         Alignment::None => ("[ align", false),
         Alignment::Compressed => ("[ compressed", true),
     };
-    push(
-        CommandId::Alignment,
-        CommandGroup::Information,
-        0,
-        alignment_label,
-        "?[",
-        alignment_active,
-        Action::ToggleAlign,
-    );
-    push(
-        CommandId::RefTree,
-        CommandGroup::Information,
-        0,
-        "ref-tree",
-        "?t",
-        false,
-        Action::ToggleRefTree,
-    );
+    push(CommandId::Alignment, 0, alignment_label, alignment_active);
+    push(CommandId::RefTree, 0, "ref-tree", false);
     if !selected_is_segment {
-        push(
-            CommandId::CommitMessage,
-            CommandGroup::Information,
-            0,
-            "message",
-            "?m",
-            app.show_commit,
-            Action::ToggleCommit,
-        );
-        push(
-            CommandId::Changes,
-            CommandGroup::Information,
-            0,
-            "changes",
-            "?e",
-            app.changes_mode.is_some(),
-            Action::ToggleChanges,
-        );
+        push(CommandId::CommitMessage, 0, "message", app.show_commit);
+        push(CommandId::Changes, 0, "changes", app.changes_mode.is_some());
     }
 
     let mut positions = [0; 4];
