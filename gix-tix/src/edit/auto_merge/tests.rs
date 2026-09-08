@@ -49,11 +49,45 @@ fn apply(repo: &gix::Repository, selected_commit_id: ObjectId, change: Change) -
 #[test]
 fn creates_extends_refreshes_and_removes_inputs_without_moving_source_refs() -> gix_testtools::Result {
     let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    assert!(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["pack-refs", "--all", "--prune"])
+            .status()?
+            .success(),
+        "AutoMerge creation also resolves packed inputs"
+    );
     let repo = crate::test_repository::open(fixture.path())?;
     let a = input(&repo, "A")?;
     let b = input(&repo, "B")?;
     let c = input(&repo, "C")?;
-    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(b.reference.clone()))?;
+    let input_log = repo.git_dir().join("logs/refs/heads/B");
+    let before_log = std::fs::read(&input_log)?;
+    let outcome = perform(
+        &repo,
+        &graph(&repo)?,
+        a.commit_id,
+        Change::Add(b.reference.clone()),
+        rebase::CheckoutOptions::default(),
+        |_| {},
+    )?
+    .result
+    .context("creation prepares a merge")?
+    .complete()?;
+    let merge_commit_id = outcome.selected.context("creation selects the merge")?;
+    assert!(
+        outcome
+            .ref_changes
+            .iter()
+            .all(|change| change.name != a.reference && change.name != b.reference),
+        "unchanged inputs do not become undo changes"
+    );
+    assert_eq!(
+        std::fs::read(input_log)?,
+        before_log,
+        "reading inputs leaves their reflogs intact"
+    );
     assert!(
         repo.head()?.is_detached(),
         "the generated commit has its own detached checkout"
@@ -574,7 +608,7 @@ fn missing_refs_are_pruned_and_an_empty_subscription_set_keeps_the_previous_resu
 }
 
 #[test]
-fn dirty_checkout_and_concurrent_ref_changes_abort_without_moving_refs() -> gix_testtools::Result {
+fn dirty_checkout_aborts_without_moving_refs() -> gix_testtools::Result {
     let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
     let repo = crate::test_repository::open(fixture.path())?;
     let a = input(&repo, "A")?;
@@ -597,9 +631,25 @@ fn dirty_checkout_and_concurrent_ref_changes_abort_without_moving_refs() -> gix_
         std::fs::read_to_string(fixture.path().join("c"))?,
         "precious untracked file\n"
     );
-    std::fs::remove_file(fixture.path().join("c"))?;
+    Ok(())
+}
+
+#[test]
+fn concurrent_input_changes_are_picked_up_by_the_next_remerge() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let mut advanced = changed_tree(
+        &repo,
+        repo.find_commit(c.commit_id)?.decode()?.into_owned()?,
+        "c",
+        "advanced C\n",
+    )?;
+    advanced.parents = [c.commit_id].into_iter().collect();
+    let advanced_commit_id = repo.write_object(&advanced)?.detach();
     let mut raced = false;
-    let result = perform(
+    let outcome = perform(
         &repo,
         &graph(&repo)?,
         a.commit_id,
@@ -609,24 +659,61 @@ fn dirty_checkout_and_concurrent_ref_changes_abort_without_moving_refs() -> gix_
             if progress.processed > 0 && !raced {
                 repo.reference(
                     c.reference.clone(),
-                    a.commit_id,
-                    gix::refs::transaction::PreviousValue::Any,
+                    advanced_commit_id,
+                    gix::refs::transaction::PreviousValue::MustExistAndMatch(c.commit_id.into()),
                     "concurrent move",
                 )
                 .expect("the fixture permits a concurrent ref update");
                 raced = true;
             }
         },
+    )?
+    .result
+    .context("creation prepares a merge")?
+    .complete()?;
+    assert!(raced, "the input advances after preparation starts");
+    let merge_commit_id = outcome.selected.context("creation selects the merge")?;
+    assert_eq!(repo.head_id()?, merge_commit_id, "the snapshot merge is checked out");
+    let commit = repo.find_commit(merge_commit_id)?.decode()?.into_owned()?;
+    assert_eq!(
+        commit.parents.as_slice(),
+        &[a.commit_id, c.commit_id],
+        "the merge keeps the input commits it actually used"
     );
-    assert!(
-        result.is_err(),
-        "every input ref is checked atomically before publication"
+    assert_eq!(
+        Definition::from_commit(&commit)?
+            .context("the snapshot keeps its recipe")?
+            .inputs,
+        vec![a, c],
+        "the recipe records the same snapshot as the merge parents"
     );
-    assert_eq!(repo.head_id()?, a.commit_id);
     assert_eq!(
         input(&repo, "C")?.commit_id,
-        a.commit_id,
-        "the concurrent move is preserved"
+        advanced_commit_id,
+        "publication preserves the concurrent input advance"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.path().join("c"))?,
+        "C\n",
+        "checkout uses the snapshot tree"
+    );
+    let (refreshed_commit_id, _) = apply(&repo, merge_commit_id, Change::Remerge)?;
+    assert_ne!(
+        refreshed_commit_id, merge_commit_id,
+        "remerge catches up with the input"
+    );
+    assert_eq!(
+        repo.find_commit(refreshed_commit_id)?
+            .parent_ids()
+            .last()
+            .context("the refreshed merge retains its inputs")?,
+        advanced_commit_id,
+        "the refreshed merge includes the advanced input"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.path().join("c"))?,
+        "advanced C\n",
+        "remerge checks out the advanced input's tree"
     );
     Ok(())
 }
