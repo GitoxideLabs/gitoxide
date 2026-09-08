@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
     fmt::Write as _,
-    path::{Path, PathBuf},
+    path::Path,
     process::Command,
 };
 
@@ -49,8 +49,6 @@ impl Perform {
 
 pub(crate) struct Conflict {
     rebase: super::rebase::Conflict,
-    repository_path: PathBuf,
-    bare: bool,
     revisions: Vec<OsString>,
     include_worktrees: bool,
     ref_rewrites: Vec<super::rebase::RefRewrite>,
@@ -60,15 +58,11 @@ pub(crate) struct Conflict {
 impl Conflict {
     pub(crate) fn from_rebase(
         rebase: super::rebase::Conflict,
-        repository_path: &Path,
-        bare: bool,
         revisions: &[OsString],
         include_worktrees: bool,
     ) -> Self {
         Conflict {
             rebase,
-            repository_path: repository_path.to_owned(),
-            bare,
             revisions: revisions.to_vec(),
             include_worktrees,
             ref_rewrites: Vec::new(),
@@ -98,31 +92,20 @@ impl Conflict {
         Vec<super::rebase::RefRewrite>,
         Vec<super::undo::RefChange>,
     )> {
-        let mut conflict = self.rebase.persist()?;
+        let outcome = self.rebase.persist(super::rebase::CheckoutOptions {
+            revisions: &self.revisions,
+            include_worktrees: self.include_worktrees,
+        })?;
+        let selected = outcome
+            .selected
+            .context("materialization selects the conflicting commit")?;
         let mut ref_rewrites = self.ref_rewrites;
         let mut ref_changes = self.ref_changes;
-        ref_rewrites.append(&mut conflict.ref_rewrites);
-        ref_changes.append(&mut conflict.ref_changes);
-        let (notice, mut checkout_changes) = move_head_to_reporting(
-            &self.repository_path,
-            self.bare,
-            conflict.commit,
-            None,
-            &self.revisions,
-            self.include_worktrees,
-            |id| conflict.map(id),
-        )?;
-        ref_changes.append(&mut checkout_changes);
-        let mut deletion_changes =
-            delete_deferred_refs(&self.repository_path, self.bare, &conflict.deferred_ref_deletions)?;
-        ref_changes.append(&mut deletion_changes);
-        conflict.materialize()?;
+        ref_rewrites.extend(outcome.ref_rewrites);
+        ref_changes.extend(outcome.ref_changes);
         Ok((
-            format!(
-                "{}; ready to resolve conflicts",
-                notice.unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)))
-            ),
-            conflict.commit,
+            outcome.notice.context("materialization reports its checkout")?,
+            selected,
             ref_rewrites,
             ref_changes,
         ))
@@ -132,8 +115,6 @@ impl Conflict {
 #[tracing::instrument(skip_all, fields(commit_id = %conflict.original()))]
 pub(crate) fn materialize_plan_conflict_reporting(
     conflict: super::rebase::PlanConflict,
-    repository_path: &Path,
-    bare: bool,
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<(
@@ -143,40 +124,9 @@ pub(crate) fn materialize_plan_conflict_reporting(
     Vec<super::undo::RefChange>,
 )> {
     let original = conflict.original();
-    let mapped_head = conflict
-        .repository()
-        .head()?
-        .id()
-        .map(gix::Id::detach)
-        .map(|id| (id, conflict.map(id)));
-    let mut conflict = conflict.into_conflict().persist()?;
-    let mut ref_changes = std::mem::take(&mut conflict.ref_changes);
-    let (notice, mut checkout_changes) = move_head_to_reporting(
-        repository_path,
-        bare,
-        conflict.commit,
-        None,
-        revisions,
-        include_worktrees,
-        |id| match mapped_head {
-            Some((head, mapped)) if head == id => mapped,
-            _ => conflict.map(id),
-        },
-    )?;
-    ref_changes.append(&mut checkout_changes);
-    let mut deletion_changes = delete_deferred_refs(repository_path, bare, &conflict.deferred_ref_deletions)?;
-    ref_changes.append(&mut deletion_changes);
-    conflict.materialize()?;
-    tracing::warn!(commit_id = %original, rewritten_id = %conflict.commit, "materialized rebase-todo conflict");
-    Ok((
-        format!(
-            "{}; ready to resolve conflicts",
-            notice.unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)))
-        ),
-        conflict.commit,
-        conflict.ref_rewrites,
-        ref_changes,
-    ))
+    let result = Conflict::from_rebase(conflict.into_conflict(), revisions, include_worktrees).accept()?;
+    tracing::warn!(commit_id = %original, rewritten_id = %result.1, "materialized rebase-todo conflict");
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -270,41 +220,6 @@ pub(crate) fn checkout_review_return_reporting(
 }
 
 #[cfg(test)]
-pub(crate) fn checkout_plan(
-    repository_path: &Path,
-    bare: bool,
-    outcome: &super::rebase::Outcome,
-    revisions: &[OsString],
-    include_worktrees: bool,
-) -> Result<Option<String>> {
-    Ok(checkout_plan_reporting(repository_path, bare, outcome, revisions, include_worktrees)?.0)
-}
-
-pub(crate) fn checkout_plan_reporting(
-    repository_path: &Path,
-    bare: bool,
-    outcome: &super::rebase::Outcome,
-    revisions: &[OsString],
-    include_worktrees: bool,
-) -> Result<(Option<String>, Vec<super::undo::RefChange>)> {
-    let selected = outcome.selected.context("the rebase plan does not select a checkout")?;
-    let mut ref_changes = outcome.ref_changes.clone();
-    let (notice, mut checkout_changes) = move_head_to_reporting(
-        repository_path,
-        bare,
-        selected,
-        outcome.checkout_reference.as_ref(),
-        revisions,
-        include_worktrees,
-        |id| outcome.map(id),
-    )?;
-    ref_changes.append(&mut checkout_changes);
-    let mut deletion_changes = delete_deferred_refs(repository_path, bare, &outcome.deferred_ref_deletions)?;
-    ref_changes.append(&mut deletion_changes);
-    Ok((notice, ref_changes))
-}
-
-#[cfg(test)]
 fn move_head_to<F>(
     repository_path: &Path,
     bare: bool,
@@ -329,7 +244,7 @@ where
     .0)
 }
 
-fn move_head_to_reporting<F>(
+pub(super) fn move_head_to_reporting<F>(
     repository_path: &Path,
     bare: bool,
     selected: ObjectId,
@@ -425,15 +340,34 @@ where
         (None, Some(pin)) => checkout_pin(&workdir, pin),
         (None, None) => checkout_detached(&workdir, selected),
     };
-    if let Err(checkout) = checkout {
-        let cleanup = open_repository(repository_path, bare, false)
-            .context("could not reopen repository to restore provisional references")
-            .and_then(|repository| super::undo::apply_reversed_changes(&repository, &ref_changes));
-        if let Err(cleanup) = cleanup {
-            return Err(checkout.context(format!("checkout failed and provisional refs remain: {cleanup:#}")));
+    let checkout_warning = if let Err(checkout) = checkout {
+        let completed = open_repository(repository_path, bare, false)
+            .context("could not reopen repository to inspect checkout completion")
+            .and_then(|repository| {
+                let actual = super::undo::state(&repository, head_name.as_ref())?;
+                if actual == head_after_checkout && repository.head_id()?.detach() == selected {
+                    return Ok(true);
+                }
+                if actual != head_before {
+                    ref_changes.push(super::undo::RefChange {
+                        name: head_name.clone(),
+                        before: head_before.clone(),
+                        after: actual,
+                    });
+                }
+                super::undo::rollback_with_worktrees(&repository, &ref_changes)?;
+                Ok(false)
+            });
+        match completed {
+            Ok(true) => Some(format!("checkout completed, but Git reported: {checkout:#}")),
+            Ok(false) => return Err(checkout),
+            Err(cleanup) => {
+                return Err(checkout.context(format!("checkout rollback failed: {cleanup:#}")));
+            }
         }
-        return Err(checkout);
-    }
+    } else {
+        None
+    };
     if head_before != head_after_checkout {
         ref_changes.push(super::undo::RefChange {
             name: head_name,
@@ -453,6 +387,9 @@ where
         (None, None, Some(pin)) => format!("returned from {}", pin_label(pin)),
         (None, None, None) => format!("time-travelled to {}", selected.to_hex_with_len(7)),
     };
+    if let Some(warning) = checkout_warning {
+        notice = format!("{notice}; {warning}");
+    }
     let repository = match open_repository(repository_path, bare, false) {
         Ok(repository) => repository,
         Err(err) => {
@@ -741,7 +678,7 @@ fn cleanup_new_pins(
     cause
 }
 
-fn ensure_branch_is_available(repository: &gix::Repository, branch: &gix::refs::FullNameRef) -> Result<()> {
+pub(super) fn ensure_branch_is_available(repository: &gix::Repository, branch: &gix::refs::FullNameRef) -> Result<()> {
     let current = repository.worktree().context("attaching requires a current worktree")?;
     let current_id = current.id().map(ToOwned::to_owned);
     if current_id.is_some() {
@@ -870,8 +807,6 @@ pub(crate) fn perform_reporting_rebased(
             super::rebase::Perform::Conflict(rebase) => {
                 return Ok(Perform::Conflict(Conflict {
                     rebase,
-                    repository_path: repository_path.to_owned(),
-                    bare,
                     revisions: revisions.to_vec(),
                     include_worktrees,
                     ref_rewrites,
@@ -941,7 +876,12 @@ pub(crate) fn perform_reporting_rebased(
                 },
                 None => err,
             };
-            return Err(err);
+            let rollback = open_repository(repository_path, bare, false)
+                .and_then(|repo| super::undo::rollback_with_worktrees(&repo, &ref_changes));
+            return Err(match rollback {
+                Ok(()) => err,
+                Err(rollback) => err.context(format!("time-travel rollback failed: {rollback:#}")),
+            });
         }
     };
     ref_changes.append(&mut checkout_changes);
@@ -1357,7 +1297,7 @@ fn delete_pin_edit(pin: &history::Pin) -> RefEdit {
     RefEdit::delete(pin.name.clone(), PreviousValue::MustExistAndMatch(pin.target.clone()))
 }
 
-fn delete_deferred_refs(
+pub(super) fn delete_deferred_refs(
     repository_path: &Path,
     bare: bool,
     refs: &[(gix::refs::FullName, ObjectId)],
@@ -1476,7 +1416,7 @@ pub(crate) fn pin_label(pin: &history::Pin) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicBool;
+    use std::{path::PathBuf, sync::atomic::AtomicBool};
 
     use super::*;
 
@@ -2350,6 +2290,34 @@ mod tests {
         assert!(
             pins[0].target.try_name().is_none(),
             "the detached departure gets a direct pin"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_failing_hook_after_checkout_still_records_the_completed_move() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let selected = repository.rev_parse_single("HEAD~1")?.detach();
+        let hook = repository.git_dir().join("hooks/post-checkout");
+        std::fs::create_dir_all(hook.parent().expect("the hook has a directory"))?;
+        std::fs::write(&hook, "#!/bin/sh\necho hook-failed >&2\nexit 1\n")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+        }
+        let (notice, changes) = move_head_to_reporting(repository.git_dir(), false, selected, None, &[], false, Some)?;
+        assert!(
+            notice.as_deref().is_some_and(|notice| notice.contains("hook-failed")),
+            "a post-checkout hook failure is reported after the completed move"
+        );
+        assert_eq!(repository.head_id()?, selected, "Git completed the checkout");
+        assert!(
+            changes.iter().any(|change| {
+                change.name.as_bstr() == b"HEAD" && change.after == super::super::undo::State::Object(selected)
+            }),
+            "the completed checkout remains undoable"
         );
         Ok(())
     }

@@ -76,6 +76,7 @@ pub(crate) fn perform_conflict(
             rebase::Edit::Remove { target: id },
             rebase::Signature::RedoIfNeeded,
             rebase::Tree::LeaveAsIsAndMark,
+            None,
             report,
         )
     } else {
