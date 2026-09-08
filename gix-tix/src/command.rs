@@ -86,20 +86,24 @@ enum Command {
 enum WorktrunkCommand {
     /// Print the fully populated worktree table without opening the terminal UI.
     Show,
-    /// Switch to an existing worktree, or create one for a local branch.
+    /// Switch to an existing worktree, or create one for a local branch or detached commit.
     #[command(group(
         clap::ArgGroup::new("switch_target")
-            .multiple(false)
-            .args(["target", "new_branch"])
+            .multiple(true)
+            .args(["target", "new_branch", "detach"])
     ))]
     Switch {
-        /// Existing worktree path or local branch; omit to open the picker.
+        /// Existing worktree path or local branch, or a commit with --detach.
+        /// Omit to open the picker, or use HEAD with --detach.
         #[arg(value_name = "TARGET")]
         target: Option<OsString>,
         /// Create this local branch at the logical Tix HEAD, or use it if it exists.
-        #[arg(long, value_name = "NAME")]
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["target", "detach"])]
         new_branch: Option<OsString>,
-        /// Path at which to create a worktree for a local branch.
+        /// Create a detached worktree at TARGET, or the current HEAD if omitted.
+        #[arg(short = 'd', long)]
+        detach: bool,
+        /// Path at which to create a worktree.
         #[arg(long, value_name = "PATH", requires = "switch_target")]
         path: Option<PathBuf>,
     },
@@ -340,11 +344,12 @@ impl Platform {
             Command::Show(args) => return show(&repository, args),
             Command::Worktrunk { command } => {
                 return match command {
-                    None => crate::worktrunk::run(repository.into_sync(), None, None, false, quit_on_finish),
+                    None => crate::worktrunk::run(repository.into_sync(), None, None, false, false, quit_on_finish),
                     Some(WorktrunkCommand::Show) => crate::worktrunk::show(&repository, std::io::stdout().lock()),
                     Some(WorktrunkCommand::Switch {
                         target,
                         new_branch,
+                        detach,
                         path,
                     }) => {
                         let create_branch_if_missing = new_branch.is_some();
@@ -353,6 +358,7 @@ impl Platform {
                             new_branch.or(target),
                             path,
                             create_branch_if_missing,
+                            detach,
                             quit_on_finish,
                         )
                     }
@@ -431,6 +437,7 @@ impl Platform {
                         | Some(WorktrunkCommand::Switch {
                             target: None,
                             new_branch: None,
+                            detach: false,
                             path: None,
                         }),
                 })
@@ -1550,6 +1557,7 @@ mod tests {
                 command: Some(WorktrunkCommand::Switch {
                     target: None,
                     new_branch: None,
+                    detach: false,
                     path: None,
                 })
             })
@@ -1573,6 +1581,7 @@ mod tests {
                 Some(WorktrunkCommand::Switch {
                     target,
                     new_branch: None,
+                    detach: false,
                     path,
                 }),
         }) = switch.command
@@ -1591,6 +1600,7 @@ mod tests {
                 command: Some(WorktrunkCommand::Switch {
                     target: None,
                     new_branch: Some(branch),
+                    detach: false,
                     path: Some(_),
                 })
             }) if branch == "topic"
@@ -1601,7 +1611,7 @@ mod tests {
         );
         assert!(
             Cli::try_parse_from(["tix", "worktrunk", "switch", "--path", "../topic"]).is_err(),
-            "a creation path requires a local-branch target"
+            "a creation path requires a target or detached creation"
         );
 
         let remove = Cli::try_parse_from(["tix", "wt", "remove"])
@@ -1655,6 +1665,60 @@ mod tests {
             )
             .contains("gix tix worktrunk"),
             "embedded invocation generates an embedded shell wrapper"
+        );
+    }
+
+    #[test]
+    fn parses_detached_worktrunk_creation() {
+        let head = Cli::try_parse_from(["tix", "wt", "switch", "--detach"])
+            .expect("detached creation defaults to HEAD")
+            .platform;
+        assert!(head.requires_repository());
+        assert!(head.validate_command_options().is_ok());
+        assert!(matches!(
+            head.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Switch {
+                    target: None,
+                    detach: true,
+                    ..
+                })
+            })
+        ));
+
+        let commit = Cli::try_parse_from(["tix", "wt", "switch", "--detach", "abc1234", "--path", "../experiment"])
+            .expect("a detached commit and destination parse")
+            .platform;
+        assert!(matches!(
+            commit.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Switch {
+                    target: Some(target),
+                    path: Some(path),
+                    detach: true,
+                    ..
+                })
+            }) if target == "abc1234" && path == Path::new("../experiment")
+        ));
+        assert!(
+            Cli::try_parse_from(["tix", "wt", "switch", "--detach", "--path", "../experiment"]).is_ok(),
+            "a detached HEAD worktree accepts a destination without a target"
+        );
+        assert!(
+            Cli::try_parse_from(["tix", "wt", "switch", "-d"]).is_ok(),
+            "detached creation has a short flag"
+        );
+        assert!(
+            Cli::try_parse_from(["tix", "wt", "switch", "--detach", "--new-branch", "topic"]).is_err(),
+            "detached creation and branch creation are mutually exclusive"
+        );
+        assert!(
+            Cli::try_parse_from(["tix", "--quit-on-finish", "wt", "switch", "--detach"])
+                .expect("detached creation parses")
+                .platform
+                .validate_command_options()
+                .is_err(),
+            "detached creation does not open the picker"
         );
     }
 
