@@ -1168,6 +1168,10 @@ views.
   a pick drops that AutoMerge. Other merge commits retain their rebase restrictions.
   Derived updates, input replays, notes, signing, ref checks, checkout preflights,
   and undo use the shared edit machinery and one grouped undo operation.
+  Input refs are snapshots for each operation. Concurrent changes to inputs that
+  Tix does not update are picked up by the next remerge; refs Tix changes retain
+  expected-value checks. Unchanged inputs create neither reflog entries nor undo
+  changes.
   Edits, review completion, and todos use the same bounded executor for tree
   application, optional-input conflicts, AutoMerge rebuilding, replay markers,
   change-ID inheritance, and signing. Their planning rules remain independent.
@@ -1452,11 +1456,11 @@ views.
   other resulting leaf gets a direct
   `refs/worktree/tix/pins/*` ref, except the checked-out leaf. When `@` moves below
   a referenced leaf, the existing time-travel checkout detaches `HEAD` there while
-  the ref stays at the leaf. Concurrent ref edits win by making the transaction
-  fail; the editor result is not rebuilt against a later graph snapshot. Leaving
-  the document unchanged is a no-op unless the ancestry ending at `@` contains
-  pending commits or rebase-update selected a newer base; pending commits on
-  other forks remain lazy and do not replay a clean checkout ancestry. Explicit
+  the ref stays at the leaf. Concurrent changes to refs being written make the
+  transaction fail; the editor result is not rebuilt against a later graph
+  snapshot. Leaving the document unchanged is a no-op unless the ancestry ending
+  at `@` contains pending commits or rebase-update selected a newer base; pending
+  commits on other forks remain lazy and do not replay a clean checkout ancestry. Explicit
   `tix rebase apply` always
   applies a valid plan, even when its editable commands are unchanged. The first
   Markdown comment states which of these modes applies and explains that emptying

@@ -438,7 +438,6 @@ struct Prepared {
     pins: Vec<ObjectId>,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     enrichment: Option<(ObjectId, BString)>,
-    input_refs: HashMap<gix::refs::FullName, super::undo::State>,
 }
 
 pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[ObjectId]) -> Result<Vec<PlanRef>> {
@@ -1440,7 +1439,6 @@ fn perform_inner(
         },
         delete_refs,
         enrichment: None,
-        input_refs: auto.refs.observed,
     };
     let enrichment = prepare_enrichment(&mut prepared, enrichment_headers)?;
     let perform = match conflict {
@@ -1702,7 +1700,6 @@ pub(super) fn finish_review_with_progress(
         pins: Vec::new(),
         delete_refs,
         enrichment: None,
-        input_refs: auto.refs.observed,
     };
     match conflict {
         Some((original, merged_tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
@@ -2165,7 +2162,6 @@ pub(crate) fn perform_plan_with_progress(
         pins,
         delete_refs,
         enrichment: None,
-        input_refs: auto_refs.observed,
     };
     tracing::info!(
         total = progress.total,
@@ -2361,7 +2357,6 @@ impl Prepared {
             self.expected_refs.take(),
             (&self.pins, &self.delete_refs),
             resource_edits,
-            &self.input_refs,
         )?;
         for (transitioned, transition) in transitions.iter().enumerate() {
             if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.old, transition.new)
@@ -3285,7 +3280,6 @@ fn update_refs(
     expected_refs: Option<Vec<PlanRef>>,
     resources: (&[ObjectId], &[(gix::refs::FullName, Target)]),
     stash_edits: super::stash::RewriteEdits,
-    input_refs: &HashMap<gix::refs::FullName, super::undo::State>,
 ) -> Result<UpdatedRefs> {
     let (pins, delete_refs) = resources;
     let mut edits = stash_edits.forward;
@@ -3405,35 +3399,6 @@ fn update_refs(
             PreviousValue::MustNotExist,
             log_change(),
         ));
-    }
-    for (name, state) in input_refs {
-        let expected = match state {
-            super::undo::State::Missing => PreviousValue::MustNotExist,
-            super::undo::State::Object(commit_id) => PreviousValue::MustExistAndMatch(Target::Object(*commit_id)),
-            super::undo::State::Symbolic(target) => PreviousValue::MustExistAndMatch(Target::Symbolic(target.clone())),
-        };
-        if let Some(edit) = edits.iter_mut().find(|edit| edit.name == *name) {
-            anyhow::ensure!(
-                matches!(&edit.change,
-                    gix::refs::transaction::Change::Update { expected: previous, .. }
-                    | gix::refs::transaction::Change::Delete { expected: previous, .. } if *previous == expected),
-                "AutoMerge input {} changed during preparation",
-                name.shorten()
-            );
-        } else {
-            // Reflog-only symbolic updates hold a ref lock and check its state without
-            // publishing a value or writing a reflog. The unused self-target also keeps
-            // absent refs locked: Delete does not support MustNotExist.
-            edits.push(RefEdit::update_with_log(
-                name.clone(),
-                Target::Symbolic(name.clone()),
-                expected,
-                LogChange {
-                    mode: RefLog::Only,
-                    ..LogChange::default()
-                },
-            ));
-        }
     }
     if edits.is_empty() {
         return Ok(UpdatedRefs::default());
