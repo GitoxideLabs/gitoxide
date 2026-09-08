@@ -427,6 +427,7 @@ struct Prepared {
     reset_index_paths: Option<Vec<BString>>,
     skip_worktree_transitions: bool,
     selected: Option<ObjectId>,
+    notice: Option<String>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
     note_rewrites: Vec<(ObjectId, ObjectId)>,
     stash_rewritten: HashMap<ObjectId, Option<ObjectId>>,
@@ -1249,6 +1250,7 @@ fn perform_inner(
             .first()
             .copied();
         rewritten.insert(root, parent);
+        auto.refs.rewritten(root, None);
         selected = parent;
         progress.processed += 1;
         report(None, progress);
@@ -1278,6 +1280,7 @@ fn perform_inner(
             let eager = conflict.is_none() && auto.eager.contains(&old_id);
             let (new_id, _) =
                 replay.auto_merge(old_id, commit, &mut auto.refs, &rewritten, None, eager, &mut progress)?;
+            auto.refs.rewritten(old_id, Some(new_id));
             if new_id != old_id {
                 rewritten.insert(old_id, Some(new_id));
                 note_rewrites.push((old_id, new_id));
@@ -1371,6 +1374,7 @@ fn perform_inner(
             CommitState::Unmarked(signature)
         };
         let new_id = replay.write(commit, Some(old_id), state, &mut progress)?;
+        auto.refs.rewritten(old_id, Some(new_id));
         progress.processed += 1;
         report(Some(old_id), progress);
         if new_id != old_id {
@@ -1420,6 +1424,7 @@ fn perform_inner(
         reset_index_paths,
         skip_worktree_transitions,
         selected,
+        notice: auto.refs.notice(),
         note_rewrites,
         stash_rewritten: rewritten.clone(),
         rewritten,
@@ -1572,6 +1577,7 @@ pub(super) fn finish_review_with_progress(
             note_rewrites.push((*old, new));
         }
         rewritten.insert(*old, Some(new));
+        auto.refs.rewritten(*old, Some(new));
         if *old == review {
             finished_review = Some(new);
         }
@@ -1601,6 +1607,7 @@ pub(super) fn finish_review_with_progress(
             let eager = conflict.is_none() && auto.eager.contains(&old);
             let (commit_id, _) =
                 replay.auto_merge(old, commit, &mut auto.refs, &rewritten, None, eager, &mut progress)?;
+            auto.refs.rewritten(old, Some(commit_id));
             rewritten.insert(old, Some(commit_id));
             if old != commit_id {
                 note_rewrites.push((old, commit_id));
@@ -1674,6 +1681,7 @@ pub(super) fn finish_review_with_progress(
             note_rewrites.push((old, new));
         }
         rewritten.insert(old, Some(new));
+        auto.refs.rewritten(old, Some(new));
         if let Some((tree, conflicts)) = new_conflict {
             conflict = Some((old, tree, conflicts, new));
         }
@@ -1689,6 +1697,7 @@ pub(super) fn finish_review_with_progress(
         reset_index_paths: None,
         skip_worktree_transitions: false,
         selected: Some(selected),
+        notice: auto.refs.notice(),
         note_rewrites,
         stash_rewritten: rewritten.clone(),
         rewritten,
@@ -2151,6 +2160,7 @@ pub(crate) fn perform_plan_with_progress(
         reset_index_paths: None,
         skip_worktree_transitions: false,
         selected,
+        notice: auto_refs.notice(),
         note_rewrites,
         rewritten: rewritten.clone(),
         stash_rewritten: rewritten.clone(),
@@ -2383,7 +2393,7 @@ impl Prepared {
         }
         let mut outcome = Outcome {
             selected: self.selected,
-            notice: None,
+            notice: self.notice.take(),
             ref_rewrites: updated_refs.rewritten,
             ref_changes: updated_refs.changes,
             rewritten: std::mem::take(&mut self.rewritten),
@@ -2417,7 +2427,9 @@ impl Prepared {
                             .map_or_else(|| outcome.map(id), |(_, new)| new)
                     },
                 )?;
-                outcome.notice = notice;
+                if let Some(notice) = notice {
+                    super::time_travel::append_notice(&mut outcome.notice, notice);
+                }
                 outcome.ref_changes.extend(changes);
                 outcome.ref_changes.extend(super::time_travel::delete_deferred_refs(
                     self.repo.git_dir(),

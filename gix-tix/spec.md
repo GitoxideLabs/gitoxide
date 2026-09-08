@@ -1125,31 +1125,59 @@ views.
 
 ### AutoMerge
 
-- `a Shift-M` creates an AutoMerge at the selected `HEAD` when exactly one local
-  branch or ordinary pin names it. A symbolic pin of the same local branch does
-  not count twice. The source refs stay where they are and the result is checked
-  out detached. The same action adds inputs when HEAD is already an AutoMerge.
-- Inputs are chosen with the command popup's fuzzy picker. Its initial order is
+- `a Shift-M` creates an AutoMerge at the selected `HEAD`. Its initial input uses
+  the single local branch or ordinary pin naming HEAD, or HEAD's effective
+  change ID if no unambiguous name exists. A symbolic pin of the same local
+  branch does not count twice. Source refs stay where they are and the result is
+  checked out detached. The same action adds inputs to an existing AutoMerge HEAD.
+- At HEAD, inputs are chosen with the command popup's fuzzy picker, ordered by
   local branches, ordinary pins, remote branches, then tags which peel to commits.
   Choosing an ancestor of HEAD changes nothing and explains why. Inputs retain
-  insertion order; a ref can subscribe only once. An AutoMerge cannot subscribe
-  to itself or its descendants, including through a branch attachment.
+  insertion order; an identity can subscribe only once. An AutoMerge cannot
+  subscribe to itself or its descendants, including through a branch attachment.
+- On a non-HEAD commit outside HEAD's ancestry, the action is labeled
+  `AutoMerge into HEAD`. Descendants of an AutoMerge HEAD are excluded. The
+  selected commit's local branches and ordinary pins take priority: one
+  canonical source is used directly, and multiple sources open the same fuzzy
+  picker with branches first. If none exists, Tix uses the commit's effective change ID.
+  An available tag or remote ref alone does not replace change tracking. HEAD
+  and ancestry are revalidated when the action executes.
 - Each live input remains a Git parent. Inputs are merged in order; a conflict
   mutes that input's entire contribution, including files which merged cleanly,
   and merging continues with later inputs. Muted parents are excluded from the
   intermediate ancestry used to calculate later merge bases. The generated
   title lists contributions, for example `✔️ A 💥 B ✔️ 📌`; pins show only their
-  symbol. Reword, amend, spill, split, and squash cannot edit generated content.
-  Ordinary descendants and separate notes/enrichments remain editable.
-- A repeated `tix-auto-merge` commit header stores each input's full ref name,
-  last resolved commit, and included/muted state. This identity survives process
+  symbol and change inputs show abbreviated change IDs with the same included
+  or muted symbols. Reword, amend, spill, split, and squash cannot edit generated
+  content. Ordinary descendants and separate notes/enrichments remain editable.
+- A repeated `tix-auto-merge` commit header stores each input's full ref name or
+  change ID, last resolved commit, and included/muted state. This identity survives process
   restarts, signing, and lazy rebases, including when several subscriptions
   converge onto one Git parent. Distinct ref subscriptions never collapse merely
-  because their commit IDs coincide.
+  because their commit IDs coincide. Ref inputs use
+  `1 <commit-id> <included|muted> <full-ref>`; change inputs use
+  `1 <commit-id> <included|muted> change-id <full-change-id>`. Re-adding a change
+  explicitly selects the supplied version of that identity. Unnamed inputs are
+  retained by merge parent links; they create no tracking refs or pins.
 - Remerging resolves every subscribed ref afresh, following external advances,
   resets, and force rewrites. Deleted refs and their old parents are pruned.
   One surviving subscription collapses the AutoMerge to that tip; zero surviving
   subscriptions retain the previous result with an explanatory notice.
+- A change input follows the same logical commit through Tix rewrites and
+  retained todo picks, never newly inserted children or copies. Splitting keeps
+  the subscription on the lower commit that retains the change ID. Dropping the
+  input, or squashing it into a different retained change ID, removes that
+  subscription and applies the same collapse rules.
+- Exact rewrites and todo placements take precedence over change-ID lookup.
+  Otherwise, lookup is enabled only when actual hidden tips bound the active
+  history; showing hidden history disables it. The operation builds one lazy
+  index over that bounded projection, including offscreen commits. Expanding
+  an operation's replay scope does not expand its lookup candidates. Stale cached
+  nodes, unrelated histories, reflogs, and unreachable objects are not searched.
+  One match selects that version; no match retains the stored commit. Multiple
+  matches, including the stored version when present, retain the stored commit
+  and report ambiguity; timestamps never decide between versions. CLI diagnostics
+  go to stderr, including those carried through rebase, reword, creation, and travel.
 - Tix edits, rebases, and branch attachment maintain dependent AutoMerges in the
   current history projection, including offscreen commits and inputs outside the
   projection. Unrelated histories belonging to other worktrees are not expanded.
@@ -1162,14 +1190,16 @@ views.
   can still complete. Direct travel to that input offers normal conflict
   resolution. If every input remains pending, the merge uses their common-base
   tree, or the empty tree when no common base exists.
-- `a x` removes a selected input tip from an AutoMerge. Multiple memberships open
-  a picker naming both the input ref and the AutoMerge, so even converged refs
-  remain distinguishable. `a Shift-X` at an AutoMerge selects an input to remove.
+- `a x` removes a selected input tip from an AutoMerge, including unnamed inputs.
+  Multiple memberships open a picker naming the input ref or abbreviated change
+  ID and the AutoMerge, so even converged refs remain distinguishable.
+  `a Shift-X` at an AutoMerge selects an input to remove.
   These actions remove subscriptions without deleting input refs. Automatic
   checkout cleanup never consumes a subscribed ordinary pin.
 - AutoMerges remain ordinary `pick` lines in rebase todos. Their parents derive
-  from the named refs' planned destinations across all fork sections; deleting
-  a pick drops that AutoMerge. Other merge commits retain their rebase restrictions.
+  from refs' planned destinations and change inputs' retained picks across all
+  fork sections; deleting a pick drops that AutoMerge. Other merge commits retain
+  their rebase restrictions.
   Derived updates, input replays, notes, signing, ref checks, checkout preflights,
   and undo use the shared edit machinery and one grouped undo operation.
   Input refs are snapshots for each operation. Concurrent changes to inputs that
@@ -1181,9 +1211,9 @@ views.
   change-ID inheritance, and signing. Their planning rules remain independent.
 - History loading inspects AutoMerge headers throughout the editable projection,
   independently of viewport text loading, and caches both positive and negative
-  results by immutable commit ID. Idle application state retains detached recipes
-  and picker data only. Pin-consuming checkouts may reload the current projection
-  to determine which pins must be retained.
+  results by immutable commit ID. Idle application state retains detached recipes,
+  selection eligibility, and picker data only. Pin-consuming checkouts may reload
+  the current projection to determine which pins must be retained.
   The graph distinguishes an unloaded frontier from a loaded root or shallow
   boundary. Reading an external input's ancestry does not expand the editable
   scope; descendant rewrites remain confined to that scope.
@@ -1485,7 +1515,8 @@ views.
   stack-insert for the linear ancestry from the selected commit through `HEAD`,
   `a f` creates and travels to a standalone child of the selected commit, and
   `a h` attaches the remembered branch at detached `HEAD` when available.
-  `a Shift-M` creates or extends AutoMerge, `a Shift-U` remerges it, `a x` removes
+  `a Shift-M` creates or extends AutoMerge at HEAD, or adds a selected nonancestor
+  commit to HEAD. `a Shift-U` remerges it, `a x` removes
   the selected input from an AutoMerge, and `a Shift-X` removes an input from the
   selected AutoMerge.
 - The active branch for network actions is the attached `HEAD` branch, or the

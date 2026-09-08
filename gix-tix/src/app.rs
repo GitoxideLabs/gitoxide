@@ -676,7 +676,7 @@ pub(crate) struct App {
     pub(crate) related_history_options: Vec<crate::history::RelatedHistory>,
     pub(crate) related_history_picker: crate::menu::Menu<gix::refs::Target>,
     pub(crate) auto_merges: HashMap<ObjectId, crate::edit::auto_merge::Definition>,
-    auto_merge_source: Option<ObjectId>,
+    auto_merge_candidates: HashSet<ObjectId>,
     auto_merge_input_tips: HashSet<ObjectId>,
     pub(crate) auto_merge_options: Vec<crate::edit::auto_merge::Selection>,
     pub(crate) auto_merge_picker: crate::menu::Menu<crate::edit::auto_merge::Selection>,
@@ -801,7 +801,7 @@ impl App {
             related_history_options: Vec::new(),
             related_history_picker: crate::menu::Menu::default(),
             auto_merges: HashMap::new(),
-            auto_merge_source: None,
+            auto_merge_candidates: HashSet::new(),
             auto_merge_input_tips: HashSet::new(),
             auto_merge_options: Vec::new(),
             auto_merge_picker: crate::menu::Menu::default(),
@@ -1207,41 +1207,33 @@ impl App {
             .auto_merges
             .values()
             .flat_map(|definition| &definition.inputs)
-            .filter_map(|input| crate::edit::auto_merge::decorated_tip(&input.reference, decorations, pins))
+            .filter_map(|input| match &input.source {
+                crate::edit::auto_merge::InputSource::Reference(name) => {
+                    crate::edit::auto_merge::decorated_tip(name, decorations, pins)
+                }
+                crate::edit::auto_merge::InputSource::Change(_) => Some(input.commit_id),
+            })
             .collect();
-        self.auto_merge_source = decorations
+        self.auto_merge_candidates.clear();
+        if let Some(head) = decorations
             .iter()
             .find_map(|(id, names)| names.iter().any(|name| name.kind == Kind::Head).then_some(*id))
-            .filter(|head| {
-                let mut names: HashSet<BString> = decorations
-                    .get(head)
-                    .into_iter()
-                    .flatten()
-                    .filter(|decoration| {
-                        matches!(
-                            decoration.kind,
-                            Kind::Local | Kind::CurrentWorktreeBranch | Kind::WorktreeBranch | Kind::HeadPinBranch
-                        )
-                    })
-                    .map(|decoration| {
-                        let mut name = BString::from("refs/heads/");
-                        name.extend_from_slice(&decoration.name);
-                        name
-                    })
-                    .collect();
-                for pin in pins
-                    .iter()
-                    .filter(|pin| pin.id == *head && !pin.is_head() && !pin.is_review_return())
-                {
-                    names.insert(
-                        pin.target
-                            .try_name()
-                            .filter(|name| name.category() == Some(gix::refs::Category::LocalBranch))
-                            .map_or_else(|| pin.name.as_bstr().to_owned(), |name| name.as_bstr().to_owned()),
-                    );
+        {
+            let mut ancestors = HashSet::new();
+            let mut pending: Vec<_> = graph.index(head).into_iter().collect();
+            while let Some(index) = pending.pop() {
+                if ancestors.insert(graph.id(index)) {
+                    pending.extend_from_slice(graph.known_parents(index));
                 }
-                names.len() == 1
-            });
+            }
+            self.auto_merge_candidates
+                .extend(graph.edit_commit_ids().into_iter().filter(|id| !ancestors.contains(id)));
+            if self.auto_merges.contains_key(&head) {
+                for id in graph.descendants_in_parent_order(head).into_iter().flatten() {
+                    self.auto_merge_candidates.remove(&id);
+                }
+            }
+        }
         self.update_hidden_branch_targets();
     }
 
@@ -3323,7 +3315,8 @@ impl App {
 
     pub(crate) fn can_auto_merge(&self) -> bool {
         self.auto_merge_selection().is_some_and(|id| {
-            Some(id) == self.worktree_head && (self.auto_merges.contains_key(&id) || Some(id) == self.auto_merge_source)
+            self.worktree_head
+                .is_some_and(|head| id == head || self.auto_merge_candidates.contains(&id))
         })
     }
 

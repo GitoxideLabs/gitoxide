@@ -7,6 +7,7 @@ use super::rebase;
 
 pub(crate) struct Outcome {
     pub selected: Option<ObjectId>,
+    pub notice: Option<String>,
     pub review_return: Option<gix::refs::FullName>,
     pub ref_changes: Vec<super::undo::RefChange>,
 }
@@ -93,6 +94,7 @@ pub(crate) fn perform_conflict(
     Ok(match result {
         rebase::Perform::Complete(outcome) => Perform::Complete(Outcome {
             selected: outcome.selected,
+            notice: outcome.notice,
             review_return,
             ref_changes: outcome.ref_changes,
         }),
