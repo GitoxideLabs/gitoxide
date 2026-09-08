@@ -33,6 +33,36 @@ mod worktree;
 #[cfg(feature = "revision")]
 mod revision {
     #[test]
+    fn missing_objects_info_does_not_prevent_merge_base() -> crate::Result {
+        let (repo, _tmp) = crate::util::basic_rw_repo()?;
+        let info_dir = repo.objects.store_ref().path().join("info");
+        std::fs::create_dir_all(&info_dir)?;
+        assert!(
+            repo.commit_graph_if_enabled()?.is_none(),
+            "an empty objects/info directory has no optional commit-graph"
+        );
+        std::fs::remove_dir(&info_dir)?;
+        assert!(
+            repo.commit_graph_if_enabled()?.is_none(),
+            "an absent objects/info directory also has no optional commit-graph"
+        );
+
+        let head_commit_id = repo.head_id()?;
+        assert_eq!(
+            repo.merge_base(head_commit_id, head_commit_id)?,
+            head_commit_id,
+            "a commit is its own merge-base without a commit-graph"
+        );
+        let parent_commit_id = repo.rev_parse_single("HEAD^")?;
+        assert_eq!(
+            repo.merge_base(head_commit_id, parent_commit_id)?,
+            parent_commit_id,
+            "merge-base can traverse history without a commit-graph"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn date() -> crate::Result {
         let repo = crate::named_repo("make_rev_parse_repo.sh")?;
         let actual = repo
