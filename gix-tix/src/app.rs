@@ -421,7 +421,7 @@ pub(crate) enum Action {
     Stash,
     Spill,
     Split,
-    Forget,
+    Delete,
     Rebase,
     RebaseUpdate,
     #[cfg(feature = "blocking-network-client")]
@@ -478,7 +478,7 @@ pub(crate) enum Effect {
     Unstash(ObjectId),
     Spill(ObjectId),
     Split(ObjectId),
-    Forget(ObjectId),
+    Delete(ObjectId),
     Rebase {
         base: ObjectId,
         onto: ObjectId,
@@ -1928,7 +1928,7 @@ impl App {
                 | Action::Amend
                 | Action::Spill
                 | Action::Split
-                | Action::Forget
+                | Action::Delete
                 | Action::TimeTravel
                 | Action::TogglePin
                 | Action::Rebase
@@ -2369,13 +2369,13 @@ impl App {
                     self.rows[self.selected.expect("split requires a selection")].id,
                 )];
             }
-            Action::Forget if self.can_discard() => {
+            Action::Delete if self.can_discard() => {
                 self.actions_expanded = false;
                 return vec![Effect::Discard(self.worktree_changes.selected)];
             }
-            Action::Forget if self.can_forget() => {
-                let id = self.rows[self.selected.expect("forget requires a selection")].id;
-                return vec![Effect::Forget(id)];
+            Action::Delete if self.can_delete() => {
+                let id = self.rows[self.selected.expect("delete requires a selection")].id;
+                return vec![Effect::Delete(id)];
             }
             Action::Rebase if self.can_rebase() => {
                 let base = self.rows[self.selected.expect("rebase requires a selection")].id;
@@ -3422,7 +3422,7 @@ impl App {
         }
     }
 
-    pub(crate) fn can_forget(&self) -> bool {
+    pub(crate) fn can_delete(&self) -> bool {
         self.state == State::Complete
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
@@ -5573,18 +5573,18 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_a_non_merge_tip_is_immediate() {
+    fn deleting_a_non_merge_tip_is_immediate() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
-        assert!(!app.can_forget(), "loading history cannot forget commits");
+        assert!(!app.can_delete(), "loading history cannot delete commits");
         complete(&mut app);
-        assert!(app.can_forget());
-        assert_eq!(app.update(Action::Forget), vec![Effect::Forget(id(2))]);
+        assert!(app.can_delete());
+        assert_eq!(app.update(Action::Delete), vec![Effect::Delete(id(2))]);
 
         let mut merge = App::new(10);
         merge.extend_commits(vec![row_with_parents(3, &[2, 1]), row(2), row(1)]);
         complete(&mut merge);
-        assert!(!merge.can_forget(), "merge commits are not forgettable");
+        assert!(!merge.can_delete(), "merge commits are not deletable");
     }
 
     #[test]
@@ -7485,7 +7485,7 @@ mod tests {
         assert_eq!(app.selected, Some(3), "paging can select the hidden boundary");
         assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(id(4))]);
         assert!(!app.can_reword());
-        assert!(!app.can_forget());
+        assert!(!app.can_delete());
         assert!(app.can_fork_commit());
         assert_eq!(app.update(Action::ForkCommit), vec![Effect::ForkCommit(id(4))]);
         assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(4))]);
@@ -7805,7 +7805,7 @@ mod tests {
         assert!(app.actions_expanded);
         app.update(Action::Reword);
         app.update(Action::NewCommit);
-        app.update(Action::Forget);
+        app.update(Action::Delete);
         app.update(Action::TimeTravel);
         app.update(Action::Rebase);
         app.update(Action::RebaseUpdate);

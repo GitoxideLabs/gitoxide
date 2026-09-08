@@ -4849,7 +4849,7 @@ mod tests {
         app.actions_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(
-            rendered_line(&terminal, 1).contains(" reword · new · N new-empty · d forget · unpin "),
+            rendered_line(&terminal, 1).contains(" reword · new · New-empty · delete · unpin "),
             "the commit actions float above their prefix"
         );
         assert!(
@@ -5035,10 +5035,10 @@ mod tests {
         assert!(popup.contains("fork"));
         assert!(popup.contains("attach"));
         #[cfg(feature = "blocking-network-client")]
-        assert!(popup.contains("F fetch"));
-        assert!(popup.contains("P push"));
+        assert!(popup.contains("Fetch"));
+        assert!(popup.contains("Push"));
         assert!(!popup.contains("cherry-"));
-        let push = popup[..popup.find("P push").expect("the push action is visible")]
+        let push = popup[..popup.find("Push").expect("the push action is visible")]
             .chars()
             .count() as u16;
         assert!(
@@ -5202,7 +5202,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 6).contains("stash"),
+            rendered_line(&terminal, 6).contains("sTash"),
             "loaded unconflicted worktree changes offer stashing"
         );
         decorations
@@ -5226,7 +5226,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 6).contains("unstash"),
+            rendered_line(&terminal, 6).contains("unsTash"),
             "an existing commit stash offers in-place restoration even with worktree changes"
         );
         decorations

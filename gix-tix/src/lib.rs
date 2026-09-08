@@ -4409,7 +4409,7 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("unstash: {err:#}")),
                     }
                 }
-                Effect::Forget(id) => {
+                Effect::Delete(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let cancels_review = app.rows.iter().any(|row| row.id == id && row.is_review);
@@ -4418,16 +4418,16 @@ fn event_loop(
                     }
                     let result = history_graph
                         .as_ref()
-                        .context("forget requires a completed history graph")
+                        .context("delete requires a completed history graph")
                         .and_then(|graph| {
                             if cancels_review {
                                 clear_undo_history(&repository_path, repository_is_bare)
                                     .context("could not clear undo history before cancelling review")?;
                             }
-                            forget_commit(terminal, &repository_path, repository_is_bare, graph, id)
+                            delete_commit(terminal, &repository_path, repository_is_bare, graph, id)
                         });
                     match result {
-                        Ok(edit::forget::Perform::Complete(outcome)) => {
+                        Ok(edit::delete::Perform::Complete(outcome)) => {
                             let ref_changes = outcome.ref_changes.clone();
                             let returned = outcome.review_return.as_ref().map(|name| {
                                 edit::time_travel::checkout_review_return_reporting(
@@ -4465,7 +4465,7 @@ fn event_loop(
                                             &mut app,
                                             &repository_path,
                                             repository_is_bare,
-                                            "forget commit",
+                                            "delete commit",
                                             &ref_changes,
                                             message,
                                         );
@@ -4474,7 +4474,7 @@ fn event_loop(
                                 Ok(None) => {
                                     let message = outcome
                                         .notice
-                                        .unwrap_or_else(|| format!("forgot {}", id.to_hex_with_len(7)));
+                                        .unwrap_or_else(|| format!("deleted {}", id.to_hex_with_len(7)));
                                     if cancels_review {
                                         app.leave_success(message);
                                     } else {
@@ -4482,7 +4482,7 @@ fn event_loop(
                                             &mut app,
                                             &repository_path,
                                             repository_is_bare,
-                                            "forget commit",
+                                            "delete commit",
                                             &ref_changes,
                                             message,
                                         );
@@ -4495,7 +4495,7 @@ fn event_loop(
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
-                        Ok(edit::forget::Perform::Conflict(conflict)) => {
+                        Ok(edit::delete::Perform::Conflict(conflict)) => {
                             let conflict =
                                 edit::time_travel::Conflict::from_rebase(conflict.into_rebase(), &revisions, false);
                             let original = conflict.original();
@@ -4504,7 +4504,7 @@ fn event_loop(
                             pending_conflict_clear_undo_on_accept = false;
                             pending_rebase_conflict = Some(conflict);
                         }
-                        Err(err) => app.leave_error(format!("forget: {err:#}")),
+                        Err(err) => app.leave_error(format!("delete: {err:#}")),
                     }
                 }
                 Effect::Rebase { base, onto, commits } => {
@@ -7867,18 +7867,18 @@ fn split_commit(
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
-fn forget_commit(
+fn delete_commit(
     terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
     id: gix::ObjectId,
-) -> Result<edit::forget::Perform> {
+) -> Result<edit::delete::Perform> {
     run_with_todo_progress(terminal, move |report| {
         let mut repository = open_repository(repository_path, bare, false)
-            .context("could not open repository before forgetting commit")?;
+            .context("could not open repository before deleting commit")?;
         repository.object_cache_size(None);
-        edit::forget::perform_conflict(repository, graph, id, report)
+        edit::delete::perform_conflict(repository, graph, id, report)
     })
 }
 
@@ -11872,7 +11872,7 @@ mod tests {
             ('w', Action::NewCommit),
             ('e', Action::Amend),
             ('l', Action::Spill),
-            ('d', Action::Forget),
+            ('d', Action::Delete),
             ('i', Action::TogglePin),
         ] {
             assert_eq!(
@@ -11903,8 +11903,10 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('m'), KeyModifiers::SHIFT),
                 Action::AutoMerge,
             ),
-            (KeyEvent::new(KeyCode::Char('U'), KeyModifiers::NONE), Action::Remerge),
-            (KeyEvent::new(KeyCode::Char('u'), KeyModifiers::SHIFT), Action::Remerge),
+            (KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE), Action::Remerge),
+            (KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT), Action::Remerge),
+            (KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE), Action::Stash),
+            (KeyEvent::new(KeyCode::Char('t'), KeyModifiers::SHIFT), Action::Stash),
             (
                 KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
                 Action::RemoveAutoMergeInput,
@@ -11930,7 +11932,6 @@ mod tests {
             ('t', Action::StackInsert),
             ('f', Action::ForkCommit),
             ('h', Action::Attach),
-            ('z', Action::Stash),
             ('x', Action::RemoveFromAutoMerge),
         ] {
             assert_eq!(
