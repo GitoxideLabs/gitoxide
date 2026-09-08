@@ -20,6 +20,8 @@ pub enum Error {
 pub const MAX_SYMLINKS: u8 = 32;
 
 pub(crate) mod function {
+    #[cfg(windows)]
+    use std::path::Prefix as PathPrefix;
     use std::path::{
         Component::{CurDir, Normal, ParentDir, Prefix, RootDir},
         Path, PathBuf,
@@ -31,7 +33,8 @@ pub(crate) mod function {
     /// Check each component of `path` and see if it is a symlink. If so, resolve it.
     /// Do not fail for non-existing components, but assume these are as is.
     ///
-    /// If `path` is relative, the current working directory be used to make it absolute.
+    /// If `path` is relative, the current working directory is used to make it absolute. On Windows, drive-relative
+    /// paths such as `C:repo` use the current directory on the specified drive.
     /// Note that the returned path will be verbatim, and repositories with `core.precomposeUnicode`
     /// set will probably want to precompose the paths unicode.
     pub fn realpath(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
@@ -46,6 +49,10 @@ pub(crate) mod function {
 
     /// The same as [`realpath()`], but allow to configure `max_symlinks` to configure how many symbolic links we are going to follow.
     /// This serves to avoid running into cycles or doing unreasonable amounts of work.
+    ///
+    /// `cwd` supplies the base for relative paths and should be absolute. On Windows, a drive-relative path uses
+    /// `cwd` if its drive matches; otherwise Windows supplies that drive's current directory which queries
+    /// the CWD from the operating system independently.
     pub fn realpath_opts(path: &Path, cwd: &Path, max_symlinks: u8) -> Result<PathBuf, Error> {
         if path.as_os_str().is_empty() {
             return Err(Error::EmptyPath);
@@ -63,6 +70,21 @@ pub(crate) mod function {
         let mut symlink_checks = 0;
         while let Some(component) = components.next() {
             match component {
+                #[cfg(windows)]
+                Prefix(prefix)
+                    if matches!(prefix.kind(), PathPrefix::Disk(_)) && components.clone().next() != Some(RootDir) =>
+                {
+                    // For input `C:repo`, match bases like `C:\work` and `\\?\C:\work`, but not
+                    // `D:\work` or `\\server\share\work`. This compares only the drive; a base like
+                    // `C:work` also matches, so absolute-path validation follows below.
+                    let same_drive = matches!(real_path.components().next(), Some(Prefix(base))
+                        if matches!(base.kind(), PathPrefix::Disk(drive) | PathPrefix::VerbatimDisk(drive)
+                            if prefix.kind() == PathPrefix::Disk(drive)));
+                    if !same_drive || !real_path.is_absolute() {
+                        // Resolve only the drive, preserving subsequent `..` for symlink resolution.
+                        real_path = std::path::absolute(prefix.as_os_str()).map_err(Error::CurrentWorkingDir)?;
+                    }
+                }
                 part @ (RootDir | Prefix(_)) => real_path.push(part),
                 CurDir => {}
                 ParentDir => {
