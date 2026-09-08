@@ -707,7 +707,8 @@ paging retains priority, and undo/redo still ignore key-repeat events.
   available after restarting Tix.
 - Bare `p` opens a centered command menu from the main history UI, including
   while a changes block has focus. In the reference tree, `p` pins the selection
-  and returns to history, just like `<enter>`.
+  and returns to history, just like `<enter>`. Its `p command` hint appears in
+  `?` help; the main status line omits it.
 - The menu contains the currently available executable entries from the Actions,
   View, Enrich, and Information groups. Each entry retains its exact contextual
   identity, so Stash and Unstash, Review and Finish Review, and Pin and Unpin are
