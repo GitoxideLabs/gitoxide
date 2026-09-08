@@ -9,6 +9,39 @@ macro_rules! mktests {
     };
 }
 
+#[test]
+fn sanitization_uses_a_fallback_when_no_name_remains() {
+    use bstr::ByteSlice;
+
+    for input in ["", "/", "///"] {
+        assert_eq!(
+            gix_validate::reference::name_partial_or_sanitize(input.as_bytes().as_bstr()),
+            "-",
+            "{input:?}: the fallback guarantees a nonempty valid name"
+        );
+    }
+}
+
+#[test]
+fn sanitization_preserves_non_empty_names() {
+    use bstr::ByteSlice;
+
+    for (input, expected) in [
+        (".lock.lock", "-lock"),
+        (".lock.lock.lock", "-lock"),
+        (".lock.lock/child", "-lock/child"),
+        ("...lock/.lock.lock", "-lock/-lock"),
+        ("/.lock.lock/", "-lock"),
+    ] {
+        let actual = gix_validate::reference::name_partial_or_sanitize(input.as_bytes().as_bstr());
+        assert_eq!(actual, expected, "{input:?}: sanitization keeps a usable name");
+        assert!(
+            gix_validate::reference::name_partial(actual.as_ref()).is_ok(),
+            "{input:?}: sanitized output must pass validation"
+        );
+    }
+}
+
 mod name_partial {
     mod valid {
         use bstr::ByteSlice;
@@ -139,7 +172,6 @@ mod name_partial {
         mktest!(any_path_starts_with_slash, b"/etc/foo", RefError::StartsWithSlash);
         mktests!(any_path_starts_with_slash_san, b"/etc/foo", "etc/foo");
         mktest!(empty_path, b"", RefError::Empty);
-        mktests!(empty_path_san, b"", "-");
         mktest!(refs_starts_with_slash, b"/refs/heads/main", RefError::StartsWithSlash);
         mktests!(refs_starts_with_slash_san, b"/refs/heads/main", "refs/heads/main");
         mktest!(ends_with_slash, b"refs/heads/main/", RefError::EndsWithSlash);
@@ -313,7 +345,6 @@ mod name {
         mktest!(any_path_starts_with_slash, b"/etc/foo", RefError::StartsWithSlash);
         mktests!(any_path_starts_with_slash_san, b"/etc/foo", "etc/foo");
         mktest!(empty_path, b"", RefError::Empty);
-        mktests!(empty_path_san, b"", "-");
         mktest!(refs_starts_with_slash, b"/refs/heads/main", RefError::StartsWithSlash);
         mktests!(refs_starts_with_slash_san, b"/refs/heads/main", "refs/heads/main");
         mktest!(ends_with_slash, b"refs/heads/main/", RefError::EndsWithSlash);
