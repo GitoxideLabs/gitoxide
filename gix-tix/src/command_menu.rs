@@ -22,6 +22,7 @@ pub(crate) enum CommandId {
     Spill,
     Split,
     Forget,
+    Discard,
     Pin,
     Unpin,
     Stash,
@@ -83,6 +84,7 @@ const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
         (Id::Spill, Actions, "al", Action::Spill),
         (Id::Split, Actions, "aS", Action::Split),
         (Id::Forget, Actions, "ad", Action::Forget),
+        (Id::Discard, Actions, "ad", Action::Forget),
         (Id::Pin, Actions, "ai", Action::TogglePin),
         (Id::Unpin, Actions, "ai", Action::TogglePin),
         (Id::Stash, Actions, "az", Action::Stash),
@@ -173,6 +175,7 @@ impl Command {
 
     pub(crate) fn search_prefix(&self) -> &'static str {
         match self.group {
+            CommandGroup::Actions if self.id == CommandId::Discard => "Actions worktree",
             CommandGroup::Actions => "Actions commit",
             CommandGroup::Enrich => "Enrich commit",
             CommandGroup::Information if matches!(self.id, CommandId::CommitMessage | CommandId::Changes) => {
@@ -245,9 +248,10 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
     }
 
     let selected_is_segment = app.selected_is_segment();
-    let actions_visible =
-        !selected_is_segment && (app.changes_focus != Some(crate::app::ChangePane::Worktree) || app.can_amend());
-    if actions_visible {
+    if app.actions_visible() {
+        if app.can_discard() {
+            push(CommandId::Discard, 0, "discard", true);
+        }
         for (id, available, label) in [
             (
                 CommandId::AutoMerge,
@@ -438,6 +442,70 @@ mod tests {
 
     fn has(commands: &[Command], id: CommandId) -> bool {
         commands.iter().any(|command| command.id == id)
+    }
+
+    #[test]
+    fn worktree_discard_is_searchable_and_independent_of_history_selection() {
+        use crate::app::{ChangePane, ChangesLayout, Effect};
+
+        let mut app = App::new(2);
+        app.set_changes_bounds(ChangePane::Worktree, 2, 2, None, 20, 0);
+        app.set_changes_layout(ChangesLayout::SideBySide, false, true);
+        app.changes_focus = Some(ChangePane::Worktree);
+        app.worktree_changes.selected = 1;
+        assert!(
+            app.can_discard(),
+            "discard is available even before history finishes loading"
+        );
+        app.update(Action::ToggleActions);
+        assert!(app.actions_expanded, "the worktree actions prefix can be opened");
+        let catalog = commands(&app, &Decorations::default(), false);
+        assert!(!has(&catalog, CommandId::Forget), "history deletion stays hidden");
+        let items = crate::command_picker_items(&catalog);
+        let mut menu = Menu::default();
+        for query in ["discard", "a dscrd", "worktree"] {
+            menu.open(&items);
+            menu.paste(query, &items);
+            assert_eq!(menu.submit_selected(&items), Some(CommandId::Discard));
+        }
+        let discard = catalog
+            .iter()
+            .find(|command| command.id == CommandId::Discard)
+            .expect("discard is listed");
+        assert_eq!(discard.shortcut, "ad");
+        assert_eq!(app.update(discard.action.clone()), vec![Effect::Discard(1)]);
+        assert!(!app.actions_expanded, "repeating d cannot discard the next path");
+
+        app.extend_commits(vec![row(2, &[1]), row(1, &[])]);
+        app.state = State::Complete;
+        app.set_worktree_head(Some(id(2)), false);
+        app.select_commit(id(1));
+        app.changes_focus = Some(ChangePane::Worktree);
+        assert!(!app.can_amend(), "an older history selection cannot amend HEAD");
+        assert!(has(&commands(&app, &Decorations::default(), false), CommandId::Discard));
+        let shortcut = shortcut_action(CommandGroup::Actions, 'd').expect("a d is bound");
+        assert_eq!(app.update(shortcut.clone()), vec![Effect::Discard(1)]);
+
+        app.changes_focus = Some(ChangePane::Tree);
+        assert!(!has(
+            &commands(&app, &Decorations::default(), false),
+            CommandId::Discard
+        ));
+        assert!(
+            app.update(shortcut.clone()).is_empty(),
+            "tree focus does not discard or forget"
+        );
+        app.changes_focus = None;
+        assert_eq!(
+            app.update(shortcut),
+            vec![Effect::Forget(id(1))],
+            "history retains forget"
+        );
+        app.changes_focus = Some(ChangePane::Worktree);
+        app.set_changes_layout(ChangesLayout::SideBySide, false, false);
+        assert!(!app.can_discard(), "a clean worktree has nothing to discard");
+        app.set_worktree_changes_available(false);
+        assert!(!app.can_discard(), "bare repositories cannot discard worktree files");
     }
 
     #[test]
