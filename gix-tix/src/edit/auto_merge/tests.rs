@@ -277,8 +277,30 @@ fn todo_inputs_keep_explicit_existing_ref_destinations() -> gix_testtools::Resul
         .iter_mut()
         .find(|expected| expected.name == c.reference)
         .context("C is editable in the todo")?;
-    reference.new = None;
-    reference.placement = Some(rebase::PlanParent::Existing(a.commit_id));
+    let mut refs = References::default();
+    reference.destination = rebase::RefDestination::Step(0);
+    let resolve = |refs: &mut References, reference: &rebase::PlanRef| {
+        refs.resolve(
+            &repo,
+            &c.reference,
+            &HashMap::new(),
+            Some((std::slice::from_ref(reference), &[])),
+        )
+    };
+    assert!(
+        resolve(&mut refs, reference)
+            .expect_err("the input step has not run")
+            .to_string()
+            .contains("unproduced step"),
+        "an unproduced input cannot silently disappear"
+    );
+    reference.destination = rebase::RefDestination::Delete;
+    assert_eq!(
+        resolve(&mut refs, reference)?,
+        None,
+        "only explicit deletion removes the input"
+    );
+    reference.destination = rebase::RefDestination::Existing(a.commit_id);
     let plan = rebase::Plan {
         base: input(&repo, "main")?.commit_id,
         scope: vec![a.commit_id, merge_commit_id],
