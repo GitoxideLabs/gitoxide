@@ -309,20 +309,6 @@ pub(crate) struct Preparation {
     pub eager: HashSet<ObjectId>,
 }
 
-pub(crate) fn parents(
-    repo: &gix::Repository,
-    graph: &crate::history::HistoryGraph,
-    commit_id: ObjectId,
-) -> Result<Vec<ObjectId>> {
-    match graph
-        .parents_of(commit_id)
-        .filter(|_| graph.is_in_edit_scope(commit_id))
-    {
-        Some(parents) => Ok(parents),
-        None => Ok(repo.find_commit(commit_id)?.parent_ids().map(gix::Id::detach).collect()),
-    }
-}
-
 /// Only the checkout's ordinary first-parent path requires conflict materialization.
 /// Inputs beneath an AutoMerge can instead remain pending and be muted.
 pub(crate) fn checkout_path(
@@ -900,7 +886,8 @@ pub(crate) fn expand_plan(
     }
     let extra: Vec<_> = affected.into_iter().filter(|id| !original.contains(id)).collect();
     for &commit_id in &extra {
-        let parent_commit_id = parents(repo, graph, commit_id)?
+        let parent_commit_id = graph
+            .parents_or_load(repo, commit_id)?
             .first()
             .copied()
             .context("a pending input has no parent")?;

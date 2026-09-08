@@ -1176,6 +1176,9 @@ views.
   results by immutable commit ID. Idle application state retains detached recipes
   and picker data only. Pin-consuming checkouts may reload the current projection
   to determine which pins must be retained.
+  The graph distinguishes an unloaded frontier from a loaded root or shallow
+  boundary. Reading an external input's ancestry does not expand the editable
+  scope; descendant rewrites remain confined to that scope.
 
 ### Reviews
 
