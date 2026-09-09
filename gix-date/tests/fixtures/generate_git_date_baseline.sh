@@ -93,6 +93,12 @@ baseline '1970-01-01 00:00:00 Z' ''
 # baseline '20080214T203045' ''
 baseline '20080214T203045-04:00' ''
 
+# Short compact times must split off the timezone after HHMM or HH.
+baseline '20080214T2030-04:00' ''
+baseline '20080214T2030-0400' ''
+baseline '20080214T2030+05:30' ''
+baseline '20080214T20-0400' ''
+
 # Subsecond precision (Git ignores the subseconds)
 baseline '2008-02-14 20:30:45.019-04:00' ''
 
