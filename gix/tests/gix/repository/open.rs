@@ -40,6 +40,31 @@ fn discover_with_git_dir_environment_override_uses_it_and_sets_trust() -> crate:
 }
 
 #[test]
+fn core_worktree_paths_are_literal() -> crate::Result {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_literal_worktree_paths.sh")?;
+    let baseline = std::fs::read_to_string(fixture.join("worktrees.baseline"))?;
+    for line in baseline.lines() {
+        let (repo, path) = line
+            .split_once('\t')
+            .expect("baseline contains repository and worktree paths");
+        let repo_path = fixture.join(repo);
+        // Canonicalize Windows short names as well as symlinks before comparing paths.
+        let expected = repo_path.join(path).canonicalize()?;
+        for home_permission in [gix_sec::Permission::Deny, gix_sec::Permission::Allow] {
+            let mut options = gix::open::Options::isolated();
+            options.permissions.env.home = home_permission;
+            let repo = gix::open_opts(&repo_path, options)?;
+            assert_eq!(
+                repo.workdir().expect("core.worktree is configured").canonicalize()?,
+                expected,
+                "{path} matches Git's literal worktree path regardless of home-directory access"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn core_worktree_cli_override_does_not_override_bare() -> crate::Result {
     let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
     let worktree = gix_testtools::tempfile::TempDir::new()?;

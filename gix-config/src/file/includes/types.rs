@@ -39,7 +39,8 @@ pub struct Options<'a> {
     pub err_on_max_depth_exceeded: bool,
     /// If true, default false, failing to interpolate paths will result in an error.
     ///
-    /// Interpolation also happens if paths in conditional includes can't be interpolated.
+    /// This also applies to paths in conditional include patterns. If false, patterns with missing
+    /// interpolation context or unknown users are matched unchanged, while such include paths are skipped.
     pub err_on_interpolation_failure: bool,
     /// If true, default true, configuration not originating from a path will cause errors when trying to resolve
     /// relative include paths (which would require the including configuration's path).

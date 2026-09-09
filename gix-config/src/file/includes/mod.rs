@@ -247,15 +247,13 @@ fn gitdir_matches(
     }
     let git_dir = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(git_dir.ok_or(Error::MissingGitDir)?));
 
-    let mut pattern_path: BString = {
-        let path = match check_interpolation_result(
-            err_on_interpolation_failure,
-            crate::Path::from(condition_path.to_owned()).interpolate(context),
-        )? {
-            Some(p) => p,
-            None => return Ok(false),
-        };
-        gix_path::into_bstr(path).into_owned()
+    let mut pattern_path = match check_interpolation_result(
+        err_on_interpolation_failure,
+        crate::Path::from(condition_path.to_owned()).interpolate(context),
+    )? {
+        Some(path) => gix_path::into_bstr(path).into_owned(),
+        // Git keeps the original condition pattern when interpolation fails.
+        None => condition_path.to_owned(),
     };
     // NOTE: yes, only if we do path interpolation will the slashes be forced to unix separators on windows
     if pattern_path != condition_path {
