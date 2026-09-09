@@ -194,7 +194,7 @@ impl Path {
                 err,
             })?;
             Ok(home_path.join(val))
-        } else if self.starts_with(b"~") && self.contains(&b'/') {
+        } else if self.starts_with(b"~") && self.len() > 1 {
             self.interpolate_user(home_for_user.ok_or(interpolate::Error::Missing {
                 what: "home for user lookup",
             })?)
@@ -210,14 +210,18 @@ impl Path {
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
     fn interpolate_user(self, home_for_user: fn(&str) -> Option<PathBuf>) -> Result<PathBuf, interpolate::Error> {
-        let (_prefix, val) = self.split_at("/".len());
-        let i = val
-            .iter()
-            .position(|&e| e == b'/')
-            .ok_or(interpolate::Error::Missing { what: "/" })?;
-        let (username, path_with_leading_slash) = val.split_at(i);
+        let (_prefix, val) = self.split_at("~".len());
+        // `git` takes everything up to the first `/` as the user name, and the whole
+        // remainder when there is no `/` at all, so `~user` is that user's home.
+        let (username, path_with_leading_slash) = match val.iter().position(|&e| e == b'/') {
+            Some(i) => val.split_at(i),
+            None => (val, &[][..]),
+        };
         let username = std::str::from_utf8(username)?;
         let home = home_for_user(username).ok_or(interpolate::Error::Missing { what: "pwd user info" })?;
+        if path_with_leading_slash.is_empty() {
+            return Ok(home);
+        }
         let path_past_user_prefix =
             gix_path::try_from_byte_slice(&path_with_leading_slash["/".len()..]).map_err(|err| {
                 interpolate::Error::Utf8Conversion {

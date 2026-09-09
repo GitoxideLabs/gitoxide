@@ -102,6 +102,17 @@ mod interpolate {
         Ok(())
     }
 
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    #[test]
+    fn tilde_with_given_user_and_no_path() -> crate::Result {
+        // `git -c foo.bar='~root' config --type=path foo.bar` prints that user's home
+        // directory on git 2.50.1: everything past the `~` is the user name when there
+        // is no `/`, and no trailing slash is needed.
+        let home = std::env::current_dir()?;
+        assert_eq!(interpolate_without_context("~user")?, home.join("user"));
+        Ok(())
+    }
+
     fn interpolate_without_context(
         path: impl AsRef<str>,
     ) -> Result<PathBuf, gix_config_value::path::interpolate::Error> {
