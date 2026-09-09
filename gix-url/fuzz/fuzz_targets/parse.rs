@@ -15,6 +15,7 @@ fn fuzz(data: &[u8]) -> Result<()> {
         assert!(!safe_host.starts_with("ssh://-"));
     }
     _ = black_box(url.path_argument_safe());
+    _ = black_box(url.path_query_fragment());
     _ = black_box(url.path_is_root());
     _ = black_box(url.port_or_default());
     _ = black_box(url.canonicalized(Path::new("/cwd")));
