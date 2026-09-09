@@ -56,8 +56,21 @@ mod interpolate {
     }
 
     #[test]
-    fn tilde_alone_does_not_interpolate() -> crate::Result {
-        assert_eq!(interpolate_without_context("~")?, Path::new("~"));
+    fn tilde_alone_substitutes_current_user() -> crate::Result {
+        let home = std::env::current_dir()?;
+        assert_eq!(
+            gix_config_value::Path::from("~")
+                .interpolate(path::interpolate::Context {
+                    home_dir: Some(&home),
+                    ..Default::default()
+                })
+                .unwrap(),
+            home
+        );
+        assert!(matches!(
+            interpolate_without_context("~"),
+            Err(path::interpolate::Error::Missing { what: "home dir" })
+        ));
         Ok(())
     }
 
@@ -86,6 +99,10 @@ mod interpolate {
             interpolate_without_context("~baz/foo/bar"),
             Err(gix_config_value::path::interpolate::Error::UserInterpolationUnsupported)
         ));
+        assert!(matches!(
+            interpolate_without_context("~baz"),
+            Err(gix_config_value::path::interpolate::Error::UserInterpolationUnsupported)
+        ));
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
@@ -99,6 +116,20 @@ mod interpolate {
 
             assert_eq!(interpolate_without_context(path)?, expected);
         }
+
+        assert_eq!(
+            interpolate_without_context("~user")?,
+            home.join("user"),
+            "~user without trailing slash is expanded like git does"
+        );
+        assert!(matches!(
+            interpolate_without_context("~nonexistent"),
+            Err(path::interpolate::Error::Missing { what: "pwd user info" })
+        ));
+        assert!(matches!(
+            interpolate_without_context("~nonexistent/foo"),
+            Err(path::interpolate::Error::Missing { what: "pwd user info" })
+        ));
         Ok(())
     }
 
@@ -112,6 +143,9 @@ mod interpolate {
     }
 
     fn home_for_user(name: &str) -> Option<PathBuf> {
+        if name == "nonexistent" {
+            return None;
+        }
         std::env::current_dir().unwrap().join(name).into()
     }
 }

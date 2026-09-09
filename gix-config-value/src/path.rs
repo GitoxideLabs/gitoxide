@@ -147,10 +147,10 @@ impl From<&str> for Path {
 impl Path {
     /// Interpolates this path into a path usable on the file system.
     ///
-    /// If this path starts with `~/` or `~user/` or `%(prefix)/`
-    ///  - `~/` is expanded to the value of `home_dir`. The caller can use the [dirs](https://crates.io/crates/dirs) crate to obtain it.
+    /// If this path starts with `~/` or `~` or `~user` or `%(prefix)/`
+    ///  - `~` or `~/` is expanded to the value of `home_dir`. The caller can use the [dirs](https://crates.io/crates/dirs) crate to obtain it.
     ///    If it is required but not set, an error is produced.
-    ///  - `~user/` to the specified user’s home directory, e.g `~alice` might get expanded to `/home/alice` on linux, but requires
+    ///  - `~user` or `~user/` to the specified user’s home directory, e.g `~alice` might get expanded to `/home/alice` on linux, but requires
     ///    the `home_for_user` function to be provided.
     ///    The interpolation uses `getpwnam` sys call and is therefore not available on windows.
     ///  - `%(prefix)/` is expanded to the location where `gitoxide` is installed.
@@ -186,15 +186,19 @@ impl Path {
                     }
                 })?;
             Ok(git_install_dir.join(path_without_trailing_slash))
-        } else if self.starts_with(USER_HOME) {
+        } else if self.as_bstr() == "~" || self.starts_with(USER_HOME) {
             let home_path = home_dir.ok_or(interpolate::Error::Missing { what: "home dir" })?;
-            let (_prefix, val) = self.split_at(USER_HOME.len());
-            let val = gix_path::try_from_byte_slice(val).map_err(|err| interpolate::Error::Utf8Conversion {
-                what: "path past ~/",
-                err,
-            })?;
-            Ok(home_path.join(val))
-        } else if self.starts_with(b"~") && self.contains(&b'/') {
+            if self.as_bstr() == "~" {
+                Ok(home_path.to_path_buf())
+            } else {
+                let (_prefix, val) = self.split_at(USER_HOME.len());
+                let val = gix_path::try_from_byte_slice(val).map_err(|err| interpolate::Error::Utf8Conversion {
+                    what: "path past ~/",
+                    err,
+                })?;
+                Ok(home_path.join(val))
+            }
+        } else if self.starts_with(b"~") {
             self.interpolate_user(home_for_user.ok_or(interpolate::Error::Missing {
                 what: "home for user lookup",
             })?)
@@ -210,21 +214,27 @@ impl Path {
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
     fn interpolate_user(self, home_for_user: fn(&str) -> Option<PathBuf>) -> Result<PathBuf, interpolate::Error> {
-        let (_prefix, val) = self.split_at("/".len());
-        let i = val
-            .iter()
-            .position(|&e| e == b'/')
-            .ok_or(interpolate::Error::Missing { what: "/" })?;
-        let (username, path_with_leading_slash) = val.split_at(i);
+        let (_prefix, val) = self.split_at(1);
+        let (username, path_past_user) = match val.iter().position(|&e| e == b'/') {
+            Some(i) => {
+                let (username, path_with_slash) = val.split_at(i);
+                (username, Some(&path_with_slash[1..]))
+            }
+            None => (val, None),
+        };
         let username = std::str::from_utf8(username)?;
         let home = home_for_user(username).ok_or(interpolate::Error::Missing { what: "pwd user info" })?;
-        let path_past_user_prefix =
-            gix_path::try_from_byte_slice(&path_with_leading_slash["/".len()..]).map_err(|err| {
-                interpolate::Error::Utf8Conversion {
-                    what: "path past ~user/",
-                    err,
-                }
-            })?;
-        Ok(home.join(path_past_user_prefix))
+        match path_past_user {
+            Some(path_past_user) => {
+                let path_past_user_prefix = gix_path::try_from_byte_slice(path_past_user).map_err(|err| {
+                    interpolate::Error::Utf8Conversion {
+                        what: "path past ~user/",
+                        err,
+                    }
+                })?;
+                Ok(home.join(path_past_user_prefix))
+            }
+            None => Ok(home),
+        }
     }
 }
