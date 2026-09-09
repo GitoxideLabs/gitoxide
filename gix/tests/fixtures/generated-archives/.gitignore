@@ -32,6 +32,9 @@
 # clones to test relative-vs-absolute worktree resolution.
 /make_core_worktree_repo.tar
 /make_core_worktree_repo_sha256.tar
+# Generate these small worktree fixtures instead of storing their archives.
+/make_literal_worktree_paths.tar
+/make_literal_worktree_paths_sha256.tar
 # Writes `global.config`/`system.config` files whose absolute paths the test
 # injects via `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`; the path layout must
 # match the host running the test.

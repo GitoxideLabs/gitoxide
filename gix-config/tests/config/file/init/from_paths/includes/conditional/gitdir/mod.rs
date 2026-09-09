@@ -31,6 +31,61 @@ fn tilde_slash_expands_the_current_user_home() -> crate::Result {
 }
 
 #[test]
+fn failed_user_expansion_matches_the_literal_pattern() -> crate::Result {
+    let temp = gix_testtools::tempfile::tempdir()?;
+    let name = format!(
+        "~gix-config-{}",
+        temp.path()
+            .file_name()
+            .expect("temporary directory has a name")
+            .to_string_lossy()
+    );
+    let git_dir = temp.path().join(&name);
+    super::git_init(&git_dir, true)?;
+    std::fs::write(git_dir.join("included.config"), "[section]\nvalue = included\n")?;
+    for condition in ["gitdir", "gitdir/i"] {
+        std::fs::write(
+            git_dir.join("config"),
+            format!(
+                r#"[core]
+bare = true
+[includeIf "{condition}:{name}"]
+path = included.config
+"#
+            ),
+        )?;
+        assert_eq!(
+            gix_testtools::git(&git_dir, "config --get section.value")?.trim_end(),
+            "included",
+            "Git matches the literal directory name when user expansion fails"
+        );
+        for strict in [false, true] {
+            let mut options = super::options_with_git_dir(&git_dir);
+            options.includes.interpolate.home_for_user = Some(|_| None);
+            options.includes.err_on_interpolation_failure = strict;
+            let result = gix_config::File::from_paths_metadata(
+                Some(gix_config::file::Metadata::try_from_path(
+                    git_dir.join("config"),
+                    gix_config::Source::Local,
+                )?),
+                options,
+            );
+            if strict {
+                assert!(result.is_err(), "strict mode still reports the failed lookup");
+            } else {
+                let config = result?.expect("the repository config exists");
+                assert_eq!(
+                    config.string("section.value"),
+                    Some(crate::file::bstring("included")),
+                    "{condition} preserves the original pattern when the user is unknown"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn tilde_alone_does_not_match_even_if_home_is_git_directory() -> crate::Result {
     let env = GitEnv::repo_in_home()?;
     assert_section_value(Condition::new("gitdir:~").expect_original_value(), env)

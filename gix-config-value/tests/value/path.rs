@@ -56,49 +56,72 @@ mod interpolate {
     }
 
     #[test]
-    fn tilde_alone_does_not_interpolate() -> crate::Result {
-        assert_eq!(interpolate_without_context("~")?, Path::new("~"));
+    fn tilde_alone_substitutes_current_user() -> crate::Result {
+        let home = std::env::current_dir()?;
+        assert_eq!(
+            gix_config_value::Path::from("~")
+                .interpolate(path::interpolate::Context {
+                    home_dir: Some(&home),
+                    ..Default::default()
+                })
+                .unwrap(),
+            home
+        );
+        assert!(matches!(
+            interpolate_without_context("~"),
+            Err(path::interpolate::Error::Missing { what: "home dir" })
+        ));
         Ok(())
     }
 
     #[test]
     fn tilde_slash_substitutes_current_user() -> crate::Result {
-        let path = "~/user/bar";
         let home = std::env::current_dir()?;
-        let expected = home.join("user").join("bar");
-        assert_eq!(
-            gix_config_value::Path::from(path)
-                .interpolate(path::interpolate::Context {
+        for suffix in ["", "user/bar", r"user\bar", "/user/bar"] {
+            let actual = gix_config_value::Path::from(format!("~/{suffix}").as_str()).interpolate(
+                path::interpolate::Context {
                     home_dir: Some(&home),
                     home_for_user: Some(home_for_user),
                     ..Default::default()
-                })
-                .unwrap(),
-            expected
-        );
+                },
+            )?;
+            assert_eq!(
+                actual.as_os_str(),
+                home.join(suffix).as_os_str(),
+                "tilde expansion preserves the suffix, including empty or leading-slash suffixes"
+            );
+        }
         Ok(())
     }
 
-    #[cfg(any(target_os = "windows", target_os = "android"))]
-    #[test]
-    fn tilde_with_given_user_is_unsupported_on_windows_and_android() {
-        assert!(matches!(
-            interpolate_without_context("~baz/foo/bar"),
-            Err(gix_config_value::path::interpolate::Error::UserInterpolationUnsupported)
-        ));
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     #[test]
     fn tilde_with_given_user() -> crate::Result {
         let home = std::env::current_dir()?;
 
         for path_suffix in &["foo/bar", r"foo\bar", ""] {
-            let path = format!("~user{}{}", std::path::MAIN_SEPARATOR, path_suffix);
+            let path = format!("~user/{path_suffix}");
             let expected = home.join("user").join(path_suffix);
 
-            assert_eq!(interpolate_without_context(path)?, expected);
+            assert_eq!(
+                interpolate_without_context(path)?.as_os_str(),
+                expected.as_os_str(),
+                "named-user expansion preserves the suffix, including a trailing slash"
+            );
         }
+
+        assert_eq!(
+            interpolate_without_context("~user")?,
+            home.join("user"),
+            "~user without trailing slash is expanded like git does"
+        );
+        assert!(matches!(
+            interpolate_without_context("~nonexistent"),
+            Err(path::interpolate::Error::Missing { what: "pwd user info" })
+        ));
+        assert!(matches!(
+            interpolate_without_context("~nonexistent/foo"),
+            Err(path::interpolate::Error::Missing { what: "pwd user info" })
+        ));
         Ok(())
     }
 
@@ -112,6 +135,9 @@ mod interpolate {
     }
 
     fn home_for_user(name: &str) -> Option<PathBuf> {
+        if name == "nonexistent" {
+            return None;
+        }
         std::env::current_dir().unwrap().join(name).into()
     }
 }

@@ -67,6 +67,25 @@ fn configure_command_clears_external_config() {
 }
 
 #[test]
+fn configure_command_clears_external_git_templates() -> Result {
+    let temp = tempfile::TempDir::new()?;
+    let template = temp.path().join("template");
+    std::fs::create_dir(&template)?;
+    std::fs::write(template.join("template-marker"), "external template")?;
+
+    let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
+    cmd.env("GIT_TEMPLATE_DIR", &template);
+    let output =
+        configure_command(&mut cmd, gix_hash::Kind::default(), ["init", "-q", "repo"], temp.path()).output()?;
+    assert!(output.status.success(), "git init succeeds: {output:?}");
+    assert!(
+        !temp.path().join("repo/.git/template-marker").exists(),
+        "external templates must not contribute files to fixture repositories"
+    );
+    Ok(())
+}
+
+#[test]
 fn an_absolute_selected_git_is_preferred_in_path() {
     let temp = tempfile::TempDir::new().expect("can create temp dir");
     let git = temp.path().join("bin").join("git");
