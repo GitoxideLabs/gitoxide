@@ -710,6 +710,7 @@ pub fn fixture_bytes(path: impl AsRef<Path>) -> Vec<u8> {
 /// the path is returned.
 ///
 /// Note that it persists and the script at `script_name` will only be executed once if it ran without error.
+/// Inherited `GIT_TEMPLATE_DIR` is cleared; Git's installed templates remain available.
 ///
 /// ### Automatic Archive Creation
 ///
@@ -1988,6 +1989,7 @@ fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_TEMPLATE_DIR")
         .env_remove("GIT_ASKPASS")
         .env_remove("SSH_ASKPASS")
         .env("MSYS", msys_for_git_bash_on_windows)
