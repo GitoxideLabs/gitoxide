@@ -1,8 +1,8 @@
 use std::{borrow::Cow, ffi::OsString, fmt::Display};
 
-use bstr::{BStr, BString, ByteSlice};
+use bstr::{BStr, BString};
 
-use crate::{Boolean, Error};
+use crate::{Boolean, Error, Integer};
 
 fn bool_err(input: impl Into<BString>) -> Error {
     Error::new(
@@ -21,6 +21,11 @@ impl TryFrom<OsString> for Boolean {
     }
 }
 
+/// # Deviation
+///
+/// Numeric values use [`Integer`]'s bases and `k`/`m`/`g` suffixes, with the full
+/// `i64::MIN..=i64::MAX` range after applying the suffix. Zero is false; nonzero is true.
+///
 /// # Warning
 ///
 /// The direct usage of `try_from("string")` is discouraged as it will produce the wrong result for values
@@ -38,13 +43,10 @@ impl TryFrom<&BStr> for Boolean {
             Ok(Boolean(true))
         } else if parse_false(value) {
             Ok(Boolean(false))
+        } else if let Some(integer) = Integer::try_from(value).ok().and_then(|integer| integer.to_decimal()) {
+            Ok(Boolean(integer != 0))
         } else {
-            use std::str::FromStr;
-            if let Some(integer) = value.to_str().ok().and_then(|s| i64::from_str(s).ok()) {
-                Ok(Boolean(integer != 0))
-            } else {
-                Err(bool_err(value))
-            }
+            Err(bool_err(value))
         }
     }
 }
