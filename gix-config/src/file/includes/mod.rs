@@ -312,9 +312,7 @@ fn check_interpolation_result(
     match res {
         Ok(good) => Ok(Some(good.into())),
         Err(err) => match err {
-            path::interpolate::Error::Missing { .. } | path::interpolate::Error::UserInterpolationUnsupported => {
-                Ok(None)
-            }
+            path::interpolate::Error::Missing { .. } => Ok(None),
             path::interpolate::Error::UsernameConversion(_) | path::interpolate::Error::Utf8Conversion { .. } => {
                 Err(err)
             }
