@@ -44,6 +44,8 @@ fn configure_command_clears_external_config() {
     let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
     cmd.env("GIT_CONFIG_SYSTEM", SCOPE_ENV_VALUE);
     cmd.env("GIT_CONFIG_GLOBAL", SCOPE_ENV_VALUE);
+    cmd.env("GIT_CONFIG_COUNT", "invalid ambient count");
+    cmd.env("GIT_CONFIG_PARAMETERS", "invalid ambient parameters");
     configure_command(
         &mut cmd,
         gix_hash::Kind::default(),
@@ -60,19 +62,7 @@ fn configure_command_clears_external_config() {
         .filter(|line| !line.starts_with("command line:\t"))
         .collect();
     let status = output.status.code().expect("terminated normally");
-    let (isolated, external): (Vec<_>, Vec<_>) = lines
-        .into_iter()
-        .partition(|line| line.starts_with("file:") && line.contains("isolated-global.gitconfig\t"));
-    assert_eq!(
-        external,
-        Vec::<&str>::new(),
-        "should be no config variables from files other than the isolated global config"
-    );
-    assert_eq!(
-        isolated.len(),
-        ISOLATED_GIT_CONFIG.len(),
-        "the isolation comes from the global config file: {isolated:?}"
-    );
+    assert_eq!(lines, Vec::<&str>::new(), "should be no config variables from files");
     assert_eq!(status, 0, "reading the config should succeed");
 }
 
