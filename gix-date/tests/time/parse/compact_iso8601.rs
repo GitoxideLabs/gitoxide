@@ -120,3 +120,51 @@ fn with_subseconds_colon_time() {
         "20080214T00:00:00.20 = Feb 14, 2008 00:00:00.20 UTC"
     );
 }
+
+#[test]
+fn hour_minute_with_colon_timezone() {
+    assert_eq!(
+        gix_date::parse("20080214T2030-04:00", None).expect("a colon-separated offset may follow HHMM"),
+        Time {
+            seconds: 1203035400,
+            offset: -14400,
+        },
+        "20080214T2030-04:00 = Feb 14, 2008 20:30:00 -04:00"
+    );
+}
+
+#[test]
+fn hour_minute_with_compact_timezone() {
+    assert_eq!(
+        gix_date::parse("20080214T2030-0400", None).expect("a compact offset may follow HHMM"),
+        Time {
+            seconds: 1203035400,
+            offset: -14400,
+        },
+        "20080214T2030-0400 = Feb 14, 2008 20:30:00 -04:00"
+    );
+}
+
+#[test]
+fn hour_minute_with_positive_timezone() {
+    assert_eq!(
+        gix_date::parse("20080214T2030+05:30", None).expect("a positive offset may follow HHMM"),
+        Time {
+            seconds: 1203001200,
+            offset: 19800,
+        },
+        "20080214T2030+05:30 = Feb 14, 2008 20:30:00 +05:30"
+    );
+}
+
+#[test]
+fn hour_only_with_timezone() {
+    assert_eq!(
+        gix_date::parse("20080214T20-0400", None).expect("a compact offset may follow HH"),
+        Time {
+            seconds: 1203033600,
+            offset: -14400,
+        },
+        "20080214T20-0400 = Feb 14, 2008 20:00:00 -04:00"
+    );
+}
