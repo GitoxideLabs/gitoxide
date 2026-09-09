@@ -11,11 +11,12 @@ function baseline() {
   local output=$DIR/${4:?4: the name of the output file}.merged;
 
   shift 4
-  git merge-file --stdout "$@" "$ours" "$base" "$theirs" > "$output" || true
+  # Exit codes 1..127 count conflicts; fatal errors must not become empty baselines.
+  git merge-file --stdout "$@" "$ours" "$base" "$theirs" > "$output" || test "$?" -le 127
   echo "$ours" "$base" "$theirs" "$output" "$@" >> baseline.cases
 
   local output="${output}-reversed"
-  git merge-file --stdout "$@" "$theirs" "$base" "$ours" > "${output}" || true
+  git merge-file --stdout "$@" "$theirs" "$base" "$ours" > "${output}" || test "$?" -le 127
   echo "$theirs" "$base" "$ours" "${output}" "$@" >> baseline-reversed.cases
 }
 
@@ -692,7 +693,7 @@ for dir in  simple-conflict-3 \
   baseline ours base theirs merge-theirs --theirs
   baseline ours base theirs merge-union --union
   (
-    export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.algorithm GIT_CONFIG_KEY_VALUE=0=histogram
+    export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.algorithm GIT_CONFIG_VALUE_0=histogram
     baseline ours base theirs diff3-histogram --diff3
     baseline ours base theirs zdiff3-histogram --zdiff3
   )

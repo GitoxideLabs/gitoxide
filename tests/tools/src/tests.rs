@@ -44,6 +44,8 @@ fn configure_command_clears_external_config() {
     let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
     cmd.env("GIT_CONFIG_SYSTEM", SCOPE_ENV_VALUE);
     cmd.env("GIT_CONFIG_GLOBAL", SCOPE_ENV_VALUE);
+    cmd.env("GIT_CONFIG_COUNT", "invalid ambient count");
+    cmd.env("GIT_CONFIG_PARAMETERS", "invalid ambient parameters");
     configure_command(
         &mut cmd,
         gix_hash::Kind::default(),
