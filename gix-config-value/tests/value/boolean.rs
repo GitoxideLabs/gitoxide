@@ -42,10 +42,8 @@ fn ignores_case() {
 }
 
 #[test]
-fn numbers_are_parsed_like_git_ints() {
-    // Recorded from `git -c foo.bar=<input> config --type=bool foo.bar` on git 2.50.1.
-    // `git_parse_maybe_bool_text()` hands the value to `git_parse_int()`, so the bases
-    // and suffixes are those of an integer, bounded to a C `int`.
+fn numbers_are_parsed_as_integers() {
+    // Use the same bases, suffixes, and full `i64` range as `Integer`.
     for (input, expected) in [
         ("0x10", true),
         ("0X1F", true),
@@ -57,28 +55,39 @@ fn numbers_are_parsed_like_git_ints() {
         ("2m", true),
         ("0k", false),
         ("-0", false),
-        ("2147483647", true),
-        // `git` accepts this from 2.50, which changed the lower bound in
-        // `git_parse_signed()` from `-max` to `-max - 1`; 2.43 refuses it. It parsed
-        // here in decimal before this change, so it keeps parsing.
-        ("-2147483648", true),
+        ("2147483647", true),  // i32::MAX
+        ("-2147483648", true), // i32::MIN
+        ("2147483648", true),
+        ("-2147483649", true),
+        ("4294967296", true),
+        ("2g", true),
+        ("9223372036854775807", true),  // i64::MAX
+        ("-9223372036854775808", true), // i64::MIN
+        ("0x7fffffffffffffff", true),
+        ("-0x8000000000000000", true),
+        ("-8589934592g", true), // i64::MIN after applying the suffix
     ] {
         assert_eq!(
             Boolean::try_from(input).map(Into::into),
             Ok(expected),
-            "{input:?}: `git` reads this as {expected}"
+            "{input:?}: zero integers are false and nonzero integers are true"
         );
     }
 }
 
 #[test]
-fn numbers_outside_a_c_int_are_rejected_like_git() {
-    // `git` refuses each of these as a boolean, even though they are valid integers,
-    // because the numeric fallback is bounded to a C `int`.
-    for input in ["2147483648", "-2147483649", "4294967296", "9223372036854775807", "2g"] {
+fn numbers_outside_i64_are_rejected() {
+    for input in [
+        "9223372036854775808",
+        "-9223372036854775809",
+        "0x8000000000000000",
+        "-0x8000000000000001",
+        "8589934592g",
+        "-8589934593g",
+    ] {
         assert!(
             Boolean::try_from(input).is_err(),
-            "{input:?}: out of range for a C `int`, which `git` refuses here"
+            "{input:?}: integers must fit in `i64` after applying any suffix"
         );
     }
 }

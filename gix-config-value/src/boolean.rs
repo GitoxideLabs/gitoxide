@@ -21,6 +21,11 @@ impl TryFrom<OsString> for Boolean {
     }
 }
 
+/// # Deviation
+///
+/// Numeric values use [`Integer`]'s bases and `k`/`m`/`g` suffixes, with the full
+/// `i64::MIN..=i64::MAX` range after applying the suffix. Zero is false; nonzero is true.
+///
 /// # Warning
 ///
 /// The direct usage of `try_from("string")` is discouraged as it will produce the wrong result for values
@@ -38,7 +43,7 @@ impl TryFrom<&BStr> for Boolean {
             Ok(Boolean(true))
         } else if parse_false(value) {
             Ok(Boolean(false))
-        } else if let Some(integer) = parse_as_git_int(value) {
+        } else if let Some(integer) = Integer::try_from(value).ok().and_then(|integer| integer.to_decimal()) {
             Ok(Boolean(integer != 0))
         } else {
             Err(bool_err(value))
@@ -97,20 +102,6 @@ impl serde::Serialize for Boolean {
     {
         serializer.serialize_bool(self.0)
     }
-}
-
-/// Parse the numeric fallback the way `git_parse_maybe_bool_text()` does, which hands
-/// the value to `git_parse_int()`: the same bases and `k`/`m`/`g` suffixes that
-/// [`Integer`] accepts, but bounded to a C `int` rather than to 64 bits.
-///
-/// So `git config --type=bool` reads `0x0` as false and `1k` as true, and refuses
-/// `2g` and `08`.
-///
-/// The lower bound is `i32::MIN` as of git 2.50, which changed `-max / factor` to
-/// `(-max - 1) / factor` in `git_parse_signed()`; before that `-2147483648` was out
-/// of range. That value already parsed here in its decimal spelling, so it is kept.
-fn parse_as_git_int(value: &BStr) -> Option<i32> {
-    Integer::try_from(value).ok()?.to_decimal()?.try_into().ok()
 }
 
 fn parse_true(value: &BStr) -> bool {
