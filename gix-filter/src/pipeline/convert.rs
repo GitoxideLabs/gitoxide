@@ -5,42 +5,9 @@ use bstr::BStr;
 use crate::{Pipeline, driver, eol, ident, pipeline::util::Configuration, worktree};
 
 ///
-pub mod configuration {
-    use bstr::BString;
-
-    /// Errors related to the configuration of filter attributes.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The encoding named '{name}' isn't available")]
-        UnknownEncoding { name: BString },
-        #[error("Encodings must be names, like UTF-16, and cannot be booleans.")]
-        InvalidEncoding,
-    }
-}
-
-///
 pub mod to_git {
     /// A function that fills `buf` `fn(&mut buf)` with the data stored in the index of the file that should be converted.
-    pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> Result<Option<()>, gix_object::find::Error> + 'a;
-
-    /// The error returned by [Pipeline::convert_to_git()][super::Pipeline::convert_to_git()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Eol(#[from] crate::eol::convert_to_git::Error),
-        #[error(transparent)]
-        Worktree(#[from] crate::worktree::encode_to_git::Error),
-        #[error(transparent)]
-        Driver(#[from] crate::driver::apply::Error),
-        #[error(transparent)]
-        Configuration(#[from] super::configuration::Error),
-        #[error("Copy of driver process output to memory failed")]
-        ReadProcessOutputToBuffer(#[from] std::io::Error),
-        #[error("Could not allocate buffer")]
-        OutOfMemory(#[from] std::collections::TryReserveError),
-    }
+    pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> Result<Option<()>, gix_error::Exn> + 'a;
 }
 
 ///
@@ -65,22 +32,6 @@ pub mod to_worktree {
         /// Return an error.
         Fail,
     }
-
-    /// The error returned by [Pipeline::convert_to_worktree()][super::Pipeline::convert_to_worktree()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Ident(#[from] crate::ident::apply::Error),
-        #[error(transparent)]
-        Eol(#[from] crate::eol::convert_to_worktree::Error),
-        #[error(transparent)]
-        Worktree(#[from] crate::worktree::encode_to_worktree::Error),
-        #[error(transparent)]
-        Driver(#[from] crate::driver::apply::Error),
-        #[error(transparent)]
-        Configuration(#[from] super::configuration::Error),
-    }
 }
 
 /// Access
@@ -95,10 +46,12 @@ impl Pipeline {
         rela_path: &Path,
         attributes: &mut dyn FnMut(&BStr, &mut gix_attributes::search::Outcome),
         index_object: &mut to_git::IndexObjectFn<'_>,
-    ) -> Result<ToGitOutcome<'_, R>, to_git::Error>
+    ) -> Result<ToGitOutcome<'_, R>, gix_error::Exn>
     where
         R: std::io::Read,
     {
+        use gix_error::{ResultExt, message};
+
         let bstr_rela_path = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(rela_path));
         let Configuration {
             driver,
@@ -113,7 +66,8 @@ impl Pipeline {
             attributes,
             self.options.eol_config,
             false,
-        )?;
+        )
+        .or_erased()?;
 
         let mut in_src_buffer = false;
         // this is just an approximation, but it's as good as it gets without reading the actual input.
@@ -126,7 +80,8 @@ impl Pipeline {
                 round_trip_check: None,
                 config: self.options.eol_config,
             },
-        )?;
+        )
+        .or_erased()?;
 
         if let Some(driver) = driver
             && let Some(mut read) = self.processes.apply(
@@ -143,12 +98,14 @@ impl Pipeline {
                 return Ok(ToGitOutcome::Process(read));
             }
             self.bufs.clear();
-            read.read_to_end(&mut self.bufs.src)?;
+            read.read_to_end(&mut self.bufs.src)
+                .or_raise_erased(|| message("Copy of driver process output to memory failed"))?;
             in_src_buffer = true;
         }
         if !in_src_buffer && (apply_ident_filter || encoding.is_some() || would_convert_eol) {
             self.bufs.clear();
-            src.read_to_end(&mut self.bufs.src)?;
+            src.read_to_end(&mut self.bufs.src)
+                .or_raise_erased(|| message("Copy of driver process output to memory failed"))?;
             in_src_buffer = true;
         }
 
@@ -162,7 +119,8 @@ impl Pipeline {
                 } else {
                     worktree::encode_to_git::RoundTripCheck::Skip
                 },
-            )?;
+            )
+            .or_erased()?;
             self.bufs.swap();
         }
 
@@ -175,11 +133,16 @@ impl Pipeline {
                 round_trip_check: self.options.crlf_roundtrip_check.to_eol_roundtrip_check(rela_path),
                 config: self.options.eol_config,
             },
-        )? {
+        )
+        .or_erased()?
+        {
             self.bufs.swap();
         }
 
-        if apply_ident_filter && ident::undo(&self.bufs.src, &mut self.bufs.dest)? {
+        if apply_ident_filter
+            && ident::undo(&self.bufs.src, &mut self.bufs.dest)
+                .or_raise_erased(|| message("Could not allocate buffer"))?
+        {
             self.bufs.swap();
         }
         Ok(if in_src_buffer {
@@ -205,7 +168,9 @@ impl Pipeline {
             can_delay,
             unknown_encoding,
         }: to_worktree::Options,
-    ) -> Result<ToWorktreeOutcome<'input, '_>, to_worktree::Error> {
+    ) -> Result<ToWorktreeOutcome<'input, '_>, gix_error::Exn> {
+        use gix_error::ResultExt;
+
         let Configuration {
             driver,
             digest,
@@ -219,16 +184,17 @@ impl Pipeline {
             attributes,
             self.options.eol_config,
             unknown_encoding == to_worktree::UnknownEncoding::Ignore,
-        )?;
+        )
+        .or_erased()?;
 
         let mut bufs = self.bufs.use_foreign_src(src);
         let (src, dest) = bufs.src_and_dest();
-        if apply_ident_filter && ident::apply(src, self.options.object_hash, dest)? {
+        if apply_ident_filter && ident::apply(src, self.options.object_hash, dest).or_erased()? {
             bufs.swap();
         }
 
         let (src, dest) = bufs.src_and_dest();
-        if eol::convert_to_worktree(src, digest, dest, self.options.eol_config)? {
+        if eol::convert_to_worktree(src, digest, dest, self.options.eol_config).or_erased()? {
             bufs.swap();
         }
 
@@ -239,7 +205,9 @@ impl Pipeline {
                 Err(_err) if unknown_encoding == to_worktree::UnknownEncoding::Ignore => {
                     gix_trace::warn!(err = %_err, "Ignoring failed worktree encoding");
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => {
+                    return Err(err.erased());
+                }
             }
         }
 

@@ -1,24 +1,16 @@
 #![allow(clippy::result_large_err)]
 use std::path::Path;
 
+use gix_error::{ErrorExt, message};
+
 pub use gix_discover::*;
 
 use crate::{ThreadSafeRepository, bstr::BString};
 
-/// The error returned by [`crate::discover()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Discover(#[from] upwards::Error),
-    #[error(transparent)]
-    Open(#[from] crate::open::Error),
-}
-
 impl ThreadSafeRepository {
     /// Try to open a git repository in `directory` and search upwards through its parents until one is found,
     /// using default trust options which matters in case the found repository isn't owned by the current user.
-    pub fn discover(directory: impl AsRef<Path>) -> Result<Self, Error> {
+    pub fn discover(directory: impl AsRef<Path>) -> Result<Self, crate::Error> {
         Self::discover_opts(directory, Default::default(), Default::default())
     }
 
@@ -34,15 +26,18 @@ impl ThreadSafeRepository {
         directory: impl AsRef<Path>,
         options: upwards::Options<'_>,
         trust_map: gix_sec::trust::Mapping<crate::open::Options>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::Error> {
         let _span = gix_trace::coarse!("ThreadSafeRepository::discover()");
-        let (path, trust) = upwards_opts(directory.as_ref(), options)?;
+        let (path, trust) = upwards_opts(directory.as_ref(), options).map_err(gix_error::Exn::into_error)?;
         let (git_dir, worktree_dir) = path.into_repository_and_work_tree_directories();
         let mut options = trust_map.into_value_by_level(trust);
         options.git_dir_trust = trust.into();
         // Note that we will adjust the `current_dir` later so it matches the value of `core.precomposeUnicode`.
-        options.current_dir = Some(gix_fs::current_dir(false).map_err(upwards::Error::CurrentDir)?);
-        Self::open_from_paths(git_dir, worktree_dir, options, None).map_err(Into::into)
+        options.current_dir = Some(gix_fs::current_dir(false).map_err(|err| {
+            err.and_raise(message("Could not obtain the current working directory"))
+                .into_error()
+        })?);
+        Self::open_from_paths(git_dir, worktree_dir, options, None)
     }
 
     /// Try to open a git repository directly from the environment.
@@ -50,7 +45,7 @@ impl ThreadSafeRepository {
     /// while applying discovery options from the environment.
     ///
     /// For more, see [`ThreadSafeRepository::discover_with_environment_overrides_opts()`].
-    pub fn discover_with_environment_overrides(directory: impl AsRef<Path>) -> Result<Self, Error> {
+    pub fn discover_with_environment_overrides(directory: impl AsRef<Path>) -> Result<Self, crate::Error> {
         Self::discover_with_environment_overrides_opts(directory, Default::default(), Default::default())
     }
 
@@ -85,7 +80,7 @@ impl ThreadSafeRepository {
         directory: impl AsRef<Path>,
         mut options: upwards::Options<'_>,
         trust_map: gix_sec::trust::Mapping<crate::open::Options>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::Error> {
         fn apply_additional_environment(mut opts: upwards::Options<'_>) -> upwards::Options<'_> {
             use crate::bstr::ByteVec;
 
@@ -99,7 +94,7 @@ impl ThreadSafeRepository {
         }
 
         if std::env::var_os("GIT_DIR").is_some() {
-            return Self::open_with_environment_overrides(directory.as_ref(), trust_map).map_err(Error::Open);
+            return Self::open_with_environment_overrides(directory.as_ref(), trust_map);
         }
 
         options = apply_additional_environment(options.apply_environment());

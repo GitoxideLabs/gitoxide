@@ -1,18 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use gix_error::{ErrorExt, OptionExt, ValidationError};
 
 use crate::Bundle;
-
-/// Returned by [`Bundle::at()`]
-#[derive(thiserror::Error, Debug)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("An 'idx' extension is expected of an index file: '{0}'")]
-    InvalidPath(PathBuf),
-    #[error(transparent)]
-    Pack(#[from] crate::data::header::decode::Error),
-    #[error(transparent)]
-    Index(#[from] crate::index::init::Error),
-}
 
 /// Initialization
 impl Bundle {
@@ -22,15 +12,20 @@ impl Bundle {
     ///
     /// The `object_hash` is a way to read (and write) the same file format with different hashes, as the hash kind
     /// isn't stored within the file format itself.
-    pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Self, Error> {
+    pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Self, gix_error::Exn> {
         Self::at_inner(path.as_ref(), object_hash)
     }
 
-    fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> Result<Self, Error> {
+    fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> Result<Self, gix_error::Exn> {
         let ext = path
             .extension()
             .and_then(std::ffi::OsStr::to_str)
-            .ok_or_else(|| Error::InvalidPath(path.to_owned()))?;
+            .ok_or_raise_erased(|| {
+                ValidationError::new(format!(
+                    "An 'idx' extension is expected of an index file: '{}'",
+                    path.display()
+                ))
+            })?;
         Ok(match ext {
             "idx" => Self {
                 index: crate::index::File::at(path, object_hash)?,
@@ -40,7 +35,13 @@ impl Bundle {
                 pack: crate::data::File::at(path, object_hash)?,
                 index: crate::index::File::at(path.with_extension("idx"), object_hash)?,
             },
-            _ => return Err(Error::InvalidPath(path.to_owned())),
+            _ => {
+                return Err(ValidationError::new(format!(
+                    "An 'idx' extension is expected of an index file: '{}'",
+                    path.display()
+                ))
+                .raise_erased());
+            }
         })
     }
 }

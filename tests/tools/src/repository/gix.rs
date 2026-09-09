@@ -73,10 +73,10 @@ fn worktree_config(git_dir: &Path, config: &gix_config::File) -> Result<Option<g
         return Ok(None);
     }
     let path = git_dir.join("config.worktree");
-    path.is_file()
+    Ok(path
+        .is_file()
         .then(|| gix_config::File::from_path_no_includes(path, gix_config::Source::Worktree))
-        .transpose()
-        .map_err(Into::into)
+        .transpose()?)
 }
 
 fn worktree_from_config(

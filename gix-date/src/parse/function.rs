@@ -5,7 +5,7 @@ use jiff::{Zoned, civil::Date, fmt::rfc2822, tz::TimeZone};
 use crate::parse::git::parse_git_date_format;
 use crate::parse::raw::parse_raw;
 use crate::{
-    Error, OffsetInSeconds, SecondsSinceUnixEpoch, Time,
+    OffsetInSeconds, SecondsSinceUnixEpoch, Time,
     parse::relative,
     time::format::{DEFAULT, GITOXIDE, ISO8601, ISO8601_STRICT, SHORT},
 };
@@ -90,7 +90,7 @@ use gix_error::{Exn, ResultExt};
 ///
 /// Note that there is no way to name a time in the future: Git has none either, so `1 hour from
 /// now` is an hour in the past to it, and to this function.
-pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
+pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<gix_error::ValidationError>> {
     // Git accepts a leading `@` before a commit-header date: `match_object_header_date()` in
     // `date.c` takes `<seconds> ±HHMM`, while an offsetless `@<seconds>` arrives at the same
     // result through the generic loop, which skips the `@` and reads the digits as an epoch.
@@ -105,7 +105,7 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
     Ok(if let Ok(val) = Date::strptime(SHORT.0, input) {
         let val = val
             .to_zoned(TimeZone::UTC)
-            .or_raise(|| Error::new_with_input("Timezone conversion failed", input))?;
+            .or_raise(|| gix_error::ValidationError::new_with_input("Timezone conversion failed", input))?;
         Time::new(val.timestamp().as_second(), val.offset().seconds())
     } else if let Ok(val) = rfc2822_relaxed(input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
@@ -127,7 +127,7 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
         // Format::Raw
         val
     } else {
-        return Err(Error::new_with_input("Unknown date format", input))?;
+        return Err(gix_error::ValidationError::new_with_input("Unknown date format", input))?;
     })
 }
 

@@ -19,8 +19,8 @@ test = false
 serde = ["dep:serde"]
 
 [dependencies]
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 zlib-rs = "0.6.2"
-thiserror = "2.0.18"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 
 [dev-dependencies]

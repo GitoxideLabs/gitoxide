@@ -109,15 +109,48 @@ pub mod open {
         use crate::packed;
 
         /// The error returned by [`open()`][super::packed::Buffer::open()].
-        #[derive(Debug, thiserror::Error)]
+        #[derive(Debug)]
         #[expect(missing_docs)]
         pub enum Error {
-            #[error("The packed-refs file did not have a header or wasn't sorted and could not be iterated")]
-            Iter(#[from] packed::iter::Error),
-            #[error("The header could not be parsed, even though first line started with '#'")]
+            Iter(packed::iter::Error),
             HeaderParsing,
-            #[error("The buffer could not be opened or read")]
-            Io(#[from] std::io::Error),
+            Io(std::io::Error),
+        }
+
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Error::Iter(_) => f.write_str(
+                        "The packed-refs file did not have a header or wasn't sorted and could not be iterated",
+                    ),
+                    Error::HeaderParsing => {
+                        f.write_str("The header could not be parsed, even though first line started with '#'")
+                    }
+                    Error::Io(_) => f.write_str("The buffer could not be opened or read"),
+                }
+            }
+        }
+
+        impl std::error::Error for Error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                match self {
+                    Error::Iter(err) => Some(err),
+                    Error::HeaderParsing => None,
+                    Error::Io(err) => Some(err),
+                }
+            }
+        }
+
+        impl From<packed::iter::Error> for Error {
+            fn from(err: packed::iter::Error) -> Self {
+                Error::Iter(err)
+            }
+        }
+
+        impl From<std::io::Error> for Error {
+            fn from(err: std::io::Error) -> Self {
+                Error::Io(err)
+            }
         }
     }
     pub use error::Error;

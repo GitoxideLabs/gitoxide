@@ -1,4 +1,6 @@
 #![allow(clippy::result_large_err)]
+use gix_error::ResultExt;
+
 use std::path::{Path, PathBuf};
 
 use crate::{
@@ -6,23 +8,6 @@ use crate::{
     bstr::{BStr, BString, ByteSlice},
     worktree::Proxy,
 };
-
-#[expect(missing_docs)]
-pub mod into_repo {
-    use std::path::PathBuf;
-
-    /// The error returned by [`Proxy::into_repo()`][super::Proxy::into_repo()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Open(#[from] crate::open::Error),
-        #[error("Worktree at '{}' is inaccessible", .base.display())]
-        MissingWorktree { base: PathBuf },
-        #[error(transparent)]
-        MissingGitDirFile(#[from] std::io::Error),
-    }
-}
 
 impl<'repo> Proxy<'repo> {
     pub(crate) fn new(parent: &'repo Repository, git_dir: impl Into<PathBuf>) -> Self {
@@ -102,7 +87,7 @@ impl Proxy<'_> {
     /// was removed or moved in the mean time or is unavailable for other reasons.
     /// The caller will encounter io errors if it's used like the work tree is guaranteed to be present, but can still access
     /// a lot of information if work tree access is avoided.
-    pub fn into_repo_with_possibly_inaccessible_worktree(self) -> Result<Repository, crate::open::Error> {
+    pub fn into_repo_with_possibly_inaccessible_worktree(self) -> Result<Repository, crate::Error> {
         let base = self.base().ok();
         let options = self.parent.options.clone().without_repository_environment_overrides();
         let common_dir = self.parent.common_dir().to_owned();
@@ -114,10 +99,13 @@ impl Proxy<'_> {
     /// if the worktree doesn't exist.
     ///
     /// Note that it won't fail if the worktree doesn't exist.
-    pub fn into_repo(self) -> Result<Repository, into_repo::Error> {
-        let base = self.base()?;
+    pub fn into_repo(self) -> Result<Repository, crate::Error> {
+        let base = self.base().or_erased()?;
         if !base.is_dir() {
-            return Err(into_repo::Error::MissingWorktree { base });
+            return Err(gix_error::Error::from_error(gix_error::message!(
+                "Worktree at '{}' is inaccessible",
+                base.display()
+            )));
         }
         let options = self.parent.options.clone().without_repository_environment_overrides();
         let common_dir = self.parent.common_dir().to_owned();

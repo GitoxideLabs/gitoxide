@@ -37,7 +37,11 @@ Plumbing crates are migrating from `thiserror` enums to `gix-error`. Check wheth
 uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns below. If it still uses
 `thiserror`, keep using `thiserror` for consistency within that crate.
 
-- **Error type alias**: `pub type Error = gix_error::Exn<gix_error::Message>;`
+- **Error types**: use `gix_error::Exn`, `gix_error::Exn<gix_error::Message>`, or the appropriate
+  concrete error directly, importing types under their canonical names as needed. Do not introduce
+  crate-specific or operation-specific forwarding aliases or renamed error exports.
+- **Porcelain errors**: use the central `gix::Error` re-export at public API boundaries. Keep the
+  underlying error type and any `Exn` parameter when adapting an existing signature.
 - **Static messages**: `gix_error::message("something failed")`
 - **Formatted messages**: `gix_error::message!("failed to read {path}")`
 - **Wrapping callee errors with context**: `.or_raise(|| message("context about what failed"))?`

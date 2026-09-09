@@ -47,7 +47,7 @@ where
     /// Any referenced blobs that are not present in the ODB will result in a call to the  `missing_cb`.
     /// Missing commits or trees will cause an error to be returned.
     ///     - TODO: consider how to handle a missing commit (invoke `missing_cb`, or possibly return a Result?)
-    pub fn check_commit(&mut self, oid: &ObjectId) -> Result<(), gix_object::find::existing_object::Error> {
+    pub fn check_commit(&mut self, oid: &ObjectId) -> Result<(), gix_error::Exn> {
         // Attempt to insert the commit ID in the set, and if already present, return immediately
         if !self.seen.insert(*oid) {
             return Ok(());

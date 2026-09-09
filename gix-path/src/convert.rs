@@ -6,20 +6,13 @@ use std::{
 
 use bstr::{BStr, BString};
 
-#[derive(Debug)]
-/// The error type returned by [`into_bstr()`] and others may suffer from failed conversions from or to bytes.
-pub struct Utf8Error;
-
-impl std::fmt::Display for Utf8Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Could not convert to UTF8 or from UTF8 due to ill-formed input")
-    }
+#[cfg(not(unix))]
+fn utf8_error() -> gix_error::ValidationError {
+    gix_error::ValidationError::new("Could not convert to UTF8 or from UTF8 due to ill-formed input")
 }
 
-impl std::error::Error for Utf8Error {}
-
 /// Like [`into_bstr()`], but takes `OsStr` as input for a lossless, but fallible, conversion.
-pub fn os_str_into_bstr(path: &OsStr) -> Result<&BStr, Utf8Error> {
+pub fn os_str_into_bstr(path: &OsStr) -> Result<&BStr, gix_error::ValidationError> {
     let path = try_into_bstr(Cow::Borrowed(path.as_ref()))?;
     match path {
         Cow::Borrowed(path) => Ok(path),
@@ -28,7 +21,7 @@ pub fn os_str_into_bstr(path: &OsStr) -> Result<&BStr, Utf8Error> {
 }
 
 /// Like [`into_bstr()`], but takes `OsString` as input for a lossless, but fallible, conversion.
-pub fn os_string_into_bstring(path: OsString) -> Result<BString, Utf8Error> {
+pub fn os_string_into_bstring(path: OsString) -> Result<BString, gix_error::ValidationError> {
     let path = try_into_bstr(Cow::Owned(path.into()))?;
     match path {
         Cow::Borrowed(_path) => unreachable!("borrowed cows stay borrowed"),
@@ -37,7 +30,7 @@ pub fn os_string_into_bstring(path: OsString) -> Result<BString, Utf8Error> {
 }
 
 /// Like [`into_bstr()`], but takes `Cow<OsStr>` as input for a lossless, but fallible, conversion.
-pub fn try_os_str_into_bstr(path: Cow<'_, OsStr>) -> Result<Cow<'_, BStr>, Utf8Error> {
+pub fn try_os_str_into_bstr(path: Cow<'_, OsStr>) -> Result<Cow<'_, BStr>, gix_error::ValidationError> {
     match path {
         Cow::Borrowed(path) => os_str_into_bstr(path).map(Cow::Borrowed),
         Cow::Owned(path) => os_string_into_bstring(path).map(Cow::Owned),
@@ -47,8 +40,8 @@ pub fn try_os_str_into_bstr(path: Cow<'_, OsStr>) -> Result<Cow<'_, BStr>, Utf8E
 /// Convert the given path either into its raw bytes on Unix or its UTF-8 encoded counterpart on non-Unix platforms.
 ///
 /// On non-Unix platforms, if the source `Path`` contains ill-formed, lone surrogates, the UTF-8 conversion will fail
-/// causing `Utf8Error` to be returned.
-pub fn try_into_bstr<'a>(path: impl Into<Cow<'a, Path>>) -> Result<Cow<'a, BStr>, Utf8Error> {
+/// causing `gix_error::ValidationError` to be returned.
+pub fn try_into_bstr<'a>(path: impl Into<Cow<'a, Path>>) -> Result<Cow<'a, BStr>, gix_error::ValidationError> {
     let path = path.into();
     let path_str = match path {
         Cow::Owned(path) => Cow::Owned({
@@ -58,7 +51,7 @@ pub fn try_into_bstr<'a>(path: impl Into<Cow<'a, Path>>) -> Result<Cow<'a, BStr>
                 path.into_os_string().into_vec().into()
             };
             #[cfg(not(unix))]
-            let p: BString = path.into_os_string().into_string().map_err(|_| Utf8Error)?.into();
+            let p: BString = path.into_os_string().into_string().map_err(|_| utf8_error())?.into();
             p
         }),
         Cow::Borrowed(path) => Cow::Borrowed({
@@ -68,7 +61,7 @@ pub fn try_into_bstr<'a>(path: impl Into<Cow<'a, Path>>) -> Result<Cow<'a, BStr>
                 path.as_os_str().as_bytes().into()
             };
             #[cfg(not(unix))]
-            let p: &BStr = path.to_str().ok_or(Utf8Error)?.as_bytes().into();
+            let p: &BStr = path.to_str().ok_or_else(utf8_error)?.as_bytes().into();
             p
         }),
     };
@@ -95,19 +88,19 @@ pub fn join_bstr_unix_pathsep<'a, 'b>(base: impl Into<Cow<'a, BStr>>, path: impl
 /// On non-Unix platforms, the input is required to be valid UTF-8, which is guaranteed if we wrote it before.
 /// There are some potential Git versions and Windows installations which produce malformed UTF-16
 /// if certain emojis are in the path. It's as rare as it sounds, but possible.
-pub fn try_from_byte_slice(input: &[u8]) -> Result<&Path, Utf8Error> {
+pub fn try_from_byte_slice(input: &[u8]) -> Result<&Path, gix_error::ValidationError> {
     #[cfg(unix)]
     let p = {
         use std::os::unix::ffi::OsStrExt;
         OsStr::from_bytes(input).as_ref()
     };
     #[cfg(not(unix))]
-    let p = Path::new(std::str::from_utf8(input).map_err(|_| Utf8Error)?);
+    let p = Path::new(std::str::from_utf8(input).map_err(|_| utf8_error())?);
     Ok(p)
 }
 
 /// Similar to [`from_byte_slice()`], but takes either borrowed or owned `input`.
-pub fn try_from_bstr<'a>(input: impl Into<Cow<'a, BStr>>) -> Result<Cow<'a, Path>, Utf8Error> {
+pub fn try_from_bstr<'a>(input: impl Into<Cow<'a, BStr>>) -> Result<Cow<'a, Path>, gix_error::ValidationError> {
     let input = input.into();
     match input {
         Cow::Borrowed(input) => try_from_byte_slice(input).map(Cow::Borrowed),
@@ -121,7 +114,7 @@ pub fn from_bstr<'a>(input: impl Into<Cow<'a, BStr>>) -> Cow<'a, Path> {
 }
 
 /// Similar to [`try_from_bstr()`], but takes and produces owned data.
-pub fn try_from_bstring(input: impl Into<BString>) -> Result<PathBuf, Utf8Error> {
+pub fn try_from_bstring(input: impl Into<BString>) -> Result<PathBuf, gix_error::ValidationError> {
     let input = input.into();
     #[cfg(unix)]
     let p = {
@@ -137,7 +130,7 @@ pub fn try_from_bstring(input: impl Into<BString>) -> Result<PathBuf, Utf8Error>
                 v
             }
             .into_string()
-            .map_err(|_| Utf8Error)?,
+            .map_err(|_| utf8_error())?,
         )
     };
     Ok(p)

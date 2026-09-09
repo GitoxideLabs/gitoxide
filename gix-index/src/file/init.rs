@@ -2,24 +2,30 @@
 
 use std::path::{Path, PathBuf};
 
+use gix_error::{ResultExt, message};
+
 use crate::{File, State, decode, extension};
 
-mod error {
+/// A failure to open an index file, retaining its path to distinguish primary and shared indexes.
+#[derive(Debug)]
+pub struct OpenError {
+    /// The index path that could not be opened.
+    pub path: PathBuf,
+    /// The underlying I/O error.
+    pub source: std::io::Error,
+}
 
-    /// The error returned by [File::at()][super::File::at()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("An IO error occurred while opening the index")]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        Decode(#[from] crate::decode::Error),
-        #[error(transparent)]
-        LinkExtension(#[from] crate::extension::link::decode::Error),
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Could not open index file at '{}'", self.path.display())
     }
 }
 
-pub use error::Error;
+impl std::error::Error for OpenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
 
 /// Initialization
 impl File {
@@ -27,17 +33,21 @@ impl File {
     /// index that merely exists in memory and is empty. `skip_hash` will increase the performance by a factor of 2, at the cost of
     /// possibly not detecting corruption.
     ///
-    /// Note that the `path` will not be written if it doesn't exist.
+    /// Note that the `path` will not be written if it doesn't exist. A missing shared index remains an error.
     pub fn at_or_default(
         path: impl Into<PathBuf>,
         object_hash: gix_hash::Kind,
         skip_hash: bool,
         options: decode::Options,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, gix_error::Exn> {
         let path = path.into();
         Ok(match Self::at(&path, object_hash, skip_hash, options) {
             Ok(f) => f,
-            Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            Err(err)
+                if err
+                    .downcast_any_ref::<OpenError>()
+                    .is_some_and(|err| err.path == path && err.source.kind() == std::io::ErrorKind::NotFound) =>
+            {
                 File::from_state(State::new(object_hash), path)
             }
             Err(err) => return Err(err),
@@ -55,14 +65,20 @@ impl File {
         object_hash: gix_hash::Kind,
         skip_hash: bool,
         options: decode::Options,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, gix_error::Exn> {
         let _span = gix_features::trace::detail!("gix_index::File::at()");
         let path = path.into();
         let (data, mtime) = {
-            let mut file = std::fs::File::open(&path)?;
+            let mut file = std::fs::File::open(&path)
+                .map_err(|source| OpenError {
+                    path: path.clone(),
+                    source,
+                })
+                .or_erased()?;
             // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
             #[expect(unsafe_code)]
-            let data = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&file)? };
+            let data = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&file) }
+                .or_raise_erased(|| message("An IO error occurred while opening the index"))?;
 
             if !skip_hash {
                 // Note that even though it's trivial to offload this into a thread, which is worth it for all but the smallest
@@ -73,7 +89,9 @@ impl File {
                     gix_hash::ObjectId::from_bytes_or_panic(&data[data.len() - object_hash.len_in_bytes()..]);
                 if !expected.is_null() {
                     let _span = gix_features::trace::detail!("gix::open_index::hash_index", path = ?path);
-                    let meta = file.metadata()?;
+                    let meta = file
+                        .metadata()
+                        .or_raise_erased(|| message("An IO error occurred while opening the index"))?;
                     let num_bytes_to_hash = meta.len() - object_hash.len_in_bytes() as u64;
                     gix_hash::bytes(
                         &mut file,
@@ -82,16 +100,20 @@ impl File {
                         &mut gix_features::progress::Discard,
                         &Default::default(),
                     )
-                    .map_err(|err| match err {
-                        gix_hash::io::Error::Io(err) => Error::Io(err),
-                        gix_hash::io::Error::Hasher(err) => Error::Decode(err.into()),
-                    })?
+                    .or_raise_erased(|| message("Could not hash index data"))?
                     .verify(&expected)
-                    .map_err(decode::Error::from)?;
+                    .or_raise_erased(|| message("Shared index checksum mismatch"))?;
                 }
             }
 
-            (data, filetime::FileTime::from_last_modification_time(&file.metadata()?))
+            (
+                data,
+                filetime::FileTime::from_last_modification_time(
+                    &file
+                        .metadata()
+                        .or_raise_erased(|| message("An IO error occurred while opening the index"))?,
+                ),
+            )
         };
 
         let (state, checksum) = State::from_bytes(&data, mtime, object_hash, options)?;

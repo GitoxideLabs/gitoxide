@@ -32,10 +32,7 @@ impl super::Store {
                     pack.id = id.to_intrinsic_pack_id();
                     Arc::new(pack)
                 })
-                .map_err(|err| match err {
-                    gix_pack::data::header::decode::Error::Io { source, .. } => source,
-                    other => std::io::Error::other(other),
-                })
+                .map_err(super::exn_to_io)
         }
 
         let slot = &self.files[id.index];

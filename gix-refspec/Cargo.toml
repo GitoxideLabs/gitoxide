@@ -23,9 +23,9 @@ sha256 = ["gix-hash/sha256"]
 [dependencies]
 gix-validate = { version = "^0.11.4", path = "../gix-validate" }
 gix-hash = { version = "^0.26.2", path = "../gix-hash" }
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
-thiserror = "2.0.18"
 smallvec = "1.15.1"
 
 [dev-dependencies]

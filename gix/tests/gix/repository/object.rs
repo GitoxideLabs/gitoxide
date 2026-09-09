@@ -620,13 +620,18 @@ fn empty_objects_are_always_present_but_not_in_plumbing() -> crate::Result {
     assert!(!repo.objects.contains(&empty_blob_id));
 
     assert!(
-        repo.find_header(empty_blob_id).is_err(),
-        "Empty blob doesn't exist automatically just like in Git"
+        repo.find_header(empty_blob_id)
+            .expect_err("empty blob doesn't exist automatically just like in Git")
+            .is_not_found()
     );
     assert_eq!(repo.objects.try_header(&empty_blob_id)?, None);
 
     assert_eq!(repo.try_find_header(empty_blob_id)?, None);
-    assert!(repo.find_object(empty_blob_id).is_err());
+    assert!(
+        repo.find_object(empty_blob_id)
+            .expect_err("empty blob doesn't exist")
+            .is_not_found()
+    );
 
     assert!(repo.try_find_object(empty_blob_id)?.is_none());
     let mut buf = Vec::new();

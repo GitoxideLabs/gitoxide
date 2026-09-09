@@ -43,7 +43,7 @@ impl File {
     pub fn append_submodule_overrides(
         &mut self,
         config: &gix_config::File,
-    ) -> Result<&mut Self, gix_config::file::section::value::Error> {
+    ) -> Result<&mut Self, gix_error::ValidationError> {
         let mut values = BTreeMap::<_, Vec<_>>::new();
         for (module_name, section) in config
             .sections_by_name("submodule")
@@ -96,6 +96,8 @@ impl File {
 pub mod init {
     use std::path::PathBuf;
 
+    use gix_error::{ResultExt, ValidationError};
+
     use crate::File;
 
     impl std::fmt::Debug for File {
@@ -109,21 +111,6 @@ pub mod init {
 
     /// A marker we use when listing names to not pick them up from overridden sections.
     pub(crate) const META_MARKER: gix_config::Source = gix_config::Source::Api;
-
-    /// Lifecycle
-    /// The error returned when parsing a submodule configuration file.
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        /// The configuration could not be parsed.
-        #[error(transparent)]
-        Parse(#[from] gix_config::parse::Error),
-        /// Applying configuration overrides exceeded the supported span size.
-        #[error(transparent)]
-        Span(#[from] gix_config::parse::span::Error),
-        /// Applying configuration overrides failed.
-        #[error(transparent)]
-        SectionValue(#[from] gix_config::file::section::value::Error),
-    }
 
     impl File {
         /// Parse `bytes` as git configuration, typically from `.gitmodules`, without doing any further validation.
@@ -142,19 +129,21 @@ pub mod init {
             bytes: &[u8],
             path: impl Into<Option<PathBuf>>,
             config: &gix_config::File,
-        ) -> Result<Self, Error> {
+        ) -> Result<Self, gix_error::Exn<gix_error::ValidationError>> {
             let metadata = {
                 let mut meta = gix_config::file::Metadata::from(META_MARKER);
                 meta.path = path.into();
                 meta
             };
             let modules = gix_config::File::from_parse_events_no_includes(
-                gix_config::parse::Events::from_bytes(bytes, None)?,
+                gix_config::parse::Events::from_bytes(bytes, None)
+                    .or_raise(|| ValidationError::new("Could not parse submodule configuration"))?,
                 metadata,
             );
 
             let mut res = Self { config: modules };
-            res.append_submodule_overrides(config)?;
+            res.append_submodule_overrides(config)
+                .or_raise(|| ValidationError::new("Could not apply submodule configuration overrides"))?;
             Ok(res)
         }
 

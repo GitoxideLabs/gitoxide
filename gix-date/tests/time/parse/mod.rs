@@ -62,7 +62,7 @@ fn git_rfc2822() {
 }
 
 #[test]
-fn raw() -> Result<(), Exn<gix_date::Error>> {
+fn raw() -> Result<(), Exn<gix_error::ValidationError>> {
     assert_eq!(
         gix_date::parse("1660874655 +0800", None)?,
         Time {

@@ -14,10 +14,7 @@ mod encoding {
         fn utf32_is_not_supported() {
             for enc in ["UTF-32BE", "UTF-32LE", "UTF-32", "UTF-32LE-BOM", "UTF-32BE-BOM"] {
                 assert!(
-                    matches!(
-                        worktree::encoding::for_label(enc).unwrap_err(),
-                        worktree::encoding::for_label::Error::Unknown { .. }
-                    ),
+                    worktree::encoding::for_label(enc).unwrap_err().message.contains(enc),
                     "it's not needed for the web and this crate is meant for use in firefox"
                 );
             }
@@ -43,10 +40,10 @@ mod encoding {
         fn various_utf_16_with_bom_suffix_are_unsupported() {
             for label in ["UTF-16BE-BOM", "UTF-16LE-BOM"] {
                 assert!(
-                    matches!(
-                        worktree::encoding::for_label(label).unwrap_err(),
-                        worktree::encoding::for_label::Error::Unknown { .. }
-                    ),
+                    worktree::encoding::for_label(label)
+                        .unwrap_err()
+                        .message
+                        .contains(label),
                     "git supports these and has special handling, but we have not for now. Git has no tests for that either."
                 );
             }

@@ -63,7 +63,7 @@ mod specials {
 }
 
 #[test]
-fn baseline() -> crate::Result {
+fn baseline() -> gix_error::TestResult {
     let mut buf = Vec::new();
     // Due to the way our setup differs from gits dynamic stack (which involves trying to read files from disk
     // by path) we can only test one case baseline, so we require multiple platforms (or filesystems) to run this.
@@ -129,7 +129,7 @@ fn assert_references(out: &Outcome) {
 }
 
 #[test]
-fn all_attributes_are_listed_in_declaration_order() -> crate::Result {
+fn all_attributes_are_listed_in_declaration_order() -> gix_error::TestResult {
     let (mut group, mut collection, base, input) = baseline::user_attributes("lookup-order")?;
 
     let mut buf = Vec::new();
@@ -226,7 +226,7 @@ fn all_attributes_are_listed_in_declaration_order() -> crate::Result {
 }
 
 #[test]
-fn given_attributes_are_made_available_in_given_order() -> crate::Result {
+fn given_attributes_are_made_available_in_given_order() -> gix_error::TestResult {
     let (mut group, mut collection, base, input) =
         baseline::user_attributes_named_baseline("lookup-order", "baseline.selected")?;
 
@@ -268,16 +268,18 @@ fn given_attributes_are_made_available_in_given_order() -> crate::Result {
 }
 
 #[test]
-fn macro_attributes_expand_only_when_macro_is_set() -> crate::Result {
-    assert_baseline("macro-expansion")
+fn macro_attributes_expand_only_when_macro_is_set() -> gix_error::TestResult {
+    assert_baseline("macro-expansion")?;
+    Ok(())
 }
 
 #[test]
-fn attribute_tokenisation_matches_git() -> crate::Result {
-    assert_baseline("tokenisation")
+fn attribute_tokenisation_matches_git() -> gix_error::TestResult {
+    assert_baseline("tokenisation")?;
+    Ok(())
 }
 
-fn assert_baseline(name: &str) -> crate::Result {
+fn assert_baseline(name: &str) -> gix_testtools::Result {
     let (mut group, mut collection, base, input) = baseline::user_attributes(name)?;
 
     let mut buf = Vec::new();
@@ -344,7 +346,7 @@ mod baseline {
     pub fn user_attributes_named_baseline(
         name: &str,
         baseline: &str,
-    ) -> crate::Result<(gix_attributes::Search, MetadataCollection, PathBuf, Vec<u8>)> {
+    ) -> gix_testtools::Result<(gix_attributes::Search, MetadataCollection, PathBuf, Vec<u8>)> {
         let dir = gix_testtools::scripted_fixture_read_only("make_attributes_baseline.sh")?;
         let base = dir.join(name);
         let input = std::fs::read(base.join(baseline))?;
@@ -359,7 +361,7 @@ mod baseline {
     /// Read user-attributes and baseline in one go.
     pub fn user_attributes(
         name: &str,
-    ) -> crate::Result<(gix_attributes::Search, MetadataCollection, PathBuf, Vec<u8>)> {
+    ) -> gix_testtools::Result<(gix_attributes::Search, MetadataCollection, PathBuf, Vec<u8>)> {
         user_attributes_named_baseline(name, "baseline")
     }
 

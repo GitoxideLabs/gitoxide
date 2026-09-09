@@ -20,7 +20,7 @@ impl Change<'_, '_, '_> {
     pub fn diff<'b>(
         &self,
         resource_cache: &'b mut gix_diff::blob::Platform,
-    ) -> Result<crate::object::blob::diff::Platform<'b>, crate::object::blob::diff::init::Error> {
+    ) -> Result<crate::object::blob::diff::Platform<'b>, crate::Error> {
         resource_cache.set_resource_by_change((*self).into(), &self.id().repo.objects)?;
         Ok(crate::object::blob::diff::Platform { resource_cache })
     }

@@ -9,7 +9,7 @@ impl crate::Repository {
     }
 
     /// Return the effective compression level used when writing pack entries.
-    pub fn pack_compression(&self) -> Result<gix_zlib::Compression, config::Error> {
+    pub fn pack_compression(&self) -> Result<gix_zlib::Compression, crate::Error> {
         config::cache::access::pack_compression(
             &self.config.resolved,
             self.config.lenient_config,
@@ -36,8 +36,9 @@ impl crate::Repository {
     /// The file and its parent directories do not have to exist. No [configuration transaction](config::FileTransaction)
     /// is opened, no lock is acquired, and no directories are created. Pass the path to
     /// [`config_file_mut()`](Self::config_file_mut) to edit it.
-    pub fn config_path(&self, source: config::Source) -> Result<std::path::PathBuf, config::file_mut::Error> {
-        use config::{Source, file_mut::Error};
+    pub fn config_path(&self, source: config::Source) -> Result<std::path::PathBuf, crate::Error> {
+        use config::Source;
+        use gix_error::{ErrorExt, message};
 
         let path = match source {
             Source::Local => self.common_dir().join("config"),
@@ -51,9 +52,17 @@ impl crate::Repository {
                     options.permissions.config,
                     &mut config::Cache::make_source_env(options.permissions.env),
                 )
-                .ok_or(Error::SourceUnavailable(source))?
+                .ok_or_else(|| {
+                    message!("Configuration source {source:?} has no available path with these options").raise()
+                })?
             }
-            _ => return Err(Error::UnsupportedSource(source)),
+            _ => {
+                return Err(
+                    message!("Configuration source {source:?} requires a repository or has no physical file")
+                        .raise()
+                        .into(),
+                );
+            }
         };
         Ok(self.current_dir().join(path))
     }
@@ -66,7 +75,7 @@ impl crate::Repository {
     pub fn config_file_mut(
         &self,
         path: impl Into<std::path::PathBuf>,
-    ) -> Result<config::FileTransaction, config::file_mut::Error> {
+    ) -> Result<config::FileTransaction, crate::Error> {
         let path = path.into();
         let path = if path.is_absolute() {
             path
@@ -127,7 +136,7 @@ impl crate::Repository {
     /// The returned command has repository context and inherited standard streams. Add the paths to edit as arguments
     /// before spawning it.
     #[cfg(feature = "command")]
-    pub fn editor_command(&self) -> Result<Option<gix_command::Prepare>, config::command_context::Error> {
+    pub fn editor_command(&self) -> Result<Option<gix_command::Prepare>, crate::Error> {
         use std::{path::Path, process::Stdio};
 
         let Some(editor) = self.editor() else {
@@ -154,9 +163,7 @@ impl crate::Repository {
     /// The returned plumbing options may be adjusted before use, for example to disable GPG pinentry by adding
     /// `--pinentry-mode=error` to `program_arguments`.
     #[cfg(feature = "command")]
-    pub fn commit_signing_options(
-        &self,
-    ) -> Result<gix_object::signature::sign::Options, crate::commit::sign::options::Error> {
+    pub fn commit_signing_options(&self) -> Result<gix_object::signature::sign::Options, crate::Error> {
         crate::commit::sign::signing_options(self)
     }
 
@@ -166,7 +173,7 @@ impl crate::Repository {
     #[cfg(feature = "command")]
     pub fn commit_signing_options_if_enabled(
         &self,
-    ) -> Result<Option<gix_object::signature::sign::Options>, crate::commit::sign::options::Error> {
+    ) -> Result<Option<gix_object::signature::sign::Options>, crate::Error> {
         crate::commit::sign::signing_options_if_enabled(self)
     }
 
@@ -200,7 +207,7 @@ impl crate::Repository {
     ///
     /// Note that these values have not been [probed](gix_fs::Capabilities::probe()).
     #[cfg(feature = "index")]
-    pub fn stat_options(&self) -> Result<gix_index::entry::stat::Options, config::stat_options::Error> {
+    pub fn stat_options(&self) -> Result<gix_index::entry::stat::Options, crate::Error> {
         self.config.stat_options()
     }
 
@@ -228,8 +235,7 @@ impl crate::Repository {
     #[cfg(feature = "blocking-network-client")]
     pub fn ssh_connect_options(
         &self,
-    ) -> Result<gix_protocol::transport::client::blocking_io::ssh::connect::Options, config::ssh_connect_options::Error>
-    {
+    ) -> Result<gix_protocol::transport::client::blocking_io::ssh::connect::Options, crate::Error> {
         use crate::config::{
             cache::util::ApplyLeniency,
             tree::{Core, Ssh, gitoxide},
@@ -252,7 +258,8 @@ impl crate::Repository {
                 .string_filter("ssh.variant", &mut trusted)
                 .and_then(|variant| Ssh::VARIANT.try_into_variant(variant).transpose())
                 .transpose()
-                .with_leniency(self.options.lenient_config)?,
+                .with_leniency(self.options.lenient_config)
+                .map_err(gix_error::Error::from)?,
         };
         Ok(opts)
     }
@@ -260,7 +267,7 @@ impl crate::Repository {
     /// Return the context to be passed to any spawned program that is supposed to interact with the repository, like
     /// hooks or filters.
     #[cfg(feature = "command")]
-    pub fn command_context(&self) -> Result<gix_command::Context, config::command_context::Error> {
+    pub fn command_context(&self) -> Result<gix_command::Context, crate::Error> {
         use crate::config::{cache::util::ApplyLeniency, tree::gitoxide};
 
         let pathspec_boolean = |key: &'static config::tree::keys::Boolean| {
@@ -272,7 +279,8 @@ impl crate::Repository {
             stderr: {
                 gitoxide::Core::EXTERNAL_COMMAND_STDERR
                     .enrich_error(self.config.resolved.boolean(gitoxide::Core::EXTERNAL_COMMAND_STDERR))
-                    .with_leniency(self.config.lenient_config)?
+                    .with_leniency(self.config.lenient_config)
+                    .map_err(gix_error::Error::from)?
                     .unwrap_or(true)
                     .into()
             },
@@ -282,13 +290,15 @@ impl crate::Repository {
                 &self.config.resolved,
                 self.config.lenient_config,
                 self.filter_config_section(),
-            )?
+            )
+            .map_err(gix_error::Error::from)?
             .map(|enabled| !enabled),
             ref_namespace: self.refs.namespace.as_ref().map(|ns| ns.as_bstr().to_owned()),
-            literal_pathspecs: pathspec_boolean(&gitoxide::Pathspec::LITERAL)?,
-            glob_pathspecs: pathspec_boolean(&gitoxide::Pathspec::GLOB)?
-                .or(pathspec_boolean(&gitoxide::Pathspec::NOGLOB)?),
-            icase_pathspecs: pathspec_boolean(&gitoxide::Pathspec::ICASE)?,
+            literal_pathspecs: pathspec_boolean(&gitoxide::Pathspec::LITERAL).map_err(gix_error::Error::from)?,
+            glob_pathspecs: pathspec_boolean(&gitoxide::Pathspec::GLOB)
+                .map_err(gix_error::Error::from)?
+                .or(pathspec_boolean(&gitoxide::Pathspec::NOGLOB).map_err(gix_error::Error::from)?),
+            icase_pathspecs: pathspec_boolean(&gitoxide::Pathspec::ICASE).map_err(gix_error::Error::from)?,
         })
     }
 

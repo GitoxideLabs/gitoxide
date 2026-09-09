@@ -23,6 +23,36 @@ use parking_lot::Mutex;
 
 use crate::fixture_bytes;
 
+#[cfg(any(feature = "blocking-client", feature = "async-std"))]
+#[crate::bisync::bisync]
+#[cfg_attr(feature = "blocking-client", test)]
+#[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
+async fn refused_connections_remain_retryable() -> crate::Result {
+    #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
+    use client::async_io::connect::connect;
+    #[cfg(feature = "blocking-client")]
+    use client::blocking_io::connect::connect;
+
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    drop(listener);
+    let url = format!("git://127.0.0.1:{port}/repo.git");
+    let err = connect(url.as_str(), Default::default())
+        .await
+        .err()
+        .expect("the local port has no listener")
+        .into_error();
+    assert_eq!(
+        err.downcast_any_ref::<std::io::Error>()
+            .expect("retain the connection failure")
+            .kind(),
+        std::io::ErrorKind::ConnectionRefused,
+        "the test must exercise a refused connection"
+    );
+    assert!(err.can_retry(), "a refused connection can succeed on retry");
+    Ok(())
+}
+
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]

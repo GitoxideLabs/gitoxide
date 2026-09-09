@@ -10,9 +10,9 @@ pub type ProgressAction = std::ops::ControlFlow<()>;
 
 #[cfg(any(feature = "blocking-io", feature = "async-io"))]
 pub(crate) type ExhaustiveOutcome<'a> = (
-    bool,                                                                     // is_done
-    Option<PacketLineRef<'static>>,                                           // stopped_at
-    Option<std::io::Result<Result<PacketLineRef<'a>, crate::decode::Error>>>, // actual method result
+    bool,                                                                           // is_done
+    Option<PacketLineRef<'static>>,                                                 // stopped_at
+    Option<std::io::Result<Result<PacketLineRef<'a>, gix_error::ValidationError>>>, // actual method result
 );
 
 mod error {

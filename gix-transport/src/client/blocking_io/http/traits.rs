@@ -1,40 +1,5 @@
 use crate::client::WriteMode;
 
-/// The error used by the [Http] trait.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Could not initialize the http client")]
-    InitHttpClient {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-    #[error("{description}")]
-    Detail { description: String },
-    #[error("An IO error occurred while uploading the body of a POST request")]
-    PostBody(#[from] std::io::Error),
-}
-
-impl crate::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
-        match self {
-            Error::PostBody(err) => err.is_spurious(),
-            #[cfg(any(feature = "http-client-reqwest", feature = "http-client-curl"))]
-            Error::InitHttpClient { source } => {
-                #[cfg(feature = "http-client-curl")]
-                if let Some(err) = source.downcast_ref::<crate::client::blocking_io::http::curl::Error>() {
-                    return err.is_spurious();
-                }
-                #[cfg(feature = "http-client-reqwest")]
-                if let Some(err) = source.downcast_ref::<crate::client::blocking_io::http::reqwest::remote::Error>() {
-                    return err.is_spurious();
-                }
-                false
-            }
-            _ => false,
-        }
-    }
-}
-
 /// The return value of [`Http::get()`].
 pub struct GetResponse<H, B> {
     /// The response headers.
@@ -105,7 +70,7 @@ pub trait Http {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<GetResponse<Self::Headers, Self::ResponseBody>, Error>;
+    ) -> Result<GetResponse<Self::Headers, Self::ResponseBody>, gix_error::Exn<gix_error::Message>>;
 
     /// Initiate a `POST` request to `url` providing with the given `headers`, where `base_url` is so that `base_url + tail == url`.
     ///
@@ -121,15 +86,12 @@ pub trait Http {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         body: PostBodyDataKind,
-    ) -> Result<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, Error>;
+    ) -> Result<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, gix_error::Exn<gix_error::Message>>;
 
     /// Pass `config` which can deserialize in the implementation's configuration, as documented separately.
     ///
     /// The caller must know how that `config` data looks like for the intended implementation.
-    fn configure(
-        &mut self,
-        config: &dyn std::any::Any,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>;
+    fn configure(&mut self, config: &dyn std::any::Any) -> Result<(), gix_error::Exn>;
 
     /// Return the effective base URL after a backend accepted a redirect, if available.
     fn redirected_base_url(&self) -> Option<String> {

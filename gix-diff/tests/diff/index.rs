@@ -3,6 +3,7 @@ use gix_diff::{
     index::Change,
     rewrites::{Copies, CopySource},
 };
+use gix_error::ErrorExt;
 use gix_object::bstr::BStr;
 
 #[test]
@@ -50,16 +51,16 @@ fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
         let err = gix_diff::index(
             &lhs,
             &rhs,
-            |_change| Err(std::io::Error::other("custom error")),
+            |_change| Err(gix_error::message("custom error").raise_erased()),
             None::<gix_diff::index::RewriteOptions<'_, gix_odb::Handle>>,
             &mut pathspec,
             &mut |_, _, _, _| true,
         )
         .unwrap_err();
-        assert_eq!(
-            format!("{err:?}"),
-            r#"Callback(Custom { kind: Other, error: "custom error" })"#,
-            "custom errors made visible and not squelched"
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("The callback indicated failure") && rendered.contains("custom error"),
+            "custom errors made visible and not squelched: {rendered}"
         );
     }
     Ok(())
@@ -1300,10 +1301,7 @@ fn unmerged_entries_and_intent_to_add() -> crate::Result {
 }
 
 mod util {
-    use std::{
-        convert::Infallible,
-        path::{Path, PathBuf},
-    };
+    use std::path::{Path, PathBuf};
 
     use gix_diff::rewrites;
 
@@ -1375,7 +1373,7 @@ mod util {
         let rewrites_info = gix_diff::index(
             &from,
             &to,
-            |change| -> Result<_, Infallible> {
+            |change| -> Result<_, gix_error::Exn> {
                 out.push(change.into_owned());
                 Ok(std::ops::ControlFlow::Continue(()))
             },

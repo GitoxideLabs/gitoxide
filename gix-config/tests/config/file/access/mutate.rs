@@ -79,11 +79,11 @@ mod remove_section {
         )?;
 
         file.remove_section("core", None).expect("plain section exists");
-        assert!(
-            matches!(
-                file.section("core", None),
-                Err(gix_config::lookup::existing::Error::SubSectionMissing)
-            ),
+        let err = file.section("core", None).unwrap_err();
+        assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+        assert_eq!(
+            err.to_string(),
+            "The requested subsection does not exist",
             "the `core` section name still exists through its siblings, but its no-subsection bucket was removed"
         );
         assert_eq!(file.section("core", "a")?.value("key"), Some("a".into()));
@@ -92,10 +92,9 @@ mod remove_section {
         assert_eq!(file.section("core", "b")?.value("key"), Some("b".into()));
 
         file.remove_section("core", "b").expect("final subsection exists");
-        assert!(matches!(
-            file.section("core", "b"),
-            Err(gix_config::lookup::existing::Error::SectionMissing)
-        ));
+        let err = file.section("core", "b").unwrap_err();
+        assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+        assert_eq!(err.to_string(), "The requested section does not exist");
         Ok(())
     }
 
@@ -145,22 +144,20 @@ mod remove_section_filter {
 }
 
 mod rename_section {
-    use gix_config::{file::rename_section, parse::section};
 
     #[test]
     fn section_renaming_validates_new_name() {
         let mut file = gix_config::File::try_from("[core] a = b").unwrap();
-        assert!(matches!(
-            file.rename_section("core", None, "new_core", None),
-            Err(rename_section::Error::Section(section::header::Error::InvalidName))
-        ));
+        let err = file.rename_section("core", None, "new_core", None).unwrap_err();
+        assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+        assert_eq!(err.to_string(), "section names can only be ascii, '-': \"new_core\"");
 
-        assert!(matches!(
-            file.rename_section("core", None, "new-core", "a\nb"),
-            Err(rename_section::Error::Section(
-                section::header::Error::InvalidSubSection
-            ))
-        ));
+        let err = file.rename_section("core", None, "new-core", "a\nb").unwrap_err();
+        assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+        assert_eq!(
+            err.to_string(),
+            "sub-section names must not contain newlines or null bytes: \"a\\nb\""
+        );
     }
 
     #[test]
@@ -238,13 +235,13 @@ mod rename_section {
         "#);
 
         let prev = file.to_string();
-        assert!(
-            matches!(
-                file.rename_section_filter("branch", "source", "branch", "other", |_| false),
-                Err(rename_section::Error::Lookup(
-                    gix_config::lookup::existing::Error::KeyMissing
-                )),
-            ),
+        let err = file
+            .rename_section_filter("branch", "source", "branch", "other", |_| false)
+            .unwrap_err();
+        assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+        assert_eq!(
+            err.to_string(),
+            "The key does not exist in the requested section",
             "matching nothing causes an error"
         );
         assert_eq!(
@@ -275,12 +272,9 @@ mod rename_section {
     fn an_empty_lookup_bucket_is_reported_as_missing() -> crate::Result {
         let mut file = gix_config::File::try_from("[core] key = value\n")?;
         file.remove_section("core", None).expect("section exists");
-        assert!(matches!(
-            file.rename_section("core", None, "other", None),
-            Err(rename_section::Error::Lookup(
-                gix_config::lookup::existing::Error::SectionMissing
-            ))
-        ));
+        let err = file.rename_section("core", None, "other", None).unwrap_err();
+        assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+        assert_eq!(err.to_string(), "The requested section does not exist");
         Ok(())
     }
 }

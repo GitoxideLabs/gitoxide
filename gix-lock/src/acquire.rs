@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use gix_error::{ErrorExt, ResultExt, RetryableError, message};
 use gix_tempfile::{AutoRemove, ContainingDirectory};
 
 use crate::{DOT_LOCK_SUFFIX, File, Marker, backoff};
@@ -40,23 +41,6 @@ impl From<Duration> for Fail {
     }
 }
 
-/// The error returned when acquiring a [`File`] or [`Marker`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Another IO error occurred while obtaining the lock")]
-    Io(#[from] std::io::Error),
-    #[error(
-        "The lock for resource '{resource_path}' could not be obtained {mode} after {attempts} attempt(s). The lockfile at '{resource_path}{}' might need manual deletion.",
-        super::DOT_LOCK_SUFFIX
-    )]
-    PermanentlyLocked {
-        resource_path: PathBuf,
-        mode: Fail,
-        attempts: usize,
-    },
-}
-
 impl File {
     /// Create a writable lock file with failure `mode` whose content will eventually overwrite the given resource `at_path`.
     ///
@@ -84,7 +68,7 @@ impl File {
         boundary_directory: Option<PathBuf>,
         resolve_resource: Option<&dyn Fn(&Path) -> PathBuf>,
         adjust_permissions: Option<&dyn Fn(std::fs::Permissions) -> std::fs::Permissions>,
-    ) -> Result<File, Error> {
+    ) -> Result<File, gix_error::Exn> {
         let resolve_resource = resolve_resource.unwrap_or(&keep_resource);
         let (resource_path, lock_path, handle) = lock_with_mode(
             at_path.as_ref(),
@@ -108,7 +92,8 @@ impl File {
             lock.with_mut(|file| {
                 let permissions = adjust_permissions(file.metadata()?.permissions());
                 file.set_permissions(permissions)
-            })?;
+            })
+            .or_erased()?;
         }
         Ok(lock)
     }
@@ -118,7 +103,7 @@ impl File {
         at_path: impl AsRef<Path>,
         mode: Fail,
         boundary_directory: Option<PathBuf>,
-    ) -> Result<File, Error> {
+    ) -> Result<File, gix_error::Exn> {
         Self::acquire(at_path, mode, boundary_directory, None, None)
     }
 
@@ -128,7 +113,7 @@ impl File {
         mode: Fail,
         boundary_directory: Option<PathBuf>,
         make_permissions: impl Fn() -> std::fs::Permissions,
-    ) -> Result<File, Error> {
+    ) -> Result<File, gix_error::Exn> {
         let (resource_path, lock_path, handle) = lock_with_mode(
             at_path.as_ref(),
             mode,
@@ -149,7 +134,7 @@ impl File {
         at_path: impl AsRef<Path>,
         mode: Fail,
         boundary_directory: Option<PathBuf>,
-    ) -> Result<File, Error> {
+    ) -> Result<File, gix_error::Exn> {
         Self::acquire(at_path, mode, boundary_directory, Some(&resolve_symlink), None)
     }
 
@@ -160,7 +145,7 @@ impl File {
         mode: Fail,
         boundary_directory: Option<PathBuf>,
         adjust_permissions: impl Fn(std::fs::Permissions) -> std::fs::Permissions,
-    ) -> Result<File, Error> {
+    ) -> Result<File, gix_error::Exn> {
         Self::acquire(
             at_path,
             mode,
@@ -189,7 +174,7 @@ impl Marker {
         at_path: impl AsRef<Path>,
         mode: Fail,
         boundary_directory: Option<PathBuf>,
-    ) -> Result<Marker, Error> {
+    ) -> Result<Marker, gix_error::Exn> {
         let (resource_path, lock_path, handle) = lock_with_mode(
             at_path.as_ref(),
             mode,
@@ -217,7 +202,7 @@ impl Marker {
         mode: Fail,
         boundary_directory: Option<PathBuf>,
         make_permissions: impl Fn() -> std::fs::Permissions,
-    ) -> Result<Marker, Error> {
+    ) -> Result<Marker, gix_error::Exn> {
         let (resource_path, lock_path, handle) = lock_with_mode(
             at_path.as_ref(),
             mode,
@@ -273,8 +258,12 @@ fn lock_with_mode<T>(
     boundary_directory: Option<PathBuf>,
     resolve_resource: &dyn Fn(&Path) -> PathBuf,
     try_lock: &dyn Fn(&Path, ContainingDirectory, AutoRemove) -> std::io::Result<T>,
-) -> Result<(PathBuf, PathBuf, T), Error> {
+) -> Result<(PathBuf, PathBuf, T), gix_error::Exn> {
     use std::io::ErrorKind::*;
+    let io_error = |err: std::io::Error| {
+        err.and_raise(message("Another IO error occurred while obtaining the lock"))
+            .erased()
+    };
     let (directory, cleanup) = dir_cleanup(boundary_directory);
     let try_once = |cleanup| {
         let resource_path = resolve_resource(resource);
@@ -302,19 +291,21 @@ fn lock_with_mode<T>(
                         std::thread::sleep(wait);
                         continue;
                     }
-                    Err((err, _)) => return Err(Error::from(err)),
+                    Err((err, _)) => return Err(io_error(err)),
                 }
             }
             try_once(cleanup)
         }
     }
     .map_err(|(err, resource_path)| match err.kind() {
-        AlreadyExists => Error::PermanentlyLocked {
-            resource_path,
-            mode,
-            attempts,
-        },
-        _ => Error::Io(err),
+        AlreadyExists => RetryableError::new(err)
+            .and_raise(message!(
+                "The lock for resource '{resource}' could not be obtained {mode} after {attempts} attempt(s). The lockfile at '{resource}{suffix}' might need manual deletion.",
+                resource = resource_path.display(),
+                suffix = super::DOT_LOCK_SUFFIX,
+            ))
+            .erased(),
+        _ => io_error(err),
     })
 }
 

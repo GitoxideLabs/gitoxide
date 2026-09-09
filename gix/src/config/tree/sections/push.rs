@@ -46,13 +46,13 @@ mod default {
 mod validate {
     #[derive(Clone, Copy)]
     pub struct Default;
-    use std::error::Error;
+    use gix_error::ResultExt;
 
     use crate::{bstr::BStr, config::tree::keys::Validate};
 
     impl Validate for Default {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            super::Push::DEFAULT.try_into_default(value)?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Push::DEFAULT.try_into_default(value).or_erased()?;
             Ok(())
         }
     }

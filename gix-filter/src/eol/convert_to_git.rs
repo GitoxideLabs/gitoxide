@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Additional context for use with [`convert_to_git`][super::convert_to_git()].
 #[derive(Default, Copy, Clone)]
@@ -26,21 +26,8 @@ pub enum RoundTripCheck<'a> {
     },
 }
 
-/// The error returned by [convert_to_git()][super::convert_to_git()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("{msg} in '{}'", path.display())]
-    RoundTrip { msg: &'static str, path: PathBuf },
-    #[error("Could not obtain index object to check line endings for")]
-    FetchObjectFromIndex(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error("Could not allocate buffer")]
-    OutOfMemory(#[from] std::collections::TryReserveError),
-}
-
 /// A function that writes a buffer like `fn(&mut buf)` with by tes of an object in the index that is the one that should be converted.
-pub type IndexObjectFn<'a> =
-    dyn FnMut(&mut Vec<u8>) -> Result<Option<()>, Box<dyn std::error::Error + Send + Sync>> + 'a;
+pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> Result<Option<()>, gix_error::Exn> + 'a;
 
 pub(crate) mod function {
     use bstr::ByteSlice;
@@ -49,7 +36,7 @@ pub(crate) mod function {
         clear_and_set_capacity,
         eol::{
             AttributesDigest, Stats,
-            convert_to_git::{Error, IndexObjectFn, Options, RoundTripCheck},
+            convert_to_git::{IndexObjectFn, Options, RoundTripCheck},
         },
     };
 
@@ -71,7 +58,9 @@ pub(crate) mod function {
             round_trip_check,
             config,
         }: Options<'_>,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, gix_error::Exn<gix_error::Message>> {
+        use gix_error::{ErrorExt, ResultExt, message};
+
         if digest == AttributesDigest::Binary || src.is_empty() {
             return Ok(false);
         }
@@ -84,7 +73,9 @@ pub(crate) mod function {
                 return Ok(false);
             }
 
-            if let Some(()) = index_object(buf).map_err(Error::FetchObjectFromIndex)? {
+            if let Some(()) =
+                index_object(buf).or_raise(|| message("Could not obtain index object to check line endings for"))?
+            {
                 let has_crlf_in_index = buf
                     .find_byte(b'\r')
                     .map(|_| Stats::from_bytes(buf))
@@ -112,10 +103,7 @@ pub(crate) mod function {
                 // CRLF would not be restored by checkout
                 match round_trip_check {
                     RoundTripCheck::Fail { rela_path } => {
-                        return Err(Error::RoundTrip {
-                            msg: "CRLF would be replaced by LF",
-                            path: rela_path.to_owned(),
-                        });
+                        return Err(message!("CRLF would be replaced by LF in '{}'", rela_path.display()).raise());
                     }
                     #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
                     RoundTripCheck::Warn { rela_path } => {
@@ -129,10 +117,7 @@ pub(crate) mod function {
                 // CRLF would be added by checkout
                 match round_trip_check {
                     RoundTripCheck::Fail { rela_path } => {
-                        return Err(Error::RoundTrip {
-                            msg: "LF would be replaced by CRLF",
-                            path: rela_path.to_owned(),
-                        });
+                        return Err(message!("LF would be replaced by CRLF in '{}'", rela_path.display()).raise());
                     }
                     #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
                     RoundTripCheck::Warn { rela_path } => {
@@ -149,7 +134,7 @@ pub(crate) mod function {
             return Ok(false);
         }
 
-        clear_and_set_capacity(buf, src.len() - stats.crlf)?;
+        clear_and_set_capacity(buf, src.len() - stats.crlf).or_raise(|| message("Could not allocate buffer"))?;
         if stats.lone_cr == 0 {
             buf.extend(src.iter().filter(|b| **b != b'\r'));
         } else {

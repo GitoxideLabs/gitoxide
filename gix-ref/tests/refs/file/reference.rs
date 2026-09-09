@@ -57,6 +57,27 @@ mod peel {
     };
 
     #[test]
+    fn object_lookup_error_preserves_causes() {
+        use gix_error::ErrorExt;
+
+        let lookup_error = std::io::Error::from(std::io::ErrorKind::PermissionDenied)
+            .and_raise(gix_error::message("Could not read the referenced object"))
+            .erased();
+        let err = gix_error::Error::from_error(gix_ref::peel::to_id::Error::from(lookup_error));
+
+        assert_eq!(
+            err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied),
+            "the peeling error retains the I/O cause beneath the lookup context"
+        );
+        assert!(
+            err.iter_errors()
+                .any(|cause| cause.to_string() == "Could not read the referenced object"),
+            "the lookup context remains part of the error chain"
+        );
+    }
+
+    #[test]
     fn one_level() -> crate::Result {
         let store = file::store()?;
         let r = store.find_loose("HEAD")?;

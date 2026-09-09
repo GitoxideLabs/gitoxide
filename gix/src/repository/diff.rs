@@ -1,9 +1,7 @@
+use gix_error::ResultExt;
 use gix_object::TreeRefIter;
 
-use crate::{
-    Repository, Tree,
-    repository::{diff_resource_cache, diff_tree_to_tree},
-};
+use crate::{Repository, Tree};
 
 /// Diff-utilities
 impl Repository {
@@ -21,9 +19,9 @@ impl Repository {
         &self,
         mode: gix_diff::blob::pipeline::Mode,
         worktree_roots: gix_diff::blob::pipeline::WorktreeRoots,
-    ) -> Result<gix_diff::blob::Platform, diff_resource_cache::Error> {
+    ) -> Result<gix_diff::blob::Platform, crate::Error> {
         let index = self.index_or_load_from_head_or_empty()?;
-        Ok(crate::diff::resource_cache(
+        crate::diff::resource_cache(
             self,
             mode,
             self.attributes_only(
@@ -33,10 +31,11 @@ impl Repository {
                 } else {
                     gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping
                 },
-            )?
+            )
+            .or_raise(|| gix_error::message("Could not obtain resource cache for diffing"))?
             .inner,
             worktree_roots,
-        )?)
+        )
     }
 
     /// Produce the changes that would need to be applied to `old_tree` to create `new_tree`.
@@ -52,7 +51,7 @@ impl Repository {
         old_tree: impl Into<Option<&'a Tree<'old_repo>>>,
         new_tree: impl Into<Option<&'a Tree<'new_repo>>>,
         options: impl Into<Option<crate::diff::Options>>,
-    ) -> Result<Vec<crate::object::tree::diff::ChangeDetached>, diff_tree_to_tree::Error> {
+    ) -> Result<Vec<crate::object::tree::diff::ChangeDetached>, crate::Error> {
         let mut cache = self.diff_resource_cache(gix_diff::blob::pipeline::Mode::ToGit, Default::default())?;
         let opts = options
             .into()
@@ -69,19 +68,20 @@ impl Repository {
             &mut cache,
             &mut Default::default(),
             &self.objects,
-            |change| -> Result<_, std::convert::Infallible> {
+            |change| -> Result<_, gix_error::Exn> {
                 out.push(change.into_owned());
                 Ok(std::ops::ControlFlow::Continue(()))
             },
             opts,
-        )?;
+        )
+        .or_erased()?;
         Ok(out)
     }
 
     /// Return a resource cache suitable for diffing blobs from trees directly, where no worktree checkout exists.
     ///
     /// For more control, see [`diff_resource_cache()`](Self::diff_resource_cache).
-    pub fn diff_resource_cache_for_tree_diff(&self) -> Result<gix_diff::blob::Platform, diff_resource_cache::Error> {
+    pub fn diff_resource_cache_for_tree_diff(&self) -> Result<gix_diff::blob::Platform, crate::Error> {
         self.diff_resource_cache(
             gix_diff::blob::pipeline::Mode::ToGit,
             gix_diff::blob::pipeline::WorktreeRoots::default(),

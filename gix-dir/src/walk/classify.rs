@@ -4,11 +4,12 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{ResultExt, message};
 
 use crate::{
     Entry, EntryRef, entry,
     entry::PathspecMatch,
-    walk::{Context, Error, ForDeletionMode, Options},
+    walk::{Context, ForDeletionMode, Options},
 };
 
 /// Classify the `worktree_relative_root` path and return the first `PathKind` that indicates that
@@ -20,7 +21,7 @@ pub fn root(
     worktree_relative_root: &Path,
     options: Options<'_>,
     ctx: &mut Context<'_>,
-) -> Result<(Outcome, bool), Error> {
+) -> Result<(Outcome, bool), gix_error::Exn> {
     buf.clear();
     let mut last_length = None;
     let mut path_buf = worktree_root.to_owned();
@@ -146,7 +147,7 @@ pub fn path(
         ..
     }: Options<'_>,
     ctx: &mut Context<'_>,
-) -> Result<Outcome, Error> {
+) -> Result<Outcome, gix_error::Exn> {
     let mut out = Outcome {
         status: entry::Status::Pruned,
         property: None,
@@ -176,7 +177,7 @@ pub fn path(
                         )
                         .map(|platform| platform.excluded_kind())
                 })
-                .map_err(Error::ExcludesAccess)?
+                .or_raise_erased(|| message("Failed to update the excludes stack to see if a path is excluded"))?
                 .filter(|_| filename_start_idx > 0)
         {
             out.status = entry::Status::Ignored(excluded);
@@ -253,7 +254,7 @@ pub fn path(
                 .at_entry(rela_path.as_bstr(), is_dir, ctx.objects)
                 .map(|platform| platform.excluded_kind())
         })
-        .map_err(Error::ExcludesAccess)?
+        .or_raise_erased(|| message("Failed to update the excludes stack to see if a path is excluded"))?
     {
         if emit_ignored.is_some() {
             if matches!(

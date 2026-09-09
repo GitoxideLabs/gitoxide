@@ -1,3 +1,6 @@
+#[cfg(feature = "revision")]
+use gix_error::ResultExt;
+
 use crate::revision;
 #[cfg(feature = "revision")]
 use crate::{Id, bstr::BStr};
@@ -39,14 +42,14 @@ impl crate::Repository {
     /// ```
     #[doc(alias = "revparse_single", alias = "git2")]
     #[cfg(feature = "revision")]
-    pub fn rev_parse_single<'repo, 'a>(
-        &'repo self,
-        spec: impl Into<&'a BStr>,
-    ) -> Result<Id<'repo>, revision::spec::parse::single::Error> {
+    pub fn rev_parse_single<'repo, 'a>(&'repo self, spec: impl Into<&'a BStr>) -> Result<Id<'repo>, crate::Error> {
         let spec = spec.into();
-        self.rev_parse(spec)?
-            .single()
-            .ok_or(revision::spec::parse::single::Error::RangedRev { spec: spec.into() })
+        self.rev_parse(spec)?.single().ok_or_else(|| {
+            let spec: crate::bstr::BString = spec.into();
+            gix_error::Error::from_error(gix_error::message!(
+                "revspec {spec:?} did not resolve to a single object"
+            ))
+        })
     }
 
     /// Obtain the best merge-base between commit `one` and `two`, or fail if there is none.
@@ -59,16 +62,19 @@ impl crate::Repository {
         &self,
         one: impl Into<gix_hash::ObjectId>,
         two: impl Into<gix_hash::ObjectId>,
-    ) -> Result<Id<'_>, super::merge_base::Error> {
+    ) -> Result<Id<'_>, crate::Error> {
         use crate::prelude::ObjectIdExt;
         let one = one.into();
         let two = two.into();
         let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
-        let bases = gix_revision::merge_base(one, &[two], &mut graph)?.ok_or(super::merge_base::Error::NotFound {
-            first: one,
-            second: two,
-        })?;
+        let bases = gix_revision::merge_base(one, &[two], &mut graph)
+            .or_erased()?
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::message!(
+                    "Could not find a merge-base between commits {one} and {two}"
+                ))
+            })?;
         Ok(bases.first().attach(self))
     }
 
@@ -83,14 +89,16 @@ impl crate::Repository {
         one: impl Into<gix_hash::ObjectId>,
         two: impl Into<gix_hash::ObjectId>,
         graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
-    ) -> Result<Id<'_>, super::merge_base_with_graph::Error> {
+    ) -> Result<Id<'_>, crate::Error> {
         use crate::prelude::ObjectIdExt;
         let one = one.into();
         let two = two.into();
-        let bases =
-            gix_revision::merge_base(one, &[two], graph)?.ok_or(super::merge_base_with_graph::Error::NotFound {
-                first: one,
-                second: two,
+        let bases = gix_revision::merge_base(one, &[two], graph)
+            .or_erased()?
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::message!(
+                    "Could not find a merge-base between commits {one} and {two}"
+                ))
             })?;
         Ok(bases.first().attach(self))
     }
@@ -128,10 +136,10 @@ impl crate::Repository {
         &self,
         one: impl Into<gix_hash::ObjectId>,
         others: &[gix_hash::ObjectId],
-    ) -> Result<Vec<Id<'_>>, crate::repository::merge_bases_many::Error> {
+    ) -> Result<Vec<Id<'_>>, crate::Error> {
         let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
-        Ok(self.merge_bases_many_with_graph(one, others, &mut graph)?)
+        Ok(self.merge_bases_many_with_graph(one, others, &mut graph).or_erased()?)
     }
 
     /// Return the best merge-base among all `commits`, or fail if `commits` yields no commit or no merge-base was found.
@@ -142,15 +150,18 @@ impl crate::Repository {
         &self,
         commits: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
         graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
-    ) -> Result<Id<'_>, crate::repository::merge_base_octopus_with_graph::Error> {
-        use crate::{prelude::ObjectIdExt, repository::merge_base_octopus_with_graph};
+    ) -> Result<Id<'_>, crate::Error> {
+        use crate::prelude::ObjectIdExt;
         let commits: Vec<_> = commits.into_iter().map(Into::into).collect();
         let first = commits
             .first()
             .copied()
-            .ok_or(merge_base_octopus_with_graph::Error::MissingCommit)?;
-        gix_revision::merge_base::octopus(first, &commits[1..], graph)?
-            .ok_or(merge_base_octopus_with_graph::Error::NoMergeBase)
+            .ok_or_else(|| gix_error::Error::from_error(gix_error::message("No commit was provided")))?;
+        gix_revision::merge_base::octopus(first, &commits[1..], graph)
+            .or_erased()?
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::message("No merge base was found between the given commits"))
+            })
             .map(|id| id.attach(self))
     }
 
@@ -161,10 +172,10 @@ impl crate::Repository {
     pub fn merge_base_octopus(
         &self,
         commits: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
-    ) -> Result<Id<'_>, crate::repository::merge_base_octopus::Error> {
+    ) -> Result<Id<'_>, crate::Error> {
         let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
-        Ok(self.merge_base_octopus_with_graph(commits, &mut graph)?)
+        self.merge_base_octopus_with_graph(commits, &mut graph)
     }
 
     /// Create the baseline for a revision walk by initializing it with the `tips` to start iterating on.

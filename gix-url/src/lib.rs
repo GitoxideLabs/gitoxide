@@ -27,6 +27,7 @@
 use std::{borrow::Cow, path::PathBuf};
 
 use bstr::{BStr, BString};
+use gix_error::ErrorExt;
 use gix_utils::AsBStr;
 
 const HTTP_PATH_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
@@ -72,7 +73,7 @@ mod simple_url;
 ///
 /// Also unlike Git, an empty remote-helper name as in `::address` is not accepted, as the `git-remote-` program it
 /// would name cannot meaningfully exist.
-pub fn parse(input: impl AsBStr) -> Result<Url, parse::Error> {
+pub fn parse(input: impl AsBStr) -> Result<Url, gix_error::Exn<gix_error::ValidationError>> {
     use parse::InputScheme;
     let input = input.as_bstr();
     match parse::find_scheme(input) {
@@ -88,7 +89,7 @@ pub fn parse(input: impl AsBStr) -> Result<Url, parse::Error> {
 /// directory automatically.
 ///
 /// If more precise control of the resolution mechanism is needed, then use the [expand_path::with()] function.
-pub fn expand_path(user: Option<&expand_path::ForUser>, path: &BStr) -> Result<PathBuf, expand_path::Error> {
+pub fn expand_path(user: Option<&expand_path::ForUser>, path: &BStr) -> Result<PathBuf, gix_error::Exn> {
     expand_path::with(user, path, |user| match user {
         expand_path::ForUser::Current => gix_path::env::home_dir(),
         expand_path::ForUser::Name(user) => {
@@ -143,7 +144,7 @@ pub enum ArgumentSafety<'a> {
 /// whereas [`Url::to_bstring()`] includes all URL parts.
 /// **Beware that some URLs still print secrets if they use them outside of the designated password fields.**
 ///
-/// Also note that URLs that fail to parse are typically stored in [the resulting error](parse::Error) type
+/// Also note that URLs that fail to parse are typically stored in [the resulting error](gix_error::Exn) type
 /// and printed in full using its display implementation.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -304,11 +305,13 @@ impl Url {
         port: Option<u16>,
         path: BString,
         serialize_alternative_form: bool,
-    ) -> Result<Self, parse::Error> {
+    ) -> Result<Self, gix_error::Exn<gix_error::ValidationError>> {
         if let Scheme::Helper(name) = &scheme
             && !parse::is_valid_remote_helper_name(name.as_bytes())
         {
-            return Err(parse::Error::InvalidRemoteHelperName { name: name.clone() });
+            return Err(
+                gix_error::ValidationError::new_with_input("Invalid remote-helper name", name.as_bytes()).raise(),
+            );
         }
         let is_http = matches!(scheme, Scheme::Http | Scheme::Https);
         let mut parsed = parse(
@@ -371,7 +374,7 @@ impl Url {
     /// Resolve the path of a file location against `current_dir` and normalize it in place.
     ///
     /// Other schemes are unchanged.
-    pub fn canonicalize(&mut self, current_dir: &std::path::Path) -> Result<(), gix_path::realpath::Error> {
+    pub fn canonicalize(&mut self, current_dir: &std::path::Path) -> Result<(), gix_error::Exn> {
         if self.scheme == Scheme::File {
             let path = gix_path::from_bstr(Cow::Borrowed(self.path.as_ref()));
             let abs_path = gix_path::realpath_opts(path.as_ref(), current_dir, gix_path::realpath::MAX_SYMLINKS)?;
@@ -513,7 +516,7 @@ impl Url {
     /// Return a clone whose file path is resolved against `current_dir` and normalized.
     ///
     /// Other schemes are returned unchanged.
-    pub fn canonicalized(&self, current_dir: &std::path::Path) -> Result<Self, gix_path::realpath::Error> {
+    pub fn canonicalized(&self, current_dir: &std::path::Path) -> Result<Self, gix_error::Exn> {
         let mut res = self.clone();
         res.canonicalize(current_dir)?;
         Ok(res)
@@ -744,7 +747,7 @@ impl Url {
 /// Deserialization
 impl Url {
     /// Parse a URL from `bytes`.
-    pub fn from_bytes(bytes: &BStr) -> Result<Self, parse::Error> {
+    pub fn from_bytes(bytes: &BStr) -> Result<Self, gix_error::Exn<gix_error::ValidationError>> {
         parse(bytes)
     }
 }
@@ -753,7 +756,7 @@ impl Url {
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
     #[test]
-    fn legacy_encoded_public_path_is_migrated() -> gix_testtools::Result {
+    fn legacy_encoded_public_path_is_migrated() -> gix_error::TestResult {
         for (input, legacy_path, decoded_path) in [
             ("https://example.com/a%2Fb", "/a%2Fb", "/a/b"),
             ("https://example.com/%20%25", "/ %25", "/ %"),

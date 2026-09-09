@@ -1,17 +1,5 @@
 use crate::{File, Version, write};
 
-/// The error produced by [`File::write()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Io(#[from] gix_hash::io::Error),
-    #[error("Could not acquire lock for index file")]
-    AcquireLock(#[from] gix_lock::acquire::Error),
-    #[error("Could not commit lock for index file")]
-    CommitLock(#[from] gix_lock::commit::Error<gix_lock::File>),
-}
-
 impl File {
     /// Write the index to `out` with `options`, to be readable by [`File::at()`], returning the version that was actually written
     /// to retain all information of this index.
@@ -23,7 +11,7 @@ impl File {
         &self,
         mut out: impl std::io::Write,
         options: write::Options,
-    ) -> Result<(Version, gix_hash::ObjectId), gix_hash::io::Error> {
+    ) -> Result<(Version, gix_hash::ObjectId), gix_error::Exn> {
         let _span = gix_features::trace::detail!("gix_index::File::write_to()", skip_hash = options.skip_hash);
         let (version, hash) = if options.skip_hash {
             let out: &mut dyn std::io::Write = &mut out;
@@ -33,9 +21,9 @@ impl File {
             let mut hasher = gix_hash::io::Write::new(&mut out, self.state.object_hash);
             let out: &mut dyn std::io::Write = &mut hasher;
             let version = self.state.write_to(out, options)?;
-            (version, hasher.hash.try_finalize()?)
+            (version, hasher.hash.try_finalize().map_err(gix_hash::io::from_hasher)?)
         };
-        out.write_all(hash.as_slice())?;
+        out.write_all(hash.as_slice()).map_err(gix_hash::io::from_std_io)?;
         Ok((version, hash))
     }
 
@@ -64,16 +52,27 @@ impl File {
     /// ```
     ///
     /// [issue #2421]: https://github.com/GitoxideLabs/gitoxide/issues/2421
-    pub fn write(&mut self, options: write::Options) -> Result<(), Error> {
+    pub fn write(&mut self, options: write::Options) -> Result<(), gix_error::Exn<gix_error::Message>> {
+        use gix_error::{ErrorExt, ResultExt, message};
+
         let _span = gix_features::trace::detail!("gix_index::File::write()", path = ?self.path);
         let mut lock = std::io::BufWriter::with_capacity(
             64 * 1024,
-            gix_lock::File::acquire_to_update_resource(&self.path, gix_lock::acquire::Fail::Immediately, None)?,
+            gix_lock::File::acquire_to_update_resource(&self.path, gix_lock::acquire::Fail::Immediately, None)
+                .or_raise(|| message("Could not acquire lock for index file"))?,
         );
-        let (version, digest) = self.write_to(&mut lock, options)?;
+        let (version, digest) = self
+            .write_to(&mut lock, options)
+            .or_raise(|| message("Could not write index"))?;
         match lock.into_inner() {
-            Ok(lock) => lock.commit()?,
-            Err(err) => return Err(Error::Io(err.into_error().into())),
+            Ok(lock) => lock
+                .commit()
+                .or_raise(|| message("Could not commit lock for index file"))?,
+            Err(err) => {
+                return Err(err
+                    .into_error()
+                    .and_raise(message("Could not flush buffered index data")));
+            }
         };
         self.state.version = version;
         self.checksum = Some(digest);

@@ -112,6 +112,7 @@ pub fn from_pack(
             options,
         ),
     }
+    .map_err(gix::Exn::into_error)
     .with_context(|| "Failed to write pack and index")?;
     match format {
         OutputFormat::Human => drop(human_output(out, res)),

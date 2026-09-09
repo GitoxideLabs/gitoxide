@@ -1,11 +1,14 @@
 use std::sync::atomic::Ordering;
 
+#[cfg(feature = "parallel")]
+use gix_error::ErrorExt;
+use gix_error::ResultExt;
 use gix_status::index_as_worktree::{Change, EntryStatus};
 
 use crate::{
     bstr::BString,
     config::cache::util::ApplyLeniencyDefault,
-    status::{Platform, index_worktree, index_worktree::BuiltinSubmoduleStatus, tree_index},
+    status::{Platform, index_worktree, index_worktree::BuiltinSubmoduleStatus},
     worktree::IndexPersistedOrInMemory,
 };
 
@@ -37,18 +40,20 @@ where
     /// This isn't feasible to do here as it would mean that returned items would have to be delayed,
     /// degrading performance for everyone who isn't order-dependent.
     #[doc(alias = "diff_index_to_workdir", alias = "git2")]
-    pub fn into_iter(
-        self,
-        patterns: impl IntoIterator<Item = BString>,
-    ) -> Result<Iter, crate::status::into_iter::Error> {
+    pub fn into_iter(self, patterns: impl IntoIterator<Item = BString>) -> Result<Iter, crate::Error> {
         let index = match self.index {
             None => IndexPersistedOrInMemory::Persisted(self.repo.index_or_empty()?),
             Some(index) => index,
         };
 
-        let obtain_tree_id = || -> Result<Option<gix_hash::ObjectId>, crate::status::into_iter::Error> {
+        let obtain_tree_id = || -> Result<Option<gix_hash::ObjectId>, crate::Error> {
             Ok(match self.head_tree {
-                Some(None) => Some(self.repo.head_tree_id_or_empty()?.into()),
+                Some(None) => Some(
+                    self.repo
+                        .head_tree_id_or_empty()
+                        .or_raise(|| gix_error::message("Could not obtain the tree id pointed to by `HEAD`"))?
+                        .into(),
+                ),
                 Some(Some(tree_id)) => Some(tree_id),
                 None => None,
             })
@@ -56,10 +61,11 @@ where
 
         let skip_hash = crate::config::tree::Index::SKIP_HASH
             .enrich_error(self.repo.config.resolved.boolean(crate::config::tree::Index::SKIP_HASH))
-            .with_lenient_default(self.repo.config.lenient_config)?
+            .with_lenient_default(self.repo.config.lenient_config)
+            .or_erased()?
             .unwrap_or_default();
         let should_interrupt = self.should_interrupt.clone().unwrap_or_default();
-        let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules)?;
+        let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules).or_erased()?;
         #[cfg(feature = "parallel")]
         {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -73,13 +79,11 @@ where
                         let tx = tx.clone();
                         let tree_index_renames = self.tree_index_renames;
                         let index = index.clone();
-                        let crate::Pathspec { repo: _, stack, search } = self
-                            .repo
-                            .index_worktree_status_pathspec::<crate::status::into_iter::Error>(
-                                &patterns,
-                                &index,
-                                self.index_worktree_options.dirwalk_options.as_ref(),
-                            )?;
+                        let crate::Pathspec { repo: _, stack, search } = self.repo.index_worktree_status_pathspec(
+                            &patterns,
+                            &index,
+                            self.index_worktree_options.dirwalk_options.as_ref(),
+                        )?;
                         move || -> Result<_, _> {
                             let repo = repo.to_thread_local();
                             let mut pathspec = crate::Pathspec {
@@ -100,12 +104,14 @@ where
                                     } else {
                                         std::ops::ControlFlow::Continue(())
                                     };
-                                    Ok::<_, std::convert::Infallible>(action)
+                                    Ok::<_, gix_error::Exn>(action)
                                 },
                             )
                         }
                     })
-                    .map_err(crate::status::into_iter::Error::SpawnThread)?
+                    .map_err(|err| {
+                        gix_error::Error::from(err.and_raise(gix_error::message("Failed to spawn producer thread")))
+                    })?
                     .into()
             } else {
                 None
@@ -118,7 +124,7 @@ where
                     let options = self.index_worktree_options;
                     let should_interrupt = should_interrupt.clone();
                     let mut progress = self.progress;
-                    move || -> Result<_, index_worktree::Error> {
+                    move || -> Result<_, crate::Error> {
                         let repo = repo.to_thread_local();
                         let out = repo.index_worktree_status(
                             &index,
@@ -139,7 +145,9 @@ where
                         })
                     }
                 })
-                .map_err(crate::status::into_iter::Error::SpawnThread)?;
+                .map_err(|err| {
+                    gix_error::Error::from(err.and_raise(gix_error::message("Failed to spawn producer thread")))
+                })?;
 
             Ok(Iter {
                 rx_and_join: Some((rx, join_index_worktree, join_tree_index)),
@@ -158,7 +166,7 @@ where
             let patterns: Vec<BString> = patterns.into_iter().collect();
             let (mut items, tree_index) = match obtain_tree_id()? {
                 Some(tree_id) => {
-                    let mut pathspec = repo.index_worktree_status_pathspec::<crate::status::into_iter::Error>(
+                    let mut pathspec = repo.index_worktree_status_pathspec(
                         &patterns,
                         &index,
                         self.index_worktree_options.dirwalk_options.as_ref(),
@@ -176,7 +184,7 @@ where
                             } else {
                                 std::ops::ControlFlow::Continue(())
                             };
-                            Ok::<_, std::convert::Infallible>(action)
+                            Ok::<_, gix_error::Exn>(action)
                         },
                     )?;
                     (items, Some(tree_index))
@@ -219,18 +227,8 @@ where
     }
 }
 
-/// The error returned for each item returned by [`Iter`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    IndexWorktree(#[from] index_worktree::Error),
-    #[error(transparent)]
-    TreeIndex(#[from] tree_index::Error),
-}
-
 impl Iterator for Iter {
-    type Item = Result<Item, Error>;
+    type Item = Result<Item, crate::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         #[cfg(feature = "parallel")]
@@ -256,7 +254,7 @@ impl Iterator for Iter {
                     let tree_index = if let Some(handle) = tree_handle {
                         match handle.join().expect("no panic") {
                             Ok(out) => Some(out),
-                            Err(err) => break Some(Err(err.into())),
+                            Err(err) => break Some(Err(err)),
                         }
                     } else {
                         None
@@ -268,7 +266,7 @@ impl Iterator for Iter {
                             self.out = Some(out);
                             None
                         }
-                        Err(err) => Some(Err(err.into())),
+                        Err(err) => Some(Err(err)),
                     };
                 }
             }

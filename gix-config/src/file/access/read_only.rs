@@ -37,11 +37,11 @@ impl File {
     ///         a = 10k
     ///         c = false
     /// "#;
-    /// let git_config = gix_config::File::try_from(config)?;
+    /// let git_config = gix_config::File::try_from(config).expect("valid config");
     /// // You can either use the turbofish to determine the type...
-    /// let a_value = git_config.value::<Integer>("core.a")?;
+    /// let a_value = git_config.value::<Integer>("core.a").expect("valid value");
     /// // ... or explicitly declare the type to avoid the turbofish
-    /// let c_value: Boolean = git_config.value("core.c")?;
+    /// let c_value: Boolean = git_config.value("core.c").expect("valid value");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn value<T: TryFrom<BString>>(&self, key: impl AsKey) -> Result<T, lookup::Error<T::Error>> {
@@ -71,11 +71,11 @@ impl File {
     ///         a = 10k
     ///         c = false
     /// "#;
-    /// let git_config = gix_config::File::try_from(config)?;
+    /// let git_config = gix_config::File::try_from(config).expect("valid config");
     /// // You can either use the turbofish to determine the type...
-    /// let a_value = git_config.value_by::<Integer>("core", None, "a")?;
+    /// let a_value = git_config.value_by::<Integer>("core", None, "a").expect("valid value");
     /// // ... or explicitly declare the type to avoid the turbofish
-    /// let c_value: Boolean = git_config.value_by("core", None, "c")?;
+    /// let c_value: Boolean = git_config.value_by("core", None, "c").expect("valid value");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn value_by<T: TryFrom<BString>>(
@@ -162,9 +162,9 @@ impl File {
     ///         a
     ///         a = false
     /// "#;
-    /// let git_config = gix_config::File::try_from(config).unwrap();
+    /// let git_config = gix_config::File::try_from(config).expect("valid config");
     /// // You can either use the turbofish to determine the type...
-    /// let a_value = git_config.values::<Boolean>("core.a")?;
+    /// let a_value = git_config.values::<Boolean>("core.a").expect("valid values");
     /// assert_eq!(
     ///     a_value,
     ///     vec![
@@ -174,9 +174,9 @@ impl File {
     ///     ]
     /// );
     /// // ... or explicitly declare the type to avoid the turbofish
-    /// let c_value: Vec<Boolean> = git_config.values("core.c").unwrap();
+    /// let c_value: Vec<Boolean> = git_config.values("core.c")?;
     /// assert_eq!(c_value, vec![Boolean(false)]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # Ok::<(), gix_config::lookup::Error<gix_error::Exn<gix_error::ValidationError>>>(())
     /// ```
     ///
     /// [`value`]: crate::value
@@ -216,9 +216,9 @@ impl File {
     ///         a
     ///         a = false
     /// "#;
-    /// let git_config = gix_config::File::try_from(config).unwrap();
+    /// let git_config = gix_config::File::try_from(config).expect("valid config");
     /// // You can either use the turbofish to determine the type...
-    /// let a_value = git_config.values_by::<Boolean>("core", None, "a")?;
+    /// let a_value = git_config.values_by::<Boolean>("core", None, "a").expect("valid values");
     /// assert_eq!(
     ///     a_value,
     ///     vec![
@@ -228,9 +228,9 @@ impl File {
     ///     ]
     /// );
     /// // ... or explicitly declare the type to avoid the turbofish
-    /// let c_value: Vec<Boolean> = git_config.values_by("core", None, "c").unwrap();
+    /// let c_value: Vec<Boolean> = git_config.values_by("core", None, "c")?;
     /// assert_eq!(c_value, vec![Boolean(false)]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # Ok::<(), gix_config::lookup::Error<gix_error::Exn<gix_error::ValidationError>>>(())
     /// ```
     ///
     /// [`value`]: crate::value
@@ -277,19 +277,16 @@ impl File {
         &self,
         name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
-    ) -> Result<file::SectionRef<'_>, lookup::existing::Error> {
+    ) -> Result<file::SectionRef<'_>, gix_error::Exn> {
         self.section_filter(name, subsection_name, |_| true)?
-            .ok_or(lookup::existing::Error::SectionMissing)
+            .ok_or_else(lookup::existing::section_missing)
     }
 
     /// Returns the last found immutable section with a given `section_key`, identifying the name and subsection name like `core`
     /// or `remote.origin`.
-    pub fn section_by_key(
-        &self,
-        section_key: impl crate::AsBStr,
-    ) -> Result<file::SectionRef<'_>, lookup::existing::Error> {
+    pub fn section_by_key(&self, section_key: impl crate::AsBStr) -> Result<file::SectionRef<'_>, gix_error::Exn> {
         let key = crate::parse::section::unvalidated::KeyRef::parse(section_key.as_bstr())
-            .ok_or(lookup::existing::Error::KeyMissing)?;
+            .ok_or_else(lookup::existing::key_missing)?;
         self.section(key.section_name, key.subsection_name)
     }
 
@@ -302,7 +299,7 @@ impl File {
         name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<file::SectionRef<'_>>, lookup::existing::Error> {
+    ) -> Result<Option<file::SectionRef<'_>>, gix_error::Exn> {
         Ok(self
             .section_ids_by_name_and_subname(name.as_ref(), subsection_name.as_bstr_opt())?
             .rev()
@@ -320,9 +317,9 @@ impl File {
         &self,
         section_key: impl crate::AsBStr,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<file::SectionRef<'_>>, lookup::existing::Error> {
+    ) -> Result<Option<file::SectionRef<'_>>, gix_error::Exn> {
         let key = crate::parse::section::unvalidated::KeyRef::parse(section_key.as_bstr())
-            .ok_or(lookup::existing::Error::KeyMissing)?;
+            .ok_or_else(lookup::existing::key_missing)?;
         self.section_filter(key.section_name, key.subsection_name, filter)
     }
 

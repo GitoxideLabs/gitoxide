@@ -130,6 +130,10 @@
 //! while a function that wraps I/O errors during parsing could return `Result<_, Exn<ValidationError>>`.
 //! When in doubt, [`Message`] is the default choice.
 //!
+//! Use the chosen type directly in signatures, importing it under its canonical name where helpful.
+//! Crate-specific and operation-specific forwarding aliases or renamed error exports are unnecessary.
+//! Facades may re-export the canonical types, as `gix` does with `gix::Error` and `gix::Exn`.
+//!
 //! ## Translating variants
 //!
 //! The translation depends on the chosen return type. When the function returns a plain error
@@ -284,11 +288,11 @@
 //! [`Exn`] also converts directly into `Box<dyn std::error::Error + Send + Sync>`, so `?` works
 //! without an explicit conversion when that is the receiving result's error type:
 //! ```rust,ignore
-//! // In the porcelain crate's error module:
-//! pub type Error = gix_error::Error;  // not gix_archive::Error (which is Exn<Message>)
-//!
-//! // The conversion happens automatically via From<Exn<E>> for Error,
-//! // so `?` works without explicit .into_error() calls.
+//! fn porcelain_operation() -> Result<(), gix_error::Error> {
+//!     // From<Exn<E>> for Error converts the plumbing error at this boundary.
+//!     plumbing_operation()?;
+//!     Ok(())
+//! }
 //! ```
 //!
 //! # Feature Flags

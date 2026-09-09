@@ -1,7 +1,5 @@
 use bstr::BStr;
 
-use crate::protocol::context::Error;
-
 mod write {
     use bstr::{BStr, BString};
 
@@ -69,26 +67,15 @@ mod write {
 
 ///
 pub mod decode {
-    use bstr::{BString, ByteSlice};
+    use bstr::ByteSlice;
+    use gix_error::ValidationError;
 
-    use crate::protocol::{Context, ContextOptions, context, context::serde::validate};
-
-    /// The error returned by [`from_bytes()`][Context::from_bytes()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Illformed UTF-8 in value of key {key:?}: {value:?}")]
-        IllformedUtf8InValue { key: String, value: BString },
-        #[error(transparent)]
-        Encoding(#[from] context::Error),
-        #[error("Invalid format in line {line:?}, expecting key=value")]
-        Syntax { line: BString },
-    }
+    use crate::protocol::{Context, ContextOptions, context::serde::validate};
 
     impl Context {
         /// Decode ourselves from `input` which is the format written by [`write_to()`][Self::write_to()].
         /// `options` control what to support during deserialization.
-        pub fn from_bytes(input: &[u8], options: ContextOptions) -> Result<Self, Error> {
+        pub fn from_bytes(input: &[u8], options: ContextOptions) -> Result<Self, gix_error::ValidationError> {
             let mut ctx = Context {
                 options,
                 ..Context::default()
@@ -111,17 +98,23 @@ pub mod decode {
                     it.next().and_then(|k| k.to_str().ok()),
                     it.next().map(ByteSlice::as_bstr),
                 ) {
-                    (Some(key), Some(value)) => validate(key, value, options.protect_protocol)
-                        .map(|_| (key, value.to_owned()))
-                        .map_err(Into::into),
-                    _ => Err(Error::Syntax { line: line.into() }),
+                    (Some(key), Some(value)) => {
+                        validate(key, value, options.protect_protocol).map(|_| (key, value.to_owned()))
+                    }
+                    _ => Err(ValidationError::new_with_input(
+                        "Invalid format, expecting key=value",
+                        line,
+                    )),
                 }
             }) {
                 let (key, value) = res?;
                 match key {
                     "protocol" | "host" | "username" | "password" | "oauth_refresh_token" => {
                         if !value.is_utf8() {
-                            return Err(Error::IllformedUtf8InValue { key: key.into(), value });
+                            return Err(ValidationError::new_with_input(
+                                format!("Illformed UTF-8 in value of key {key:?}"),
+                                value,
+                            ));
                         }
                         let value = value.to_string();
                         *match key {
@@ -151,7 +144,7 @@ pub mod decode {
     }
 }
 
-fn validate(key: &str, value: &BStr, protect_protocol: bool) -> Result<(), Error> {
+fn validate(key: &str, value: &BStr, protect_protocol: bool) -> Result<(), gix_error::ValidationError> {
     if key.contains('\0')
         || key.contains('\n')
         || key.contains('\r')
@@ -159,10 +152,10 @@ fn validate(key: &str, value: &BStr, protect_protocol: bool) -> Result<(), Error
         || value.contains(&b'\n')
         || (protect_protocol && value.contains(&b'\r'))
     {
-        return Err(Error::Encoding {
-            key: key.to_owned(),
-            value: value.to_owned(),
-        });
+        return Err(gix_error::ValidationError::new_with_input(
+            format!("{key:?}={value:?} must not contain null bytes or newlines neither in key nor in value."),
+            value,
+        ));
     }
     Ok(())
 }

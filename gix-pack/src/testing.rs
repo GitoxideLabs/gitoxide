@@ -29,7 +29,7 @@ impl crate::Find for Memory {
         id: &gix_hash::oid,
         buffer: &'a mut Vec<u8>,
         _pack_cache: &mut dyn crate::cache::DecodeEntry,
-    ) -> Result<Option<(gix_object::Data<'a>, Option<crate::data::entry::Location>)>, gix_object::find::Error> {
+    ) -> Result<Option<(gix_object::Data<'a>, Option<crate::data::entry::Location>)>, gix_error::Exn> {
         Ok(self.objects.get(id).map(|(kind, data)| {
             buffer.clear();
             buffer.extend_from_slice(data);

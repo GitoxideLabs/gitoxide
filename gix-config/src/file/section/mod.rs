@@ -15,19 +15,6 @@ use gix_features::threading::OwnShared;
 
 use crate::file::{SectionId, write::platform_newline};
 
-/// Errors related to changing values in a section.
-pub mod value {
-    /// The error returned when adding or changing a value in a section.
-    #[derive(Debug, thiserror::Error)]
-    #[allow(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ValueName(#[from] crate::parse::section::value_name::Error),
-        #[error(transparent)]
-        Span(#[from] crate::parse::span::Error),
-    }
-}
-
 impl std::ops::Deref for SectionData {
     type Target = BodyData;
 
@@ -89,7 +76,7 @@ impl Section {
         name: impl AsRef<str>,
         subsection: impl IntoBStringOpt,
         meta: impl Into<OwnShared<file::Metadata>>,
-    ) -> Result<Self, parse::section::header::Error> {
+    ) -> Result<Self, gix_error::ValidationError> {
         let mut backing = Vec::new();
         let data = SectionData::new(name, subsection.into_bstring_opt(), meta, &mut backing)?;
         Ok(Section { backing, data })
@@ -120,7 +107,7 @@ impl Section {
         Section { backing, data }
     }
 
-    pub(crate) fn into_data(self, target: &mut Vec<u8>) -> Result<SectionData, parse::span::Error> {
+    pub(crate) fn into_data(self, target: &mut Vec<u8>) -> Result<SectionData, gix_error::ValidationError> {
         self.data.copy_to_backing_in(&self.backing, target)
     }
 }
@@ -132,7 +119,7 @@ impl SectionData {
         subsection: impl Into<Option<BString>>,
         meta: impl Into<OwnShared<file::Metadata>>,
         backing: &mut Vec<u8>,
-    ) -> Result<Self, parse::section::header::Error> {
+    ) -> Result<Self, gix_error::ValidationError> {
         Ok(SectionData {
             header: parse::section::HeaderData::new_in(name, subsection, backing)?,
             body: Default::default(),
@@ -155,7 +142,11 @@ impl SectionData {
         &self.meta
     }
 
-    pub(crate) fn copy_to_backing_in(&self, source: &[u8], target: &mut Vec<u8>) -> Result<Self, parse::span::Error> {
+    pub(crate) fn copy_to_backing_in(
+        &self,
+        source: &[u8],
+        target: &mut Vec<u8>,
+    ) -> Result<Self, gix_error::ValidationError> {
         Ok(SectionData {
             header: self.header.copy_to_backing_in(source, target)?,
             body: self.body.copy_to_backing_in(source, target)?,

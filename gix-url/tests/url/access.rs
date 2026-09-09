@@ -2,14 +2,14 @@ mod canonicalized {
     use std::borrow::Cow;
 
     #[test]
-    fn non_file_scheme_is_noop() -> crate::Result {
+    fn non_file_scheme_is_noop() -> gix_testtools::TestResult {
         let url = gix_url::parse("https://github.com/byron/gitoxide")?;
         assert_eq!(url.canonicalized(&std::env::current_dir()?)?, url);
         Ok(())
     }
 
     #[test]
-    fn absolute_file_url_does_nothing() -> crate::Result {
+    fn absolute_file_url_does_nothing() -> gix_testtools::TestResult {
         #[cfg(not(windows))]
         let url = gix_url::parse("/this/path/does/not/exist")?;
         #[cfg(windows)]
@@ -19,7 +19,7 @@ mod canonicalized {
     }
 
     #[test]
-    fn file_that_is_current_dir_is_absolutized() -> crate::Result {
+    fn file_that_is_current_dir_is_absolutized() -> gix_testtools::TestResult {
         let url = gix_url::parse(".")?;
         assert!(gix_path::from_bstr(Cow::Borrowed(url.path.as_ref())).is_relative());
         assert!(
@@ -35,7 +35,7 @@ mod canonicalized {
 use gix_url::ArgumentSafety;
 
 #[test]
-fn user() -> crate::Result {
+fn user() -> gix_error::TestResult {
     let mut url = gix_url::parse("https://user:password@host/path")?;
 
     assert_eq!(url.user(), Some("user"));
@@ -46,7 +46,7 @@ fn user() -> crate::Result {
 }
 
 #[test]
-fn password() -> crate::Result {
+fn password() -> gix_error::TestResult {
     let mut url = gix_url::parse("https://user:password@host/path")?;
 
     assert_eq!(url.password(), Some("password"));
@@ -57,7 +57,7 @@ fn password() -> crate::Result {
 }
 
 #[test]
-fn mutation_roundtrip() -> crate::Result {
+fn mutation_roundtrip() -> gix_error::TestResult {
     let mut url = gix_url::parse("https://user@host/path")?;
     url.set_user(Some("newuser".into()));
     url.set_password(Some("secret".into()));
@@ -73,7 +73,7 @@ fn mutation_roundtrip() -> crate::Result {
 }
 
 #[test]
-fn from_bytes_roundtrip() -> crate::Result {
+fn from_bytes_roundtrip() -> gix_error::TestResult {
     let original = "https://user:password@example.com:8080/path/to/repo";
     let url = gix_url::parse(original)?;
 
@@ -87,7 +87,7 @@ fn from_bytes_roundtrip() -> crate::Result {
 }
 
 #[test]
-fn from_bytes_with_non_utf8_path() -> crate::Result {
+fn from_bytes_with_non_utf8_path() -> gix_error::TestResult {
     let url = gix_url::parse(b"/path/to\xff/repo".as_slice())?;
     let bytes = url.to_bstring();
     let from_bytes = gix_url::Url::from_bytes(bytes.as_ref())?;
@@ -99,7 +99,7 @@ fn from_bytes_with_non_utf8_path() -> crate::Result {
 }
 
 #[test]
-fn user_argument_safety() -> crate::Result {
+fn user_argument_safety() -> gix_error::TestResult {
     let url = gix_url::parse("ssh://-Fconfigfile@foo/bar")?;
 
     assert_eq!(url.user(), Some("-Fconfigfile"));
@@ -117,7 +117,7 @@ fn user_argument_safety() -> crate::Result {
 }
 
 #[test]
-fn host_argument_safety() -> crate::Result {
+fn host_argument_safety() -> gix_error::TestResult {
     let url = gix_url::parse("ssh://-oProxyCommand=open$IFS-aCalculator/foo")?;
 
     assert_eq!(url.user(), None);
@@ -142,7 +142,7 @@ fn host_argument_safety() -> crate::Result {
 }
 
 #[test]
-fn path_argument_safety() -> crate::Result {
+fn path_argument_safety() -> gix_error::TestResult {
     let url = gix_url::parse("ssh://foo/-oProxyCommand=open$IFS-aCalculator")?;
 
     assert_eq!(url.user(), None);
@@ -173,7 +173,7 @@ fn path_argument_safety() -> crate::Result {
 }
 
 #[test]
-fn all_argument_safety_safe() -> crate::Result {
+fn all_argument_safety_safe() -> gix_error::TestResult {
     let url = gix_url::parse("ssh://user.name@example.com/path/to/file")?;
 
     assert_eq!(url.user(), Some("user.name"));
@@ -191,7 +191,7 @@ fn all_argument_safety_safe() -> crate::Result {
 }
 
 #[test]
-fn all_argument_safety_not_safe() -> crate::Result {
+fn all_argument_safety_not_safe() -> gix_error::TestResult {
     let all_bad = "ssh://-Fconfigfile@-oProxyCommand=open$IFS-aCalculator/-oProxyCommand=open$IFS-aCalculator";
     let url = gix_url::parse(all_bad)?;
 

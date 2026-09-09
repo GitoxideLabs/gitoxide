@@ -1,3 +1,4 @@
+use gix_error::{ErrorExt, ResultExt};
 use gix_ref::{
     Category, FullName,
     transaction::{PreviousValue, RefEdit},
@@ -9,58 +10,52 @@ pub mod delete {
 
     use gix_ref::FullName;
 
+    /// A branch-deletion rejection because the branch is checked out in a worktree.
+    #[derive(Debug)]
+    pub struct CheckedOutError {
+        /// The local branch whose checkout prevents deletion.
+        pub name: FullName,
+        /// The worktree directories in which the branch is checked out.
+        pub worktree_dirs: Vec<PathBuf>,
+    }
+
+    impl std::fmt::Display for CheckedOutError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "The local branch {:?} is checked out in {:?}",
+                self.name, self.worktree_dirs
+            )
+        }
+    }
+
+    impl std::error::Error for CheckedOutError {}
+
     /// A configuration-cleanup failure after all requested references were made absent.
-    #[derive(Debug, thiserror::Error)]
-    pub enum CleanupError {
-        /// The updated configuration could not be written to its lock file; the existing config file is unchanged.
-        #[error("Could not write the updated local configuration")]
-        Write(#[source] std::io::Error),
-        /// The lock file containing the updated configuration could not replace the existing config file.
-        #[error("Could not commit the updated local configuration")]
-        Commit(#[source] std::io::Error),
+    #[derive(Debug)]
+    pub struct CleanupError {
+        /// Every requested reference name, including names which were already missing before the call.
+        ///
+        /// All of these references and their reflogs are guaranteed to be absent. Their `branch.<name>` configuration
+        /// sections may remain.
+        pub references: Vec<FullName>,
+        /// The branches actually deleted, as would have been returned on success.
+        ///
+        /// Names are sorted and deduplicated; branches missing when locked for deletion are excluded.
+        pub deleted: Vec<FullName>,
     }
 
-    /// The error returned by [`Repository::delete_local_branches()`][crate::Repository::delete_local_branches()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("{name:?} is not a local branch")]
-        NotLocal { name: FullName },
-
-        #[error("The local branch {name:?} is checked out in {worktree_dirs:?}")]
-        CheckedOut {
-            name: FullName,
-            worktree_dirs: Vec<PathBuf>,
-        },
-        #[error("Failed to read or iterate worktree directories")]
-        WorktreeListing(#[source] std::io::Error),
-        #[error("Could not open a worktree repository")]
-        OpenWorktreeRepo(#[source] crate::open::Error),
-        #[error("Failed to follow a symbolic reference while inspecting worktrees")]
-        FollowSymref(#[source] gix_ref::file::find::existing::Error),
-        #[error("Could not acquire the local configuration lock")]
-        ConfigLock(#[source] gix_lock::acquire::Error),
-        #[error("Could not read the local configuration")]
-        ConfigRead(#[source] gix_config::file::init::from_paths::Error),
-        #[error("Could not delete local branches")]
-        EditReferences(#[from] crate::reference::edit::Error),
-        /// Reference deletion succeeded, but configuration cleanup failed.
-        #[error("References {references:?} are absent, but local branch configuration cleanup failed")]
-        Cleanup {
-            /// Every requested reference name, including names which were already missing before the call.
-            ///
-            /// All of these references and their reflogs are guaranteed to be absent. Their `branch.<name>` configuration
-            /// sections may remain; inspect `source` to determine which cleanup phase failed.
-            references: Vec<FullName>,
-            /// The branches actually deleted, as would have been returned on success.
-            ///
-            /// Names are sorted and deduplicated; branches missing when locked for deletion are excluded.
-            deleted: Vec<FullName>,
-            /// The configuration cleanup phase that failed.
-            #[source]
-            source: CleanupError,
-        },
+    impl std::fmt::Display for CleanupError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "References {:?} are absent, but local branch configuration cleanup failed",
+                self.references
+            )
+        }
     }
+
+    impl std::error::Error for CleanupError {}
 }
 
 impl crate::Repository {
@@ -70,19 +65,22 @@ impl crate::Repository {
     /// any name belongs to another reference category or is checked out in any worktree. Missing branches are accepted so any
     /// associated local configuration is still removed. **It deliberately performs no merged-state check**.
     ///
+    /// A checked-out branch rejection contains [`delete::CheckedOutError`] in its error chain, identifying the branch and
+    /// the worktree directories that prevented deletion.
+    ///
     /// On success, every requested reference and its reflog is absent, and every matching `branch.<name>` section has been
     /// removed from the local configuration. Return the sorted, deduplicated names of branches that existed when locked for
     /// deletion. Missing branches are omitted from the returned vector, but their configuration is still removed.
     ///
     /// Reference deletion and configuration cleanup cannot be one atomic transaction. Once reference deletion succeeds, a
-    /// configuration write or commit failure is returned as [`delete::Error::Cleanup`]. Its `references` field contains
-    /// every requested name—including names which were missing initially—and guarantees only that their references and reflogs
-    /// are absent. Its `deleted` field contains the branches actually deleted, just as in the success case.
-    /// See [`delete::CleanupError`] to determine whether the on-disk configuration was updated.
+    /// configuration write or commit failure contains [`delete::CleanupError`] in its error chain. Its `references` field
+    /// contains every requested name—including names which were missing initially—and guarantees only that their references and
+    /// reflogs are absent. Its `deleted` field contains the branches actually deleted, just as in the success case.
+    /// The remaining error chain identifies the failed cleanup phase.
     pub fn delete_local_branches(
         &mut self,
         names: impl IntoIterator<Item = FullName>,
-    ) -> Result<Vec<FullName>, delete::Error> {
+    ) -> Result<Vec<FullName>, crate::Error> {
         let mut names: Vec<_> = names.into_iter().collect();
         names.sort();
         names.dedup();
@@ -92,21 +90,19 @@ impl crate::Repository {
 
         for name in &names {
             if name.category_and_short_name().map(|(category, _)| category) != Some(Category::LocalBranch) {
-                return Err(delete::Error::NotLocal { name: name.clone() });
+                return Err(gix_error::message!("{name:?} is not a local branch").raise().into());
             }
         }
 
-        let checked_out = self.checked_out_branches().map_err(|err| match err {
-            super::worktree::CheckedOutBranchesError::WorktreeListing(err) => delete::Error::WorktreeListing(err),
-            super::worktree::CheckedOutBranchesError::OpenWorktreeRepo(err) => delete::Error::OpenWorktreeRepo(err),
-            super::worktree::CheckedOutBranchesError::FollowSymref(err) => delete::Error::FollowSymref(err),
-        })?;
+        let checked_out = self.checked_out_branches()?;
         for name in &names {
             if let Some(worktree_dirs) = checked_out.get(name) {
-                return Err(delete::Error::CheckedOut {
+                return Err(delete::CheckedOutError {
                     name: name.clone(),
                     worktree_dirs: worktree_dirs.clone(),
-                });
+                }
+                .raise()
+                .into());
             }
         }
 
@@ -118,23 +114,29 @@ impl crate::Repository {
         let config_path = self.common_dir().join("config");
         let mut config_lock =
             gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)
-                .map_err(delete::Error::ConfigLock)?;
+                .or_raise(|| gix_error::message("Could not acquire the local configuration lock"))?;
         let mut config = match gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local) {
             Ok(config) => Some(config),
-            // TODO(gix-error): this is what should just be `err.not_found()` in future, anywhere.
-            Err(gix_config::file::init::from_paths::Error::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound =>
+            Err(err)
+                if err
+                    .downcast_any_ref::<std::io::Error>()
+                    .is_some_and(|source| source.kind() == std::io::ErrorKind::NotFound) =>
             {
                 None
             }
-            Err(err) => return Err(delete::Error::ConfigRead(err)),
+            Err(err) => {
+                return Err(err
+                    .raise(gix_error::message("Could not read the local configuration"))
+                    .into());
+            }
         };
         let removed_config = config
             .as_mut()
             .is_some_and(|config| remove_branch_config(config, &names, |_| true));
 
         let deleted: Vec<_> = self
-            .edit_references(edits)?
+            .edit_references(edits)
+            .or_raise(|| gix_error::message("Could not delete local branches"))?
             .into_iter()
             .filter_map(|edit| edit.change.previous_value().is_some().then_some(edit.name))
             .collect();
@@ -143,16 +145,19 @@ impl crate::Repository {
             let config = config.expect("configuration was present when sections were removed");
             config
                 .write_to(&mut config_lock)
-                .map_err(|source| delete::Error::Cleanup {
+                .or_raise(|| gix_error::message("Could not write the updated local configuration"))
+                .or_raise(|| delete::CleanupError {
                     references: names.clone(),
                     deleted: deleted.clone(),
-                    source: delete::CleanupError::Write(source),
                 })?;
-            config_lock.commit().map_err(|err| delete::Error::Cleanup {
-                references: names.clone(),
-                deleted: deleted.clone(),
-                source: delete::CleanupError::Commit(err.error),
-            })?;
+            config_lock
+                .commit()
+                .map_err(|err| err.error)
+                .or_raise(|| gix_error::message("Could not commit the updated local configuration"))
+                .or_raise(|| delete::CleanupError {
+                    references: names.clone(),
+                    deleted: deleted.clone(),
+                })?;
             remove_branch_config(
                 gix_features::threading::OwnShared::make_mut(&mut self.config.resolved),
                 &names,

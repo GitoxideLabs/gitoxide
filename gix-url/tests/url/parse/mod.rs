@@ -1,7 +1,7 @@
 use bstr::ByteSlice;
 use gix_url::{Scheme, parse, testing::TestUrlExtension};
 
-fn assert_url(url: &str, expected: gix_url::Url) -> Result<gix_url::Url, crate::Error> {
+fn assert_url(url: &str, expected: gix_url::Url) -> Result<gix_url::Url, gix_error::Exn<gix_error::ValidationError>> {
     let actual = gix_url::parse(url)?;
     assert_eq!(actual, expected);
     // Note that this must not match on the name, as `Scheme::Helper("http")` is a remote helper.
@@ -18,7 +18,7 @@ fn assert_url(url: &str, expected: gix_url::Url) -> Result<gix_url::Url, crate::
     Ok(expected)
 }
 
-fn assert_url_roundtrip(url: &str, expected: gix_url::Url) -> crate::Result {
+fn assert_url_roundtrip(url: &str, expected: gix_url::Url) -> Result<(), gix_error::Exn<gix_error::ValidationError>> {
     assert_eq!(assert_url(url, expected)?.to_bstring(), url);
     Ok(())
 }
@@ -89,8 +89,8 @@ mod radicle {
     use crate::parse::{assert_url_roundtrip, url};
 
     #[test]
-    fn basic() -> crate::Result {
-        assert_url_roundtrip(
+    fn basic() -> gix_error::TestResult {
+        Ok(assert_url_roundtrip(
             "rad://hynkuwzskprmswzeo4qdtku7grdrs4ffj3g9tjdxomgmjzhtzpqf81@hwd1yregyf1dudqwkx85x5ps3qsrqw3ihxpx3ieopq6ukuuq597p6m8161c.git",
             url(
                 Scheme::HelperUrl("rad".into()),
@@ -99,7 +99,7 @@ mod radicle {
                 None,
                 b"",
             ),
-        )
+        )?)
     }
 }
 
@@ -110,16 +110,19 @@ mod ports {
     use gix_url::Scheme;
 
     #[test]
-    fn max_valid_port() -> crate::Result {
-        assert_url_roundtrip(
+    fn max_valid_port() -> gix_error::TestResult {
+        Ok(assert_url_roundtrip(
             "ssh://host.xz:65535/repo",
             url(Scheme::Ssh, None, "host.xz", 65535, b"/repo"),
-        )
+        )?)
     }
 
     #[test]
-    fn port_one() -> crate::Result {
-        assert_url_roundtrip("ssh://host.xz:1/repo", url(Scheme::Ssh, None, "host.xz", 1, b"/repo"))
+    fn port_one() -> gix_error::TestResult {
+        Ok(assert_url_roundtrip(
+            "ssh://host.xz:1/repo",
+            url(Scheme::Ssh, None, "host.xz", 1, b"/repo"),
+        )?)
     }
 }
 
@@ -129,26 +132,26 @@ mod git {
     use crate::parse::{assert_url_roundtrip, url};
 
     #[test]
-    fn username_expansion_with_username() -> crate::Result {
-        assert_url_roundtrip(
+    fn username_expansion_with_username() -> gix_error::TestResult {
+        Ok(assert_url_roundtrip(
             "git://example.com/~byron/hello",
             url(Scheme::Git, None, "example.com", None, b"~byron/hello"),
-        )
+        )?)
     }
 
     #[test]
-    fn default_port_is_9418() -> crate::Result {
+    fn default_port_is_9418() -> gix_error::TestResult {
         let url = url(Scheme::Git, None, "example.com", None, b"/repo");
         assert_eq!(url.port_or_default(), Some(9418));
         Ok(())
     }
 
     #[test]
-    fn git_with_explicit_port() -> crate::Result {
-        assert_url_roundtrip(
+    fn git_with_explicit_port() -> gix_error::TestResult {
+        Ok(assert_url_roundtrip(
             "git://example.com:1234/repo",
             url(Scheme::Git, None, "example.com", 1234, b"/repo"),
-        )
+        )?)
     }
 }
 
@@ -158,8 +161,8 @@ mod unknown {
     use crate::parse::{assert_url_roundtrip, url};
 
     #[test]
-    fn any_protocol_is_supported_via_a_remote_helper_url() -> crate::Result {
-        assert_url_roundtrip(
+    fn any_protocol_is_supported_via_a_remote_helper_url() -> gix_error::TestResult {
+        Ok(assert_url_roundtrip(
             "abc://example.com/~byron/hello",
             url(
                 Scheme::HelperUrl("abc".into()),
@@ -168,6 +171,6 @@ mod unknown {
                 None,
                 b"/~byron/hello",
             ),
-        )
+        )?)
     }
 }

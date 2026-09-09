@@ -1,33 +1,28 @@
-use crate::parse::{assert_parse, b, try_parse};
-use gix_refspec::{
-    Instruction,
-    instruction::Push,
-    parse::{Error, Operation},
-};
+use crate::parse::{assert_parse, assert_reference_error, assert_validation, b};
+use gix_refspec::{Instruction, instruction::Push, parse::Operation};
 
 #[test]
 fn negative_must_not_be_empty() {
-    assert!(matches!(
-        try_parse("^", Operation::Push).unwrap_err(),
-        Error::NegativeEmpty
-    ));
+    assert_validation("^", Operation::Push, "Negative specs must not be empty");
 }
 
 #[test]
 fn negative_must_not_be_object_hash() {
-    assert!(matches!(
-        try_parse("^e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", Operation::Push).unwrap_err(),
-        Error::NegativeObjectHash
-    ));
+    assert_validation(
+        "^e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        Operation::Push,
+        "Negative specs must not be object hashes",
+    );
 }
 
 #[test]
 fn negative_with_destination() {
     for spec in ["^a:b", "^a:", "^:", "^:b"] {
-        assert!(matches!(
-            try_parse(spec, Operation::Push).unwrap_err(),
-            Error::NegativeWithDestination
-        ));
+        assert_validation(
+            spec,
+            Operation::Push,
+            "Negative refspecs cannot have destinations as they exclude sources",
+        );
     }
 }
 
@@ -81,18 +76,12 @@ fn revspecs_with_ref_name_destination() {
 
 #[test]
 fn destinations_must_be_ref_names() {
-    assert!(matches!(
-        try_parse("a~1:b~1", Operation::Push).unwrap_err(),
-        Error::ReferenceName(_)
-    ));
+    assert_reference_error("a~1:b~1", Operation::Push);
 }
 
 #[test]
 fn single_refs_must_be_refnames() {
-    assert!(matches!(
-        try_parse("a~1", Operation::Push).unwrap_err(),
-        Error::ReferenceName(_)
-    ));
+    assert_reference_error("a~1", Operation::Push);
 }
 
 #[test]
@@ -174,9 +163,10 @@ fn delete() {
     assert_parse("+:a", Instruction::Push(Push::Delete { ref_or_pattern: b("a") }));
 
     for spec in [":refs/heads/*", "+:refs/heads/*"] {
-        assert!(
-            matches!(try_parse(spec, Operation::Push).unwrap_err(), Error::PatternUnbalanced),
-            "deletion destinations cannot be patterns"
+        assert_validation(
+            spec,
+            Operation::Push,
+            "Both sides of a two-sided specification need a pattern, like 'a/*:b/*'",
         );
     }
 }

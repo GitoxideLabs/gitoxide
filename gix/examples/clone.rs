@@ -16,12 +16,13 @@ fn main() -> anyhow::Result<()> {
         gix::interrupt::init_handler(1, || {})?;
     }
     std::fs::create_dir_all(&dst)?;
-    let url = gix::url::parse(repo_url.to_str().unwrap())?;
+    let repo_url = repo_url.to_str().context("The repository URL must be valid UTF-8")?;
+    let url = gix::url::parse(repo_url).map_err(gix::Exn::into_error)?;
 
     println!("Url: {:?}", url.to_bstring());
     let mut prepare_clone = gix::prepare_clone(url, &dst)?;
 
-    println!("Cloning {} into {}...", repo_url.display(), dst.display());
+    println!("Cloning {} into {}...", repo_url, dst.display());
     let (mut prepare_checkout, _) =
         prepare_clone.fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?;
 

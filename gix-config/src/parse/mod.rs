@@ -36,10 +36,13 @@ pub(crate) struct Span {
 
 /// Errors produced when a span cannot be represented.
 pub mod span {
-    /// A span offset or length exceeded the supported 32-bit representation.
-    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, thiserror::Error)]
-    #[error("configuration data exceeds the supported span size of {} bytes", u32::MAX)]
-    pub struct Error;
+
+    pub(crate) fn error() -> gix_error::ValidationError {
+        gix_error::ValidationError::new(format!(
+            "configuration data exceeds the supported span size of {} bytes",
+            u32::MAX
+        ))
+    }
 }
 
 /// A raw span whose semantic value may have required decoding while parsing.
@@ -74,11 +77,15 @@ impl MaybeDecoded {
             .map_or_else(|| self.raw.as_bstr_in(backing), |value| value.as_bstr())
     }
 
-    pub(crate) fn rebase(&mut self, offset: usize) -> Result<(), span::Error> {
+    pub(crate) fn rebase(&mut self, offset: usize) -> Result<(), gix_error::ValidationError> {
         self.raw.rebase(offset)
     }
 
-    pub(crate) fn copy_to_backing_in(&self, source: &[u8], target: &mut Vec<u8>) -> Result<Self, span::Error> {
+    pub(crate) fn copy_to_backing_in(
+        &self,
+        source: &[u8],
+        target: &mut Vec<u8>,
+    ) -> Result<Self, gix_error::ValidationError> {
         Ok(Self {
             raw: self.raw.copy_to_backing_in(source, target)?,
             decoded: self.decoded.clone(),
@@ -87,18 +94,18 @@ impl MaybeDecoded {
 }
 
 impl Span {
-    pub(crate) fn append(backing: &mut Vec<u8>, bytes: &[u8]) -> Result<Self, span::Error> {
+    pub(crate) fn append(backing: &mut Vec<u8>, bytes: &[u8]) -> Result<Self, gix_error::ValidationError> {
         let start = backing.len();
         let span = Self::range(start, bytes.len())?;
-        backing.len().checked_add(bytes.len()).ok_or(span::Error)?;
+        backing.len().checked_add(bytes.len()).ok_or_else(span::error)?;
         backing.extend_from_slice(bytes);
         Ok(span)
     }
 
-    pub(crate) fn range(start: usize, len: usize) -> Result<Self, span::Error> {
+    pub(crate) fn range(start: usize, len: usize) -> Result<Self, gix_error::ValidationError> {
         Ok(Span {
-            start: start.try_into().map_err(|_| span::Error)?,
-            len: len.try_into().map_err(|_| span::Error)?,
+            start: start.try_into().map_err(|_| span::error())?,
+            len: len.try_into().map_err(|_| span::error())?,
         })
     }
 
@@ -132,15 +139,19 @@ impl Span {
         self.as_slice_in(backing).into()
     }
 
-    pub(crate) fn copy_to_backing_in(&self, source: &[u8], target: &mut Vec<u8>) -> Result<Self, span::Error> {
+    pub(crate) fn copy_to_backing_in(
+        &self,
+        source: &[u8],
+        target: &mut Vec<u8>,
+    ) -> Result<Self, gix_error::ValidationError> {
         Span::append(target, self.as_slice_in(source))
     }
 
-    pub(crate) fn rebase(&mut self, offset: usize) -> Result<(), span::Error> {
+    pub(crate) fn rebase(&mut self, offset: usize) -> Result<(), gix_error::ValidationError> {
         self.start = (self.start as usize)
             .checked_add(offset)
             .and_then(|start| start.try_into().ok())
-            .ok_or(span::Error)?;
+            .ok_or_else(span::error)?;
         Ok(())
     }
 }

@@ -1,5 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
+use gix_error::{ResultExt, message};
 use gix_features::{interrupt, parallel::in_parallel_with_finalize};
 use gix_worktree::{Stack, stack};
 
@@ -23,7 +24,7 @@ pub fn checkout<Find>(
     bytes: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     options: crate::checkout::Options,
-) -> Result<crate::checkout::Outcome, crate::checkout::Error>
+) -> Result<crate::checkout::Outcome, gix_error::Exn>
 where
     Find: gix_object::Find + Send + Clone,
 {
@@ -43,7 +44,7 @@ fn checkout_inner<Find>(
     bytes: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     mut options: crate::checkout::Options,
-) -> Result<crate::checkout::Outcome, crate::checkout::Error>
+) -> Result<crate::checkout::Outcome, gix_error::Exn>
 where
     Find: gix_object::Find + Send + Clone,
 {
@@ -126,7 +127,8 @@ where
                 ctx.filters
                     .driver_state_mut()
                     .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
-                    .map_err(crate::checkout::Error::FilterShutdownIo)?;
+                    .or_raise(|| message("Could not shut down filter processes"))
+                    .or_erased()?;
                 Ok(out)
             },
             chunk::Reduce {
@@ -153,7 +155,8 @@ where
     ctx.filters
         .driver_state_mut()
         .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
-        .map_err(crate::checkout::Error::FilterShutdownIo)?;
+        .or_raise(|| message("Could not shut down filter processes"))
+        .or_erased()?;
 
     Ok(crate::checkout::Outcome {
         files_updated,

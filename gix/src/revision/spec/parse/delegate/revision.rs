@@ -207,18 +207,16 @@ impl delegate::Revision for Delegate<'_> {
                         self.refs[self.idx] = Some(r.detach());
                         id
                     }
-                    Err(crate::reference::find::existing::Error::NotFound { .. }) => {
-                        match ObjectId::from_hex(ref_name.as_ref()) {
-                            Ok(id) if id.kind() == self.repo.object_hash() => id,
-                            _ => {
-                                return Err(message!(
-                                    "Previous checkout '{name}' does not resolve to an existing revision",
-                                    name = ref_name.as_bstr()
-                                )
-                                .raise_erased());
-                            }
+                    Err(err) if err.is_not_found() => match ObjectId::from_hex(ref_name.as_ref()) {
+                        Ok(id) if id.kind() == self.repo.object_hash() => id,
+                        _ => {
+                            return Err(message!(
+                                "Previous checkout '{name}' does not resolve to an existing revision",
+                                name = ref_name.as_bstr()
+                            )
+                            .raise_erased());
                         }
-                    }
+                    },
                     Err(err) => return Err(err.raise_erased()),
                 };
                 let objs = self.objs[self.idx].get_or_insert_with(Vec::new);

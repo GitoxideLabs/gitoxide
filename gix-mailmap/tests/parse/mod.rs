@@ -1,4 +1,4 @@
-use gix_mailmap::{Entry, parse};
+use gix_mailmap::Entry;
 use gix_testtools::fixture_bytes;
 
 #[test]
@@ -160,7 +160,7 @@ fn line(input: &str) -> Entry<'_> {
     try_line(input).unwrap()
 }
 
-fn try_line(input: &str) -> Result<Entry<'_>, parse::Error> {
+fn try_line(input: &str) -> Result<Entry<'_>, gix_error::Exn<gix_error::ValidationError>> {
     let mut lines = gix_mailmap::parse(input.as_bytes());
     let res = lines.next().expect("single line");
     assert!(lines.next().is_none(), "only one line provided");

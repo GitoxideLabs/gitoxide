@@ -58,7 +58,6 @@ gix-fsck = { version = "^0.25.1", path = "../gix-fsck" }
 gix-error-for-configuration-only = { package = "gix-error", version = "^0.3.2", path = "../gix-error", features = ["anyhow"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 anyhow = "1.0.102"
-thiserror = "2.0.18"
 bytesize = "2.3.1"
 tempfile = "3.26.0"
 unicode-width = "0.2.2"
@@ -131,6 +130,4 @@ ignored = [
     "gix-transport-configuration-only",
     # Imported as crate `layout`, which does not match the package name `layout-rs`.
     "layout-rs",
-    # Enabled through `estimate-hours` feature wiring only.
-    "smallvec",
 ]

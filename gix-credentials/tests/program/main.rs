@@ -1,9 +1,14 @@
 use gix_credentials::program::main;
 use std::io::Cursor;
 
-#[derive(Debug, thiserror::Error)]
-#[error("Test error")]
-struct TestError;
+#[test]
+#[cfg(unix)]
+fn invalid_non_utf8_action_is_preserved() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+    let err = main::Action::try_from(OsString::from_vec(vec![0xff])).expect_err("the action is invalid");
+    assert_eq!(err.input.expect("the invalid action is retained").as_slice(), &[0xff]);
+}
 
 #[test]
 fn context_options_apply_to_input_and_output() {
@@ -18,7 +23,7 @@ fn context_options_apply_to_input_and_output() {
         Cursor::new(input),
         &mut output,
         options,
-        |_action, context| -> Result<Option<gix_credentials::protocol::Context>, TestError> {
+        |_action, context| -> Result<Option<gix_credentials::protocol::Context>, gix_error::Exn> {
             assert_eq!(
                 context.url.as_ref().map(|url| url.as_slice()),
                 Some(&input[4..input.len() - 1])
@@ -45,7 +50,7 @@ fn protocol_and_host_without_url_is_valid() {
         Cursor::new(input),
         &mut output,
         gix_credentials::protocol::ContextOptions::default(),
-        |_action, context| -> Result<Option<gix_credentials::protocol::Context>, TestError> {
+        |_action, context| -> Result<Option<gix_credentials::protocol::Context>, gix_error::Exn> {
             assert_eq!(context.protocol.as_deref(), Some("https"));
             assert_eq!(context.host.as_deref(), Some("github.com"));
             assert_eq!(context.url, None, "the URL isn't automatically populated");
@@ -57,15 +62,12 @@ fn protocol_and_host_without_url_is_valid() {
 
     // This should fail because our mock helper returned None (no credentials found)
     // but it should NOT fail because of missing URL
-    match result {
-        Err(gix_credentials::program::main::Error::CredentialsMissing { .. }) => {
-            assert!(
-                called,
-                "The helper gets called, but as nothing is provided in the function it ulimately fails"
-            );
-        }
-        other => panic!("Expected CredentialsMissing error, got: {other:?}"),
-    }
+    let err = result.expect_err("missing credentials must fail");
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(
+        called,
+        "The helper gets called, but as nothing is provided in the function it ultimately fails"
+    );
 }
 
 #[test]
@@ -79,18 +81,15 @@ fn missing_protocol_with_only_host_or_protocol_fails() {
             Cursor::new(input),
             &mut output,
             gix_credentials::protocol::ContextOptions::default(),
-            |_action, _context| -> Result<Option<gix_credentials::protocol::Context>, TestError> {
+            |_action, _context| -> Result<Option<gix_credentials::protocol::Context>, gix_error::Exn> {
                 called = true;
                 Ok(None)
             },
         );
 
-        match result {
-            Err(gix_credentials::program::main::Error::UrlMissing) => {
-                assert!(!called, "the context is lacking, hence nothing gets called");
-            }
-            other => panic!("Expected UrlMissing error, got: {other:?}"),
-        }
+        let err = result.expect_err("incomplete URL must fail validation");
+        assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+        assert!(!called, "the context is lacking, hence nothing gets called");
     }
 }
 
@@ -105,7 +104,7 @@ fn url_alone_is_valid() {
         Cursor::new(input),
         &mut output,
         gix_credentials::protocol::ContextOptions::default(),
-        |_action, context| -> Result<Option<gix_credentials::protocol::Context>, TestError> {
+        |_action, context| -> Result<Option<gix_credentials::protocol::Context>, gix_error::Exn> {
             called = true;
             assert_eq!(context.url.unwrap(), "https://github.com");
             assert_eq!(context.host, None, "not auto-populated");
@@ -117,10 +116,7 @@ fn url_alone_is_valid() {
 
     // This should fail because our mock helper returned None (no credentials found)
     // but it should NOT fail because of missing URL
-    match result {
-        Err(gix_credentials::program::main::Error::CredentialsMissing { .. }) => {
-            assert!(called);
-        }
-        other => panic!("Expected CredentialsMissing error, got: {other:?}"),
-    }
+    let err = result.expect_err("missing credentials must fail");
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(called);
 }

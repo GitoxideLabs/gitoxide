@@ -21,7 +21,7 @@ pub type Version = keys::Any<validate::Version>;
 
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 mod allow {
-    use crate::{bstr::ByteSlice, config, config::tree::protocol::Allow, remote::url::scheme_permission};
+    use crate::{bstr::ByteSlice, config::tree::protocol::Allow, remote::url::scheme_permission};
 
     impl Allow {
         /// Convert `value` into its respective `Allow` variant, possibly informing about the `scheme` we are looking at in the error.
@@ -29,11 +29,13 @@ mod allow {
             &'static self,
             value: impl gix_utils::AsBStr,
             scheme: Option<&str>,
-        ) -> Result<scheme_permission::Allow, config::protocol::allow::Error> {
+        ) -> Result<scheme_permission::Allow, crate::Error> {
             let value = value.as_bstr();
-            scheme_permission::Allow::try_from(value.as_bstr()).map_err(|value| config::protocol::allow::Error {
-                value,
-                scheme: scheme.map(ToOwned::to_owned),
+            scheme_permission::Allow::try_from(value.as_bstr()).map_err(|value| {
+                gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                    "The value {value:?} must be allow|deny|user in configuration key protocol{}.allow",
+                    scheme.map(|scheme| format!(".{scheme}")).unwrap_or_default()
+                )))
             })
         }
     }
@@ -81,14 +83,15 @@ mod key_impls {
         #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
         pub fn try_into_protocol_version(
             &'static self,
-            value: Result<Option<i64>, gix_config::value::Error>,
+            value: Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>>,
         ) -> Result<gix_protocol::transport::Protocol, crate::config::key::GenericErrorWithValue> {
             let value = match value {
                 Ok(None) => return Ok(gix_protocol::transport::Protocol::V2),
                 Ok(Some(value)) => value,
                 Err(err) => {
                     return Err(
-                        crate::config::key::GenericErrorWithValue::from_value(self, "unknown".into()).with_source(err),
+                        crate::config::key::GenericErrorWithValue::from_value(self, "unknown".into())
+                            .with_source(err.into_error()),
                     );
                 }
             };
@@ -109,13 +112,14 @@ mod key_impls {
 
 mod validate {
     use crate::{bstr::BStr, config::tree::keys};
+    use gix_error::{ErrorExt, ResultExt, message};
 
     #[derive(Clone, Copy)]
     pub struct Allow;
     impl keys::Validate for Allow {
-        fn validate(&self, _value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, _value: &BStr) -> Result<(), gix_error::Exn> {
             #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
-            super::Protocol::ALLOW.try_into_allow(_value, None)?;
+            super::Protocol::ALLOW.try_into_allow(_value, None).or_erased()?;
             Ok(())
         }
     }
@@ -123,13 +127,14 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct Version;
     impl keys::Validate for Version {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            let value = gix_config::Integer::try_from(value)?
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            let value = gix_config::Integer::try_from(value)
+                .or_erased()?
                 .to_decimal()
-                .ok_or_else(|| format!("integer {value} cannot be represented as integer"))?;
+                .ok_or_else(|| message!("integer {value} cannot be represented as integer").raise_erased())?;
             match value {
                 0..=2 => Ok(()),
-                _ => Err(format!("protocol version {value} is unknown").into()),
+                _ => Err(message!("protocol version {value} is unknown").raise_erased()),
             }
         }
     }

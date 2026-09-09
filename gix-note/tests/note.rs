@@ -4,6 +4,7 @@ use std::{
     io::{self, Read},
 };
 
+use gix_error::{ErrorExt, Exn};
 use gix_hash::{Kind, ObjectId, oid};
 use gix_object::{
     FindExt, Tree, Write,
@@ -20,7 +21,7 @@ mod one_shot {
         root_tree_id: ObjectId,
         annotated_object_id: &oid,
         objects: &impl gix_object::Find,
-    ) -> Result<Option<ObjectId>, gix_note::Error> {
+    ) -> Result<Option<ObjectId>, Exn> {
         let mut state = gix_note::State::new(root_tree_id, objects)?;
         state.get(annotated_object_id, objects)
     }
@@ -30,7 +31,7 @@ mod one_shot {
         annotated_object_id: ObjectId,
         note_blob_id: ObjectId,
         objects: &(impl gix_object::Find + Write),
-    ) -> Result<gix_note::Edit, gix_note::Error> {
+    ) -> Result<gix_note::Edit, Exn> {
         let mut state = gix_note::State::new(root_tree_id, objects)?;
         state.replace(annotated_object_id, note_blob_id, objects)
     }
@@ -39,7 +40,7 @@ mod one_shot {
         root_tree_id: ObjectId,
         annotated_object_id: ObjectId,
         objects: &(impl gix_object::Find + Write),
-    ) -> Result<gix_note::Edit, gix_note::Error> {
+    ) -> Result<gix_note::Edit, Exn> {
         let mut state = gix_note::State::new(root_tree_id, objects)?;
         state.remove(annotated_object_id, objects)
     }
@@ -64,46 +65,32 @@ impl CountingObjectDb {
         }
     }
 
-    fn maybe_fail_write(&self) -> Result<(), gix_object::write::Error> {
+    fn maybe_fail_write(&self) -> Result<(), Exn> {
         if self.fail_next_write.replace(false) {
-            return Err(io::Error::other("injected write failure").into());
+            return Err(io::Error::other("injected write failure").raise_erased());
         }
         Ok(())
     }
 }
 
 impl gix_object::Find for CountingObjectDb {
-    fn try_find<'a>(
-        &self,
-        id: &gix_hash::oid,
-        buffer: &'a mut Vec<u8>,
-    ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>, Exn> {
         self.reads.set(self.reads.get() + 1);
         if self.fail_next_read.replace(false) {
-            return Err(io::Error::other("injected read failure").into());
+            return Err(io::Error::other("injected read failure").raise_erased());
         }
         self.inner.try_find(id, buffer)
     }
 }
 
 impl gix_object::Write for CountingObjectDb {
-    fn write_buf_with_known_id(
-        &self,
-        kind: gix_object::Kind,
-        from: &[u8],
-        id: ObjectId,
-    ) -> Result<ObjectId, gix_object::write::Error> {
+    fn write_buf_with_known_id(&self, kind: gix_object::Kind, from: &[u8], id: ObjectId) -> Result<ObjectId, Exn> {
         self.writes.set(self.writes.get() + 1);
         self.maybe_fail_write()?;
         self.inner.write_buf_with_known_id(kind, from, id)
     }
 
-    fn write_stream(
-        &self,
-        kind: gix_object::Kind,
-        size: u64,
-        from: &mut dyn Read,
-    ) -> Result<ObjectId, gix_object::write::Error> {
+    fn write_stream(&self, kind: gix_object::Kind, size: u64, from: &mut dyn Read) -> Result<ObjectId, Exn> {
         self.writes.set(self.writes.get() + 1);
         self.maybe_fail_write()?;
         self.inner.write_stream(kind, size, from)
@@ -115,7 +102,7 @@ impl gix_object::Write for CountingObjectDb {
         size: u64,
         from: &mut dyn Read,
         id: ObjectId,
-    ) -> Result<ObjectId, gix_object::write::Error> {
+    ) -> Result<ObjectId, Exn> {
         self.writes.set(self.writes.get() + 1);
         self.maybe_fail_write()?;
         self.inner.write_stream_with_known_id(kind, size, from, id)

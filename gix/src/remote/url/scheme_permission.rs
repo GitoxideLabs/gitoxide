@@ -1,8 +1,9 @@
+use gix_error::ResultExt;
+
 use std::collections::BTreeMap;
 
 use crate::{
     bstr::{BStr, BString, ByteSlice},
-    config,
     config::tree::{Protocol, gitoxide},
 };
 
@@ -15,17 +16,6 @@ pub enum Allow {
     Never,
     /// Only supported if `GIT_PROTOCOL_FROM_USER` is unset or evaluates to true.
     User,
-}
-
-/// The error returned when obtaining transport permissions from configuration.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    /// The value of `protocol[.<name>].allow` was invalid.
-    #[error(transparent)]
-    Allow(#[from] config::protocol::allow::Error),
-    /// `GIT_PROTOCOL_FROM_USER` was not a valid Git boolean.
-    #[error(transparent)]
-    ProtocolFromUser(#[from] config::boolean::Error),
 }
 
 impl Allow {
@@ -68,7 +58,7 @@ impl SchemePermission {
     pub fn from_config(
         config: &gix_config::File,
         mut filter: fn(&gix_config::file::Metadata) -> bool,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::Error> {
         if let Some(allow_protocol) = config.string_filter(gitoxide::Allow::PROTOCOL, &mut filter) {
             return Ok(SchemePermission {
                 user_allowed: None,
@@ -107,7 +97,8 @@ impl SchemePermission {
         };
 
         let user_allowed = gitoxide::Allow::PROTOCOL_FROM_USER
-            .enrich_error(config.boolean_filter(gitoxide::Allow::PROTOCOL_FROM_USER, &mut filter))?;
+            .enrich_error(config.boolean_filter(gitoxide::Allow::PROTOCOL_FROM_USER, &mut filter))
+            .or_erased()?;
         Ok(SchemePermission {
             allow,
             allow_per_scheme,

@@ -1,16 +1,16 @@
 mod streaming {
     use gix_packetline::{
         ErrorRef, PacketLineRef,
-        decode::{self, Stream, streaming},
+        decode::{Stream, streaming},
     };
 
     use crate::assert_err_display;
 
     fn assert_complete(
-        res: Result<Stream, decode::Error>,
+        res: Result<Stream, gix_error::ValidationError>,
         expected_consumed: usize,
         expected_value: PacketLineRef,
-    ) -> crate::Result {
+    ) -> Result<(), gix_error::ValidationError> {
         match res? {
             Stream::Complete { line, bytes_consumed } => {
                 assert_eq!(bytes_consumed, expected_consumed);
@@ -34,7 +34,7 @@ mod streaming {
         #[crate::bisync::bisync]
         #[cfg_attr(feature = "blocking-io", test)]
         #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-        async fn trailing_line_feeds_are_removed_explicitly() -> crate::Result {
+        async fn trailing_line_feeds_are_removed_explicitly() -> gix_error::TestResult {
             let line = decode::all_at_once(b"0006a\n")?;
             assert_eq!(line.as_text().expect("text").0.as_bstr(), b"a".as_bstr());
             let mut out = Vec::new();
@@ -48,7 +48,7 @@ mod streaming {
         #[crate::bisync::bisync]
         #[cfg_attr(feature = "blocking-io", test)]
         #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-        async fn all_kinds_of_packetlines() -> crate::Result {
+        async fn all_kinds_of_packetlines() -> gix_error::TestResult {
             for (line, bytes) in &[
                 (PacketLineRef::ResponseEnd, 4),
                 (PacketLineRef::Delimiter, 4),
@@ -65,7 +65,7 @@ mod streaming {
         #[crate::bisync::bisync]
         #[cfg_attr(feature = "blocking-io", test)]
         #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-        async fn error_line() -> crate::Result {
+        async fn error_line() -> gix_error::TestResult {
             let mut out = Vec::new();
             encode_io::write_error(
                 &PacketLineRef::Data(b"the error").as_error().expect("data line"),
@@ -80,7 +80,7 @@ mod streaming {
         #[crate::bisync::bisync]
         #[cfg_attr(feature = "blocking-io", test)]
         #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-        async fn side_bands() -> crate::Result {
+        async fn side_bands() -> gix_error::TestResult {
             for channel in &[Channel::Data, Channel::Error, Channel::Progress] {
                 let mut out = Vec::new();
                 let band = PacketLineRef::Data(b"band data")
@@ -107,18 +107,21 @@ mod streaming {
     }
 
     #[test]
-    fn flush() -> crate::Result {
-        assert_complete(streaming(b"0000someotherstuff"), 4, PacketLineRef::Flush)
+    fn flush() -> gix_error::TestResult {
+        assert_complete(streaming(b"0000someotherstuff"), 4, PacketLineRef::Flush)?;
+        Ok(())
     }
 
     #[test]
-    fn trailing_line_feeds_are_not_removed_automatically() -> crate::Result {
-        assert_complete(streaming(b"0006a\n"), 6, PacketLineRef::Data(b"a\n"))
+    fn trailing_line_feeds_are_not_removed_automatically() -> gix_error::TestResult {
+        assert_complete(streaming(b"0006a\n"), 6, PacketLineRef::Data(b"a\n"))?;
+        Ok(())
     }
 
     #[test]
-    fn ignore_extra_bytes() -> crate::Result {
-        assert_complete(streaming(b"0006a\nhello"), 6, PacketLineRef::Data(b"a\n"))
+    fn ignore_extra_bytes() -> gix_error::TestResult {
+        assert_complete(streaming(b"0006a\nhello"), 6, PacketLineRef::Data(b"a\n"))?;
+        Ok(())
     }
 
     #[test]
@@ -130,7 +133,7 @@ mod streaming {
     }
 
     #[test]
-    fn error_on_error_line() -> crate::Result {
+    fn error_on_error_line() -> gix_error::TestResult {
         let line = PacketLineRef::Data(b"ERR the error");
         assert_complete(
             streaming(b"0011ERR the error-and just ignored because not part of the size"),
@@ -158,9 +161,12 @@ mod streaming {
     }
 
     mod incomplete {
-        use gix_packetline::decode::{self, Stream, streaming};
+        use gix_packetline::decode::{Stream, streaming};
 
-        fn assert_incomplete(res: Result<Stream, decode::Error>, expected_missing: usize) -> crate::Result {
+        fn assert_incomplete(
+            res: Result<Stream, gix_error::ValidationError>,
+            expected_missing: usize,
+        ) -> Result<(), gix_error::ValidationError> {
             match res? {
                 Stream::Complete { .. } => {
                     panic!("expected parsing to be partial, not complete");
@@ -173,14 +179,14 @@ mod streaming {
         }
 
         #[test]
-        fn missing_hex_bytes() -> crate::Result {
+        fn missing_hex_bytes() -> gix_error::TestResult {
             assert_incomplete(streaming(b"0"), 3)?;
             assert_incomplete(streaming(b"00"), 2)?;
             Ok(())
         }
 
         #[test]
-        fn missing_data_bytes() -> crate::Result {
+        fn missing_data_bytes() -> gix_error::TestResult {
             assert_incomplete(streaming(b"0005"), 1)?;
             assert_incomplete(streaming(b"0006a"), 1)?;
             Ok(())

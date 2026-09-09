@@ -225,7 +225,7 @@ impl BodyData {
         &self,
         source: &[u8],
         target: &mut Vec<u8>,
-    ) -> Result<Self, crate::parse::span::Error> {
+    ) -> Result<Self, gix_error::ValidationError> {
         Ok(BodyData(
             self.0
                 .iter()

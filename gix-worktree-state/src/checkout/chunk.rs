@@ -4,22 +4,22 @@ use std::{
 };
 
 use bstr::{BStr, BString};
+use gix_error::{CorruptionError, ErrorExt, ResultExt};
 use gix_worktree::Stack;
 
 use crate::{checkout, checkout::entry};
 
 mod reduce {
-    use crate::checkout;
 
     pub struct Reduce<'entry> {
         pub aggregate: super::Outcome<'entry>,
     }
 
     impl<'entry> gix_features::parallel::Reduce for Reduce<'entry> {
-        type Input = Result<super::Outcome<'entry>, checkout::Error>;
+        type Input = Result<super::Outcome<'entry>, gix_error::Exn>;
         type FeedProduce = ();
         type Output = super::Outcome<'entry>;
-        type Error = checkout::Error;
+        type Error = gix_error::Exn;
 
         fn feed(&mut self, item: Self::Input) -> Result<Self::FeedProduce, Self::Error> {
             let item = item?;
@@ -105,7 +105,7 @@ pub fn process<'entry, Find>(
     bytes: &AtomicUsize,
     delayed_filter_results: &mut Vec<DelayedFilteredStream<'entry>>,
     ctx: &mut Context<Find>,
-) -> Result<Outcome<'entry>, checkout::Error>
+) -> Result<Outcome<'entry>, gix_error::Exn>
 where
     Find: gix_object::Find + Clone,
 {
@@ -160,7 +160,7 @@ pub fn process_delayed_filter_results<Find>(
     bytes: &AtomicUsize,
     out: &mut Outcome<'_>,
     ctx: &mut Context<Find>,
-) -> Result<(), checkout::Error>
+) -> Result<(), gix_error::Exn>
 where
     Find: gix_object::Find + Clone,
 {
@@ -179,7 +179,7 @@ where
     let mut unknown_paths = Vec::new();
     for key in keys {
         loop {
-            let rela_paths = ctx.filters.driver_state_mut().list_delayed_paths(&key)?;
+            let rela_paths = ctx.filters.driver_state_mut().list_delayed_paths(&key).or_erased()?;
             if rela_paths.is_empty() {
                 break;
             }
@@ -192,17 +192,19 @@ where
                             unknown_paths.push(rela_path);
                             continue;
                         } else {
-                            return Err(checkout::Error::FilterPathUnknown { rela_path });
+                            return Err(CorruptionError::new(format!(
+                                "The entry at path '{rela_path}' was listed as delayed by the filter process, but we never passed it"
+                            ))
+                            .raise_erased());
                         }
                     }
                 };
                 let mut read = std::io::BufReader::with_capacity(
                     512 * 1024,
-                    ctx.filters.driver_state_mut().fetch_delayed(
-                        &key,
-                        rela_path.as_ref(),
-                        gix_filter::driver::Operation::Smudge,
-                    )?,
+                    ctx.filters
+                        .driver_state_mut()
+                        .fetch_delayed(&key, rela_path.as_ref(), gix_filter::driver::Operation::Smudge)
+                        .or_erased()?,
                 );
                 let (file, executable_bit_change) = match entry::open_file(
                     &std::mem::take(&mut delayed.validated_file_path), // mark it as seen, relevant for `unprocessed_paths`
@@ -214,9 +216,15 @@ where
                     Ok(res) => res,
                     Err(err) => {
                         if !is_collision(&err, delayed.entry_path, &mut out.collisions, files) {
-                            handle_error(err, delayed.entry_path, files, &mut out.errors, ctx.options.keep_going)?;
+                            handle_error(
+                                err.raise_erased(),
+                                delayed.entry_path,
+                                files,
+                                &mut out.errors,
+                                ctx.options.keep_going,
+                            )?;
                         }
-                        std::io::copy(&mut read, &mut std::io::sink())?;
+                        std::io::copy(&mut read, &mut std::io::sink()).or_erased()?;
                         continue;
                     }
                 };
@@ -224,11 +232,15 @@ where
                     inner: std::io::BufWriter::with_capacity(512 * 1024, file),
                     progress: bytes,
                 };
-                let actual_bytes = std::io::copy(&mut read, &mut write)?;
+                let actual_bytes = std::io::copy(&mut read, &mut write).or_erased()?;
                 bytes_written += actual_bytes;
                 entry::finalize_entry(
                     delayed.entry,
-                    write.inner.into_inner().map_err(std::io::IntoInnerError::into_error)?,
+                    write
+                        .inner
+                        .into_inner()
+                        .map_err(std::io::IntoInnerError::into_error)
+                        .or_erased()?,
                     actual_bytes,
                     executable_bit_change,
                 )?;
@@ -238,15 +250,16 @@ where
         }
     }
 
-    let unprocessed_paths = delayed_filter_results
+    let unprocessed_paths: Vec<BString> = delayed_filter_results
         .into_iter()
         .filter_map(|d| (!d.validated_file_path.as_os_str().is_empty()).then(|| d.entry_path.to_owned()))
         .collect();
 
-    if !keep_going && !unknown_paths.is_empty() {
-        return Err(checkout::Error::FilterPathsUnprocessed {
-            rela_paths: unprocessed_paths,
-        });
+    if !keep_going && !unprocessed_paths.is_empty() {
+        return Err(CorruptionError::new(format!(
+            "The following paths were delayed and apparently forgotten to be processed by the filter driver: {unprocessed_paths:?}"
+        ))
+        .raise_erased());
     }
 
     out.delayed_paths_unknown = unknown_paths;
@@ -291,7 +304,7 @@ pub fn checkout_entry_handle_result<'entry, Find>(
         buf,
         options,
     }: &mut Context<Find>,
-) -> Result<entry::Outcome<'entry>, checkout::Error>
+) -> Result<entry::Outcome<'entry>, gix_error::Exn>
 where
     Find: gix_object::Find + Clone,
 {
@@ -314,7 +327,13 @@ where
             }
             Ok(out)
         }
-        Err(checkout::Error::Io(err)) if is_collision(&err, entry_path, collisions, files) => {
+        Err(err)
+            if err
+                .frame()
+                .error()
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|err| is_collision(err, entry_path, collisions, files)) =>
+        {
             Ok(entry::Outcome::Written { bytes: 0 })
         }
         Err(err) => handle_error(err, entry_path, files, errors, options.keep_going)
@@ -322,20 +341,17 @@ where
     }
 }
 
-fn handle_error<E>(
-    err: E,
+fn handle_error(
+    err: gix_error::Exn,
     entry_path: &BStr,
     files: &AtomicUsize,
     errors: &mut Vec<checkout::ErrorRecord>,
     keep_going: bool,
-) -> Result<(), E>
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
+) -> Result<(), gix_error::Exn> {
     if keep_going {
         errors.push(checkout::ErrorRecord {
             path: entry_path.into(),
-            error: Box::new(err),
+            error: err.into_error(),
         });
         files.fetch_add(1, Ordering::Relaxed);
         Ok(())

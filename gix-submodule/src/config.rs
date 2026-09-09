@@ -55,7 +55,9 @@ impl FetchRecurse {
     /// Check if `boolean` is set and translate it the respective variant, or check the underlying string
     /// value for non-boolean options.
     /// On error, it returns the obtained string value which would be the invalid value.
-    pub fn new(boolean: Result<Option<bool>, gix_config::value::Error>) -> Result<Option<Self>, BString> {
+    pub fn new(
+        boolean: Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>>,
+    ) -> Result<Option<Self>, BString> {
         Ok(match boolean {
             Ok(Some(value)) => Some(if value {
                 FetchRecurse::Always
@@ -64,8 +66,12 @@ impl FetchRecurse {
             }),
             Ok(None) => None,
             Err(err) => {
-                if err.input != "on-demand" {
-                    return Err(err.input);
+                let input = err
+                    .into_inner()
+                    .input
+                    .expect("gix-config-value validation errors retain their input");
+                if input != "on-demand" {
+                    return Err(input);
                 }
                 Some(FetchRecurse::OnDemand)
             }
@@ -89,7 +95,7 @@ impl Default for Branch {
 }
 
 impl TryFrom<&BStr> for Branch {
-    type Error = gix_refspec::parse::Error;
+    type Error = gix_error::Exn<gix_error::ValidationError>;
 
     fn try_from(value: &BStr) -> Result<Self, Self::Error> {
         if value == "." {
@@ -134,82 +140,5 @@ impl TryFrom<&BStr> for Update {
             command if command.first() == Some(&b'!') => Update::Command(command[1..].to_owned().into()),
             _ => return Err(()),
         })
-    }
-}
-
-/// The error returned by [File::fetch_recurse()](crate::File::fetch_recurse) and [File::ignore()](crate::File::ignore).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-#[error("The '{field}' field of submodule '{submodule}' was invalid: '{actual}'")]
-pub struct Error {
-    pub field: &'static str,
-    pub submodule: BString,
-    pub actual: BString,
-}
-
-///
-pub mod branch {
-    use bstr::BString;
-
-    /// The error returned by [File::branch()](crate::File::branch).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    #[error(
-        "The value '{actual}' of the 'branch' field of submodule '{submodule}' couldn't be turned into a valid fetch refspec"
-    )]
-    pub struct Error {
-        pub submodule: BString,
-        pub actual: BString,
-        pub source: gix_refspec::parse::Error,
-    }
-}
-
-///
-pub mod update {
-    use bstr::BString;
-
-    /// The error returned by [File::update()](crate::File::update).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The 'update' field of submodule '{submodule}' tried to set command '{actual}' to be shared")]
-        CommandForbiddenInModulesConfiguration { submodule: BString, actual: BString },
-        #[error("The 'update' field of submodule '{submodule}' was invalid: '{actual}'")]
-        Invalid { submodule: BString, actual: BString },
-    }
-}
-
-///
-pub mod url {
-    use bstr::BString;
-
-    /// The error returned by [File::url()](crate::File::url).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The url of submodule '{submodule}' could not be parsed")]
-        Parse {
-            submodule: BString,
-            source: gix_url::parse::Error,
-        },
-        #[error("The submodule '{submodule}' was missing its 'url' field or it was empty")]
-        Missing { submodule: BString },
-    }
-}
-
-///
-pub mod path {
-    use bstr::BString;
-
-    /// The error returned by [File::path()](crate::File::path).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The path '{actual}' of submodule '{submodule}' needs to be relative")]
-        Absolute { actual: BString, submodule: BString },
-        #[error("The submodule '{submodule}' was missing its 'path' field or it was empty")]
-        Missing { submodule: BString },
-        #[error("The path '{actual}' would lead outside of the repository worktree")]
-        OutsideOfWorktree { actual: BString, submodule: BString },
     }
 }

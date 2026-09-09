@@ -18,9 +18,6 @@
 
 use bstr::BString;
 
-/// The error returned by [`write_stream()`].
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 /// The supported container formats for use in [`write_stream()`].
 #[derive(Default, PartialEq, Eq, Copy, Clone, Debug)]
 pub enum Format {

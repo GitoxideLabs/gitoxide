@@ -32,7 +32,7 @@ pub(crate) mod protocol;
 mod from_tree;
 pub use from_tree::from_tree;
 
-pub(crate) type SharedErrorSlot = Arc<parking_lot::Mutex<Option<entry::Error>>>;
+pub(crate) type SharedErrorSlot = Arc<parking_lot::Mutex<Option<gix_error::Exn<gix_error::Message>>>>;
 
 /// An entry in a stream. Note that they must be consumed fully, by reading from them till exhaustion.
 ///

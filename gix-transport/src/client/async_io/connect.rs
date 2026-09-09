@@ -1,8 +1,9 @@
-pub use crate::client::non_io_types::connect::{Error, Options};
+pub use crate::client::non_io_types::connect::Options;
 
 #[cfg(feature = "async-std")]
 pub(crate) mod function {
-    use crate::client::{async_io::Transport, git::async_io::Connection, non_io_types::connect::Error};
+    use crate::client::{async_io::Transport, git::async_io::Connection};
+    use gix_error::{ErrorExt, ResultExt, message};
 
     /// A general purpose connector connecting to a repository identified by the given `url`.
     ///
@@ -10,19 +11,24 @@ pub(crate) mod function {
     /// [git daemons][crate::client::git::connect()] only at the moment.
     ///
     /// Use `options` to further control specifics of the transport resulting from the connection.
-    pub async fn connect<Url, E>(url: Url, options: super::Options) -> Result<Box<dyn Transport + Send>, Error>
+    pub async fn connect<Url, E>(
+        url: Url,
+        options: super::Options,
+    ) -> Result<Box<dyn Transport + Send>, gix_error::Exn<gix_error::Message>>
     where
         Url: TryInto<gix_url::Url, Error = E>,
-        gix_url::parse::Error: From<E>,
+        E: std::error::Error + Send + Sync + 'static,
     {
-        let mut url = url.try_into().map_err(gix_url::parse::Error::from)?;
+        let mut url = url.try_into().or_raise(|| message("Could not parse URL"))?;
         Ok(match url.scheme {
             gix_url::Scheme::Git => {
                 if url.user().is_some() {
-                    return Err(Error::UnsupportedUrlTokens {
-                        url: url.to_bstring(),
-                        scheme: url.scheme,
-                    });
+                    return Err(message!(
+                        "The url {:?} contains information that would not be used by the {} protocol",
+                        url.to_bstring(),
+                        url.scheme
+                    )
+                    .raise());
                 }
                 let path = std::mem::take(&mut url.path);
                 Box::new(
@@ -34,10 +40,11 @@ pub(crate) mod function {
                         options.trace,
                     )
                     .await
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
+                    .map_err(gix_error::Error::from)
+                    .or_raise(|| message("connection failed"))?,
                 )
             }
-            scheme => return Err(Error::UnsupportedScheme(scheme)),
+            scheme => return Err(message!("The '{scheme}' protocol is currently unsupported").raise()),
         })
     }
 }

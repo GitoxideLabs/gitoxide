@@ -53,7 +53,7 @@ impl Default for Whitespace {
 }
 
 impl Whitespace {
-    fn key_value_separators(&self, backing: &mut Vec<u8>) -> Result<Vec<Event>, crate::parse::span::Error> {
+    fn key_value_separators(&self, backing: &mut Vec<u8>) -> Result<Vec<Event>, gix_error::ValidationError> {
         let mut out = Vec::with_capacity(3);
         if let Some(ws) = &self.pre_sep {
             out.push(Event::Whitespace(crate::parse::Span::append(backing, ws)?));

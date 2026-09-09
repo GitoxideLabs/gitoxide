@@ -20,8 +20,12 @@ fn main() -> anyhow::Result<()> {
     let empty_tree_id = repo.write_object(&tree)?.detach();
 
     let mut config = repo.config_snapshot_mut();
-    config.set_raw_value(Author::NAME, "Maria Sanchez")?;
-    config.set_raw_value(Author::EMAIL, "maria@example.com")?;
+    config
+        .set_raw_value(Author::NAME, "Maria Sanchez")
+        .map_err(gix::Exn::into_error)?;
+    config
+        .set_raw_value(Author::EMAIL, "maria@example.com")
+        .map_err(gix::Exn::into_error)?;
     {
         let repo = config.commit_auto_rollback()?;
         let initial_commit_id = repo.commit("HEAD", "initial commit", empty_tree_id, gix::commit::NO_PARENT_IDS)?;

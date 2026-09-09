@@ -12,10 +12,7 @@ pub fn header_event(name: &'static str, subsection: impl Into<Option<&'static st
 mod header {
     use gix_config::file::IntoBStringOpt;
 
-    fn serialized(
-        name: &str,
-        subsection: impl IntoBStringOpt,
-    ) -> Result<bstr::BString, gix_config::parse::section::header::Error> {
+    fn serialized(name: &str, subsection: impl IntoBStringOpt) -> Result<bstr::BString, gix_error::ValidationError> {
         let mut config = gix_config::File::default();
         let section = config.new_section(name, subsection.into_bstring_opt())?;
         Ok(section.header().to_bstring())
@@ -38,21 +35,28 @@ mod header {
         }
     }
     mod new {
-        use gix_config::parse::section;
-
         use crate::parse::section::header::serialized;
 
         #[test]
         fn names_must_be_mostly_ascii() {
             for name in ["🤗", "x.y", "x y", "x\ny"] {
-                assert_eq!(serialized(name, None), Err(section::header::Error::InvalidName));
+                assert_eq!(
+                    serialized(name, None).expect_err("name must be rejected").message,
+                    "section names can only be ascii, '-'"
+                );
             }
         }
 
         #[test]
         fn subsections_with_newlines_and_null_bytes_are_rejected() {
-            assert_eq!(serialized("a", "a\nb"), Err(section::header::Error::InvalidSubSection));
-            assert_eq!(serialized("a", "a\0b"), Err(section::header::Error::InvalidSubSection));
+            for subsection in ["a\nb", "a\0b"] {
+                assert_eq!(
+                    serialized("a", subsection)
+                        .expect_err("subsection must be rejected")
+                        .message,
+                    "sub-section names must not contain newlines or null bytes"
+                );
+            }
         }
     }
 }

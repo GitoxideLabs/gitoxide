@@ -1,16 +1,6 @@
-/// The error returned by [`Hasher::try_finalize()`](crate::Hasher::try_finalize()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Detected SHA-1 collision attack with digest {digest}")]
-    CollisionAttack { digest: crate::ObjectId },
-}
-
 pub(super) mod _impl {
     #[cfg(feature = "sha1")]
     use sha1_checked::{CollisionResult, Digest};
-
-    use crate::hasher::Error;
 
     /// Hash implementations that can be used once.
     #[derive(Clone)]
@@ -56,12 +46,12 @@ pub(super) mod _impl {
 
         /// Finalize the hash and produce an object id.
         ///
-        /// Returns [`Error`] if a collision attack is detected.
+        /// Returns [`gix_error::CorruptionError`] if a collision attack is detected.
         // TODO: Since SHA-256 has an infallible `finalize`, it might be worth investigating
         //       turning the return type into `Result<crate::ObjectId, Infallible>` when this crate is
         //       compiled with SHA-256 support only.
         #[inline]
-        pub fn try_finalize(self) -> Result<crate::ObjectId, Error> {
+        pub fn try_finalize(self) -> Result<crate::ObjectId, gix_error::CorruptionError> {
             match self {
                 #[cfg(feature = "sha1")]
                 Hasher::Sha1(sha1) => match sha1.try_finalize() {
@@ -80,9 +70,10 @@ pub(super) mod _impl {
                             std::hint::unreachable_unchecked()
                         }
                     }
-                    CollisionResult::Collision(digest) => Err(Error::CollisionAttack {
-                        digest: crate::ObjectId::Sha1(digest.into()),
-                    }),
+                    CollisionResult::Collision(digest) => Err(gix_error::CorruptionError::new(format!(
+                        "Detected SHA-1 collision attack with digest {}",
+                        crate::ObjectId::Sha1(digest.into())
+                    ))),
                 },
                 #[cfg(feature = "sha256")]
                 Hasher::Sha256(sha256) => Ok(crate::ObjectId::Sha256(sha2::Digest::finalize(sha256).into())),

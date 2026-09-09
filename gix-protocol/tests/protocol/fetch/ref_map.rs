@@ -30,10 +30,13 @@ mod from_refs {
     fn unknown_object_format_errors() {
         let caps = caps_with(b"symref=HEAD:refs/heads/main object-format=sha999 agent=git/2.54.0");
         let err = RefMap::from_refs(Vec::new(), &caps, ctx()).expect_err("unknown format must error");
-        assert!(
-            matches!(err, refmap::init::Error::UnknownObjectFormat { ref format } if format == "sha999"),
-            "Any `object-format` value we don't recognize must surface as an `UnknownObjectFormat` error
-            rather than silently defaulting to Sha1, so callers can refuse to fetch from unsupported servers"
+        let err = err
+            .downcast_any_ref::<gix_error::ValidationError>()
+            .expect("unknown formats are validation errors");
+        assert_eq!(
+            err.input.as_ref().map(|input| input.as_slice()),
+            Some(b"sha999".as_slice()),
+            "the unsupported format is retained for callers"
         );
     }
 

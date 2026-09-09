@@ -13,6 +13,19 @@ mod at_or_new {
     }
 
     #[test]
+    fn missing_shared_index_is_an_error() -> gix_testtools::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let index_path = tmp.path().join("index");
+        // Keep the primary split index, but leave its shared index behind.
+        std::fs::copy(Generated("v2_split_index").to_path(), &index_path)?;
+
+        let err = gix_index::File::at_or_default(index_path, gix_testtools::object_hash(), false, Default::default())
+            .expect_err("a missing shared index must not produce an empty index");
+        assert!(err.into_error().is_not_found(), "the missing-file cause is preserved");
+        Ok(())
+    }
+
+    #[test]
     fn create_empty_in_memory_state_if_file_does_not_exist() {
         let index = gix_index::File::at_or_default(
             "__definitely no file that exists ever__",

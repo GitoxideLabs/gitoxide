@@ -133,10 +133,7 @@ criterion_main!(benches);
 
 type ObjectDb = Rc<gix_odb::memory::Proxy<gix_object::find::Never>>;
 
-fn new_inmemory_writes() -> (
-    ObjectDb,
-    impl FnMut(&Tree) -> Result<ObjectId, gix_object::write::Error>,
-) {
+fn new_inmemory_writes() -> (ObjectDb, impl FnMut(&Tree) -> Result<ObjectId, gix_error::Exn>) {
     let odb = Rc::new(gix_odb::memory::Proxy::new(
         gix_object::find::Never,
         gix_hash::Kind::Sha1,

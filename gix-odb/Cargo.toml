@@ -26,6 +26,7 @@ serde = ["dep:serde", "gix-hash/serde", "gix-object/serde", "gix-pack/serde"]
 parallel = ["gix-features/parallel"]
 
 [dependencies]
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 gix-features = { version = "^0.49.1", path = "../gix-features", features = ["walkdir", "crc32"] }
 gix-zlib = { version = "^0.1.0", path = "../gix-zlib" }
 gix-hashtable = { version = "^0.16.0", path = "../gix-hashtable" }
@@ -38,7 +39,6 @@ gix-fs = { version = "^0.22.1", path = "../gix-fs" }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 
 tempfile = "3.26.0"
-thiserror = "2.0.18"
 parking_lot = { version = "0.12.4" }
 arc-swap = "1.9.0"
 memmap2 = "0.9.11"

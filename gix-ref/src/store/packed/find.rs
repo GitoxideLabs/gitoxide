@@ -101,13 +101,35 @@ mod error {
     use std::convert::Infallible;
 
     /// The error returned by [`find()`][super::packed::Buffer::find()]
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The ref name or path is not a valid ref name")]
-        RefnameValidation(#[from] crate::name::Error),
-        #[error("The reference could not be parsed")]
+        RefnameValidation(crate::name::Error),
         Parse,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::RefnameValidation(_) => f.write_str("The ref name or path is not a valid ref name"),
+                Error::Parse => f.write_str("The reference could not be parsed"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::RefnameValidation(err) => Some(err),
+                Error::Parse => None,
+            }
+        }
+    }
+
+    impl From<crate::name::Error> for Error {
+        fn from(err: crate::name::Error) -> Self {
+            Error::RefnameValidation(err)
+        }
     }
 
     impl From<Infallible> for Error {
@@ -122,13 +144,35 @@ pub use error::Error;
 pub mod existing {
 
     /// The error returned by [`find_existing()`][super::packed::Buffer::find()]
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The find operation failed")]
-        Find(#[from] super::Error),
-        #[error("The reference did not exist even though that was expected")]
+        Find(super::Error),
         NotFound,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Find(_) => f.write_str("The find operation failed"),
+                Error::NotFound => f.write_str("The reference did not exist even though that was expected"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Find(err) => Some(err),
+                Error::NotFound => None,
+            }
+        }
+    }
+
+    impl From<super::Error> for Error {
+        fn from(err: super::Error) -> Self {
+            Error::Find(err)
+        }
     }
 }
 

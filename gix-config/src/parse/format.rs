@@ -76,8 +76,8 @@ impl Default for Options {
 ///
 /// # Errors
 ///
-/// Returns a [`parse::Error`] if `input` is not a syntactically valid git-config file.
-pub fn normalize(input: &[u8], options: &Options) -> Result<BString, parse::Error> {
+/// Returns a [`gix_error::ValidationError`] if `input` is not a syntactically valid git-config file.
+pub fn normalize(input: &[u8], options: &Options) -> Result<BString, gix_error::ValidationError> {
     let parsed = parse::Events::from_bytes(input, None)?;
     let events: Vec<_> = parsed.iter().collect();
     Ok(normalize_events(&events, options))
