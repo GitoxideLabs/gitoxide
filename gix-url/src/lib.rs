@@ -26,7 +26,7 @@
 
 use std::{borrow::Cow, path::PathBuf};
 
-use bstr::{BStr, BString};
+use bstr::{BStr, BString, ByteSlice};
 use gix_utils::AsBStr;
 
 const HTTP_PATH_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
@@ -118,6 +118,24 @@ pub enum ArgumentSafety<'a> {
     Dangerous(&'a str),
 }
 
+/// Decoded components returned by [`Url::path_query_fragment()`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathComponents<'a> {
+    /// The repository path, with `/` used for an empty HTTP path.
+    pub path: &'a BStr,
+    /// HTTP query name/value pairs in input order, including duplicate names.
+    ///
+    /// Names and values use form decoding: literal `+` becomes a space, while `%2B` becomes `+`.
+    /// Empty `&`-separated fields are skipped; names without `=` have an empty value.
+    /// `None` means no query delimiter was present, while `Some(Vec::new())` represents an empty query.
+    /// Decoded bytes are borrowed except when replacing literal plus signs requires an owned value.
+    pub query: Option<Vec<(Cow<'a, BStr>, Cow<'a, BStr>)>>,
+    /// The decoded HTTP fragment without its leading `#`, preserving literal plus signs.
+    ///
+    /// `None` means no fragment delimiter was present, while `Some("")` represents an empty fragment.
+    pub fragment: Option<&'a BStr>,
+}
+
 /// A URL with support for specialized git related capabilities.
 ///
 /// Additionally, there is support for [deserialization](Url::from_bytes()) and [serialization](Url::to_bstring()).
@@ -195,6 +213,7 @@ pub struct Url {
     ///
     /// This type has no separate query or fragment fields. For HTTP and HTTPS, `?`, `#`, and everything after them are
     /// stored in this field. For other URL schemes, Git treats `?` and `#` before the first slash as authority text.
+    /// Use [`Self::path_query_fragment()`] to access the decoded path, query pairs, and fragment separately.
     ///
     /// For locations in the `<helper>::<address>` form of
     /// [`gitremote-helpers`](https://git-scm.com/docs/gitremote-helpers), this holds the address verbatim,
@@ -468,9 +487,142 @@ impl Url {
             .then_some(encoded.as_ref())
     }
 
-    /// Return the original percent-escaped path if [Self::path] wasn't changed in the meantime, or [`Self::path`] otherwise.
+    /// Return the original percent-escaped spelling of [`Self::path`] when it still matches the current path.
+    ///
+    /// Parsing decodes percent escapes into [`Self::path`], so `/my%20repo` becomes `/my repo`. This method
+    /// preserves the encoded spelling as long as decoding it produces the current path bytes. This compares
+    /// values, not mutation history: restoring the decoded path also restores access to its original spelling.
+    ///
+    /// If no encoded spelling was retained, or the current path differs, return [`Self::path`] as-is. This method
+    /// does not percent-encode a modified path; use [`Self::to_bstring()`] to serialize the complete URL.
+    /// Query and fragment components stored in the path are included; use
+    /// [`Self::path_query_fragment()`] to obtain the decoded path, query pairs, and fragment separately.
+    ///
+    /// ```
+    /// let mut url = gix_url::parse("https://host/my%20repo")?;
+    /// assert_eq!(url.path, "/my repo", "the public path contains decoded bytes");
+    /// assert_eq!(url.original_path(), "/my%20repo", "the original spelling is retained");
+    ///
+    /// url.path = "/other repo".into();
+    /// assert_eq!(url.original_path(), "/other repo", "a changed path is returned as-is");
+    /// assert_eq!(url.to_bstring(), "https://host/other%20repo", "HTTP serialization encodes spaces");
+    ///
+    /// url.path = "/my repo".into();
+    /// assert_eq!(url.original_path(), "/my%20repo", "restoring the path reuses the original spelling");
+    /// # Ok::<(), gix_url::parse::Error>(())
+    /// ```
     pub fn original_path(&self) -> &BStr {
         self.path_with_percent_escapes().unwrap_or(self.path.as_ref())
+    }
+
+    /// Return the decoded path, query name/value pairs, and fragment for HTTP and HTTPS.
+    ///
+    /// Component boundaries, query `&` separators, and the first `=` in each query pair are recognized before
+    /// percent-decoding. Encoded delimiters remain data: `?x=a%26b` yields one pair, `("x", "a&b")`.
+    /// Percent escapes are decoded exactly once, so `%2523` remains `%23`. Query names and values also use form
+    /// decoding, turning literal `+` into spaces; `%2B` remains `+`. Path and fragment plus signs remain literal.
+    ///
+    /// Paths supplied through [`Self::from_parts()`] or changed through [`Self::path`] are already decoded data:
+    /// percent escapes remain literal text, while literal delimiters and query plus signs retain their syntactic roles.
+    /// This agrees with parsing the serialized URL. An original escaped spelling is reused only while it still decodes
+    /// to the current path.
+    /// Empty HTTP paths return `/`, including when the URL only specifies a query or fragment after the host.
+    ///
+    /// Other schemes return [`Self::path`] unchanged with no query or fragment. In particular, SSH paths retain
+    /// literal `?` and `#`, URL-form SSH paths are already decoded, and SCP-style paths retain literal percent escapes.
+    /// Repository names and any `.git` suffix are preserved for the caller to interpret. Serialization is unchanged.
+    ///
+    /// ```
+    /// let url = gix_url::parse("https://host/repo%23one?x=a%26b#fragment%23one")?;
+    /// let parts = url.path_query_fragment();
+    /// assert_eq!(parts.path, "/repo#one");
+    /// let query = parts.query.expect("the URL has a query");
+    /// assert_eq!(query.len(), 1);
+    /// assert_eq!(query[0].0.as_ref(), "x");
+    /// assert_eq!(query[0].1.as_ref(), "a&b");
+    /// assert_eq!(parts.fragment, Some("fragment#one".into()));
+    /// assert_eq!(url.path, "/repo#one?x=a&b#fragment#one");
+    /// # Ok::<(), gix_url::parse::Error>(())
+    /// ```
+    pub fn path_query_fragment(&self) -> PathComponents<'_> {
+        fn decoded_len(original: &[u8], is_encoded: bool) -> usize {
+            if is_encoded {
+                percent_encoding::percent_decode(original).count()
+            } else {
+                original.len()
+            }
+        }
+
+        /// Advance over an original component while borrowing its already-decoded bytes.
+        fn take_decoded<'a>(original: &[u8], decoded: &mut &'a [u8], is_encoded: bool) -> &'a BStr {
+            let (part, rest) = decoded.split_at(decoded_len(original, is_encoded));
+            *decoded = rest;
+            BStr::new(part)
+        }
+
+        fn decode_query_component<'a>(original: &[u8], decoded: &'a BStr, is_encoded: bool) -> Cow<'a, BStr> {
+            if !original.contains(&b'+') {
+                return Cow::Borrowed(decoded);
+            }
+            let mut out = decoded.to_owned();
+            let mut offset = 0;
+            for part in original.split_inclusive(|byte| *byte == b'+') {
+                offset += decoded_len(part, is_encoded);
+                if part.ends_with(b"+") {
+                    out[offset - 1] = b' ';
+                }
+            }
+            Cow::Owned(out)
+        }
+
+        let mut parts = PathComponents {
+            path: self.path.as_ref(),
+            query: None,
+            fragment: None,
+        };
+        if !matches!(self.scheme, Scheme::Http | Scheme::Https) {
+            return parts;
+        }
+        let original = self.path_with_percent_escapes();
+        let is_encoded = original.is_some();
+        let mut original: &[u8] = original.unwrap_or(self.path.as_ref());
+        let mut decoded: &[u8] = self.path.as_ref();
+        let path_end = original.find_byteset(b"?#").unwrap_or(original.len());
+        parts.path = take_decoded(&original[..path_end], &mut decoded, is_encoded);
+        if parts.path.is_empty() {
+            parts.path = "/".into();
+        }
+        original = &original[path_end..];
+
+        if let Some(query_and_fragment) = original.strip_prefix(b"?") {
+            decoded = &decoded[1..];
+            let query_end = query_and_fragment.find_byte(b'#').unwrap_or(query_and_fragment.len());
+            original = &query_and_fragment[query_end..];
+            let mut pairs = Vec::new();
+            for (index, pair) in query_and_fragment[..query_end].split(|byte| *byte == b'&').enumerate() {
+                if index != 0 {
+                    decoded = &decoded[1..];
+                }
+                let mut decoded_pair: &[u8] = take_decoded(pair, &mut decoded, is_encoded);
+                if pair.is_empty() {
+                    continue;
+                }
+                let (name, value) = pair.split_at(pair.find_byte(b'=').unwrap_or(pair.len()));
+                let decoded_name = take_decoded(name, &mut decoded_pair, is_encoded);
+                let (value, decoded_value) = if value.is_empty() {
+                    (value, decoded_pair)
+                } else {
+                    (&value[1..], &decoded_pair[1..])
+                };
+                pairs.push((
+                    decode_query_component(name, decoded_name, is_encoded),
+                    decode_query_component(value, BStr::new(decoded_value), is_encoded),
+                ));
+            }
+            parts.query = Some(pairs);
+        }
+        parts.fragment = original.starts_with(b"#").then(|| BStr::new(&decoded[1..]));
+        parts
     }
 
     /// Return a slash-prefixed path if the bytes after the slash can't be mistaken for a command-line argument.
