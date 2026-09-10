@@ -118,7 +118,7 @@ pub mod create_or_update {
 
                     if force_create_reflog || self.should_autocreate_reflog(&full_name) {
                         let parent_dir = log_path.parent().expect("always with parent directory");
-                        gix_tempfile::create_dir::all(parent_dir, Default::default()).map_err(|err| {
+                        gix_tempfile::create_dir::all(parent_dir, Default::default(), 0).map_err(|err| {
                             Error::CreateLeadingDirectories {
                                 source: err,
                                 reflog_directory: parent_dir.to_owned(),
