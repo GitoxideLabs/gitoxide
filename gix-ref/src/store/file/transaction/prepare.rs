@@ -87,7 +87,7 @@ impl Transaction<'_, '_> {
                     base.join(relative_path.as_ref()),
                     lock_fail_mode,
                     Some(base.clone().into_owned()),
-                    0,
+                    store.shared_repository_permissions,
                 )
                 .map_err(|err| Self::lock_acquire_error(err, "borrowcheck won't allow change.name()"))?;
 
@@ -129,12 +129,14 @@ impl Transaction<'_, '_> {
             }
             Change::Update { expected, new, .. } => {
                 let (base, relative_path) = store.reference_path_with_base(change.update.name.as_ref());
+                let path = base.join(relative_path.as_ref());
                 let obtain_lock = || {
-                    gix_lock::File::acquire_to_update_resource(
-                        base.join(relative_path.as_ref()),
+                    gix_lock::File::acquire(
+                        &path,
                         lock_fail_mode,
                         Some(base.clone().into_owned()),
-                        0,
+                        store.shared_repository_permissions,
+                        None,
                     )
                     .map_err(|err| {
                         Self::lock_acquire_error(
@@ -360,6 +362,7 @@ impl Transaction<'_, '_> {
                                     packed_refs_lock_fail_mode,
                                     self.store.precompose_unicode,
                                     self.store.namespace.clone(),
+                                    self.store.shared_repository_permissions,
                                 )
                                 .map_err(Error::PackedTransactionAcquire)
                             })

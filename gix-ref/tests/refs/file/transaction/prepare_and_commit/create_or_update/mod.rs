@@ -27,6 +27,81 @@ use crate::{
 mod collisions;
 
 #[test]
+#[cfg(unix)]
+fn shared_permissions_cover_refs_reflogs_and_packed_refs() -> crate::Result {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let (_keep, mut store) = empty_store()?;
+    store.shared_repository_permissions = -0o640;
+    let commit_id = ObjectId::empty_blob(crate::fixture_hash_kind());
+    store
+        .transaction()
+        .packed_refs(PackedRefs::DeletionsAndNonSymbolicUpdates(Box::new(EmptyCommit)))
+        .prepare(
+            ["HEAD", "refs/heads/nested/topic", "refs/heads/keep"]
+                .into_iter()
+                .map(|name| {
+                    RefEdit::update(
+                        name.try_into().expect("valid test reference name"),
+                        commit_id,
+                        PreviousValue::MustNotExist,
+                        "initial",
+                    )
+                }),
+            Fail::Immediately,
+            Fail::Immediately,
+        )?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+    for name in [
+        "HEAD",
+        "refs/heads/nested/topic",
+        "logs/HEAD",
+        "logs/refs/heads/nested/topic",
+        "packed-refs",
+    ] {
+        assert_eq!(
+            fs::metadata(store.git_dir().join(name))?.permissions().mode() & 0o777,
+            0o640,
+            "{name} honors the shared permission policy"
+        );
+    }
+    for name in ["refs/heads/nested", "logs/refs/heads/nested"] {
+        assert_eq!(
+            fs::metadata(store.git_dir().join(name))?.permissions().mode() & 0o777,
+            0o750,
+            "new reference and reflog directories provide search access"
+        );
+    }
+
+    store.shared_repository_permissions = -0o660;
+    let next_commit_id = ObjectId::empty_tree(crate::fixture_hash_kind());
+    store
+        .transaction()
+        .prepare(
+            [
+                RefEdit::update("HEAD".try_into()?, next_commit_id, PreviousValue::MustExist, "update"),
+                RefEdit::delete("refs/heads/keep".try_into()?, PreviousValue::MustExist),
+            ],
+            Fail::Immediately,
+            Fail::Immediately,
+        )?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+    for name in ["HEAD", "logs/HEAD", "packed-refs"] {
+        assert_eq!(
+            fs::metadata(store.git_dir().join(name))?.permissions().mode() & 0o777,
+            0o660,
+            "updates to {name} honor the current policy, including existing packed buffers"
+        );
+    }
+    assert_eq!(
+        reflog_lines(&store, "HEAD")?.len(),
+        2,
+        "permission changes preserve existing reflog entries"
+    );
+    Ok(())
+}
+
+#[test]
 fn intermediate_directories_are_removed_on_rollback() -> crate::Result {
     for explicit_rollback in [false, true] {
         let (dir, store) = empty_store()?;

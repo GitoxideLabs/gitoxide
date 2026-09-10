@@ -118,12 +118,11 @@ pub mod create_or_update {
 
                     if force_create_reflog || self.should_autocreate_reflog(&full_name) {
                         let parent_dir = log_path.parent().expect("always with parent directory");
-                        gix_tempfile::create_dir::all(parent_dir, Default::default(), 0).map_err(|err| {
-                            Error::CreateLeadingDirectories {
+                        gix_fs::dir::create::all(parent_dir, Default::default(), self.shared_repository_permissions)
+                            .map_err(|err| Error::CreateLeadingDirectories {
                                 source: err,
                                 reflog_directory: parent_dir.to_owned(),
-                            }
-                        })?;
+                            })?;
                         options.create(true);
                     }
 
@@ -151,6 +150,19 @@ pub mod create_or_update {
 
                     if let Some(mut file) = file_for_appending {
                         let committer = committer.ok_or(Error::MissingCommitter)?;
+                        if cfg!(unix) && self.shared_repository_permissions != 0 {
+                            file.metadata()
+                                .and_then(|metadata| {
+                                    file.set_permissions(gix_fs::adjust_shared_repository_permissions(
+                                        metadata.permissions(),
+                                        self.shared_repository_permissions,
+                                    ))
+                                })
+                                .map_err(|source| Error::Append {
+                                    source,
+                                    reflog_path: self.reflog_path(name),
+                                })?;
+                        }
                         write!(file, "{} {} ", previous_oid.unwrap_or_else(|| new.kind().null()), new)
                             .and_then(|_| committer.trim().write_to(&mut file))
                             .and_then(|_| {

@@ -436,6 +436,7 @@ impl ThreadSafeRepository {
         };
 
         refs.write_reflog = config::cache::util::reflog_or_default(config.reflog, worktree_dir.is_some());
+        refs.shared_repository_permissions = config.shared_repository_permissions;
         refs.namespace.clone_from(&config.refs_namespace);
         let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
 

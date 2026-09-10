@@ -3,6 +3,31 @@ use gix_index::{State, Version, entry, extension, write, write::Options};
 
 use crate::Fixture::*;
 
+#[test]
+#[cfg(unix)]
+fn shared_permissions_apply_to_new_and_replaced_indexes() -> crate::Result {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let dir = gix_testtools::tempfile::TempDir::new()?;
+    let path = dir.path().join("index");
+    let mut index = gix_index::File::from_state(State::new(gix_testtools::object_hash()), path.clone());
+    for permissions in [-0o640, -0o660] {
+        index.write(Default::default(), permissions)?;
+        assert_eq!(
+            fs::metadata(&path)?.permissions().mode() & 0o777,
+            permissions.unsigned_abs(),
+            "the committed index uses the sharing policy after the umask"
+        );
+        assert!(
+            gix_index::File::at(&path, gix_testtools::object_hash(), false, Default::default())?
+                .entries()
+                .is_empty(),
+            "permission handling retains a readable index"
+        );
+    }
+    Ok(())
+}
+
 /// Round-trips should eventually be possible for all files we have, as we write them back exactly as they were read.
 #[test]
 fn roundtrips() -> crate::Result {
@@ -55,10 +80,13 @@ fn skip_hash() -> crate::Result {
     assert!(expected.checksum().is_some());
 
     expected.set_path(&path);
-    expected.write(Options {
-        extensions: Default::default(),
-        skip_hash: false,
-    })?;
+    expected.write(
+        Options {
+            extensions: Default::default(),
+            skip_hash: false,
+        },
+        0,
+    )?;
 
     let actual = gix_index::File::at(
         &path,
@@ -72,10 +100,13 @@ fn skip_hash() -> crate::Result {
         "a hash is written by default and it matches"
     );
 
-    expected.write(Options {
-        extensions: Default::default(),
-        skip_hash: true,
-    })?;
+    expected.write(
+        Options {
+            extensions: Default::default(),
+            skip_hash: true,
+        },
+        0,
+    )?;
 
     let actual = gix_index::File::at(
         &path,

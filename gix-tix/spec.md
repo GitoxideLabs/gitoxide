@@ -868,6 +868,8 @@ space first; changes blocks adapt within the remaining history width.
   exact commit instead of being replayed merely because it is checked out.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
   targets are trees, blobs, or other non-commit objects.
+- Index writes honor `core.sharedRepository`, including conflict materialization
+  and selected-path updates.
 - Time travel toward a pending destination cherry-picks and signs only the pending
   ancestry through that destination. Later non-empty descendants become or
   remain lazy and unsigned; zero-delta descendants finalize immediately while

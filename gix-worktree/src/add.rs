@@ -10,6 +10,16 @@ use std::{
 /// Options for linking a new worktree to its shared Git directory.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Options {
+    /// The parsed `core.sharedRepository` policy for repository metadata.
+    ///
+    /// This applies to the common `worktrees` directory and, matching Git's preparation of `<destination>/.git`,
+    /// to the destination and any parent directories created by [`prepare()`]. Existing directories and the
+    /// new private Git directory retain their normal filesystem permissions.
+    ///
+    /// Unlike Git, the linking files `.git`, `gitdir`, `commondir`, and `locked` also receive these permissions.
+    /// This option does not configure permissions for subsequently checked-out files or subdirectories.
+    /// See [`gix_fs::adjust_shared_repository_permissions()`] for the signed mode encoding; `0` is the default.
+    pub shared_repository_permissions: i32,
     /// Write relative paths into the `.git` and `gitdir` files, falling back to absolute paths across filesystem roots.
     ///
     /// This does not affect the paths passed to [`prepare()`], which may be absolute or relative regardless of
@@ -112,11 +122,14 @@ impl Drop for PreparedWorktree {
 /// before creating the administrative files. The private Git directory is named after the sanitized destination
 /// basename, with a numeric suffix added when needed.
 ///
-/// Paths in the returned [`Prepared`] are absolute regardless of the link format selected by `options`.
+/// Paths in the returned [`PreparedWorktree`] are absolute regardless of the link format selected by `options`.
 pub fn prepare(
     common_dir: impl AsRef<Path>,
     destination_dir: impl AsRef<Path>,
-    Options { relative_paths }: Options,
+    Options {
+        relative_paths,
+        shared_repository_permissions,
+    }: Options,
 ) -> io::Result<PreparedWorktree> {
     let common_dir = common_dir.as_ref();
     ensure_directory(common_dir, "common Git directory")?;
@@ -126,7 +139,7 @@ pub fn prepare(
     let work_dir = gix_path::realpath(work_dir).map_err(io::Error::other)?;
 
     let worktrees_dir = common_dir.join("worktrees");
-    fs::create_dir_all(&worktrees_dir)?;
+    gix_fs::dir::create::all(&worktrees_dir, Default::default(), shared_repository_permissions)?;
     ensure_directory(&worktrees_dir, "worktrees directory")?;
 
     let basename = work_dir.file_name().ok_or_else(|| {
@@ -151,12 +164,13 @@ pub fn prepare(
 
     if !empty_destination_exists {
         if let Some(parent) = prepared.work_dir.parent() {
-            fs::create_dir_all(parent)?;
+            gix_fs::dir::create::all(parent, Default::default(), shared_repository_permissions)?;
         }
         match fs::create_dir(&prepared.work_dir) {
             Ok(()) => prepared.work_dir_cleanup = Some(WorkDirCleanup::RemoveDirectory),
             Err(err) => return Err(err),
         }
+        gix_fs::set_shared_repository_permissions(&prepared.work_dir, shared_repository_permissions)?;
     }
 
     fs::write(prepared.git_dir.join("locked"), b"initializing\n")?;
@@ -176,6 +190,14 @@ pub fn prepare(
         b"gitdir: ",
         &link_path(&prepared.git_dir, &prepared.work_dir, relative_paths),
     )?;
+    for path in [
+        prepared.work_dir.join(".git"),
+        prepared.git_dir.join("gitdir"),
+        prepared.git_dir.join("commondir"),
+        prepared.git_dir.join("locked"),
+    ] {
+        gix_fs::set_shared_repository_permissions(&path, shared_repository_permissions)?;
+    }
 
     Ok(prepared)
 }
