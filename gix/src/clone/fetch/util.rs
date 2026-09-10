@@ -73,7 +73,7 @@ pub(super) fn reinitialize_with_object_hash(
         config.remove_section("extensions", None);
     }
     let mut lock =
-        gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)?;
+        gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None, 0)?;
     config.write_to_filter(&mut lock, |section| section.meta().source == gix_config::Source::Local)?;
     lock.commit()?;
 
