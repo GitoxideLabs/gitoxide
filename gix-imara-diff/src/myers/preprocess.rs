@@ -133,8 +133,13 @@ fn prune_unmatched_tokens(
 fn should_prune_common_line(token_status: &[Occurrences], pos: usize) -> bool {
     const WINDOW_SIZE: usize = 100;
 
+    // Git's `xdl_clean_mmatch` starts both `rpdis0` and `rpdis1` at 1 and sums them,
+    // so the line under test is counted twice. Here, the backward scan stops just
+    // before the candidate so we initialize the count to 1 to account for it. In the
+    // forward scan we'll start from the candidate line and count it there, leaving a
+    // count of 2; matching `xdl_clean_mmatch`'s behavior.
     let mut unmatched_before = 0;
-    let mut common_before = 0;
+    let mut common_before = 1;
 
     let start = pos.saturating_sub(WINDOW_SIZE);
     for status in token_status[start..pos].iter().rev() {
@@ -153,7 +158,10 @@ fn should_prune_common_line(token_status: &[Occurrences], pos: usize) -> bool {
         return false;
     }
 
-    let end = token_status.len().min(pos + WINDOW_SIZE);
+    // The candidate line gets walked over and counted in this scan so the
+    // count starts at 0 here. We also make sure to walk a full `WINDOW_SIZE`
+    // lines after the candidate and not just walk `WINDOW_SIZE` in total.
+    let end = token_status.len().min(pos + WINDOW_SIZE + 1);
     let mut unmatched_after = 0;
     let mut common_after = 0;
     for status in token_status[pos..end].iter() {
@@ -194,6 +202,51 @@ mod tests {
         assert!(
             !should_prune_common_line(&token_status, 500),
             "only the last 100 items before the current line should contribute to the backward scan"
+        );
+    }
+
+    #[test]
+    fn candidate_line_counts_exactly_twice() {
+        // `xdl_clean_mmatch` starts both frequent-line counters at 1 and sums them, so the
+        // line under test contributes 2 and six unmatched lines around it is the boundary:
+        // `6 > 3 * 2` is false and git keeps the line, seven discards it.
+        let run = |before: usize, after: usize| {
+            let mut token_status = vec![Occurrences::Some; 40];
+            let pos = 20;
+            token_status[pos - before..pos].fill(Occurrences::None);
+            token_status[pos] = Occurrences::Common;
+            token_status[pos + 1..=pos + after].fill(Occurrences::None);
+            should_prune_common_line(&token_status, pos)
+        };
+        assert!(
+            !run(3, 3),
+            "six unmatched lines must keep the candidate: counting it twice gives `6 > 3 * 2`, which is false"
+        );
+        assert!(
+            run(3, 4),
+            "seven unmatched lines must prune the candidate: counting it twice gives `7 > 3 * 2`, which is true"
+        );
+    }
+
+    #[test]
+    fn forward_scan_reaches_a_hundred_lines_past_the_candidate() {
+        // git's forward scan runs while `(i + r) <= i + XDL_SIMSCAN_WINDOW`, covering the
+        // 100 lines after the candidate. Here the hundredth is what tips the ratio.
+        let pos = 120;
+        let mut token_status = vec![Occurrences::Some; 300];
+        token_status[pos - 3..pos].fill(Occurrences::None);
+        token_status[pos..pos + 25].fill(Occurrences::Common);
+        token_status[pos + 25..=pos + 100].fill(Occurrences::None);
+
+        assert!(
+            should_prune_common_line(&token_status, pos),
+            "the unmatched line 100 positions after the candidate must be counted to exceed the pruning threshold"
+        );
+
+        token_status[pos + 100] = Occurrences::Some;
+        assert!(
+            !should_prune_common_line(&token_status, pos),
+            "without the hundredth unmatched line, the candidate must stay at the threshold and be kept"
         );
     }
 }

@@ -195,6 +195,8 @@ pub struct Indents {
     leading_blanks: u8,
     /// The number of blank lines after the line following the current position.
     trailing_blanks: u8,
+    /// Whether the split sits past the last line of the file.
+    at_eof: bool,
 }
 
 /// Maximum number of consecutive blank lines to consider when computing indentation context.
@@ -238,7 +240,7 @@ impl Indents {
                         }
                     }
                 })
-                .unwrap_or((token_idx, IndentLevel::BLANK))
+                .unwrap_or((tokens.len() - token_idx - 1, IndentLevel::BLANK))
         };
         let indent = tokens
             .get(token_idx)
@@ -249,6 +251,7 @@ impl Indents {
             next_indent: indent_next_line,
             leading_blanks: leading_blank_lines as u8,
             trailing_blanks: trailing_blank_lines as u8,
+            at_eof,
         }
     }
 
@@ -257,7 +260,7 @@ impl Indents {
         if self.prev_indent == IndentLevel::BLANK && self.leading_blanks == 0 {
             penalty += START_OF_FILE_PENALTY;
         }
-        if self.next_indent == IndentLevel::BLANK && self.trailing_blanks == 0 {
+        if self.at_eof {
             penalty += END_OF_FILE_PENALTY;
         }
 
@@ -375,7 +378,31 @@ impl Score {
 
 #[cfg(test)]
 mod tests {
-    use super::IndentLevel;
+    use super::{IndentLevel, Indents};
+    use crate::intern::Token;
+
+    #[test]
+    fn trailing_blanks_are_counted_not_positioned() {
+        // Everything after the split is blank so there are no indents to find. git's
+        // measure_split leaves `post_blank` set to the number of blank lines it walked
+        // over, which is 3 here. Reporting the split's position instead provides an
+        // incorrect score.
+        const BLANK: Token = Token(0);
+        const CODE: Token = Token(1);
+        let indent = |token: Token| {
+            if token == BLANK {
+                IndentLevel::BLANK
+            } else {
+                IndentLevel(0)
+            }
+        };
+
+        let mut tokens = vec![CODE; 300];
+        tokens.extend([BLANK; 3]);
+        let split = tokens.len() - 4;
+        let indents = Indents::at_token(&tokens, split, indent);
+        assert_eq!(indents.trailing_blanks, 3);
+    }
 
     #[test]
     fn ascii_indent_clamps_before_overflow() {
