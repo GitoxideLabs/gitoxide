@@ -2104,6 +2104,7 @@ version = "0.0.0"
 name = "gix-lock"
 version = "24.0.0"
 dependencies = [
+ "gix-fs",
  "gix-tempfile",
  "gix-utils",
  "tempfile",

@@ -57,16 +57,12 @@ impl FileTransaction {
         lock_mode: gix_lock::acquire::Fail,
         shared_repository_permissions: i32,
     ) -> Result<Self, Error> {
-        let adjust_permissions =
-            |permissions| gix_fs::adjust_shared_repository_permissions(permissions, shared_repository_permissions);
-        let adjust_permissions: Option<&dyn Fn(std::fs::Permissions) -> std::fs::Permissions> =
-            (shared_repository_permissions != 0).then_some(&adjust_permissions);
         let mut lock = gix_lock::File::acquire(
             &path,
             lock_mode,
             None,
+            shared_repository_permissions,
             Some(&gix_lock::acquire::resolve_symlink),
-            adjust_permissions,
         )?;
         let path = lock.resource_path();
         let config = match std::fs::File::open(&path) {

@@ -223,7 +223,7 @@ fn read_remaining(reader: &mut impl std::io::Read) -> std::io::Result<()> {
 }
 
 fn acquire_shallow_lock(shallow_file: &Path) -> Result<gix_lock::File, Error> {
-    gix_lock::File::acquire_to_update_resource(shallow_file, gix_lock::acquire::Fail::Immediately, None)
+    gix_lock::File::acquire_to_update_resource(shallow_file, gix_lock::acquire::Fail::Immediately, None, 0)
         .map_err(Into::into)
 }
 
