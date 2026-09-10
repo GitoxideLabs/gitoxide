@@ -311,22 +311,22 @@ pub(super) fn apply(repository_path: &Path, bare: bool, workdir: &Path, stash: S
         .arg(stash.name.as_bstr().to_str_lossy().as_ref())
         .output()
         .context("could not launch git stash apply")?;
-    let deletion = repo.edit_references([RefEdit::delete(
-        stash.name.clone(),
-        PreviousValue::MustExistAndMatch(stash.target),
-    )]);
-    let mut notice = if output.status.success() {
-        format!("restored {}", stash.name.shorten())
+    let notice = if output.status.success() {
+        let mut notice = format!("restored {}", stash.name.shorten());
+        if let Err(err) = repo.edit_references([RefEdit::delete(
+            stash.name.clone(),
+            PreviousValue::MustExistAndMatch(stash.target),
+        )]) {
+            write!(notice, "; stash reference remains: {err}").expect("writing to a string cannot fail");
+        }
+        notice
     } else {
         format!(
-            "{} restore needs attention: {}",
+            "{} restore needs attention; stash reference remains: {}",
             stash.name.shorten(),
             output.stderr.trim().to_str_lossy()
         )
     };
-    if let Err(err) = deletion {
-        write!(notice, "; stash reference remains: {err}").expect("writing to a string cannot fail");
-    }
     tracing::info!(stash = %stash.name, success = output.status.success(), "applied saved worktree state");
     Ok(notice)
 }
@@ -407,6 +407,111 @@ mod tests {
         let repo = crate::test_repository::open(fixture.path())?;
         assert!(repo.try_find_reference(name.as_ref())?.is_none());
         assert_eq!(repo.find_reference("refs/stash")?.id(), ordinary);
+        Ok(())
+    }
+
+    #[test]
+    fn manual_stash_survives_an_index_conflict_and_can_restore_all_saved_files() -> gix_testtools::Result {
+        let fixture = gix_testtools::tempfile::tempdir()?;
+        git(fixture.path(), &["init", "-q", "-b", "main"])?;
+        crate::test_repository::disable_autocrlf(fixture.path())?;
+        git(fixture.path(), &["config", "user.name", "user"])?;
+        git(fixture.path(), &["config", "user.email", "user@example.com"])?;
+        std::fs::write(fixture.path().join("Cargo.lock"), "base\n")?;
+        std::fs::write(fixture.path().join("tracked"), "base\n")?;
+        git(fixture.path(), &["add", "."])?;
+        git(fixture.path(), &["-c", "commit.gpgSign=false", "commit", "-qm", "base"])?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let repository_path = repo.git_dir().to_owned();
+        let head_commit_id = repo.head_id()?.detach();
+        drop(repo);
+
+        std::fs::write(fixture.path().join("Cargo.lock"), "staged\n")?;
+        git(fixture.path(), &["add", "Cargo.lock"])?;
+        std::fs::write(fixture.path().join("tracked"), "unstaged\n")?;
+        std::fs::write(fixture.path().join("untracked"), "untracked\n")?;
+        save_manual(&repository_path, false, head_commit_id)?;
+        let name = reference(head_commit_id)?;
+        let stash_commit_id = crate::test_repository::open(fixture.path())?
+            .find_reference(name.as_ref())?
+            .id()
+            .detach();
+
+        // A conflicting staged change makes --index fail before Git restores the other files.
+        std::fs::write(fixture.path().join("Cargo.lock"), "local\n")?;
+        git(fixture.path(), &["add", "Cargo.lock"])?;
+        let notice = restore_manual(&repository_path, false, head_commit_id)?;
+        assert!(
+            notice.contains("needs attention"),
+            "the index conflict is reported: {notice}"
+        );
+        assert_eq!(
+            std::fs::read(fixture.path().join("Cargo.lock"))?,
+            b"local\n",
+            "the conflicting local change is preserved"
+        );
+        assert_eq!(
+            std::fs::read(fixture.path().join("tracked"))?,
+            b"base\n",
+            "the early index failure prevents restoring unstaged changes"
+        );
+        assert!(
+            !fixture.path().join("untracked").exists(),
+            "the early index failure also prevents restoring untracked files"
+        );
+        assert_eq!(
+            crate::test_repository::open(fixture.path())?
+                .find_reference(name.as_ref())?
+                .id(),
+            stash_commit_id,
+            "a failed apply retains the complete original stash"
+        );
+        assert!(
+            notice.contains("stash reference remains"),
+            "the notice explains that saved state remains available: {notice}"
+        );
+
+        git(
+            fixture.path(),
+            &["restore", "--source=HEAD", "--staged", "--worktree", "Cargo.lock"],
+        )?;
+        restore_manual(&repository_path, false, head_commit_id)?;
+        assert_eq!(
+            git(fixture.path(), &["show", ":Cargo.lock"])?,
+            b"staged\n",
+            "retry restores the saved index"
+        );
+        assert_eq!(
+            std::fs::read(fixture.path().join("Cargo.lock"))?,
+            b"staged\n",
+            "retry restores the staged file's worktree contents"
+        );
+        assert_eq!(
+            std::fs::read(fixture.path().join("tracked"))?,
+            b"unstaged\n",
+            "retry restores the previously skipped tracked change"
+        );
+        assert_eq!(
+            std::fs::read(fixture.path().join("untracked"))?,
+            b"untracked\n",
+            "retry restores the previously skipped untracked file"
+        );
+        assert_eq!(
+            git(fixture.path(), &["diff", "--cached", "--name-only"])?.trim(),
+            b"Cargo.lock",
+            "only the original staged path is staged"
+        );
+        assert_eq!(
+            git(fixture.path(), &["diff", "--name-only"])?.trim(),
+            b"tracked",
+            "the original unstaged change stays unstaged"
+        );
+        assert!(
+            crate::test_repository::open(fixture.path())?
+                .try_find_reference(name.as_ref())?
+                .is_none(),
+            "only a complete restoration consumes the stash"
+        );
         Ok(())
     }
 }
