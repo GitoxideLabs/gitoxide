@@ -1679,7 +1679,7 @@ mod tests {
     }
 
     #[test]
-    fn review_stash_references_are_consumed_after_any_git_apply_result() -> gix_testtools::Result {
+    fn review_stash_references_survive_conflicts_and_fatal_apply_failures() -> gix_testtools::Result {
         let (fixture, repository_path, stash) = review_stash_fixture()?;
         std::fs::write(fixture.path().join("file"), "destination\n")?;
         git(
@@ -1689,7 +1689,11 @@ mod tests {
         let notice = apply_review_stash(&repository_path, false, fixture.path(), stash.clone())?;
         assert!(notice.contains("needs attention"), "the conflict is reported: {notice}");
         let repo = crate::test_repository::open(fixture.path())?;
-        assert!(repo.try_find_reference(stash.name.as_ref())?.is_none());
+        assert_eq!(
+            repo.find_reference(stash.name.as_ref())?.target().into_owned(),
+            stash.target,
+            "a conflicted apply retains the complete review stash"
+        );
         assert!(
             repo.index_or_empty()?
                 .entries()
@@ -1705,11 +1709,13 @@ mod tests {
             notice.contains("needs attention"),
             "the fatal apply failure is reported: {notice}"
         );
-        assert!(
+        assert_eq!(
             crate::test_repository::open(fixture.path())?
-                .try_find_reference(stash.name.as_ref())?
-                .is_none(),
-            "the review stash ref is consumed even when Git cannot apply it"
+                .find_reference(stash.name.as_ref())?
+                .target()
+                .into_owned(),
+            stash.target,
+            "a fatal apply failure retains the complete review stash"
         );
         Ok(())
     }

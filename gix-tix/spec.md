@@ -812,11 +812,13 @@ paging retains priority, and undo/redo still ignore key-repeat events.
   staged, unstaged, and untracked state with Git under
   `refs/worktree/tix/review/stashes/N`; ignored files remain untouched. Crossing
   into any commit in that review tree restores the state with `git stash apply
-  --index` and always removes the companion ref after Git returns. Apply conflicts
-  remain in the ordinary index/worktree conflict workflow. Leaving a review tree
-  retains its leaf with the normal direct departure pin even after returning to
-  attached history; returning through that pin consumes it. Nested trees use the
-  nearest review-root ancestor.
+  --index` and removes the companion ref only after Git succeeds. A conflict or
+  other apply failure retains the complete stash and reports that it remains
+  available, including when Git stops before restoring all files. Any partially
+  restored state remains in the index/worktree for inspection or conflict
+  resolution. Leaving a review tree retains its leaf with the normal direct
+  departure pin even after returning to attached history; returning through that
+  pin consumes it. Nested trees use the nearest review-root ancestor.
 - When loaded worktree status shows staged, unstaged, or untracked changes without
   conflicts, the actions menu offers `sTash` (`a Shift-T`) at the selected `@`
   entry. Missing or stale worktree status hides the action instead of performing
@@ -826,16 +828,17 @@ paging retains priority, and undo/redo still ignore key-repeat events.
   `tix stash` performs this operation directly at `HEAD` with the same checks.
 - A commit stash is shown as a bright `🎁` beside any `📌`, directly after the
   hash and outside reference visibility. Time travel back to that exact commit
-  restores it with `git stash apply --index` and consumes its companion ref after
-  Git returns, including when application leaves conflicts to resolve. Manual
-  commit stashes use the same plumbing during reviews, while automatic review
-  stashes retain their review-tree identity and namespace. An active automatic
+  restores it with `git stash apply --index` and consumes its companion ref only
+  after Git succeeds. Conflicts and other apply failures retain the complete
+  stash, just as with automatic review stashes. Manual commit stashes use the
+  same plumbing during reviews, while automatic review stashes retain their
+  review-tree identity and namespace. An active automatic
   review stash likewise shows `🎁` on the review leaf whose worktree state it
   saved, without exposing its internal reference or stash commit to traversal.
 - At a selected `@` with a commit stash, the actions menu offers `unsTash`
   (`a Shift-T`) even when other worktree changes are present. It applies and
-  consumes the stash in place through the same path used when time travel returns
-  to that commit.
+  consumes the stash in place only on success, through the same path used when
+  time travel returns to that commit.
 - Rewriting a commit atomically renames its commit-stash association alongside
   other reference updates. Dropping a stashed commit, converging multiple stashes
   onto one result, or overwriting an existing destination stash is rejected before
