@@ -160,7 +160,13 @@ pub enum ContainingDirectory {
     Exists,
     /// Create the directory recursively with the given number of retries in a way that is somewhat race resistant
     /// depending on the amount of retries.
-    CreateAllRaceProof(create_dir::Retries),
+    CreateAllRaceProof {
+        /// How often to retry directory creation when other processes interfere.
+        retries: create_dir::Retries,
+        /// Git's parsed sharing policy for newly created directories; `0` keeps the umask permissions.
+        /// See [`gix_fs::adjust_shared_repository_permissions()`] for the encoding.
+        shared_repository_permissions: i32,
+    },
 }
 
 /// A type expressing the ways we cleanup after ourselves to remove resources we created.
