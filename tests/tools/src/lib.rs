@@ -1499,6 +1499,7 @@ fn marker_if_needed(
                 archive_name,
                 gix_lock::acquire::Fail::AfterDurationWithBackoff(Duration::from_secs(6 * 60)),
                 None,
+                0,
             )
         })
         .transpose()?)

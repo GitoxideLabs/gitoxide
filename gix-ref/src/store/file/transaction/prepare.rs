@@ -90,6 +90,7 @@ impl Transaction<'_, '_> {
                     base.join(relative_path.as_ref()),
                     lock_fail_mode,
                     Some(base.clone().into_owned()),
+                    0,
                 )
                 .map_err(|err| Self::lock_acquire_error(err, "borrowcheck won't allow change.name()"))?;
 
@@ -136,6 +137,7 @@ impl Transaction<'_, '_> {
                         base.join(relative_path.as_ref()),
                         lock_fail_mode,
                         Some(base.clone().into_owned()),
+                        0,
                     )
                     .map_err(|err| {
                         Self::lock_acquire_error(
