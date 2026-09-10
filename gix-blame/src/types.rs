@@ -15,6 +15,10 @@ use crate::file::function::tokens_for_diffing;
 /// It handles the conversion between git's 1-based inclusive ranges and the internal
 /// 0-based exclusive ranges used by the blame algorithm.
 ///
+/// Values of this type are always valid: they either select the whole file, or a non-empty set of
+/// non-empty, sorted and pairwise disjoint ranges. Construction therefore goes through the
+/// constructors below, which validate and normalize their input.
+///
 /// # Examples
 ///
 /// ```rust
@@ -24,11 +28,10 @@ use crate::file::function::tokens_for_diffing;
 /// let range = BlameRanges::from_one_based_inclusive_range(20..=40);
 ///
 /// // Blame multiple ranges
-/// let mut ranges = BlameRanges::from_one_based_inclusive_ranges(vec![
-///     1..=4, // Lines 1-4
+/// let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![
+///     1..=4,  // Lines 1-4
 ///    10..=14, // Lines 10-14
-/// ]
-/// );
+/// ]);
 /// ```
 ///
 /// # Line Number Representation
@@ -37,58 +40,105 @@ use crate::file::function::tokens_for_diffing;
 /// - A range of `20..=40` represents 21 lines, spanning from line 20 up to and including line 40
 /// - This will be converted to `19..40` internally as the algorithm uses 0-based ranges that are exclusive at the end
 ///
-/// # Empty Ranges
-/// You can blame the entire file by calling `BlameRanges::default()`, or by passing an empty vector to `from_one_based_inclusive_ranges`.
+/// Ranges are always non-empty, so `<start>` may never exceed `<end>`. This mirrors the `gix blame -L <start>,<end>`
+/// command-line interface, but differs from `git blame -L <start>,<end>` which silently swaps reversed ranges.
+/// That swapping is [explicitly documented as undocumented behaviour][swap] in `git`'s own test suite, so we
+/// prefer to reject what we cannot unambiguously interpret.
+///
+/// # Blaming the Whole File
+///
+/// You can blame the entire file by calling [`BlameRanges::default()`], or by passing an empty vector to
+/// [`BlameRanges::from_one_based_inclusive_ranges()`]. Note that this is about an empty collection of ranges;
+/// an individual range may never be empty.
+///
+/// If you already hold 0-based exclusive ranges, convert each `start..end` to the 1-based inclusive
+/// `(start + 1)..=end` before passing it in. That conversion is exact for every non-empty range.
+///
+/// [swap]: https://github.com/git/git/blob/3cb9185f65410273787f74333cc027d2ea5daada/t/annotate-tests.sh#L271-L273
 #[derive(Debug, Clone, Default)]
-pub enum BlameRanges {
+pub struct BlameRanges(Selection);
+
+#[derive(Debug, Clone, Default)]
+enum Selection {
     /// Blame the entire file.
     #[default]
     WholeFile,
-    /// Blame ranges in 0-based exclusive format.
+    /// Blame the given ranges, in 0-based exclusive format.
+    ///
+    /// Upheld invariants, all established by [`BlameRanges::merge_zero_based_exclusive_range()`]:
+    ///
+    /// * the `Vec` is never empty - that state is spelled [`Selection::WholeFile`],
+    /// * every range is non-empty, so it can become a [`BlameEntry`] with a [`NonZeroU32`] length,
+    /// * the ranges are sorted by `start` and pairwise disjoint and non-adjacent, so no line is
+    ///   ever attributed twice.
     PartialFile(Vec<Range<u32>>),
 }
 
 /// Lifecycle
 impl BlameRanges {
-    /// Create from a single 0-based range.
+    /// Create from a single 1-based inclusive range.
     ///
     /// Note that the input range is 1-based inclusive, as used by git, and
-    /// the output is a zero-based `BlameRanges` instance.
+    /// the output is a 0-based exclusive `BlameRanges` instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidOneBasedLineRange`] if `range` starts at `0`, or if it is reversed,
+    /// i.e. if its start exceeds its end.
     pub fn from_one_based_inclusive_range(range: RangeInclusive<u32>) -> Result<Self, Error> {
-        let zero_based_range = Self::inclusive_to_zero_based_exclusive(range)?;
-        Ok(Self::PartialFile(vec![zero_based_range]))
+        let mut result = Self::default();
+        result.merge_zero_based_exclusive_range(Self::inclusive_to_zero_based_exclusive(range)?);
+        Ok(result)
     }
 
-    /// Create from multiple 0-based ranges.
+    /// Create from multiple 1-based inclusive ranges.
     ///
     /// Note that the input ranges are 1-based inclusive, as used by git, and
-    /// the output is a zero-based `BlameRanges` instance.
+    /// the output is a 0-based exclusive `BlameRanges` instance.
     ///
-    /// If the input vector is empty, the result will be `WholeFile`.
+    /// If the input vector is empty, the result selects the whole file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidOneBasedLineRange`] if any range starts at `0`, or if any range is
+    /// reversed, i.e. if its start exceeds its end.
     pub fn from_one_based_inclusive_ranges(ranges: Vec<RangeInclusive<u32>>) -> Result<Self, Error> {
-        if ranges.is_empty() {
-            return Ok(Self::WholeFile);
-        }
-
-        let zero_based_ranges = ranges
-            .into_iter()
-            .map(Self::inclusive_to_zero_based_exclusive)
-            .collect::<Vec<_>>();
-        let mut result = Self::PartialFile(vec![]);
-        for range in zero_based_ranges {
-            result.merge_zero_based_exclusive_range(range?);
+        let mut result = Self::default();
+        for range in ranges {
+            result.merge_zero_based_exclusive_range(Self::inclusive_to_zero_based_exclusive(range)?);
         }
         Ok(result)
     }
 
     /// Convert a 1-based inclusive range to a 0-based exclusive range.
+    ///
+    /// Reversed ranges are rejected rather than turned into empty 0-based ranges, as the blame
+    /// algorithm cannot represent a hunk without lines.
     fn inclusive_to_zero_based_exclusive(range: RangeInclusive<u32>) -> Result<Range<u32>, Error> {
-        if range.start() == &0 {
+        let (start, end) = (*range.start(), *range.end());
+        // Not `RangeInclusive::is_empty()`, which is also `true` for a range iterated to exhaustion.
+        if start == 0 || start > end {
             return Err(Error::InvalidOneBasedLineRange);
         }
-        let start = range.start() - 1;
-        let end = *range.end();
-        Ok(start..end)
+        Ok(start - 1..end)
+    }
+}
+
+/// Access
+impl BlameRanges {
+    /// Return `true` if the entire file is selected, which is the default.
+    pub fn is_whole_file(&self) -> bool {
+        matches!(self.0, Selection::WholeFile)
+    }
+
+    /// Return the selected 0-based exclusive ranges, or `None` if the whole file is selected.
+    ///
+    /// The ranges are non-empty, sorted and pairwise disjoint.
+    pub fn selected_ranges(&self) -> Option<&[Range<u32>]> {
+        match &self.0 {
+            Selection::WholeFile => None,
+            Selection::PartialFile(ranges) => Some(ranges),
+        }
     }
 }
 
@@ -96,6 +146,12 @@ impl BlameRanges {
     /// Add a single range to blame.
     ///
     /// The new range will be merged with any overlapping existing ranges.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidOneBasedLineRange`] if `new_range` starts at `0`, or if it is
+    /// reversed, i.e. if its start exceeds its end. The existing selection is left untouched in
+    /// that case.
     pub fn add_one_based_inclusive_range(&mut self, new_range: RangeInclusive<u32>) -> Result<(), Error> {
         let zero_based_range = Self::inclusive_to_zero_based_exclusive(new_range)?;
         self.merge_zero_based_exclusive_range(zero_based_range);
@@ -103,10 +159,14 @@ impl BlameRanges {
         Ok(())
     }
 
-    /// Adds a new ranges, merging it with any existing overlapping ranges.
+    /// Add `new_range`, merging it with any existing overlapping or adjacent ranges.
+    ///
+    /// This is the only place that creates [`Selection::PartialFile`], and is what upholds its
+    /// invariants. `new_range` must be non-empty.
     fn merge_zero_based_exclusive_range(&mut self, new_range: Range<u32>) {
-        match self {
-            Self::PartialFile(ranges) => {
+        debug_assert!(!new_range.is_empty(), "BUG: an empty range must never be selected");
+        match &mut self.0 {
+            Selection::PartialFile(ranges) => {
                 // Partition ranges into those that don't overlap and those that do.
                 let (mut non_overlapping, overlapping): (Vec<_>, Vec<_>) = ranges
                     .drain(..)
@@ -121,18 +181,31 @@ impl BlameRanges {
                 *ranges = non_overlapping;
                 ranges.sort_by_key(|a| a.start);
             }
-            Self::WholeFile => *self = Self::PartialFile(vec![new_range]),
+            Selection::WholeFile => self.0 = Selection::PartialFile(vec![new_range]),
         }
     }
 
-    /// Gets zero-based exclusive ranges.
-    pub fn to_zero_based_exclusive_ranges(&self, max_lines: u32) -> Vec<Range<u32>> {
-        match self {
-            Self::WholeFile => {
+    /// Resolves the selection into 0-based exclusive ranges while taking into account `max_lines` -
+    /// the number of lines in the content that will be blamed.
+    ///
+    /// Ranges that reach past `max_lines` are clamped to it, and ranges that start past `max_lines`
+    /// are dropped. Consequently the result can be empty, if every selected range starts past
+    /// `max_lines`, but every range it does contain is guaranteed to be non-empty.
+    /// [`file()`](crate::file()) relies on that guarantee, as a hunk without lines cannot be turned
+    /// into a [`BlameEntry`].
+    ///
+    /// Note that a file without lines cannot be expressed here, as `max_lines` is a [`NonZeroU32`].
+    /// Such a file has nothing to attribute, and [`file()`](crate::file()) recognizes it before
+    /// any range is resolved.
+    pub(crate) fn to_zero_based_exclusive_ranges(&self, max_lines: NonZeroU32) -> Vec<Range<u32>> {
+        let max_lines = max_lines.get();
+        let ranges = match &self.0 {
+            Selection::WholeFile => {
+                // Kept as a binding to avoid `clippy::single_range_in_vec_init`.
                 let full_range = 0..max_lines;
                 vec![full_range]
             }
-            Self::PartialFile(ranges) => ranges
+            Selection::PartialFile(ranges) => ranges
                 .iter()
                 .filter_map(|range| {
                     if range.end < max_lines {
@@ -146,7 +219,12 @@ impl BlameRanges {
                     }
                 })
                 .collect(),
-        }
+        };
+        debug_assert!(
+            ranges.iter().all(|range| !range.is_empty()),
+            "BUG: resolved ranges must never be empty, or creating a `BlameEntry` from them will panic"
+        );
+        ranges
     }
 }
 

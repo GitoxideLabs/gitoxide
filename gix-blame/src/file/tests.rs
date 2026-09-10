@@ -986,7 +986,16 @@ mod process_changes {
 }
 
 mod blame_ranges {
+    use std::num::NonZeroU32;
+
     use crate::{BlameRanges, Error};
+
+    /// A file of `n` lines, for resolving a selection against.
+    ///
+    /// A file without lines cannot be expressed, which is the point: it has nothing to blame.
+    fn num_lines(n: u32) -> NonZeroU32 {
+        NonZeroU32::new(n).expect("these tests never describe a file without lines")
+    }
 
     #[test]
     fn create_with_invalid_range() {
@@ -996,24 +1005,62 @@ mod blame_ranges {
     }
 
     #[test]
+    #[expect(clippy::reversed_empty_ranges)]
+    fn constructors_reject_reversed_ranges() {
+        assert!(
+            matches!(
+                BlameRanges::from_one_based_inclusive_range(2..=1),
+                Err(Error::InvalidOneBasedLineRange)
+            ),
+            "a reversed range cannot be turned into a non-empty 0-based range, so it must be rejected"
+        );
+        assert!(
+            matches!(
+                BlameRanges::from_one_based_inclusive_ranges(vec![1..=2, 4..=3]),
+                Err(Error::InvalidOneBasedLineRange)
+            ),
+            "a single reversed range invalidates the whole set, even if other ranges are fine"
+        );
+    }
+
+    #[test]
+    #[expect(clippy::reversed_empty_ranges)]
+    fn adding_a_reversed_range_is_rejected_and_leaves_the_selection_untouched() {
+        let mut ranges = BlameRanges::from_one_based_inclusive_range(1..=3).expect("valid range");
+
+        assert!(
+            matches!(
+                ranges.add_one_based_inclusive_range(5..=4),
+                Err(Error::InvalidOneBasedLineRange)
+            ),
+            "adding a reversed range fails just like constructing from one"
+        );
+        assert_eq!(
+            ranges.to_zero_based_exclusive_ranges(num_lines(100)),
+            vec![0..3],
+            "a rejected range must not be merged into the existing selection"
+        );
+    }
+
+    #[test]
     fn create_from_single_range() {
         let ranges = BlameRanges::from_one_based_inclusive_range(20..=40).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![19..40]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(100)), vec![19..40]);
     }
 
     #[test]
     fn create_from_multiple_ranges() {
         let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![1..=4, 10..=14]).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![0..4, 9..14]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(100)), vec![0..4, 9..14]);
     }
 
     #[test]
     fn create_with_empty_ranges() {
         let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![]).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![0..100]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(100)), vec![0..100]);
     }
 
     #[test]
@@ -1021,7 +1068,7 @@ mod blame_ranges {
         let mut ranges = BlameRanges::from_one_based_inclusive_range(1..=5).unwrap();
         ranges.add_one_based_inclusive_range(3..=7).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![0..7]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(100)), vec![0..7]);
     }
 
     #[test]
@@ -1030,7 +1077,7 @@ mod blame_ranges {
         ranges.add_one_based_inclusive_range(5..=7).unwrap();
         ranges.add_one_based_inclusive_range(2..=6).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![0..7]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(100)), vec![0..7]);
     }
 
     #[test]
@@ -1038,7 +1085,7 @@ mod blame_ranges {
         let mut ranges = BlameRanges::from_one_based_inclusive_range(5..=7).unwrap();
         ranges.add_one_based_inclusive_range(1..=3).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![0..3, 4..7]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(100)), vec![0..3, 4..7]);
     }
 
     #[test]
@@ -1046,28 +1093,39 @@ mod blame_ranges {
         let mut ranges = BlameRanges::from_one_based_inclusive_range(1..=5).unwrap();
         ranges.add_one_based_inclusive_range(6..=10).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![0..10]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(100)), vec![0..10]);
     }
 
     #[test]
     fn non_sorted_ranges() {
         let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![10..=15, 1..=5]).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![0..5, 9..15]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(100)), vec![0..5, 9..15]);
     }
 
     #[test]
     fn convert_to_zero_based_exclusive() {
         let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![1..=5, 10..=15]).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![0..5, 9..15]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(100)), vec![0..5, 9..15]);
     }
 
     #[test]
     fn convert_full_file_to_zero_based() {
-        let ranges = BlameRanges::WholeFile;
+        let ranges = BlameRanges::default();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![0..100]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(100)), vec![0..100]);
+    }
+
+    #[test]
+    fn the_whole_file_always_resolves_to_exactly_one_non_empty_range() {
+        for n in [1, 2, 100] {
+            assert_eq!(
+                BlameRanges::default().to_zero_based_exclusive_ranges(num_lines(n)),
+                vec![0..n],
+                "selecting the whole file always yields exactly one range covering all {n} lines"
+            );
+        }
     }
 
     #[test]
@@ -1076,7 +1134,7 @@ mod blame_ranges {
 
         ranges.add_one_based_inclusive_range(1..=10).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(100), vec![0..10]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(100)), vec![0..10]);
     }
 
     #[test]
@@ -1084,7 +1142,7 @@ mod blame_ranges {
         let mut ranges = BlameRanges::from_one_based_inclusive_range(1..=5).unwrap();
         ranges.add_one_based_inclusive_range(16..=20).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(7), vec![0..5]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(7)), vec![0..5]);
     }
 
     #[test]
@@ -1092,7 +1150,7 @@ mod blame_ranges {
         let mut ranges = BlameRanges::from_one_based_inclusive_range(1..=5).unwrap();
         ranges.add_one_based_inclusive_range(6..=10).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(7), vec![0..7]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(7)), vec![0..7]);
     }
 
     #[test]
@@ -1100,13 +1158,47 @@ mod blame_ranges {
         let mut ranges = BlameRanges::from_one_based_inclusive_range(1..=4).unwrap();
         ranges.add_one_based_inclusive_range(6..=10).unwrap();
 
-        assert_eq!(ranges.to_zero_based_exclusive_ranges(7), vec![0..4, 5..7]);
+        assert_eq!(ranges.to_zero_based_exclusive_ranges(num_lines(7)), vec![0..4, 5..7]);
     }
 
     #[test]
     fn default_is_full_file() {
         let ranges = BlameRanges::default();
 
-        assert!(matches!(ranges, BlameRanges::WholeFile));
+        assert!(
+            ranges.is_whole_file(),
+            "not selecting anything in particular blames the whole file"
+        );
+        assert_eq!(
+            ranges.selected_ranges(),
+            None,
+            "there are no individual ranges to inspect when the whole file is selected"
+        );
+    }
+
+    #[test]
+    fn selected_ranges_are_non_empty_sorted_and_disjoint() {
+        let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![10..=15, 1..=5, 3..=4, 6..=7])
+            .expect("all ranges are valid");
+
+        assert!(
+            !ranges.is_whole_file(),
+            "selecting individual ranges is not the same as selecting the whole file"
+        );
+        assert_eq!(
+            ranges.selected_ranges(),
+            Some([0..7, 9..15].as_slice()),
+            "overlapping and adjacent ranges are merged, and the result is sorted, so no line is blamed twice"
+        );
+    }
+
+    #[test]
+    fn an_empty_set_of_ranges_is_the_whole_file() {
+        let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![]).expect("an empty selection is valid");
+
+        assert!(
+            ranges.is_whole_file(),
+            "selecting no ranges at all cannot be distinguished from selecting everything"
+        );
     }
 }

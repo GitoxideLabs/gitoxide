@@ -683,6 +683,37 @@ mod untracked_changes {
         Ok(())
     }
 
+    // An empty buffer is the only way to express content without lines: a lone newline tokenizes to
+    // one line, as does newline-free binary content. Blaming it as untracked changes is what lets us
+    // exercise a line count of zero, which the internal range resolution no longer accepts.
+    #[test]
+    fn a_file_without_lines_has_nothing_to_blame() -> gix_testtools::Result {
+        let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_repo.sh")?;
+
+        let mut fixture = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
+        let lines_blamed = fixture
+            .blame_untracked_changes(
+                "untracked-lines.txt".into(),
+                Vec::new(),
+                gix_blame::Options {
+                    diff_algorithm: gix_diff::blob::Algorithm::Histogram,
+                    ranges: BlameRanges::default(),
+                    since: None,
+                    rewrites: Some(gix_diff::Rewrites::default()),
+                    debug_track_path: false,
+                },
+            )?
+            .entries;
+
+        assert!(
+            lines_blamed.is_empty(),
+            "content without lines cannot be attributed, so blame stops before a line count is ever \
+             needed to resolve `BlameRanges` into ranges to blame"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn untracked_file() -> gix_testtools::Result {
         let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_repo.sh")?;
