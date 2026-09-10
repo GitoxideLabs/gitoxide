@@ -2740,9 +2740,10 @@ fn metadata_columns<'a>(
     };
     if let Some(date) = date {
         date_spans.push(Span::styled(
-            format!("{} ", date.format_or_unix(gix::date::time::format::SHORT)),
+            date.format_or_unix(gix::date::time::format::SHORT),
             color(Color::Blue),
         ));
+        date_spans.push(Span::raw(" "));
     }
     let mut author_spans = Vec::new();
     let mut attribution_spans = Vec::new();
@@ -4541,7 +4542,7 @@ mod tests {
                     .add_modifier(Modifier::REVERSED | Modifier::BOLD),
             );
         }
-        for x in 18..29 {
+        for x in 18..28 {
             expected[(x, 0)].set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         }
         for x in 29..43 {
@@ -8176,7 +8177,7 @@ mod tests {
             style("0101010"),
             Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
         );
-        assert_eq!(style("1970-01-01 "), Style::default().fg(Color::Blue));
+        assert_eq!(style("1970-01-01"), Style::default().fg(Color::Blue));
         assert_eq!(style("author "), Style::default().fg(Color::Green));
         assert!(
             line.spans.iter().all(|span| span.content != "HEAD"),

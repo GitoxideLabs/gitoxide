@@ -345,6 +345,8 @@ without trading responsiveness for metadata that is not visible.
   author date by default, author and attribution information, markers, and title.
   Simple lane turns use rounded corners in both the TUI and `tix show`; merge
   tees and crossings remain orthogonal so every commit still occupies one row.
+- The date's trailing space uses the row's default colors, leaving a one-column
+  margin before the author even on selected rows.
 - When the current worktree HEAD is in an active review tree, its nearest review
   root and all descendants are drawn before other ready branches. Ambiguous
   unrelated review roots retain the ordinary history order.
