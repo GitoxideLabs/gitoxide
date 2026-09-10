@@ -111,7 +111,7 @@ impl crate::Repository {
 
         let config_path = self.common_dir().join("config");
         let mut config_lock =
-            gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)
+            gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None, 0)
                 .or_raise(|| gix_error::message("Could not acquire the local configuration lock"))?;
         let mut config = match gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local) {
             Ok(config) => Some(config),

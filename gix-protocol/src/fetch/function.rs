@@ -234,7 +234,7 @@ fn read_remaining(reader: &mut impl std::io::Read) -> std::io::Result<()> {
 }
 
 fn acquire_shallow_lock(shallow_file: &Path) -> ExnResult<gix_lock::File> {
-    gix_lock::File::acquire_to_update_resource(shallow_file, gix_lock::acquire::Fail::Immediately, None)
+    gix_lock::File::acquire_to_update_resource(shallow_file, gix_lock::acquire::Fail::Immediately, None, 0)
         .or_raise_erased(|| message("'shallow' file could not be locked in preparation for writing changes"))
 }
 
