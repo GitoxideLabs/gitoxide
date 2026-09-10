@@ -343,7 +343,7 @@ impl ContainingDirectory {
     fn resolve(self, dir: &Path) -> std::io::Result<&Path> {
         match self {
             ContainingDirectory::Exists => Ok(dir),
-            ContainingDirectory::CreateAllRaceProof(retries) => crate::create_dir::all(dir, retries),
+            ContainingDirectory::CreateAllRaceProof(retries) => crate::create_dir::all(dir, retries, 0),
         }
     }
 }
