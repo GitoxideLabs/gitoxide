@@ -238,7 +238,10 @@ fn dir_cleanup(boundary: Option<PathBuf>) -> (ContainingDirectory, AutoRemove) {
     match boundary {
         None => (ContainingDirectory::Exists, AutoRemove::Tempfile),
         Some(boundary_directory) => (
-            ContainingDirectory::CreateAllRaceProof(Default::default()),
+            ContainingDirectory::CreateAllRaceProof {
+                retries: Default::default(),
+                shared_repository_permissions: 0,
+            },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil { boundary_directory },
         ),
     }
