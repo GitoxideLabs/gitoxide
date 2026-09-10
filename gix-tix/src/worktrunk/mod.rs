@@ -914,8 +914,8 @@ pub(crate) fn run(
     quit_on_finish: Option<String>,
 ) -> Result<()> {
     let repository = repository.to_thread_local();
-    if let Some(target) = target.or_else(|| detach.then(|| "HEAD".into())) {
-        let selected = if detach {
+    let selected = if let Some(target) = target.or_else(|| detach.then(|| "HEAD".into())) {
+        if detach {
             create_detached(
                 &repository,
                 &target,
@@ -932,32 +932,19 @@ pub(crate) fn run(
                 gix::progress::Discard,
                 &AtomicBool::default(),
             )?
-        };
-        if !write_shell_handoff(&selected)? {
-            println!("{}", selected.display());
         }
-        return Ok(());
-    }
-
-    let mut worktrees = Worktrees::start(&repository)?;
-    anyhow::ensure!(!worktrees.rows().is_empty(), "this repository has no worktrees");
-    let selected = crate::pick_worktree(repository.into_sync(), &mut worktrees, quit_on_finish)?;
-    let Some((selected, hide)) = selected else {
-        return Ok(());
+    } else {
+        let mut worktrees = Worktrees::start(&repository)?;
+        anyhow::ensure!(!worktrees.rows().is_empty(), "this repository has no worktrees");
+        let Some(selected) = crate::pick_worktree(repository.into_sync(), &mut worktrees, quit_on_finish)? else {
+            return Ok(());
+        };
+        selected
     };
-    write_shell_handoff(&selected)?;
-    drop(worktrees);
-    std::env::set_current_dir(&selected).with_context(|| format!("could not enter worktree {}", selected.display()))?;
-    crate::run_without_logging(
-        gix::open(&selected)
-            .with_context(|| format!("could not open worktree {}", selected.display()))?
-            .into_sync(),
-        Vec::new(),
-        crate::Options {
-            hide,
-            ..crate::Options::default()
-        },
-    )
+    if !write_shell_handoff(&selected)? {
+        println!("{}", selected.display());
+    }
+    Ok(())
 }
 
 /// Print the fully populated worktree picker table without opening the terminal UI.

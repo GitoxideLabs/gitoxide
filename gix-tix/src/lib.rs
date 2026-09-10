@@ -991,7 +991,7 @@ pub(crate) fn pick_worktree(
     repository: gix::ThreadSafeRepository,
     picker: &mut worktrunk::Worktrees,
     quit_on_finish: Option<String>,
-) -> Result<Option<(PathBuf, Vec<OsString>)>> {
+) -> Result<Option<PathBuf>> {
     let repository = repository.to_thread_local();
     let (hide, unavailable) = history::available_hidden_revisions(&repository, &[], true)?;
     for (revision, err) in unavailable {
@@ -1005,13 +1005,13 @@ pub(crate) fn pick_worktree(
         Vec::new(),
         Options {
             quit_on_finish,
-            hide: hide.clone(),
+            hide,
             ..Options::default()
         },
         Some(picker),
     )? {
         UiExit::Quit(_) => Ok(None),
-        UiExit::Promote(path) => Ok(Some((path, hide))),
+        UiExit::Promote(path) => Ok(Some(path)),
     }
 }
 
@@ -1033,6 +1033,7 @@ fn run_ui(
 ) -> Result<UiExit> {
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
+    let show_hidden = options.hide.is_empty();
     let (hide, unavailable) = validate_hidden_revisions(&mut repository_path, &common_dir, &options.hide)?;
     options.hide = hide;
     for (revision, err) in unavailable {
@@ -1090,6 +1091,7 @@ fn run_ui(
                 repository,
                 revisions,
                 options,
+                show_hidden,
                 enhanced_keyboard,
                 commit_pane_background,
                 picker,
@@ -1136,7 +1138,7 @@ fn validate_hidden_revisions(
     hide: &[OsString],
 ) -> Result<(Vec<OsString>, Vec<(OsString, String)>)> {
     let (repository, _) = open_history_repository(repository_path, common_dir)?;
-    history::available_hidden_revisions(&repository, hide, false)
+    history::available_hidden_revisions(&repository, hide, hide.is_empty())
 }
 
 fn enable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
@@ -1349,6 +1351,7 @@ fn event_loop(
     mut repository: gix::ThreadSafeRepository,
     revisions: Vec<OsString>,
     options: Options,
+    show_hidden: bool,
     enhanced_keyboard: bool,
     commit_pane_background: Option<(u8, u8, u8)>,
     mut picker: Option<&mut worktrunk::Worktrees>,
@@ -1402,7 +1405,7 @@ fn event_loop(
     let (cancelled, receiver) = start_history(
         repository,
         &revisions,
-        &hide,
+        if show_hidden { &[] } else { &hide },
         false,
         gix::features::threading::OwnShared::clone(&authors),
     );
@@ -1451,6 +1454,7 @@ fn event_loop(
     };
     app.set_worktree_changes_available(!repository_is_bare);
     app.configure_hidden_filter(!hide.is_empty());
+    app.show_hidden = show_hidden && app.has_hidden_filter;
     sync_line_diff_pool(
         &mut line_diff_pool,
         app.changes_mode.is_some(),
@@ -1969,8 +1973,6 @@ fn event_loop(
                         ref_tree_refresh_pending = false;
                         refresh_expand_hidden = false;
                         return_to_history_after_refresh = None;
-                        app.related_history_picker.close();
-                        app.related_history_options.clear();
                         history_status_deadline = None;
                         fill_repository.path.clone_from(&repository_path);
                         fill_repository.bare = repository_is_bare;
@@ -2952,7 +2954,6 @@ fn event_loop(
             && !diagnostic_input
             && !app.entry_selection_active()
             && !app.topological_navigation_active()
-            && !app.related_history_picker.is_open()
             && !app.auto_merge_picker.is_open()
             && opens_command_menu(&terminal_event, command_picker.is_open(), ref_tree.is_active())
         {
@@ -3183,27 +3184,6 @@ fn event_loop(
                     continue;
                 }
                 MenuInput::Submit(selection) => Some(Action::ApplyAutoMerge(selection)),
-            }
-        } else if focused && app.related_history_picker.is_open() && !diagnostic_input {
-            let items: Vec<_> = app
-                .related_history_options
-                .iter()
-                .map(|option| MenuItem::new(&option.label, option.target.clone()))
-                .collect();
-            let input = menu_input(&terminal_event, &mut app.related_history_picker, &items);
-            if !app.related_history_picker.is_open()
-                && let TerminalEvent::Key(key) = &terminal_event
-            {
-                command_picker_key = Some(key.code);
-            }
-            match input {
-                MenuInput::Pass => None,
-                MenuInput::Handled => {
-                    dirty = true;
-                    urgent = true;
-                    continue;
-                }
-                MenuInput::Submit(target) => Some(Action::PinHistoryTarget(target)),
             }
         } else if focused && command_picker.is_open() && !diagnostic_input {
             let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
@@ -3692,32 +3672,6 @@ fn event_loop(
                 }
                 Err(err) => {
                     app.leave_error(format!("AutoMerge: {err:#}"));
-                    continue;
-                }
-            }
-        }
-        if action == Action::ShowRelatedHistory {
-            let Some(commit_id) = app.related_history_commit() else {
-                continue;
-            };
-            dirty = true;
-            urgent = true;
-            let result = open_repository(&repository_path, repository_is_bare, false).and_then(|repository| {
-                history_graph
-                    .as_ref()
-                    .context("history graph is unavailable")?
-                    .related_history(&repository, commit_id, &ref_snapshot)
-            });
-            match result {
-                Ok(options) => {
-                    let Some(next) = app.open_related_history(options) else {
-                        continue;
-                    };
-                    action = next;
-                }
-                Err(err) => {
-                    app.update(Action::ShowRelatedHistory);
-                    app.leave_error(format!("related history: {err:#}"));
                     continue;
                 }
             }
@@ -4964,25 +4918,6 @@ fn event_loop(
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
-                    }
-                }
-                Effect::PinHistoryTarget(target) => {
-                    let result = open_repository(&repository_path, repository_is_bare, false)
-                        .and_then(|repository| pin_history_target(&repository, target));
-                    match result {
-                        Ok((pin, _created, changes)) => {
-                            leave_recorded_success(
-                                &mut app,
-                                &repository_path,
-                                repository_is_bare,
-                                "pin related history",
-                                &changes,
-                                "pinned related history",
-                            );
-                            app.select_commit_after_refresh(pin.id);
-                            refresh_pending = true;
-                        }
-                        Err(err) => app.leave_error(format!("pin related history: {err:#}")),
                     }
                 }
                 Effect::TogglePin(id) => {
@@ -6379,17 +6314,6 @@ fn decoration_successor(selected: gix::ObjectId, current: &Decorations, next: &D
     (successor != selected && matches.all(|candidate| candidate == successor)).then_some(successor)
 }
 
-fn pin_history_target(
-    repository: &gix::Repository,
-    target: gix::refs::Target,
-) -> Result<(history::Pin, bool, Vec<edit::undo::RefChange>)> {
-    let commit_id = match &target {
-        gix::refs::Target::Symbolic(name) => repository.find_reference(name.as_ref())?.peel_to_commit()?.id,
-        gix::refs::Target::Object(commit_id) => repository.find_commit(*commit_id)?.id,
-    };
-    edit::time_travel::create_or_reuse_pin_reporting(repository, target, commit_id, "tix related history")
-}
-
 fn update_hidden_branch_updates(app: &mut App, graph: Option<&HistoryGraph>, refs: &history::RefSnapshot) {
     let updates = graph.map_or_else(HashMap::new, |graph| {
         graph.hidden_branch_updates(
@@ -6790,15 +6714,6 @@ fn draw(
                 app.auto_merge_picker_title,
                 "no matching inputs",
                 |index| app.auto_merge_options[index].label.clone(),
-            )
-        } else if app.related_history_picker.is_open() {
-            ui::draw_menu(
-                &mut frame,
-                history,
-                &mut app.related_history_picker,
-                " Related history ",
-                "no matching references",
-                |index| app.related_history_options[index].label.clone(),
             )
         } else {
             None
@@ -9669,7 +9584,7 @@ mod tests {
     }
 
     #[test]
-    fn related_history_picker_filters_and_consumes_escape() -> gix_testtools::Result {
+    fn menu_filters_choices_and_consumes_escape() -> gix_testtools::Result {
         let main = gix::refs::Target::Symbolic("refs/remotes/origin/main".try_into()?);
         let topic = gix::refs::Target::Symbolic("refs/remotes/origin/topic".try_into()?);
         let items = [
@@ -9685,7 +9600,7 @@ mod tests {
                 &items
             ),
             MenuInput::Handled,
-            "p filters related refs instead of opening the command popup"
+            "p filters the picker instead of opening the command popup"
         );
         assert_eq!(menu.query(), "p");
         assert_eq!(
@@ -9708,55 +9623,6 @@ mod tests {
             "Escape closes the picker without reaching history's cancellation action"
         );
         assert!(!menu.is_open());
-        Ok(())
-    }
-
-    #[test]
-    fn pin_related_history_reuses_symbolic_pins_and_resolves_their_current_tip() -> gix_testtools::Result {
-        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = test_repository::open(fixture.path())?;
-        let head_id = repository.head_id()?.detach();
-        let topic_id = repository.rev_parse_single("topic")?.detach();
-        let target = gix::refs::Target::Symbolic("refs/heads/topic".try_into()?);
-        let (first, created, changes) = pin_history_target(&repository, target.clone())?;
-        assert!(created, "the first request creates an ordinary symbolic pin");
-        assert_eq!(changes.len(), 1, "the pin can be undone through the existing undo log");
-        let next_id = repository
-            .commit(
-                "refs/heads/topic",
-                "advance topic",
-                repository.find_commit(topic_id)?.tree_id()?,
-                [topic_id],
-            )?
-            .detach();
-        let (again, created, changes) = pin_history_target(&repository, target)?;
-        assert!(!created && changes.is_empty(), "reopening a related ref reuses its pin");
-        assert_eq!(again.name, first.name);
-        assert_eq!(
-            again.id, next_id,
-            "a moving reference is resolved again before selection"
-        );
-        let (fixed, _, _) = pin_history_target(&repository, gix::refs::Target::Object(topic_id))?;
-        assert_eq!(
-            fixed.target,
-            gix::refs::Target::Object(topic_id),
-            "commit IDs remain fixed pins"
-        );
-        assert_eq!(
-            repository.head_id()?.detach(),
-            head_id,
-            "pinning preserves the checkout"
-        );
-        let refs = history::snapshot(&repository, &[], &["topic".into()], false)?;
-        assert!(
-            refs.view_tips.contains(&next_id),
-            "ordinary pins augment the normal history tips"
-        );
-        assert_eq!(
-            refs.hidden_tips,
-            [next_id],
-            "the hidden ref remains configured and excluded"
-        );
         Ok(())
     }
 
@@ -11263,15 +11129,44 @@ mod tests {
 
     #[test]
     fn startup_validation_returns_only_detached_hidden_revision_data() -> gix_testtools::Result {
-        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let repository = test_repository::open(&fixture)?;
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = test_repository::open(fixture.path())?;
         let mut git_dir = repository.git_dir().to_owned();
         let common_dir = repository.common_dir().to_owned();
         drop(repository);
 
-        let (hide, unavailable) = validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("main")])?;
-        assert_eq!(hide, [OsString::from("main")]);
-        assert!(unavailable.is_empty(), "the fixture's main branch resolves");
+        assert!(
+            validate_hidden_revisions(&mut git_dir, &common_dir, &[])?.0.is_empty(),
+            "a stale remote HEAD does not offer a hidden-history filter"
+        );
+        for args in [
+            ["config", "remote.origin.url", "."],
+            ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+            ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
+        ] {
+            let output = Command::new("git").current_dir(fixture.path()).args(args).output()?;
+            assert!(
+                output.status.success(),
+                "git {args:?} configures the integration branch: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let (hide, unavailable) = validate_hidden_revisions(&mut git_dir, &common_dir, &[])?;
+        assert_eq!(
+            hide,
+            [OsString::from("refs/heads/main")],
+            "plain Tix offers the inferred integration branch for its history toggle"
+        );
+        assert!(unavailable.is_empty(), "the inferred local branch resolves");
+
+        let (hide, unavailable) = validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("topic")])?;
+        assert_eq!(hide, [OsString::from("topic")], "explicit filters are not broadened");
+        assert!(unavailable.is_empty(), "the explicit branch resolves");
+        assert!(
+            validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("missing")]).is_err(),
+            "inference does not mask an invalid explicit filter"
+        );
         Ok(())
     }
 
@@ -11792,7 +11687,6 @@ mod tests {
             ('d', Action::ToggleDate),
             ('i', Action::CycleIds),
             ('c', Action::SelectEntry),
-            ('o', Action::ShowRelatedHistory),
             ('s', Action::ToggleEmail),
             ('e', Action::ToggleName),
             ('t', Action::ToggleTrailers),
