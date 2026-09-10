@@ -218,8 +218,14 @@ mod tests {
             token_status[pos + 1..=pos + after].fill(Occurrences::None);
             should_prune_common_line(&token_status, pos)
         };
-        assert!(!run(3, 3));
-        assert!(run(3, 4));
+        assert!(
+            !run(3, 3),
+            "six unmatched lines must keep the candidate: counting it twice gives `6 > 3 * 2`, which is false"
+        );
+        assert!(
+            run(3, 4),
+            "seven unmatched lines must prune the candidate: counting it twice gives `7 > 3 * 2`, which is true"
+        );
     }
 
     #[test]
@@ -232,9 +238,15 @@ mod tests {
         token_status[pos..pos + 25].fill(Occurrences::Common);
         token_status[pos + 25..=pos + 100].fill(Occurrences::None);
 
-        assert!(should_prune_common_line(&token_status, pos));
+        assert!(
+            should_prune_common_line(&token_status, pos),
+            "the unmatched line 100 positions after the candidate must be counted to exceed the pruning threshold"
+        );
 
         token_status[pos + 100] = Occurrences::Some;
-        assert!(!should_prune_common_line(&token_status, pos));
+        assert!(
+            !should_prune_common_line(&token_status, pos),
+            "without the hundredth unmatched line, the candidate must stay at the threshold and be kept"
+        );
     }
 }

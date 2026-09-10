@@ -68,49 +68,6 @@ fn myers_is_odd() {
     );
 }
 
-/// Check for parity with Git at frequent-line detection. Even though the line being checked is
-/// frequent, it is not discarded because it is bounded by unmatched runs that are short, which
-/// is offset by Git counting the line twice. Counting it only once would cause it to be discarded.
-#[test]
-fn a_frequent_line_between_short_unmatched_runs_is_kept() {
-    fn file(tag: &str) -> String {
-        // The first and last lines differ so that stripping the common prefix and postfix leaves
-        // the blank lines in the region, which is what makes an empty line frequent here. The
-        // unmatched runs are bounded by non-blank shared lines, so nothing else inside them is.
-        let mut out = format!("first line, {tag}\n");
-        for i in 0..8 {
-            out.push_str(&format!("shared line {i}\n\n"));
-        }
-        out.push_str("anchor above\n");
-        for i in 0..3 {
-            out.push_str(&format!("only in {tag} {i}\n"));
-        }
-        out.push('\n');
-        for i in 3..6 {
-            out.push_str(&format!("only in {tag} {i}\n"));
-        }
-        out.push_str("anchor below\n");
-        for i in 8..16 {
-            out.push_str(&format!("shared line {i}\n\n"));
-        }
-        out.push_str(&format!("last line, {tag}\n"));
-        out
-    }
-
-    let (before, after) = (file("old"), file("new"));
-    let input = InternedInput::new(before.as_str(), after.as_str());
-    let diff = Diff::compute(Algorithm::Myers, &input);
-    let changed = diff.hunks().fold((0, 0), |(removed, inserted), hunk| {
-        (removed + hunk.before.len(), inserted + hunk.after.len())
-    });
-    // `git diff --no-index --numstat` reports 8 and 8 for these two files.
-    assert_eq!(
-        changed,
-        (8, 8),
-        "the blank line between the two unmatched runs should still be matched"
-    );
-}
-
 /// The frequency limit above which a line becomes a candidate for discarding comes from git's
 /// `xdl_bogosqrt`, which rounds the halved bit count up. Rounding down halves the limit for every
 /// odd bit length, so lines git considers ordinary are treated as too frequent to match.
