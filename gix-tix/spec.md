@@ -34,11 +34,12 @@ without trading responsiveness for metadata that is not visible.
   `PageUp` and `PageDown` move by the visible list height. `/` opens a
   case-insensitive fuzzy search over worktree names; edits and navigation paint
   and preview the current match, `Ctrl-P` and `Ctrl-N` move up and down, `Enter`
-  promotes it immediately, and `Escape` cancels the search and restores its
+  selects it immediately, and `Escape` cancels the search and restores its
   starting selection.
   `Tab` focuses history and `Escape` returns from root history to the list.
-  `Enter` selects the worktree and promotes it to a normal full-screen history
-  with the same inferred hidden revisions as its preview.
+  `Enter` selects the worktree and exits the picker. Selection hands its path
+  to the shell wrapper, or prints it on stdout without shell integration, just
+  like an explicit switch target. It does not open another history session.
   `d` twice removes a clean selected linked worktree; `D` twice removes it while
   discarding changes. A different key cancels the confirmation, and `Escape`
   cancels it without closing the picker. The launch and main worktrees cannot be
@@ -109,8 +110,9 @@ without trading responsiveness for metadata that is not visible.
   preserving the failure status.
 - `tix worktrunk shell-init SHELL` prints a `wt` wrapper for Bash, Zsh, Fish,
   Nushell, or PowerShell. The wrapper lets a successful selection change the
-  calling shell's directory and opens full-screen Tix only after picker
-  selection; setup output never edits shell profiles. `gix tix` emits a wrapper
+  calling shell's directory and returns to its prompt, allowing the shell's
+  terminal CWD integration to run before the user opens Tix again. Setup output
+  never edits shell profiles. `gix tix` emits a wrapper
   which consistently invokes `gix tix` instead. Handoff rejects non-Unicode
   worktree paths rather than passing a corrupted path to the shell.
 - `tix show [-x HIDDEN...] [--no-auto-hide] [TIP...]`, also available through
@@ -234,9 +236,12 @@ without trading responsiveness for metadata that is not visible.
   deduplicated; stale, direct, ambiguous, unmappable, missing, and non-commit
   results are ignored. At least one explicit or inferred hidden revision is
   required by commands that need a hidden boundary. `--no-auto-hide` disables
-  inference. A directly launched interactive history retains its explicit-only
-  behavior; one promoted from worktrunk retains the preview's inferred hidden
-  revisions.
+  inference. A directly launched interactive history applies explicit `-x`
+  filters immediately. Without `-x`, it starts with full history and makes the
+  same inferred local defaults available to `Shift-H` / `v h`; the first toggle
+  hides their reachable commits. Explicit filters are not broadened by inference,
+  and invalid explicit filters do not fall back to inferred ones. Worktrunk
+  previews start with inferred exclusions applied.
 - `tix rebase apply [FILE]` applies such a plan from a file, or from standard
   input when `FILE` is omitted or `-`. Removing its state comment or emptying the
   document cancels successfully; malformed or unsupported state is an error.
@@ -319,8 +324,9 @@ without trading responsiveness for metadata that is not visible.
   leaves retain the boundary commit's ordinary parent diff. Enter opens the same
   complete branch diff, labelled `<base>..<leaf>`.
 - Hidden revisions do not change the default reference display mode.
-- `Shift-H`, or `v` then `h`, toggles the full hidden projection. The direct
-  shortcut works from history and focused changes panes, including while a
+- `Shift-H`, or `v` then `h`, toggles the full hidden projection using explicit
+  exclusions, or inferred integration branches when no exclusions were given.
+  The direct shortcut works from history and focused changes panes, including while a
   shortcut group is open. An open command popup consumes it as query text.
   Toggling preserves the selected commit when it still exists and otherwise
   selects the newest selectable row.
@@ -551,13 +557,12 @@ without trading responsiveness for metadata that is not visible.
 | `v d` | Cycle author dates, committer dates, and no dates. |
 | `v i` | Cycle commit IDs, change IDs, and no explicit IDs. |
 | `v c` | Prompt for a displayed entry number and select it within the current tree. |
-| `v o` | Pin and select related history; choose a target when several are available. |
 | `v s` | Toggle full actors/emails and titles. |
 | `v e` | Cycle all attribution, author only, and no names, skipping inert states. |
 | `v t` | Toggle attribution trailers. |
 | `v m` | Toggle mailmap resolution. |
 | `v r` | Cycle all, normal, and no reference labels. |
-| `Shift-H` / `v h` | Show or hide configured hidden ancestry from history or a focused changes pane. |
+| `Shift-H` / `v h` | Show or hide explicit or inferred hidden ancestry from history or a focused changes pane. |
 | `r` | Hide reference labels or restore the mode visible when they were hidden. |
 | `m`/`]` | Toggle the commit-message view. |
 | `p` | Open the command menu from history or a focused changes block. |
@@ -572,9 +577,10 @@ without trading responsiveness for metadata that is not visible.
 | `u u` / `U U` | Undo / redo one operation. The first press shows an informational confirmation prompt; the second matching press performs the operation. |
 
 The `?` information group documents the direct hidden-history and push shortcuts
-alongside its other controls. It shows `sHow hidden` or `Hide hidden` when hidden
-ancestry is configured, and `Push` when available from history or Worktree.
-The underlined capital letters work without a prefix.
+alongside its other controls. It shows `sHow related history` or
+`Hide unrelated history` when explicit or inferred hidden ancestry is available,
+and `Push` when available from history or Worktree. The underlined capital
+letters work without a prefix.
 
 Each undo or redo requires a new pair of matching key presses. Switching between
 `u` and `U` arms the new direction. Escape cancels the confirmation before leaving
@@ -690,21 +696,13 @@ paging retains priority, and undo/redo still ignore key-repeat events.
 
 ### Command menu
 
-- View **show related history**, also available as `v o`, offers related targets
-  for the selected history commit. At a shared base it includes every hidden
-  branch or unnamed hidden tip with commits outside the view; at a local branch
-  tip it includes each configured upstream resolved through its fetch refspec.
-  Targets are deduplicated by reference identity, with their relationship and
-  the number of commits outside the current view shown in the chooser.
-  One target is pinned immediately. Multiple targets use the searchable picker,
-  with the command menu's typing, navigation, numbered choices, and Escape
-  cancellation. No targets produces an informational message.
-  Opening a target creates or reuses an ordinary symbolic pin for a reference
-  or a direct pin for a commit ID, then selects its current tip after refresh.
-  Hidden targets reveal their connecting history through the ordinary pinned
-  view projection, retaining the base's styling and read-only behavior. The
-  checkout stays unchanged. Created pins use the normal undo history and remain
-  available after restarting Tix.
+- View has one history toggle, available as `Shift-H` or `v h`. While full
+  history is shown it offers **hide unrelated history**, which applies the
+  explicit or inferred hidden revisions. While filtered it offers
+  **show related history**, which restores the full ancestry of the same view tips.
+  It is absent when no hidden revisions are available. Toggling changes only the view: it
+  creates or removes no pins and adds no undo entry. Existing pins continue to
+  define the view tips.
 - Bare `p` opens a centered command menu from the main history UI, including
   while a changes block has focus. In the reference tree, `p` pins the selection
   and returns to history, just like `<enter>`. Its `p command` hint appears in

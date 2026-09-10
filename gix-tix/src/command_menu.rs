@@ -13,7 +13,6 @@ pub(crate) enum CommandId {
     Trailers,
     Refs,
     Hidden,
-    RelatedHistory,
     Select,
     Reword,
     NewCommit,
@@ -75,7 +74,6 @@ const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
         (Id::Trailers, View, "vt", Action::ToggleTrailers),
         (Id::Refs, View, "vr", Action::CycleRefs),
         (Id::Hidden, View, "vh", Action::ToggleHidden),
-        (Id::RelatedHistory, View, "vo", Action::ShowRelatedHistory),
         (Id::Select, View, "vc", Action::SelectEntry),
         (Id::Reword, Actions, "ao", Action::Reword),
         (Id::NewCommit, Actions, "aw", Action::NewCommit),
@@ -236,15 +234,16 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
         push(
             CommandId::Hidden,
             0,
-            if app.show_hidden { "hide hidden" } else { "show hidden" },
+            if app.show_hidden {
+                "hide unrelated history"
+            } else {
+                "show related history"
+            },
             app.show_hidden,
         );
     }
     if app.can_select_entry() {
         push(CommandId::Select, 0, "select", true);
-    }
-    if app.related_history_commit().is_some() {
-        push(CommandId::RelatedHistory, 0, "show related history", true);
     }
 
     let selected_is_segment = app.selected_is_segment();
@@ -257,7 +256,7 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
                 CommandId::AutoMerge,
                 app.can_auto_merge(),
                 if app
-                    .related_history_commit()
+                    .selected_history_commit()
                     .and_then(|id| decorations.get(&id))
                     .is_some_and(|names| {
                         names
@@ -696,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn select_is_available_for_numbered_history() {
+    fn select_and_history_toggle_match_the_current_view() {
         let mut app = App::new(1);
         app.extend_commits(vec![row(1, &[])]);
         let rows = app
@@ -714,13 +713,34 @@ mod tests {
         assert_eq!(select.shortcut, "vc");
         assert_eq!(select.action, Action::SelectEntry);
 
-        let related = commands(&app, &Decorations::default(), false)
-            .into_iter()
-            .find(|command| command.id == CommandId::RelatedHistory)
-            .expect("completed history offers related targets");
-        assert_eq!(related.group, CommandGroup::View);
-        assert_eq!(related.shortcut, "vo");
-        assert_eq!(related.action, Action::ShowRelatedHistory);
+        assert!(
+            !commands(&app, &Decorations::default(), false)
+                .iter()
+                .any(|command| command.id == CommandId::Hidden),
+            "no filter action is offered without explicit or inferred hidden revisions"
+        );
+        app.configure_hidden_filter(true);
+        for (show_hidden, label) in [(true, "hide unrelated history"), (false, "show related history")] {
+            app.show_hidden = show_hidden;
+            let history_commands: Vec<_> = commands(&app, &Decorations::default(), false)
+                .into_iter()
+                .filter(|command| command.group == CommandGroup::View && command.label.ends_with("history"))
+                .collect();
+            assert_eq!(history_commands.len(), 1, "both directions share one history command");
+            let hidden = &history_commands[0];
+            assert_eq!(hidden.label, label, "the label describes the next toggle");
+            assert_eq!(hidden.shortcut, "vh", "the View shortcut keeps its existing key");
+            assert_eq!(
+                hidden.action,
+                Action::ToggleHidden,
+                "the menu uses the direct-key action"
+            );
+            assert_eq!(
+                app.update(hidden.action.clone()),
+                vec![crate::app::Effect::Reload(!show_hidden)],
+                "showing or hiding history only reloads the view, without pinning"
+            );
+        }
     }
 
     #[test]
