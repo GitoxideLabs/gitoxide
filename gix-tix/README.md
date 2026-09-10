@@ -17,7 +17,7 @@ These shortcuts also work directly, without a prefix:
 
 | Key | Action |
 | --- | --- |
-| `H` (`Shift+H`) | Toggle configured hidden history from history or a changes pane. |
+| `H` (`Shift+H`) | Show or hide integration-branch history from history or a changes pane; infer the branches when `-x` is omitted. |
 | `P` (`Shift+P`) | Push the active branch from history or Worktree. In Tree, cycle the comparison parent; `a P` pushes from there. |
 
 See the [full keyboard reference](spec.md#navigation-and-display-controls) for
@@ -36,6 +36,13 @@ wrapper which uses `gix tix` throughout.
 unchecked-out local branch. `wt switch --new-branch BRANCH` creates a missing
 branch at the logical Tix HEAD, or reuses it if it exists. `--path PATH`
 overrides the default sibling path.
+
+Selecting a worktree in the picker also returns to the shell and changes its
+directory. Open `tix` there and press `Shift+H` (View **hide unrelated history**)
+to hide commits reachable from the integration branches inferred by `tix show`.
+The same action becomes **show related history** while filtered; press it again
+to restore the full history. Explicit `-x` filters apply immediately when
+opening Tix.
 
 `wt switch --detach [COMMIT]` creates a detached worktree at the current HEAD
 or a supplied commit. `--path PATH` chooses its directory; otherwise a sibling
