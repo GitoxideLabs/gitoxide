@@ -76,6 +76,7 @@ pub(crate) enum Edit {
     Repeat {
         base: ObjectId,
         checkout: ObjectId,
+        stash_before_persist: Option<gix::refs::FullName>,
     },
 }
 
@@ -371,6 +372,7 @@ pub(crate) struct Outcome {
     pub notice: Option<String>,
     pub ref_rewrites: Vec<RefRewrite>,
     pub ref_changes: Vec<super::undo::RefChange>,
+    pub(super) departure_stash: Option<super::stash::SavedStash>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
 }
 
@@ -471,6 +473,7 @@ struct Prepared {
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
     note_rewrites: Vec<(ObjectId, ObjectId)>,
     stash_rewritten: HashMap<ObjectId, Option<ObjectId>>,
+    stash_before_persist: Option<gix::refs::FullName>,
     removed: HashSet<ObjectId>,
     committer: gix::actor::Signature,
     expected_refs: Option<Vec<PlanRef>>,
@@ -904,9 +907,13 @@ fn perform_inner(
 ) -> Result<(Perform, Option<crate::enrich::Enrichment>)> {
     let mut repo = repo.clone();
     let header_only = matches!(enrichment_headers, Some(EnrichmentEdit::Patch(_)));
-    let repeat_checkout = match &edit {
-        Edit::Repeat { checkout, .. } => Some(*checkout),
-        _ => None,
+    let (repeat_checkout, stash_before_persist) = match &edit {
+        Edit::Repeat {
+            checkout,
+            stash_before_persist,
+            ..
+        } => (Some(*checkout), stash_before_persist.clone()),
+        _ => (None, None),
     };
     let (root, replacement, inserted, reset_index, removed, repeat, mut split_upper) = match edit {
         Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false, false, None),
@@ -1220,6 +1227,7 @@ fn perform_inner(
         notice: auto.refs.notice(),
         note_rewrites,
         stash_rewritten: rewritten.clone(),
+        stash_before_persist,
         rewritten,
         removed: if removed {
             root.into_iter().collect()
@@ -1499,6 +1507,7 @@ pub(super) fn finish_review_with_progress(
         notice: auto.refs.notice(),
         note_rewrites,
         stash_rewritten: rewritten.clone(),
+        stash_before_persist: None,
         rewritten,
         removed: HashSet::new(),
         committer,
@@ -1988,6 +1997,7 @@ pub(crate) fn perform_plan_with_progress(
         note_rewrites,
         rewritten: rewritten.clone(),
         stash_rewritten: rewritten.clone(),
+        stash_before_persist: None,
         removed,
         committer,
         expected_refs: Some(expected_refs.clone()),
@@ -2127,6 +2137,42 @@ impl Prepared {
         checkout: Option<CheckoutOptions<'_>>,
         materialized: Option<(ObjectId, &[gix::merge::tree::Conflict])>,
     ) -> Result<Outcome> {
+        let Some(name) = self.stash_before_persist.take() else {
+            return self.finish_inner(checkout, materialized);
+        };
+        let repository_path = self.repo.git_dir().to_owned();
+        let bare = self.repo.is_bare();
+        let workdir = self
+            .repo
+            .workdir()
+            .context("stashing changes requires a worktree")?
+            .to_owned();
+        let saved = super::stash::save_if_dirty(&repository_path, bare, &workdir, name)?;
+        let mut outcome = match self.finish_inner(checkout, materialized) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                return Err(match saved {
+                    Some(saved) => super::stash::restore_after_failure(&repository_path, bare, &workdir, saved, err),
+                    None => err,
+                });
+            }
+        };
+        if let Some(mut saved) = saved {
+            super::stash::remap(&mut saved, |commit_id| outcome.map(commit_id))?;
+            super::time_travel::append_notice(&mut outcome.notice, "stashed departure changes".into());
+            if let Some(warning) = saved.warning.take() {
+                super::time_travel::append_notice(&mut outcome.notice, warning);
+            }
+            outcome.departure_stash = Some(saved);
+        }
+        Ok(outcome)
+    }
+
+    fn finish_inner(
+        &mut self,
+        checkout: Option<CheckoutOptions<'_>>,
+        materialized: Option<(ObjectId, &[gix::merge::tree::Conflict])>,
+    ) -> Result<Outcome> {
         let mut resource_edits = super::stash::rewrite_edits(&self.repo, &self.stash_rewritten, &self.removed)?;
         let note_edits = note_rewrite_edits(&self.repo, &self.note_rewrites, &self.committer)?;
         let enrichment_edits = self
@@ -2246,6 +2292,7 @@ impl Prepared {
             notice: self.notice.take(),
             ref_rewrites: updated_refs.rewritten,
             ref_changes: updated_refs.changes,
+            departure_stash: None,
             rewritten: std::mem::take(&mut self.rewritten),
         };
         if let Some(options) = checkout {
@@ -3599,6 +3646,7 @@ mod tests {
             Edit::Repeat {
                 base: pending_middle_commit_id,
                 checkout: pending_tip_commit_id,
+                stash_before_persist: None,
             },
             Signature::RedoIfNeeded,
             Tree::CherryPick,
@@ -3731,6 +3779,7 @@ mod tests {
             Edit::Repeat {
                 base: placeholder_commit_id,
                 checkout: placeholder_commit_id,
+                stash_before_persist: None,
             },
             Signature::RedoIfNeeded,
             Tree::CherryPick,
@@ -4037,6 +4086,112 @@ mod tests {
     }
 
     #[test]
+    fn repeat_stashes_before_publication_and_restores_after_failure() -> gix_testtools::Result {
+        for refuse_publication in [false, true] {
+            let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+            let path = fixture.path();
+            let repo = open(path)?;
+            let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+            let middle_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+            let old_tip_commit_id = repo.head_id()?.detach();
+            let graph = super::super::loaded_graph(&repo)?;
+            let mut middle = repo.find_commit(middle_commit_id)?.decode()?.into_owned()?;
+            middle.tree = repo.find_commit(base_commit_id)?.tree_id()?.detach();
+            git(path, &["checkout", "-q", "--detach", &base_commit_id.to_string()])?;
+            let pending = perform(
+                &repo,
+                &graph,
+                Edit::Replace {
+                    target: middle_commit_id,
+                    commit: middle,
+                },
+                Signature::InvalidateExisting,
+                Tree::LeaveAsIsAndMark,
+            )?
+            .complete()?;
+            let pending_tip_commit_id = pending.map(old_tip_commit_id).context("the pending tip remains")?;
+            git(path, &["checkout", "-q", "main"])?;
+            std::fs::write(path.join("tip"), b"staged\n")?;
+            git(path, &["add", "tip"])?;
+            std::fs::write(path.join("tip"), b"unstaged\n")?;
+            std::fs::write(path.join("untracked"), b"untracked\n")?;
+            let before = gix_testtools::repository::snapshot(path)?;
+            if refuse_publication {
+                std::fs::write(repo.git_dir().join("refs/patches/tip.lock"), b"publication contention")?;
+            }
+            let old_stash_name = super::super::stash::reference(pending_tip_commit_id)?;
+            let graph = super::super::loaded_graph(&repo)?;
+            let result = perform(
+                &repo,
+                &graph,
+                Edit::Repeat {
+                    base: pending_tip_commit_id,
+                    checkout: pending_tip_commit_id,
+                    stash_before_persist: Some(old_stash_name.clone()),
+                },
+                Signature::RedoIfNeeded,
+                Tree::CherryPick,
+            );
+            if refuse_publication {
+                assert!(result.is_err(), "the locked patch ref prevents publishing the replay");
+                assert_eq!(
+                    gix_testtools::repository::snapshot(path)?,
+                    before,
+                    "a failed publication restores the departure index, worktree, and references"
+                );
+                continue;
+            }
+
+            let outcome = result?.complete()?;
+            let rewritten_tip_commit_id = outcome
+                .map(pending_tip_commit_id)
+                .context("replaying retains the pending tip")?;
+            assert_eq!(
+                repo.head_id()?,
+                rewritten_tip_commit_id,
+                "replay updates the checked-out tip"
+            );
+            assert!(
+                !path.join("middle").exists(),
+                "replay updates the worktree to its rewritten tree"
+            );
+            assert!(
+                git(path, &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty(),
+                "stashing precedes the pending checkout's index and worktree transition"
+            );
+            let saved = outcome
+                .departure_stash
+                .context("the replay returns its departure stash")?;
+            assert_eq!(
+                saved.name,
+                super::super::stash::reference(rewritten_tip_commit_id)?,
+                "the saved handle follows the rewritten departure"
+            );
+            assert!(
+                repo.try_find_reference(old_stash_name.as_ref())?.is_none(),
+                "the predecessor no longer owns the saved worktree state"
+            );
+            super::super::stash::apply(repo.git_dir(), false, path, saved)?;
+            assert_eq!(
+                git(path, &["show", ":tip"])?,
+                b"staged\n",
+                "the index split is preserved"
+            );
+            assert_eq!(
+                std::fs::read(path.join("tip"))?,
+                b"unstaged\n",
+                "unstaged changes are retained"
+            );
+            assert_eq!(
+                std::fs::read(path.join("untracked"))?,
+                b"untracked\n",
+                "untracked files are retained"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn removes_a_middle_commit_by_cherry_picking_its_descendant() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
@@ -4112,6 +4267,7 @@ mod tests {
             Edit::Repeat {
                 base: tip,
                 checkout: tip,
+                stash_before_persist: None,
             },
             Signature::RedoIfNeeded,
             Tree::CherryPick,
@@ -4219,6 +4375,7 @@ mod tests {
             Edit::Repeat {
                 base: legacy_tip,
                 checkout: legacy_tip,
+                stash_before_persist: None,
             },
             Signature::RedoIfNeeded,
             Tree::CherryPick,

@@ -18,8 +18,13 @@ use gix::{
 
 use crate::{history, open_repository};
 
-#[cfg(test)]
 use super::stash::SavedStash;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Options {
+    pub include_worktrees: bool,
+    pub stash: bool,
+}
 
 pub(crate) enum Perform {
     Complete {
@@ -591,6 +596,7 @@ pub(crate) fn attach_reporting(
                 super::rebase::Edit::Repeat {
                     base,
                     checkout: head_id,
+                    stash_before_persist: None,
                 },
                 super::rebase::Signature::RedoIfNeeded,
                 super::rebase::Tree::LeaveAsIsAndMark,
@@ -735,7 +741,7 @@ pub(crate) fn perform(
     graph: &history::HistoryGraph,
     review_roots: &[ObjectId],
     revisions: &[OsString],
-    include_worktrees: bool,
+    options: Options,
 ) -> Result<Perform> {
     perform_reporting_rebased(
         repository_path,
@@ -744,7 +750,7 @@ pub(crate) fn perform(
         graph,
         review_roots,
         revisions,
-        include_worktrees,
+        options,
         |_| {},
     )
 }
@@ -761,18 +767,33 @@ pub(crate) fn perform_reporting_rebased(
     graph: &history::HistoryGraph,
     review_roots: &[ObjectId],
     revisions: &[OsString],
-    include_worktrees: bool,
+    options: Options,
     mut report: impl FnMut(ObjectId),
 ) -> Result<Perform> {
+    let Options {
+        include_worktrees,
+        stash,
+    } = options;
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository for time-travel")?;
-    repository.workdir().context("time-travel requires a worktree")?;
+    let workdir = repository
+        .workdir()
+        .context("time-travel requires a worktree")?
+        .to_owned();
     let head = repository.head().context("could not read HEAD before time-travel")?;
     let Some(mut head_id) = head.id().map(gix::Id::detach) else {
         anyhow::bail!("cannot time-travel from an unborn HEAD");
     };
     let head_was_detached = head.is_detached();
     drop(head);
+    if stash && selected == head_id {
+        return Ok(Perform::Complete {
+            notice: None,
+            selected,
+            ref_rewrites: Vec::new(),
+            ref_changes: Vec::new(),
+        });
+    }
     if repository
         .index_or_empty()
         .context("could not inspect the index before time-travel")?
@@ -786,155 +807,194 @@ pub(crate) fn perform_reporting_rebased(
     let destination_review = review_tree(&repository, graph, review_roots, selected)?;
     let crosses_review_boundary =
         source_review.as_ref().map(|review| review.root) != destination_review.as_ref().map(|review| review.root);
-    let mut completed_graph = None;
-    let mut remerge_notice = None;
-    let mut original_ids = HashMap::new();
-    let mut ref_rewrites = Vec::new();
+    let mut stash_name = match source_review.as_ref().filter(|_| crosses_review_boundary) {
+        Some(review) => Some(super::review::stash_reference(review.reference.as_bstr())?),
+        None if stash => Some(super::stash::reference(head_id)?),
+        None => None,
+    };
+    let commit_stash = stash_name
+        .as_ref()
+        .is_some_and(|name| name.as_bstr().starts_with(history::STASH_PREFIX));
+    // Keep the creation name as well: rollback reverses any later association rewrites.
+    let mut saved: Option<(SavedStash, gix::refs::FullName)> = None;
     let mut ref_changes = Vec::new();
-    let mut pending = refresh_base(graph, selected).or(pending_base(&repository, selected)?);
-    while let Some(base) = pending {
-        let graph = completed_graph.as_ref().unwrap_or(graph);
-        let mut rebased = Vec::new();
-        let outcome = super::rebase::perform_reporting_rebased(
-            &repository,
-            graph,
-            super::rebase::Edit::Repeat {
-                base,
-                checkout: selected,
-            },
-            super::rebase::Signature::RedoIfNeeded,
-            super::rebase::Tree::CherryPick,
-            |id| {
-                let original = original_ids.get(&id).copied().unwrap_or(id);
-                rebased.push((id, original));
-                if graph.is_ancestor(id, selected) {
-                    report(original);
+    let result = (|| -> Result<Perform> {
+        let mut completed_graph = None;
+        let mut remerge_notice = None;
+        let mut original_ids = HashMap::new();
+        let mut ref_rewrites = Vec::new();
+        let mut pending = refresh_base(graph, selected).or(pending_base(&repository, selected)?);
+        while let Some(base) = pending {
+            let graph = completed_graph.as_ref().unwrap_or(graph);
+            let mut rebased = Vec::new();
+            let outcome = super::rebase::perform_reporting_rebased(
+                &repository,
+                graph,
+                super::rebase::Edit::Repeat {
+                    base,
+                    checkout: selected,
+                    stash_before_persist: stash_name.clone(),
+                },
+                super::rebase::Signature::RedoIfNeeded,
+                super::rebase::Tree::CherryPick,
+                |id| {
+                    let original = original_ids.get(&id).copied().unwrap_or(id);
+                    rebased.push((id, original));
+                    if graph.is_ancestor(id, selected) {
+                        report(original);
+                    }
+                },
+            )?;
+            let mut outcome = match outcome {
+                super::rebase::Perform::Complete(outcome) => outcome,
+                super::rebase::Perform::Conflict(rebase) => {
+                    return Ok(Perform::Conflict(Conflict {
+                        rebase,
+                        revisions: revisions.to_vec(),
+                        include_worktrees,
+                        ref_rewrites,
+                        ref_changes: std::mem::take(&mut ref_changes),
+                    }));
                 }
+            };
+            ref_changes.extend(outcome.ref_changes.iter().cloned());
+            if let Some(departure_stash) = outcome.departure_stash.take() {
+                saved = Some((
+                    departure_stash,
+                    stash_name
+                        .clone()
+                        .context("a saved departure has a requested stash reference")?,
+                ));
+            } else if let Some((saved, _)) = &mut saved {
+                super::stash::remap(saved, |commit_id| outcome.map(commit_id))?;
+            }
+            ref_rewrites.extend(outcome.ref_rewrites.iter().cloned());
+            if let Some(notice) = &outcome.notice {
+                append_notice(&mut remerge_notice, notice.clone());
+            }
+            for &(old, original) in &rebased {
+                if let Some(new) = outcome.map(old) {
+                    original_ids.insert(new, original);
+                }
+            }
+            selected = outcome
+                .map(selected)
+                .context("the time-travel destination disappeared while completing its rebase")?;
+            head_id = outcome
+                .map(head_id)
+                .context("HEAD disappeared while completing its rebase")?;
+            if commit_stash {
+                stash_name = Some(super::stash::reference(head_id)?);
+            }
+            repository = open_repository(repository_path, bare, false)
+                .context("could not reopen repository after completing a pending rebase")?;
+            pending = pending_base(&repository, selected)?;
+            if pending.is_some() {
+                let mut ids: Vec<_> = graph
+                    .edit_commit_ids()
+                    .into_iter()
+                    .filter_map(|id| outcome.map(id))
+                    .collect();
+                ids.extend(rebased.into_iter().filter_map(|(id, _)| outcome.map(id)));
+                let mut next_graph = history::HistoryGraph::for_commits(&repository, &ids)?;
+                next_graph.bounded_history = graph
+                    .bounded_history
+                    .as_ref()
+                    .map(|ids| ids.iter().filter_map(|id| outcome.map(*id)).collect());
+                completed_graph = Some(next_graph);
+            }
+        }
+        drop(repository);
+
+        if saved.is_none()
+            && let Some(name) = stash_name
+        {
+            saved =
+                super::stash::save_if_dirty(repository_path, bare, &workdir, name.clone())?.map(|saved| (saved, name));
+            if saved.is_some() {
+                append_notice(&mut remerge_notice, "stashed departure changes".into());
+            }
+        }
+        let (mut notice, mut checkout_changes) = move_head_to_reporting(
+            repository_path,
+            bare,
+            selected,
+            None,
+            revisions,
+            include_worktrees,
+            |actual| {
+                if head_was_detached { Some(head_id) } else { Some(actual) }
             },
         )?;
-        let outcome = match outcome {
-            super::rebase::Perform::Complete(outcome) => outcome,
-            super::rebase::Perform::Conflict(rebase) => {
-                return Ok(Perform::Conflict(Conflict {
-                    rebase,
-                    revisions: revisions.to_vec(),
-                    include_worktrees,
-                    ref_rewrites,
-                    ref_changes,
-                }));
+        ref_changes.append(&mut checkout_changes);
+        if let Some(remerge_notice) = remerge_notice {
+            append_notice(&mut notice, remerge_notice);
+        }
+        if let Some((saved, _)) = &saved
+            && let Some(warning) = &saved.warning
+        {
+            append_notice(&mut notice, warning.clone());
+        }
+        if crosses_review_boundary && let Some(review) = destination_review {
+            match find_review_stash(repository_path, bare, &review) {
+                Ok(Some(stash)) => {
+                    match apply_stash_reporting(repository_path, bare, &workdir, stash, &mut ref_changes) {
+                        Ok((message, _)) => append_notice(&mut notice, message),
+                        Err(err) => append_notice(&mut notice, format!("review stash remains: {err:#}")),
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => append_notice(&mut notice, format!("could not inspect the review stash: {err:#}")),
             }
-        };
-        ref_rewrites.extend(outcome.ref_rewrites.iter().cloned());
-        if let Some(notice) = &outcome.notice {
-            append_notice(&mut remerge_notice, notice.clone());
         }
-        ref_changes.extend(outcome.ref_changes.iter().cloned());
-        for &(old, original) in &rebased {
-            if let Some(new) = outcome.map(old) {
-                original_ids.insert(new, original);
-            }
-        }
-        selected = outcome
-            .map(selected)
-            .context("the time-travel destination disappeared while completing its rebase")?;
-        head_id = outcome
-            .map(head_id)
-            .context("HEAD disappeared while completing its rebase")?;
-        repository = open_repository(repository_path, bare, false)
-            .context("could not reopen repository after completing a pending rebase")?;
-        pending = pending_base(&repository, selected)?;
-        if pending.is_some() {
-            let mut ids: Vec<_> = graph
-                .edit_commit_ids()
-                .into_iter()
-                .filter_map(|id| outcome.map(id))
-                .collect();
-            ids.extend(rebased.into_iter().filter_map(|(id, _)| outcome.map(id)));
-            let mut next_graph = history::HistoryGraph::for_commits(&repository, &ids)?;
-            next_graph.bounded_history = graph
-                .bounded_history
-                .as_ref()
-                .map(|ids| ids.iter().filter_map(|id| outcome.map(*id)).collect());
-            completed_graph = Some(next_graph);
-        }
-    }
-    let workdir = repository
-        .workdir()
-        .context("time-travel requires a worktree")?
-        .to_owned();
-    drop(repository);
-
-    let saved = if crosses_review_boundary {
-        source_review
-            .as_ref()
-            .map(|review| save_review_stash(repository_path, bare, &workdir, review))
-            .transpose()?
-            .flatten()
-    } else {
-        None
-    };
-    let moved = move_head_to_reporting(
-        repository_path,
-        bare,
-        selected,
-        None,
-        revisions,
-        include_worktrees,
-        |actual| {
-            if head_was_detached { Some(head_id) } else { Some(actual) }
-        },
-    );
-    let (mut notice, mut checkout_changes) = match moved {
-        Ok(outcome) => outcome,
-        Err(err) => {
-            let err = match saved {
-                Some(stash) => match apply_review_stash(repository_path, bare, &workdir, stash) {
-                    Ok(notice) => err.context(format!("source review stash restoration: {notice}")),
-                    Err(restore) => err.context(format!("source review stash could not be restored: {restore:#}")),
-                },
-                None => err,
-            };
-            let rollback = open_repository(repository_path, bare, false)
-                .and_then(|repo| super::undo::rollback_with_worktrees(&repo, &ref_changes));
-            return Err(match rollback {
-                Ok(()) => err,
-                Err(rollback) => err.context(format!("time-travel rollback failed: {rollback:#}")),
-            });
-        }
-    };
-    ref_changes.append(&mut checkout_changes);
-    if let Some(remerge_notice) = remerge_notice {
-        append_notice(&mut notice, remerge_notice);
-    }
-    if let Some(saved) = saved
-        && let Some(warning) = saved.warning
-    {
-        append_notice(&mut notice, warning);
-    }
-    if crosses_review_boundary && let Some(review) = destination_review {
-        match find_review_stash(repository_path, bare, &review) {
-            Ok(Some(stash)) => match apply_review_stash(repository_path, bare, &workdir, stash) {
-                Ok(message) => append_notice(&mut notice, message),
-                Err(err) => append_notice(&mut notice, format!("review stash remains: {err:#}")),
+        match super::stash::reference(selected).and_then(|name| super::stash::find(repository_path, bare, name)) {
+            Ok(Some(stash)) => match apply_stash_reporting(repository_path, bare, &workdir, stash, &mut ref_changes) {
+                Ok((message, _)) => append_notice(&mut notice, message),
+                Err(err) => append_notice(&mut notice, format!("commit stash remains: {err:#}")),
             },
             Ok(None) => {}
-            Err(err) => append_notice(&mut notice, format!("could not inspect the review stash: {err:#}")),
+            Err(err) => append_notice(&mut notice, format!("could not inspect the commit stash: {err:#}")),
+        }
+        Ok(Perform::Complete {
+            notice,
+            selected,
+            ref_rewrites,
+            ref_changes: std::mem::take(&mut ref_changes),
+        })
+    })();
+    match result {
+        Ok(Perform::Conflict(mut conflict)) => {
+            // Earlier replay steps may have published; restore at their mapped departure before waiting.
+            if let Some((saved, _)) = saved {
+                let name = saved.name.clone();
+                let (notice, consumed) =
+                    apply_stash_reporting(repository_path, bare, &workdir, saved, &mut conflict.ref_changes)
+                        .with_context(|| {
+                            format!("could not restore departure stash {name} before showing the conflict")
+                        })?;
+                anyhow::ensure!(consumed, "{notice}");
+            }
+            Ok(Perform::Conflict(conflict))
+        }
+        Ok(complete) => Ok(complete),
+        Err(err) => {
+            if let Err(rollback) = open_repository(repository_path, bare, false)
+                .and_then(|repo| super::undo::rollback_with_worktrees(&repo, &ref_changes))
+            {
+                let recovery = saved.as_ref().map_or(String::new(), |(saved, _)| {
+                    format!("; departure stash remains at {}", saved.name)
+                });
+                return Err(err.context(format!("time-travel rollback failed: {rollback:#}{recovery}")));
+            }
+            Err(match saved {
+                Some((mut saved, original_name)) => {
+                    saved.name = original_name;
+                    super::stash::restore_after_failure(repository_path, bare, &workdir, saved, err)
+                }
+                None => err,
+            })
         }
     }
-    match super::stash::reference(selected).and_then(|name| super::stash::find(repository_path, bare, name)) {
-        Ok(Some(stash)) => match super::stash::apply(repository_path, bare, &workdir, stash) {
-            Ok(message) => append_notice(&mut notice, message),
-            Err(err) => append_notice(&mut notice, format!("commit stash remains: {err:#}")),
-        },
-        Ok(None) => {}
-        Err(err) => append_notice(&mut notice, format!("could not inspect the commit stash: {err:#}")),
-    }
-    Ok(Perform::Complete {
-        notice,
-        selected,
-        ref_rewrites,
-        ref_changes,
-    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -961,29 +1021,6 @@ fn review_tree(
     Ok(Some(ReviewTree { root, reference }))
 }
 
-#[tracing::instrument(skip_all, fields(review = %review.reference))]
-fn save_review_stash(
-    repository_path: &Path,
-    bare: bool,
-    workdir: &Path,
-    review: &ReviewTree,
-) -> Result<Option<super::stash::SavedStash>> {
-    if !super::review::is_dirty(workdir)? {
-        return Ok(None);
-    }
-    let name = super::review::stash_reference(review.reference.as_bstr())?;
-    super::stash::save(
-        repository_path,
-        bare,
-        workdir,
-        name,
-        format!("tix review {}", review.reference.shorten()),
-        "tix review auto-stash",
-        "review state",
-    )
-    .map(Some)
-}
-
 fn find_review_stash(
     repository_path: &Path,
     bare: bool,
@@ -994,13 +1031,28 @@ fn find_review_stash(
 }
 
 #[tracing::instrument(skip_all, fields(stash = %stash.name))]
-fn apply_review_stash(
+fn apply_stash_reporting(
     repository_path: &Path,
     bare: bool,
     workdir: &Path,
     stash: super::stash::SavedStash,
-) -> Result<String> {
-    super::stash::apply(repository_path, bare, workdir, stash)
+    ref_changes: &mut Vec<super::undo::RefChange>,
+) -> Result<(String, bool)> {
+    let name = stash.name.clone();
+    let target = match &stash.target {
+        Target::Object(commit_id) => super::undo::State::Object(*commit_id),
+        Target::Symbolic(name) => super::undo::State::Symbolic(name.clone()),
+    };
+    let notice = super::stash::apply(repository_path, bare, workdir, stash)?;
+    let consumed = super::stash::find(repository_path, bare, name)?.is_none();
+    if consumed {
+        // Stash save/restore is outside undo; a consumed association can no longer be moved back.
+        ref_changes.retain(|change| {
+            !(change.name.as_bstr().starts_with(history::STASH_PREFIX)
+                && (change.before == target || change.after == target))
+        });
+    }
+    Ok((notice, consumed))
 }
 
 pub(super) fn append_notice(notice: &mut Option<String>, addition: String) {
@@ -1616,7 +1668,16 @@ mod tests {
         );
         drop(repo);
 
-        perform(&repository_path, false, child, &graph, &[started.commit], &[], false)?.complete()?;
+        perform(
+            &repository_path,
+            false,
+            child,
+            &graph,
+            &[started.commit],
+            &[],
+            Default::default(),
+        )?
+        .complete()?;
         assert_eq!(
             git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?,
             before,
@@ -1630,7 +1691,16 @@ mod tests {
             "no stash is created inside the review tree"
         );
 
-        perform(&repository_path, false, tip, &graph, &[started.commit], &[], false)?.complete()?;
+        perform(
+            &repository_path,
+            false,
+            tip,
+            &graph,
+            &[started.commit],
+            &[],
+            Default::default(),
+        )?
+        .complete()?;
         let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(
             repo.head_id()?,
@@ -1657,7 +1727,16 @@ mod tests {
         );
         drop(repo);
 
-        perform(&repository_path, false, child, &graph, &[started.commit], &[], false)?.complete()?;
+        perform(
+            &repository_path,
+            false,
+            child,
+            &graph,
+            &[started.commit],
+            &[],
+            Default::default(),
+        )?
+        .complete()?;
         assert_eq!(
             git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?,
             before,
@@ -1681,7 +1760,7 @@ mod tests {
             fixture.path(),
             &["-c", "commit.gpgSign=false", "commit", "-qam", "destination"],
         )?;
-        let notice = apply_review_stash(&repository_path, false, fixture.path(), stash.clone())?;
+        let notice = super::super::stash::apply(&repository_path, false, fixture.path(), stash.clone())?;
         assert!(notice.contains("needs attention"), "the conflict is reported: {notice}");
         let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(
@@ -1699,7 +1778,7 @@ mod tests {
 
         let (fixture, repository_path, stash) = review_stash_fixture()?;
         std::fs::write(fixture.path().join(".git/index.lock"), "locked")?;
-        let notice = apply_review_stash(&repository_path, false, fixture.path(), stash.clone())?;
+        let notice = super::super::stash::apply(&repository_path, false, fixture.path(), stash.clone())?;
         assert!(
             notice.contains("needs attention"),
             "the fatal apply failure is reported: {notice}"
@@ -1775,7 +1854,7 @@ mod tests {
         assert!(!contains(&repository, main, root));
         drop(repository);
 
-        let notice = perform(&repository_path, false, root, &graph, &[], &[], false)?
+        let notice = perform(&repository_path, false, root, &graph, &[], &[], Default::default())?
             .complete()?
             .context("time-travel changed HEAD")?;
         assert!(notice.contains("time-travelled"), "{notice}");
@@ -1801,7 +1880,7 @@ mod tests {
 
         let middle = repository.rev_parse_single("main~1")?.detach();
         drop(repository);
-        perform(&repository_path, false, middle, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, middle, &graph, &[], &[], Default::default())?.complete()?;
         let repository = crate::test_repository::open(fixture.path())?;
         assert!(repository.head()?.is_detached(), "further travel remains detached");
         let pins = history::all_pins(&repository)?;
@@ -1821,7 +1900,7 @@ mod tests {
             .split(|byte| *byte == b'\n')
             .filter(|line| !line.is_empty())
             .count();
-        let returned = perform(&repository_path, false, topic, &graph, &[], &[], false)?;
+        let returned = perform(&repository_path, false, topic, &graph, &[], &[], Default::default())?;
         let Perform::Complete { ref_changes, .. } = returned else {
             return Err("returning through the HEAD pin must complete".into());
         };
@@ -1870,12 +1949,12 @@ mod tests {
             .status()?;
         assert!(detach.success());
         let graph = loaded_graph(&crate::test_repository::open(fixture.path())?, &[])?;
-        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, root, &graph, &[], &[], Default::default())?.complete()?;
         let pin = history::all_pins(&crate::test_repository::open(fixture.path())?)?
             .pop()
             .context("direct pin is present")?;
         assert_eq!(pin.target.try_id().map(ToOwned::to_owned), Some(main));
-        perform(&repository_path, false, main, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, main, &graph, &[], &[], Default::default())?.complete()?;
         let repository = crate::test_repository::open(fixture.path())?;
         assert!(
             repository.head()?.is_detached(),
@@ -1906,7 +1985,7 @@ mod tests {
         let graph = loaded_graph(&repository, &[])?;
         drop(repository);
 
-        let notice = perform(&repository_path, false, selected, &graph, &[], &[], false)?
+        let notice = perform(&repository_path, false, selected, &graph, &[], &[], Default::default())?
             .complete()?
             .context("time-travel changes HEAD")?;
         assert!(
@@ -1938,7 +2017,7 @@ mod tests {
         let graph = loaded_graph(&repository, &[])?;
         drop(repository);
 
-        perform(&repository_path, false, middle, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, middle, &graph, &[], &[], Default::default())?.complete()?;
         std::fs::write(fixture.path().join("root"), "dirty root\n")?;
         let before = gix_testtools::repository::snapshot(fixture.path())?;
 
@@ -1978,7 +2057,7 @@ mod tests {
         let graph = loaded_graph(&repository, &[])?;
         drop(repository);
 
-        perform(&repository_path, false, middle, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, middle, &graph, &[], &[], Default::default())?.complete()?;
         attach(&repository_path, false, &["keep".into()], false)?;
         let repository = crate::test_repository::open(fixture.path())?;
         assert!(
@@ -2000,7 +2079,7 @@ mod tests {
         let graph = loaded_graph(&repository, &[])?;
         drop(repository);
 
-        perform(&repository_path, false, middle, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, middle, &graph, &[], &[], Default::default())?.complete()?;
         let linked = fixture.path().join("main-wt");
         let worktree = Command::new("git")
             .arg("-C")
@@ -2050,7 +2129,7 @@ mod tests {
         let graph = loaded_graph(&repository, &[])?;
         drop(repository);
 
-        perform(&git_dir, false, root, &graph, &[], &[], false)?.complete()?;
+        perform(&git_dir, false, root, &graph, &[], &[], Default::default())?.complete()?;
         let repository = open_repository(&git_dir, false, false)?;
         assert!(
             repository.head()?.is_detached(),
@@ -2088,7 +2167,7 @@ mod tests {
         let graph = loaded_graph(&repository, &[])?;
         drop(repository);
 
-        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, root, &graph, &[], &[], Default::default())?.complete()?;
         move_head_to(&repository_path, false, topic, Some(&topic_ref), &[], false, Some)?;
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(repository.head_name()?.expect("HEAD is attached"), topic_ref);
@@ -2109,7 +2188,7 @@ mod tests {
         let graph = loaded_graph(&repository, &[])?;
         drop(repository);
 
-        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, root, &graph, &[], &[], Default::default())?.complete()?;
         let linked = fixture.path().join("main-wt");
         let worktree = Command::new("git")
             .arg("-C")
@@ -2120,7 +2199,7 @@ mod tests {
             .status()?;
         assert!(worktree.success(), "another worktree checks out the remembered branch");
 
-        let notice = perform(&repository_path, false, main, &graph, &[], &[], false)?
+        let notice = perform(&repository_path, false, main, &graph, &[], &[], Default::default())?
             .complete()?
             .context("travel reports the failed reattachment")?;
         assert!(notice.contains("could not reattach HEAD to main"), "{notice}");
@@ -2155,13 +2234,13 @@ mod tests {
 
         std::fs::write(fixture.path().join("manual-stash"), "saved\n")?;
         super::super::stash::save_manual(&repository_path, false, head)?;
-        perform(&repository_path, false, parent, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, parent, &graph, &[], &[], Default::default())?.complete()?;
         assert!(
             !fixture.path().join("manual-stash").exists(),
             "leaving the stashed commit keeps its worktree clean"
         );
 
-        perform(&repository_path, false, head, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, head, &graph, &[], &[], Default::default())?.complete()?;
         assert_eq!(std::fs::read(fixture.path().join("manual-stash"))?, b"saved\n");
         assert!(
             crate::test_repository::open(fixture.path())?
@@ -2169,6 +2248,296 @@ mod tests {
                 .is_none(),
             "returning consumes the manual stash association"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn stash_travel_to_head_does_not_detach_or_save_changes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let head_commit_id = repository.head_id()?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        std::fs::write(fixture.path().join("base"), "local changes\n")?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        perform(
+            repository.git_dir(),
+            false,
+            head_commit_id,
+            &graph,
+            &[],
+            &[],
+            Options {
+                stash: true,
+                ..Default::default()
+            },
+        )?
+        .complete()?;
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "stash travel at HEAD leaves files, attachment, and stash refs unchanged"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stash_travel_preserves_an_existing_departure_stash() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let head_commit_id = repository.head_id()?.detach();
+        let parent_commit_id = repository.rev_parse_single("HEAD~1")?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        std::fs::write(fixture.path().join("untracked"), "already saved\n")?;
+        super::super::stash::save_manual(repository.git_dir(), false, head_commit_id)?;
+        std::fs::write(fixture.path().join("tip"), "new changes\n")?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let error = perform(
+            repository.git_dir(),
+            false,
+            parent_commit_id,
+            &graph,
+            &[],
+            &[],
+            Options {
+                stash: true,
+                ..Default::default()
+            },
+        )
+        .and_then(Perform::complete)
+        .expect_err("travel cannot replace an existing departure stash");
+        assert!(
+            format!("{error:#}").contains("already saved"),
+            "the retained stash is explained: {error:#}"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "rejecting a duplicate stash changes neither files nor refs"
+        );
+        git(fixture.path(), &["restore", "tip"])?;
+        perform(
+            repository.git_dir(),
+            false,
+            parent_commit_id,
+            &graph,
+            &[],
+            &[],
+            Options {
+                stash: true,
+                ..Default::default()
+            },
+        )?
+        .complete()?;
+        assert!(
+            repository
+                .try_find_reference(super::super::stash::reference(head_commit_id)?.as_ref())?
+                .is_some(),
+            "a clean departure retains an existing stash"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stash_travel_within_a_review_saves_the_commit_and_exits_with_review_state() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let tip_commit_id = repository.head_id()?.detach();
+        let base_commit_id = repository.rev_parse_single("HEAD~1")?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        let repository_path = repository.git_dir().to_owned();
+        drop(repository);
+        let review = super::super::review::start(fixture.path(), false, &graph, tip_commit_id, base_commit_id)?;
+        let child_commit_id = ObjectId::from_hex(
+            git(
+                fixture.path(),
+                &[
+                    "commit-tree",
+                    &format!("{}^{{tree}}", review.commit),
+                    "-p",
+                    &review.commit.to_string(),
+                    "-m",
+                    "review child",
+                ],
+            )?
+            .trim(),
+        )?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        create_pin(
+            &repository,
+            Target::Object(child_commit_id),
+            child_commit_id,
+            "test child",
+        )?;
+        let graph = loaded_graph(&repository, &[])?;
+        let before = git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?;
+        assert!(!before.is_empty(), "a review begins with its unstaged delta");
+        let options = Options {
+            stash: true,
+            ..Default::default()
+        };
+        perform(
+            &repository_path,
+            false,
+            child_commit_id,
+            &graph,
+            &[review.commit],
+            &[],
+            options,
+        )?
+        .complete()?;
+        let commit_stash = super::super::stash::reference(review.commit)?;
+        let review_stash = super::super::review::stash_reference(review.reference.as_bstr())?;
+        assert!(
+            repository.try_find_reference(commit_stash.as_ref())?.is_some(),
+            "within a review the exact departure owns the stash"
+        );
+        assert!(
+            repository.try_find_reference(review_stash.as_ref())?.is_none(),
+            "within-review travel does not save tree-wide state"
+        );
+        assert!(
+            git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty(),
+            "within-review stash travel leaves a clean destination"
+        );
+        perform(
+            &repository_path,
+            false,
+            review.commit,
+            &graph,
+            &[review.commit],
+            &[],
+            options,
+        )?
+        .complete()?;
+        assert_eq!(
+            git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?,
+            before,
+            "return restores the original review delta"
+        );
+        perform(
+            &repository_path,
+            false,
+            tip_commit_id,
+            &graph,
+            &[review.commit],
+            &[],
+            options,
+        )?
+        .complete()?;
+        assert!(
+            repository.try_find_reference(review_stash.as_ref())?.is_some(),
+            "crossing out still saves tree-wide review state"
+        );
+        assert!(
+            repository.try_find_reference(commit_stash.as_ref())?.is_none(),
+            "crossing out does not create a second commit stash"
+        );
+        perform(
+            &repository_path,
+            false,
+            child_commit_id,
+            &graph,
+            &[review.commit],
+            &[],
+            options,
+        )?
+        .complete()?;
+        assert_eq!(
+            git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?,
+            before,
+            "returning to another review descendant restores tree-wide state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_stash_travel_restores_the_departure_after_pending_replay() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let root_commit_id = repository.rev_parse_single("HEAD~2")?.detach();
+        drop(repository);
+        git(
+            fixture.path(),
+            &["checkout", "-q", "--detach", &root_commit_id.to_string()],
+        )?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repository)?;
+        super::super::head::perform(repository, &graph, super::super::head::Kind::Spill, None)?
+            .context("spilling the root makes its descendants pending")?;
+        git(fixture.path(), &["clean", "-fd"])?;
+        git(fixture.path(), &["checkout", "-q", "--detach", "main~1"])?;
+        let linked = gix_testtools::tempfile::tempdir()?;
+        git(
+            fixture.path(),
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.path().to_str().context("temporary path is UTF-8")?,
+                "main",
+            ],
+        )?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let head_commit_id = repository.head_id()?.detach();
+        let destination_commit_id = repository.rev_parse_single("main")?.detach();
+        create_pin(
+            &repository,
+            Target::Symbolic("refs/heads/main".try_into()?),
+            destination_commit_id,
+            "test destination",
+        )?;
+        let graph = super::super::loaded_graph(&repository)?;
+        let refs_before = git(fixture.path(), &["show-ref"])?;
+        drop(repository);
+        std::fs::write(fixture.path().join("base"), "staged\n")?;
+        git(fixture.path(), &["add", "base"])?;
+        std::fs::write(fixture.path().join("base"), "unstaged\n")?;
+        std::fs::write(fixture.path().join("untracked"), "saved\n")?;
+        let status_before = git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?;
+        let index_before = git(fixture.path(), &["diff", "--cached"])?;
+
+        let error = perform(
+            &repository_path,
+            false,
+            destination_commit_id,
+            &graph,
+            &[],
+            &[],
+            Options {
+                stash: true,
+                ..Default::default()
+            },
+        )
+        .and_then(Perform::complete)
+        .expect_err("the destination branch is checked out by another worktree");
+        assert!(
+            format!("{error:#}").contains("already"),
+            "checkout failure is reported: {error:#}"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            repository.head_id()?,
+            head_commit_id,
+            "rollback restores the pending departure before its dirty files"
+        );
+        assert_eq!(
+            git(fixture.path(), &["show-ref"])?,
+            refs_before,
+            "rollback restores pins, branches, and stash associations"
+        );
+        assert_eq!(
+            git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?,
+            status_before,
+            "all departure changes are restored"
+        );
+        assert_eq!(
+            git(fixture.path(), &["diff", "--cached"])?,
+            index_before,
+            "the original staging is restored"
+        );
+        assert_eq!(std::fs::read(fixture.path().join("base"))?, b"unstaged\n");
+        assert_eq!(std::fs::read(fixture.path().join("untracked"))?, b"saved\n");
         Ok(())
     }
 
@@ -2308,7 +2677,7 @@ mod tests {
                 .success()
         );
 
-        perform(&repository_path, false, topic, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, topic, &graph, &[], &[], Default::default())?.complete()?;
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(repository.head_id()?, topic);
         let pins = history::all_pins(&repository)?;
@@ -2361,7 +2730,16 @@ mod tests {
         let graph = loaded_graph(&repository, &revisions)?;
         drop(repository);
 
-        perform(&repository_path, false, root, &graph, &[], &revisions, false)?.complete()?;
+        perform(
+            &repository_path,
+            false,
+            root,
+            &graph,
+            &[],
+            &revisions,
+            Default::default(),
+        )?
+        .complete()?;
         let pins = history::all_pins(&crate::test_repository::open(fixture.path())?)?;
         assert_eq!(
             pins.len(),
@@ -2395,7 +2773,7 @@ mod tests {
                 .success()
         );
         std::fs::write(fixture.path().join("main"), "dirty\n")?;
-        let err = perform(&repository_path, false, root, &graph, &[], &[], false)
+        let err = perform(&repository_path, false, root, &graph, &[], &[], Default::default())
             .and_then(Perform::complete)
             .expect_err("Git rejects a conflicting checkout");
         assert!(format!("{err:#}").contains("git checkout failed"));
@@ -2423,14 +2801,55 @@ mod tests {
     }
 
     #[test]
+    fn accepting_stash_travel_rechecks_the_departure_head() -> gix_testtools::Result {
+        let (fixture, repository_path, root_commit_id, tip_commit_id, graph) = pending_conflict_fixture()?;
+        let options = Options {
+            stash: true,
+            ..Default::default()
+        };
+        std::fs::write(fixture.path().join("local"), "keep\n")?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        perform(&repository_path, false, tip_commit_id, &graph, &[], &[], options)?.complete()?;
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "stash travel at pending HEAD does not replay or stash"
+        );
+        git(
+            fixture.path(),
+            &["checkout", "-q", "--detach", &root_commit_id.to_string()],
+        )?;
+        let Perform::Conflict(conflict) = perform(&repository_path, false, tip_commit_id, &graph, &[], &[], options)?
+        else {
+            panic!("the pending destination requires a conflict preview");
+        };
+        git(fixture.path(), &["checkout", "-q", "main"])?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let error = conflict
+            .accept()
+            .expect_err("a changed HEAD must not have its files stashed under the old departure");
+        assert!(
+            format!("{error:#}").contains("current HEAD"),
+            "the changed departure is explained: {error:#}"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "rejecting stale acceptance preserves the new checkout and its changes"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn conflicting_pending_rebases_are_unobservable_until_accepted() -> gix_testtools::Result {
         let (fixture, repository_path, root, tip, graph) = pending_conflict_fixture()?;
-        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, root, &graph, &[], &[], Default::default())?.complete()?;
         let repository = crate::test_repository::open(fixture.path())?;
         let graph = super::super::loaded_graph(&repository)?;
         let before = gix_testtools::repository::snapshot(fixture.path())?;
 
-        let Perform::Conflict(conflict) = perform(&repository_path, false, tip, &graph, &[], &[], false)? else {
+        let Perform::Conflict(conflict) = perform(&repository_path, false, tip, &graph, &[], &[], Default::default())?
+        else {
             return Err("the pending rebase should suspend at its conflicting cherry-pick".into());
         };
         assert_eq!(
@@ -2489,7 +2908,7 @@ mod tests {
                 .to_string()
                 .replace("\n  \n", "\n\n")
         );
-        let err = perform(&repository_path, false, root, &graph, &[], &[], false)
+        let err = perform(&repository_path, false, root, &graph, &[], &[], Default::default())
             .and_then(Perform::complete)
             .expect_err("time-travel is disabled until the index conflict is resolved");
         assert!(format!("{err:#}").contains("unresolved index conflicts"));
@@ -2553,9 +2972,18 @@ mod tests {
         let graph = loaded_graph(&repository, &[OsString::from("main")])?;
         drop(repository);
         let mut rebased = Vec::new();
-        let outcome = perform_reporting_rebased(&repository_path, false, pending_tip, &graph, &[], &[], false, |id| {
-            rebased.push(id);
-        })?;
+        let outcome = perform_reporting_rebased(
+            &repository_path,
+            false,
+            pending_tip,
+            &graph,
+            &[],
+            &[],
+            Default::default(),
+            |id| {
+                rebased.push(id);
+            },
+        )?;
         let Perform::Complete { selected, .. } = outcome else {
             return Err("the pending rebase must complete".into());
         };
@@ -2630,7 +3058,7 @@ mod tests {
             &graph,
             &[],
             &[],
-            false,
+            Default::default(),
             |id| reported.push(id),
         )?
         .complete()?;
@@ -2709,7 +3137,16 @@ mod tests {
         let graph = super::super::loaded_graph(&repository)?;
         drop(repository);
 
-        perform(&repository_path, false, reworded_tip, &graph, &[], &[], false)?.complete()?;
+        perform(
+            &repository_path,
+            false,
+            reworded_tip,
+            &graph,
+            &[],
+            &[],
+            Default::default(),
+        )?
+        .complete()?;
         let repository = crate::test_repository::open(fixture.path())?;
         let materialized_tip = repository.head_id()?.detach();
         assert!(!super::super::rebase::is_pending(
@@ -2796,7 +3233,7 @@ mod tests {
 
         let repository = open()?;
         let graph = super::super::loaded_graph(&repository)?;
-        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
+        perform(&repository_path, false, root, &graph, &[], &[], Default::default())?.complete()?;
         let repository = open()?;
         assert_eq!(repository.find_reference("refs/heads/main")?.id(), pending_tip);
         assert!(!super::super::rebase::is_pending(
@@ -2809,9 +3246,18 @@ mod tests {
         drop(repository);
 
         let mut rebased = Vec::new();
-        perform_reporting_rebased(&repository_path, false, spilled_middle, &graph, &[], &[], false, |id| {
-            rebased.push(id);
-        })?
+        perform_reporting_rebased(
+            &repository_path,
+            false,
+            spilled_middle,
+            &graph,
+            &[],
+            &[],
+            Default::default(),
+            |id| {
+                rebased.push(id);
+            },
+        )?
         .complete()?;
         assert!(
             rebased.is_empty(),
@@ -2855,7 +3301,7 @@ mod tests {
             &graph,
             &[],
             &[],
-            false,
+            Default::default(),
             |id| rebased.push(id),
         )?
         .complete()?;

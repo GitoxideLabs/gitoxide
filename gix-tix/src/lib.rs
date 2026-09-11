@@ -4741,7 +4741,7 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("attach: {err:#}")),
                     }
                 }
-                Effect::TimeTravel(id) => {
+                Effect::TimeTravel { id, stash } => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let review_roots: Vec<_> = app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
@@ -4761,7 +4761,10 @@ fn event_loop(
                                         graph,
                                         &review_roots,
                                         &revisions,
-                                        false,
+                                        edit::time_travel::Options {
+                                            stash,
+                                            ..Default::default()
+                                        },
                                         report,
                                     )
                                 },
@@ -9236,7 +9239,8 @@ fn action_with_shortcut_groups(
         KeyCode::Home | KeyCode::Char('g') => Some(Action::First),
         KeyCode::End | KeyCode::Char('G') => Some(Action::Last),
         KeyCode::Char('R') => Some(Action::Refresh),
-        KeyCode::Char('@') => Some(Action::TimeTravel),
+        KeyCode::Char('2') if key.modifiers == KeyModifiers::NONE => Some(Action::TimeTravel { stash: true }),
+        KeyCode::Char('@') => Some(Action::TimeTravel { stash: false }),
         KeyCode::Char('m' | ']') => Some(Action::ToggleCommit),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
@@ -11687,19 +11691,26 @@ mod tests {
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE)),
-            Some(Action::TimeTravel),
-            "the terminal's direct at-sign event invokes time travel"
+            Some(Action::TimeTravel { stash: false }),
+            "the terminal's direct at-sign event carries the worktree when travelling"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::SHIFT)),
-            Some(Action::TimeTravel),
-            "terminals which preserve the base character map Shift-2 to time travel"
+            Some(Action::TimeTravel { stash: false }),
+            "terminals which preserve the base character map Shift-2 to travel with the worktree"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
-            None,
-            "an unshifted 2 has no time-travel behavior"
+            Some(Action::TimeTravel { stash: true }),
+            "an unshifted 2 stashes the worktree before travelling"
         );
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            assert_eq!(
+                action(KeyEvent::new(KeyCode::Char('2'), modifiers)),
+                None,
+                "the new stash shortcut requires a bare 2"
+            );
+        }
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
             Some(Action::Refresh),
@@ -11954,17 +11965,19 @@ mod tests {
             Some(Action::ToggleRefTree),
             "removed insertion shortcuts no longer shadow direct navigation"
         );
-        assert_eq!(
-            action_with_shortcut_groups(
-                KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE),
-                false,
-                true,
-                false,
-                false
-            ),
-            Some(Action::TimeTravel),
-            "the direct time-travel key remains available while actions are expanded"
-        );
+        for (key, stash) in [('@', false), ('2', true)] {
+            assert_eq!(
+                action_with_shortcut_groups(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    false,
+                    true,
+                    false,
+                    false
+                ),
+                Some(Action::TimeTravel { stash }),
+                "both time-travel keys remain available while actions are expanded"
+            );
+        }
         assert_eq!(
             action_with_shortcut_groups(
                 KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
@@ -12187,6 +12200,13 @@ mod tests {
             None,
             "undo is not replayed"
         );
+        for key in ['2', '@'] {
+            assert_eq!(
+                diagnostic_action(diagnostic_key(key), &app),
+                None,
+                "neither time-travel mode is replayed by read-only diagnostics"
+            );
+        }
 
         app.actions_expanded = true;
         assert_eq!(
@@ -12449,7 +12469,8 @@ mod tests {
             Action::Amend,
             Action::Spill,
             Action::Rebase,
-            Action::TimeTravel,
+            Action::TimeTravel { stash: false },
+            Action::TimeTravel { stash: true },
             Action::VerifySignatures,
         ] {
             assert!(

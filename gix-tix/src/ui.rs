@@ -1395,7 +1395,9 @@ pub(crate) fn draw_with_worktree(
     }
     if let Some(label) = time_travel {
         ordered.push(Span::raw(" · "));
-        ordered.extend(shortcut(label, '@', true));
+        ordered.extend(shortcut(label, '2', true));
+        ordered.push(Span::raw(" · "));
+        ordered.extend(shortcut("@ with worktree", '@', true));
     }
     if app.can_cycle_duplicate() {
         ordered.push(Span::raw(" · "));
@@ -1518,9 +1520,9 @@ fn time_travel_label(app: &App, decorations: &Decorations) -> Option<&'static st
         .iter()
         .any(|decoration| decoration.kind == DecorationKind::Pin)
     {
-        Some("@ return")
+        Some("2 stash & return")
     } else {
-        Some("@ travel")
+        Some("2 stash & travel")
     }
 }
 
@@ -1553,7 +1555,7 @@ fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<us
         }
     }
     if actions_visible && let Some(label) = time_travel_label(app, decorations) {
-        width += 3 + label.len();
+        width += 3 + label.len() + " · @ with worktree".chars().count();
     }
     if app.can_cycle_duplicate() {
         width += 3 + "next duplicate".len();
@@ -4947,13 +4949,25 @@ mod tests {
             "the commit actions float above their prefix"
         );
         assert!(
-            rendered_line(&terminal, 3).contains("actions · enrich · @ return · copy"),
-            "time travel stays outside the active actions prefix"
+            rendered_line(&terminal, 3).contains("actions · enrich · 2 stash & return · @ with worktree · copy"),
+            "both travel choices stay outside the active actions prefix"
         );
+        let footer = rendered_line(&terminal, 3);
+        for key in ['2', '@'] {
+            let column = footer[..footer.find(key).expect("both travel shortcuts are visible")]
+                .chars()
+                .count() as u16;
+            assert!(
+                terminal.backend().buffer()[(column, 3)]
+                    .modifier
+                    .contains(Modifier::UNDERLINED),
+                "both travel choices underline their shortcut key"
+            );
+        }
 
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
-        assert!(rendered_line(&terminal, 3).contains(" · @ travel · copy"));
+        assert!(rendered_line(&terminal, 3).contains(" · 2 stash & travel · @ with worktree · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
 
         app.ref_mode = RefMode::Default;
@@ -4971,7 +4985,7 @@ mod tests {
             "the remembered branch has its dedicated marker: {row:?}"
         );
         assert!(!row.contains("📌"), "the HEAD pin is not an ordinary pin: {row:?}");
-        assert!(rendered_line(&terminal, 3).contains(" · @ travel · copy"));
+        assert!(rendered_line(&terminal, 3).contains(" · 2 stash & travel · @ with worktree · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
 
         decorations.remove(&head);
@@ -4991,8 +5005,8 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let footer = rendered_line(&terminal, 3);
         assert!(
-            !footer.contains("@ travel") && !footer.contains("@ return"),
-            "time travel is hidden at HEAD: {footer}"
+            !footer.contains("2 stash") && !footer.contains("@ with worktree"),
+            "both travel choices are hidden at HEAD: {footer}"
         );
         Ok(())
     }

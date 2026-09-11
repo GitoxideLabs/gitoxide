@@ -129,11 +129,13 @@ without trading responsiveness for metadata that is not visible.
   seven-character commit hash is followed by its seven-character reverse-hex
   change ID. Colliding or duplicated prefixes remain visible and receive a `💥`
   gutter marker.
-- `tix travel [--materialize-conflicts] (REVSPEC | --to first|parent|child|tip)`
+- `tix travel [--stash] [--materialize-conflicts] (REVSPEC | --to first|parent|child|tip)`
   performs the same detached checkout, pending-rebase replay, stash handling,
-  and pin reconciliation as TUI time travel. Its target may also be an
-  unambiguous reverse-hex change-ID prefix from the default Tix view. `parent`
-  and `child` move one edge from `HEAD`; `first` selects its oldest reachable
+  and pin reconciliation as TUI time travel. Plain travel carries local changes;
+  `--stash` saves them at the departure commit before travelling and restores
+  them on return. Automatic review-boundary stashing applies in both modes.
+  Its target may also be an unambiguous reverse-hex change-ID prefix from the
+  default Tix view. `parent` and `child` move one edge from `HEAD`; `first` selects its oldest reachable
   root and `tip` its reachable leaf, considering only commits visible in the
   default view. Multiple direct or terminal candidates are reported with their
   commit and change IDs and must be selected with a direct `tix travel REVSPEC`.
@@ -141,8 +143,9 @@ without trading responsiveness for metadata that is not visible.
   A detached source may travel to a descendant without a pin, but travelling to
   an ancestor or unrelated commit requires an existing current-worktree pin at
   `HEAD` or a descendant. An attached source is preserved through the singleton
-  HEAD-pin rules. Replay conflicts change nothing unless explicitly
-  materialized; an accepted conflict writes the checkout and unmerged index,
+  HEAD-pin rules. A conflicting replay is published only when explicitly
+  materialized; earlier completed replay steps retain their updates.
+  An accepted conflict writes the checkout and unmerged index,
   then exits with an error so resolution cannot be mistaken for completion.
 - `tix stash` saves the index and worktree state in a gix stash associated with
   the `HEAD` commit through the same commit-stash operation as the TUI.
@@ -662,7 +665,8 @@ without trading responsiveness for metadata that is not visible.
 | `y` | Copy the selected change ID when shown, otherwise the commit ID; copy the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
-| `@` | Time-travel to the selected commit, or return through its tix pin. Terminals reporting the base key as `Shift-2` are also accepted. |
+| `2` | Stash local changes at the departure commit, then time-travel to the selected commit or return through its tix pin. |
+| `@` / `Shift-2` | Time-travel with local changes to the selected commit, or return through its tix pin. |
 | `x` | Select the next visible commit with the same change ID, wrapping at the end. |
 | `u u` / `U U` | Undo / redo one operation. The first press shows an informational confirmation prompt; the second matching press performs the operation. |
 
@@ -782,7 +786,8 @@ behavior and shortcut availability are unchanged, and direct status actions and 
 footer. The history status starts with the history position, then the `p`
 command entry and the `v` and `a` prefixes when they are addressable. Remaining history-level
 actions end at the information prefix while it is closed. An available direct
-time-travel action follows the shortcut groups, and duplicate cycling follows it when
+time-travel action follows the shortcut groups as `2 stash & travel · @ with worktree`,
+substituting `return` for `travel` at a pinned destination. Duplicate cycling follows it when
 the selected commit has duplicates, and copy follows these actions; the reference toggle immediately precedes
 the `?` group; quit is always last.
 All status lines embed and underline a shortcut character in its action label when
@@ -836,8 +841,26 @@ paging retains priority, and undo/redo still ignore key-repeat events.
 
 ### Time-travel
 
-- On a completed, focused history in a worktree repository, `@` on a non-`HEAD`
-  row runs `git checkout --detach <commit>` without forcing local changes.
+- On a completed, focused history in a worktree repository, `2` on a non-`HEAD`
+  row saves local changes before travelling; `@` and terminals reporting
+  `Shift-2` carry them through `git checkout --detach <commit>` without forcing
+  local changes. Both shortcuts have the same availability and preserve numeric
+  input precedence. Stashing travel to the current `HEAD` is a no-op; `@` can
+  still replay a pending `HEAD`.
+- Stashing travel uses the existing commit-stash namespace and includes staged,
+  unstaged, and untracked changes, preserves the ordinary Git stash stack, and
+  leaves ignored files in place. Clean departures create no stash; an existing
+  departure stash is never overwritten. Destination validation leaves the source
+  unchanged; conflict previews leave local changes at the departure. Saving
+  happens immediately before
+  checkout or replay persistence, so commit rewrites also move the departure
+  stash association. If earlier replay steps already completed, their updates
+  remain and saved changes are restored at the mapped departure before waiting;
+  consumed departure-stash rewrites are removed from the pending undo record.
+  Declining a conflict preview leaves changes at the source;
+  acceptance saves them before materializing conflicts. Failure restores the
+  original references and checkout before applying saved departure changes.
+  Failed restoration retains the complete stash and reports its recovery ref.
 - `a h` is available while `HEAD` is detached with a valid symbolic HEAD pin.
   It atomically moves the remembered local branch to the current `HEAD` commit
   and attaches `HEAD` without changing the index or worktree. The symbolic HEAD
@@ -879,7 +902,7 @@ paging retains priority, and undo/redo still ignore key-repeat events.
 - One or more worktree pins at a commit are shown as a single blue `📌`
   resource marker immediately after the hash and outside ordinary reference
   decorations. It remains visible when references are hidden, and internal pin
-  names are omitted from history rows. `@` on a pinned
+  names are omitted from history rows. Time travel to a pinned
   tip uses a local-branch pin to attach or a direct pin to detach, then removes
   that one pin. Symbolic pins for other reference namespaces are ignored and
   retained. Multiple matching checkout pins prefer local branches and then
@@ -904,9 +927,10 @@ paging retains priority, and undo/redo still ignore key-repeat events.
   preserves the selected row, refreshes history directly, and invalidates
   worktree status.
 - Active review commits define review trees containing all of their descendants.
-  Time travel within one review tree keeps ordinary checkout behavior and never
-  creates or restores a stash. Crossing out of a dirty review tree saves tracked,
-  staged, unstaged, and untracked state with Git under
+  Time travel within one review tree uses the chosen travel mode: `2` or
+  `--stash` saves changes at the departure commit, while `@` or plain CLI travel
+  carries them through ordinary checkout. Crossing out of a dirty review tree
+  always saves tracked, staged, unstaged, and untracked state with Git under
   `refs/worktree/tix/review/stashes/N`; ignored files remain untouched. Crossing
   into any commit in that review tree restores the state with `git stash apply
   --index` and removes the companion ref only after Git succeeds. A conflict or
@@ -926,9 +950,11 @@ paging retains priority, and undo/redo still ignore key-repeat events.
 - A commit stash is shown as a bright `🎁` beside any `📌`, directly after the
   hash and outside reference visibility. Time travel back to that exact commit
   restores it with `git stash apply --index` and consumes its companion ref only
-  after Git succeeds. Conflicts and other apply failures retain the complete
-  stash, just as with automatic review stashes. Manual commit stashes use the
-  same plumbing during reviews, while automatic review stashes retain their
+  after Git succeeds. Consuming a stash also removes its association rewrites
+  from travel's undo record. Conflicts and other apply failures retain the complete
+  stash, just as with automatic review stashes. Commit stashes, whether saved
+  manually or during travel, use the same plumbing during reviews, while
+  automatic review stashes retain their
   review-tree identity and namespace. An active automatic
   review stash likewise shows `🎁` on the review leaf whose worktree state it
   saved, without exposing its internal reference or stash commit to traversal.
@@ -1834,8 +1860,8 @@ views.
   put. Copies retain Git notes and change enrichment but do not duplicate active
   review resources. Paste uses ordinary progress, conflict, continuation, and
   undo handling, and is blocked while a tree selection is active.
-- `@` invokes time travel directly, outside the group. Invoking it leaves an
-  already expanded actions group open.
+- `2` and `@` invoke their time-travel modes directly, outside the group.
+  Invoking either leaves an already expanded actions group open.
 - Commit and action shortcuts keep the actions group open. Navigation or
   another recognized command closes it, matching the `v` display shortcut group.
   Plain `r` does not mutate the repository, and plain `t` has no action.
