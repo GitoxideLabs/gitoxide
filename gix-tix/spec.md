@@ -86,12 +86,13 @@ without trading responsiveness for metadata that is not visible.
   Successful creation hands off or prints the canonical destination just like
   branch-based creation. Invalid or non-commit targets and an unborn default
   `HEAD` fail before creating a worktree.
-  If the source worktree already has any valid Tix pins, creation adds an
-  ordinary symbolic pin there targeting `worktrees/<new-worktree-id>/HEAD`.
+  Creation from a source worktree creates or reuses an ordinary symbolic pin
+  there targeting `worktrees/<new-worktree-id>/HEAD`, whether attached or detached
+  and regardless of existing pins.
   The pin follows later commits and checkouts in the new worktree, including
   changes made outside Tix, and brings that tip into the source's history.
-  The new worktree receives no pins. Sources without pins and bare repositories
-  gain none. The relationship consists solely of this pin;
+  The new worktree and bare source repositories receive no pins.
+  The relationship consists solely of this pin;
   there is no separate parent/offspring metadata. A failure to create the
   worktree adds no pin; a later pinning failure reports the already-created
   worktree's path.

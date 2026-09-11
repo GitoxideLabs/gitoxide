@@ -67,9 +67,9 @@ opening Tix.
 
 `wt switch --detach [COMMIT]` creates a detached worktree at the current HEAD
 or a supplied commit. `--path PATH` chooses its directory; otherwise a sibling
-directory uses the commit's short hash, adding a number if occupied. When the
-source worktree already has Tix pins, it gains a symbolic pin following the new
-worktree's HEAD so its experiment stays visible in the source's history.
+directory uses the commit's short hash, adding a number if occupied. The source
+worktree gains a symbolic pin following the new worktree's HEAD so its experiment
+stays visible in the source's history, even without existing Tix pins.
 
 `wt show` prints the fully populated worktree table without opening the picker.
 
