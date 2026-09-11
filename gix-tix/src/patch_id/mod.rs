@@ -8,7 +8,7 @@ use gix::{
 };
 
 pub(crate) const HEADER: &str = "patch-id";
-const UNAVAILABLE: &[u8] = b"v1 unavailable";
+pub(crate) const UNAVAILABLE: &[u8] = b"v1 unavailable";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct PatchId(ObjectId);
