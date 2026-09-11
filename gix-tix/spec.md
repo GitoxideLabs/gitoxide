@@ -662,7 +662,7 @@ without trading responsiveness for metadata that is not visible.
 | `Shift-P` | Push the active branch from history or Worktree without a prefix; cycle the comparison parent while Tree has focus. |
 | `? e` | Cycle the tree/worktree changes display. |
 | `Shift-R` | Explicitly refresh the revision view and visible worktree status. |
-| `y` | Copy the selected change ID when shown, otherwise the commit ID; copy the selected raw path when a changes block is focused. |
+| `y` | Copy the full selected commit hash first; when change IDs are displayed, including automatically for siblings, append a space and the full change ID. Copy the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
 | `2` | Stash local changes at the departure commit, then time-travel to the selected commit or return through its tix pin. |
@@ -1848,8 +1848,10 @@ views.
   forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
 - Bracketed paste in history trims whitespace and accepts one uniquely
   resolvable hexadecimal commit-ID prefix or one full reverse-hex change ID in
-  the Tix view. It copies that single-parent commit above the cursor through the
-  shared transplant planner. A hidden boundary is a read-only anchor: its
+  the Tix view. A copied `commit-hash change-id` pair resolves by its leading
+  commit hash and verifies that the full change ID belongs to that commit, so
+  siblings remain unambiguous. It copies that single-parent commit above the
+  cursor through the shared transplant planner. A hidden boundary is a read-only anchor: its
   existing descendants and refs stay unchanged. An ambiguous change ID switches
   to commit IDs, selects the closest matching sibling, and offers `x` to cycle
   siblings. Invalid or unavailable operands produce an attention message.

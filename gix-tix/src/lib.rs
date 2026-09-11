@@ -3876,14 +3876,7 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("{}: {err:#}", if undoing { "undo" } else { "redo" })),
                     }
                 }
-                Effect::CopyId(id) => execute!(
-                    terminal.backend_mut(),
-                    CopyToClipboard::to_clipboard_from(id.to_hex().to_string())
-                )?,
-                Effect::CopyChangeId(id) => execute!(
-                    terminal.backend_mut(),
-                    CopyToClipboard::to_clipboard_from(id.to_reverse_hex().to_string())
-                )?,
+                Effect::CopyIds(text) => execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(text))?,
                 Effect::CopyPath(path) => execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(path))?,
                 Effect::CopyAuthor(author) => {
                     let actor = actor_bytes(author);
@@ -8886,9 +8879,12 @@ fn resolve_pasted_commit(
     change_id_candidates: impl IntoIterator<Item = gix::ObjectId>,
 ) -> Result<PastedCommit> {
     let id = pasted.trim();
+    let (id, paired_change_id) = id
+        .split_once(char::is_whitespace)
+        .map_or((id, None), |(id, change_id)| (id, Some(change_id.trim())));
     anyhow::ensure!(
         !id.is_empty(),
-        "expected exactly one hexadecimal commit ID or reverse-hex change ID"
+        "expected a commit hash, optionally followed by its change ID, or a full change ID"
     );
     if id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         let object = repository
@@ -8902,11 +8898,23 @@ fn resolve_pasted_commit(
             object.kind == gix::object::Kind::Commit,
             "pasted object is not a commit"
         );
+        if let Some(paired_change_id) = paired_change_id {
+            let paired_change_id = gix::hash::ChangeId::from_reverse_hex(paired_change_id.as_bytes())
+                .context("expected a full reverse-hex change ID after the commit ID")?;
+            anyhow::ensure!(
+                change_id::for_commit(repository, object.id)? == paired_change_id,
+                "pasted change ID does not match the commit"
+            );
+        }
         return Ok(PastedCommit::Unique(object.id));
     }
 
+    anyhow::ensure!(
+        paired_change_id.is_none(),
+        "expected the commit ID before the change ID"
+    );
     let change_id = gix::hash::ChangeId::from_reverse_hex(id.as_bytes())
-        .context("expected exactly one hexadecimal commit ID or reverse-hex change ID")?;
+        .context("expected a commit hash, optionally followed by its change ID, or a full change ID")?;
     let mut candidates = Vec::new();
     for commit_id in change_id_candidates {
         if change_id::for_commit(repository, commit_id)? == change_id {
@@ -9550,7 +9558,7 @@ mod tests {
         assert_eq!(
             resolve_pasted_commit(&repository, &change_id.to_string(), [commit])?,
             PastedCommit::Unique(commit),
-            "a unique copied change ID resolves in the Tix view"
+            "a unique change ID resolves in the Tix view"
         );
         let mut sibling = repository.find_commit(commit)?.decode()?.into_owned()?;
         sibling
@@ -9563,9 +9571,37 @@ mod tests {
                 change_id,
                 candidates: vec![commit, sibling]
             },
-            "all siblings are returned when a copied change ID is ambiguous"
+            "all siblings are returned when a pasted change ID is ambiguous"
         );
 
+        for copied in [
+            format!("{commit} {change_id}"),
+            format!("\n{abbreviated}\t{change_id}\n"),
+        ] {
+            assert_eq!(
+                resolve_pasted_commit(&repository, &copied, [commit, sibling])?,
+                PastedCommit::Unique(commit),
+                "the leading commit hash disambiguates a copied pair of IDs"
+            );
+        }
+        assert_eq!(
+            resolve_pasted_commit(&repository, &format!("{sibling} {change_id}"), [commit, sibling])?,
+            PastedCommit::Unique(sibling),
+            "a sibling's copied hash selects that occurrence of the shared change"
+        );
+
+        let wrong_change_id = gix::hash::ChangeId::from(gix::ObjectId::null(repository.object_hash()));
+        for invalid in [
+            format!("{commit} {wrong_change_id}"),
+            format!("{commit} {commit}"),
+            format!("{change_id} {commit}"),
+            format!("{commit} {change_id} extra"),
+        ] {
+            assert!(
+                resolve_pasted_commit(&repository, &invalid, [commit, sibling]).is_err(),
+                "copied pairs must contain exactly a commit hash and its full change ID: {invalid:?}"
+            );
+        }
         for invalid in ["topic", "dead beef", ""] {
             assert!(
                 resolve_pasted_commit(&repository, invalid, []).is_err(),
