@@ -2233,8 +2233,28 @@ fn commit_title_spans(title: &BStr, format: TitleFormat) -> Vec<Span<'static>> {
         TitleFormat::Symbolic => false,
         TitleFormat::Abbreviated => true,
     };
+    let mut spans = Vec::new();
+    let title = if let Some((message, target)) = crate::edit::todo::autosquash_marker(title) {
+        let symbol = match message {
+            crate::edit::rebase::FoldMessage::Discard => "↪",
+            crate::edit::rebase::FoldMessage::Append => "⊕",
+            crate::edit::rebase::FoldMessage::Replace => "✎",
+        };
+        spans.push(Span::styled(
+            symbol,
+            color(Color::LightMagenta).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        ));
+        spans.push(Span::raw(" "));
+        target.as_bstr()
+    } else {
+        title
+    };
     let Some(conventional) = conventional_title(title) else {
-        return markdown_title_spans(title);
+        if spans.is_empty() {
+            return markdown_title_spans(title);
+        }
+        spans.extend(markdown_subject_spans(title));
+        return spans;
     };
     let (symbol, symbol_color) = match conventional.kind {
         b"feat" => ("+", Color::Green),
@@ -2252,9 +2272,12 @@ fn commit_title_spans(title: &BStr, format: TitleFormat) -> Vec<Span<'static>> {
         b"chore" => ("·", Color::DarkGray),
         b"revert" => ("↶", Color::Red),
         _ if abbreviated => ("…", Color::DarkGray),
-        _ => return markdown_title_spans(title),
+        _ => {
+            spans.extend(markdown_title_spans(title));
+            return spans;
+        }
     };
-    let mut spans = vec![Span::styled(symbol, color(symbol_color).add_modifier(Modifier::BOLD))];
+    spans.push(Span::styled(symbol, color(symbol_color).add_modifier(Modifier::BOLD)));
     if !abbreviated && let Some(scope) = conventional.scope {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
@@ -2266,18 +2289,21 @@ fn commit_title_spans(title: &BStr, format: TitleFormat) -> Vec<Span<'static>> {
         spans.push(Span::styled("!", color(Color::LightRed).add_modifier(Modifier::BOLD)));
     }
     spans.push(Span::raw(" "));
+    spans.extend(markdown_subject_spans(conventional.subject));
+    spans
+}
 
+fn markdown_subject_spans(title: &BStr) -> Vec<Span<'static>> {
     // Keep the subject in paragraph context so leading `#` or `---` stays literal.
     let mut subject = BString::from("…:");
-    subject.extend_from_slice(conventional.subject);
+    subject.extend_from_slice(title);
     let mut subject_spans = markdown_title_spans(subject.as_bstr());
     if let Some(first) = subject_spans.first_mut()
         && let Some(subject) = first.content.strip_prefix("…:")
     {
         first.content = subject.to_owned().into();
     }
-    spans.extend(subject_spans);
-    spans
+    subject_spans
 }
 
 fn less_than_sixty_percent(widths: impl IntoIterator<Item = (usize, usize)>) -> bool {
@@ -7682,7 +7708,7 @@ mod tests {
     }
 
     #[test]
-    fn formats_only_conventional_commit_prefixes() {
+    fn formats_conventional_and_autosquash_prefixes() {
         for (input, symbolic, abbreviated) in [
             ("feat: subject", "+ subject", "+ subject"),
             ("feat(gix-tix)!: subject", "+ gix-tix! subject", "+! subject"),
@@ -7717,6 +7743,28 @@ mod tests {
             ("feat(a(b)): subject", "feat(a(b)): subject", "feat(a(b)): subject"),
             ("feat!!: subject", "feat!!: subject", "feat!!: subject"),
             ("feat:subject", "feat:subject", "feat:subject"),
+            ("fixup! subject", "↪ subject", "↪ subject"),
+            ("squash! subject", "⊕ subject", "⊕ subject"),
+            ("amend! **subject**", "✎ subject", "✎ subject"),
+            ("fixup! feat(gix-tix)!: subject", "↪ + gix-tix! subject", "↪ +! subject"),
+            (
+                "squash! custom(scope)!: subject",
+                "⊕ custom(scope)!: subject",
+                "⊕ …! subject",
+            ),
+            ("fixup! squash! amend! subject", "↪ subject", "↪ subject"),
+            ("squash! fixup! subject", "⊕ subject", "⊕ subject"),
+            ("amend! fixup! subject", "✎ subject", "✎ subject"),
+            ("fixup!   subject", "↪ subject", "↪ subject"),
+            ("fixup! # heading", "↪ # heading", "↪ # heading"),
+            ("fixup! ---", "↪ ---", "↪ ---"),
+            ("fixup! - item", "↪ - item", "↪ - item"),
+            ("fixup! > quote", "↪ > quote", "↪ > quote"),
+            ("fixup! …:literal", "↪ …:literal", "↪ …:literal"),
+            ("fixup! ", "↪ ", "↪ "),
+            ("fixup!subject", "fixup!subject", "fixup!subject"),
+            ("Fixup! subject", "Fixup! subject", "Fixup! subject"),
+            ("fixup!: subject", "fixup!: subject", "…! subject"),
         ] {
             for (format, expected) in [
                 (TitleFormat::Symbolic, symbolic),
@@ -7731,13 +7779,102 @@ mod tests {
         }
         assert_eq!(
             Line::from(commit_title_spans(
-                b"fix(sc\xffpe)!: sub\xffject".as_bstr(),
+                b"fixup! fix(sc\xffpe)!: sub\xffject".as_bstr(),
                 TitleFormat::Symbolic
             ))
             .to_string(),
-            "~ sc�pe! sub�ject",
+            "↪ ~ sc�pe! sub�ject",
             "non-UTF-8 scopes and subjects retain lossy display handling"
         );
+    }
+
+    #[test]
+    fn highlights_autosquash_markers_only_in_history() -> gix_testtools::Result {
+        let commit_id = gix::ObjectId::Sha1([1; 20]);
+        for (marker, symbol) in [("fixup!", "↪"), ("squash!", "⊕"), ("amend!", "✎")] {
+            let mut app = App::new(1);
+            app.extend_commits(vec![Commit {
+                id: commit_id,
+                parent_ids: Default::default(),
+                author_time: gix::date::Time::default(),
+                committer_time: gix::date::Time::default(),
+                author: author(b"author", b"author@example.com"),
+                attributions: 0..0,
+                title: format!("{marker} feat(gix-tix)!: **subject**").into(),
+                metadata_loaded: true,
+                has_agent_marker: false,
+                is_review: false,
+                signature: SignatureState::Unsigned,
+            }]);
+            complete(&mut app);
+            let mut terminal = Terminal::new(TestBackend::new(100, 2))?;
+            for kind in [None, Some(DecorationKind::Head), Some(DecorationKind::WorktreeDetached)] {
+                let head = kind == Some(DecorationKind::Head);
+                app.set_worktree_head(head.then_some(commit_id), false);
+                let decorations = kind
+                    .map(|kind| {
+                        (
+                            commit_id,
+                            vec![Decoration {
+                                name: "HEAD".into(),
+                                kind,
+                            }],
+                        )
+                    })
+                    .into_iter()
+                    .collect();
+                for selected in [None, Some(0)] {
+                    app.selected = selected;
+                    terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+                    let line = rendered_row(&terminal);
+                    let start = line[..line
+                        .find(&format!("{symbol} + gix-tix! subject"))
+                        .expect("the autosquash badge precedes the conventional title")]
+                        .chars()
+                        .count() as u16;
+                    let buffer = terminal.backend().buffer();
+                    let badge = &buffer[(start, 0)];
+                    assert_eq!(badge.fg, Color::LightMagenta, "autosquash markers have a bright color");
+                    assert!(
+                        badge.modifier.contains(Modifier::BOLD | Modifier::UNDERLINED),
+                        "autosquash markers have stronger emphasis than conventional types"
+                    );
+                    assert_eq!(
+                        badge.modifier.contains(Modifier::REVERSED),
+                        head,
+                        "HEAD emphasis includes autosquash badges regardless of selection"
+                    );
+                    assert_eq!(
+                        badge.bg,
+                        if kind == Some(DecorationKind::WorktreeDetached) && selected.is_none() {
+                            Color::DarkGray
+                        } else {
+                            Color::Reset
+                        },
+                        "foreign worktree shading includes the badge"
+                    );
+                    let conventional = &buffer[(start + 2, 0)];
+                    assert_eq!(conventional.fg, Color::Green, "the target retains conventional styling");
+                    assert!(
+                        !conventional.modifier.contains(Modifier::UNDERLINED),
+                        "badge emphasis does not leak into the target"
+                    );
+                }
+            }
+            let row = &app.rows[0];
+            let mailmap = gix::mailmap::Snapshot::default();
+            for text in [
+                plain_history_metadata(&app, row, &Decorations::new(), &mailmap, false, None),
+                todo_metadata(&app, row, &mailmap),
+                message_text(app.title(row), None).lines[0].to_string(),
+            ] {
+                assert!(
+                    text.ends_with(&format!("{marker} feat(gix-tix)!: subject")),
+                    "outside history, autosquash and conventional prefixes stay intact: {text:?}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -7969,7 +8106,7 @@ mod tests {
         app.extend_commits(vec![commit(1)]);
         std::sync::Arc::make_mut(&mut app.rows[0]).parent_ids = [gix::ObjectId::Sha1([2; 20])].into_iter().collect();
         let mut hidden = commit(2);
-        hidden.title = format!("fix(scope)!: subject 2 {}", "wide ".repeat(20)).into();
+        hidden.title = format!("fixup! fix(scope)!: subject 2 {}", "wide ".repeat(20)).into();
         app.extend_hidden_commits(vec![hidden]);
         std::sync::Arc::make_mut(&mut app.rows[1]).author =
             author(b"an extraordinarily long hidden author", b"author@example.com");
@@ -8012,7 +8149,7 @@ mod tests {
 
         let line = rendered_line(&terminal, 1);
         assert!(
-            line.contains("~ scope! subject 2"),
+            line.contains("↪ ~ scope! subject 2"),
             "the hidden commit keeps its normal content: {line:?}"
         );
         let visible = rendered_line(&terminal, 0);
@@ -8082,7 +8219,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let hidden = rendered_line(&terminal, 1);
         assert!(
-            hidden.contains("hidden ~ scope! subject"),
+            hidden.contains("hidden ↪ ~ scope! subject"),
             "hidden boundary fields remain unaligned: {hidden:?}"
         );
 
