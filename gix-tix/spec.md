@@ -1419,16 +1419,20 @@ views.
 
 ### Delete commits
 
-- `a d` immediately deletes a selected non-merge commit after history completion
-  when it has no known ordinary merge descendant.
+- `a d` immediately deletes a selected ordinary or AutoMerge commit after history
+  completion when it has no known ordinary merge descendant. Other merge commits
+  remain ineligible.
 - Deleting does not require a worktree. Linear descendants are reparented with
   unchanged trees and marked when tree replay is needed; mutable refs throughout the
   rewritten stack move atomically. Tags and remote-tracking refs remain unchanged.
 - When the selected commit is the current worktree `HEAD`, Git preflights and
   applies a two-tree index/worktree transition which discards only that commit's
   tracked delta. Conflicting staged, tracked, or untracked state refuses the
-  operation; unrelated untracked content survives. When `HEAD` is unrelated, only
-  refs move and the worktree is untouched.
+  operation; unrelated untracked content survives. Deleting an AutoMerge uses
+  its first parent and preserves the input commits and their refs. When `HEAD`
+  is outside the deleted commit's descendant history, including an input just
+  below an AutoMerge, it stays where it is without a checkout-target prompt;
+  the index and worktree are untouched.
 - Deleting an attached root deletes the branch and leaves symbolic `HEAD`
   unborn. A selected detached root is rejected because it cannot produce a valid
   unborn `HEAD`. Success refreshes history and selects the parent when present.
