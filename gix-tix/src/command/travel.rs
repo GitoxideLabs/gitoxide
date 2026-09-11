@@ -36,6 +36,9 @@ impl To {
         .args(["revision", "to"])
 ))]
 pub(super) struct Args {
+    /// Save local changes at the departure commit and restore them on return.
+    #[arg(long)]
+    pub(super) stash: bool,
     /// Check out an encountered replay conflict and write its unmerged index.
     #[arg(long)]
     pub(super) materialize_conflicts: bool,
@@ -67,7 +70,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         _ => anyhow::bail!("exactly one time-travel destination is required"),
     };
     if selected == head_id {
-        println!("already at {}", crate::change_id::display(&repository, selected, 7)?);
+        eprintln!("already at {}", crate::change_id::display(&repository, selected, 7)?);
         return Ok(());
     }
 
@@ -95,7 +98,18 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
     drop(repository);
-    match crate::edit::time_travel::perform(&repository_path, bare, selected, &graph, &reviews, &[], false)? {
+    match crate::edit::time_travel::perform(
+        &repository_path,
+        bare,
+        selected,
+        &graph,
+        &reviews,
+        &[],
+        crate::edit::time_travel::Options {
+            stash: args.stash,
+            ..Default::default()
+        },
+    )? {
         crate::edit::time_travel::Perform::Complete {
             notice,
             selected,
@@ -270,6 +284,7 @@ mod tests {
 
     fn args(revision: &str) -> Args {
         Args {
+            stash: false,
             materialize_conflicts: false,
             revision: Some(revision.into()),
             to: None,
@@ -278,10 +293,164 @@ mod tests {
 
     fn relative_args(to: To) -> Args {
         Args {
+            stash: false,
             materialize_conflicts: false,
             revision: None,
             to: Some(to),
         }
+    }
+
+    #[test]
+    fn stashing_travel_restores_the_index_worktree_and_untracked_files_on_return() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        std::fs::write(path.join("ordinary"), "ordinary stash\n")?;
+        git(path, &["stash", "push", "--include-untracked", "-qm", "ordinary"])?;
+        let ordinary_stashes = git(path, &["stash", "list", "--format=%H %gs"])?;
+        std::fs::write(path.join(".git/info/exclude"), "ignored\n")?;
+        std::fs::write(path.join("ignored"), "ignored\n")?;
+        std::fs::write(path.join("tip"), "staged tip\n")?;
+        git(path, &["add", "tip"])?;
+        std::fs::write(path.join("tip"), "unstaged tip\n")?;
+        std::fs::write(path.join("untracked"), "untracked\n")?;
+        let before = git(path, &["status", "--porcelain=v2", "--branch"])?;
+        let staged = git(path, &["diff", "--cached"])?;
+        let unstaged = git(path, &["diff"])?;
+        let repository = crate::test_repository::open(path)?;
+        let source_commit_id = repository.head_id()?.detach();
+        let destination_commit_id = repository.rev_parse_single("HEAD~1")?.detach();
+        let stash_name = crate::edit::stash::reference(source_commit_id)?;
+
+        run(
+            repository,
+            Args {
+                stash: true,
+                ..args("HEAD~1")
+            },
+        )?;
+
+        let repository = crate::test_repository::open(path)?;
+        assert_eq!(
+            repository.head_id()?,
+            destination_commit_id,
+            "travel visits the selected parent"
+        );
+        assert!(
+            repository.try_find_reference(stash_name.as_ref())?.is_some(),
+            "the departure commit owns the saved changes"
+        );
+        assert!(
+            git(path, &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty(),
+            "the destination has no staged, unstaged, or untracked changes"
+        );
+        assert_eq!(
+            std::fs::read(path.join("ignored"))?,
+            b"ignored\n",
+            "ignored files remain in place"
+        );
+        assert_eq!(
+            git(path, &["stash", "list", "--format=%H %gs"])?,
+            ordinary_stashes,
+            "the ordinary stash stack is unchanged"
+        );
+
+        run(
+            repository,
+            Args {
+                stash: true,
+                ..relative_args(To::Tip)
+            },
+        )?;
+
+        let repository = crate::test_repository::open(path)?;
+        assert_eq!(
+            git(path, &["status", "--porcelain=v2", "--branch"])?,
+            before,
+            "returning restores the original branch and status"
+        );
+        assert_eq!(
+            git(path, &["diff", "--cached"])?,
+            staged,
+            "staged changes retain their index state"
+        );
+        assert_eq!(
+            git(path, &["diff"])?,
+            unstaged,
+            "unstaged changes retain their worktree state"
+        );
+        assert_eq!(
+            std::fs::read(path.join("untracked"))?,
+            b"untracked\n",
+            "untracked contents are restored"
+        );
+        assert!(
+            repository.try_find_reference(stash_name.as_ref())?.is_none(),
+            "successful restoration consumes the stash"
+        );
+        assert!(
+            repository
+                .try_find_reference(crate::edit::stash::reference(destination_commit_id)?.as_ref())?
+                .is_none(),
+            "a clean departure creates no stash"
+        );
+        assert_eq!(
+            git(path, &["stash", "list", "--format=%H %gs"])?,
+            ordinary_stashes,
+            "restoration preserves the ordinary stash stack"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stashing_travel_to_head_or_an_invalid_destination_leaves_changes_in_place() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        std::fs::write(path.join("tip"), "local tip\n")?;
+        git(path, &["add", "tip"])?;
+        std::fs::write(path.join("untracked"), "untracked\n")?;
+        let before = gix_testtools::repository::snapshot(path)?;
+
+        run(
+            crate::test_repository::open(path)?,
+            Args {
+                stash: true,
+                ..args("HEAD")
+            },
+        )?;
+        assert_eq!(
+            gix_testtools::repository::snapshot(path)?,
+            before,
+            "travelling to HEAD does not save or restore changes"
+        );
+
+        run(
+            crate::test_repository::open(path)?,
+            Args {
+                stash: true,
+                ..args("HEAD~99")
+            },
+        )
+        .expect_err("an invalid revision cannot be visited");
+        assert_eq!(
+            gix_testtools::repository::snapshot(path)?,
+            before,
+            "revision validation happens before stashing"
+        );
+
+        run(
+            crate::test_repository::open(path)?,
+            Args {
+                stash: true,
+                ..relative_args(To::Child)
+            },
+        )
+        .expect_err("the tip has no visible child");
+        assert_eq!(
+            gix_testtools::repository::snapshot(path)?,
+            before,
+            "a missing relative destination does not stash changes"
+        );
+        Ok(())
     }
 
     #[test]
@@ -636,10 +805,23 @@ mod tests {
 
         git(path, &["checkout", "-q", "main"])?;
         run(crate::test_repository::open(path)?, args(&root.to_string()))?;
+        std::fs::write(path.join("file"), "staged local change\n")?;
+        git(path, &["add", "file"])?;
+        std::fs::write(path.join("file"), "unstaged local change\n")?;
+        std::fs::write(path.join("untracked"), "untracked local change\n")?;
         let before = gix_testtools::repository::snapshot(path)?;
-        let err = run(crate::test_repository::open(path)?, args(&tip.to_string()))
-            .expect_err("a conflict needs explicit materialization");
-        assert!(format!("{err:#}").contains("--materialize-conflicts"));
+        let err = run(
+            crate::test_repository::open(path)?,
+            Args {
+                stash: true,
+                ..args(&tip.to_string())
+            },
+        )
+        .expect_err("a conflict needs explicit materialization");
+        assert!(
+            format!("{err:#}").contains("--materialize-conflicts"),
+            "the preview explains how to accept the conflict: {err:#}"
+        );
         assert_eq!(
             gix_testtools::repository::snapshot(path)?,
             before,
@@ -649,13 +831,17 @@ mod tests {
         let err = run(
             crate::test_repository::open(path)?,
             Args {
+                stash: true,
                 materialize_conflicts: true,
                 revision: Some(tip.to_string().into()),
                 to: None,
             },
         )
         .expect_err("a materialized conflict remains an incomplete command");
-        assert!(format!("{err:#}").contains("ready to resolve conflicts"));
+        assert!(
+            format!("{err:#}").contains("ready to resolve conflicts"),
+            "materialization reports that the worktree is ready for resolution: {err:#}"
+        );
         assert!(
             crate::test_repository::open(path)?
                 .index_or_empty()?
@@ -663,6 +849,26 @@ mod tests {
                 .iter()
                 .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted),
             "opt-in materialization writes the unresolved index"
+        );
+        let stash_name = crate::edit::stash::reference(root)?.to_string();
+        assert_eq!(
+            git(path, &["show", &format!("{stash_name}:file")])?,
+            b"unstaged local change\n",
+            "materialization saves the departure worktree"
+        );
+        assert_eq!(
+            git(path, &["show", &format!("{stash_name}^2:file")])?,
+            b"staged local change\n",
+            "materialization saves the departure index"
+        );
+        assert_eq!(
+            git(path, &["show", &format!("{stash_name}^3:untracked")])?,
+            b"untracked local change\n",
+            "materialization saves untracked contents"
+        );
+        assert!(
+            !path.join("untracked").exists(),
+            "the departure's untracked changes stay in its stash"
         );
         Ok(())
     }

@@ -87,8 +87,16 @@ fn deleting_a_merge_above_head_preserves_the_checkout_and_reparents_descendants(
         gix::refs::transaction::PreviousValue::MustNotExist,
         "retain a descendant of the merge",
     )?;
-    super::super::time_travel::perform(fixture.path(), false, a.commit_id, &graph(&repo)?, &[], &[], false)?
-        .complete()?;
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        a.commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?
+    .complete()?;
     let head_before = repo.head()?.referent_name().map(ToOwned::to_owned);
     std::fs::write(fixture.path().join("shared"), b"staged\n")?;
     assert!(
@@ -632,7 +640,7 @@ fn nested_change_inputs_keep_conflicting_replays_muted_and_retained_by_parents()
         &super::super::loaded_graph(&repo)?,
         &[],
         &[],
-        false,
+        Default::default(),
     )?
     .complete()?;
     let (outer_commit_id, _) = apply(&repo, main, Change::AddCommit(inner_commit_id))?;
@@ -772,8 +780,16 @@ fn change_subscriptions_can_select_another_version_and_remove_one_of_multiple_me
     );
     assert_eq!(recipe.parents.as_slice(), &[a.commit_id, replacement_commit_id]);
 
-    super::super::time_travel::perform(fixture.path(), false, a.commit_id, &graph(&repo)?, &[], &[], false)?
-        .complete()?;
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        a.commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?
+    .complete()?;
     let (second_merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "B")?.reference))?;
     let (second_merge_commit_id, _) = apply(&repo, second_merge_commit_id, Change::AddCommit(replacement_commit_id))?;
     let memberships = removals(&repo, &graph(&repo)?, replacement_commit_id, false)?;
@@ -959,6 +975,160 @@ fn changed_tree(
 }
 
 #[test]
+fn travel_after_merge_collapse_restores_the_departure_and_keeps_undo_consistent() -> gix_testtools::Result {
+    for accept in [None, Some(false), Some(true)] {
+        let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+        let path = fixture.path();
+        let repo = crate::test_repository::open(path)?;
+        let a = input(&repo, "A")?;
+        let c = input(&repo, "C")?;
+        let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+        repo.reference(
+            "refs/heads/combined",
+            merge_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "retain the collapsing merge",
+        )?;
+        let base_commit_id = input(&repo, "main")?.commit_id;
+        let mut new_base = changed_tree(
+            &repo,
+            repo.find_commit(base_commit_id)?.decode()?.into_owned()?,
+            "shared",
+            if accept.is_some() { "new base\n" } else { "base\n" },
+        )?;
+        new_base.parents = [base_commit_id].into_iter().collect();
+        let new_base_commit_id = repo.write_object(&new_base)?.detach();
+        let mut pending = repo.find_commit(a.commit_id)?.decode()?.into_owned()?;
+        pending.parents = [new_base_commit_id].into_iter().collect();
+        pending
+            .extra_headers
+            .push(("tix-rebase-parent".into(), base_commit_id.to_string().into()));
+        // Invalidating this stale signature makes the optional replay visibly rewrite the departure.
+        pending.extra_headers.push(("gpgsig".into(), "legacy signature".into()));
+        let pending_commit_id = repo.write_object(&pending)?.detach();
+        repo.find_reference(a.reference.as_ref())?
+            .set_target_id(pending_commit_id, "prepare the pending departure")?;
+        // The first pass collapses the merge to A, leaving a conflict-free A at HEAD.
+        // If A conflicts, that optional replay stays pending and a second, mandatory pass must report it.
+        repo.find_reference(c.reference.as_ref())?.delete()?;
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(["checkout", "-q", "A"])
+                .status()?
+                .success(),
+            "the pending input becomes the departure checkout"
+        );
+        std::fs::write(path.join("shared"), b"staged\n")?;
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(["add", "shared"])
+                .status()?
+                .success(),
+            "the departure contains staged changes"
+        );
+        std::fs::write(path.join("shared"), b"unstaged\n")?;
+        std::fs::write(path.join("untracked"), b"untracked\n")?;
+        let before = gix_testtools::repository::snapshot(path)?;
+
+        let performed = super::super::time_travel::perform(
+            repo.git_dir(),
+            false,
+            merge_commit_id,
+            &graph(&repo)?,
+            &[],
+            &[],
+            super::super::time_travel::Options {
+                stash: true,
+                ..Default::default()
+            },
+        )?;
+        let replayed_commit_id = repo.head_id()?.detach();
+        assert_ne!(
+            replayed_commit_id, pending_commit_id,
+            "the first replay already rewrote the departure"
+        );
+        let preview = gix_testtools::repository::snapshot(path)?;
+        assert_eq!(
+            preview.index, before.index,
+            "travel restores the staged departure changes"
+        );
+        assert_eq!(
+            preview.worktree, before.worktree,
+            "travel restores unstaged and untracked changes"
+        );
+        assert!(
+            preview
+                .references
+                .iter()
+                .all(|reference| !reference.name.starts_with(crate::history::STASH_PREFIX)),
+            "travel consumes the earlier departure stash before returning"
+        );
+
+        let changes = match performed {
+            super::super::time_travel::Perform::Complete {
+                selected, ref_changes, ..
+            } => {
+                assert_eq!(accept, None, "only the unchanged base replays without a conflict");
+                assert_eq!(
+                    selected, replayed_commit_id,
+                    "successful collapse returns to the rewritten departure"
+                );
+                ref_changes
+            }
+            super::super::time_travel::Perform::Conflict(conflict) => {
+                assert_eq!(
+                    conflict.original(),
+                    replayed_commit_id,
+                    "the later preview targets the rewritten input"
+                );
+                if accept.context("the changed base requires a conflict decision")? {
+                    let (_, conflict_commit_id, _, changes) = conflict.accept()?;
+                    assert!(
+                        repo.try_find_reference(super::super::stash::reference(conflict_commit_id)?.as_ref())?
+                            .is_some(),
+                        "acceptance saves the restored departure again and follows its materialized rewrite"
+                    );
+                    changes
+                } else {
+                    let changes = conflict.into_ref_changes();
+                    assert!(
+                        changes
+                            .iter()
+                            .all(|change| !change.name.as_bstr().starts_with(crate::history::STASH_PREFIX)),
+                        "cancelling retains no undo changes for the consumed departure stash"
+                    );
+                    changes
+                }
+            }
+        };
+        undo::record(&repo, "time travel after merge collapse", &changes)?;
+        let undo = undo::plan_undo(&repo)?.context("the completed first replay remains undoable")?;
+        for change in &undo.changes {
+            assert_eq!(
+                undo::state(&repo, change.name.as_ref())?,
+                change.before,
+                "undo has a valid precondition for {} with conflict decision {:?}",
+                change.name,
+                accept
+            );
+        }
+        if accept != Some(true) {
+            undo.apply(&repo)?;
+            assert_eq!(
+                repo.head_id()?,
+                pending_commit_id,
+                "undo restores the original pending departure"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn travel_refreshes_external_inputs_and_muted_replays_keep_their_original_patch() -> gix_testtools::Result {
     let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
     let repo = crate::test_repository::open(fixture.path())?;
@@ -1002,8 +1172,15 @@ fn travel_refreshes_external_inputs_and_muted_replays_keep_their_original_patch(
         "external advancement",
     )?;
 
-    let travel =
-        super::super::time_travel::perform(fixture.path(), false, merge_commit_id, &graph(&repo)?, &[], &[], false)?;
+    let travel = super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        merge_commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?;
     travel.complete()?;
     let merged = repo.head_commit()?.decode()?.into_owned()?;
     let definition = Definition::from_commit(&merged)?.expect("travel preserves the AutoMerge");
@@ -1028,8 +1205,15 @@ fn travel_refreshes_external_inputs_and_muted_replays_keep_their_original_patch(
         Some(Some(main)),
         "the replay base survives a conflict"
     );
-    let super::super::time_travel::Perform::Conflict(conflict) =
-        super::super::time_travel::perform(fixture.path(), false, input_commit_id, &graph(&repo)?, &[], &[], false)?
+    let super::super::time_travel::Perform::Conflict(conflict) = super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        input_commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?
     else {
         panic!("direct travel offers ordinary conflict resolution")
     };
@@ -1067,7 +1251,7 @@ fn travel_refreshes_external_inputs_and_muted_replays_keep_their_original_patch(
         &graph(&repo)?,
         &[],
         &[],
-        false,
+        Default::default(),
     )
     .err()
     .context("mandatory replay remains blocked until the unavailable commit is amended")?;
@@ -1079,7 +1263,7 @@ fn travel_refreshes_external_inputs_and_muted_replays_keep_their_original_patch(
         &graph(&repo)?,
         &[],
         &[],
-        false,
+        Default::default(),
     )
     .context("an unavailable optional input does not block returning to its AutoMerge")?
     .complete()?;
@@ -1317,7 +1501,15 @@ fn a_todo_conflict_continuation_maintains_auto_merge_descendants() -> gix_testto
     let definition = Definition::from_commit(&repo.find_commit(merged)?.decode()?.into_owned()?)?
         .expect("the continuation retains the AutoMerge");
     assert_eq!(definition.inputs[0].commit_id, input(&repo, "A")?.commit_id);
-    super::super::time_travel::perform(fixture.path(), false, merged, &graph(&repo)?, &[], &[], false)?;
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        merged,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?;
     assert_eq!(
         std::fs::read_to_string(fixture.path().join("shared"))?,
         "resolved A and B\n"
@@ -1648,8 +1840,16 @@ fn input_pins_survive_checkout_and_removal_choices_disambiguate_memberships() ->
          - ✔️ C: Included reference `refs/heads/C`.\n",
         "the body identifies the pin behind its compact title symbol"
     );
-    super::super::time_travel::perform(fixture.path(), false, a.commit_id, &graph(&repo)?, &[], &[], false)?
-        .complete()?;
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        a.commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?
+    .complete()?;
     assert!(
         repo.try_find_reference(pin.as_ref())?.is_some(),
         "checkout cannot consume a subscribed pin"
@@ -2083,7 +2283,7 @@ fn attaching_an_advanced_input_maintains_its_merges_and_is_undoable() -> gix_tes
         &graph(&repo)?,
         &[],
         &[],
-        false,
+        Default::default(),
     )?;
     let (_, changes) = super::super::time_travel::attach_reporting(fixture.path(), false, &[], false)?;
     let updated = input(&repo, "combined")?.commit_id;
