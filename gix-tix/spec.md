@@ -1274,10 +1274,20 @@ views.
   mutes that input's entire contribution, including files which merged cleanly,
   and merging continues with later inputs. Muted parents are excluded from the
   intermediate ancestry used to calculate later merge bases. The generated
-  title lists contributions, for example `✔️ A 💥 B ✔️ 📌`; pins show only their
-  symbol and change inputs show abbreviated change IDs with the same included
-  or muted symbols. Reword, amend, spill, split, and squash cannot edit generated
-  content. Ordinary descendants and separate notes/enrichments remain editable.
+  title groups each status with its input, for example `[✔️ A] [💥 B] [✔️ 📌]`;
+  pins show only their symbol and change inputs show abbreviated change IDs with
+  the same included or muted symbols. The commit body's `AutoMerge inputs:`
+  section contains one bullet per input, in title order, starting with that
+  input's status symbol and label. Each bullet explains inclusion or exclusion
+  and identifies the full reference or change ID. Pin bullets name the pin and
+  its symbolic target when present, so repeated pin symbols remain distinguishable.
+  Muted inputs contribute no content because of conflicts or pending replay.
+  Eager rebuilds regenerate the title and this section, preserving other body
+  text; lazy rebuilds retain the previous message until content is replayed.
+  Message generation uses the operation's existing reference snapshots and
+  stable source identities, without extra repository reads during UI display.
+  Reword, amend, spill, split, and squash cannot edit generated content. Ordinary
+  descendants and separate notes/enrichments remain editable.
 - A repeated `tix-auto-merge` commit header stores each input's full ref name or
   change ID, last resolved commit, and included/muted state. This identity survives process
   restarts, signing, and lazy rebases, including when several subscriptions

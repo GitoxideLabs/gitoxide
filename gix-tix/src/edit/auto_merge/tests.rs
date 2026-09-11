@@ -747,7 +747,18 @@ fn change_subscriptions_can_select_another_version_and_remove_one_of_multiple_me
     assert_eq!(definition.inputs[1].commit_id, replacement_commit_id);
     assert_eq!(
         definition.title(),
-        format!("✔️ A ✔️ {}", change_id.to_reverse_hex_with_len(7)).as_str()
+        format!("[✔️ A] [✔️ {}]", change_id.to_reverse_hex_with_len(7)).as_str()
+    );
+    assert_eq!(
+        recipe.message,
+        format!(
+            "[✔️ A] [✔️ {short_change_id}]\n\nAutoMerge inputs:\n\
+             - ✔️ A: Included reference `refs/heads/A`.\n\
+             - ✔️ {short_change_id}: Included change `{change_id}`.\n",
+            short_change_id = change_id.to_reverse_hex_with_len(7)
+        )
+        .as_str(),
+        "the legend expands the abbreviated change identity without depending on its current commit ID"
     );
     definition.store(&mut recipe);
     assert_eq!(
@@ -1620,7 +1631,13 @@ fn input_pins_survive_checkout_and_removal_choices_disambiguate_memberships() ->
         gix::refs::transaction::RefEdit::delete(a.reference, gix::refs::transaction::PreviousValue::Any),
     ])?;
     let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "C")?.reference))?;
-    assert_eq!(repo.head_commit()?.decode()?.message, "✔️ 📌 ✔️ C\n");
+    assert_eq!(
+        repo.head_commit()?.decode()?.message,
+        "[✔️ 📌] [✔️ C]\n\nAutoMerge inputs:\n\
+         - ✔️ 📌: Included pin `refs/worktree/tix/pins/input`.\n\
+         - ✔️ C: Included reference `refs/heads/C`.\n",
+        "the body identifies the pin behind its compact title symbol"
+    );
     super::super::time_travel::perform(fixture.path(), false, a.commit_id, &graph(&repo)?, &[], &[], false)?
         .complete()?;
     assert!(
@@ -1654,6 +1671,68 @@ fn input_pins_survive_checkout_and_removal_choices_disambiguate_memberships() ->
         repo.head_id()?,
         second_merge_commit_id,
         "removing from another merge keeps the checkout"
+    );
+    Ok(())
+}
+
+#[test]
+fn legends_distinguish_converged_pins_and_the_worktree_head_they_follow() -> gix_testtools::Result {
+    use gix::refs::transaction::{PreviousValue, RefEdit};
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(fixture.path())
+            .args(["worktree", "add", "--quiet", "--detach"])
+            .arg(fixture.path().join("linked"))
+            .arg("C")
+            .status()?
+            .success(),
+        "a detached linked worktree gives the symbolic pin a real HEAD to follow"
+    );
+    let direct: FullName = "refs/worktree/tix/pins/direct".try_into()?;
+    let symbolic: FullName = "refs/worktree/tix/pins/worktree".try_into()?;
+    repo.reference(
+        direct.clone(),
+        input(&repo, "B")?.commit_id,
+        PreviousValue::MustNotExist,
+        "pin the conflicting input directly",
+    )?;
+    repo.edit_references([RefEdit::update(
+        symbolic.clone(),
+        gix::refs::Target::Symbolic("worktrees/linked/HEAD".try_into()?),
+        PreviousValue::MustNotExist,
+        "follow the linked worktree HEAD",
+    )])?;
+    let (merge_commit_id, _) = apply(&repo, input(&repo, "A")?.commit_id, Change::Add(direct.clone()))?;
+    let (merge_commit_id, _) = apply(&repo, merge_commit_id, Change::Add(symbolic))?;
+    assert_eq!(
+        repo.find_commit(merge_commit_id)?.decode()?.message,
+        "[✔️ A] [💥 📌] [✔️ 📌]\n\nAutoMerge inputs:\n\
+         - ✔️ A: Included reference `refs/heads/A`.\n\
+         - 💥 📌: Muted pin `refs/worktree/tix/pins/direct`; conflicts or pending replay exclude its entire contribution.\n\
+         - ✔️ 📌: Included pin `refs/worktree/tix/pins/worktree` following `worktrees/linked/HEAD`.\n",
+        "title grouping and ordered bullets associate each status with the corresponding pin"
+    );
+    repo.reference(
+        direct,
+        input(&repo, "C")?.commit_id,
+        PreviousValue::Any,
+        "make the two pin targets converge",
+    )?;
+    let (merge_commit_id, _) = apply(&repo, merge_commit_id, Change::Remerge)?;
+    assert_eq!(
+        repo.find_commit(merge_commit_id)?.decode()?.message,
+        "[✔️ A] [✔️ 📌] [✔️ 📌]\n\nAutoMerge inputs:\n\
+         - ✔️ A: Included reference `refs/heads/A`.\n\
+         - ✔️ 📌: Included pin `refs/worktree/tix/pins/direct`.\n\
+         - ✔️ 📌: Included pin `refs/worktree/tix/pins/worktree` following `worktrees/linked/HEAD`.\n",
+        "ordered bullets distinguish equal pin symbols even when both resolve to the same commit"
+    );
+    assert_eq!(
+        apply(&repo, merge_commit_id, Change::Remerge)?.0,
+        merge_commit_id,
+        "remerging preserves the symbolic target description and the exact generated commit"
     );
     Ok(())
 }
@@ -1923,7 +2002,13 @@ fn common_base_is_used_when_every_input_is_pending() -> gix_testtools::Result {
         repo.find_commit(main)?.tree_id()?,
         "muted pending patches do not leak into the generated tree"
     );
-    assert_eq!(commit.message, "💥 A 💥 B\n");
+    assert_eq!(
+        commit.message,
+        "[💥 A] [💥 B]\n\nAutoMerge inputs:\n\
+         - 💥 A: Muted reference `refs/heads/A`; conflicts or pending replay exclude its entire contribution.\n\
+         - 💥 B: Muted reference `refs/heads/B`; conflicts or pending replay exclude its entire contribution.\n",
+        "the legend explains that a muted input may still need replay"
+    );
     Ok(())
 }
 
@@ -2094,10 +2179,129 @@ fn mutes_the_entire_conflicting_input_and_continues_with_later_inputs() -> gix_t
         [false, true, false]
     );
     assert_eq!(commit.parents.len(), 3, "muting never removes a parent");
-    assert_eq!(commit.message, "✔️ A 💥 B ✔️ C\n");
+    assert_eq!(
+        commit.message,
+        "[✔️ A] [💥 B] [✔️ C]\n\nAutoMerge inputs:\n\
+         - ✔️ A: Included reference `refs/heads/A`.\n\
+         - 💥 B: Muted reference `refs/heads/B`; conflicts or pending replay exclude its entire contribution.\n\
+         - ✔️ C: Included reference `refs/heads/C`.\n",
+        "the legend follows title order and describes each contribution independently"
+    );
     let tree = repo.find_tree(commit.tree)?;
     assert!(tree.find_entry("b").is_none(), "even B's clean file is omitted");
     assert!(tree.find_entry("c").is_some(), "later inputs still contribute");
+    Ok(())
+}
+
+#[test]
+fn regenerating_legends_preserves_custom_body_and_updates_changed_inputs() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let b_commit_id = input(&repo, "B")?.commit_id;
+    let muted_legend = "[✔️ A] [💥 B] [✔️ C]\n\nAutoMerge inputs:\n\
+        - ✔️ A: Included reference `refs/heads/A`.\n\
+        - 💥 B: Muted reference `refs/heads/B`; conflicts or pending replay exclude its entire contribution.\n\
+        - ✔️ C: Included reference `refs/heads/C`.\n";
+    let included_legend = "[✔️ A] [✔️ B] [✔️ C]\n\nAutoMerge inputs:\n\
+        - ✔️ A: Included reference `refs/heads/A`.\n\
+        - ✔️ B: Included reference `refs/heads/B`.\n\
+        - ✔️ C: Included reference `refs/heads/C`.\n";
+    let reduced_legend = "[✔️ A] [✔️ C]\n\nAutoMerge inputs:\n\
+        - ✔️ A: Included reference `refs/heads/A`.\n\
+        - ✔️ C: Included reference `refs/heads/C`.\n";
+    let cases: &[(&[u8], &[u8])] = &[
+        (
+            b"\nReview notes.\n\n- Keep this explanation.\n",
+            b"\nReview notes.\n\n- Keep this explanation.\n",
+        ),
+        (
+            b"Review notes.\n\n- Keep this explanation.\n",
+            b"\nReview notes.\n\n- Keep this explanation.\n",
+        ),
+        (
+            b"\nAutoMerge inputs:\nKeep this explanation.\n\n- A custom bullet.\n",
+            b"\nAutoMerge inputs:\nKeep this explanation.\n\n- A custom bullet.\n",
+        ),
+        (b"\nAutoMerge inputs:\n", b"\nAutoMerge inputs:\n"),
+        (
+            b"\nReview \xff notes.\n\n- Preserve \xfe.\n",
+            b"\nReview \xff notes.\n\n- Preserve \xfe.\n",
+        ),
+    ];
+    for &(body, preserved_body) in cases {
+        repo.reference(
+            "refs/heads/B",
+            b_commit_id,
+            gix::refs::transaction::PreviousValue::Any,
+            "restore the conflicting input for this body",
+        )?;
+        let mut commit = candidate(&repo, &["A", "B", "C"])?;
+        commit.message = "Old title\n".into();
+        commit.message.push_str(body);
+        rebuild(
+            &repo,
+            &mut commit,
+            &mut References::default(),
+            &HashMap::new(),
+            None,
+            true,
+        )?;
+        assert_eq!(
+            commit.message,
+            [muted_legend.as_bytes(), preserved_body].concat().as_bstr(),
+            "a generated legend preserves custom paragraphs, bullets, and non-UTF-8 bytes"
+        );
+        let first_commit_id = repo.write_object(&commit)?.detach();
+        rebuild(
+            &repo,
+            &mut commit,
+            &mut References::default(),
+            &HashMap::new(),
+            None,
+            true,
+        )?;
+        assert_eq!(
+            repo.write_object(&commit)?,
+            first_commit_id,
+            "regenerating a legend neither duplicates it nor changes the custom body's spacing"
+        );
+
+        repo.reference(
+            "refs/heads/B",
+            input(&repo, "C")?.commit_id,
+            gix::refs::transaction::PreviousValue::Any,
+            "resolve the conflicting input",
+        )?;
+        rebuild(
+            &repo,
+            &mut commit,
+            &mut References::default(),
+            &HashMap::new(),
+            None,
+            true,
+        )?;
+        assert_eq!(
+            commit.message,
+            [included_legend.as_bytes(), preserved_body].concat().as_bstr(),
+            "a newly included input loses its old muted explanation without replacing custom notes"
+        );
+        let mut definition = Definition::from_commit(&commit)?.context("the merge keeps its input recipe")?;
+        definition.inputs.remove(1);
+        definition.store(&mut commit);
+        rebuild(
+            &repo,
+            &mut commit,
+            &mut References::default(),
+            &HashMap::new(),
+            None,
+            true,
+        )?;
+        assert_eq!(
+            commit.message,
+            [reduced_legend.as_bytes(), preserved_body].concat().as_bstr(),
+            "removing an input removes its generated bullet while preserving later custom bullets"
+        );
+    }
     Ok(())
 }
 
@@ -2132,12 +2336,16 @@ fn malformed_recipes_are_rejected_and_pin_titles_do_not_expose_ref_names() -> gi
     let mut definition = Definition::from_commit(&commit)?.expect("the candidate is automatic");
     definition.inputs[1].source = InputSource::Reference("refs/worktree/tix/pins/abcd".try_into()?);
     definition.inputs[1].muted = true;
-    assert_eq!(definition.title(), "✔️ A 💥 📌");
+    assert_eq!(
+        definition.title(),
+        "[✔️ A] [💥 📌]",
+        "brackets keep a conflict marker with its pin without exposing the pin ref in the title"
+    );
     let change_id = crate::change_id::for_commit(&repo, definition.inputs[1].commit_id)?;
     definition.inputs[1].source = InputSource::Change(change_id);
     assert_eq!(
         definition.title(),
-        format!("✔️ A 💥 {}", change_id.to_reverse_hex_with_len(7)).as_str()
+        format!("[✔️ A] [💥 {}]", change_id.to_reverse_hex_with_len(7)).as_str()
     );
     definition.inputs[0].source = InputSource::Change(change_id);
     definition.store(&mut commit);

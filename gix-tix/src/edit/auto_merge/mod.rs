@@ -54,6 +54,14 @@ pub(crate) struct Input {
     pub muted: bool,
 }
 
+impl Input {
+    fn label(&self) -> BString {
+        let mut label = BString::from(if self.muted { "💥 " } else { "✔️ " });
+        label.push_str(self.source.label());
+        label
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Definition {
     pub inputs: Vec<Input>,
@@ -146,10 +154,64 @@ impl Definition {
             if !title.is_empty() {
                 title.push(b' ');
             }
-            title.push_str(if input.muted { "💥 " } else { "✔️ " });
-            title.push_str(input.source.label());
+            title.push(b'[');
+            title.push_str(input.label());
+            title.push(b']');
         }
         title
+    }
+
+    fn message(&self, previous: &BStr, refs: &References) -> BString {
+        let mut body = previous
+            .find_byte(b'\n')
+            .map_or(b"".as_slice(), |newline| &previous[newline + 1..]);
+        if let Some(legend) = body.strip_prefix(b"\nAutoMerge inputs:\n") {
+            let end = legend.find(b"\n\n");
+            let paragraph = &legend[..end.unwrap_or(legend.len())];
+            // Preserve legacy prose that happens to use the generated section's heading.
+            if !paragraph.is_empty()
+                && paragraph
+                    .lines()
+                    .all(|line| line.starts_with("- ✔️ ".as_bytes()) || line.starts_with("- 💥 ".as_bytes()))
+            {
+                body = end.map_or(b"".as_slice(), |end| &legend[end + 1..]);
+            }
+        }
+
+        let mut message = self.title();
+        message.push_str("\n\nAutoMerge inputs:\n");
+        for input in &self.inputs {
+            message.push_str("- ");
+            message.push_str(input.label());
+            message.push_str(if input.muted { ": Muted " } else { ": Included " });
+            match &input.source {
+                InputSource::Reference(name) => {
+                    message.push_str(if name.as_bstr().starts_with(crate::history::PIN_PREFIX) {
+                        "pin `"
+                    } else {
+                        "reference `"
+                    });
+                    message.push_str(name.as_bstr());
+                    message.push(b'`');
+                    if let Some(undo::State::Symbolic(target)) = refs.observed.get(name) {
+                        message.push_str(" following `");
+                        message.push_str(target.as_bstr());
+                        message.push(b'`');
+                    }
+                }
+                InputSource::Change(change_id) => message.push_str(format!("change `{change_id}`")),
+            }
+            message.push_str(if input.muted {
+                "; conflicts or pending replay exclude its entire contribution.\n"
+            } else {
+                ".\n"
+            });
+        }
+        if !body.is_empty() && !body.starts_with(b"\n") {
+            message.push(b'\n');
+        }
+        message.push_str(body);
+        message
     }
 }
 
@@ -160,7 +222,7 @@ pub(crate) fn is_auto_merge(commit: &gix::objs::Commit) -> bool {
 pub(super) fn ensure_editable(commit: &gix::objs::Commit) -> Result<()> {
     ensure!(
         !is_auto_merge(commit),
-        "AutoMerge trees and titles are generated; edit an input or change the AutoMerge inputs instead"
+        "AutoMerge trees and messages are generated; edit an input or change the AutoMerge inputs instead"
     );
     Ok(())
 }
@@ -409,13 +471,7 @@ pub(crate) fn rebuild(
                 Err(err) => return Err(err).context("could not find the common base of muted inputs"),
             },
         };
-        let mut message = definition.title();
-        if let Some(newline) = commit.message.find_byte(b'\n') {
-            message.push_str(&commit.message[newline..]);
-        } else {
-            message.push(b'\n');
-        }
-        commit.message = message;
+        commit.message = definition.message(commit.message.as_bstr(), refs);
     }
     let mut seen = HashSet::new();
     commit.parents = definition
