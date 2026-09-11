@@ -9997,6 +9997,7 @@ mod tests {
                 id,
                 label_id: id,
                 checkout_name: "main".into(),
+                head_reference: "main-worktree/HEAD".try_into().expect("valid main worktree HEAD"),
                 reference: Some("refs/heads/main".try_into().expect("valid branch name")),
                 is_current: true,
                 is_detached: false,
