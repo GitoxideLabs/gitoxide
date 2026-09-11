@@ -1498,25 +1498,62 @@ views.
   separator is `fork <id> (updated-base) <title>`, with the raw title exactly as
   shown in history, including `[A]` and `[N]`. The hidden branch
   itself is not moved.
-- Pick lines may be reordered or removed. `squash <id>` folds an existing
-  non-merge commit into the following `pick` or `empty` below it in the same
-  fork; it may carry `@`, and fork separators naming any folded ID resolve to
-  the combined result. A fork cannot begin with `squash` when read bottom-to-top.
+- Pick lines may be reordered or removed. `squash <id>`, `fixup <id>`, and
+  `fixup -C <id>` fold an existing non-merge commit into the following `pick`
+  or `empty` below it in the same fork. A fold may carry `@`, and fork
+  separators naming any folded ID resolve to
+  the combined result. A fork cannot begin with a fold when read bottom-to-top.
   Fork separators may otherwise target a pick below or any existing commit, so
   adding and removing separators creates
   and joins branches. `empty <title>` inserts an empty commit. Markdown code
   spans and equivalent plain commands are accepted; display text after an ID is
   informational and emitted verbatim without Markdown escaping.
-- Squash groups are materialized eagerly on every fork by applying their source
+- Fold groups are materialized eagerly on every fork by applying their source
   deltas in bottom-to-top todo order. The result retains the first member's author, author
-  time, encoding, extra headers, and message, receives the operation's committer,
-  and is signed once. Before every later full message, a permanent
+  time, encoding, and extra headers, starts with its message, receives the operation's committer,
+  and is signed once. For `squash`, before every later full message, a permanent
   `# <short-id> <subject>` line identifies its source. Distinct raw authors of
-  later commits are appended in first-seen order as `Co-authored-by` trailers,
+  later squashed commits are appended in first-seen order as `Co-authored-by` trailers,
   excluding the first author and identities already named by a valid such
   trailer in any source message. Name and email pairs are compared without
   mailmap. All folded IDs and mutable refs map to the one resulting commit;
   resources owned by a later folded review commit are removed.
+- `fixup` discards its source message and adds no author trailer. `fixup -C`
+  replaces the accumulated message with its source's complete message, or with
+  the body after the subject paragraph when the source has an `amend! ` marker.
+  An empty replacement is allowed. The last replacement wins, including over
+  earlier squash messages and generated trailers; subsequent `squash` messages
+  append normally. Neither fixup mode changes the first member's author or
+  generates a trailer for its source author. No additional message editor opens.
+- Initial explicit rebases, including TUI rebase/rebase-update and CLI
+  `tix rebase todo`, automatically group commits whose subjects begin with
+  `fixup! `, `squash! `, or `amend! ` and mark them as `fixup`, `squash`, or
+  `fixup -C`. These are ordinary commits with message conventions, not stored
+  target links. Create them with `git commit --fixup=<target>`,
+  `--squash=<target>`, or `--fixup=amend:<target>`. Git's
+  `--fixup=reword:<target>` creates an `amend!` commit containing only a message
+  change and ignores staged changes during creation.
+- Autosquash matches original normalized subjects and IDs within each source's
+  editable first-parent ancestry. It tries an exact subject, then a commit name
+  or hash, then a subject prefix, choosing the earliest matching ancestor.
+  Nested markers are stripped for lookup; the outermost marker selects the
+  action. Unmatched and out-of-scope targets remain ordinary picks. Ordinary
+  merges and AutoMerges cannot be fold sources or targets. Sibling branch
+  commits are ineligible, even when displayed earlier in the todo.
+- Multiple folds preserve Git's grouping order, including folds targeting an
+  earlier fixup by hash. Contributions from separate branches use the original
+  generated todo order. Moving a fold reconnects its children through its
+  surviving original parent, retaining intervening commits and forks. Branch
+  tips and a checkout at a consumed tip stay at the surviving stack tip.
+  Shared ancestor targets affect their descendant forks. Moving a patch earlier
+  can conflict when it depends on an intervening commit.
+- Automatic marking happens only during initial todo generation. Edited
+  commands and continuations are applied literally; users can change a generated
+  fold to `pick` and reposition it. Internal replays during amend, reword, and
+  travel do not automatically fold commits. Unlike Git's opt-in autosquash,
+  Tix enables initial marking automatically. Its first-parent restriction,
+  automatic squash message composition, and replacement of earlier squash
+  messages follow Tix conventions rather than Git's full interactive behavior.
 - The first line points to complete self-documenting help after the editable
   todo. All instructions are enclosed in Markdown comments so only separators,
   reference lines, and command lines participate in the editable plan.
@@ -1547,8 +1584,8 @@ views.
   unverified signature, and `○` for an unsigned commit. Applicable states may be
   combined without changing plan semantics. Applicable `🚧`, `📝`, and `✔️`
   enrichment gutter symbols appear before the signature-state disk as metadata.
-- `@pick`, `@squash`, or `@empty` chooses the post-rebase commit. A generated
-  todo keeps this marker even when `HEAD` is attached, but shows its branch as an
+- `@pick`, `@squash`, `@fixup`, `@fixup -C`, or `@empty` chooses the post-rebase
+  commit. A generated todo keeps this marker even when `HEAD` is attached, but shows its branch as an
   ordinary ref. Versioned state remembers that attachment while the ref stays
   at the marked result. Moving it elsewhere detaches `HEAD`; adding `@` to one
   editable ref explicitly attaches it and is valid only at the marked result.
@@ -1589,9 +1626,10 @@ views.
   without changes unless `--materialize-conflicts` was explicitly supplied. Its
   continuation document uses the full null object ID for the command whose tree
   must come from the resolved index. Already produced commits use their new IDs,
-  completed drops and squash sources disappear, unapplied squash sources remain,
-  and the remaining
-  todo stays editable. Applying it
+  completed drops and fold sources disappear, unapplied fold sources retain
+  their actions, and the remaining todo stays editable. A conflicting fold's
+  message action is already recorded on the partial result and is not applied
+  again by continuation. Applying it
   requires only that `HEAD` names a commit and the index has no unresolved stages;
   the index tree, including additional staged changes, becomes the resolved tree.
   There is no hidden sequencer state or separate continue/abort command.
@@ -1621,8 +1659,9 @@ views.
   the ref stays at the leaf. Concurrent changes to refs being written make the
   transaction fail; the editor result is not rebuilt against a later graph
   snapshot. Leaving the document unchanged is a no-op unless the ancestry ending
-  at `@` contains pending commits or rebase-update selected a newer base; pending
-  commits on other forks remain lazy and do not replay a clean checkout ancestry. Explicit
+  at `@` contains pending commits, rebase-update selected a newer base, or
+  autosquash generated folds. Pending commits on other forks remain lazy and
+  do not replay a clean checkout ancestry. Explicit
   `tix rebase apply` always
   applies a valid plan, even when its editable commands are unchanged. The first
   Markdown comment states which of these modes applies and explains that emptying
