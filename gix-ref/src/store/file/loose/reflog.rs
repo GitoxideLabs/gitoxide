@@ -153,10 +153,15 @@ pub mod create_or_update {
                         if cfg!(unix) && self.shared_repository_permissions != 0 {
                             file.metadata()
                                 .and_then(|metadata| {
-                                    file.set_permissions(gix_fs::adjust_shared_repository_permissions(
-                                        metadata.permissions(),
+                                    let current = metadata.permissions();
+                                    let adjusted = gix_fs::adjust_shared_repository_permissions(
+                                        current.clone(),
                                         self.shared_repository_permissions,
-                                    ))
+                                    );
+                                    if current != adjusted {
+                                        file.set_permissions(adjusted)?;
+                                    }
+                                    Ok(())
                                 })
                                 .map_err(|source| Error::Append {
                                     source,
