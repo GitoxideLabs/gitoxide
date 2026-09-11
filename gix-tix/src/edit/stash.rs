@@ -190,6 +190,83 @@ pub(super) struct SavedStash {
     pub warning: Option<String>,
 }
 
+pub(super) fn save_if_dirty(
+    repository_path: &Path,
+    bare: bool,
+    workdir: &Path,
+    name: gix::refs::FullName,
+) -> Result<Option<SavedStash>> {
+    if let Some(commit_id) = associated_commit(name.as_bstr())? {
+        let repo = open_repository(repository_path, bare, false).context("could not verify the stash departure")?;
+        anyhow::ensure!(
+            repo.head_id()? == commit_id,
+            "changes can only be stashed at the current HEAD"
+        );
+    }
+    if !super::review::is_dirty(workdir)? {
+        return Ok(None);
+    }
+    let message = format!("tix travel {}", name.shorten());
+    save(
+        repository_path,
+        bare,
+        workdir,
+        name,
+        message,
+        "tix travel auto-stash",
+        "departure state",
+    )
+    .map(Some)
+}
+
+pub(super) fn remap(saved: &mut SavedStash, map: impl FnOnce(ObjectId) -> Option<ObjectId>) -> Result<()> {
+    if let Some(commit_id) = associated_commit(saved.name.as_bstr())? {
+        saved.name = reference(map(commit_id).context("the stashed departure disappeared during replay")?)?;
+    }
+    Ok(())
+}
+
+pub(super) fn restore_after_failure(
+    repository_path: &Path,
+    bare: bool,
+    workdir: &Path,
+    saved: SavedStash,
+    cause: anyhow::Error,
+) -> anyhow::Error {
+    let saved_id = saved.target.try_id().map(|id| id.to_string());
+    let restore = (|| -> Result<String> {
+        let repo =
+            open_repository(repository_path, bare, false).context("could not inspect the rolled-back departure")?;
+        let stash_commit_id = saved.target.try_id().context("a saved stash must point to an object")?;
+        let departure_commit_id = repo
+            .find_commit(stash_commit_id)?
+            .parent_ids()
+            .next()
+            .context("a saved stash must have a departure parent")?;
+        anyhow::ensure!(
+            repo.head_id()? == departure_commit_id,
+            "HEAD was not restored to the departure"
+        );
+        anyhow::ensure!(
+            !super::review::is_dirty(workdir)?,
+            "the departure is not clean after rollback"
+        );
+        anyhow::ensure!(
+            saved.target == repo.find_reference(saved.name.as_ref())?.target(),
+            "the departure stash reference changed"
+        );
+        drop(repo);
+        apply(repository_path, bare, workdir, saved)
+    })();
+    match restore {
+        Ok(notice) => cause.context(format!("departure stash restoration: {notice}")),
+        Err(restore) => cause.context(format!(
+            "departure stash could not be restored: {restore:#}; saved stash object: {}",
+            saved_id.as_deref().unwrap_or("unknown")
+        )),
+    }
+}
+
 #[tracing::instrument(skip_all, fields(stash = %name))]
 pub(super) fn save(
     repository_path: &Path,
@@ -257,23 +334,30 @@ pub(super) fn save(
     }
     drop(repo);
 
-    let warning = match current(repository_path, bare)? {
-        Some(current) if current == id => {
-            let output = Command::new("git")
+    let warning = match current(repository_path, bare) {
+        Ok(Some(current)) if current == id => {
+            match Command::new("git")
                 .arg("-C")
                 .arg(workdir)
                 .args(["stash", "drop", "--quiet", "stash@{0}"])
                 .output()
-                .context("could not launch git stash drop")?;
-            (!output.status.success()).then(|| {
-                format!(
-                    "{state_label} was saved, but its ordinary stash entry remains: {}",
-                    output.stderr.trim().to_str_lossy()
-                )
-            })
+            {
+                Ok(output) => (!output.status.success()).then(|| {
+                    format!(
+                        "{state_label} was saved, but its ordinary stash entry remains: {}",
+                        output.stderr.trim().to_str_lossy()
+                    )
+                }),
+                Err(err) => Some(format!(
+                    "{state_label} was saved, but could not launch git stash drop: {err}"
+                )),
+            }
         }
-        _ => Some(format!(
+        Ok(_) => Some(format!(
             "{state_label} was saved, but refs/stash changed before its entry could be dropped"
+        )),
+        Err(err) => Some(format!(
+            "{state_label} was saved, but could not inspect its ordinary stash entry: {err:#}"
         )),
     };
     tracing::info!(stash = %name, %id, "saved worktree state");

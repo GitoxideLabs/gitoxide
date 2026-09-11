@@ -900,8 +900,16 @@ mod tests {
         let return_name = return_to(&review)?.expect("the review records its return pin");
         let graph = super::super::loaded_graph(&repo)?;
         drop(repo);
-        super::super::time_travel::perform(fixture.path(), false, middle, &graph, &[started.commit], &[], false)?
-            .complete()?;
+        super::super::time_travel::perform(
+            fixture.path(),
+            false,
+            middle,
+            &graph,
+            &[started.commit],
+            &[],
+            Default::default(),
+        )?
+        .complete()?;
 
         let repo = open()?;
         let graph = super::super::loaded_graph(&repo)?;
@@ -938,7 +946,7 @@ mod tests {
             &graph,
             &[started.commit],
             &[],
-            false,
+            Default::default(),
         )?
         .complete()?;
         run(fixture.path(), &["add", "--all"])?;
