@@ -1036,8 +1036,8 @@ views.
   title, a `why` body, optional attribution trailers, and a commented Git-style
   per-path diffstat with signed net line counts. Commit hooks are not run.
 - After editing, tix revalidates the destination, applies configured signing,
-  marks linear descendants for lazy replay, persists the prepared objects, and atomically
-  advances mutable refs throughout the rewritten stack. This includes local
+  marks linear descendants needing tree replay as pending, persists the prepared
+  objects, and atomically advances mutable refs throughout the rewritten stack. This includes local
   branches, custom refs, direct tix pins, and a detached `HEAD`, while excluding
   tags and remote-tracking refs. Checked-out affected worktrees are preflighted;
   inaccessible or conflicting affected worktrees abort safely.
@@ -1114,8 +1114,9 @@ views.
   commit already has its final tree and unchanged parent, so it is signed
   immediately when configured and is never pending. A zero-delta commit
   immediately adopts and is signed against its rewritten parent tree whenever
-  that parent is final; it remains lazy only behind a pending parent. Other
-  reparented descendants carry
+  that parent is final; it remains lazy only behind a pending parent. Previously
+  final descendants whose result and ordered parent trees stay unchanged also
+  remain final after their parent IDs change. Other reparented descendants carry
   `tix-rebase-parent`, retaining the original parent needed for later replay.
   Pending forms use a grey commit marker so they remain distinct from unsigned
   blue. A final descendant whose effective parents did not change retains its
@@ -1123,9 +1124,9 @@ views.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
   targets are trees, blobs, or other non-commit objects.
 - Time travel toward a pending destination cherry-picks and signs only the pending
-  ancestry through that destination. Later non-empty descendants become or
-  remain lazy and unsigned; zero-delta descendants finalize immediately while
-  their parent is final and remain lazy behind a pending parent. Traveling toward
+  ancestry through that destination. Later non-empty descendants needing tree
+  replay become or remain lazy and unsigned; zero-delta descendants finalize
+  immediately while their parent is final and remain lazy behind a pending parent. Traveling toward
   a non-pending ancestor leaves the entire pending region untouched. A completed
   final replay does not reload history;
   another pass loads only the rewritten path and never unrelated references.
@@ -1336,7 +1337,7 @@ views.
 - `a d` immediately deletes a selected non-merge commit after history completion
   when it has no known ordinary merge descendant.
 - Deleting does not require a worktree. Linear descendants are reparented with
-  unchanged trees and marked for lazy replay; mutable refs throughout the
+  unchanged trees and marked when tree replay is needed; mutable refs throughout the
   rewritten stack move atomically. Tags and remote-tracking refs remain unchanged.
 - When the selected commit is the current worktree `HEAD`, Git preflights and
   applies a two-tree index/worktree transition which discards only that commit's
@@ -1361,10 +1362,18 @@ views.
   root of a direct amend or spill already has its final tree and does not receive
   a redundant worktree transition. Descendants on unrelated branches and in
   other worktrees remain lazy unless their delta is empty and their parent is
-  final. A successful repeated rebase clears the marker
-  through its checkout destination.
+  final, or the metadata-only rewrite rule below applies. A successful repeated
+  rebase clears the marker through its checkout destination.
   On conflict, `tix-rebase-parent` identifies the original base and later descendants
   remain marked instead of being cherry-picked.
+- A previously final commit remains final when a rewrite changes only metadata:
+  its result tree and ordered parent trees are unchanged, and every rewritten
+  parent is final. Rewording a message or adding a commit header therefore
+  reparents and re-signs affected final descendants without tree replay or
+  pending markers, including off-checkout forks and qualifying AutoMerges.
+  Existing pending commits still require their normal replay; metadata changes
+  alone never finalize them. Hidden-boundary, descendant-merge, checkout, and
+  signature restrictions remain in force.
 - Checkout-path validation considers only the current edit scope: visible
   commits and their displayed hidden boundary, or the frozen scope of a
   self-contained rebase plan. Cached commits below that boundary do not block
@@ -1473,12 +1482,14 @@ views.
   reject an unborn `HEAD`.
 - Within the ancestry ending at `@`, unchanged picks whose original parent is
   still their planned parent retain their IDs. Eager cherry-picking and re-signing
-  starts at the first pending or structurally changed commit. Any descendants
-  above `@` and other resulting stacks retain their trees, receive pending-rebase
-  markers, and invalidate old signatures for later time travel. With no explicit
-  `@`, the current attached branch's resulting destination is inferred and its
-  ancestry is replayed eagerly; a detached checkout is not inferred. Other
-  ordinary steps remain lazy while squash groups are still materialized.
+  starts at the first pending or structurally changed commit. Descendants
+  above `@` and other resulting stacks retain their trees; those needing tree
+  replay receive pending-rebase markers and invalidate old signatures for later
+  time travel. Metadata-only rewrites follow the same final-state rule as other
+  edits. With no explicit `@`, the current attached branch's resulting destination
+  is inferred and its ancestry is replayed eagerly; a detached checkout is not
+  inferred. Other ordinary steps needing replay remain lazy while squash groups
+  are still materialized.
   Any conflict while applying a history todo first remains entirely in memory.
   The TUI projects the partial result, selects and centers the actual conflicting
   result with normal history-boundary clamping, and marks it with a steady red

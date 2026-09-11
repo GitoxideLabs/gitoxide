@@ -598,9 +598,10 @@ mod tests {
             Some(child),
             "the natural descendants follow the review side's single leaf"
         );
-        assert!(super::super::rebase::has_marker(
-            &repo.find_commit(natural)?.decode()?.into_owned()?
-        ));
+        assert!(
+            !super::super::rebase::is_pending(&repo.find_commit(natural)?.decode()?.into_owned()?),
+            "the review leaf retains the original parent tree, so the natural descendant stays final"
+        );
         assert!(
             repo.try_find_reference(started.reference.as_ref())?.is_none(),
             "finishing removes the review resource"
