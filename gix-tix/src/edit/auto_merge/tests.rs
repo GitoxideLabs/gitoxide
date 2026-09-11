@@ -59,6 +59,107 @@ fn apply(repo: &gix::Repository, selected_commit_id: ObjectId, change: Change) -
 }
 
 #[test]
+fn deleting_a_merge_above_head_preserves_the_checkout_and_reparents_descendants() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+    repo.reference(
+        "refs/heads/combined",
+        merge_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain the merge to delete",
+    )?;
+    let mut descendant = changed_tree(
+        &repo,
+        repo.find_commit(merge_commit_id)?.decode()?.into_owned()?,
+        "child",
+        "descendant\n",
+    )?;
+    descendant.parents = [merge_commit_id].into_iter().collect();
+    descendant.extra_headers.clear();
+    descendant.message = "ordinary descendant\n".into();
+    let descendant_commit_id = repo.write_object(&descendant)?.detach();
+    repo.reference(
+        "refs/heads/child",
+        descendant_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain a descendant of the merge",
+    )?;
+    super::super::time_travel::perform(fixture.path(), false, a.commit_id, &graph(&repo)?, &[], &[], false)?
+        .complete()?;
+    let head_before = repo.head()?.referent_name().map(ToOwned::to_owned);
+    std::fs::write(fixture.path().join("shared"), b"staged\n")?;
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(fixture.path())
+            .args(["add", "shared"])
+            .status()?
+            .success(),
+        "Git stages an edit at the parent checkout"
+    );
+    std::fs::write(fixture.path().join("shared"), b"unstaged\n")?;
+    let index_before = std::fs::read(repo.index_path())?;
+
+    let outcome = super::super::delete::perform(repo.clone(), &graph(&repo)?, merge_commit_id)?;
+    assert_eq!(outcome.selected, Some(a.commit_id), "deletion selects the first parent");
+    assert!(outcome.review_return.is_none(), "deletion needs no return checkout");
+    assert_eq!(repo.head_id()?, a.commit_id, "HEAD already below the merge stays put");
+    assert_eq!(repo.head()?.referent_name().map(ToOwned::to_owned), head_before);
+    assert_eq!(std::fs::read(repo.index_path())?, index_before, "staging stays intact");
+    assert_eq!(std::fs::read(fixture.path().join("shared"))?, b"unstaged\n");
+    assert!(
+        !fixture.path().join("c").exists(),
+        "the merge content is never checked out"
+    );
+    assert_eq!(input(&repo, "A")?.commit_id, a.commit_id, "the first input is retained");
+    assert_eq!(input(&repo, "C")?.commit_id, c.commit_id, "the other input is retained");
+    assert_eq!(input(&repo, "combined")?.commit_id, a.commit_id);
+    let child = repo
+        .find_commit(input(&repo, "child")?.commit_id)?
+        .decode()?
+        .into_owned()?;
+    assert_eq!(
+        child.parents.as_slice(),
+        [a.commit_id],
+        "the descendant bypasses the deleted merge"
+    );
+    assert_eq!(child.tree, descendant.tree, "off-checkout descendants keep their trees");
+    assert!(rebase::is_pending(&child), "the descendant's content replay stays lazy");
+    Ok(())
+}
+
+#[test]
+fn deleting_the_checked_out_merge_returns_to_its_first_parent() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+    assert!(
+        fixture.path().join("c").is_file(),
+        "the merge includes the second input"
+    );
+
+    let outcome = super::super::delete::perform(repo.clone(), &graph(&repo)?, merge_commit_id)?;
+    assert_eq!(outcome.selected, Some(a.commit_id));
+    assert_eq!(repo.head_id()?, a.commit_id, "deleting HEAD uses its first parent");
+    assert!(
+        !fixture.path().join("c").exists(),
+        "only the merge's tracked delta is removed"
+    );
+    assert_eq!(std::fs::read(fixture.path().join("shared"))?, b"A\n");
+    assert_eq!(input(&repo, "A")?.commit_id, a.commit_id);
+    assert_eq!(
+        input(&repo, "C")?.commit_id,
+        c.commit_id,
+        "input branches survive deletion"
+    );
+    Ok(())
+}
+
+#[test]
 fn unnamed_inputs_survive_creation_and_rewrites_without_tracking_refs() -> gix_testtools::Result {
     let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
     let repo = crate::test_repository::open(fixture.path())?;
