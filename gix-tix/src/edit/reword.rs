@@ -1231,6 +1231,60 @@ mod tests {
     }
 
     #[test]
+    fn reword_keeps_off_checkout_descendants_final() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "-q", "--detach", "HEAD^"])
+                .status()?
+                .success(),
+            "the descendant remains on its branch beyond the current checkout"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        let middle_commit_id = repository.head_id()?.detach();
+        let tip_commit_id = repository.find_reference("refs/heads/main")?.id().detach();
+        let original = repository.find_commit(tip_commit_id)?.decode()?.into_owned()?;
+        let graph = super::super::loaded_graph(&repository)?;
+        let rewritten_middle_commit_id = apply_message_reporting(
+            repository.clone(),
+            &graph,
+            middle_commit_id,
+            b"rewritten middle\n",
+            None,
+        )?
+        .commit
+        .expect("the changed message rewrites the selected commit");
+        let rewritten_tip_commit_id = repository.find_reference("refs/heads/main")?.id().detach();
+        let rewritten = repository
+            .find_commit(rewritten_tip_commit_id)?
+            .decode()?
+            .into_owned()?;
+
+        assert_ne!(
+            rewritten_tip_commit_id, tip_commit_id,
+            "the descendant follows the new parent ID"
+        );
+        assert_eq!(
+            rewritten.parents.as_slice(),
+            &[rewritten_middle_commit_id],
+            "the rewritten descendant references the reworded parent"
+        );
+        assert_eq!(rewritten.tree, original.tree, "rewording preserves the descendant tree");
+        assert_eq!(
+            (&rewritten.author, &rewritten.message),
+            (&original.author, &original.message),
+            "reparenting preserves descendant authorship and message"
+        );
+        assert!(
+            !rebase::is_pending(&rewritten),
+            "unchanged parent content leaves the off-checkout descendant final"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn head_edits_ignore_pending_history_below_the_hidden_base() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -1365,6 +1419,64 @@ mod tests {
                 .is_valid(),
             "the checked-out descendant receives its configured signature"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn signed_reword_signs_off_checkout_descendants() -> gix_testtools::Result {
+        if !gix_testtools::signature::program_available("ssh-keygen") {
+            return Ok(());
+        }
+        let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "-q", "--detach", "HEAD^"])
+                .status()?
+                .success(),
+            "the signed reword must also finalize the descendant beyond the checkout"
+        );
+        let repository = crate::test_repository::open_with(
+            fixture.path(),
+            [
+                "commit.gpgSign=true".to_owned(),
+                "gpg.format=ssh".to_owned(),
+                format!("user.signingKey={}", key.display()),
+                format!(
+                    "gpg.ssh.allowedSignersFile={}",
+                    gix_testtools::signature::fixture("ssh-allowed-signers").display()
+                ),
+            ],
+        )?;
+        let middle_commit_id = repository.head_id()?.detach();
+        let graph = super::super::loaded_graph(&repository)?;
+        let rewritten_middle_commit_id = apply_message_reporting(
+            repository.clone(),
+            &graph,
+            middle_commit_id,
+            b"rewritten middle\n",
+            None,
+        )?
+        .commit
+        .expect("the changed message rewrites the selected commit");
+        let rewritten_tip_commit_id = repository.find_reference("refs/heads/main")?.id().detach();
+
+        for commit_id in [rewritten_middle_commit_id, rewritten_tip_commit_id] {
+            let commit = repository.find_commit(commit_id)?;
+            assert!(
+                !rebase::is_pending(&commit.decode()?.into_owned()?),
+                "metadata-only rewrites retain final commits beyond the checkout"
+            );
+            assert!(
+                commit
+                    .verify_signature()?
+                    .expect("every final rewritten commit receives its configured signature")
+                    .is_valid(),
+                "signatures cover the rewritten parent IDs"
+            );
+        }
         Ok(())
     }
 

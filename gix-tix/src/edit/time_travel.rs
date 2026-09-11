@@ -2604,6 +2604,8 @@ mod tests {
         let other_tip = repository.head_id()?.detach();
         let graph = super::super::loaded_graph(&repository)?;
         let mut replacement = repository.find_commit(middle)?.decode()?.into_owned()?;
+        // Removing the middle delta requires replay; a message-only edit keeps descendants final.
+        replacement.tree = repository.find_commit(root)?.tree_id()?.detach();
         replacement.message = "rewritten middle".into();
         git(fixture.path(), &["checkout", "-q", "--detach", &root.to_string()])?;
         let marked = super::super::rebase::perform(
