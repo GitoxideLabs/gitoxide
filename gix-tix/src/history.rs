@@ -95,6 +95,8 @@ pub(crate) struct WorktreeCheckout {
     pub id: ObjectId,
     pub label_id: ObjectId,
     pub checkout_name: BString,
+    /// The qualified reference to this worktree's physical `HEAD`.
+    pub head_reference: gix::refs::FullName,
     pub reference: Option<gix::refs::FullName>,
     pub is_current: bool,
     pub is_detached: bool,
@@ -1598,7 +1600,7 @@ pub(crate) fn worktree_checkouts(repo: &gix::Repository) -> Vec<WorktreeCheckout
     match repo.main_repo() {
         Ok(main) if !main.is_bare() => {
             let name = main.workdir().and_then(worktree_basename);
-            add_worktree_checkout(&main, name, b"main".as_bstr(), current_worktree == Some(None), &mut out);
+            add_worktree_checkout(&main, name, None, current_worktree == Some(None), &mut out);
         }
         Ok(_) => {}
         Err(err) => tracing::warn!(error = %err, "ignoring inaccessible main worktree"),
@@ -1614,7 +1616,7 @@ pub(crate) fn worktree_checkouts(repo: &gix::Repository) -> Vec<WorktreeCheckout
                     .is_some_and(|current| current == &worktree);
                 match proxy.into_repo_with_possibly_inaccessible_worktree() {
                     Ok(repository) => {
-                        add_worktree_checkout(&repository, name, worktree.as_bstr(), is_current, &mut out);
+                        add_worktree_checkout(&repository, name, Some(worktree.as_bstr()), is_current, &mut out);
                     }
                     Err(err) => {
                         tracing::warn!(worktree = %worktree, error = %err, "ignoring inaccessible linked worktree");
@@ -1637,10 +1639,21 @@ pub(crate) fn worktree_checkouts(repo: &gix::Repository) -> Vec<WorktreeCheckout
 fn add_worktree_checkout(
     repo: &gix::Repository,
     checkout_name: Option<BString>,
-    worktree: &BStr,
+    worktree: Option<&BStr>,
     is_current: bool,
     out: &mut Vec<WorktreeCheckout>,
 ) {
+    let head_category = worktree.map_or(gix::refs::Category::MainPseudoRef, |name| {
+        gix::refs::Category::LinkedPseudoRef { name }
+    });
+    let worktree = worktree.unwrap_or(b"main".as_bstr());
+    let head_reference = match head_category.to_full_name("HEAD") {
+        Ok(reference) => reference,
+        Err(err) => {
+            tracing::warn!(%worktree, error = %err, "ignoring worktree with invalid HEAD reference name");
+            return;
+        }
+    };
     let mut head = match repo.head() {
         Ok(head) => head,
         Err(err) => {
@@ -1649,7 +1662,7 @@ fn add_worktree_checkout(
         }
     };
     let is_detached = head.is_detached();
-    let head_reference = head.referent_name().map(ToOwned::to_owned);
+    let head_referent = head.referent_name().map(ToOwned::to_owned);
     let id = match head.try_peel_to_id() {
         Ok(Some(id)) => id.detach(),
         Ok(None) => return,
@@ -1662,13 +1675,14 @@ fn add_worktree_checkout(
         .then(|| remembered_worktree_branch(repo, worktree))
         .flatten();
     let (reference, label_id) = remembered
-        .or_else(|| head_reference.map(|reference| (reference, id)))
+        .or_else(|| head_referent.map(|reference| (reference, id)))
         .map_or((None, id), |(reference, id)| (Some(reference), id));
     let checkout_name = checkout_name.unwrap_or_else(|| worktree.to_owned());
     out.push(WorktreeCheckout {
         id,
         label_id,
         checkout_name,
+        head_reference,
         reference,
         is_current,
         is_detached,
@@ -2828,6 +2842,7 @@ mod tests {
         assert!(worktrees.iter().any(|worktree| {
             worktree.id == main
                 && worktree.label_id == main
+                && worktree.head_reference == "main-worktree/HEAD"
                 && worktree.is_current
                 && !worktree.is_detached
                 && worktree
@@ -2839,6 +2854,7 @@ mod tests {
             worktree.id == topic
                 && worktree.label_id == topic
                 && worktree.checkout_name == "topic-wt"
+                && worktree.head_reference == "worktrees/topic-wt/HEAD"
                 && !worktree.is_current
                 && !worktree.is_detached
                 && worktree
@@ -2850,6 +2866,7 @@ mod tests {
             worktree.id == root
                 && worktree.label_id == remembered
                 && worktree.checkout_name == "detached-wt"
+                && worktree.head_reference == "worktrees/detached-wt/HEAD"
                 && worktree
                     .reference
                     .as_ref()
@@ -2858,6 +2875,13 @@ mod tests {
                 && worktree.is_detached
         }));
         assert_eq!(worktrees.len(), 4, "the malformed worktree is ignored");
+        for worktree in &worktrees {
+            assert_eq!(
+                repo.find_reference(worktree.head_reference.as_ref())?.peel_to_id()?,
+                worktree.id,
+                "qualified HEAD references resolve to the physical checkout, even when its directory is absent"
+            );
+        }
 
         let main_repo_decorations = decorations(&repo, &[], &worktrees)?;
         let main_decorations = main_repo_decorations.get(&main).expect("main is decorated");
@@ -2904,10 +2928,14 @@ mod tests {
         let linked_path = fixture.path().join("topic-wt");
         let linked_repo = crate::test_repository::open(&linked_path)?;
         let linked_worktrees = worktree_checkouts(&linked_repo);
+        assert!(linked_worktrees.iter().any(|worktree| worktree.id == topic
+            && worktree.is_current
+            && worktree.head_reference == "worktrees/topic-wt/HEAD"));
         assert!(
             linked_worktrees
                 .iter()
-                .any(|worktree| worktree.id == topic && worktree.is_current)
+                .any(|worktree| worktree.id == main && worktree.head_reference == "main-worktree/HEAD"),
+            "main-worktree HEAD keeps its identity when viewed from a linked worktree"
         );
         let linked_decorations = decorations(&linked_repo, &[], &linked_worktrees)?;
         assert!(linked_decorations.get(&topic).is_some_and(|decorations| {
@@ -2937,6 +2965,10 @@ mod tests {
         assert!(current.reference.is_none());
         assert!(current.is_detached);
         assert_eq!(current.label_id, current.id);
+        assert_eq!(
+            current.head_reference, "worktrees/topic-wt/HEAD",
+            "detaching keeps the physical HEAD reference"
+        );
         let detached_decorations = decorations(&detached_repo, &[], &detached_worktrees)?;
         assert!(detached_decorations.get(&current.id).is_some_and(|decorations| {
             decorations.iter().any(|decoration| {
@@ -2959,6 +2991,10 @@ mod tests {
         assert_eq!(current.label_id, topic, "the label follows the remembered branch tip");
         assert_eq!(current.checkout_name, "topic-wt");
         assert!(current.is_detached);
+        assert_eq!(
+            current.head_reference, "worktrees/topic-wt/HEAD",
+            "remembering a branch leaves the physical HEAD reference unchanged"
+        );
         assert!(
             current
                 .reference
