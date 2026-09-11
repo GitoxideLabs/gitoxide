@@ -74,11 +74,6 @@ impl Conflict {
         self.rebase.original()
     }
 
-    pub(crate) fn prepend_ref_changes(&mut self, mut changes: Vec<super::undo::RefChange>) {
-        changes.append(&mut self.ref_changes);
-        self.ref_changes = changes;
-    }
-
     pub(crate) fn into_ref_changes(self) -> Vec<super::undo::RefChange> {
         self.ref_changes
     }

@@ -97,12 +97,10 @@ pub(crate) fn draw_command_menu(
         let command = &commands[index];
         let group = command.group.label();
         let mut shortcut = command.shortcut.chars();
-        let shortcut = format!(
-            "{} {}",
-            shortcut.next().expect("a command shortcut has a prefix"),
-            shortcut.next().expect("a command shortcut has a key")
-        );
-        format!("{group:<11} {}  [{shortcut}]", command.label)
+        match (shortcut.next(), shortcut.next()) {
+            (Some(prefix), Some(key)) => format!("{group:<11} {}  [{prefix} {key}]", command.label),
+            _ => format!("{group:<11} {}", command.label),
+        }
     })
 }
 
@@ -193,20 +191,28 @@ pub(crate) fn draw_todo_progress(frame: &mut Frame<'_>, progress: crate::edit::r
     );
     let rows = Layout::vertical([Constraint::Length(1); 4]).split(progress_area);
     frame.render_widget(
-        Paragraph::new("Rebasing commits")
-            .alignment(Alignment::Center)
-            .style(Style::default().add_modifier(Modifier::BOLD)),
+        Paragraph::new(if progress.total == 0 {
+            "Preparing rebase"
+        } else {
+            "Rebasing commits"
+        })
+        .alignment(Alignment::Center)
+        .style(Style::default().add_modifier(Modifier::BOLD)),
         rows[0],
     );
     let ratio = if progress.total == 0 {
-        1.0
+        0.0
     } else {
         progress.processed.min(progress.total) as f64 / progress.total as f64
     };
     frame.render_widget(
         Gauge::default()
             .ratio(ratio)
-            .label(format!("{} / {} commits", progress.processed, progress.total))
+            .label(if progress.total == 0 {
+                "planning commits".into()
+            } else {
+                format!("{} / {} commits", progress.processed, progress.total)
+            })
             .gauge_style(Style::default().fg(Color::LightBlue)),
         rows[1],
     );
@@ -650,11 +656,13 @@ pub(crate) fn draw_with_worktree(
     } else {
         0
     };
-    let status_x = body
+    let selection_gutter = if app.tree_selection_active() { 4 } else { 0 };
+    let selection_x = body
         .x
         .saturating_add(enrichment_gutter)
         .saturating_add(change_id_gutter)
         .saturating_add(conflict_gutter);
+    let status_x = selection_x.saturating_add(selection_gutter);
     let content = Rect::new(
         status_x.saturating_add(2),
         body.y,
@@ -662,6 +670,7 @@ pub(crate) fn draw_with_worktree(
             enrichment_gutter
                 .saturating_add(change_id_gutter)
                 .saturating_add(conflict_gutter)
+                .saturating_add(selection_gutter)
                 .saturating_add(2),
         ),
         body.height,
@@ -1186,6 +1195,27 @@ pub(crate) fn draw_with_worktree(
                     area,
                 );
             }
+        }
+        if let Some((label, role)) = app.tree_selection_marker(row.id) {
+            let color = match role {
+                crate::app::TreeSelectionRole::Source => Color::Cyan,
+                crate::app::TreeSelectionRole::Preview => Color::Yellow,
+                crate::app::TreeSelectionRole::Destination => Color::Magenta,
+            };
+            let marker = Rect::new(
+                selection_x,
+                y,
+                selection_gutter.min(body.right().saturating_sub(selection_x)),
+                1,
+            );
+            frame.render_widget(
+                Paragraph::new(label).style(Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                marker,
+            );
+            frame.buffer_mut().set_style(
+                marker,
+                Style::default().remove_modifier(Modifier::DIM | Modifier::REVERSED),
+            );
         }
         if let Some((marker, x, width)) = hidden_branch_marker {
             frame.buffer_mut()[(x - 1, y)].set_symbol(" ");
@@ -2378,14 +2408,10 @@ fn command_items(commands: &[Command], group: CommandGroup, row: usize) -> Vec<V
         .iter()
         .filter(|command| command.group == group && command.row == row)
     {
-        let item = if command.id == CommandId::StackInsert {
-            vec![
-                Span::raw("stack-inser"),
-                Span::styled("t", Style::default().add_modifier(Modifier::UNDERLINED)),
-            ]
-        } else {
-            shortcut(command.label, command.key(), command.active)
-        };
+        let item = command.key().map_or_else(
+            || vec![Span::raw(command.label)],
+            |key| shortcut(command.label, key, command.active),
+        );
         items.push(item);
     }
     if items.is_empty() {
@@ -2434,7 +2460,10 @@ fn active_prefix_popup(
                         ]
                     }
                 } else {
-                    shortcut(command.label, command.key(), command.active)
+                    command.key().map_or_else(
+                        || vec![Span::raw(command.label)],
+                        |key| shortcut(command.label, key, command.active),
+                    )
                 }
             })
             .collect();
@@ -3526,6 +3555,18 @@ mod tests {
     #[test]
     fn renders_todo_progress_with_operation_counts_and_times() -> Result<(), Box<dyn std::error::Error>> {
         let mut terminal = Terminal::new(TestBackend::new(80, 8))?;
+        terminal.draw(|frame| draw_todo_progress(frame, crate::edit::rebase::Progress::default()))?;
+        assert_eq!(
+            rendered_line(&terminal, 2).trim(),
+            "Preparing rebase",
+            "the initial worker state describes planning before the commit count is known"
+        );
+        assert!(rendered_line(&terminal, 3).contains("planning commits"));
+        assert_ne!(
+            terminal.backend().buffer()[(4, 3)].bg,
+            Color::LightBlue,
+            "the planning gauge starts empty"
+        );
         terminal.draw(|frame| {
             draw_todo_progress(
                 frame,
@@ -5058,7 +5099,130 @@ mod tests {
     }
 
     #[test]
-    fn actions_popup_shows_push_and_insert_shortcuts_without_the_cherry_prefix()
+    fn tree_selection_keeps_source_preview_destination_and_keyboard_hints_visible() -> gix_testtools::Result {
+        let id = |n| gix::ObjectId::Sha1([n; 20]);
+        let mut app = App::new(8);
+        let mut commits = [
+            (6, Some(4)),
+            (5, Some(3)),
+            (4, Some(2)),
+            (3, Some(2)),
+            (2, Some(1)),
+            (1, None),
+        ]
+        .into_iter()
+        .map(|(n, parent)| Commit {
+            id: id(n),
+            parent_ids: parent.map(id).into_iter().collect(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: format!("commit {n}").into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            signature: SignatureState::Unsigned,
+        })
+        .collect::<Vec<_>>();
+        let hidden = commits.pop().expect("the final row is the hidden boundary");
+        app.extend_commits(commits);
+        app.extend_hidden_commits(vec![hidden]);
+        complete(&mut app);
+        app.changes_mode = None;
+        app.select_commit(id(2));
+        app.update(Action::SelectTree);
+        app.select_commit(id(6));
+        app.update(Action::SelectTree);
+        app.update(Action::NextTreeLeaf);
+        app.update(Action::NextTreeLeaf);
+
+        let mut terminal = Terminal::new(TestBackend::new(180, 16))?;
+        let rendered = |terminal: &Terminal<TestBackend>| {
+            (0..16)
+                .map(|y| rendered_line(terminal, y))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let assert_marker = |terminal: &Terminal<TestBackend>, n, label: &str, color| {
+            let y = (0..16)
+                .find(|y| rendered_line(terminal, *y).contains(&format!("commit {n}")))
+                .expect("each source and destination row remains visible");
+            let x = Line::raw(crate::enrich::marker(true, true, true, true)).width() as u16;
+            let marker: String = (x..x + 4)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect();
+            assert_eq!(marker.trim(), label, "each row carries its persistent role marker");
+            let cell = &terminal.backend().buffer()[(x, y)];
+            assert_eq!(cell.fg, color, "roles have distinct colors");
+            assert!(cell.modifier.contains(Modifier::BOLD));
+            assert!(
+                !cell.modifier.intersects(Modifier::DIM | Modifier::REVERSED),
+                "markers remain readable on rows outside the active path and hidden destinations"
+            );
+        };
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        for (n, label, color) in [
+            (2, "R", Color::Cyan),
+            (4, "+", Color::Cyan),
+            (6, "L1", Color::Cyan),
+            (3, "?", Color::Yellow),
+            (5, "P2", Color::Yellow),
+        ] {
+            assert_marker(&terminal, n, label, color);
+        }
+        let source = rendered(&terminal);
+        assert!(source.contains("Source: 3 commits · root 0202020 · 1 leaves: 0606060"));
+        assert!(source.contains("leaf 2/2 preview"));
+        assert!(source.contains("p: Select subtree"));
+        assert!(!source.contains("Shift-Space"));
+
+        app.set_enhanced_keyboard(true);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(rendered(&terminal).contains("Shift-Space select subtree"));
+
+        for _ in 0..3 {
+            app.update(Action::ConfirmTreeSelection);
+        }
+        app.select_commit(id(1));
+        app.update(Action::ConfirmTreeSelection);
+        app.update(Action::ConfirmTreeSelection);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_marker(&terminal, 1, "D", Color::Magenta);
+        assert_marker(&terminal, 2, "R", Color::Cyan);
+        assert_marker(&terminal, 6, "L1", Color::Cyan);
+        assert_marker(&terminal, 5, "P2", Color::Yellow);
+        let confirmation = rendered(&terminal);
+        assert!(confirmation.contains("Source: 3 commits · root 0202020 · 1 leaves: 0606060"));
+        assert!(confirmation.contains("Copy · Fork · destination 0101010 · Above"));
+        assert!(confirmation.contains("Enter apply · Esc abort"));
+
+        terminal.backend_mut().resize(60, 16);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let narrow = rendered(&terminal).split_whitespace().collect::<Vec<_>>().join(" ");
+        for detail in [
+            "root 0202020",
+            "destination 0101010",
+            "Copy",
+            "Fork",
+            "Above",
+            "Enter apply",
+            "Esc abort",
+        ] {
+            assert!(
+                narrow.contains(detail),
+                "resizing a narrow terminal preserves confirmation details and controls: {detail}"
+            );
+        }
+        assert!(
+            app.tree_selection_active(),
+            "resizing and redrawing retain the armed selection"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn actions_popup_shows_tree_selection_and_push_without_legacy_insert_actions()
     -> Result<(), Box<dyn std::error::Error>> {
         let head = gix::ObjectId::Sha1([1; 20]);
         let base = gix::ObjectId::Sha1([2; 20]);
@@ -5099,9 +5263,12 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
         let popup = rendered_line(&terminal, 3);
-        assert!(popup.contains("copy-insert"));
-        assert!(popup.contains("move-insert"));
-        assert!(popup.contains("fork"));
+        assert!(popup.contains("select tree"));
+        assert!(popup.contains("Select subtree"));
+        assert!(!popup.contains("copy-insert"));
+        assert!(!popup.contains("move-insert"));
+        assert!(!popup.contains("stack-insert"));
+        assert!(!popup.contains("fork"));
         assert!(popup.contains("attach"));
         #[cfg(feature = "blocking-network-client")]
         assert!(popup.contains("Fetch"));
@@ -5114,22 +5281,6 @@ mod tests {
             terminal.backend().buffer()[(push, 3)]
                 .modifier
                 .contains(Modifier::UNDERLINED)
-        );
-        let label = "stack-insert";
-        let start = popup[..popup.find(label).expect("the stack-insert action is visible")]
-            .chars()
-            .count() as u16;
-        let shortcut = start + label.len() as u16 - 1;
-        assert!(
-            terminal.backend().buffer()[(shortcut, 3)]
-                .modifier
-                .contains(Modifier::UNDERLINED)
-        );
-        assert!(
-            (start..shortcut).all(|x| !terminal.backend().buffer()[(x, 3)]
-                .modifier
-                .contains(Modifier::UNDERLINED)),
-            "only the t in insert is underlined"
         );
         Ok(())
     }
