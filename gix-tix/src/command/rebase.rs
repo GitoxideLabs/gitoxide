@@ -313,6 +313,7 @@ fn mapped_revisions(tips: &[ObjectId], mut map: impl FnMut(ObjectId) -> Option<O
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rebase::FoldMessage;
     use std::process::Command;
 
     fn repository() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, gix::Repository)> {
@@ -322,6 +323,324 @@ mod tests {
             ["core.abbrev=7", "user.name=todo author", "user.email=todo@example.com"],
         )?;
         Ok((fixture, repo))
+    }
+
+    fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
+        let output = Command::new("git")
+            .current_dir(path)
+            .env("GIT_EDITOR", ":")
+            .env("GIT_SEQUENCE_EDITOR", "cat")
+            .args(args)
+            .output()?;
+        if !output.status.success() {
+            return Err(format!("git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr)).into());
+        }
+        Ok(output.stdout)
+    }
+
+    fn autosquash_args(base_commit_id: ObjectId) -> Todo {
+        Todo {
+            hide: vec![base_commit_id.to_string().into()],
+            no_auto_hide: true,
+            onto: None,
+            update_base: false,
+            edit_and_apply: false,
+            materialize_conflicts: None,
+            tips: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn autosquash_applies_all_markers_and_keeps_the_branch_at_the_descendant() -> gix_testtools::Result {
+        for (message, changes_tree, mode) in [
+            ("fixup! middle\n\nDiscarded commentary", true, FoldMessage::Discard),
+            ("squash! middle\n\nAdditional explanation", true, FoldMessage::Append),
+            (
+                "amend! middle\n\nReplacement title\n\nReplacement body",
+                true,
+                FoldMessage::Replace,
+            ),
+            ("amend! middle\n\nMessage-only replacement", false, FoldMessage::Replace),
+        ] {
+            let (fixture, repo) = repository()?;
+            let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+            let target_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+            if changes_tree {
+                std::fs::write(fixture.path().join("middle"), b"corrected middle\n")?;
+                git(fixture.path(), &["add", "middle"])?;
+            }
+            git(
+                fixture.path(),
+                &[
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "--author=Correction Author <correction@example.com>",
+                    "-m",
+                    message,
+                ],
+            )?;
+            let source_commit_id = repo.head_id()?.detach();
+
+            // Git supplies the expected rewritten trees, target authorship, and fixup/amend messages.
+            git(
+                fixture.path(),
+                &[
+                    "-c",
+                    "rebase.updateRefs=false",
+                    "rebase",
+                    "--autosquash",
+                    &base_commit_id.to_string(),
+                ],
+            )?;
+            let oracle = crate::test_repository::open(fixture.path())?;
+            let expected_head = oracle.head_commit()?.decode()?.into_owned()?;
+            let expected_target = oracle
+                .find_commit(oracle.rev_parse_single("HEAD~1")?)?
+                .decode()?
+                .into_owned()?;
+            git(fixture.path(), &["reset", "--hard", &source_commit_id.to_string()])?;
+
+            let mut args = autosquash_args(base_commit_id);
+            let repo = crate::test_repository::open_with(fixture.path(), ["core.editor=false"])?;
+            let prepared = prepare(&repo, &args)?;
+            assert!(
+                prepared.apply_unchanged,
+                "autosquash makes the generated todo actionable"
+            );
+            let parsed = todo::parse(&repo, &prepared.document)?.context("the generated todo is actionable")?;
+            let target = parsed
+                .plan
+                .steps
+                .iter()
+                .find(|step| step.commit == rebase::PlanCommit::Pick(target_commit_id))
+                .context("the target remains a pick")?;
+            assert_eq!(
+                target.squash,
+                [rebase::PlanFold {
+                    commit_id: source_commit_id,
+                    message: mode,
+                }],
+                "the message marker selects its fold behavior"
+            );
+            if changes_tree {
+                apply_document(repo, &prepared.document, None)?;
+            } else {
+                args.edit_and_apply = true;
+                todo(crate::test_repository::open(fixture.path())?, args)?;
+            }
+
+            let actual = crate::test_repository::open(fixture.path())?;
+            let actual_head = actual.head_commit()?.decode()?.into_owned()?;
+            let actual_target = actual
+                .find_commit(actual.rev_parse_single("HEAD~1")?)?
+                .decode()?
+                .into_owned()?;
+            assert_eq!(actual_head.tree, expected_head.tree, "the final tree agrees with Git");
+            assert_eq!(
+                actual_target.tree, expected_target.tree,
+                "the folded target tree agrees with Git"
+            );
+            assert_eq!(
+                actual_target.author, expected_target.author,
+                "folding retains the target author and date"
+            );
+            assert_eq!(
+                actual_head.message,
+                b"tip\n".as_slice(),
+                "the descendant remains the checked-out tip"
+            );
+            assert_eq!(
+                actual_target.parents.as_slice(),
+                [base_commit_id],
+                "the correction leaves no extra commit"
+            );
+            assert_eq!(
+                git(fixture.path(), &["symbolic-ref", "HEAD"])?,
+                b"refs/heads/main\n",
+                "the attached branch follows the surviving descendant when its former tip is folded backward"
+            );
+            if mode == FoldMessage::Append {
+                let actual_message = actual_target.message.to_string();
+                assert!(
+                    actual_message.contains("squash! middle")
+                        && actual_message.contains("Additional explanation")
+                        && actual_message.contains("Co-authored-by: Correction Author <correction@example.com>"),
+                    "squash retains Tix's source sections and co-author credit"
+                );
+            } else {
+                assert_eq!(
+                    actual_target.message, expected_target.message,
+                    "fixup and amend messages agree with Git"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn autosquash_hash_targets_keep_gits_fold_order() -> gix_testtools::Result {
+        let (fixture, repo) = repository()?;
+        let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+        let mut source_commit_ids = Vec::<ObjectId>::new();
+        for index in 0..4 {
+            let path = format!("correction-{index}");
+            std::fs::write(fixture.path().join(&path), format!("correction {index}\n"))?;
+            git(fixture.path(), &["add", &path])?;
+            let target = if index < 2 {
+                "middle".to_owned()
+            } else {
+                source_commit_ids[0].to_string()
+            };
+            git(fixture.path(), &["commit", "-qm", &format!("fixup! {target}")])?;
+            source_commit_ids.push(repo.head_id()?.detach());
+        }
+        let original_head_commit_id = repo.head_id()?.detach();
+        let oracle_todo = String::from_utf8(git(
+            fixture.path(),
+            &[
+                "-c",
+                "core.abbrev=40",
+                "-c",
+                "rebase.updateRefs=false",
+                "rebase",
+                "-i",
+                "--autosquash",
+                &base_commit_id.to_string(),
+            ],
+        )?)?;
+        let expected_order = oracle_todo
+            .lines()
+            .filter_map(|line| {
+                line.strip_prefix("fixup ")
+                    .and_then(|line| line.split_whitespace().next())
+            })
+            .map(|id| ObjectId::from_hex(id.as_bytes()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            expected_order,
+            [
+                source_commit_ids[0],
+                source_commit_ids[2],
+                source_commit_ids[3],
+                source_commit_ids[1]
+            ],
+            "Git inserts hash-targeted fixups after their target, ahead of later root fixups"
+        );
+        let expected_tree_id = repo.head_commit()?.tree_id()?.detach();
+        git(
+            fixture.path(),
+            &["reset", "--hard", &original_head_commit_id.to_string()],
+        )?;
+        let prepared = prepare(&repo, &autosquash_args(base_commit_id))?;
+        let parsed = todo::parse(&repo, &prepared.document)?.context("autosquash is actionable")?;
+        assert_eq!(
+            parsed
+                .plan
+                .steps
+                .iter()
+                .flat_map(|step| step.squash.iter().map(|fold| fold.commit_id))
+                .collect::<Vec<_>>(),
+            expected_order,
+            "the generated Tix todo preserves Git's fold order"
+        );
+        apply_document(repo, &prepared.document, None)?;
+        assert_eq!(
+            crate::test_repository::open(fixture.path())?.head_commit()?.tree_id()?,
+            expected_tree_id,
+            "all nested corrections reach the final tree"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn autosquash_continuations_preserve_remaining_message_modes() -> gix_testtools::Result {
+        for (message, mode) in [
+            ("fixup! middle\n\nDiscarded later message", FoldMessage::Discard),
+            ("squash! middle\n\nAppended later message", FoldMessage::Append),
+            ("amend! middle\n\nReplaced later message", FoldMessage::Replace),
+        ] {
+            let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+            let repo = crate::test_repository::open(fixture.path())?;
+            let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+            // The first correction depends on the intervening tip's same-line edit and must conflict when moved.
+            std::fs::write(fixture.path().join("file"), b"source\n")?;
+            git(fixture.path(), &["commit", "-qam", "fixup! middle"])?;
+            std::fs::write(fixture.path().join("pending"), b"pending correction\n")?;
+            git(fixture.path(), &["add", "pending"])?;
+            git(fixture.path(), &["commit", "-qm", message])?;
+            let prepared = prepare(&repo, &autosquash_args(base_commit_id))?;
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let err = apply_document(repo.clone(), &prepared.document, None)
+                .expect_err("the non-adjacent correction conflicts");
+            assert!(
+                format!("{err:#}").contains("aborted without changes"),
+                "conflicts remain opt-in: {err:#}"
+            );
+            assert_eq!(
+                gix_testtools::repository::snapshot(fixture.path())?,
+                before,
+                "an unmaterialized conflict changes nothing"
+            );
+
+            let output_dir = gix_testtools::tempfile::tempdir()?;
+            let output = output_dir.path().join("continue.md");
+            let err = apply_document(repo, &prepared.document, Some(&output))
+                .expect_err("materializing the first correction stops the command");
+            assert!(
+                format!("{err:#}").contains("materialized conflict"),
+                "the continuation is available: {err:#}"
+            );
+            let continuation = std::fs::read(output)?;
+            let repo = crate::test_repository::open(fixture.path())?;
+            let parsed = todo::parse(&repo, &continuation)?.context("the continuation is actionable")?;
+            assert_eq!(
+                parsed
+                    .plan
+                    .steps
+                    .iter()
+                    .flat_map(|step| step.squash.iter().map(|fold| fold.message))
+                    .collect::<Vec<_>>(),
+                [mode],
+                "serialization preserves the unapplied fold's message mode"
+            );
+            // Keep the earlier version when resolving, allowing the original tip to replay without another conflict.
+            std::fs::write(fixture.path().join("file"), b"middle\n")?;
+            git(fixture.path(), &["add", "file"])?;
+            apply_document(repo, &continuation, None)?;
+            let actual = crate::test_repository::open(fixture.path())?;
+            let target = actual
+                .find_commit(actual.rev_parse_single("HEAD~1")?)?
+                .decode()?
+                .into_owned()?;
+            match mode {
+                FoldMessage::Discard => assert_eq!(
+                    target.message,
+                    b"middle\n".as_slice(),
+                    "fixup discards the pending message"
+                ),
+                FoldMessage::Append => assert!(
+                    target.message.to_string().contains("Appended later message"),
+                    "squash appends the pending message"
+                ),
+                FoldMessage::Replace => assert_eq!(
+                    target.message,
+                    b"Replaced later message\n".as_slice(),
+                    "amend replaces the pending message"
+                ),
+            }
+            assert_eq!(
+                std::fs::read(fixture.path().join("pending"))?,
+                b"pending correction\n",
+                "continuation applies the remaining patch"
+            );
+            assert_eq!(
+                std::fs::read(fixture.path().join("file"))?,
+                b"tip\n",
+                "the descendant replays after resolution"
+            );
+        }
+        Ok(())
     }
 
     #[test]

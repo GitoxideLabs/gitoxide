@@ -110,7 +110,29 @@ impl PlanCommit {
 pub(crate) struct PlanStep {
     pub parent: PlanParent,
     pub commit: PlanCommit,
-    pub squash: Vec<ObjectId>,
+    pub squash: Vec<PlanFold>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlanFold {
+    pub commit_id: ObjectId,
+    pub message: FoldMessage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FoldMessage {
+    Append,
+    Discard,
+    Replace,
+}
+
+impl From<ObjectId> for PlanFold {
+    fn from(commit_id: ObjectId) -> Self {
+        Self {
+            commit_id,
+            message: FoldMessage::Append,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -222,7 +244,7 @@ pub(crate) struct PlanConflict {
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
     conflict_step: usize,
     continuation_start: usize,
-    remaining_squash: Vec<Vec<ObjectId>>,
+    remaining_squash: Vec<Vec<PlanFold>>,
     final_refs: HashSet<gix::refs::FullName>,
 }
 
@@ -276,7 +298,7 @@ impl PlanConflict {
             })
             .collect();
         let mut scope = self.produced[self.continuation_start..].to_vec();
-        scope.extend(self.remaining_squash.iter().flatten().copied());
+        scope.extend(self.remaining_squash.iter().flatten().map(|fold| fold.commit_id));
         let base = match self.plan.steps[self.continuation_start].parent {
             PlanParent::Existing(id) => id,
             PlanParent::Step(parent) => self.produced[parent],
@@ -543,7 +565,7 @@ pub(crate) fn squash_plan(
         steps.push(PlanStep {
             parent,
             commit: PlanCommit::Pick(id),
-            squash: (id == target).then_some(source).into_iter().collect(),
+            squash: (id == target).then_some(source.into()).into_iter().collect(),
         });
         step_by_id.insert(id, index);
     }
@@ -1815,16 +1837,16 @@ pub(crate) fn perform_plan_with_progress(
         {
             anyhow::bail!("copying a commit requires it to have exactly one parent");
         }
-        let ids = match step.commit {
-            PlanCommit::Pick(id) | PlanCommit::Resolved(id) => Some(id).into_iter().chain(step.squash.iter().copied()),
-            PlanCommit::Copy(_) | PlanCommit::Empty(_) => None.into_iter().chain(step.squash.iter().copied()),
+        let source = match step.commit {
+            PlanCommit::Pick(id) | PlanCommit::Resolved(id) => Some(id),
+            PlanCommit::Copy(_) | PlanCommit::Empty(_) => None,
         };
-        for id in ids {
+        for id in source.into_iter().chain(step.squash.iter().map(|fold| fold.commit_id)) {
             if !scope.contains(&id) || !picked.insert(id) {
                 anyhow::bail!("a rebase plan contains an invalid or duplicate pick");
             }
             let automatic = auto_merge::is_auto_merge(&repo.find_commit(id)?.decode()?.into_owned()?);
-            if automatic && step.squash.contains(&id) {
+            if automatic && step.squash.iter().any(|fold| fold.commit_id == id) {
                 anyhow::bail!("an AutoMerge cannot be squashed");
             }
             if graph.parents_or_load(&repo, id)?.len() > 1 && !automatic {
@@ -2054,9 +2076,9 @@ pub(crate) fn perform_plan_with_progress(
             report(progress);
         }
         let mut squashed = Vec::with_capacity(step.squash.len());
-        for id in &step.squash {
+        for fold in &step.squash {
             let source = repo
-                .find_commit(*id)
+                .find_commit(fold.commit_id)
                 .context("could not find a squashed commit")?
                 .decode()
                 .context("could not decode a squashed commit")?
@@ -2066,17 +2088,19 @@ pub(crate) fn perform_plan_with_progress(
                 !crate::patch_id::is_unavailable(&source),
                 "resolve and amend the conflicting commit before squashing it"
             );
-            let graph_parents = graph.parents_of(*id).context("a squashed commit is incomplete")?;
+            let graph_parents = graph
+                .parents_of(fold.commit_id)
+                .context("a squashed commit is incomplete")?;
             let recorded_parent = has_marker(&source).then(|| marked_parent(&source)).transpose()?;
             let replay_parents = recorded_parent.map_or_else(
                 || graph_parents.clone(),
                 |parent| parent.into_iter().collect::<Vec<_>>(),
             );
-            squashed.push((*id, source, replay_parents));
+            squashed.push((*fold, source, replay_parents));
         }
         let mut applied_squash = 0;
         if !squashed.is_empty() && conflict.is_none() && step_conflict.is_none() && !optional_conflict {
-            for (squash_index, (id, source, replay_parents)) in squashed.iter().enumerate() {
+            for (squash_index, (fold, source, replay_parents)) in squashed.iter().enumerate() {
                 let old_base = parent_tree(&repo, replay_parents.first().copied())?;
                 let started = Instant::now();
                 commit.tree = match cherry_pick_tree_outcome(&repo, old_base, commit.tree, source.tree)? {
@@ -2086,11 +2110,12 @@ pub(crate) fn perform_plan_with_progress(
                         merged,
                         conflicts,
                     } => {
-                        step_conflict = Some((*id, merged, conflicts, Some(squash_index)));
+                        step_conflict = Some((fold.commit_id, merged, conflicts, Some(squash_index)));
                         ours
                     }
                 };
                 applied_squash += 1;
+                delete_refs.extend(super::review::deletions(&repo, source)?);
                 if step_conflict.is_some() {
                     break;
                 }
@@ -2098,7 +2123,6 @@ pub(crate) fn perform_plan_with_progress(
                 progress.cherry_pick_time += started.elapsed();
                 progress.processed += 1;
                 report(progress);
-                delete_refs.extend(super::review::deletions(&repo, source)?);
             }
             squash_message(&repo, &mut commit, &squashed[..applied_squash])?;
         }
@@ -2148,14 +2172,14 @@ pub(crate) fn perform_plan_with_progress(
                 note_rewrites.push((actual, new_id));
             }
         }
-        for old_id in step.squash.iter().take(applied_squash) {
-            rewritten.insert(*old_id, Some(new_id));
-            if *old_id != new_id {
-                note_rewrites.push((*old_id, new_id));
+        for fold in step.squash.iter().take(applied_squash) {
+            rewritten.insert(fold.commit_id, Some(new_id));
+            if fold.commit_id != new_id {
+                note_rewrites.push((fold.commit_id, new_id));
             }
         }
-        for old_id in step.squash.iter().skip(applied_squash) {
-            rewritten.insert(*old_id, Some(new_id));
+        for fold in step.squash.iter().skip(applied_squash) {
+            rewritten.insert(fold.commit_id, Some(new_id));
         }
         produced.push(new_id);
         if let Some((original, tree, conflicts, squash_index)) = step_conflict {
@@ -2279,7 +2303,11 @@ pub(crate) fn perform_plan_with_progress(
         .filter(|expected| !matches!(expected.destination, RefDestination::Existing(commit_id) if affected_ids.contains(&commit_id)))
         .cloned()
         .collect();
-    let final_ref_names = final_refs.iter().map(|expected| expected.name.clone()).collect();
+    let final_ref_names = final_refs
+        .iter()
+        .map(|expected| expected.name.clone())
+        .chain(prepared.delete_refs.iter().map(|(name, _)| name.clone()))
+        .collect();
     let mut remaining_squash = vec![Vec::new(); plan.steps.len()];
     remaining_squash[conflict_step] = conflict_remaining_squash;
     for (index, step) in plan.steps.iter().enumerate().skip(conflict_step + 1) {
@@ -2905,19 +2933,58 @@ enum TreeRewrite {
     },
 }
 
+pub(super) fn message_subject_and_body(message: &[u8]) -> (&[u8], &[u8]) {
+    let is_blank = |line: &&[u8]| line.iter().all(u8::is_ascii_whitespace);
+    let leading: usize = message
+        .lines_with_terminator()
+        .take_while(is_blank)
+        .map(<[u8]>::len)
+        .sum();
+    let message = &message[leading..];
+    let subject_len: usize = message
+        .lines_with_terminator()
+        .take_while(|line| !is_blank(line))
+        .map(<[u8]>::len)
+        .sum();
+    let (subject, body) = message.split_at(subject_len);
+    let separator: usize = body.lines_with_terminator().take_while(is_blank).map(<[u8]>::len).sum();
+    (subject, &body[separator..])
+}
+
 fn squash_message(
     repo: &gix::Repository,
     commit: &mut gix::objs::Commit,
-    squashed: &[(ObjectId, gix::objs::Commit, Vec<ObjectId>)],
+    squashed: &[(PlanFold, gix::objs::Commit, Vec<ObjectId>)],
 ) -> Result<()> {
+    let squashed = if let Some(index) = squashed
+        .iter()
+        .rposition(|(fold, _, _)| fold.message == FoldMessage::Replace)
+    {
+        let source = &squashed[index].1;
+        let (subject, body) = message_subject_and_body(&source.message);
+        commit.message = if gix::objs::commit::MessageRef::from_bytes(subject)
+            .summary()
+            .starts_with(b"amend! ")
+        {
+            body.into()
+        } else {
+            source.message.clone()
+        };
+        &squashed[index + 1..]
+    } else {
+        squashed
+    };
+    let squashed = squashed
+        .iter()
+        .filter(|(fold, _, _)| fold.message == FoldMessage::Append);
     let mut known = HashSet::<(BString, BString)>::new();
     collect_co_authors(&commit.message, &mut known);
-    for (_, source, _) in squashed {
+    for (_, source, _) in squashed.clone() {
         collect_co_authors(&source.message, &mut known);
     }
     known.insert(author_identity(&commit.author));
     let mut additional = Vec::new();
-    for (_, source, _) in squashed {
+    for (_, source, _) in squashed.clone() {
         let author = author_identity(&source.author);
         if known.insert(author.clone()) {
             additional.push(author);
@@ -2925,11 +2992,12 @@ fn squash_message(
     }
 
     let mut message = commit.message.to_vec();
-    for (id, source, _) in squashed {
+    for (fold, source, _) in squashed {
         while message.last().is_some_and(|byte| matches!(byte, b'\n' | b'\r')) {
             message.pop();
         }
-        let short = id
+        let short = fold
+            .commit_id
             .attach(repo)
             .shorten()
             .context("could not shorten a squashed commit ID")?;
@@ -4855,6 +4923,160 @@ mod tests {
     }
 
     #[test]
+    fn fixup_conflicts_continue_replacements_once_and_release_consumed_review_resources() -> gix_testtools::Result {
+        for conflict_in_target in [true, false] {
+            let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+            let repo = open(fixture.path())?;
+            let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+            let middle_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+            let tip_commit_id = repo.head_id()?.detach();
+            let target_commit_id = if conflict_in_target {
+                tip_commit_id
+            } else {
+                middle_commit_id
+            };
+            // An empty replacement follows the conflicting target, or its delta skips the
+            // intermediate tip and conflicts while being folded into the middle commit.
+            let mut source = repo
+                .find_commit(if conflict_in_target {
+                    tip_commit_id
+                } else {
+                    base_commit_id
+                })?
+                .decode()?
+                .into_owned()?;
+            source.parents = [tip_commit_id].into_iter().collect();
+            source.message = "amend! target\n\nreplacement message\n".into();
+            source
+                .extra_headers
+                .push(("tix-rebase".into(), "onto refs/worktree/tix/review/1".into()));
+            let source_commit_id = repo.write_object(&source)?.detach();
+            let mut trailing = source.clone();
+            trailing.parents = [source_commit_id].into_iter().collect();
+            trailing.message = "fixup! target\n\nignored trailing message\n".into();
+            trailing
+                .extra_headers
+                .retain(|(name, _)| name.as_slice() != b"tix-rebase");
+            let trailing_commit_id = repo.write_object(&trailing)?.detach();
+            repo.reference(
+                "refs/worktree/tix/review/1",
+                tip_commit_id,
+                PreviousValue::MustNotExist,
+                "review resource",
+            )?;
+            repo.reference(
+                "refs/worktree/tix/review/stashes/1",
+                tip_commit_id,
+                PreviousValue::MustNotExist,
+                "review stash",
+            )?;
+            repo.reference(
+                "refs/heads/main",
+                trailing_commit_id,
+                PreviousValue::ExistingMustMatch(Target::Object(tip_commit_id)),
+                "prepare fixup history",
+            )?;
+            git(fixture.path(), &["reset", "--hard", "HEAD"])?;
+            let scope = vec![middle_commit_id, tip_commit_id, source_commit_id, trailing_commit_id];
+            let graph = HistoryGraph::for_commits(&repo, &scope)?;
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let PlanPerform::Conflict(conflict) = perform_plan(
+                &repo,
+                &graph,
+                Plan {
+                    base: base_commit_id,
+                    expected_refs: capture_refs(&repo, &scope, &[trailing_commit_id])?,
+                    scope,
+                    steps: vec![PlanStep {
+                        parent: PlanParent::Existing(base_commit_id),
+                        commit: PlanCommit::Pick(target_commit_id),
+                        squash: vec![
+                            PlanFold {
+                                commit_id: source_commit_id,
+                                message: FoldMessage::Replace,
+                            },
+                            PlanFold {
+                                commit_id: trailing_commit_id,
+                                message: FoldMessage::Discard,
+                            },
+                        ],
+                    }],
+                    checkout: Some(PlanCheckout {
+                        target: PlanParent::Step(0),
+                        reference: Some("refs/heads/main".try_into()?),
+                    }),
+                },
+            )?
+            else {
+                return Err("the incompatible same-line change must conflict".into());
+            };
+            assert_eq!(
+                conflict.original(),
+                if conflict_in_target {
+                    target_commit_id
+                } else {
+                    source_commit_id
+                },
+                "the conflict identifies the delta being applied"
+            );
+            assert_eq!(
+                gix_testtools::repository::snapshot(fixture.path())?,
+                before,
+                "preparing a fixup conflict leaves the repository unchanged"
+            );
+            let continuation = conflict.continuation_plan();
+            let remaining_modes: Vec<_> = continuation.steps[0].squash.iter().map(|fold| fold.message).collect();
+            assert_eq!(
+                remaining_modes,
+                if conflict_in_target {
+                    vec![FoldMessage::Replace, FoldMessage::Discard]
+                } else {
+                    vec![FoldMessage::Discard]
+                },
+                "the conflicting fold's message is already in the partial result"
+            );
+            conflict.into_conflict().persist(CheckoutOptions::default())?;
+            assert_eq!(
+                repo.try_find_reference("refs/worktree/tix/review/1")?.is_some(),
+                conflict_in_target,
+                "review resources remain only until their source has been consumed"
+            );
+            std::fs::write(fixture.path().join("file"), b"resolved\n")?;
+            git(fixture.path(), &["add", "file"])?;
+            if !conflict_in_target {
+                git(
+                    fixture.path(),
+                    &["commit", "--amend", "-qm", "manual resolution message"],
+                )?;
+            }
+            let graph = HistoryGraph::for_commits(&repo, &continuation.scope)?;
+            perform_plan(&repo, &graph, continuation)?.complete()?;
+            let combined = repo.head_commit()?.decode()?.into_owned()?;
+            assert_eq!(
+                combined.message.as_slice(),
+                if conflict_in_target {
+                    b"replacement message\n".as_slice()
+                } else {
+                    b"manual resolution message\n".as_slice()
+                },
+                "resuming applies pending replacements but never repeats a consumed replacement"
+            );
+            assert_eq!(
+                std::fs::read(fixture.path().join("file"))?,
+                b"resolved\n",
+                "the resolved tree survives remaining empty folds"
+            );
+            for name in ["refs/worktree/tix/review/1", "refs/worktree/tix/review/stashes/1"] {
+                assert!(
+                    repo.try_find_reference(name)?.is_none(),
+                    "consumed review resource {name} is removed"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn a_todo_rebase_eagerly_replays_only_the_checkout_ancestry_and_keeps_the_branch_at_the_leaf()
     -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
@@ -5083,7 +5305,7 @@ mod tests {
                 steps: vec![PlanStep {
                     parent: PlanParent::Existing(base),
                     commit: PlanCommit::Pick(middle),
-                    squash: vec![tip],
+                    squash: vec![tip.into()],
                 }],
                 checkout: None,
                 expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
@@ -5126,6 +5348,101 @@ mod tests {
             Some(b"middle note\n\ntip note".as_slice()),
             "squashed Git notes concatenate in source order"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn fixup_replay_retains_the_target_identity_and_combines_notes() -> gix_testtools::Result {
+        for (mode, replacement) in [
+            (FoldMessage::Discard, b"replacement message\n".as_slice()),
+            (FoldMessage::Replace, b"replacement message\n".as_slice()),
+            (FoldMessage::Replace, b"".as_slice()),
+            (FoldMessage::Replace, b"replacement\xff\n".as_slice()),
+        ] {
+            let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+            let repo = open(fixture.path())?;
+            let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+            let target_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+            let old_tip_commit_id = repo.head_id()?.detach();
+            let target = repo.find_commit(target_commit_id)?.decode()?.into_owned()?;
+            let mut source = repo.find_commit(old_tip_commit_id)?.decode()?.into_owned()?;
+            source.message = b"amend! middle\n\n".as_slice().into();
+            source.message.extend_from_slice(replacement);
+            source.author.name = "Other".into();
+            source.author.email = "other@example.com".into();
+            let source_commit_id = repo.write_object(&source)?.detach();
+            repo.reference(
+                "refs/heads/main",
+                source_commit_id,
+                PreviousValue::ExistingMustMatch(Target::Object(old_tip_commit_id)),
+                "prepare fixup source",
+            )?;
+            let scope = vec![target_commit_id, source_commit_id];
+            let graph = HistoryGraph::for_commits(&repo, &scope)?;
+            set_git_note(&repo, target_commit_id, b"target note")?;
+            set_git_note(&repo, source_commit_id, b"source note")?;
+            let outcome = perform_plan(
+                &repo,
+                &graph,
+                Plan {
+                    base: base_commit_id,
+                    expected_refs: capture_refs(&repo, &scope, &[source_commit_id])?,
+                    scope,
+                    steps: vec![PlanStep {
+                        parent: PlanParent::Existing(base_commit_id),
+                        commit: PlanCommit::Pick(target_commit_id),
+                        squash: vec![PlanFold {
+                            commit_id: source_commit_id,
+                            message: mode,
+                        }],
+                    }],
+                    checkout: None,
+                },
+            )?
+            .complete()?;
+            let combined_commit_id = outcome.map(target_commit_id).context("the target remains")?;
+            let combined = repo.find_commit(combined_commit_id)?.decode()?.into_owned()?;
+            assert_eq!(
+                outcome.map(source_commit_id),
+                Some(combined_commit_id),
+                "both IDs map to the folded result"
+            );
+            assert_eq!(combined.tree, source.tree, "the fixup's changes are retained");
+            assert_eq!(
+                combined.parents.as_slice(),
+                [base_commit_id],
+                "the fixup creates no separate commit"
+            );
+            assert_eq!(
+                combined.author, target.author,
+                "the target's author and timestamp are retained"
+            );
+            assert_eq!(combined.committer.name, b"rebasing committer".as_bstr());
+            assert_eq!(
+                crate::change_id::for_commit(&repo, combined_commit_id)?,
+                crate::change_id::for_commit(&repo, target_commit_id)?,
+                "the target's change identity is retained"
+            );
+            assert_eq!(
+                combined.message.as_slice(),
+                if mode == FoldMessage::Discard {
+                    target.message.as_slice()
+                } else {
+                    replacement
+                },
+                "fixups discard source authorship and select the requested message"
+            );
+            assert_eq!(
+                git_note(&repo, combined_commit_id)?.as_deref(),
+                Some(b"target note\n\nsource note".as_slice()),
+                "fixup notes retain the same source order as squash notes"
+            );
+            assert_eq!(
+                repo.head_id()?,
+                combined_commit_id,
+                "the branch follows the folded result"
+            );
+        }
         Ok(())
     }
 
@@ -5203,7 +5520,7 @@ mod tests {
         let target_step = step_for(target);
         let intermediate_step = step_for(intermediate);
         let side_step = step_for(side);
-        assert_eq!(plan.steps[target_step].squash, [source]);
+        assert_eq!(plan.steps[target_step].squash, [source.into()]);
         assert_eq!(plan.steps[intermediate_step].parent, PlanParent::Step(target_step));
         assert_eq!(plan.steps[side_step].parent, PlanParent::Step(target_step));
         assert_eq!(
@@ -5819,7 +6136,7 @@ mod tests {
                 steps: vec![PlanStep {
                     parent: PlanParent::Existing(base),
                     commit: PlanCommit::Pick(middle),
-                    squash: vec![tip],
+                    squash: vec![tip.into()],
                 }],
                 checkout: None,
                 expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
@@ -5872,9 +6189,9 @@ mod tests {
             &repo,
             &mut first,
             &[
-                (base, bob, Vec::new()),
-                (middle, carol, Vec::new()),
-                (tip, repeated_carol, Vec::new()),
+                (base.into(), bob, Vec::new()),
+                (middle.into(), carol, Vec::new()),
+                (tip.into(), repeated_carol, Vec::new()),
             ],
         )?;
         assert_eq!(
@@ -5887,6 +6204,119 @@ mod tests {
             )
             .as_bytes(),
             "existing trailers suppress duplicates and repeated raw authors appear once"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fixup_message_modes_preserve_and_replace_raw_bytes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let source_commit_id = repo.head_id()?.detach();
+        let original = repo.find_commit(source_commit_id)?.decode()?.into_owned()?;
+        let target_message = b"target\xff  \r\n\r\nbody\r\n\r\nCo-authored-by: Existing <existing@example.com>\r\n";
+        for (mode, source_message, expected) in [
+            (
+                FoldMessage::Discard,
+                b"fixup! target\n\nignored\n".as_slice(),
+                target_message.as_slice(),
+            ),
+            (
+                FoldMessage::Replace,
+                b"amend! target\n\nreplacement\xff\n".as_slice(),
+                b"replacement\xff\n".as_slice(),
+            ),
+            (
+                FoldMessage::Replace,
+                b" \t\r\n\n   amend! wrapped\n target \r\n \t\r\n\n  replacement\xff \r\n\n".as_slice(),
+                b"  replacement\xff \r\n\n".as_slice(),
+            ),
+            (
+                FoldMessage::Replace,
+                b"ordinary\n\ncomplete message\n".as_slice(),
+                b"ordinary\n\ncomplete message\n".as_slice(),
+            ),
+            (FoldMessage::Replace, b"amend! target\n".as_slice(), b"".as_slice()),
+            (
+                FoldMessage::Replace,
+                b"amend! target\r\n\r\n".as_slice(),
+                b"".as_slice(),
+            ),
+        ] {
+            let mut target = original.clone();
+            target.message = target_message.as_slice().into();
+            let author = target.author.clone();
+            let mut source = original.clone();
+            source.author.name = "Other".into();
+            source.author.email = "other@example.com".into();
+            source.message = source_message.into();
+            squash_message(
+                &repo,
+                &mut target,
+                &[(
+                    PlanFold {
+                        commit_id: source_commit_id,
+                        message: mode,
+                    },
+                    source,
+                    Vec::new(),
+                )],
+            )?;
+            assert_eq!(
+                target.message, expected,
+                "{mode:?} retains precisely the selected message bytes"
+            );
+            assert_eq!(target.author, author, "message folding preserves target authorship");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_fold_messages_append_only_after_the_last_replacement() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let source_commit_id = repo.head_id()?.detach();
+        let mut target = repo.find_commit(source_commit_id)?.decode()?.into_owned()?;
+        target.message = "original target".into();
+        let sources: Vec<_> = [
+            (FoldMessage::Append, "before replacement", "Earlier"),
+            (FoldMessage::Replace, "amend! target\n\nfirst replacement", "Ignored"),
+            (FoldMessage::Append, "between replacements", "Earlier"),
+            (FoldMessage::Replace, "amend! target\n\nlast replacement", "Ignored"),
+            (
+                FoldMessage::Discard,
+                "fixup! target\n\nCo-authored-by: Carol <Carol@example.com>",
+                "Ignored",
+            ),
+            (FoldMessage::Append, "bob title\n\nbob body", "Bob"),
+            (
+                FoldMessage::Append,
+                "carol title\n\nCo-authored-by: Bob <Bob@example.com>",
+                "Carol",
+            ),
+        ]
+        .into_iter()
+        .map(|(mode, message, name)| {
+            let mut source = target.clone();
+            source.message = message.into();
+            source.author.name = name.into();
+            source.author.email = format!("{name}@example.com").into();
+            (
+                PlanFold {
+                    commit_id: source_commit_id,
+                    message: mode,
+                },
+                source,
+                Vec::new(),
+            )
+        })
+        .collect();
+        squash_message(&repo, &mut target, &sources)?;
+        let short = source_commit_id.attach(&repo).shorten()?;
+        assert_eq!(
+            target.message,
+            format!("last replacement\n\n# {short} bob title\n\nbob title\n\nbob body\n\n# {short} carol title\n\ncarol title\n\nCo-authored-by: Bob <Bob@example.com>\nCo-authored-by: Carol <Carol@example.com>\n").as_bytes(),
+            "replacement discards earlier messages and authors, while retained squash trailers still suppress duplicates"
         );
         Ok(())
     }
@@ -6444,7 +6874,7 @@ mod tests {
                 steps: vec![PlanStep {
                     parent: PlanParent::Existing(base),
                     commit: PlanCommit::Pick(tip),
-                    squash: vec![middle],
+                    squash: vec![middle.into()],
                 }],
                 checkout: None,
                 expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,

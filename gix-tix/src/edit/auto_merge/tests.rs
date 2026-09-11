@@ -284,8 +284,8 @@ fn change_inputs_follow_the_rewritten_commit_without_following_inserted_children
 }
 
 #[test]
-fn todos_place_change_inputs_before_merging_and_remove_dropped_or_squashed_identities() -> gix_testtools::Result {
-    for action in ["pick", "drop", "squash", "copy"] {
+fn todos_place_change_inputs_before_merging_and_remove_dropped_or_folded_identities() -> gix_testtools::Result {
+    for action in ["pick", "drop", "squash", "fixup", "amend", "copy"] {
         let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
         let a = input(&repo, "A")?;
@@ -319,7 +319,13 @@ fn todos_place_change_inputs_before_merging_and_remove_dropped_or_squashed_ident
         if action != "copy" {
             scope.push(c.commit_id);
         }
-        if action == "squash" {
+        let fold_message = match action {
+            "squash" => Some(rebase::FoldMessage::Append),
+            "fixup" => Some(rebase::FoldMessage::Discard),
+            "amend" => Some(rebase::FoldMessage::Replace),
+            _ => None,
+        };
+        if fold_message.is_some() {
             scope.push(a.commit_id);
         }
         match action {
@@ -332,10 +338,13 @@ fn todos_place_change_inputs_before_merging_and_remove_dropped_or_squashed_ident
                 parent: rebase::PlanParent::Existing(base_commit_id),
                 squash: Vec::new(),
             }),
-            "squash" => steps.push(rebase::PlanStep {
+            "squash" | "fixup" | "amend" => steps.push(rebase::PlanStep {
                 commit: rebase::PlanCommit::Pick(a.commit_id),
                 parent: rebase::PlanParent::Existing(main),
-                squash: vec![c.commit_id],
+                squash: vec![rebase::PlanFold {
+                    commit_id: c.commit_id,
+                    message: fold_message.expect("fold actions have a message mode"),
+                }],
             }),
             _ => {}
         }
@@ -356,7 +365,7 @@ fn todos_place_change_inputs_before_merging_and_remove_dropped_or_squashed_ident
             .find_commit(outcome.selected.context("the todo selects its merge result")?)?
             .decode()?
             .into_owned()?;
-        if action == "drop" || action == "squash" {
+        if action == "drop" || fold_message.is_some() {
             assert!(
                 Definition::from_commit(&result)?.is_none(),
                 "{action} removes the tracked identity and collapses the merge"

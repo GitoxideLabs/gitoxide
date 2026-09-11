@@ -1085,8 +1085,8 @@ pub(crate) fn expand_plan(
         if let rebase::PlanCommit::Pick(commit_id) | rebase::PlanCommit::Resolved(commit_id) = step.commit {
             positions.insert(commit_id, index);
         }
-        for &commit_id in &step.squash {
-            positions.insert(commit_id, index);
+        for fold in &step.squash {
+            positions.insert(fold.commit_id, index);
         }
     }
     let extra: Vec<_> = affected.into_iter().filter(|id| !original.contains(id)).collect();
@@ -1155,8 +1155,8 @@ pub(crate) fn order_plan(
         if let rebase::PlanCommit::Pick(commit_id) | rebase::PlanCommit::Resolved(commit_id) = step.commit {
             positions.insert(commit_id, index);
         }
-        for &commit_id in &step.squash {
-            positions.insert(commit_id, index);
+        for fold in &step.squash {
+            positions.insert(fold.commit_id, index);
         }
     }
     let automatic: HashSet<_> = plan
