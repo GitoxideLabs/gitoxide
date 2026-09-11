@@ -446,7 +446,9 @@ pub(crate) enum Action {
     RemoveFromAutoMerge,
     RemoveAutoMergeInput,
     ApplyAutoMerge(crate::edit::auto_merge::Selection),
-    TimeTravel,
+    TimeTravel {
+        stash: bool,
+    },
     TogglePin,
     VerifySignatures,
     Cancel,
@@ -509,7 +511,10 @@ pub(crate) enum Effect {
         return_to: Option<ObjectId>,
     },
     Attach,
-    TimeTravel(ObjectId),
+    TimeTravel {
+        id: ObjectId,
+        stash: bool,
+    },
     TogglePin(ObjectId),
     ToggleTodo(ObjectId),
     ToggleChecksPass(ObjectId),
@@ -1932,7 +1937,7 @@ impl App {
                 | Action::Spill
                 | Action::Split
                 | Action::Delete
-                | Action::TimeTravel
+                | Action::TimeTravel { .. }
                 | Action::TogglePin
                 | Action::Rebase
                 | Action::RebaseUpdate
@@ -2427,10 +2432,11 @@ impl App {
                     label: String::new(),
                 })];
             }
-            Action::TimeTravel if self.can_time_travel() => {
-                return vec![Effect::TimeTravel(
-                    self.rows[self.selected.expect("time-travel requires a selection")].id,
-                )];
+            Action::TimeTravel { stash } if self.can_time_travel() => {
+                return vec![Effect::TimeTravel {
+                    id: self.rows[self.selected.expect("time-travel requires a selection")].id,
+                    stash,
+                }];
             }
             Action::TogglePin => {
                 if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
@@ -5505,19 +5511,29 @@ mod tests {
     fn time_travel_requires_completed_history_and_a_worktree() {
         let mut app = App::new(10);
         app.extend_commits(vec![row(1)]);
-        assert!(app.update(Action::TimeTravel).is_empty());
+        for stash in [false, true] {
+            assert!(app.update(Action::TimeTravel { stash }).is_empty());
+        }
         complete(&mut app);
-        assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(1))]);
+        for stash in [false, true] {
+            assert_eq!(
+                app.update(Action::TimeTravel { stash }),
+                vec![Effect::TimeTravel { id: id(1), stash }],
+                "both travel modes forward their worktree policy"
+            );
+        }
         app.deferred_history_state = Some(State::Complete);
         app.state = State::Computing;
         assert!(
             app.time_travel_shortcut_visible(),
             "the shortcut remains stable during deferred lane computation"
         );
-        assert!(
-            app.update(Action::TimeTravel).is_empty(),
-            "time travel waits for the current lane generation"
-        );
+        for stash in [false, true] {
+            assert!(
+                app.update(Action::TimeTravel { stash }).is_empty(),
+                "time travel waits for the current lane generation"
+            );
+        }
         app.deferred_history_state = None;
         app.state = State::Complete;
         app.set_worktree_branch(Some((id(1), true)));
@@ -5525,7 +5541,9 @@ mod tests {
         assert!(app.can_attach());
         assert_eq!(app.update(Action::Attach), vec![Effect::Attach]);
         app.set_worktree_changes_available(false);
-        assert!(app.update(Action::TimeTravel).is_empty());
+        for stash in [false, true] {
+            assert!(app.update(Action::TimeTravel { stash }).is_empty());
+        }
         assert!(app.update(Action::Attach).is_empty());
         assert_eq!(app.update(Action::TogglePin), vec![Effect::TogglePin(id(1))]);
     }
@@ -5541,11 +5559,19 @@ mod tests {
 
         app.set_worktree_conflicted(true);
         assert!(!app.time_travel_shortcut_visible());
-        assert!(app.update(Action::TimeTravel).is_empty());
+        for stash in [false, true] {
+            assert!(app.update(Action::TimeTravel { stash }).is_empty());
+        }
         app.set_worktree_conflicted(false);
         assert!(app.changes_visible(), "changes are normally shown while enabled");
         app.arm_rebase_conflict(id(1));
         assert!(!app.time_travel_shortcut_visible());
+        for stash in [false, true] {
+            assert!(
+                app.update(Action::TimeTravel { stash }).is_empty(),
+                "neither travel mode can replace an unresolved replay preview"
+            );
+        }
         assert!(
             !app.changes_visible(),
             "an in-memory conflict preview cannot be loaded by an on-disk changes view"
@@ -7282,7 +7308,13 @@ mod tests {
         assert!(!app.can_reword());
         assert!(!app.can_delete());
         assert!(!app.can_select_tree(), "hidden history cannot be a transplant source");
-        assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(4))]);
+        for stash in [false, true] {
+            assert_eq!(
+                app.update(Action::TimeTravel { stash }),
+                vec![Effect::TimeTravel { id: id(4), stash }],
+                "both travel modes can select a hidden boundary"
+            );
+        }
         assert!(
             app.update(Action::VerifySignatures).is_empty(),
             "hidden signatures are not actionable"
@@ -7600,7 +7632,10 @@ mod tests {
         app.update(Action::Reword);
         app.update(Action::NewCommit);
         app.update(Action::Delete);
-        app.update(Action::TimeTravel);
+        for stash in [false, true] {
+            app.update(Action::TimeTravel { stash });
+            assert!(app.actions_expanded, "both travel modes retain the actions group");
+        }
         app.update(Action::Rebase);
         app.update(Action::RebaseUpdate);
         app.update(Action::Push);

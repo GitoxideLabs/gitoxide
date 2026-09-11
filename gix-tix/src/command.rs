@@ -1165,6 +1165,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_stashing_travel_with_explicit_and_relative_destinations() {
+        for arguments in [
+            vec!["tix", "travel", "--stash", "HEAD~1"],
+            vec!["tix", "travel", "--stash", "--to", "parent"],
+            vec!["tix", "travel", "--stash", "--materialize-conflicts", "HEAD~1"],
+            vec!["tix", "travel", "--stash", "--materialize-conflicts", "--to", "tip"],
+        ] {
+            let parsed = Cli::try_parse_from(&arguments).expect("stashing combines with all travel options");
+            let Some(Command::Travel(travel)) = parsed.platform.command else {
+                panic!("travel was expected")
+            };
+            assert!(
+                travel.stash,
+                "--stash opts into saving departure changes: {arguments:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parses_tui_options_and_top_level_commands() {
         let cli = Cli::try_parse_from([
             "tix",
@@ -1426,6 +1445,7 @@ mod tests {
             panic!("travel was expected")
         };
         assert!(travel.materialize_conflicts);
+        assert!(!travel.stash, "plain travel carries local changes by default");
         assert_eq!(travel.revision.as_deref(), Some(std::ffi::OsStr::new("HEAD~1")));
         assert_eq!(travel.to, None);
         for (value, expected) in [
@@ -1443,6 +1463,7 @@ mod tests {
             };
             assert_eq!(travel.revision, None);
             assert_eq!(travel.to, Some(expected));
+            assert!(!travel.stash, "relative travel also carries local changes by default");
         }
         assert_eq!(
             Cli::try_parse_from(["tix", "travel"])
