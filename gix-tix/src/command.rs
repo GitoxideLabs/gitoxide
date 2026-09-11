@@ -613,6 +613,18 @@ fn write_history(
         }
     }
 
+    let mut refackiewed_ids = HashSet::new();
+    let mut patch_enrichments = crate::enrich::open_patch(repository)?;
+    for row in &app.rows {
+        match crate::enrich::load_patch_for_commit(repository, &mut patch_enrichments, row.id) {
+            Ok(enrichment) if enrichment.refackiewed => {
+                refackiewed_ids.insert(row.id);
+            }
+            Ok(_) => {}
+            Err(err) => tracing::warn!(commit_id = %row.id, error = %err, "ignored malformed tix patch enrichment"),
+        }
+    }
+
     let change_ids = crate::change_id::abbreviations(repository, app.rows.iter().map(|row| row.id), 7)?;
 
     let mailmap = repository.open_mailmap();
@@ -626,6 +638,7 @@ fn write_history(
                 todo_ids.contains(&row.id),
                 enrichment_note_ids.contains(&row.id),
                 checks_pass_ids.contains(&row.id),
+                refackiewed_ids.contains(&row.id),
             ))
             .width()
         })
@@ -646,6 +659,7 @@ fn write_history(
             todo_ids.contains(&row.id),
             enrichment_note_ids.contains(&row.id),
             checks_pass_ids.contains(&row.id),
+            refackiewed_ids.contains(&row.id),
         );
         let ambiguity_marker = if change_ids.ambiguous.contains(&row.id) {
             "💥"
@@ -2351,6 +2365,7 @@ mod tests {
             crate::change_id::HEADER.into(),
             crate::change_id::for_commit(&repository, parent)?.to_string().into(),
         ));
+        crate::patch_id::refresh(&repository, &mut commit)?;
         let head = repository.write_object(&commit)?.detach();
         let head_ref = repository
             .head()?
@@ -2370,7 +2385,9 @@ mod tests {
         create_pins(&repository, &[OsString::from(orphan.to_string())])?;
         let head_change_id = crate::change_id::for_commit(&repository, head)?;
         assert!(crate::enrich::toggle(&repository, head)?.todo);
+        crate::enrich::set_note(&repository, head, Some(b"follow up"))?;
         assert!(crate::enrich::toggle_checks_pass(&repository, head)?.checks_pass);
+        assert!(crate::enrich::ensure_refackiewed(&repository, head, true)?.refackiewed);
 
         let mut output = Vec::new();
         write_history(&repository, &[], &[OsString::from("v1")], &mut output)?;
@@ -2423,8 +2440,8 @@ mod tests {
         }
         assert!(output.contains('●'), "history graph lanes are rendered");
         assert!(
-            output.lines().any(|line| line.starts_with("🚧✔️💥├")),
-            "commit and tree enrichments directly lead their rows: {output:?}"
+            output.lines().any(|line| line.starts_with("🚧📝✔️✨💥├")),
+            "commit, tree, and current patch enrichments directly lead their rows: {output:?}"
         );
         assert!(output.contains("📌"), "applicable pins are decorated and traversed");
         assert!(
@@ -2444,6 +2461,41 @@ mod tests {
             "the hidden boundary row is included"
         );
         assert!(!output.contains('\u{1b}'), "plain output contains no terminal escapes");
+
+        for header_state in ["missing", "stale"] {
+            let mut variant = repository.find_commit(head)?.decode()?.into_owned()?;
+            if header_state == "missing" {
+                variant
+                    .extra_headers
+                    .retain(|(name, _)| name != crate::patch_id::HEADER);
+            } else {
+                variant.parents[0] = repository
+                    .find_commit(parent)?
+                    .parent_ids()
+                    .next()
+                    .context("the fixture parent has a different-tree parent")?
+                    .detach();
+            }
+            let variant_id = repository.write_object(&variant)?.detach();
+            repository
+                .find_reference("refs/heads/main")?
+                .set_target_id(variant_id, "test patch header validity")?;
+            let mut output = Vec::new();
+            write_history(&repository, &[], &[OsString::from("v1")], &mut output)?;
+            let output = String::from_utf8(output)?;
+            let line = output
+                .lines()
+                .find(|line| line.contains(&variant_id.to_hex_with_len(7).to_string()))
+                .context("the selected patch variant is shown")?;
+            assert!(
+                line.starts_with("🚧📝✔️"),
+                "{header_state} patch metadata preserves other enrichment markers: {line:?}"
+            );
+            assert!(
+                !output.contains('✨'),
+                "a {header_state} header cannot display the retained patch approval: {output:?}"
+            );
+        }
         Ok(())
     }
 

@@ -26,7 +26,7 @@ const HELP: &str = r#"
 - Saving an unchanged document in the history-view editor is a no-op unless the ancestry ending at `@` has a pending rebase. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. Unchanged picks whose parent stays unchanged retain their IDs; replay starts at the first pending or structurally changed commit. Changed commits through `@` are cherry-picked and re-signed, while descendants and other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Tix pins, stashes, and review refs, tags, remote-tracking refs, and symbolic refs stay unchanged and hidden. A ref checked out by another worktree may be moved but not deleted. New unreferenced leaves are pinned.
 - A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts [CONTINUE]` and writes a continuation todo. Resolve the ordinary unmerged index, then apply that todo. Concurrent ref changes still abort the update.
-- Commit states are display-only and editing them has no effect: `🚧` means the commit is a todo, `📝` it has a note, `✔️` its tree passed checks, `↻` a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, `○` means unsigned, and `🎁` means worktree state is stashed for that commit. Stashes follow rewritten commits automatically; dropping a stashed commit or combining multiple stashes into one result is rejected.
+- Commit states are display-only and editing them has no effect: `🚧` means the commit is a todo, `📝` it has a note, `✔️` its tree passed checks, `✨` its current patch was refackiewed, `↻` a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, `○` means unsigned, and `🎁` means worktree state is stashed for that commit. Stashes follow rewritten commits automatically; dropping a stashed commit or combining multiple stashes into one result is rejected.
 -->
 "#;
 
@@ -211,6 +211,7 @@ pub(crate) fn prepare(
     let mut body = Vec::new();
     let mut enrichments = crate::enrich::open(repo)?;
     let mut tree_enrichments = crate::enrich::open_tree(repo)?;
+    let mut patch_enrichments = crate::enrich::open_patch(repo)?;
     let mut written_external_refs = HashSet::new();
     for (section_index, section) in sections.iter().enumerate() {
         if section_index > 0 {
@@ -233,7 +234,13 @@ pub(crate) fn prepare(
             } else {
                 "pick"
             };
-            let states = commit_states(repo, &mut enrichments, &mut tree_enrichments, *id)?;
+            let states = commit_states(
+                repo,
+                &mut enrichments,
+                &mut tree_enrichments,
+                &mut patch_enrichments,
+                *id,
+            )?;
             body.extend_from_slice(
                 format!(
                     "`{verb} {}` {states}{}\n",
@@ -294,6 +301,7 @@ pub(crate) fn prepare_continuation(
     let mut body = Vec::new();
     let mut enrichments = crate::enrich::open(repo)?;
     let mut tree_enrichments = crate::enrich::open_tree(repo)?;
+    let mut patch_enrichments = crate::enrich::open_patch(repo)?;
     for (index, step) in plan.steps.iter().enumerate() {
         let continues = matches!(step.parent, rebase::PlanParent::Step(parent) if parent + 1 == index);
         if !continues {
@@ -354,7 +362,13 @@ pub(crate) fn prepare_continuation(
                 body.extend_from_slice(
                     format!(
                         "`{marker}pick {value}` {}{}\n",
-                        commit_states(repo, &mut enrichments, &mut tree_enrichments, id)?,
+                        commit_states(
+                            repo,
+                            &mut enrichments,
+                            &mut tree_enrichments,
+                            &mut patch_enrichments,
+                            id
+                        )?,
                         title
                     )
                     .as_bytes(),
@@ -370,7 +384,13 @@ pub(crate) fn prepare_continuation(
                 format!(
                     "`squash {}` {}{}\n",
                     short(repo, *id, show_change_ids)?,
-                    commit_states(repo, &mut enrichments, &mut tree_enrichments, *id)?,
+                    commit_states(
+                        repo,
+                        &mut enrichments,
+                        &mut tree_enrichments,
+                        &mut patch_enrichments,
+                        *id
+                    )?,
                     title
                 )
                 .as_bytes(),
@@ -504,6 +524,7 @@ fn commit_states(
     repo: &gix::Repository,
     enrichments: &mut gix::note::Platform,
     tree_enrichments: &mut gix::note::Platform,
+    patch_enrichments: &mut gix::note::Platform,
     id: ObjectId,
 ) -> Result<String> {
     let commit = repo
@@ -547,7 +568,19 @@ fn commit_states(
             crate::enrich::TreeEnrichment::default()
         }
     };
-    let marker = crate::enrich::marker(enrichment.todo, enrichment.note.is_some(), tree_enrichment.checks_pass);
+    let patch_enrichment = match crate::enrich::load_patch_for_commit(repo, patch_enrichments, id) {
+        Ok(enrichment) => enrichment,
+        Err(err) => {
+            tracing::warn!(commit_id = %id, error = %err, "ignored malformed tix patch enrichment");
+            crate::enrich::PatchEnrichment::default()
+        }
+    };
+    let marker = crate::enrich::marker(
+        enrichment.todo,
+        enrichment.note.is_some(),
+        tree_enrichment.checks_pass,
+        patch_enrichment.refackiewed,
+    );
     let mut out = Vec::with_capacity(6);
     if !marker.is_empty() {
         out.push(marker);
@@ -1367,6 +1400,9 @@ mod tests {
     #[test]
     fn enrichment_markers_precede_commit_states_in_initial_and_continuation_todos() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
+        let original = repo.rev_parse_single("HEAD~1")?.detach();
+        let graph = super::super::loaded_graph(&repo)?;
+        super::super::enrich::refackiewed(&repo, Some(&graph), original, Some(true), |_| {})?;
         let (base, middle, tip, commits) = commits(&repo)?;
         crate::enrich::ensure_todo(&repo, middle, true)?;
         crate::enrich::set_note(&repo, middle, Some(b"follow up"))?;
@@ -1376,11 +1412,11 @@ mod tests {
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         let document = String::from_utf8(prepared.document)?;
         assert!(
-            document.contains(&format!("`pick {id}` 🚧📝✔️ ○ 2000-01-02")),
-            "commit and tree enrichments precede the unsigned signature state"
+            document.contains(&format!("`pick {id}` 🚧📝✔️✨ ○ 2000-01-02")),
+            "commit, tree, and current patch enrichments precede the unsigned signature state"
         );
         assert!(
-            document.contains("`🚧` means the commit is a todo, `📝` it has a note, `✔️` its tree passed checks"),
+            document.contains("`🚧` means the commit is a todo, `📝` it has a note, `✔️` its tree passed checks, `✨` its current patch was refackiewed"),
             "the embedded legend explains enrichment states"
         );
 
@@ -1408,15 +1444,75 @@ mod tests {
         )?;
         let document = String::from_utf8(prepared.document)?;
         assert!(
-            document.contains(&format!("`pick {id}` 🚧📝✔️ ○ 🎁 middle")),
+            document.contains(&format!("`pick {id}` 🚧📝✔️✨ ○ 🎁 middle")),
             "continuation todos retain enrichment ordering before stash state"
         );
+
+        for header_state in ["missing", "stale"] {
+            let mut variant = repo.find_commit(middle)?.decode()?.into_owned()?;
+            let parent = if header_state == "missing" {
+                variant
+                    .extra_headers
+                    .retain(|(name, _)| name != crate::patch_id::HEADER);
+                base
+            } else {
+                variant.parents = [tip].into_iter().collect();
+                tip
+            };
+            let variant_id = repo.write_object(&variant)?.detach();
+            let id = crate::change_id::display_short(&repo, variant_id)?;
+            let initial = prepare_test(
+                &repo,
+                parent,
+                parent,
+                &[Commit {
+                    id: variant_id,
+                    parents: vec![parent],
+                    info: "middle".into(),
+                }],
+                Some(variant_id),
+            )?;
+            let continuation = prepare_continuation(
+                &repo,
+                &rebase::Plan {
+                    base: parent,
+                    scope: vec![variant_id],
+                    steps: vec![rebase::PlanStep {
+                        parent: rebase::PlanParent::Existing(parent),
+                        commit: rebase::PlanCommit::Pick(variant_id),
+                        squash: Vec::new(),
+                    }],
+                    checkout: None,
+                    expected_refs: Vec::new(),
+                },
+                vec![variant_id],
+                true,
+            )?;
+            for (kind, document) in [("initial", initial.document), ("continuation", continuation.document)] {
+                let document = String::from_utf8(document)?;
+                let line = document
+                    .lines()
+                    .find(|line| line.contains(&format!("`pick {id}`")))
+                    .expect("the patch variant remains in the todo");
+                assert!(
+                    line.contains("🚧📝✔️"),
+                    "{kind} todos retain other enrichments with a {header_state} patch header: {line:?}"
+                );
+                assert!(
+                    !line.contains('✨'),
+                    "{kind} todos suppress a {header_state} patch approval: {line:?}"
+                );
+            }
+        }
         Ok(())
     }
 
     #[test]
     fn malformed_enrichments_do_not_prevent_todo_generation() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
+        let original = repo.rev_parse_single("HEAD~1")?.detach();
+        let graph = super::super::loaded_graph(&repo)?;
+        super::super::enrich::refackiewed(&repo, Some(&graph), original, Some(true), |_| {})?;
         let (base, middle, tip, commits) = commits(&repo)?;
         let change_id = crate::change_id::for_commit(&repo, middle)?;
         let reference: gix::refs::FullName = crate::enrich::REF_NAME.try_into()?;
@@ -1425,6 +1521,9 @@ mod tests {
         let tree_id = crate::enrich::tree_id(&repo, middle)?;
         let reference: gix::refs::FullName = crate::enrich::TREE_REF_NAME.try_into()?;
         repo.notes()?.replace_at_ref(reference.as_ref(), tree_id, b"[tree")?;
+        let reference: gix::refs::FullName = crate::enrich::PATCH_REF_NAME.try_into()?;
+        repo.notes()?
+            .replace_at_ref(reference.as_ref(), ObjectId::from(change_id), b"[patch")?;
 
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         let document = String::from_utf8(prepared.document)?;
@@ -1433,7 +1532,7 @@ mod tests {
             .find(|line| line.contains("2000-01-02 author middle"))
             .expect("the malformed enrichment commit remains in the todo");
         assert!(line.contains(" ○ "), "ordinary commit states remain visible");
-        for marker in ["🚧", "📝", "✔️"] {
+        for marker in ["🚧", "📝", "✔️", "✨"] {
             assert!(!line.contains(marker), "malformed enrichments are ignored");
         }
         Ok(())

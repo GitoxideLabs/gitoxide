@@ -35,6 +35,11 @@ enum CommitState {
     Pending { original_parent: Option<ObjectId> },
 }
 
+enum EnrichmentEdit<'a> {
+    Commit(&'a crate::enrich::Headers),
+    Patch(bool),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Tree {
     #[cfg_attr(not(test), allow(dead_code))]
@@ -438,7 +443,7 @@ struct Prepared {
     departure: Option<(ObjectId, Option<ObjectId>)>,
     pins: Vec<ObjectId>,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
-    enrichment: Option<(ObjectId, BString)>,
+    enrichment: Option<(&'static str, ObjectId, BString)>,
 }
 
 pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[ObjectId]) -> Result<Vec<PlanRef>> {
@@ -941,7 +946,7 @@ pub(crate) fn perform_with_enrichment(
         Vec::new(),
         None,
         PendingCheckout::Reject,
-        Some(headers),
+        Some(EnrichmentEdit::Commit(headers)),
         |_, _| {},
     )
 }
@@ -965,9 +970,33 @@ pub(crate) fn perform_with_enrichment_and_progress(
         Vec::new(),
         None,
         PendingCheckout::Reject,
-        Some(headers),
+        Some(EnrichmentEdit::Commit(headers)),
         |_, progress| report(progress),
     )
+}
+
+pub(crate) fn perform_with_refackiewed_and_progress(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    target: ObjectId,
+    commit: gix::objs::Commit,
+    enabled: bool,
+    mut report: impl FnMut(Progress),
+) -> Result<(Perform, crate::enrich::PatchEnrichment)> {
+    let (performed, _) = perform_inner(
+        repo,
+        graph,
+        Edit::Replace { target, commit },
+        Signature::RedoIfNeeded,
+        Tree::LeaveAsIsAndMark,
+        None,
+        Vec::new(),
+        None,
+        PendingCheckout::Reject,
+        Some(EnrichmentEdit::Patch(enabled)),
+        |_, progress| report(progress),
+    )?;
+    Ok((performed, crate::enrich::PatchEnrichment { refackiewed: enabled }))
 }
 
 pub(super) fn perform_finalizing_pending_checkout_with_progress(
@@ -1111,10 +1140,11 @@ fn perform_inner(
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     reset_index_paths: Option<Vec<BString>>,
     pending_checkout: PendingCheckout,
-    enrichment_headers: Option<&crate::enrich::Headers>,
+    enrichment_headers: Option<EnrichmentEdit<'_>>,
     mut report: impl FnMut(Option<ObjectId>, Progress),
 ) -> Result<(Perform, Option<crate::enrich::Enrichment>)> {
     let mut repo = repo.clone();
+    let header_only = matches!(enrichment_headers, Some(EnrichmentEdit::Patch(_)));
     let repeat_checkout = match &edit {
         Edit::Repeat { checkout, .. } => Some(*checkout),
         _ => None,
@@ -1231,7 +1261,7 @@ fn perform_inner(
     if inserted || forked {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
-        let id = replay.write(commit, None, CommitState::Unmarked(signature), &mut progress)?;
+        let id = replay.write(commit, None, CommitState::Unmarked(signature), false, &mut progress)?;
         progress.processed += 1;
         report(None, progress);
         selected = Some(id);
@@ -1277,7 +1307,7 @@ fn perform_inner(
             .filter_map(|parent| auto_merge::mapped(*parent, &rewritten))
             .collect();
         if auto_merge::is_auto_merge(&commit) {
-            let eager = conflict.is_none() && auto.eager.contains(&old_id);
+            let eager = !header_only && conflict.is_none() && auto.eager.contains(&old_id);
             let (new_id, _) = replay.auto_merge(
                 old_id,
                 commit,
@@ -1307,6 +1337,9 @@ fn perform_inner(
             continue;
         }
         let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
+        if Some(old_id) == root && pending_checkout == PendingCheckout::FinalizeEditedHead {
+            crate::patch_id::clear_unavailable(&mut commit);
+        }
         let original_parents =
             recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
         let optional = auto.optional.contains(&old_id) && !checkout_path.contains(&old_id);
@@ -1315,7 +1348,8 @@ fn perform_inner(
             .map(|parent| -> Result<bool> { Ok(is_pending(&repo.find_commit(*parent)?.decode()?.into_owned()?)) })
             .transpose()?
             .unwrap_or(false);
-        let eager = conflict.is_none()
+        let eager = !header_only
+            && conflict.is_none()
             && !parent_pending
             && if repeat {
                 checkout_path.contains(&old_id) || optional
@@ -1330,7 +1364,9 @@ fn perform_inner(
         } else {
             tree_mode
         };
-        let finalize_empty = conflict.is_none()
+        let finalize_empty = !header_only
+            && conflict.is_none()
+            && !crate::patch_id::is_unavailable(&commit)
             && matches!(
                 commit_tree_mode,
                 Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants
@@ -1384,7 +1420,7 @@ fn perform_inner(
         } else {
             CommitState::Unmarked(signature)
         };
-        let new_id = replay.write(commit, Some(old_id), state, &mut progress)?;
+        let new_id = replay.write(commit, Some(old_id), state, new_conflict.is_some(), &mut progress)?;
         auto.refs.rewritten(old_id, Some(new_id));
         progress.processed += 1;
         report(Some(old_id), progress);
@@ -1402,6 +1438,7 @@ fn perform_inner(
                     upper,
                     None,
                     CommitState::Unmarked(Signature::RedoIfNeeded),
+                    false,
                     &mut progress,
                 )?;
                 progress.processed += 1;
@@ -1416,16 +1453,17 @@ fn perform_inner(
 
     let marked = (!forked && matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants))
         || conflict.is_some();
-    let skip_worktree_transitions = !eager_checkout_rewrite
-        && (inserted
-            || forked
-            || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed));
-    let mut reset_indices: HashSet<_> = ((inserted && reset_index) || (!inserted && marked))
+    let skip_worktree_transitions = header_only
+        || !eager_checkout_rewrite
+            && (inserted
+                || forked
+                || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed));
+    let mut reset_indices: HashSet<_> = (!header_only && ((inserted && reset_index) || (!inserted && marked)))
         .then_some(root)
         .flatten()
         .into_iter()
         .collect();
-    if skip_worktree_transitions {
+    if skip_worktree_transitions && !header_only {
         reset_indices.extend(finalized_empty);
     }
     let committer = replay.committer;
@@ -1580,6 +1618,7 @@ pub(super) fn finish_review_with_progress(
             commit,
             Some(*old),
             CommitState::Unmarked(Signature::RedoIfNeeded),
+            false,
             &mut progress,
         )?;
         progress.processed += 1;
@@ -1661,6 +1700,7 @@ pub(super) fn finish_review_with_progress(
             Tree::LeaveAsIsAndMark
         };
         let finalize_empty = conflict.is_none()
+            && !crate::patch_id::is_unavailable(&commit)
             && empty_commit_has_final_parent(
                 &repo,
                 commit.tree,
@@ -1692,7 +1732,7 @@ pub(super) fn finish_review_with_progress(
         } else {
             CommitState::Unmarked(Signature::RedoIfNeeded)
         };
-        let new = replay.write(commit, Some(old), state, &mut progress)?;
+        let new = replay.write(commit, Some(old), state, new_conflict.is_some(), &mut progress)?;
         progress.processed += 1;
         report(progress);
         if new != old {
@@ -1941,6 +1981,7 @@ pub(crate) fn perform_plan_with_progress(
                     anyhow::bail!("the conflict index still has unresolved entries");
                 }
                 commit.tree = super::create::index_tree(&repo, &index)?;
+                crate::patch_id::clear_unavailable(&mut commit);
                 commit
             }
             PlanCommit::Empty(title) => gix::objs::Commit {
@@ -1981,6 +2022,7 @@ pub(crate) fn perform_plan_with_progress(
             |parent| parent.into_iter().collect::<Vec<_>>(),
         );
         let finalize_empty = conflict.is_none()
+            && !crate::patch_id::is_unavailable(&commit)
             && step.squash.is_empty()
             && empty_commit_has_final_parent(&repo, commit.tree, replay_parents.first().copied(), Some(parent))?;
         let mode = if eager || finalize_empty {
@@ -2020,6 +2062,10 @@ pub(crate) fn perform_plan_with_progress(
                 .context("could not decode a squashed commit")?
                 .into_owned()
                 .context("could not own a squashed commit")?;
+            anyhow::ensure!(
+                !crate::patch_id::is_unavailable(&source),
+                "resolve and amend the conflicting commit before squashing it"
+            );
             let graph_parents = graph.parents_of(*id).context("a squashed commit is incomplete")?;
             let recorded_parent = has_marker(&source).then(|| marked_parent(&source)).transpose()?;
             let replay_parents = recorded_parent.map_or_else(
@@ -2073,7 +2119,13 @@ pub(crate) fn perform_plan_with_progress(
             }
         };
         marked |= matches!(state, CommitState::Pending { .. });
-        let new_id = replay.write(commit, step.commit.source(), state, &mut progress)?;
+        let new_id = replay.write(
+            commit,
+            step.commit.source(),
+            state,
+            step_conflict.is_some(),
+            &mut progress,
+        )?;
         if matches!(step.commit, PlanCommit::Empty(_)) {
             progress.processed += 1;
         }
@@ -2276,15 +2328,26 @@ fn infer_plan_checkout(repo: &gix::Repository, plan: &Plan) -> Result<Option<Pla
 
 fn prepare_enrichment(
     prepared: &mut Prepared,
-    headers: Option<&crate::enrich::Headers>,
+    headers: Option<EnrichmentEdit<'_>>,
 ) -> Result<Option<crate::enrich::Enrichment>> {
     let Some(headers) = headers else { return Ok(None) };
     let selected = prepared.selected.context("an enriched edit must select its commit")?;
-    let Some((object, data, enrichment)) = crate::enrich::prepare_headers(&prepared.repo, selected, headers)? else {
-        return Ok(None);
-    };
-    prepared.enrichment = Some((object, data));
-    Ok(Some(enrichment))
+    match headers {
+        EnrichmentEdit::Commit(headers) => {
+            let Some((object, data, enrichment)) = crate::enrich::prepare_headers(&prepared.repo, selected, headers)?
+            else {
+                return Ok(None);
+            };
+            prepared.enrichment = Some((crate::enrich::REF_NAME, object, data));
+            Ok(Some(enrichment))
+        }
+        EnrichmentEdit::Patch(enabled) => {
+            if let Some((object, data, _)) = crate::enrich::prepare_refackiewed(&prepared.repo, selected, enabled)? {
+                prepared.enrichment = Some((crate::enrich::PATCH_REF_NAME, object, data));
+            }
+            Ok(None)
+        }
+    }
 }
 
 impl Prepared {
@@ -2313,7 +2376,7 @@ impl Prepared {
         let enrichment_edits = self
             .enrichment
             .take()
-            .map(|(object, data)| enrichment_edits(&self.repo, object, data, &self.committer))
+            .map(|(reference, object, data)| enrichment_edits(&self.repo, reference, object, data, &self.committer))
             .transpose()?
             .unwrap_or_else(|| super::stash::RewriteEdits {
                 forward: Vec::new(),
@@ -2572,11 +2635,12 @@ fn note_rewrite_edits(
 
 fn enrichment_edits(
     repo: &gix::Repository,
+    reference: &'static str,
     object: ObjectId,
     data: BString,
     committer: &gix::actor::Signature,
 ) -> Result<super::stash::RewriteEdits> {
-    let name: gix::refs::FullName = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
+    let name: gix::refs::FullName = reference.try_into().expect("valid enrich ref");
     let (root, parent) = match repo.try_find_reference(name.as_ref())? {
         Some(mut reference) => {
             let parent = reference
@@ -3060,6 +3124,7 @@ pub(super) fn has_marker(commit: &gix::objs::Commit) -> bool {
 
 pub(crate) fn is_pending(commit: &gix::objs::Commit) -> bool {
     has_marker(commit)
+        || crate::patch_id::is_unavailable(commit)
         || commit
             .extra_headers
             .iter()
@@ -3103,6 +3168,18 @@ impl<'repo> Replay<'repo> {
         optional: bool,
         progress: Option<&mut Progress>,
     ) -> Result<ReplayedTree> {
+        if mode == Tree::CherryPick && crate::patch_id::is_unavailable(commit) {
+            anyhow::ensure!(
+                optional,
+                "resolve and amend the conflicting commit, or continue its rebase, before replaying it"
+            );
+            // An optional input's unresolved placeholder has no replayable patch.
+            commit.parents = new_parents.iter().copied().collect();
+            return Ok(ReplayedTree {
+                conflict: None,
+                muted: true,
+            });
+        }
         let started = progress.as_ref().map(|_| Instant::now());
         let mut replayed = ReplayedTree {
             conflict: None,
@@ -3172,7 +3249,7 @@ impl<'repo> Replay<'repo> {
             self.reparented_state(old_id, &commit, original.parents.first().copied(), can_finalize)?
         };
         let pending = matches!(state, CommitState::Pending { .. });
-        Ok((self.write(commit, Some(old_id), state, progress)?, pending))
+        Ok((self.write(commit, Some(old_id), state, false, progress)?, pending))
     }
 
     fn reparented_state(
@@ -3229,12 +3306,14 @@ impl<'repo> Replay<'repo> {
         mut commit: gix::objs::Commit,
         predecessor: Option<ObjectId>,
         state: CommitState,
+        conflicted: bool,
         progress: &mut Progress,
     ) -> Result<ObjectId> {
         if let Some(predecessor) = predecessor {
             crate::change_id::inherit(self.repo, &mut commit, predecessor)?;
         }
         commit.committer = self.committer.clone();
+        let final_patch = matches!(state, CommitState::Unmarked(_));
         let signature = match state {
             CommitState::Unmarked(signature) => {
                 marker(&mut commit, false, None);
@@ -3245,6 +3324,22 @@ impl<'repo> Replay<'repo> {
                 Signature::InvalidateExisting
             }
         };
+        if conflicted {
+            crate::patch_id::mark_unavailable(&mut commit);
+        } else if final_patch && !crate::patch_id::is_unavailable(&commit) {
+            let has_patch_id = commit
+                .extra_headers
+                .iter()
+                .any(|(name, _)| name == crate::patch_id::HEADER);
+            let metadata_only = !has_patch_id
+                && predecessor
+                    .map(|commit_id| self.unchanged_parent_content(commit_id, &commit))
+                    .transpose()?
+                    .unwrap_or(false);
+            if !metadata_only {
+                crate::patch_id::refresh(self.repo, &mut commit)?;
+            }
+        }
         let had_signature = commit.extra_headers.iter().any(|(name, _)| is_signature(name));
         commit.extra_headers.retain(|(name, _)| !is_signature(name));
         commit = match (signature, self.signing.clone()) {
@@ -3593,6 +3688,225 @@ mod tests {
                 "core.notesRef=refs/notes/review",
             ],
         )?)
+    }
+
+    #[test]
+    fn refackiewed_patch_is_hidden_while_lazy_and_restored_only_for_the_same_delta() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+        let graph = super::super::loaded_graph(&repo)?;
+        let approved_commit_id =
+            super::super::enrich::refackiewed(&repo, Some(&graph), repo.head_id()?.detach(), Some(true), |_| {})?
+                .selected;
+        let approved_patch_id = crate::patch_id::for_commit(&repo, approved_commit_id)?;
+        let is_approved = |commit_id| -> Result<bool> {
+            Ok(
+                crate::enrich::load_patch_for_commit(&repo, &mut crate::enrich::open_patch(&repo)?, commit_id)?
+                    .refackiewed,
+            )
+        };
+        assert!(is_approved(approved_commit_id)?, "the original delta is approved");
+        git(
+            fixture.path(),
+            &["checkout", "-q", "--detach", &base_commit_id.to_string()],
+        )?;
+
+        let graph = super::super::loaded_graph(&repo)?;
+        let mut base = repo.find_commit(base_commit_id)?.decode()?.into_owned()?;
+        base.tree = repo.object_hash().empty_tree();
+        let lazy = perform(
+            &repo,
+            &graph,
+            Edit::Replace {
+                target: base_commit_id,
+                commit: base,
+            },
+            Signature::RedoIfNeeded,
+            Tree::LeaveAsIsAndMark,
+        )?
+        .complete()?;
+        let pending_middle_commit_id = lazy.map(middle_commit_id).context("the middle remains")?;
+        let pending_tip_commit_id = lazy.map(approved_commit_id).context("the approved tip remains")?;
+        assert!(
+            repo.find_commit(pending_tip_commit_id)?
+                .decode()?
+                .extra_headers()
+                .find(crate::patch_id::HEADER)
+                .is_some(),
+            "lazy reparenting carries the stored ID without recomputing it"
+        );
+        assert_eq!(
+            crate::patch_id::for_commit(&repo, pending_tip_commit_id)?,
+            None,
+            "a carried lazy ID cannot be used for enrichment"
+        );
+        assert!(
+            !is_approved(pending_tip_commit_id)?,
+            "stale patches never display approval"
+        );
+
+        let graph = super::super::loaded_graph(&repo)?;
+        let replayed = perform(
+            &repo,
+            &graph,
+            Edit::Repeat {
+                base: pending_middle_commit_id,
+                checkout: pending_tip_commit_id,
+            },
+            Signature::RedoIfNeeded,
+            Tree::CherryPick,
+        )?
+        .complete()?;
+        let replayed_commit_id = replayed.map(pending_tip_commit_id).context("the tip is replayed")?;
+        assert_eq!(
+            crate::patch_id::for_commit(&repo, replayed_commit_id)?,
+            approved_patch_id,
+            "removing an unrelated ancestor file preserves the patch ID after full replay"
+        );
+        assert!(
+            is_approved(replayed_commit_id)?,
+            "the same change and delta regain approval"
+        );
+
+        let mut edited = repo.find_commit(replayed_commit_id)?.decode()?.into_owned()?;
+        let approved_tree_id = edited.tree;
+        edited.tree = parent_tree(&repo, edited.parents.first().copied())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let edited_commit_id = perform(
+            &repo,
+            &graph,
+            Edit::Replace {
+                target: replayed_commit_id,
+                commit: edited,
+            },
+            Signature::RedoIfNeeded,
+            Tree::LeaveAsIsAndMark,
+        )?
+        .complete()?
+        .selected
+        .context("the content edit selects its commit")?;
+        assert!(
+            !is_approved(edited_commit_id)?,
+            "changing the delta requires renewed approval"
+        );
+        let mut restored = repo.find_commit(edited_commit_id)?.decode()?.into_owned()?;
+        restored.tree = approved_tree_id;
+        let graph = super::super::loaded_graph(&repo)?;
+        let restored_commit_id = perform(
+            &repo,
+            &graph,
+            Edit::Replace {
+                target: edited_commit_id,
+                commit: restored,
+            },
+            Signature::RedoIfNeeded,
+            Tree::LeaveAsIsAndMark,
+        )?
+        .complete()?
+        .selected
+        .context("the original delta is restored")?;
+        assert!(
+            is_approved(restored_commit_id)?,
+            "previously approved versions remain recorded"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unsigned_conflict_patch_ids_stay_unavailable_until_explicit_resolution() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let approved_commit_id =
+            super::super::enrich::refackiewed(&repo, Some(&graph), repo.head_id()?.detach(), Some(true), |_| {})?
+                .selected;
+        let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+        let graph = super::super::loaded_graph(&repo)?;
+        let PlanPerform::Conflict(conflict) = perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base: base_commit_id,
+                scope: vec![middle_commit_id, approved_commit_id],
+                steps: vec![PlanStep {
+                    parent: PlanParent::Existing(base_commit_id),
+                    commit: PlanCommit::Pick(approved_commit_id),
+                    squash: Vec::new(),
+                }],
+                checkout: Some(PlanCheckout {
+                    target: PlanParent::Step(0),
+                    reference: None,
+                }),
+                expected_refs: capture_refs(&repo, &[middle_commit_id, approved_commit_id], &[approved_commit_id])?,
+            },
+        )?
+        else {
+            return Err("the source delta conflicts with its new base".into());
+        };
+        let placeholder_commit_id = conflict.commit();
+        let placeholder = conflict
+            .repository()
+            .find_commit(placeholder_commit_id)?
+            .decode()?
+            .into_owned()?;
+        assert!(
+            !has_marker(&placeholder),
+            "the todo conflict has no original-parent marker"
+        );
+        assert!(
+            !placeholder.extra_headers.iter().any(|(name, _)| is_signature(name)),
+            "the unsigned conflict has no signature marker either"
+        );
+        assert!(
+            crate::patch_id::is_unavailable(&placeholder),
+            "conflict state is persisted explicitly"
+        );
+        assert_eq!(
+            crate::patch_id::for_commit(conflict.repository(), placeholder_commit_id)?,
+            None
+        );
+        conflict.into_conflict().persist(CheckoutOptions::default())?;
+        assert_eq!(
+            crate::patch_id::for_commit(&repo, placeholder_commit_id)?,
+            None,
+            "accepting the conflict does not certify its placeholder tree"
+        );
+
+        std::fs::write(fixture.path().join("file"), b"base\n")?;
+        git(fixture.path(), &["add", "file"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let premature = perform(
+            &repo,
+            &graph,
+            Edit::Repeat {
+                base: placeholder_commit_id,
+                checkout: placeholder_commit_id,
+            },
+            Signature::RedoIfNeeded,
+            Tree::CherryPick,
+        );
+        assert!(
+            premature.is_err(),
+            "ordinary replay cannot substitute the placeholder for the resolved index"
+        );
+        let resolved_commit_id = super::super::head::amend_index(repo.clone(), &graph)?
+            .context("explicitly amending the resolution finalizes even an unchanged ours tree")?;
+        assert!(
+            crate::patch_id::for_commit(&repo, resolved_commit_id)?.is_some(),
+            "the resolved empty delta receives a fresh ID"
+        );
+        assert!(!is_pending(
+            &repo.find_commit(resolved_commit_id)?.decode()?.into_owned()?
+        ));
+        assert!(
+            !crate::enrich::load_patch_for_commit(&repo, &mut crate::enrich::open_patch(&repo)?, resolved_commit_id)?
+                .refackiewed,
+            "the new empty delta does not inherit the old nonempty approval"
+        );
+        Ok(())
     }
 
     #[test]

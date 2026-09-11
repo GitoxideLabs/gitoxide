@@ -403,6 +403,7 @@ pub(crate) enum Action {
     ToggleEnrich,
     ToggleTodo,
     ToggleChecksPass,
+    ToggleRefackiewed,
     EditNote,
     EditGitNote,
     ToggleInformation,
@@ -515,6 +516,7 @@ pub(crate) enum Effect {
     TogglePin(ObjectId),
     ToggleTodo(ObjectId),
     ToggleChecksPass(ObjectId),
+    ToggleRefackiewed(ObjectId),
     EditNote(ObjectId),
     EditGitNote(ObjectId),
     VerifySignatures(Vec<ObjectId>),
@@ -560,6 +562,13 @@ impl TreeDiffTarget {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PatchEnrichmentState {
+    Missing,
+    Fresh { refackiewed: bool },
+    Stale,
+}
+
 #[derive(Debug)]
 pub(crate) struct App {
     pub rows: Vec<SharedCommitRow>,
@@ -573,6 +582,7 @@ pub(crate) struct App {
     notes: HashMap<ObjectId, Vec<BString>>,
     enrichments: HashMap<ObjectId, crate::enrich::Enrichment>,
     tree_enrichments: HashMap<ObjectId, crate::enrich::TreeEnrichment>,
+    patch_enrichments: HashMap<ObjectId, PatchEnrichmentState>,
     graph: Option<Graph>,
     view_tips: HashSet<ObjectId>,
     compressed_history: Option<CompressedHistory>,
@@ -696,6 +706,7 @@ impl App {
             notes: HashMap::new(),
             enrichments: HashMap::new(),
             tree_enrichments: HashMap::new(),
+            patch_enrichments: HashMap::new(),
             graph: None,
             view_tips: HashSet::new(),
             compressed_history: None,
@@ -1416,9 +1427,25 @@ impl App {
             .is_some_and(|enrichment| enrichment.checks_pass)
     }
 
+    pub(crate) fn patch_enrichment_loaded(&self, id: ObjectId) -> bool {
+        self.patch_enrichments.contains_key(&id)
+    }
+
+    pub(crate) fn set_patch_enrichment(&mut self, id: ObjectId, enrichment: PatchEnrichmentState) {
+        self.patch_enrichments.insert(id, enrichment);
+    }
+
+    pub(crate) fn refackiewed(&self, id: ObjectId) -> bool {
+        matches!(
+            self.patch_enrichments.get(&id),
+            Some(PatchEnrichmentState::Fresh { refackiewed: true })
+        )
+    }
+
     pub(crate) fn clear_enrichments(&mut self) {
         self.enrichments.clear();
         self.tree_enrichments.clear();
+        self.patch_enrichments.clear();
     }
 
     pub(crate) fn history_len(&self) -> usize {
@@ -1929,6 +1956,7 @@ impl App {
             Action::ToggleEnrich
                 | Action::ToggleTodo
                 | Action::ToggleChecksPass
+                | Action::ToggleRefackiewed
                 | Action::EditNote
                 | Action::EditGitNote
         ) {
@@ -2479,6 +2507,11 @@ impl App {
                 if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
                     return vec![Effect::ToggleChecksPass(id)];
                 }
+            }
+            Action::ToggleRefackiewed if self.can_refackiew() => {
+                return vec![Effect::ToggleRefackiewed(
+                    self.rows[self.selected.expect("refackiewed requires a selection")].id,
+                )];
             }
             Action::EditNote if self.can_enrich() => {
                 return vec![Effect::EditNote(
@@ -3273,6 +3306,19 @@ impl App {
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
                 !self.hidden_rows.contains(&row.id) && !self.known_merge_descendants.contains(&row.id)
+            })
+    }
+
+    pub(crate) fn can_refackiew(&self) -> bool {
+        !self.has_rebase_conflict()
+            && self.selected_history_commit().is_some_and(|id| {
+                let row = &self.rows[self.selected.expect("a selected history commit has a row")];
+                row.signature != SignatureState::PendingRebase
+                    && match self.patch_enrichments.get(&id) {
+                        Some(PatchEnrichmentState::Fresh { .. }) => true,
+                        Some(PatchEnrichmentState::Missing) => self.can_reword(),
+                        Some(PatchEnrichmentState::Stale) | None => false,
+                    }
             })
     }
 
@@ -7819,6 +7865,54 @@ mod tests {
             app.update(Action::ToggleChecksPass),
             vec![Effect::ToggleChecksPass(id(1))],
             "immutable boundaries still accept tree enrichments"
+        );
+    }
+
+    #[test]
+    fn refackiewed_eligibility_follows_the_loaded_patch_identity() {
+        let mut app = App::new(1);
+        app.extend_commits(vec![row(1)]);
+        complete(&mut app);
+        assert!(!app.patch_enrichment_loaded(id(1)), "patch metadata starts unloaded");
+        assert!(!app.refackiewed(id(1)), "unloaded metadata shows no review marker");
+        assert!(app.update(Action::ToggleRefackiewed).is_empty());
+
+        app.set_patch_enrichment(id(1), PatchEnrichmentState::Missing);
+        app.update(Action::ToggleEnrich);
+        assert!(
+            app.patch_enrichment_loaded(id(1)),
+            "a missing header is a cached result"
+        );
+        assert_eq!(
+            app.update(Action::ToggleRefackiewed),
+            vec![Effect::ToggleRefackiewed(id(1))],
+            "a mutable legacy commit can receive a patch identity when marked"
+        );
+        assert!(app.enrich_expanded, "the refackiewed action keeps its group open");
+
+        app.hidden_rows.insert(id(1));
+        assert!(
+            app.update(Action::ToggleRefackiewed).is_empty(),
+            "an immutable legacy commit cannot be rewritten to add a header"
+        );
+        app.set_patch_enrichment(id(1), PatchEnrichmentState::Fresh { refackiewed: true });
+        assert!(app.refackiewed(id(1)), "a fresh reviewed patch shows the marker");
+        assert_eq!(
+            app.update(Action::ToggleRefackiewed),
+            vec![Effect::ToggleRefackiewed(id(1))],
+            "an existing fresh header permits note-only changes on immutable commits"
+        );
+
+        app.set_patch_enrichment(id(1), PatchEnrichmentState::Stale);
+        assert!(!app.refackiewed(id(1)), "stale identities hide review markers");
+        assert!(
+            app.update(Action::ToggleRefackiewed).is_empty(),
+            "stale identities cannot be marked until their rebase completes"
+        );
+        app.clear_enrichments();
+        assert!(
+            !app.patch_enrichment_loaded(id(1)),
+            "refresh clears patch enrichment results"
         );
     }
 

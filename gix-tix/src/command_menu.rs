@@ -46,6 +46,7 @@ pub(crate) enum CommandId {
     Todo,
     Note,
     ChecksPass,
+    Refackiewed,
     GitNote,
     VerifySignatures,
     Alignment,
@@ -107,6 +108,7 @@ const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
         (Id::Todo, Enrich, "nt", Action::ToggleTodo),
         (Id::Note, Enrich, "no", Action::EditNote),
         (Id::ChecksPass, Enrich, "ne", Action::ToggleChecksPass),
+        (Id::Refackiewed, Enrich, "nr", Action::ToggleRefackiewed),
         (Id::GitNote, Enrich, "ng", Action::EditGitNote),
         (Id::VerifySignatures, Information, "?s", Action::VerifySignatures),
         (Id::Alignment, Information, "?[", Action::ToggleAlign),
@@ -371,6 +373,9 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
             push(CommandId::Note, 0, "note", app.note(row.id).is_some());
         }
         push(CommandId::ChecksPass, 0, "checks-pass", app.checks_pass(row.id));
+        if app.can_refackiew() {
+            push(CommandId::Refackiewed, 0, "refackiewed", app.refackiewed(row.id));
+        }
         push(CommandId::GitNote, 0, "git note", !app.notes(row.id).is_empty());
     }
 
@@ -441,6 +446,42 @@ mod tests {
 
     fn has(commands: &[Command], id: CommandId) -> bool {
         commands.iter().any(|command| command.id == id)
+    }
+
+    #[test]
+    fn refackiewed_is_searchable_and_only_available_for_eligible_patch_identities() {
+        use crate::app::PatchEnrichmentState;
+
+        let mut app = App::new(1);
+        app.extend_commits(vec![row(1, &[])]);
+        app.state = State::Complete;
+        app.set_patch_enrichment(id(1), PatchEnrichmentState::Fresh { refackiewed: true });
+        let catalog = commands(&app, &Decorations::default(), false);
+        let command = catalog
+            .iter()
+            .find(|command| command.id == CommandId::Refackiewed)
+            .expect("a fresh patch identity exposes refackiewed");
+        assert_eq!(command.shortcut, "nr", "the enrich group uses r for refackiewed");
+        assert!(command.active, "the palette reflects the saved review marker");
+        assert_eq!(
+            shortcut_action(CommandGroup::Enrich, 'r'),
+            Some(Action::ToggleRefackiewed),
+            "the shortcut and palette share the same action"
+        );
+        let items = crate::command_picker_items(&catalog);
+        let mut menu = Menu::default();
+        menu.open(&items);
+        menu.paste("refackiewed", &items);
+        assert_eq!(
+            menu.submit_selected(&items),
+            Some(CommandId::Refackiewed),
+            "the review action is discoverable by its name"
+        );
+        app.set_patch_enrichment(id(1), PatchEnrichmentState::Stale);
+        assert!(
+            !has(&commands(&app, &Decorations::default(), false), CommandId::Refackiewed),
+            "a stale patch identity removes the action"
+        );
     }
 
     #[test]
@@ -571,6 +612,7 @@ mod tests {
         ]);
         app.set_auto_merges(&graph, &decorations, &[]);
         app.set_known_merge_descendants(graph.commits_with_merge_descendants());
+        app.set_patch_enrichment(id(4), crate::app::PatchEnrichmentState::Fresh { refackiewed: false });
         let catalog = commands(&app, &decorations, false);
         for available in [
             CommandId::AutoMerge,
@@ -578,6 +620,7 @@ mod tests {
             CommandId::RemoveAutoMergeInput,
             CommandId::Todo,
             CommandId::Note,
+            CommandId::Refackiewed,
         ] {
             assert!(
                 has(&catalog, available),

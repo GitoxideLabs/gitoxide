@@ -101,7 +101,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     )
 }
 
-fn ensure_retained_target(
+pub(super) fn ensure_retained_target(
     graph: &crate::history::HistoryGraph,
     target: gix::ObjectId,
     pins: &[crate::history::Pin],

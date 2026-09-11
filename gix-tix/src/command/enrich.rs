@@ -11,6 +11,9 @@ pub(super) enum Command {
     /// Manage enrichments keyed by a commit's tree ID.
     #[command(subcommand)]
     Tree(Tree),
+    /// Manage enrichments for a patch within the same Tix change.
+    #[command(subcommand)]
+    Patch(Patch),
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -27,6 +30,12 @@ pub(super) enum Commit {
 pub(super) enum Tree {
     /// Mark the tree as passing checks, or clear the mark.
     ChecksPass(BooleanTarget),
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub(super) enum Patch {
+    /// Mark the patch as reviewed and refactored, or clear the mark.
+    Refackiewed(BooleanTarget),
 }
 
 #[derive(Debug, clap::Args)]
@@ -99,7 +108,60 @@ pub(super) fn run(repository: gix::Repository, command: Command) -> Result<()> {
                 },
             )
         }
+        Command::Patch(Patch::Refackiewed(args)) => refackiewed(&repository, args),
     }
+}
+
+fn refackiewed(repository: &gix::Repository, args: BooleanTarget) -> Result<()> {
+    let (target, resolved_graph) = super::resolve_commit(repository, &args.target.revision, "refackiew target")?;
+    let commit = repository.find_commit(target)?.decode()?.into_owned()?;
+    let needs_header = !args.clear
+        && !crate::edit::rebase::is_pending(&commit)
+        && !commit
+            .extra_headers
+            .iter()
+            .any(|(name, _)| name == crate::patch_id::HEADER);
+    let graph = if needs_header {
+        let pins = crate::history::all_pins(repository)?;
+        let head = repository.head()?;
+        let attached_head = !head.is_detached() && head.id().map(gix::Id::detach) == Some(target);
+        let graph = match resolved_graph {
+            Some(graph) => graph,
+            None => {
+                let revisions = [OsString::from("HEAD"), OsString::from(target.to_string())];
+                let hidden = crate::history::available_hidden_revisions(repository, &[], true)?.0;
+                crate::edit::loaded_explicit_view_graph(repository, &revisions, &hidden)?
+            }
+        };
+        super::reword::ensure_retained_target(&graph, target, &pins, attached_head)?;
+        Some(graph)
+    } else {
+        None
+    };
+    let outcome = crate::edit::enrich::refackiewed(repository, graph.as_ref(), target, Some(!args.clear), |_| {})?;
+    if let Some(notice) = &outcome.notice {
+        eprintln!("{notice}");
+    }
+    let status = if outcome.enrichment.refackiewed {
+        "marked patch refackiewed"
+    } else {
+        "cleared patch refackiewed"
+    };
+    eprintln!(
+        "{} {status}",
+        crate::change_id::display(repository, outcome.selected, 7)?
+    );
+    super::print_ref_rewrites(repository, &outcome.ref_rewrites)?;
+    super::record_undo(
+        repository,
+        if outcome.enrichment.refackiewed {
+            "mark patch refackiewed"
+        } else {
+            "clear patch refackiewed"
+        },
+        Ok(outcome.ref_changes),
+    );
+    Ok(())
 }
 
 fn resolve(repository: &gix::Repository, target: &Target) -> Result<gix::ObjectId> {
@@ -220,6 +282,68 @@ mod tests {
         Target {
             revision: revision.into(),
         }
+    }
+
+    fn patch_command(revision: &str, clear: bool) -> Command {
+        Command::Patch(Patch::Refackiewed(BooleanTarget {
+            clear,
+            target: target(revision),
+        }))
+    }
+
+    #[test]
+    fn patch_mark_backfills_head_once_and_then_only_changes_notes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let original = repository.head_id()?.detach();
+        run(repository.clone(), patch_command("HEAD", false))?;
+        let marked = repository.head_id()?.detach();
+        assert_ne!(marked, original, "the first mark stores the patch header in history");
+        let patch_id = crate::patch_id::for_commit(&repository, marked)?.expect("marking embeds the patch ID");
+        let change_id = crate::change_id::for_commit(&repository, marked)?;
+        let undo_before = repository.find_reference(crate::edit::undo::TIP_REF)?.id().detach();
+        run(repository.clone(), patch_command("HEAD", false))?;
+        assert_eq!(
+            repository.head_id()?,
+            marked,
+            "an existing header prevents further history rewrites"
+        );
+        assert_eq!(
+            repository.find_reference(crate::edit::undo::TIP_REF)?.id(),
+            undo_before,
+            "an idempotent mark does not add another undo entry"
+        );
+        run(repository.clone(), patch_command("HEAD", true))?;
+        assert_eq!(
+            repository.head_id()?,
+            marked,
+            "clearing leaves the embedded identity untouched"
+        );
+        assert!(
+            !crate::enrich::load_patch(&mut crate::enrich::open_patch(&repository)?, change_id, patch_id)?.refackiewed,
+            "the CLI clears the selected patch version"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_patch_mark_uses_reword_retention_rules_but_clear_needs_no_pin() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let original_head = repository.head_id()?.detach();
+        let original_target = repository.rev_parse_single("HEAD~1")?.detach();
+        let err = run(repository.clone(), patch_command("HEAD~1", false))
+            .expect_err("a legacy ancestor needs a covering pin before its header can be added");
+        assert!(format!("{err:#}").contains("must be pinned"));
+        run(repository.clone(), patch_command("HEAD~1", true))?;
+        assert_eq!(
+            repository.head_id()?,
+            original_head,
+            "clearing a legacy mark leaves history untouched"
+        );
+        assert_eq!(repository.rev_parse_single("HEAD~1")?, original_target);
+        assert!(repository.try_find_reference(crate::enrich::PATCH_REF_NAME)?.is_none());
+        Ok(())
     }
 
     #[test]

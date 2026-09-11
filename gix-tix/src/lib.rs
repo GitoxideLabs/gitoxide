@@ -11,6 +11,7 @@ mod enrich;
 mod history;
 mod logging;
 mod menu;
+mod patch_id;
 mod ref_tree;
 #[cfg(test)]
 mod test_repository;
@@ -5009,6 +5010,49 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("checks-pass: {err:#}")),
                     }
                 }
+                Effect::ToggleRefackiewed(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let result = run_with_todo_progress(terminal, |report| {
+                        let repository = open_repository(&repository_path, repository_is_bare, false)
+                            .context("could not open repository to mark the patch")?;
+                        edit::enrich::refackiewed(&repository, history_graph.as_ref(), id, None, report)
+                    });
+                    match result {
+                        Ok(outcome) => {
+                            let enabled = outcome.enrichment.refackiewed;
+                            app.clear_enrichments();
+                            app.set_patch_enrichment(
+                                outcome.selected,
+                                app::PatchEnrichmentState::Fresh { refackiewed: enabled },
+                            );
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                if enabled {
+                                    "mark patch refackiewed"
+                                } else {
+                                    "clear patch refackiewed"
+                                },
+                                &outcome.ref_changes,
+                                outcome.notice.unwrap_or_else(|| {
+                                    if enabled {
+                                        "marked patch refackiewed"
+                                    } else {
+                                        "cleared patch refackiewed"
+                                    }
+                                    .into()
+                                }),
+                            );
+                            if outcome.selected != id {
+                                app.select_commit_after_refresh(outcome.selected);
+                                refresh_pending = true;
+                            }
+                        }
+                        Err(err) => app.leave_error(format!("refackiewed: {err:#}")),
+                    }
+                }
                 Effect::EditNote(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
@@ -6468,6 +6512,11 @@ fn draw(
         .map(|index| app.rows[*index].id)
         .filter(|id| repository_fill_allowed && !app.tree_enrichment_loaded(*id))
         .collect();
+    let patch_enrichments_to_load: Vec<_> = visible_indices
+        .iter()
+        .map(|index| app.rows[*index].id)
+        .filter(|id| repository_fill_allowed && !app.patch_enrichment_loaded(*id))
+        .collect();
     let changes_visible = app.changes_visible();
     let selected_id = app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id);
     app.selection_relation = selection_cache
@@ -6545,6 +6594,7 @@ fn draw(
     if !notes_to_load.is_empty()
         || !enrichments_to_load.is_empty()
         || !tree_enrichments_to_load.is_empty()
+        || !patch_enrichments_to_load.is_empty()
         || visible_indices.iter().any(|index| !app.rows[*index].metadata_loaded)
         || message_to_load.is_some()
         || tree_changes_to_load.is_some()
@@ -6599,6 +6649,19 @@ fn draw(
                         app.set_tree_enrichment(id, enrich::TreeEnrichment::default());
                     }
                 }
+            }
+        }
+        if !patch_enrichments_to_load.is_empty() {
+            let mut notes = enrich::open_patch(repository)?;
+            for commit_id in patch_enrichments_to_load {
+                let state = match load_patch_enrichment_state(repository, &mut notes, commit_id) {
+                    Ok(state) => state,
+                    Err(err) => {
+                        tracing::warn!(%commit_id, error = %err, "ignored malformed tix patch enrichment");
+                        app::PatchEnrichmentState::Stale
+                    }
+                };
+                app.set_patch_enrichment(commit_id, state);
             }
         }
         if let Some(id) = message_to_load {
@@ -7686,6 +7749,27 @@ fn run_with_todo_progress<T: Send>(
         }
         result
     })
+}
+
+fn load_patch_enrichment_state(
+    repository: &gix::Repository,
+    notes: &mut gix::note::Platform<'_>,
+    commit_id: gix::ObjectId,
+) -> Result<app::PatchEnrichmentState> {
+    let object = repository.find_commit(commit_id)?;
+    let commit = object.decode()?;
+    if let Some(patch_id) = patch_id::current(repository, &commit)? {
+        let change_id = change_id::effective(commit_id, commit.extra_headers().find_all(change_id::HEADER));
+        let enrichment = enrich::load_patch(notes, change_id, patch_id)?;
+        Ok(app::PatchEnrichmentState::Fresh {
+            refackiewed: enrichment.refackiewed,
+        })
+    } else if commit.extra_headers().find(patch_id::HEADER).is_some() || edit::rebase::is_pending(&commit.into_owned()?)
+    {
+        Ok(app::PatchEnrichmentState::Stale)
+    } else {
+        Ok(app::PatchEnrichmentState::Missing)
+    }
 }
 
 fn todo_progress_visible(elapsed: Duration) -> bool {

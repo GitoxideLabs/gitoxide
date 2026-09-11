@@ -115,7 +115,7 @@ impl Definition {
     }
 
     pub(crate) fn store(&self, commit: &mut gix::objs::Commit) {
-        commit.extra_headers.retain(|(name, _)| name != HEADER);
+        let mut headers = Vec::with_capacity(self.inputs.len());
         for input in &self.inputs {
             let mut value = BString::from(format!(
                 "1 {} {} ",
@@ -126,8 +126,18 @@ impl Definition {
                 InputSource::Reference(name) => value.push_str(name.as_bstr()),
                 InputSource::Change(change_id) => value.push_str(format!("change-id {change_id}")),
             }
-            commit.extra_headers.push((HEADER.into(), value));
+            headers.push((HEADER.into(), value));
         }
+        if commit
+            .extra_headers
+            .iter()
+            .filter(|(name, _)| name == HEADER)
+            .eq(&headers)
+        {
+            return;
+        }
+        commit.extra_headers.retain(|(name, _)| name != HEADER);
+        commit.extra_headers.extend(headers);
     }
 
     pub(crate) fn title(&self) -> BString {
@@ -972,6 +982,8 @@ pub(crate) fn perform(
     definition.store(&mut commit);
     let mut ids = graph.edit_commit_ids();
     let target = if created {
+        // Seed the empty delta so a same-tree merge receives a patch identity.
+        crate::patch_id::refresh(&repo, &mut commit)?;
         let commit_id = repo.write_object(&commit)?.detach();
         ids.push(commit_id);
         commit_id
