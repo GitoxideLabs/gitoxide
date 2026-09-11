@@ -23,6 +23,27 @@ These shortcuts also work directly, without a prefix:
 See the [full keyboard reference](spec.md#navigation-and-display-controls) for
 navigation and the remaining direct shortcuts.
 
+## Marking reviewed patches
+
+Press `n r` to mark the selected patch **refackiewed** (refactored and reviewed)
+with `✨`, or to clear the mark. The command menu also finds `refackiewed`.
+From the shell, use `tix enrich patch refackiewed [REVSPEC]` and add `--clear`
+to remove the mark; the target defaults to `HEAD`.
+
+The mark belongs to that version of a Tix change's patch. It survives rewording
+and rebasing when the patch's edits stay the same, even when ancestor changes
+move lines or alter unrelated files. Changing the patch hides its old mark;
+returning to the approved version restores it. The existing `✔️` checks-pass
+mark still belongs to one exact tree.
+
+Tix stores the patch identity in a commit header and the mark in worktree-local
+notes. Marking a commit without that header rewrites it and its descendants,
+preserving staged changes and worktree files; previously final descendants stay
+final. Lazy rebases hide the mark until replay refreshes the identity. Browsing
+only reads existing metadata and never calculates patch hashes or backfills old
+commits. See [patch identity and enrichment](spec.md#patch-identity-and-enrichment)
+for identity, eligibility, and caching rules.
+
 ## Worktrees
 
 `tix worktrunk` (or `tix wt`) opens a worktree picker with the selected
