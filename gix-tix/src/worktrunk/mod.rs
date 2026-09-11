@@ -825,7 +825,7 @@ where
         .to_owned())
 }
 
-/// Create a detached worktree and, if the source uses pins, pin the new worktree's HEAD there.
+/// Create a detached worktree and pin its HEAD in the source worktree, if present.
 fn create_detached<P>(
     repository: &gix::Repository,
     target: &OsStr,
@@ -840,7 +840,6 @@ where
     let target = gix::path::os_str_into_bstr(target).context("detached target is not valid UTF-8")?;
     let (commit_id, _) = crate::history::resolve_revision(repository, target)
         .with_context(|| format!("could not resolve detached worktree commit {target}"))?;
-    let pin_worktree = repository.workdir().is_some() && !crate::history::all_pins(repository)?.is_empty();
     let destination = match path_override {
         Some(path) => absolute(path)?,
         None => {
@@ -867,7 +866,7 @@ where
             interrupt,
         )
         .with_context(|| format!("could not create worktree at {}", destination.display()))?;
-    if pin_worktree {
+    if repository.workdir().is_some() {
         let linked = worktree
             .worktree()
             .context("created worktree has no worktree directory")?;
@@ -1530,26 +1529,39 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(path.join("tracked"))?, "base\n");
         git(&path, &["diff-index", "--exit-code", "HEAD", "--"])?;
-        assert!(
-            crate::history::all_pins(&repository)?.is_empty(),
-            "a source without pins does not acquire one"
+        let pins = crate::history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 3, "an initially unpinned source tracks each new worktree");
+        assert_eq!(
+            pins.iter()
+                .map(|pin| &pin.target)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3,
+            "worktrees starting at the same commit retain distinct tracking targets"
         );
         let refs = repository
             .references()?
-            .all()?
+            .prefixed("refs/heads/")?
             .map(|reference| reference.map(|reference| reference.name().as_bstr().to_owned()))
             .collect::<Result<Vec<_>, _>>()?;
         assert_eq!(
             refs,
             [b"refs/heads/main".as_bstr()],
-            "no branch or relationship ref is created"
+            "detached creation does not create branches"
         );
         Ok(())
     }
 
     #[test]
     fn detached_offspring_pin_follows_head_and_is_private_to_the_source() -> gix_testtools::Result {
-        for linked_source in [false, true] {
+        for (linked_source, detached_source, remember_branch) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (true, true, false),
+            (false, true, true),
+            (true, true, true),
+        ] {
             let (temp, repository) = fixture()?;
             let base_commit_id = repository.head_id()?.detach();
             let main = repository.workdir().expect("fixture has a worktree");
@@ -1558,33 +1570,40 @@ mod tests {
             let branch_commit_id = repository.head_id()?.detach();
             let interrupt = AtomicBool::default();
             let source_path = if linked_source {
-                create_detached(
-                    &repository,
-                    OsStr::new(&base_commit_id.to_string()),
-                    Some(&temp.path().join("source")),
-                    gix::progress::Discard,
-                    &interrupt,
-                )?
+                let head = if detached_source {
+                    gix::worktree::create::Head::Detached(base_commit_id)
+                } else {
+                    create_branch(&repository, "source")?;
+                    gix::worktree::create::Head::Attached("refs/heads/source".try_into()?)
+                };
+                let (source, _) =
+                    repository.create_worktree(temp.path().join("source"), head, gix::progress::Discard, &interrupt)?;
+                source.workdir().expect("the source has a worktree").to_owned()
             } else {
-                git(main, &["switch", "--detach", &base_commit_id.to_string()])?;
+                if detached_source {
+                    git(main, &["switch", "--detach", &base_commit_id.to_string()])?;
+                }
                 main.to_owned()
             };
             let source = crate::test_repository::open(&source_path)?;
-            crate::edit::time_travel::create_named_pin(
-                &source,
-                crate::history::HEAD_PIN_NAME.as_bstr().try_into()?,
-                gix::refs::Target::Symbolic("refs/heads/main".try_into()?),
-                branch_commit_id,
-                "remember source branch",
-            )?;
-            assert_eq!(logical_head(&source)?.commit_id, Some(branch_commit_id));
+            let source_commit_id = source.head_id()?.detach();
+            if remember_branch {
+                crate::edit::time_travel::create_named_pin(
+                    &source,
+                    crate::history::HEAD_PIN_NAME.as_bstr().try_into()?,
+                    gix::refs::Target::Symbolic("refs/heads/main".try_into()?),
+                    branch_commit_id,
+                    "remember source branch",
+                )?;
+                assert_eq!(logical_head(&source)?.commit_id, Some(branch_commit_id));
+            }
 
             let path = create_detached(&source, OsStr::new("HEAD"), None, gix::progress::Discard, &interrupt)?;
             let worktree = crate::test_repository::open(&path)?;
             assert!(worktree.head()?.is_detached(), "the offspring starts detached");
             assert_eq!(
                 worktree.head_id()?,
-                base_commit_id,
+                source_commit_id,
                 "detached creation uses physical HEAD even when the remembered branch has advanced"
             );
             let linked = worktree.worktree().expect("the offspring has a worktree");
@@ -1594,8 +1613,8 @@ mod tests {
             let pins = crate::history::all_pins(&source)?;
             assert_eq!(
                 pins.len(),
-                2,
-                "the source gains one ordinary pin alongside its HEAD pin"
+                1 + usize::from(remember_branch),
+                "every source gains one ordinary pin regardless of existing pins"
             );
             let pin = pins
                 .iter()
@@ -1612,25 +1631,34 @@ mod tests {
                 );
             }
 
-            std::fs::write(path.join("tracked"), "base\nexperiment\n")?;
-            git(&path, &["commit", "-am", "experiment"])?;
-            let advanced_commit_id = worktree.head_id()?.detach();
-            assert_ne!(advanced_commit_id, base_commit_id, "the child advances independently");
-            let source = crate::test_repository::open(&source_path)?;
-            let mut reference = source.find_reference(pin.name.as_ref())?;
-            assert_eq!(reference.target().into_owned(), target, "the pin remains symbolic");
+            for attached in [false, true] {
+                if attached {
+                    git(&path, &["switch", "-c", "experiment"])?;
+                }
+                std::fs::write(path.join("tracked"), format!("base\nexperiment attached={attached}\n"))?;
+                git(&path, &["commit", "-am", "experiment"])?;
+                let advanced_commit_id = worktree.head_id()?.detach();
+                assert_ne!(advanced_commit_id, source_commit_id, "the child advances independently");
+                let source = crate::test_repository::open(&source_path)?;
+                let mut reference = source.find_reference(pin.name.as_ref())?;
+                assert_eq!(reference.target().into_owned(), target, "the pin remains symbolic");
+                assert_eq!(
+                    reference.peel_to_id()?,
+                    advanced_commit_id,
+                    "the pin follows commits made outside tix with detached or attached HEAD"
+                );
+                assert!(
+                    crate::history::snapshot(&source, &[], &[], false)?
+                        .view_tips
+                        .contains(&advanced_commit_id),
+                    "the offspring's new tip participates in the source history"
+                );
+            }
             assert_eq!(
-                reference.peel_to_id()?,
-                advanced_commit_id,
-                "the pin follows commits made outside tix"
+                source.head_id()?,
+                source_commit_id,
+                "the source checkout stays in place"
             );
-            assert!(
-                crate::history::snapshot(&source, &[], &[], false)?
-                    .view_tips
-                    .contains(&advanced_commit_id),
-                "the offspring's new tip participates in the source history"
-            );
-            assert_eq!(source.head_id()?, base_commit_id, "the source checkout stays in place");
             assert_eq!(
                 source.find_reference("refs/heads/main")?.id(),
                 branch_commit_id,
