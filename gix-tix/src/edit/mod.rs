@@ -95,6 +95,7 @@ pub(crate) mod split;
 pub(crate) mod stash;
 pub(crate) mod time_travel;
 pub(crate) mod todo;
+pub(crate) mod transplant;
 pub(crate) mod undo;
 
 #[tracing::instrument(skip_all, fields(filename))]

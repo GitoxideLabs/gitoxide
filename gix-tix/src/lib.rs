@@ -1412,6 +1412,8 @@ fn event_loop(
     );
 
     let mut app = App::new(1);
+    app.set_enhanced_keyboard(enhanced_keyboard);
+    let mut tree_selection_refs = None;
     app.set_configured_author(configured_author);
     app.set_view_tips(&ref_snapshot.view_tips);
     app.set_worktree_head_unborn(worktree_head_unborn);
@@ -2450,6 +2452,11 @@ fn event_loop(
                 hidden_changed,
                 "compared reference snapshot"
             );
+            if app.tree_selection_active() && next != ref_snapshot {
+                app.cancel_tree_selection();
+                tree_selection_refs = None;
+                app.leave_attention("tree selection cancelled: references changed");
+            }
             ref_snapshot = next;
             app.set_worktree_branch(current_worktree_branch(&ref_snapshot));
             app.set_active_branch(active_branch_name(&ref_snapshot));
@@ -3165,6 +3172,30 @@ fn event_loop(
                 _ => {}
             }
         }
+        if app.tree_selection_active()
+            && matches!(terminal_event, TerminalEvent::Key(KeyEvent { code: KeyCode::Enter, kind, .. }) if kind != KeyEventKind::Press)
+        {
+            continue;
+        }
+        if focused
+            && app.tree_selection_active()
+            && matches!(
+                terminal_event,
+                TerminalEvent::Key(KeyEvent {
+                    code: KeyCode::Esc,
+                    kind: KeyEventKind::Press,
+                    ..
+                })
+            )
+        {
+            command_picker.close();
+            app.auto_merge_picker.close();
+            app.update(Action::Cancel);
+            tree_selection_refs = None;
+            dirty = true;
+            urgent = true;
+            continue;
+        }
         let command_action = if focused && app.auto_merge_picker.is_open() && !diagnostic_input {
             let items: Vec<_> = app
                 .auto_merge_options
@@ -3246,6 +3277,12 @@ fn event_loop(
                     };
                     let repeats_history = app.changes_focus.is_none() && repeats_viewport(&action);
                     (Some(action), repeats_history, true, true)
+                }
+                TerminalEvent::Paste(_) if app.tree_selection_active() => {
+                    app.leave_attention("finish or cancel tree selection before pasting");
+                    dirty = true;
+                    urgent = true;
+                    continue;
                 }
                 TerminalEvent::Paste(pasted) if app.entry_selection_active() => {
                     (Some(Action::SelectEntryInput(pasted)), false, false, false)
@@ -3625,6 +3662,9 @@ fn event_loop(
         let Some(mut action) = action else {
             continue;
         };
+        if app.tree_selection_active() && !app.tree_selection_allows(&action) {
+            continue;
+        }
         if matches!(
             action,
             Action::AutoMerge | Action::RemoveFromAutoMerge | Action::RemoveAutoMergeInput
@@ -3700,7 +3740,13 @@ fn event_loop(
         let previous_changes_mode = app.changes_mode;
         let toggles_changes = action == Action::ToggleChanges;
         let refreshes_worktree = action == Action::Refresh && app.changes_mode == Some(ChangesMode::Both);
+        let selecting_tree = app.tree_selection_active();
         let effects = app.update(action);
+        if !selecting_tree && app.tree_selection_active() {
+            tree_selection_refs = Some(ref_snapshot.clone());
+        } else if !app.tree_selection_active() {
+            tree_selection_refs = None;
+        }
         if refreshes_worktree {
             invalidate_worktree_changes(&mut worktree_changes);
             worktree_watch_refresh = WorktreeWatchRefresh::default();
@@ -4050,11 +4096,7 @@ fn event_loop(
                                 repository_is_bare,
                                 graph,
                                 parent,
-                                if empty {
-                                    CreateMode::InsertEmpty
-                                } else {
-                                    CreateMode::Insert
-                                },
+                                empty,
                                 enhanced_keyboard,
                             )
                         });
@@ -4084,104 +4126,6 @@ fn event_loop(
                         }
                         Ok(None) => app.leave_attention("no commit created: no input was provided"),
                         Err(err) => app.leave_error(format!("new commit: {err:#}")),
-                    }
-                }
-                Effect::ForkCommit(parent) => {
-                    fill_repository.retain = false;
-                    fill_repository.retained = None;
-                    let created = history_graph
-                        .as_ref()
-                        .context("creating a fork requires a completed history graph")
-                        .and_then(|graph| {
-                            create_commit(
-                                terminal,
-                                &repository_path,
-                                repository_is_bare,
-                                graph,
-                                Some(parent),
-                                CreateMode::Fork,
-                                enhanced_keyboard,
-                            )
-                        });
-                    match created {
-                        Ok(Some(edit::rebase::Perform::Complete(outcome))) => {
-                            let new_id = outcome.selected.context("creating a fork did not select it")?;
-                            let ref_changes = outcome.ref_changes;
-                            let review_roots: Vec<_> =
-                                app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
-                            let travel = open_repository(&repository_path, repository_is_bare, false)
-                                .context("could not reopen repository before travelling to fork")
-                                .and_then(|repository| edit::loaded_view_graph(&repository))
-                                .and_then(|graph| {
-                                    edit::time_travel::perform(
-                                        &repository_path,
-                                        repository_is_bare,
-                                        new_id,
-                                        &graph,
-                                        &review_roots,
-                                        &revisions,
-                                        false,
-                                    )
-                                });
-                            match travel {
-                                Ok(edit::time_travel::Perform::Complete {
-                                    notice,
-                                    selected,
-                                    ref_changes: mut travel_changes,
-                                    ..
-                                }) => {
-                                    let mut changes = ref_changes;
-                                    changes.append(&mut travel_changes);
-                                    leave_recorded_success(
-                                        &mut app,
-                                        &repository_path,
-                                        repository_is_bare,
-                                        "fork commit",
-                                        &changes,
-                                        notice.map_or_else(
-                                            || format!("created fork {}", new_id.to_hex_with_len(7)),
-                                            |notice| format!("created fork {}; {notice}", new_id.to_hex_with_len(7)),
-                                        ),
-                                    );
-                                    app.select_commit_after_refresh(selected);
-                                    invalidate_worktree_changes(&mut worktree_changes);
-                                    refresh_pending = true;
-                                }
-                                Ok(edit::time_travel::Perform::Conflict(mut conflict)) => {
-                                    conflict.prepend_ref_changes(ref_changes);
-                                    let original = conflict.original();
-                                    app.arm_rebase_conflict(original);
-                                    app.select_commit(original);
-                                    pending_conflict_clear_undo_on_accept = false;
-                                    pending_rebase_conflict = Some(conflict);
-                                }
-                                Err(err) => {
-                                    leave_recorded_success(
-                                        &mut app,
-                                        &repository_path,
-                                        repository_is_bare,
-                                        "fork commit",
-                                        &ref_changes,
-                                        format!(
-                                            "created fork {}, but checkout failed: {err:#}",
-                                            new_id.to_hex_with_len(7)
-                                        ),
-                                    );
-                                    invalidate_worktree_changes(&mut worktree_changes);
-                                    refresh_pending = true;
-                                }
-                            }
-                        }
-                        Ok(Some(edit::rebase::Perform::Conflict(rebase))) => {
-                            let conflict = edit::time_travel::Conflict::from_rebase(rebase, &revisions, false);
-                            let original = conflict.original();
-                            app.arm_rebase_conflict(original);
-                            app.select_commit(original);
-                            pending_conflict_clear_undo_on_accept = false;
-                            pending_rebase_conflict = Some(conflict);
-                        }
-                        Ok(None) => app.leave_attention("no fork created: no input was provided"),
-                        Err(err) => app.leave_error(format!("fork: {err:#}")),
                     }
                 }
                 Effect::Split(id) => {
@@ -4570,97 +4514,96 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("squash: {err:#}")),
                     }
                 }
-                effect @ (Effect::Insert { .. } | Effect::PasteInsert { .. }) => {
-                    let (source, base, target, copy, pasted, target_is_read_only) = match effect {
-                        Effect::Insert {
-                            source,
-                            base,
-                            target,
-                            copy,
-                            target_is_read_only,
-                        } => (source, base, target, copy, false, target_is_read_only),
-                        Effect::PasteInsert {
-                            source,
-                            target,
-                            target_is_read_only,
-                        } => (source, source, target, true, true, target_is_read_only),
-                        _ => unreachable!("the match arm accepts only insertion effects"),
-                    };
+                effect @ (Effect::Transplant(_) | Effect::PasteInsert { .. }) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
-                    let result = (|| {
+                    let transplanting = matches!(effect, Effect::Transplant(_));
+                    let result = run_with_todo_progress(terminal, |report| {
+                        report(edit::rebase::Progress::default());
                         let mut repository = open_repository(&repository_path, repository_is_bare, false)
-                            .context("could not open repository to insert commits")?;
+                            .context("could not open repository to transplant commits")?;
                         repository.object_cache_size(None);
-                        let loaded_graph;
-                        let graph = if pasted {
-                            let graph_revisions = [
-                                OsString::from("HEAD"),
-                                OsString::from(source.to_string()),
-                                OsString::from(target.to_string()),
-                            ];
-                            loaded_graph = edit::loaded_explicit_view_graph(&repository, &graph_revisions, &[])?;
-                            &loaded_graph
-                        } else {
-                            history_graph
-                                .as_ref()
-                                .context("inserting commits requires a completed history graph")?
-                        };
-                        let plan = if copy {
-                            edit::rebase::copy_insert_plan(&repository, graph, source, target, target_is_read_only)?
-                        } else if base == source {
-                            edit::rebase::move_insert_plan(&repository, graph, source, target, target_is_read_only)?
-                        } else {
-                            edit::rebase::stack_insert_plan(
-                                &repository,
-                                graph,
-                                base,
+                        let graph;
+                        let plan = match &effect {
+                            Effect::Transplant(request) => {
+                                let current = history::snapshot(&repository, &revisions, &hide, false)?;
+                                anyhow::ensure!(
+                                    tree_selection_refs.as_ref() == Some(&current),
+                                    "tree selection is stale: references or HEAD changed; select the source again"
+                                );
+                                graph = edit::loaded_explicit_view_graph(&repository, &revisions, &hide)?;
+                                let plan = edit::transplant::plan(
+                                    &repository,
+                                    &graph,
+                                    request,
+                                    graph.is_read_only(request.destination),
+                                )?;
+                                anyhow::ensure!(
+                                    tree_selection_refs.as_ref()
+                                        == Some(&history::snapshot(&repository, &revisions, &hide, false)?),
+                                    "tree selection is stale: references changed while preparing the rebase"
+                                );
+                                plan
+                            }
+                            Effect::PasteInsert {
                                 source,
                                 target,
                                 target_is_read_only,
-                            )?
+                            } => {
+                                let graph_revisions = [
+                                    OsString::from("HEAD"),
+                                    OsString::from(source.to_string()),
+                                    OsString::from(target.to_string()),
+                                ];
+                                graph = edit::loaded_explicit_view_graph(&repository, &graph_revisions, &[])?;
+                                edit::rebase::copy_insert_plan(
+                                    &repository,
+                                    &graph,
+                                    *source,
+                                    *target,
+                                    *target_is_read_only,
+                                )?
+                            }
+                            _ => unreachable!("only transplant and paste effects enter this arm"),
                         };
-                        run_rebase_plan(terminal, repository.into_sync(), graph, plan, &revisions)
-                    })();
+                        edit::rebase::perform_plan_with_progress(
+                            &repository,
+                            &graph,
+                            plan,
+                            edit::rebase::CheckoutOptions {
+                                revisions: &revisions,
+                                ..Default::default()
+                            },
+                            report,
+                        )
+                    });
+                    if transplanting {
+                        app.cancel_tree_selection();
+                        tree_selection_refs = None;
+                    }
                     match result {
                         Ok(edit::rebase::PlanPerform::Complete(outcome)) => {
-                            let inserted = if copy {
-                                outcome.selected.expect("copy-insert selects the copied commit")
-                            } else {
-                                outcome.map(source).unwrap_or(source)
-                            };
+                            let selected = outcome.selected.context("transplant did not select its result")?;
                             let message = outcome.notice.unwrap_or_else(|| {
-                                if copy {
-                                    format!(
-                                        "copied {} as {} above {}",
-                                        source.to_hex_with_len(7),
-                                        inserted.to_hex_with_len(7),
-                                        target.to_hex_with_len(7)
-                                    )
-                                } else {
-                                    format!(
-                                        "inserted {} above {}",
-                                        inserted.to_hex_with_len(7),
-                                        target.to_hex_with_len(7)
-                                    )
-                                }
+                                format!(
+                                    "{} {}",
+                                    if transplanting { "transplanted" } else { "copied" },
+                                    selected.to_hex_with_len(7)
+                                )
                             });
-                            let changes = outcome.ref_changes;
                             leave_recorded_success(
                                 &mut app,
                                 &repository_path,
                                 repository_is_bare,
-                                if copy {
-                                    "copy-insert commit"
-                                } else if base == source {
-                                    "move-insert commit"
+                                if transplanting {
+                                    "transplant commits"
                                 } else {
-                                    "stack-insert commits"
+                                    "copy-insert commit"
                                 },
-                                &changes,
+                                &outcome.ref_changes,
                                 message,
                             );
-                            app.select_commit_after_refresh(inserted);
+                            app.select_commit_after_refresh(selected);
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
@@ -4677,7 +4620,7 @@ fn event_loop(
                             app.select_commit(id);
                             pending_todo_rebase_conflict = Some(conflict);
                         }
-                        Err(err) => app.leave_error(format!("insert: {err:#}")),
+                        Err(err) => app.leave_error(format!("transplant: {err:#}")),
                     }
                 }
                 Effect::StartReview { tip, base } => {
@@ -7776,32 +7719,25 @@ fn todo_progress_visible(elapsed: Duration) -> bool {
     elapsed >= TODO_PROGRESS_DELAY
 }
 
-#[derive(Clone, Copy)]
-enum CreateMode {
-    Insert,
-    InsertEmpty,
-    Fork,
-}
-
-#[tracing::instrument(skip_all, fields(parent = ?parent, fork = matches!(mode, CreateMode::Fork)))]
+#[tracing::instrument(skip_all, fields(parent = ?parent, empty))]
 fn create_commit(
     terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
     parent: Option<gix::ObjectId>,
-    mode: CreateMode,
+    empty: bool,
     enhanced_keyboard: bool,
 ) -> Result<Option<edit::rebase::Perform>> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before creating commit")?;
     repository.object_cache_size(None);
-    let mut prepared = if matches!(mode, CreateMode::InsertEmpty) {
+    let mut prepared = if empty {
         edit::create::prepare_empty(repository, parent)?
     } else {
         edit::create::prepare(repository, parent)?
     };
-    if matches!(mode, CreateMode::Insert) && prepared.is_empty {
+    if !empty && prepared.is_empty {
         anyhow::bail!("the new commit would be empty; use new-empty instead");
     }
     let editor = prepared.editor.take().expect("prepared commits have an editor");
@@ -7815,21 +7751,12 @@ fn create_commit(
     else {
         return Ok(None);
     };
-    let outcome = match mode {
-        CreateMode::Insert | CreateMode::InsertEmpty => run_with_todo_progress(terminal, move |report| {
-            let mut repository = open_repository(repository_path, bare, false)
-                .context("could not reopen repository after editing commit")?;
-            repository.object_cache_size(None);
-            edit::create::apply_conflict_reporting(repository, graph, prepared, &edited, report)
-        }),
-        CreateMode::Fork => {
-            let mut repository = open_repository(repository_path, bare, false)
-                .context("could not reopen repository after editing commit")?;
-            repository.object_cache_size(None);
-            edit::create::apply_fork_reporting(repository, graph, prepared, &edited)
-                .map(edit::rebase::Perform::Complete)
-        }
-    }?;
+    let outcome = run_with_todo_progress(terminal, move |report| {
+        let mut repository = open_repository(repository_path, bare, false)
+            .context("could not reopen repository after editing commit")?;
+        repository.object_cache_size(None);
+        edit::create::apply_conflict_reporting(repository, graph, prepared, &edited, report)
+    })?;
     Ok(Some(outcome))
 }
 
@@ -9023,6 +8950,42 @@ fn diagnostic_action(key: KeyEvent, app: &App) -> Option<Action> {
 }
 
 fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
+    if app.tree_selection_active() {
+        if key.kind == KeyEventKind::Release {
+            return None;
+        }
+        if matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char(' ')) && key.kind != KeyEventKind::Press {
+            return None;
+        }
+        if key.code == KeyCode::Esc {
+            return Some(Action::Cancel);
+        }
+        if app.topological_navigation_active() {
+            return topological_selection_action(key);
+        }
+        if key.code == KeyCode::Enter {
+            return Some(Action::ConfirmTreeSelection);
+        }
+        if app.tree_selection_source_active() && key.modifiers == KeyModifiers::NONE {
+            match key.code {
+                KeyCode::Char('h') => return Some(Action::PreviousTreeLeaf),
+                KeyCode::Char('l') => return Some(Action::NextTreeLeaf),
+                _ => {}
+            }
+        }
+    }
+    if key.code == KeyCode::Char(' ')
+        && app.changes_focus.is_none()
+        && !app.entry_selection_active()
+        && !app.topological_navigation_active()
+        && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return (key.kind == KeyEventKind::Press).then_some(if key.modifiers.contains(KeyModifiers::SHIFT) {
+            Action::SelectSubtree
+        } else {
+            Action::SelectTree
+        });
+    }
     if app.entry_selection_active() {
         return entry_selection_action(key);
     }
@@ -11916,10 +11879,6 @@ mod tests {
             ('u', Action::RebaseUpdate),
             ('r', Action::Review),
             ('s', Action::Squash),
-            ('y', Action::CopyInsert),
-            ('m', Action::MoveInsert),
-            ('t', Action::StackInsert),
-            ('f', Action::ForkCommit),
             ('h', Action::Attach),
             ('x', Action::RemoveFromAutoMerge),
         ] {
@@ -11992,8 +11951,8 @@ mod tests {
                 false,
                 false
             ),
-            Some(Action::StackInsert),
-            "the actions shortcut takes priority over the direct ref-tree key"
+            Some(Action::ToggleRefTree),
+            "removed insertion shortcuts no longer shadow direct navigation"
         );
         assert_eq!(
             action_with_shortcut_groups(
@@ -12125,6 +12084,66 @@ mod tests {
         );
         assert_eq!(entry_selection_action(key(KeyCode::Esc)), Some(Action::Cancel));
         assert_eq!(entry_selection_action(key(KeyCode::Char('j'))), None);
+    }
+
+    #[test]
+    fn tree_selection_keys_require_deliberate_confirmations_and_restore_normal_navigation() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("rebase_edit.sh")?;
+        let repository = test_repository::open(&fixture)?;
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        let mut graph = HistoryGraph::default();
+        let history = graph.refresh(&repository, &[], &[], false, &HashSet::new(), &authors)?;
+        let mut app = App::new(10);
+        let rows = app
+            .start_refresh(history.commits, &history.refs.view_tips, &[], false)
+            .context("initial history needs lanes")?;
+        let (rows, lanes, elapsed) = app::compute_lanes(rows);
+        app.finish_lane_computation(rows, lanes, elapsed);
+        app.set_worktree_head(Some(repository.head_id()?.detach()), false);
+        app.select_commit(repository.rev_parse_single("HEAD~1")?.detach());
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(app_action(key(KeyCode::Char(' ')), &app), Some(Action::SelectTree));
+        app.update(Action::SelectTree);
+        assert!(
+            app.tree_selection_active(),
+            "Space arms a source before any operation is chosen"
+        );
+        for code in [KeyCode::Char(' '), KeyCode::Enter] {
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+                assert_eq!(
+                    app_action(KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind), &app),
+                    None,
+                    "holding a selection key never changes membership or advances the workflow"
+                );
+            }
+        }
+        assert_eq!(
+            app_action(key(KeyCode::Char('h')), &app),
+            Some(Action::PreviousTreeLeaf)
+        );
+        assert_eq!(app_action(key(KeyCode::Char('l')), &app), Some(Action::NextTreeLeaf));
+        assert_eq!(app_action(key(KeyCode::Char('j')), &app), Some(Action::MoveDown));
+        assert_eq!(app_action(key(KeyCode::Char('K')), &app), Some(Action::TopologicalUp));
+        assert_eq!(
+            app_action(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::SHIFT), &app),
+            Some(Action::SelectSubtree)
+        );
+        assert_eq!(
+            app_action(key(KeyCode::Enter), &app),
+            Some(Action::ConfirmTreeSelection)
+        );
+        app.update(Action::ConfirmTreeSelection);
+        assert!(
+            app.tree_selection_active(),
+            "source confirmation does not apply a rebase"
+        );
+        assert_eq!(app_action(key(KeyCode::Esc), &app), Some(Action::Cancel));
+        app.update(Action::Cancel);
+        assert!(!app.tree_selection_active(), "Escape aborts the full flow");
+        assert_eq!(app_action(key(KeyCode::Char('h')), &app), Some(Action::ScrollLeft));
+        assert_eq!(app_action(key(KeyCode::Enter), &app), Some(Action::OpenDiff));
+        Ok(())
     }
 
     #[test]
@@ -13228,6 +13247,8 @@ mod tests {
             .map(gix::Id::detach)
             .context("the conflicted commit has a parent")?;
         let plan = edit::rebase::Plan {
+            eager: Vec::new(),
+            selection: None,
             base: parent,
             scope: vec![head],
             steps: vec![edit::rebase::PlanStep {
@@ -13373,6 +13394,8 @@ mod tests {
             &repo,
             &graph,
             edit::rebase::Plan {
+                eager: Vec::new(),
+                selection: None,
                 base: base_commit_id,
                 scope: vec![middle_commit_id, tip_commit_id],
                 steps: vec![edit::rebase::PlanStep {

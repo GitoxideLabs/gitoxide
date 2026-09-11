@@ -12,6 +12,9 @@ use gix::{
     traverse::commit::ParentIds,
 };
 
+mod tree_selection;
+pub(crate) use tree_selection::Role as TreeSelectionRole;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Commit<T> {
     pub id: ObjectId,
@@ -427,15 +430,16 @@ pub(crate) enum Action {
     Fetch,
     Push,
     Squash,
-    CopyInsert,
+    SelectTree,
+    SelectSubtree,
+    PreviousTreeLeaf,
+    NextTreeLeaf,
+    ConfirmTreeSelection,
     PasteInsert {
         source: ObjectId,
         target: ObjectId,
     },
-    MoveInsert,
-    StackInsert,
     Review,
-    ForkCommit,
     Attach,
     AutoMerge,
     Remerge,
@@ -490,13 +494,7 @@ pub(crate) enum Effect {
         source: ObjectId,
         target: ObjectId,
     },
-    Insert {
-        source: ObjectId,
-        base: ObjectId,
-        target: ObjectId,
-        copy: bool,
-        target_is_read_only: bool,
-    },
+    Transplant(crate::edit::transplant::Request),
     PasteInsert {
         source: ObjectId,
         target: ObjectId,
@@ -510,7 +508,6 @@ pub(crate) enum Effect {
         review: ObjectId,
         return_to: Option<ObjectId>,
     },
-    ForkCommit(ObjectId),
     Attach,
     TimeTravel(ObjectId),
     TogglePin(ObjectId),
@@ -631,8 +628,8 @@ pub(crate) struct App {
     review_tip: Option<ObjectId>,
     review_return: Option<(ObjectId, ObjectId)>,
     squash_source: Option<ObjectId>,
-    insert_selection: Option<(ObjectId, bool)>,
-    stack_insert_base: Option<ObjectId>,
+    tree_selection: Option<tree_selection::SelectionFlow>,
+    enhanced_keyboard: bool,
     reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
     pub(crate) focus_feedback: Option<&'static str>,
@@ -682,6 +679,7 @@ pub(crate) struct App {
     signature_verification_running: bool,
     pub(crate) selection_relation: Option<SelectionRelation>,
     pub(crate) auto_merges: HashMap<ObjectId, crate::edit::auto_merge::Definition>,
+    unavailable_patches: HashSet<ObjectId>,
     auto_merge_candidates: HashSet<ObjectId>,
     auto_merge_input_tips: HashSet<ObjectId>,
     pub(crate) auto_merge_options: Vec<crate::edit::auto_merge::Selection>,
@@ -755,8 +753,8 @@ impl App {
             review_tip: None,
             review_return: None,
             squash_source: None,
-            insert_selection: None,
-            stack_insert_base: None,
+            tree_selection: None,
+            enhanced_keyboard: false,
             reachable_rows: None,
             copy_feedback: None,
             focus_feedback: None,
@@ -806,6 +804,7 @@ impl App {
             signature_verification_running: false,
             selection_relation: None,
             auto_merges: HashMap::new(),
+            unavailable_patches: HashSet::new(),
             auto_merge_candidates: HashSet::new(),
             auto_merge_input_tips: HashSet::new(),
             auto_merge_options: Vec::new(),
@@ -910,7 +909,9 @@ impl App {
     }
 
     pub(crate) fn notice(&self) -> Option<Notice> {
-        let prompt = if let Some(navigation) = self.topological_navigation.as_ref() {
+        let prompt = if let Some(selection) = self.tree_selection.as_ref() {
+            Some(selection.notice(self))
+        } else if let Some(navigation) = self.topological_navigation.as_ref() {
             Some(format!(
                 "choose {} {}/{} · h/l cycle · <enter> move · Esc cancel",
                 match navigation.direction {
@@ -941,13 +942,6 @@ impl App {
             Some("review base · j/k select ancestor · <enter> start · Esc cancel".into())
         } else if self.squash_selection_active() {
             Some("squash target · j/k select ancestor · <enter> squash · Esc cancel".into())
-        } else if let Some((_, copy)) = self.insert_selection {
-            Some(format!(
-                "{} target · j/k select insertion point · <enter> insert · Esc cancel",
-                if copy { "copy-insert" } else { "move-insert" }
-            ))
-        } else if self.stack_insert_base.is_some() {
-            Some("stack-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
         } else {
             self.undo_redo_confirmation.as_ref().map(|action| {
                 if *action == Action::Undo {
@@ -1202,6 +1196,7 @@ impl App {
         pins: &[crate::history::Pin],
     ) {
         use crate::history::DecorationKind as Kind;
+        self.unavailable_patches.clone_from(&graph.unavailable_patches);
         self.auto_merges = graph
             .auto_merges
             .iter()
@@ -1512,7 +1507,8 @@ impl App {
     }
 
     fn compressed_history_suspended(&self) -> bool {
-        self.time_travel_animation.is_some()
+        self.tree_selection.is_some()
+            || self.time_travel_animation.is_some()
             || self.pending_rebase_conflict.is_some()
             || self.rebase_continuation_pending
             || self.worktree_conflicted
@@ -1863,6 +1859,7 @@ impl App {
             || self.deferred_history_state.unwrap_or(self.state) != State::Complete
             || self.changes_focus.is_some()
             || self.reachable_rows.is_some()
+            || self.tree_selection.is_some()
             || self.selected_is_segment()
         {
             return None;
@@ -1872,6 +1869,7 @@ impl App {
 
     pub(crate) fn worktrunk_history_root(&self) -> bool {
         self.changes_focus.is_none()
+            && self.tree_selection.is_none()
             && !self.auto_merge_picker.is_open()
             && self.reachable_rows.is_none()
             && self.entry_selection.is_none()
@@ -1899,6 +1897,13 @@ impl App {
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         self.notice = None;
+        if !self.tree_selection_allows(&action) {
+            self.leave_attention("finish the tree selection or press Esc to abort");
+            return Vec::new();
+        }
+        if let Some(effects) = self.update_tree_selection(&action) {
+            return effects;
+        }
         let undo_redo_confirmation = self.undo_redo_confirmation.take();
         if !matches!(&action, Action::Undo | Action::Redo) {
             self.undo_position = None;
@@ -1933,12 +1938,10 @@ impl App {
                 | Action::RebaseUpdate
                 | Action::Push
                 | Action::Squash
-                | Action::CopyInsert
-                | Action::MoveInsert
-                | Action::StackInsert
+                | Action::SelectTree
+                | Action::SelectSubtree
                 | Action::Stash
                 | Action::Review
-                | Action::ForkCommit
                 | Action::Attach
                 | Action::AutoMerge
                 | Action::Remerge
@@ -2284,43 +2287,6 @@ impl App {
                 self.clear_reachability_selection();
                 return vec![Effect::Squash { source, target }];
             }
-            Action::OpenDiff if self.insert_selection.is_some() => {
-                let (source, copy) = self.insert_selection.expect("insert target selection has a source");
-                let Some((target, target_is_read_only)) = self
-                    .selected
-                    .filter(|index| self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
-                    .and_then(|index| self.rows.get(index).map(|row| (row.id, self.is_row_hidden(index))))
-                else {
-                    return Vec::new();
-                };
-                self.clear_reachability_selection();
-                return vec![Effect::Insert {
-                    source,
-                    base: source,
-                    target,
-                    copy,
-                    target_is_read_only,
-                }];
-            }
-            Action::OpenDiff if self.stack_insert_base.is_some() => {
-                let source = self.worktree_head.expect("stack insertion requires HEAD");
-                let base = self.stack_insert_base.expect("stack insertion has a base");
-                let Some((target, target_is_read_only)) = self
-                    .selected
-                    .filter(|index| self.is_row_reachable(*index) && self.reachable_row_selectable(*index))
-                    .and_then(|index| self.rows.get(index).map(|row| (row.id, self.is_row_hidden(index))))
-                else {
-                    return Vec::new();
-                };
-                self.clear_reachability_selection();
-                return vec![Effect::Insert {
-                    source,
-                    base,
-                    target,
-                    copy: false,
-                    target_is_read_only,
-                }];
-            }
             Action::OpenDiff => {
                 if let Some(target) = self.selected_tree_diff_target() {
                     return vec![Effect::OpenCommitDiff(target)];
@@ -2421,34 +2387,12 @@ impl App {
                     return vec![Effect::Squash { source, target }];
                 }
             }
-            Action::CopyInsert if self.can_copy_insert() => {
-                self.begin_insert_selection(true);
-            }
             Action::PasteInsert { source, target } => {
                 return vec![Effect::PasteInsert {
                     source,
                     target,
                     target_is_read_only: self.hidden_rows.contains(&target),
                 }];
-            }
-            Action::MoveInsert if self.can_move_insert() => {
-                self.begin_insert_selection(false);
-            }
-            Action::StackInsert => {
-                if let Some((source, base, base_parent, stack)) = self.stack_insert() {
-                    let reachable: Vec<_> = self
-                        .rows
-                        .iter()
-                        .enumerate()
-                        .map(|(index, row)| self.is_stack_insert_target(index, row.id, base, base_parent, &stack))
-                        .collect();
-                    if reachable.iter().any(|reachable| *reachable) {
-                        debug_assert_eq!(source, self.worktree_head.expect("a stack insertion has HEAD"));
-                        self.stack_insert_base = Some(base);
-                        self.reachable_rows = Some(reachable);
-                        self.ensure_visible();
-                    }
-                }
             }
             Action::Review if self.can_finish_review() => {
                 return vec![Effect::FinishReview {
@@ -2473,11 +2417,6 @@ impl App {
                     self.clear_reachability_selection();
                     return vec![Effect::StartReview { tip, base }];
                 }
-            }
-            Action::ForkCommit if self.can_fork_commit() => {
-                return vec![Effect::ForkCommit(
-                    self.rows[self.selected.expect("fork requires a selection")].id,
-                )];
             }
             Action::Attach if self.can_attach() => return vec![Effect::Attach],
             Action::ApplyAutoMerge(selection) => return vec![Effect::AutoMerge(selection)],
@@ -2546,11 +2485,7 @@ impl App {
             Action::Cancel if undo_redo_confirmation.is_some() => {}
             Action::Cancel if self.entry_selection.is_some() => self.entry_selection = None,
             Action::Cancel
-                if self.review_tip.is_some()
-                    || self.review_return.is_some()
-                    || self.squash_source.is_some()
-                    || self.insert_selection.is_some()
-                    || self.stack_insert_base.is_some() =>
+                if self.review_tip.is_some() || self.review_return.is_some() || self.squash_source.is_some() =>
             {
                 self.clear_reachability_selection();
             }
@@ -2761,9 +2696,6 @@ impl App {
         select_top: bool,
     ) -> Vec<SharedCommitRow> {
         self.topological_navigation = None;
-        if self.insert_selection.is_some() || self.stack_insert_base.is_some() {
-            self.clear_reachability_selection();
-        }
         let previous_order: HashMap<_, _> = self
             .rows
             .iter()
@@ -2783,6 +2715,18 @@ impl App {
             .filter(|id| visible.contains(*id) || boundary.contains(*id))
             .filter_map(|id| self.all_rows.get(id).map(Arc::clone))
             .collect();
+        if self.tree_selection.is_some()
+            && (boundary != self.hidden_rows
+                || rows.len() != self.rows.len()
+                || rows.iter().any(|row| {
+                    previous_order
+                        .get(&row.id)
+                        .is_none_or(|index| self.rows[*index].parent_ids != row.parent_ids)
+                }))
+        {
+            self.cancel_tree_selection();
+            self.leave_attention("history changed; tree selection was cancelled");
+        }
         let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
         let mut children = vec![Vec::new(); rows.len()];
         let mut ranks = vec![None; rows.len()];
@@ -2959,6 +2903,7 @@ impl App {
         if self.reachability_anchor.is_some() {
             self.compute_reachable_rows();
         }
+        self.update_tree_selection_mask();
         if self
             .pending_rebase_conflict
             .is_some_and(|id| self.selected.is_some_and(|index| self.rows[index].id == id))
@@ -3014,6 +2959,7 @@ impl App {
         self.selection_after_refresh = None;
         self.update_worktree_head_descendants();
         self.clear_reachability_selection();
+        self.cancel_tree_selection();
         self.signature_failures = 0;
         self.signature_verification_running = false;
     }
@@ -3052,8 +2998,6 @@ impl App {
         self.review_tip = None;
         self.review_return = None;
         self.squash_source = None;
-        self.insert_selection = None;
-        self.stack_insert_base = None;
         self.reachability_anchor = None;
         self.reachable_rows = None;
         self.restore_compressed_history_around_selection();
@@ -3238,7 +3182,7 @@ impl App {
                 .is_some_and(|row| Some(row.id) != self.squash_source)
                 && self.is_squash_target(index);
         }
-        if self.insert_selection.is_some() || self.stack_insert_base.is_some() {
+        if self.tree_selection.is_some() {
             return self.is_row_reachable(index);
         }
         !self.is_row_hidden(index)
@@ -3278,6 +3222,7 @@ impl App {
             }
             self.follow_tail = false;
             self.ensure_visible();
+            self.update_tree_selection_cursor();
         }
     }
 
@@ -3485,12 +3430,9 @@ impl App {
                 })
     }
 
-    pub(crate) fn can_copy_insert(&self) -> bool {
-        self.can_insert(true)
-    }
-
     pub(crate) fn paste_insert_target(&self) -> Option<ObjectId> {
         if self.state != State::Complete
+            || self.tree_selection.is_some()
             || self.deferred_history_state.unwrap_or(self.state) != State::Complete
             || self.changes_focus.is_some()
             || self.has_conflict_marker()
@@ -3501,125 +3443,6 @@ impl App {
             .and_then(|index| self.rows.get(index).map(|row| (index, row)))
             .filter(|(index, row)| self.is_row_hidden(*index) || !self.known_merge_descendants.contains(&row.id))
             .map(|(_, row)| row.id)
-    }
-
-    pub(crate) fn can_move_insert(&self) -> bool {
-        self.can_insert(false)
-    }
-
-    fn can_insert(&self, copy: bool) -> bool {
-        if self.state != State::Complete
-            || self.changes_focus.is_some()
-            || self.deferred_history_state.unwrap_or(self.state) != State::Complete
-            || self.reachable_rows.is_some()
-        {
-            return false;
-        }
-        let Some((source_index, source)) = self
-            .selected
-            .and_then(|index| self.rows.get(index).map(|row| (index, row)))
-        else {
-            return false;
-        };
-        !self.is_row_hidden(source_index)
-            && source.parent_ids.len() == 1
-            && !self.auto_merges.contains_key(&source.id)
-            && (copy || Some(source.id) == self.worktree_head && !self.known_merge_descendants.contains(&source.id))
-            && self
-                .rows
-                .iter()
-                .enumerate()
-                .any(|(index, _)| self.is_insert_target(index, source.id, copy))
-    }
-
-    fn is_insert_target(&self, index: usize, source: ObjectId, copy: bool) -> bool {
-        let Some(source) = self.all_rows.get(&source) else {
-            return false;
-        };
-        let target_is_read_only = self.is_row_hidden(index);
-        self.rows.get(index).is_some_and(|target| {
-            source.id != target.id
-                && (copy || source.parent_ids.first().copied() != Some(target.id))
-                && (target_is_read_only || !self.known_merge_descendants.contains(&target.id))
-                && (copy || !target_is_read_only || !self.is_known_ancestor(source.id, target.id))
-        })
-    }
-
-    fn begin_insert_selection(&mut self, copy: bool) {
-        let source = self
-            .selected
-            .and_then(|index| self.rows.get(index))
-            .map(|row| row.id)
-            .expect("insert availability requires a selected source");
-        let reachable = self
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(index, _)| self.is_insert_target(index, source, copy))
-            .collect();
-        self.insert_selection = Some((source, copy));
-        self.reachable_rows = Some(reachable);
-        self.ensure_visible();
-    }
-
-    pub(crate) fn can_stack_insert(&self) -> bool {
-        self.stack_insert().is_some_and(|(_, base, base_parent, stack)| {
-            self.rows
-                .iter()
-                .enumerate()
-                .any(|(index, row)| self.is_stack_insert_target(index, row.id, base, base_parent, &stack))
-        })
-    }
-
-    fn stack_insert(&self) -> Option<(ObjectId, ObjectId, ObjectId, HashSet<ObjectId>)> {
-        if self.state != State::Complete
-            || self.changes_focus.is_some()
-            || self.deferred_history_state.unwrap_or(self.state) != State::Complete
-        {
-            return None;
-        }
-        let source = self.worktree_head?;
-        let base = self.selected.and_then(|index| self.rows.get(index))?.id;
-        if self.hidden_rows.contains(&base) || self.known_merge_descendants.contains(&base) {
-            return None;
-        }
-
-        let mut current = source;
-        let mut stack = HashSet::new();
-        loop {
-            if !stack.insert(current) {
-                return None;
-            }
-            let row = self.all_rows.get(&current)?;
-            let [parent] = row.parent_ids.as_slice() else {
-                return None;
-            };
-            if current == base {
-                return Some((source, base, *parent, stack));
-            }
-            current = *parent;
-        }
-    }
-
-    fn is_stack_insert_target(
-        &self,
-        index: usize,
-        id: ObjectId,
-        base: ObjectId,
-        base_parent: ObjectId,
-        stack: &HashSet<ObjectId>,
-    ) -> bool {
-        let target_is_read_only = self.is_row_hidden(index);
-        !stack.contains(&id)
-            && id != base_parent
-            && if target_is_read_only {
-                !self.is_known_ancestor(base, id)
-            } else {
-                !self.known_merge_descendants.contains(&id)
-                    && !stack
-                        .iter()
-                        .any(|ancestor| *ancestor != base && self.is_known_ancestor(*ancestor, id))
-            }
     }
 
     pub(crate) fn can_review(&self) -> bool {
@@ -3648,17 +3471,6 @@ impl App {
                         .worktree_head
                         .is_some_and(|head| self.is_known_ancestor(row.id, head))
             })
-    }
-
-    pub(crate) fn can_fork_commit(&self) -> bool {
-        self.state == State::Complete
-            && self.worktree_changes_available
-            && !self.worktree_conflicted
-            && self.pending_rebase_conflict.is_none()
-            && self.changes_focus.is_none()
-            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self.worktree_head.is_some()
-            && self.selected.and_then(|index| self.rows.get(index)).is_some()
     }
 
     pub(crate) fn can_attach(&self) -> bool {
@@ -5609,8 +5421,6 @@ mod tests {
             !app.can_create_commit(),
             "a merge descendant outside the visible projection prevents a child"
         );
-        assert!(app.can_fork_commit(), "a fork does not rewrite merge descendants");
-        assert_eq!(app.update(Action::ForkCommit), vec![Effect::ForkCommit(id(2))]);
 
         let mut unborn = App::new(10);
         unborn.set_worktree_head_unborn(true);
@@ -5626,7 +5436,6 @@ mod tests {
                 empty: false,
             }]
         );
-        assert!(!unborn.can_fork_commit(), "a fork requires a selected parent");
 
         let mut unborn_with_history = App::new(10);
         unborn_with_history.set_worktree_head_unborn(true);
@@ -5643,10 +5452,6 @@ mod tests {
                 empty: false,
             }],
             "the hidden tip can parent the unborn branch's first commit"
-        );
-        assert!(
-            !unborn_with_history.can_fork_commit(),
-            "a fork requires an existing worktree HEAD even when another ref is selected"
         );
         assert!(!unborn_with_history.can_rebase(), "rebase todos require a born HEAD");
     }
@@ -5733,17 +5538,14 @@ mod tests {
         complete(&mut app);
         app.update(Action::MoveDown);
         assert!(app.time_travel_shortcut_visible());
-        assert!(app.can_fork_commit());
 
         app.set_worktree_conflicted(true);
         assert!(!app.time_travel_shortcut_visible());
-        assert!(!app.can_fork_commit());
         assert!(app.update(Action::TimeTravel).is_empty());
         app.set_worktree_conflicted(false);
         assert!(app.changes_visible(), "changes are normally shown while enabled");
         app.arm_rebase_conflict(id(1));
         assert!(!app.time_travel_shortcut_visible());
-        assert!(!app.can_fork_commit());
         assert!(
             !app.changes_visible(),
             "an in-memory conflict preview cannot be loaded by an on-disk changes view"
@@ -6104,115 +5906,304 @@ mod tests {
     }
 
     #[test]
-    fn single_commit_inserts_select_the_source_before_the_target() {
+    fn tree_selection_remembers_all_leaf_slots_and_updates_only_selected_paths() {
         let mut app = App::new(10);
         app.extend_commits(vec![
-            row_with_parents(5, &[4]),
-            row_with_parents(4, &[3]),
+            row_with_parents(6, &[4]),
+            row_with_parents(5, &[3]),
+            row_with_parents(4, &[2]),
             row_with_parents(3, &[2]),
             row_with_parents(2, &[1]),
             row(1),
         ]);
-        app.set_worktree_head(Some(id(5)), false);
         complete(&mut app);
-        app.selected = app.rows.iter().position(|row| row.id == id(3));
-
-        assert!(app.can_copy_insert());
-        assert!(!app.can_move_insert(), "only HEAD can be moved");
-        assert!(app.update(Action::CopyInsert).is_empty());
-        assert_eq!(
-            app.notice().map(|notice| notice.text),
-            Some("copy-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
-        );
         app.select_commit(id(2));
+        assert!(app.update(Action::SelectTree).is_empty());
         assert_eq!(
-            app.update(Action::OpenDiff),
-            vec![Effect::Insert {
-                source: id(3),
-                base: id(3),
-                target: id(2),
-                copy: true,
-                target_is_read_only: false,
-            }]
+            app.tree_selection_marker(id(2)),
+            Some(("R".into(), TreeSelectionRole::Source))
+        );
+        assert!(
+            app.tree_selection_marker(id(4)).is_none(),
+            "Space starts with only the root"
         );
 
-        app.select_commit(id(5));
-        assert!(app.can_copy_insert());
-        assert!(app.can_move_insert());
-        assert!(app.update(Action::MoveInsert).is_empty());
+        app.select_commit(id(4));
+        app.update(Action::SelectTree);
         assert_eq!(
-            app.notice().map(|notice| notice.text),
-            Some("move-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
+            app.tree_selection_marker(id(4)),
+            Some(("L1".into(), TreeSelectionRole::Source))
+        );
+        app.update(Action::NextTreeLeaf);
+        assert_eq!(
+            app.rows[app.selected.expect("the first endpoint is selected")].id,
+            id(4)
         );
         app.update(Action::MoveDown);
         assert_eq!(
-            app.selected.map(|index| app.rows[index].id),
-            Some(id(3)),
-            "move-insert skips the source's current parent"
+            app.rows[app.selected.expect("movement stays on the first path")].id,
+            id(2)
+        );
+        assert!(
+            app.tree_selection_marker(id(4)).is_none(),
+            "moving a selected endpoint shrinks its path live"
+        );
+        app.update(Action::NextTreeLeaf);
+        assert_eq!(
+            app.rows[app.selected.expect("the second candidate is selected")].id,
+            id(5)
         );
         assert_eq!(
-            app.update(Action::OpenDiff),
-            vec![Effect::Insert {
-                source: id(5),
-                base: id(5),
-                target: id(3),
-                copy: false,
-                target_is_read_only: false,
-            }]
+            app.tree_selection_marker(id(5)),
+            Some(("P2".into(), TreeSelectionRole::Preview))
+        );
+        assert!(
+            app.notice()
+                .expect("source context stays visible")
+                .text
+                .contains("Source: 1 commits")
+        );
+        app.update(Action::SelectTree);
+        assert_eq!(
+            app.tree_selection_marker(id(5)),
+            Some(("L2".into(), TreeSelectionRole::Source))
+        );
+        app.update(Action::PreviousTreeLeaf);
+        assert_eq!(
+            app.rows[app.selected.expect("the first slot remembers its endpoint")].id,
+            id(2)
+        );
+        app.update(Action::TopologicalUp);
+        assert_eq!(
+            app.rows[app.selected.expect("topology follows the active path")].id,
+            id(4)
+        );
+        assert!(
+            app.notice()
+                .expect("both paths are selected")
+                .text
+                .contains("Source: 4 commits")
+        );
+        app.update(Action::SelectSubtree);
+        assert_eq!(
+            app.rows[app.selected.expect("flood resets the active endpoint")].id,
+            id(6)
+        );
+        assert_eq!(
+            app.tree_selection_marker(id(6)),
+            Some(("L1".into(), TreeSelectionRole::Source))
+        );
+        assert!(
+            app.notice()
+                .expect("the full subtree is selected")
+                .text
+                .contains("Source: 5 commits")
         );
 
-        app.select_commit(id(5));
-        app.update(Action::CopyInsert);
+        app.update(Action::ConfirmTreeSelection);
+        app.update(Action::ConfirmTreeSelection);
         app.update(Action::MoveDown);
-        assert_eq!(
-            app.selected.map(|index| app.rows[index].id),
-            Some(id(4)),
-            "copy-insert permits the source's parent as a target"
+        let prompt = app.notice().expect("the connection choice is visible").text;
+        assert!(prompt.contains("multiple leaves require Fork"));
+        assert!(
+            !prompt.contains("Insert"),
+            "effective multiple leaves cannot be inserted"
         );
-        app.update(Action::Cancel);
-        assert!(app.notice().is_none(), "Escape cancels target selection");
+    }
 
-        let mut review_head = row_with_parents(5, &[4]);
-        review_head.is_review = true;
-        let mut review_app = App::new(5);
-        review_app.extend_commits(vec![
-            review_head,
+    #[test]
+    fn tree_selection_normalizes_overlapping_slots_and_requires_every_confirmation() {
+        use crate::edit::transplant::{Connection, Mode, Placement, Request, Selection};
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(5, &[3]),
             row_with_parents(4, &[3]),
             row_with_parents(3, &[2]),
             row_with_parents(2, &[1]),
             row(1),
         ]);
-        review_app.set_worktree_head(Some(id(5)), false);
-        complete(&mut review_app);
-        review_app.select_commit(id(3));
-        assert!(review_app.can_copy_insert(), "any single-parent commit can be copied");
-        assert!(!review_app.can_move_insert(), "a non-HEAD source cannot be moved");
-        review_app.update(Action::CopyInsert);
-        review_app.select_commit(id(5));
-        assert_eq!(
-            review_app.update(Action::OpenDiff),
-            vec![Effect::Insert {
-                source: id(3),
-                base: id(3),
-                target: id(5),
-                copy: true,
-                target_is_read_only: false,
-            }],
-            "the selected source is copied onto the subsequently selected review HEAD"
+        app.hidden_rows.insert(id(1));
+        complete(&mut app);
+        app.select_commit(id(2));
+        app.update(Action::SelectTree);
+        app.select_commit(id(3));
+        app.update(Action::SelectTree);
+        app.update(Action::NextTreeLeaf);
+        app.update(Action::NextTreeLeaf);
+        app.update(Action::SelectTree);
+        assert!(
+            app.notice()
+                .expect("shared stems are normalized")
+                .text
+                .contains("1 leaves")
         );
+        assert!(
+            app.update(Action::ConfirmTreeSelection).is_empty(),
+            "source confirmation only chooses Copy/Move"
+        );
+        assert!(
+            app.update(Action::ConfirmTreeSelection).is_empty(),
+            "mode confirmation only chooses Fork/Insert"
+        );
+        app.update(Action::MoveDown);
+        assert!(
+            app.notice()
+                .expect("one effective leaf can insert")
+                .text
+                .contains("[Insert]")
+        );
+        assert!(
+            app.update(Action::ConfirmTreeSelection).is_empty(),
+            "connection confirmation only selects a destination"
+        );
+        app.select_commit(id(1));
+        assert!(
+            app.update(Action::ConfirmTreeSelection).is_empty(),
+            "destination confirmation only chooses placement"
+        );
+        let placement = app.notice().expect("hidden boundaries support only Above").text;
+        assert!(placement.contains("[Above]"));
+        assert!(!placement.contains("Below"));
+        assert!(
+            app.update(Action::ConfirmTreeSelection).is_empty(),
+            "placement confirmation only opens the preview"
+        );
+        assert_eq!(
+            app.update(Action::ConfirmTreeSelection),
+            vec![Effect::Transplant(Request {
+                selection: Selection {
+                    root: id(2),
+                    leaves: vec![id(4)]
+                },
+                mode: Mode::Copy,
+                connection: Connection::Insert,
+                placement: Placement::Above,
+                destination: id(1),
+            })],
+            "only the final confirmation emits the detached request"
+        );
+        assert!(
+            app.tree_selection_active(),
+            "the final summary remains available for execution validation"
+        );
+    }
 
-        let mut merge_target = App::new(10);
-        merge_target.extend_commits(vec![
-            row_with_parents(5, &[4]),
-            row(4),
-            row_with_parents(3, &[2, 1]),
-            row(2),
+    #[test]
+    fn tree_selection_stops_at_hidden_merge_and_unavailable_patch_barriers() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(8, &[7]),
+            row_with_parents(7, &[4, 3]),
+            row_with_parents(6, &[4]),
+            row_with_parents(5, &[3]),
+            row_with_parents(4, &[2]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
             row(1),
         ]);
-        merge_target.set_worktree_head(Some(id(5)), false);
-        complete(&mut merge_target);
-        merge_target.select_commit(id(5));
-        assert!(merge_target.can_move_insert(), "an unchanged merge target is allowed");
+        app.unavailable_patches.insert(id(3));
+        complete(&mut app);
+        app.select_commit(id(2));
+        app.update(Action::SelectSubtree);
+        for selected in [2, 4, 6] {
+            assert!(
+                app.tree_selection_marker(id(selected)).is_some(),
+                "the safe path is included"
+            );
+        }
+        for excluded in [1, 3, 5, 7, 8] {
+            assert!(
+                app.tree_selection_marker(id(excluded)).is_none(),
+                "barriers and commits beyond them are excluded"
+            );
+            app.select_commit(id(excluded));
+            app.update(Action::SelectTree);
+            assert!(
+                app.tree_selection_marker(id(excluded)).is_none(),
+                "direct Space cannot jump across a barrier"
+            );
+        }
+        app.update(Action::Cancel);
+        app.hidden_rows.insert(id(2));
+        app.select_commit(id(2));
+        assert!(!app.can_select_tree(), "immutable history cannot be selected as source");
+        app.hidden_rows.remove(&id(2));
+        app.set_worktree_changes_available(false);
+        assert!(!app.can_select_tree(), "bare repositories cannot transplant commits");
+        app.set_worktree_changes_available(true);
+        app.rebase_continuation_pending = true;
+        assert!(!app.can_select_tree(), "a pending rebase must finish before selection");
+    }
+
+    #[test]
+    fn tree_selection_aborts_every_stage_and_blocks_mutations_and_focus_changes() {
+        for confirmations in 0..=5 {
+            let mut app = App::new(10);
+            app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+            complete(&mut app);
+            app.alignment = Alignment::Compressed;
+            app.select_commit(id(2));
+            app.update(Action::SelectTree);
+            for _ in 0..confirmations {
+                assert!(app.update(Action::ConfirmTreeSelection).is_empty());
+            }
+            for action in [
+                Action::Delete,
+                Action::NewEmptyCommit,
+                Action::TogglePin,
+                Action::Undo,
+                Action::ToggleChangesFocus,
+                Action::ToggleAlign,
+                Action::PasteInsert {
+                    source: id(3),
+                    target: id(1),
+                },
+            ] {
+                assert!(
+                    app.update(action).is_empty(),
+                    "selection cannot be bypassed by another action"
+                );
+                assert!(app.tree_selection_active());
+            }
+            assert!(app.changes_focus.is_none(), "endpoint navigation keeps history focus");
+            assert_eq!(
+                app.alignment,
+                Alignment::Compressed,
+                "temporary expansion preserves the chosen display mode"
+            );
+            assert!(app.update(Action::Cancel).is_empty());
+            assert!(
+                !app.tree_selection_active(),
+                "Escape aborts instead of moving back one stage"
+            );
+            assert!(app.reachable_rows.is_none(), "aborting removes the navigation mask");
+        }
+    }
+
+    #[test]
+    fn tree_selection_survives_unchanged_refresh_and_cancels_changed_topology() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+        app.select_commit(id(2));
+        app.update(Action::SelectSubtree);
+        app.viewport_rows = 2;
+        app.prepare_history_viewport();
+        let input = app
+            .start_refresh(Vec::new().into(), &[id(3)], &[], false)
+            .expect("refresh has a graph");
+        assert!(app.tree_selection_active(), "an unchanged refresh preserves the source");
+        let (rows, graph, elapsed) = compute_lanes(input);
+        app.finish_lane_computation(rows, graph, elapsed);
+        assert!(
+            app.tree_selection_active(),
+            "lane recomputation retains detached selection IDs"
+        );
+        app.start_refresh(vec![row_with_parents(4, &[3])].into(), &[id(4)], &[], false);
+        assert!(
+            !app.tree_selection_active(),
+            "a changed source graph invalidates the workflow"
+        );
     }
 
     #[test]
@@ -6235,200 +6226,6 @@ mod tests {
                 target_is_read_only: true,
             }]
         );
-    }
-
-    #[test]
-    fn every_insert_mode_accepts_hidden_boundaries_as_read_only_targets() {
-        let mut app = App::new(10);
-        app.extend_commits(vec![
-            row_with_parents(5, &[4]),
-            row_with_parents(4, &[3]),
-            row_with_parents(3, &[2]),
-            row_with_parents(2, &[1]),
-            row(1),
-        ]);
-        app.set_worktree_head(Some(id(5)), false);
-        app.hidden_rows.insert(id(2));
-        complete(&mut app);
-
-        for (action, base, copy) in [
-            (Action::CopyInsert, id(5), true),
-            (Action::MoveInsert, id(5), false),
-            (Action::StackInsert, id(4), false),
-        ] {
-            app.select_commit(base);
-            assert!(app.update(action).is_empty());
-            app.select_commit(id(2));
-            assert_eq!(
-                app.update(Action::OpenDiff),
-                vec![Effect::Insert {
-                    source: id(5),
-                    base,
-                    target: id(2),
-                    copy,
-                    target_is_read_only: true,
-                }]
-            );
-        }
-    }
-
-    #[test]
-    fn stack_insert_selects_only_valid_insertion_targets() {
-        let mut app = App::new(10);
-        app.extend_commits(vec![
-            row_with_parents(7, &[6]),
-            row_with_parents(6, &[1]),
-            row_with_parents(5, &[4]),
-            row_with_parents(4, &[3]),
-            row_with_parents(3, &[2]),
-            row_with_parents(2, &[1]),
-            row(1),
-        ]);
-        app.set_worktree_head(Some(id(5)), false);
-        app.set_known_merge_descendants(HashSet::from([id(6)]));
-        complete(&mut app);
-        app.select_commit(id(3));
-
-        assert!(app.can_stack_insert());
-        assert!(app.update(Action::StackInsert).is_empty());
-        assert_eq!(
-            app.notice().map(|notice| notice.text),
-            Some("stack-insert target · j/k select insertion point · <enter> insert · Esc cancel".into())
-        );
-        for (n, reachable) in [
-            (7, true),
-            (6, false),
-            (5, false),
-            (4, false),
-            (3, false),
-            (2, false),
-            (1, true),
-        ] {
-            let index = app
-                .rows
-                .iter()
-                .position(|row| row.id == id(n))
-                .expect("the fixture commit is visible");
-            assert_eq!(app.is_row_reachable(index), reachable, "commit {n} target eligibility");
-        }
-
-        app.update(Action::MoveDown);
-        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(1)));
-        assert_eq!(
-            app.update(Action::OpenDiff),
-            vec![Effect::Insert {
-                source: id(5),
-                base: id(3),
-                target: id(1),
-                copy: false,
-                target_is_read_only: false,
-            }]
-        );
-
-        app.select_commit(id(3));
-        app.update(Action::StackInsert);
-        app.update(Action::Cancel);
-        assert!(app.notice().is_none(), "Escape cancels insertion-target selection");
-        assert!(
-            app.rows
-                .iter()
-                .enumerate()
-                .all(|(index, _)| app.is_row_reachable(index))
-        );
-    }
-
-    #[test]
-    fn stack_insert_requires_a_linear_head_ancestry() {
-        let mut app = App::new(10);
-        app.extend_commits(vec![
-            row_with_parents(5, &[4]),
-            row_with_parents(4, &[3, 2]),
-            row_with_parents(3, &[1]),
-            row_with_parents(2, &[1]),
-            row(1),
-        ]);
-        app.set_worktree_head(Some(id(5)), false);
-        complete(&mut app);
-        app.select_commit(id(3));
-
-        assert!(!app.can_stack_insert());
-        assert!(app.update(Action::StackInsert).is_empty());
-        assert!(app.notice().is_none());
-    }
-
-    #[test]
-    fn stack_insert_hides_targets_that_would_cycle_through_an_internal_commit() {
-        let mut app = App::new(10);
-        app.extend_commits(vec![
-            row_with_parents(8, &[4]),
-            row_with_parents(7, &[3]),
-            row_with_parents(6, &[1]),
-            row_with_parents(5, &[4]),
-            row_with_parents(4, &[3]),
-            row_with_parents(3, &[2]),
-            row_with_parents(2, &[1]),
-            row(1),
-        ]);
-        app.set_worktree_head(Some(id(5)), false);
-        complete(&mut app);
-        app.select_commit(id(3));
-
-        assert!(app.update(Action::StackInsert).is_empty());
-        for (commit, expected) in [(8, false), (7, true), (6, true)] {
-            let index = app
-                .rows
-                .iter()
-                .position(|row| row.id == id(commit))
-                .expect("the candidate is visible");
-            assert_eq!(
-                app.is_row_reachable(index),
-                expected,
-                "candidate {commit} has the expected cycle safety"
-            );
-        }
-    }
-
-    #[test]
-    fn refresh_cancels_insert_target_selections_before_rows_change() {
-        for action in [Action::CopyInsert, Action::StackInsert] {
-            let mut app = App::new(10);
-            app.extend_commits(vec![
-                row_with_parents(5, &[4]),
-                row_with_parents(4, &[3]),
-                row_with_parents(3, &[2]),
-                row_with_parents(2, &[1]),
-                row(1),
-            ]);
-            app.set_worktree_head(Some(id(5)), false);
-            complete(&mut app);
-            app.select_commit(id(3));
-            app.update(action);
-            assert!(app.reachable_rows.is_some(), "target selection is active");
-
-            let rows = app
-                .start_refresh(vec![row_with_parents(6, &[5])].into(), &[id(6)], &[], false)
-                .expect("the changed history starts lane computation");
-            assert!(
-                app.insert_selection.is_none() && app.stack_insert_base.is_none(),
-                "refresh cancels the index-based selection"
-            );
-            assert!(
-                app.reachable_rows.is_none(),
-                "the stale row mask is discarded immediately"
-            );
-            assert!(app.notice().is_none(), "the cancelled selection no longer prompts");
-
-            let (rows, graph, time) = compute_lanes(rows);
-            app.finish_lane_computation(rows, graph, time);
-            assert_eq!(app.rows.first().map(|row| row.id), Some(id(6)));
-            assert!(
-                app.rows
-                    .iter()
-                    .enumerate()
-                    .all(|(index, _)| app.is_row_reachable(index)),
-                "the replacement projection has no stale eligibility mask"
-            );
-        }
     }
 
     #[test]
@@ -7174,21 +6971,13 @@ mod tests {
         }
 
         app.select_commit(id(6));
-        assert!(
-            app.can_copy_insert(),
-            "a retained graph tip is an ordinary insertion source"
-        );
-        assert!(app.update(Action::CopyInsert).is_empty());
-        app.select_commit(id(2));
+        assert!(app.can_select_tree(), "a retained graph tip is a tree-selection source");
+        assert!(app.update(Action::SelectTree).is_empty());
+        assert!(app.tree_selection_active());
         assert_eq!(
-            app.update(Action::OpenDiff),
-            vec![Effect::Insert {
-                source: id(6),
-                base: id(6),
-                target: id(2),
-                copy: true,
-                target_is_read_only: false,
-            }]
+            app.history_len(),
+            app.rows.len(),
+            "selection temporarily exposes canonical rows"
         );
     }
 
@@ -7492,8 +7281,7 @@ mod tests {
         assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(id(4))]);
         assert!(!app.can_reword());
         assert!(!app.can_delete());
-        assert!(app.can_fork_commit());
-        assert_eq!(app.update(Action::ForkCommit), vec![Effect::ForkCommit(id(4))]);
+        assert!(!app.can_select_tree(), "hidden history cannot be a transplant source");
         assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(4))]);
         assert!(
             app.update(Action::VerifySignatures).is_empty(),
@@ -7820,11 +7608,9 @@ mod tests {
         app.update(Action::Fetch);
         app.update(Action::Review);
         app.update(Action::Squash);
-        app.update(Action::CopyInsert);
-        app.update(Action::MoveInsert);
-        app.update(Action::StackInsert);
+        app.update(Action::SelectTree);
+        app.update(Action::SelectSubtree);
         app.update(Action::Stash);
-        app.update(Action::ForkCommit);
         app.update(Action::Attach);
         assert!(app.actions_expanded, "all grouped actions keep the group open");
 

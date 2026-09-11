@@ -66,6 +66,9 @@ struct State {
     expected_refs: Vec<rebase::PlanRef>,
     resolved: Option<ObjectId>,
     continuation_sources: Vec<ObjectId>,
+    eager: Vec<ObjectId>,
+    selection: Option<ObjectId>,
+    existing_checkout: Option<ObjectId>,
 }
 
 #[derive(Debug)]
@@ -247,6 +250,9 @@ pub(crate) fn prepare(
         expected_refs,
         resolved: None,
         continuation_sources: Vec::new(),
+        eager: Vec::new(),
+        selection: None,
+        existing_checkout: None,
     };
     let notice = if has_autosquash {
         "<!-- Rebase help follows. Saving unchanged applies automatically grouped fixups and any pending rebase or base update; empty this file or remove the tix-rebase-state-v2 comment to cancel. -->"
@@ -361,22 +367,75 @@ pub(crate) fn prepare_continuation(
         rebase::PlanCommit::Resolved(id) => Some(id),
         _ => None,
     });
+    let commit_at = |position: rebase::PlanParent| -> Result<ObjectId> {
+        match position {
+            rebase::PlanParent::Existing(id) => Ok(id),
+            rebase::PlanParent::Step(index) => match plan.steps.get(index).map(|step| &step.commit) {
+                Some(
+                    rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Copy(id) | rebase::PlanCommit::Resolved(id),
+                ) => Ok(*id),
+                _ => anyhow::bail!("continuation metadata requires a produced commit"),
+            },
+        }
+    };
+    let scope: HashSet<_> = plan.scope.iter().copied().collect();
+    let mut continuation_sources: Vec<_> = plan
+        .steps
+        .iter()
+        .flat_map(|step| step.squash.iter().map(|fold| fold.commit_id))
+        .collect();
+    for step in &plan.steps {
+        if let rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Copy(id) | rebase::PlanCommit::Resolved(id) =
+            step.commit
+        {
+            let parent = repo.find_commit(id)?.parent_ids().next().map(gix::Id::detach);
+            if parent.is_some_and(|parent| parent != plan.base && !scope.contains(&parent)) {
+                continuation_sources.push(id);
+            }
+        }
+    }
+    continuation_sources.sort_unstable();
+    continuation_sources.dedup();
     let state = State {
         base: plan.base,
         onto: plan.base,
         tips,
         scope: plan.scope.clone(),
-        marker_required: plan.checkout.is_some(),
+        marker_required: plan
+            .checkout
+            .as_ref()
+            .is_some_and(|checkout| matches!(checkout.target, rebase::PlanParent::Step(_))),
         checkout_allowed: repo.workdir().is_some(),
         head_ref: plan.checkout.as_ref().and_then(|checkout| checkout.reference.clone()),
         edit_refs: true,
-        expected_refs: plan.expected_refs.clone(),
-        resolved,
-        continuation_sources: plan
-            .steps
+        expected_refs: plan
+            .expected_refs
             .iter()
-            .flat_map(|step| step.squash.iter().map(|fold| fold.commit_id))
+            .cloned()
+            .map(|mut reference| {
+                if let rebase::RefDestination::Existing(id) = reference.destination
+                    && !plan
+                        .steps
+                        .iter()
+                        .any(|step| step.parent == rebase::PlanParent::Existing(id))
+                {
+                    reference.editable = false;
+                }
+                reference
+            })
             .collect(),
+        resolved,
+        continuation_sources,
+        eager: plan
+            .eager
+            .iter()
+            .map(|index| commit_at(rebase::PlanParent::Step(*index)))
+            .collect::<Result<_>>()?,
+        selection: plan.selection.map(commit_at).transpose()?,
+        existing_checkout: plan.checkout.as_ref().and_then(|checkout| match checkout.target {
+            rebase::PlanParent::Existing(id) => Some(id),
+            rebase::PlanParent::Step(_) => None,
+        }),
     };
     let mut document = b"<!-- Rebase help follows. Saving unchanged continues the materialized rebase; empty this file or remove the tix-rebase-state-v2 comment to cancel. -->\n# Continue materialized rebase\n\n".to_vec();
     let mut body = Vec::new();
@@ -557,6 +616,15 @@ fn write_state(out: &mut Vec<u8>, state: &State) {
     }
     for id in &state.continuation_sources {
         out.extend_from_slice(format!("continuation-source {id}\n").as_bytes());
+    }
+    for id in &state.eager {
+        out.extend_from_slice(format!("eager {id}\n").as_bytes());
+    }
+    if let Some(id) = state.selection {
+        out.extend_from_slice(format!("selection {id}\n").as_bytes());
+    }
+    if let Some(id) = state.existing_checkout {
+        out.extend_from_slice(format!("existing-checkout {id}\n").as_bytes());
     }
     out.extend_from_slice(STATE_END.as_bytes());
     out.push(b'\n');
@@ -932,6 +1000,9 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
     let mut expected_refs = Vec::new();
     let mut resolved = None;
     let mut continuation_sources = Vec::new();
+    let mut eager = Vec::new();
+    let mut selection = None;
+    let mut existing_checkout = None;
     for line in body[..end].lines() {
         let (key, value) = line.split_once(' ').context("a rebase state line has no value")?;
         match key {
@@ -1004,6 +1075,20 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
                 }
             }
             "continuation-source" => continuation_sources.push(ObjectId::from_hex(value.as_bytes())?),
+            "eager" => eager.push(ObjectId::from_hex(value.as_bytes())?),
+            "selection" => {
+                if selection.replace(ObjectId::from_hex(value.as_bytes())?).is_some() {
+                    anyhow::bail!("the rebase state repeats its result selection");
+                }
+            }
+            "existing-checkout" => {
+                if existing_checkout
+                    .replace(ObjectId::from_hex(value.as_bytes())?)
+                    .is_some()
+                {
+                    anyhow::bail!("the rebase state repeats its existing checkout");
+                }
+            }
             _ => anyhow::bail!("unsupported rebase state field {key:?}"),
         }
     }
@@ -1019,6 +1104,9 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
         expected_refs,
         resolved,
         continuation_sources,
+        eager,
+        selection,
+        existing_checkout,
     };
     validate_state(repo, &state)?;
     Ok(Some(state))
@@ -1042,11 +1130,11 @@ fn validate_state(repo: &gix::Repository, state: &State) -> Result<()> {
         if !refs.insert(reference.name.as_bstr()) {
             anyhow::bail!("the rebase state contains duplicate refs");
         }
-        if !scope.contains(&reference.source) && reference.source != state.base && reference.source != state.onto {
-            anyhow::bail!("a captured ref does not logically point into the rebase scope");
-        }
+        repo.find_commit(reference.source)
+            .context("could not find a captured reference's source commit")?;
     }
     if let Some(name) = &state.head_ref
+        && state.existing_checkout.is_none()
         && !state
             .expected_refs
             .iter()
@@ -1075,6 +1163,24 @@ fn validate_state(repo: &gix::Repository, state: &State) -> Result<()> {
     }
     if !continuation_sources.is_subset(&scope) {
         anyhow::bail!("a continuation source is outside the rebase scope");
+    }
+    let eager: HashSet<_> = state.eager.iter().copied().collect();
+    anyhow::ensure!(
+        eager.len() == state.eager.len(),
+        "the rebase state repeats an eager commit"
+    );
+    anyhow::ensure!(eager.is_subset(&scope), "an eager commit is outside the rebase scope");
+    if let Some(id) = state.selection {
+        repo.find_commit(id)
+            .context("could not find the recorded result selection")?;
+    }
+    if let Some(id) = state.existing_checkout {
+        anyhow::ensure!(
+            state.checkout_allowed && !state.marker_required,
+            "an existing checkout conflicts with the rebase checkout state"
+        );
+        repo.find_commit(id)
+            .context("could not find the recorded existing checkout")?;
     }
     Ok(())
 }
@@ -1280,6 +1386,7 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
     if state.marker_required && checkout_target.is_none() {
         anyhow::bail!("the current checkout marker must be retained");
     }
+    checkout_target = checkout_target.or(state.existing_checkout.map(rebase::PlanParent::Existing));
     let checkout_reference = match (checkout_target, explicit_checkout_reference) {
         (Some(target), Some((name, reference_target))) => {
             if target != reference_target {
@@ -1288,10 +1395,10 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
             Some(name)
         }
         (None, Some(_)) => anyhow::bail!("an @ reference requires an @ command at the same result"),
-        (Some(target), None) => state
-            .head_ref
-            .take()
-            .filter(|name| ref_targets.get(name) == Some(&target)),
+        (Some(target), None) => state.head_ref.take().filter(|name| {
+            ref_targets.get(name) == Some(&target)
+                || state.existing_checkout.map(rebase::PlanParent::Existing) == Some(target)
+        }),
         (None, None) => None,
     };
     if state.edit_refs {
@@ -1307,6 +1414,16 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
         target,
         reference: checkout_reference,
     });
+    let mut eager: Vec<_> = state.eager.iter().filter_map(|id| picked.get(id).copied()).collect();
+    eager.sort_unstable();
+    eager.dedup();
+    let selection = state.selection.and_then(|id| {
+        picked
+            .get(&id)
+            .copied()
+            .map(rebase::PlanParent::Step)
+            .or_else(|| (!scope.contains(&id)).then_some(rebase::PlanParent::Existing(id)))
+    });
     Ok(Some(Parsed {
         plan: rebase::Plan {
             base: state.onto,
@@ -1314,6 +1431,8 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
             steps,
             checkout,
             expected_refs: state.expected_refs,
+            eager,
+            selection,
         },
         tips: state.tips,
     }))
@@ -2067,6 +2186,8 @@ mod tests {
         let prepared = prepare_continuation(
             &repo,
             &rebase::Plan {
+                eager: Vec::new(),
+                selection: None,
                 base,
                 scope: vec![middle],
                 steps: vec![rebase::PlanStep {
@@ -2113,6 +2234,8 @@ mod tests {
             let continuation = prepare_continuation(
                 &repo,
                 &rebase::Plan {
+                    eager: Vec::new(),
+                    selection: None,
                     base: parent,
                     scope: vec![variant_id],
                     steps: vec![rebase::PlanStep {
@@ -2201,6 +2324,9 @@ mod tests {
             }],
             resolved: None,
             continuation_sources: Vec::new(),
+            eager: Vec::new(),
+            selection: None,
+            existing_checkout: None,
         };
         let mut document = Vec::new();
         write_state(&mut document, &state);
@@ -2629,6 +2755,133 @@ mod tests {
     }
 
     #[test]
+    fn continuation_metadata_tracks_edited_commits_and_preserves_an_external_checkout() -> gix_testtools::Result {
+        let (_fixture, repo) = repo()?;
+        let (base, middle, tip, _) = commits(&repo)?;
+        let external = append(&repo, base, "unaffected checkout")?.id;
+        let branch: gix::refs::FullName = "refs/heads/unaffected".try_into()?;
+        repo.reference(
+            branch.clone(),
+            external,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "retain checkout",
+        )?;
+        let plan = rebase::Plan {
+            base,
+            scope: vec![middle, tip],
+            steps: vec![
+                rebase::PlanStep {
+                    parent: rebase::PlanParent::Existing(base),
+                    commit: rebase::PlanCommit::Resolved(middle),
+                    squash: Vec::new(),
+                },
+                rebase::PlanStep {
+                    parent: rebase::PlanParent::Step(0),
+                    commit: rebase::PlanCommit::Pick(tip),
+                    squash: Vec::new(),
+                },
+            ],
+            checkout: Some(rebase::PlanCheckout {
+                target: rebase::PlanParent::Existing(external),
+                reference: Some(branch.clone()),
+            }),
+            expected_refs: vec![rebase::PlanRef {
+                name: branch.clone(),
+                old: Some(external),
+                source: external,
+                destination: rebase::RefDestination::Existing(external),
+                editable: true,
+            }],
+            eager: vec![1],
+            selection: Some(rebase::PlanParent::Step(0)),
+        };
+        let prepared = prepare_continuation(&repo, &plan, Vec::new(), false)?;
+        let parsed = parse_plan(&repo, &prepared.document)?;
+        assert_eq!(
+            parsed.eager,
+            [1],
+            "the pending child remains eager independently of checkout"
+        );
+        assert_eq!(parsed.selection, Some(rebase::PlanParent::Step(0)));
+        assert_eq!(
+            parsed.checkout.as_ref().map(|checkout| checkout.target),
+            Some(rebase::PlanParent::Existing(external))
+        );
+        assert_eq!(
+            parsed
+                .checkout
+                .as_ref()
+                .and_then(|checkout| checkout.reference.as_ref()),
+            Some(&branch),
+            "an unaffected checkout retains its branch without an @ command"
+        );
+        assert!(
+            !parsed.expected_refs[0].editable,
+            "an undisplayed external ref cannot be deleted by omission"
+        );
+
+        let null = ObjectId::null(repo.object_hash());
+        let reordered = with_state(&prepared, &format!("fork {base}\npick {tip}\npick {null}\n"));
+        let parsed = parse_plan(&repo, &reordered)?;
+        assert_eq!(parsed.eager, [0], "replay follows the child's ID after reordering");
+        assert_eq!(
+            parsed.selection,
+            Some(rebase::PlanParent::Step(1)),
+            "selection follows the produced root after reordering"
+        );
+        let dropped_eager = with_state(&prepared, &format!("fork {base}\npick {null}\n"));
+        assert!(
+            parse_plan(&repo, &dropped_eager)?.eager.is_empty(),
+            "dropping the eager commit drops its replay requirement"
+        );
+        let dropped_selection = with_state(&prepared, &format!("fork {base}\npick {tip}\n"));
+        let parsed = parse_plan(&repo, &dropped_selection)?;
+        assert_eq!(
+            parsed.selection, None,
+            "dropping the selected commit falls back to the checkout"
+        );
+        assert_eq!(
+            parsed.checkout.as_ref().map(|checkout| checkout.target),
+            Some(rebase::PlanParent::Existing(external))
+        );
+
+        let continued = prepare_continuation(
+            &repo,
+            &rebase::Plan {
+                base: middle,
+                scope: vec![tip],
+                steps: vec![rebase::PlanStep {
+                    parent: rebase::PlanParent::Existing(middle),
+                    commit: rebase::PlanCommit::Resolved(tip),
+                    squash: Vec::new(),
+                }],
+                eager: vec![0],
+                selection: Some(rebase::PlanParent::Existing(middle)),
+                checkout: plan.checkout,
+                expected_refs: Vec::new(),
+            },
+            Vec::new(),
+            false,
+        )?;
+        let parsed = parse_plan(&repo, &continued.document)?;
+        assert_eq!(
+            parsed.selection,
+            Some(rebase::PlanParent::Existing(middle)),
+            "a completed selected root survives a later conflict outside its remaining scope"
+        );
+        assert_eq!(parsed.eager, [0]);
+        assert_eq!(
+            parsed
+                .checkout
+                .as_ref()
+                .and_then(|checkout| checkout.reference.as_ref()),
+            Some(&branch),
+            "the original checkout survives another continuation without a captured ref"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn continuation_todos_round_trip_the_resolved_index_and_remaining_squashes() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, _) = commits(&repo)?;
@@ -2636,6 +2889,8 @@ mod tests {
         let prepared = prepare_continuation(
             &repo,
             &rebase::Plan {
+                eager: Vec::new(),
+                selection: None,
                 base,
                 scope: vec![middle, tip],
                 steps: vec![rebase::PlanStep {

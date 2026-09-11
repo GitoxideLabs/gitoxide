@@ -1196,6 +1196,8 @@ pub(crate) fn order_plan(
         .iter()
         .map(|step| step.parent)
         .chain(plan.checkout.iter().map(|checkout| checkout.target))
+        .chain(plan.selection)
+        .chain(plan.eager.iter().copied().map(rebase::PlanParent::Step))
         .chain(
             plan.expected_refs
                 .iter()
@@ -1375,6 +1377,10 @@ pub(crate) fn order_plan(
         .collect();
     if let Some(checkout) = &mut plan.checkout {
         checkout.target = parent(checkout.target);
+    }
+    plan.selection = plan.selection.map(parent);
+    for index in &mut plan.eager {
+        *index = remap[*index];
     }
     for reference in &mut plan.expected_refs {
         if let Some(placement) = reference.destination.placement() {
