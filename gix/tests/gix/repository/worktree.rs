@@ -78,6 +78,13 @@ mod add {
                         "shared={shared}: {name} follows Git's metadata policy"
                     );
                 }
+                if worktree_config {
+                    assert_eq!(
+                        mode(&created.git_dir().join("config.worktree"))?,
+                        mode(&git_repo.git_dir().join("config.worktree"))?,
+                        "copied worktree configuration uses the source repository's sharing policy"
+                    );
+                }
                 for path in [
                     destination.join(".git"),
                     created.git_dir().join("gitdir"),

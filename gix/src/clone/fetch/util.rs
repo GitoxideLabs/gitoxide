@@ -55,7 +55,7 @@ pub(super) fn reinitialize_with_object_hash(
     let git_dir = repo.git_dir();
     let config_path = git_dir.join("config");
 
-    let mut config = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)?;
+    let mut config = repo.config_file_mut(&config_path)?;
     // Mirror what `crate::create` writes at init time: only SHA-256 repositories get
     // `repositoryformatversion = 1` along with the `objectformat` extension.
     let is_sha256 = object_hash == gix_hash::Kind::Sha256;
@@ -72,14 +72,7 @@ pub(super) fn reinitialize_with_object_hash(
         // In a freshly initialized repository, this section exists solely to carry `objectformat`.
         config.remove_section("extensions", None);
     }
-    let mut lock = gix_lock::File::acquire_to_update_resource(
-        &config_path,
-        gix_lock::acquire::Fail::Immediately,
-        None,
-        repo.config.shared_repository_permissions,
-    )?;
-    config.write_to_filter(&mut lock, |section| section.meta().source == gix_config::Source::Local)?;
-    lock.commit()?;
+    config.commit()?;
 
     Ok(crate::ThreadSafeRepository::open_opts(git_dir, repo.options.clone())?.to_thread_local())
 }

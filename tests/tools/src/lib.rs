@@ -2337,6 +2337,54 @@ pub fn size_ok(actual_size: usize, expected_64_bit_size: usize) -> bool {
     return actual_size <= expected_64_bit_size;
 }
 
+/// Run the current test in a subprocess with `mask`, without changing the parent process's umask.
+///
+/// Returns `true` only in the subprocess for this mask, where the test body should run. The parent
+/// waits for the subprocess and returns `false`, or an error if the test failed. To test several
+/// masks, call this in a loop and continue when it returns `false`.
+#[cfg(unix)]
+pub fn run_with_umask(mask: u32) -> std::io::Result<bool> {
+    const CHILD_MASK: &str = "GIX_TEST_UMASK";
+    let mask = format!("{mask:03o}");
+    if let Some(child_mask) = env::var_os(CHILD_MASK) {
+        return Ok(child_mask == mask.as_str());
+    }
+
+    let thread = std::thread::current();
+    let name = thread.name().expect("libtest names its test threads");
+    let output = std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            // macOS removes DYLD_* when launching the system shell. Restore Cargo's library paths
+            // before executing the test binary, which may use dynamically linked dependencies.
+            r#"umask "$1" || exit
+shift
+if [ -n "$GIX_TEST_DYLD_LIBRARY_PATH" ]; then export DYLD_LIBRARY_PATH="$GIX_TEST_DYLD_LIBRARY_PATH"; fi
+if [ -n "$GIX_TEST_DYLD_FALLBACK_LIBRARY_PATH" ]; then export DYLD_FALLBACK_LIBRARY_PATH="$GIX_TEST_DYLD_FALLBACK_LIBRARY_PATH"; fi
+exec "$@""#,
+            "gix-test-umask",
+            &mask,
+        ])
+        .arg(env::current_exe()?)
+        .args(["--exact", name, "--nocapture"])
+        .env(CHILD_MASK, &mask)
+        .env("GIX_TEST_DYLD_LIBRARY_PATH", env::var_os("DYLD_LIBRARY_PATH").unwrap_or_default())
+        .env(
+            "GIX_TEST_DYLD_FALLBACK_LIBRARY_PATH",
+            env::var_os("DYLD_FALLBACK_LIBRARY_PATH").unwrap_or_default(),
+        )
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "test {name} failed with umask {mask}: {}\n{}\n{}",
+            output.status,
+            output.stdout.as_bstr(),
+            output.stderr.as_bstr()
+        )));
+    }
+    Ok(false)
+}
+
 /// Get the umask in a way that is safe, but may be too slow for use outside of tests.
 #[cfg(unix)]
 pub fn umask() -> u32 {

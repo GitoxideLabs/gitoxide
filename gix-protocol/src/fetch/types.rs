@@ -9,6 +9,11 @@ pub struct Options<'a> {
     ///
     /// When needed, it will be locked in preparation for being modified.
     pub shallow_file: PathBuf,
+    /// The parsed `core.sharedRepository` policy to apply when writing the shallow boundary.
+    ///
+    /// Use `0` to retain umask-derived permissions, a positive mode to add permission bits,
+    /// or a negative mode to replace them with its absolute value.
+    pub shared_repository_permissions: i32,
     /// How to deal with shallow repositories. It does affect how negotiations are performed.
     pub shallow: &'a Shallow,
     /// Describe how to handle tags when fetching.

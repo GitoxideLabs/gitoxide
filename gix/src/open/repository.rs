@@ -499,6 +499,7 @@ impl ThreadSafeRepository {
                     use_multi_pack_index: config.use_multi_pack_index,
                     alloc_limit_bytes: config.alloc_limit_bytes,
                     loose_compression: config.loose_compression,
+                    shared_repository_permissions: config.shared_repository_permissions,
                     current_dir: current_dir.to_owned().into(),
                 },
             )?),

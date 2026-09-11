@@ -253,6 +253,7 @@ impl crate::Repository {
             copy_worktree_config(
                 &self.git_dir().join("config.worktree"),
                 &prepared.git_dir().join("config.worktree"),
+                self.config.shared_repository_permissions,
             )?;
         }
 
@@ -310,7 +311,7 @@ impl crate::Repository {
     }
 }
 
-fn copy_worktree_config(source: &Path, destination: &Path) -> Result<(), Error> {
+fn copy_worktree_config(source: &Path, destination: &Path, shared_repository_permissions: i32) -> Result<(), Error> {
     let mut config = match gix_config::File::from_path_no_includes(source.to_owned(), gix_config::Source::Worktree) {
         Ok(config) => config,
         Err(gix_config::file::init::from_paths::Error::Io { source, .. })
@@ -330,5 +331,7 @@ fn copy_worktree_config(source: &Path, destination: &Path) -> Result<(), Error> 
     }
     config
         .write_to(&mut std::fs::File::create(destination).map_err(Error::WriteWorktreeConfig)?)
+        .map_err(Error::WriteWorktreeConfig)?;
+    gix_fs::set_shared_repository_permissions(destination, shared_repository_permissions)
         .map_err(Error::WriteWorktreeConfig)
 }
