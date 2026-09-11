@@ -464,8 +464,7 @@ pub(crate) enum Effect {
     Cancel,
     Undo,
     Redo,
-    CopyId(ObjectId),
-    CopyChangeId(ChangeId),
+    CopyIds(String),
     CopyPath(BString),
     CopyAuthor(&'static Author),
     Reload(bool),
@@ -2504,13 +2503,13 @@ impl App {
                 return vec![Effect::Cancel];
             }
             Action::Copy => {
-                if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
-                    let effect = match self.effective_id_mode() {
-                        IdMode::Change => Effect::CopyChangeId(self.change_id(id)),
-                        IdMode::Commit | IdMode::Off => Effect::CopyId(id),
+                if let Some(commit_id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
+                    let text = match self.effective_id_mode() {
+                        IdMode::Change => format!("{commit_id} {}", self.change_id(commit_id)),
+                        IdMode::Commit | IdMode::Off => commit_id.to_string(),
                     };
                     self.copy_feedback = Some(CopyKind::Id);
-                    return vec![effect];
+                    return vec![Effect::CopyIds(text)];
                 }
             }
             Action::CopyPath(path) => return vec![Effect::CopyPath(path)],
@@ -4610,6 +4609,11 @@ mod tests {
                 app.selected.map(|index| app.rows[index].id),
                 Some(expected),
                 "duplicate cycling skips unrelated rows and wraps"
+            );
+            assert_eq!(
+                app.update(Action::Copy),
+                vec![Effect::CopyIds(format!("{expected} {duplicate}"))],
+                "copying siblings retains each commit hash before their shared change ID"
             );
             assert!(
                 app.selected
@@ -7304,7 +7308,7 @@ mod tests {
         app.update(Action::First);
         app.update(Action::PageDown);
         assert_eq!(app.selected, Some(3), "paging can select the hidden boundary");
-        assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(id(4))]);
+        assert_eq!(app.update(Action::Copy), vec![Effect::CopyIds(id(4).to_string())]);
         assert!(!app.can_reword());
         assert!(!app.can_delete());
         assert!(!app.can_select_tree(), "hidden history cannot be a transplant source");
@@ -8097,22 +8101,33 @@ mod tests {
 
         assert_eq!(
             app.update(Action::Copy),
-            vec![Effect::CopyId(row(7).id)],
+            vec![Effect::CopyIds(row(7).id.to_string())],
             "hidden identifiers copy the commit ID"
         );
         app.id_mode = IdMode::Commit;
         assert_eq!(
             app.update(Action::Copy),
-            vec![Effect::CopyId(row(7).id)],
+            vec![Effect::CopyIds(row(7).id.to_string())],
             "shown commit IDs copy the commit ID"
         );
         let change_id = ChangeId::from(id(8));
-        app.set_change_ids(HashMap::from([(row(7).id, change_id)]), HashSet::new());
-        app.id_mode = IdMode::Change;
+        for (mode, duplicates) in [
+            (IdMode::Change, HashSet::new()),
+            (IdMode::Off, HashSet::from([row(7).id, id(9)])),
+        ] {
+            app.set_change_ids(HashMap::from([(row(7).id, change_id)]), duplicates);
+            app.id_mode = mode;
+            assert_eq!(
+                app.update(Action::Copy),
+                vec![Effect::CopyIds(format!("{} {change_id}", row(7).id))],
+                "explicit and automatically shown change IDs follow the full commit hash"
+            );
+        }
+        app.id_mode = IdMode::Commit;
         assert_eq!(
             app.update(Action::Copy),
-            vec![Effect::CopyChangeId(change_id)],
-            "shown change IDs copy the change ID"
+            vec![Effect::CopyIds(row(7).id.to_string())],
+            "explicit commit-ID mode omits the change ID even when siblings exist"
         );
         assert_eq!(
             app.update(Action::CopyPath("dir/file".into())),
