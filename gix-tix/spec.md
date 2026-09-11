@@ -693,6 +693,15 @@ Scopes follow the symbol in italic cyan without parentheses. Breaking changes
 retain a bold, bright red `!`, so `feat(gix-tix)!: subject` appears as
 `+ gix-tix! subject`. Unknown types retain their original prefixes. Subject
 Markdown remains intact, including literal leading heading or list markers.
+
+History replaces `fixup! `, `squash! `, and `amend! ` with `↪`, `⊕`, and `✎`
+respectively. These badges are bold, underlined light magenta and remain present
+when titles are abbreviated. Nested autosquash prefixes collapse to the outermost
+badge; the target retains conventional-prefix formatting and literal leading
+Markdown markers. For example, `fixup! feat(scope)!: subject` appears as
+`↪ + scope! subject`. Highlighting recognizes the message syntax even when no
+eligible target exists, and its emphasis remains visible on selected and HEAD rows.
+
 Hidden boundary rows retain their usual colorless styling. Plain `tix show`,
 rebase todos, commit-message panes, and enrichment notes keep the original
 prefixes.
