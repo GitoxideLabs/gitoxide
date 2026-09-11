@@ -615,6 +615,7 @@ mod tests {
         app.set_patch_enrichment(id(4), crate::app::PatchEnrichmentState::Fresh { refackiewed: false });
         let catalog = commands(&app, &decorations, false);
         for available in [
+            CommandId::Delete,
             CommandId::AutoMerge,
             CommandId::Remerge,
             CommandId::RemoveAutoMergeInput,
@@ -670,6 +671,10 @@ mod tests {
         assert!(app.can_auto_merge(), "a descendant of an ordinary HEAD can be merged");
         app.select_commit(id(4));
         assert!(app.can_auto_merge(), "an unnamed ordinary HEAD can create an AutoMerge");
+        assert!(
+            !has(&commands(&app, &decorations, false), CommandId::Delete),
+            "removing AutoMerge metadata restores the ordinary merge deletion restriction"
+        );
         let options = vec![
             Selection {
                 merge_commit_id: id(4),

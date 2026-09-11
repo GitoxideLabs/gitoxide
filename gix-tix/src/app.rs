@@ -3440,7 +3440,7 @@ impl App {
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
                 !self.hidden_rows.contains(&row.id)
-                    && row.parent_ids.len() <= 1
+                    && (row.parent_ids.len() <= 1 || self.auto_merges.contains_key(&row.id))
                     && !self.known_merge_descendants.contains(&row.id)
                     && (!row.is_review || !self.has_known_descendant(row.id))
             })
@@ -5549,7 +5549,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_non_merge_tip_is_immediate() {
+    fn deleting_commits_allows_auto_merges_but_rejects_ordinary_merges() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         assert!(!app.can_delete(), "loading history cannot delete commits");
@@ -5560,7 +5560,37 @@ mod tests {
         let mut merge = App::new(10);
         merge.extend_commits(vec![row_with_parents(3, &[2, 1]), row(2), row(1)]);
         complete(&mut merge);
-        assert!(!merge.can_delete(), "merge commits are not deletable");
+        assert!(!merge.can_delete(), "ordinary merge commits are not deletable");
+        merge.auto_merges.insert(
+            id(3),
+            crate::edit::auto_merge::Definition {
+                inputs: [id(2), id(1)]
+                    .into_iter()
+                    .map(|commit_id| crate::edit::auto_merge::Input {
+                        source: crate::edit::auto_merge::InputSource::Change(commit_id.into()),
+                        commit_id,
+                        muted: false,
+                    })
+                    .collect(),
+            },
+        );
+        for head_commit_id in [id(3), id(2), id(1)] {
+            merge.set_worktree_head(Some(head_commit_id), false);
+            assert!(merge.can_delete(), "an AutoMerge is deletable at HEAD or above it");
+            assert_eq!(
+                merge.update(Action::Delete),
+                vec![Effect::Delete(id(3))],
+                "deletion always dispatches the selected AutoMerge"
+            );
+        }
+        merge.hidden_rows.insert(id(3));
+        assert!(!merge.can_delete(), "hidden AutoMerge boundaries remain read-only");
+        merge.hidden_rows.remove(&id(3));
+        merge.set_known_merge_descendants(HashSet::from([id(3)]));
+        assert!(
+            !merge.can_delete(),
+            "an ordinary merge descendant still prevents deletion"
+        );
     }
 
     #[test]
