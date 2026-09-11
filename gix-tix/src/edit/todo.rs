@@ -844,7 +844,7 @@ fn autosquash(repo: &gix::Repository, order: &[ObjectId], commits: &HashMap<Obje
     Ok(out)
 }
 
-fn autosquash_marker(mut subject: &[u8]) -> Option<(rebase::FoldMessage, &[u8])> {
+pub(crate) fn autosquash_marker(mut subject: &[u8]) -> Option<(rebase::FoldMessage, &[u8])> {
     let mut message = None;
     loop {
         let (kind, rest) = if let Some(rest) = subject.strip_prefix(b"fixup! ") {
