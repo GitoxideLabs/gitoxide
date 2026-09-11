@@ -156,13 +156,17 @@ without trading responsiveness for metadata that is not visible.
   worktree's undo and redo queue. It does not apply or reverse queued operations,
   change their recorded references, or affect another worktree's queue.
 - `tix enrich commit todo [--clear] [REVSPEC]`, `tix enrich commit note
-  [REVSPEC]`, `tix enrich commit git-note [REVSPEC]`, and `tix enrich tree
-  checks-pass [--clear] [REVSPEC]` expose the TUI's enrichment actions without
-  opening it. Targets default to `HEAD` and accept Git revisions or unambiguous
+  [REVSPEC]`, `tix enrich commit git-note [REVSPEC]`, `tix enrich tree
+  checks-pass [--clear] [REVSPEC]`, and `tix enrich patch refackiewed [--clear]
+  [REVSPEC]` expose the TUI's enrichment actions without opening it.
+  Targets default to `HEAD` and accept Git revisions or unambiguous
   reverse-hex change-ID prefixes from the default Tix view. Boolean commands
   idempotently set their marker, or clear it with `--clear`; note commands use
   Git's editor, remove empty notes, and leave unchanged notes alone. Output
   starts with the target's abbreviated commit and change IDs before its status.
+  The patch command writes its status to stderr. Marking a legacy patch can
+  rewrite its commit to add the identity described below; the status then
+  identifies the rewritten commit.
 - `tix new [--index | --worktree | --worktree-untracked] [--allow-empty] [--todo]
   [--author "Name <email>"] [-m MESSAGE ... | -f FILE]` creates a child of `HEAD`, or a root commit for
   unborn `HEAD`, with the same signing, editor, enrichment, lazy-rebase, and
@@ -425,7 +429,7 @@ without trading responsiveness for metadata that is not visible.
   copies the source note only to its rewritten lower identity; inserted and
   dropped commits do not propagate notes. The notes ref changes atomically with
   the other rebase refs and participates in rollback.
-- Tix enrichments are stored separately as Git notes headed at the worktree-local
+- Commit enrichments are stored separately as Git notes headed at the worktree-local
   `refs/worktree/tix/enrich` ref. Enrichments are keyed by the commit's effective
   change ID and use human-readable Git config. Independent `[commit]` keys store
   `todo = true` and an optional multiline `note` value.
@@ -436,18 +440,90 @@ without trading responsiveness for metadata that is not visible.
   at `refs/worktree/tix/enrich-tree`. They are keyed directly by tree object ID;
   `[tree] checks-pass = true` therefore applies to every commit with that exact
   tree and naturally disappears when a rewrite changes the tree.
-- Todo, note, and checks-pass enrichments receive a leading `🚧`, `📝`, and `✔️`
-  respectively before
-  the graph, with no gap between them or the following status field. The dedicated
-  field remains visible alongside selection, dirty-worktree, and conflict markers.
+- Todo, note, checks-pass, and refackiewed enrichments receive leading `🚧`, `📝`,
+  `✔️`, and `✨` markers in that order before the graph, with no gap between them
+  or the following status field. The dedicated field remains visible alongside
+  selection, dirty-worktree, and conflict markers.
   `tix show` emits the same field and aligns unmarked rows when any displayed
-  commit has either enrichment.
+  commit has an enrichment. The TUI reserves two cells for each marker so an
+  enrichment update never shifts the graph or selection columns.
 - Only the selected history row prefixes its commit title with its note title,
   using black text on a yellow background followed by one unstyled space.
   Unselected rows and `tix show` retain only the commit title.
 - Commit and selected-note titles render Markdown styling. Block-shaped title
   output is flattened onto the single history row; plain command output retains
   the rendered text without terminal styling.
+
+### Patch identity and enrichment
+
+- A patch identity describes a commit's changes relative to its first parent;
+  roots use the empty tree. Merges use their first parent regardless of the
+  parent chosen for viewing a diff. Commit messages, actors, timestamps,
+  signatures, and unrelated tree content do not identify the patch.
+- The identity is stored only in a commit extra header:
+  `patch-id v1 <ghij> <base-tree-hex> <result-tree-hex>`. The fingerprint uses the
+  repository's object hash algorithm and encodes every hash byte in lowercase
+  base four with the alphabet `ghij`: 80 characters for SHA-1 or 128 for SHA-256.
+  The two ordinary hexadecimal tree IDs record the
+  first-parent and result trees used to calculate it. A conflicted placeholder
+  instead carries `patch-id v1 unavailable`.
+- Version 1 processes changed leaf entries in byte-path order and includes
+  their exact paths, entry modes, and change kind. Renames are conservatively
+  represented as a deletion and an addition. Whole-file additions and deletions
+  use the content's object ID; mode-only changes need no blob reads. Binary
+  changes containing NUL bytes and submodule changes use the old and new object
+  IDs, without needing to resolve submodule commits.
+- Modified text uses raw repository bytes and a fixed Histogram diff, independent
+  of Git diff configuration, attributes, filters, text conversion, or the selected
+  UI diff algorithm. Removed and added bytes form separate ordered streams with
+  explicit lengths. Line numbers, unchanged context, hunk boundaries, and the
+  interleaving of removals with additions are excluded; whitespace, line endings,
+  missing final newlines, and each stream's byte order remain significant.
+  Moving the same edits through changed context therefore preserves identity
+  when those streams stay the same.
+- Final commit creation and replay calculate or refresh the header before
+  signing. An existing header whose base and result tree IDs still match is
+  reused without tree walks, blob reads, or text diffs. Otherwise, matching
+  previous and current changed-leaf records allow reuse with updated tree IDs
+  and no blob reads; differing records require fingerprinting. Missing old tree objects
+  disable this reuse without preventing calculation from the current trees.
+  Metadata-only rewrites do not backfill missing identities in legacy commits.
+- Lazy rebases retain the old header as stale; they neither calculate a new
+  identity nor authorize enrichment. Completed replay refreshes the identity.
+  Pending rebases, pending signatures, mismatched tree IDs, and unresolved
+  conflicts have no usable patch identity. Unresolved optional AutoMerge inputs
+  stay pending and muted while other inputs rebuild; staging a resolution does
+  not make their placeholder trees replayable before amend or continuation.
+  A malformed or duplicate header is
+  diagnosed and ignored for display, and can be replaced when a final rewrite
+  refreshes it. Missing or stale identities show no patch enrichment or separate
+  stale-identity highlight.
+- Patch enrichments are human-readable Git config notes at the worktree-local
+  `refs/worktree/tix/enrich-patch` ref, keyed by the effective Tix change ID.
+  Each `[patch "v1:<ghij>"]` section stores `refackiewed = true` for that patch
+  version. Only an explicit mark creates approval. The same change and patch
+  share it across rewrites, but an unrelated change with the same patch does
+  not. Editing a patch hides its old approval; returning to that approved patch
+  restores the marker. Updating or clearing one version preserves other
+  versions and unknown fields. Malformed notes are diagnosed and ignored for
+  display, and mutations refuse to overwrite them. Tree checks remain keyed
+  by the exact tree at `refs/worktree/tix/enrich-tree`.
+- `n r` toggles refackiewed and is searchable by that name in the command menu.
+  With a current header, it changes only the patch notes and is available even
+  on immutable boundaries and AutoMerges. Without a header, marking requires
+  an ordinary commit eligible for rewording: it calculates the identity and
+  rewrites the commit while preserving its author, message, tree, staged
+  changes, and worktree bytes. Final descendants remain final under the
+  metadata-only rewrite rule. The header, approval, and dependent ref rewrites
+  publish atomically and form one undoable operation. Clearing an unmarked legacy
+  commit is a no-op. Stale or unavailable identities must complete replay
+  before they can be marked or cleared.
+- History display, `tix show`, and rebase-todo rendering only validate existing
+  headers against commit metadata and read the corresponding notes. They never
+  hash patches, diff trees or blobs for identities, write headers or notes, or
+  start patch-hashing workers. Legacy commits are not automatically scanned or
+  backfilled. Visible-row enrichment caches hold detached display state and
+  follow the ordinary repository-fill lifetime and refresh rules.
 
 ### Selection context
 
@@ -1683,6 +1759,8 @@ views.
   `[commit] note` in Git's editor as Markdown. Saving or removing a note preserves
   the todo flag, and toggling todo preserves the note. `n e` toggles
   `[tree] checks-pass` for any selected commit, including immutable boundaries.
+  `n r` toggles `refackiewed` for the selected patch under the patch-identity
+  eligibility rules above, leaving the enrichment group open.
   `n g` edits the real Git note and remains available when the commit-specific
   Tix actions are not. The group is mutually
   exclusive with the view, commit, actions, and information groups and otherwise follows
@@ -1756,6 +1834,9 @@ views.
 - One fill repository may be shared by commit, tree, worktree, and metadata loads
   during continuous key-repeat or mouse navigation. It is dropped after the
   75 ms idle boundary.
+- Patch-enrichment population reads only commit metadata and notes for visible
+  rows. Patch identities are calculated during explicit mutation, never during
+  display population or by an idle worker.
 - Terminal growth loads metadata for every newly visible history row before that
   frame is painted; unloaded placeholder dates or titles are never shown.
 - Traversal and incremental refresh workers may use a bounded object cache and

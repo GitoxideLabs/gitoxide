@@ -9,6 +9,7 @@ use gix::{
 
 pub(crate) const REF_NAME: &str = "refs/worktree/tix/enrich";
 pub(crate) const TREE_REF_NAME: &str = "refs/worktree/tix/enrich-tree";
+pub(crate) const PATCH_REF_NAME: &str = "refs/worktree/tix/enrich-patch";
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Enrichment {
@@ -21,22 +22,35 @@ pub(crate) struct TreeEnrichment {
     pub checks_pass: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PatchEnrichment {
+    pub refackiewed: bool,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Headers {
     pub todo: bool,
     pub message: Option<BString>,
 }
 
-pub(crate) fn marker(todo: bool, note: bool, checks_pass: bool) -> &'static str {
-    match (todo, note, checks_pass) {
-        (true, true, true) => "🚧📝✔️",
-        (true, true, false) => "🚧📝",
-        (true, false, true) => "🚧✔️",
-        (true, false, false) => "🚧",
-        (false, true, true) => "📝✔️",
-        (false, true, false) => "📝",
-        (false, false, true) => "✔️",
-        (false, false, false) => "",
+pub(crate) fn marker(todo: bool, note: bool, checks_pass: bool, refackiewed: bool) -> &'static str {
+    match (todo, note, checks_pass, refackiewed) {
+        (true, true, true, true) => "🚧📝✔️✨",
+        (true, true, true, false) => "🚧📝✔️",
+        (true, true, false, true) => "🚧📝✨",
+        (true, true, false, false) => "🚧📝",
+        (true, false, true, true) => "🚧✔️✨",
+        (true, false, true, false) => "🚧✔️",
+        (true, false, false, true) => "🚧✨",
+        (true, false, false, false) => "🚧",
+        (false, true, true, true) => "📝✔️✨",
+        (false, true, true, false) => "📝✔️",
+        (false, true, false, true) => "📝✨",
+        (false, true, false, false) => "📝",
+        (false, false, true, true) => "✔️✨",
+        (false, false, true, false) => "✔️",
+        (false, false, false, true) => "✨",
+        (false, false, false, false) => "",
     }
 }
 
@@ -46,6 +60,10 @@ pub(crate) fn open(repo: &gix::Repository) -> Result<gix::note::Platform<'_>> {
 
 pub(crate) fn open_tree(repo: &gix::Repository) -> Result<gix::note::Platform<'_>> {
     open_at(repo, TREE_REF_NAME)
+}
+
+pub(crate) fn open_patch(repo: &gix::Repository) -> Result<gix::note::Platform<'_>> {
+    open_at(repo, PATCH_REF_NAME)
 }
 
 fn open_at<'repo>(repo: &'repo gix::Repository, reference: &str) -> Result<gix::note::Platform<'repo>> {
@@ -77,6 +95,38 @@ pub(crate) fn load_tree(notes: &mut gix::note::Platform, tree_id: ObjectId) -> R
         checks_pass: config
             .boolean("tree.checks-pass")
             .context("tree.checks-pass is not a boolean")?
+            .unwrap_or(false),
+    })
+}
+
+pub(crate) fn load_patch(
+    notes: &mut gix::note::Platform,
+    change_id: ChangeId,
+    patch_id: crate::patch_id::PatchId,
+) -> Result<PatchEnrichment> {
+    let Some(config) = load_config(notes, ObjectId::from(change_id))? else {
+        return Ok(PatchEnrichment::default());
+    };
+    patch_enrichment(&config, patch_id)
+}
+
+pub(crate) fn load_patch_for_commit(
+    repo: &gix::Repository,
+    notes: &mut gix::note::Platform,
+    commit_id: ObjectId,
+) -> Result<PatchEnrichment> {
+    match crate::patch_id::for_commit(repo, commit_id)? {
+        Some(patch_id) => load_patch(notes, crate::change_id::for_commit(repo, commit_id)?, patch_id),
+        None => Ok(PatchEnrichment::default()),
+    }
+}
+
+fn patch_enrichment(config: &File, patch_id: crate::patch_id::PatchId) -> Result<PatchEnrichment> {
+    let subsection = format!("v1:{patch_id}");
+    Ok(PatchEnrichment {
+        refackiewed: config
+            .boolean_by("patch", Some(subsection.as_bytes().as_bstr()), "refackiewed")
+            .context("patch.refackiewed is not a boolean")?
             .unwrap_or(false),
     })
 }
@@ -187,6 +237,49 @@ pub(crate) fn apply_headers(
     Ok(Some(desired))
 }
 
+pub(crate) fn prepare_refackiewed(
+    repo: &gix::Repository,
+    commit_id: ObjectId,
+    enabled: bool,
+) -> Result<Option<(ObjectId, BString, PatchEnrichment)>> {
+    let patch_id = crate::patch_id::for_commit(repo, commit_id)?
+        .context("the commit needs a current patch ID before it can be refackiewed")?;
+    let change_id = crate::change_id::for_commit(repo, commit_id)?;
+    let object = ObjectId::from(change_id);
+    let mut config = load_config(&mut open_patch(repo)?, object)?.unwrap_or_default();
+    let current = patch_enrichment(&config, patch_id)?;
+    if current.refackiewed == enabled {
+        return Ok(None);
+    }
+    let subsection = format!("v1:{patch_id}");
+    config
+        .section_mut_or_create_new("patch", Some(subsection.as_bytes().as_bstr()))
+        .context("could not create the patch enrichment section")?
+        .set("refackiewed", if enabled { "true" } else { "false" })
+        .context("could not update patch.refackiewed")?;
+    Ok(Some((
+        object,
+        config.to_bstring(),
+        PatchEnrichment { refackiewed: enabled },
+    )))
+}
+
+pub(crate) fn ensure_refackiewed(
+    repo: &gix::Repository,
+    commit_id: ObjectId,
+    enabled: bool,
+) -> Result<PatchEnrichment> {
+    if let Some((object, data, _)) = prepare_refackiewed(repo, commit_id, enabled)? {
+        let reference: FullName = PATCH_REF_NAME
+            .try_into()
+            .expect("the tix patch enrich reference is valid");
+        open_patch(repo)?
+            .replace_at_ref(reference.as_ref(), object, data)
+            .context("could not write the tix patch enrichment")?;
+    }
+    Ok(PatchEnrichment { refackiewed: enabled })
+}
+
 pub(crate) fn prepare_headers(
     repo: &gix::Repository,
     commit_id: ObjectId,
@@ -280,6 +373,106 @@ mod tests {
     use std::process::Command;
 
     use super::*;
+
+    fn with_patch_id(repo: &gix::Repository, commit_id: ObjectId) -> Result<ObjectId> {
+        let mut commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
+        crate::change_id::inherit(repo, &mut commit, commit_id)?;
+        crate::patch_id::refresh(repo, &mut commit)?;
+        Ok(repo.write_object(&commit)?.detach())
+    }
+
+    #[test]
+    fn refackiewed_versions_are_change_scoped_and_preserve_other_fields() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let commit_id = with_patch_id(&repo, repo.head_id()?.detach())?;
+        let change_id = crate::change_id::for_commit(&repo, commit_id)?;
+        let patch_id = crate::patch_id::for_commit(&repo, commit_id)?.expect("the final commit has a patch ID");
+        let other_patch_id: crate::patch_id::PatchId = "g".repeat(patch_id.to_string().len()).parse()?;
+        assert_ne!(
+            patch_id, other_patch_id,
+            "the fixture patch differs from the synthetic old version"
+        );
+        ensure_todo(&repo, commit_id, true)?;
+        set_note(&repo, commit_id, Some(b"keep the commit note"))?;
+        let reference: FullName = PATCH_REF_NAME.try_into()?;
+        repo.notes()?.replace_at_ref(
+            reference.as_ref(),
+            ObjectId::from(change_id),
+            format!(
+                "[patch \"v1:{patch_id}\"]\n\trefackiewed = false\n\towner = me\n\
+                 [patch \"v1:{other_patch_id}\"]\n\trefackiewed = true\n"
+            ),
+        )?;
+
+        assert!(ensure_refackiewed(&repo, commit_id, true)?.refackiewed);
+        let first = repo.find_reference(PATCH_REF_NAME)?.id().detach();
+        assert!(ensure_refackiewed(&repo, commit_id, true)?.refackiewed);
+        assert_eq!(
+            repo.find_reference(PATCH_REF_NAME)?.id(),
+            first,
+            "setting an existing mark does not rewrite its notes commit"
+        );
+        assert!(load_patch(&mut open_patch(&repo)?, change_id, other_patch_id)?.refackiewed);
+        let unrelated = crate::change_id::for_commit(&repo, repo.rev_parse_single("HEAD~1")?.detach())?;
+        assert!(
+            !load_patch(&mut open_patch(&repo)?, unrelated, patch_id)?.refackiewed,
+            "an identical patch ID does not share approval across different Tix changes"
+        );
+        let config =
+            load_config(&mut open_patch(&repo)?, ObjectId::from(change_id))?.expect("the patch enrichment was written");
+        let subsection = format!("v1:{patch_id}");
+        assert_eq!(
+            config
+                .string_by("patch", Some(subsection.as_bytes().as_bstr()), "owner")
+                .as_ref()
+                .map(|value| value.as_bstr()),
+            Some(b"me".as_bstr()),
+            "patch updates preserve unrelated keys"
+        );
+        assert!(!ensure_refackiewed(&repo, commit_id, false)?.refackiewed);
+        assert!(
+            load_patch(&mut open_patch(&repo)?, change_id, other_patch_id)?.refackiewed,
+            "clearing one patch version preserves approval of older versions"
+        );
+        assert_eq!(
+            load(&mut open(&repo)?, change_id)?,
+            Enrichment {
+                todo: true,
+                note: Some("keep the commit note".into()),
+            },
+            "patch approvals do not change commit enrichments"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_patch_enrichments_are_not_overwritten() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let commit_id = with_patch_id(&repo, repo.head_id()?.detach())?;
+        let change_id = crate::change_id::for_commit(&repo, commit_id)?;
+        let patch_id = crate::patch_id::for_commit(&repo, commit_id)?.expect("the final commit has a patch ID");
+        let reference: FullName = PATCH_REF_NAME.try_into()?;
+        for data in [
+            "[patch".to_owned(),
+            format!("[patch \"v1:{patch_id}\"]\nrefackiewed = invalid\n"),
+        ] {
+            repo.notes()?
+                .replace_at_ref(reference.as_ref(), ObjectId::from(change_id), data)?;
+            let before = repo.find_reference(PATCH_REF_NAME)?.id().detach();
+            assert!(
+                ensure_refackiewed(&repo, commit_id, true).is_err(),
+                "invalid configuration or a malformed boolean blocks patch mutation"
+            );
+            assert_eq!(
+                repo.find_reference(PATCH_REF_NAME)?.id(),
+                before,
+                "malformed data stays intact"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn toggling_preserves_other_fields() -> gix_testtools::Result {
@@ -510,6 +703,13 @@ mod tests {
         assert!(
             !load_tree(&mut open_tree(&linked)?, tree)?.checks_pass,
             "tree enrichments are also worktree-local"
+        );
+        let commit_id = with_patch_id(&main, id)?;
+        let patch_id = crate::patch_id::for_commit(&main, commit_id)?.expect("the final commit has a patch ID");
+        assert!(ensure_refackiewed(&main, commit_id, true)?.refackiewed);
+        assert!(
+            !load_patch(&mut open_patch(&linked)?, change_id, patch_id)?.refackiewed,
+            "patch approvals remain private even though their commit headers are shared"
         );
         Ok(())
     }

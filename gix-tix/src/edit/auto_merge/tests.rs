@@ -903,21 +903,90 @@ fn travel_refreshes_external_inputs_and_muted_replays_keep_their_original_patch(
         Some(Some(main)),
         "the replay base survives a conflict"
     );
+    let super::super::time_travel::Perform::Conflict(conflict) =
+        super::super::time_travel::perform(fixture.path(), false, input_commit_id, &graph(&repo)?, &[], &[], false)?
+    else {
+        panic!("direct travel offers ordinary conflict resolution")
+    };
+    let (_, conflict_commit_id, _, _) = conflict.accept()?;
+    let conflicted = repo.find_commit(conflict_commit_id)?.decode()?.into_owned()?;
     assert!(
-        matches!(
-            super::super::time_travel::perform(
-                fixture.path(),
-                false,
-                input_commit_id,
-                &graph(&repo)?,
-                &[],
-                &[],
-                false
-            )?,
-            super::super::time_travel::Perform::Conflict(_)
-        ),
-        "direct travel offers ordinary conflict resolution"
+        crate::patch_id::is_unavailable(&conflicted),
+        "accepting the conflict writes an unavailable patch identity"
     );
+    let retained_merge_commit_id = crate::history::all_pins(&repo)?
+        .into_iter()
+        .find(|pin| !pin.is_head())
+        .context("travelling to the conflict retains the departing AutoMerge")?
+        .id;
+    assert!(
+        is_auto_merge(&repo.find_commit(retained_merge_commit_id)?.decode()?.into_owned()?),
+        "the retained departure is the merge to revisit"
+    );
+
+    // Staging clears the index conflict but does not amend the unavailable
+    // commit. Choosing the other input's content also permits checkout there.
+    std::fs::write(fixture.path().join("shared"), b"base\n")?;
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(fixture.path())
+            .args(["add", "shared"])
+            .status()?
+            .success(),
+        "the resolution is staged without committing it"
+    );
+    let error = super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        conflict_commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        false,
+    )
+    .err()
+    .context("mandatory replay remains blocked until the unavailable commit is amended")?;
+    assert!(format!("{error:#}").contains("resolve and amend"));
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        retained_merge_commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        false,
+    )
+    .context("an unavailable optional input does not block returning to its AutoMerge")?
+    .complete()?;
+    let input_commit_id = input(&repo, "A")?.commit_id;
+    let input_commit = repo.find_commit(input_commit_id)?.decode()?.into_owned()?;
+    assert!(rebase::is_pending(&input_commit), "the optional conflict stays pending");
+    assert!(
+        crate::patch_id::is_unavailable(&input_commit),
+        "optional replay preserves the unavailable sentinel"
+    );
+    assert!(
+        crate::patch_id::for_commit(&repo, input_commit_id)?.is_none(),
+        "staging alone cannot authorize an identity for the placeholder tree"
+    );
+    assert_eq!(
+        input_commit.tree, conflicted.tree,
+        "the unavailable optional input retains its exact placeholder tree"
+    );
+    let merged = repo.head_commit()?.decode()?.into_owned()?;
+    let definition = Definition::from_commit(&merged)?.context("returning retains the AutoMerge")?;
+    assert!(definition.inputs[0].muted, "the unavailable input remains muted");
+    assert!(!definition.inputs[1].muted, "the other input still contributes");
+    assert_eq!(
+        definition.inputs[0].commit_id, input_commit_id,
+        "the recipe retains the pending input for later resolution"
+    );
+    assert_eq!(
+        merged.tree,
+        repo.find_commit(advanced_commit_id)?.tree_id()?,
+        "the other input rebuilds the merge without the unavailable patch"
+    );
+    assert_eq!(std::fs::read(fixture.path().join("advanced"))?, b"C advanced\n");
     Ok(())
 }
 
@@ -1125,6 +1194,172 @@ fn a_todo_conflict_continuation_maintains_auto_merge_descendants() -> gix_testto
     assert!(
         fixture.path().join("c").is_file(),
         "travel includes the other input too"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_new_merge_with_its_first_inputs_tree_has_a_patch_identity() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let mut sibling = repo.find_commit(a.commit_id)?.decode()?.into_owned()?;
+    sibling.message = "same tree in an independent commit\n".into();
+    let sibling_commit_id = repo.write_object(&sibling)?.detach();
+    let sibling_ref: FullName = "refs/heads/same-tree".try_into()?;
+    repo.reference(
+        sibling_ref.clone(),
+        sibling_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain a sibling with identical content",
+    )?;
+
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(sibling_ref))?;
+    assert_eq!(
+        repo.find_commit(merge_commit_id)?.tree_id()?,
+        sibling.tree,
+        "merging identical changes leaves an empty first-parent delta"
+    );
+    assert!(
+        crate::patch_id::for_commit(&repo, merge_commit_id)?.is_some(),
+        "a newly created AutoMerge has an identity even when its provisional tree was already final"
+    );
+    let marked = super::super::enrich::refackiewed(&repo, None, merge_commit_id, Some(true), |_| {})?;
+    assert_eq!(
+        marked.selected, merge_commit_id,
+        "approving generated content only changes notes"
+    );
+    assert!(
+        marked.enrichment.refackiewed,
+        "the empty generated patch can be approved"
+    );
+    assert_eq!(
+        apply(&repo, merge_commit_id, Change::Remerge)?.0,
+        merge_commit_id,
+        "an unchanged remerge preserves its identity and approval"
+    );
+    assert!(
+        crate::enrich::load_patch_for_commit(&repo, &mut crate::enrich::open_patch(&repo)?, merge_commit_id)?
+            .refackiewed,
+        "the unchanged remerge retains the explicit patch approval"
+    );
+    Ok(())
+}
+
+#[test]
+fn marking_a_legacy_input_keeps_optional_pending_inputs_and_worktree_content_unchanged() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+    let merge_tree_id = repo.find_commit(merge_commit_id)?.tree_id()?.detach();
+    let main_commit_id = input(&repo, "main")?.commit_id;
+
+    // C could replay cleanly onto this new base. A header-only edit must leave
+    // that optional work pending instead of pulling its new file into the merge.
+    let mut base = changed_tree(
+        &repo,
+        repo.find_commit(main_commit_id)?.decode()?.into_owned()?,
+        "new-base",
+        "unreplayed base\n",
+    )?;
+    base.parents = [main_commit_id].into_iter().collect();
+    let base_commit_id = repo.write_object(&base)?.detach();
+    let mut pending = repo.find_commit(c.commit_id)?.decode()?.into_owned()?;
+    pending.parents = [base_commit_id].into_iter().collect();
+    pending
+        .extra_headers
+        .push(("tix-rebase-parent".into(), main_commit_id.to_string().into()));
+    let pending_commit_id = repo.write_object(&pending)?.detach();
+    repo.reference(
+        c.reference,
+        pending_commit_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "retain a pending optional input",
+    )?;
+    let graph = graph(&repo)?;
+    let mut affected = vec![a.commit_id];
+    let preparation = prepare(&repo, &graph, &mut affected, Some(merge_commit_id), None)?;
+    assert!(
+        preparation.optional.contains(&pending_commit_id),
+        "the pending input participates in ordinary AutoMerge replay preparation"
+    );
+    assert!(
+        preparation.eager.contains(&merge_commit_id),
+        "ordinary content edits would rebuild the checked-out AutoMerge eagerly"
+    );
+    assert!(
+        repo.find_commit(a.commit_id)?
+            .decode()?
+            .extra_headers()
+            .find(crate::patch_id::HEADER)
+            .is_none(),
+        "the selected input requires a legacy header insertion"
+    );
+
+    std::fs::write(fixture.path().join("shared"), b"staged\n")?;
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(fixture.path())
+            .args(["add", "shared"])
+            .status()?
+            .success(),
+        "Git stages a change independent of the history edit"
+    );
+    std::fs::write(fixture.path().join("shared"), b"unstaged\n")?;
+    let index_before = std::fs::read(repo.index_path())?;
+
+    let outcome = super::super::enrich::refackiewed(&repo, Some(&graph), a.commit_id, Some(true), |_| {})?;
+    assert_ne!(
+        outcome.selected, a.commit_id,
+        "marking embeds the missing header in a successor commit"
+    );
+    assert_eq!(
+        repo.find_commit(outcome.selected)?.tree_id()?,
+        repo.find_commit(a.commit_id)?.tree_id()?,
+        "the approved patch retains its exact tree"
+    );
+    assert!(outcome.enrichment.refackiewed, "the selected patch is approved");
+    assert!(
+        crate::enrich::load_patch_for_commit(&repo, &mut crate::enrich::open_patch(&repo)?, outcome.selected)?
+            .refackiewed,
+        "the fresh header resolves to the saved approval"
+    );
+
+    let updated_pending_commit_id = input(&repo, "C")?.commit_id;
+    let updated_pending = repo.find_commit(updated_pending_commit_id)?.decode()?.into_owned()?;
+    assert!(
+        rebase::is_pending(&updated_pending),
+        "header insertion never finalizes an optional input's existing pending replay"
+    );
+    assert_eq!(
+        updated_pending.tree, pending.tree,
+        "the optional input retains its original patch tree"
+    );
+    assert_eq!(
+        rebase::marked_parent_ref(&repo.find_commit(updated_pending_commit_id)?.decode()?)?,
+        Some(Some(main_commit_id)),
+        "the original replay base remains available"
+    );
+    let merged = repo.head_commit()?.decode()?.into_owned()?;
+    assert_eq!(
+        merged.tree, merge_tree_id,
+        "header insertion never rebuilds merge content"
+    );
+    let definition = Definition::from_commit(&merged)?.context("the merge retains its recipe")?;
+    assert_eq!(definition.inputs[0].commit_id, outcome.selected);
+    assert_eq!(definition.inputs[1].commit_id, updated_pending_commit_id);
+    assert_eq!(
+        std::fs::read(repo.index_path())?,
+        index_before,
+        "the exact staged index survives the header insertion"
+    );
+    assert_eq!(std::fs::read(fixture.path().join("shared"))?, b"unstaged\n");
+    assert_eq!(std::fs::read(fixture.path().join("c"))?, b"C\n");
+    assert!(
+        !fixture.path().join("new-base").exists(),
+        "the optional replay's new base never reaches the worktree"
     );
     Ok(())
 }

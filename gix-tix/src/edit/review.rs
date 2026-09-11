@@ -178,6 +178,7 @@ pub(crate) fn start(
             .extra_headers
             .push((RETURN_TO.into(), return_to.as_bstr().to_owned()));
     }
+    crate::patch_id::refresh(&repo, &mut commit)?;
     let id = repo
         .write_object(&commit)
         .context("could not write review commit")?
