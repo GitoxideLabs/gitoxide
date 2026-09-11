@@ -1130,7 +1130,7 @@ fn a_todo_conflict_continuation_maintains_auto_merge_descendants() -> gix_testto
 }
 
 #[test]
-fn editing_an_input_updates_nested_merges_and_undo_restores_the_whole_operation() -> gix_testtools::Result {
+fn rewording_an_input_keeps_off_checkout_merges_and_descendants_final() -> gix_testtools::Result {
     let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
     let repo = crate::test_repository::open(fixture.path())?;
     let a = input(&repo, "A")?;
@@ -1158,22 +1158,34 @@ fn editing_an_input_updates_nested_merges_and_undo_restores_the_whole_operation(
         gix::refs::transaction::PreviousValue::MustNotExist,
         "retain outer merge",
     )?;
+    let outer_tree_id = outer.tree;
+    let outer_message = outer.message.clone();
+    let mut expected_definition = Definition::from_commit(&outer)?.context("the outer recipe exists")?;
+    assert!(
+        expected_definition.inputs[1].muted,
+        "B conflicts with the combined input"
+    );
+    let mut descendant = changed_tree(&repo, outer, "descendant", "after the merge\n")?;
+    descendant.parents = [outer_commit_id].into_iter().collect();
+    descendant.extra_headers.clear();
+    descendant.message = "ordinary descendant\n".into();
+    let descendant_tree_id = descendant.tree;
+    let descendant_commit_id = repo.write_object(&descendant)?.detach();
+    repo.reference(
+        "refs/heads/after-merge",
+        descendant_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain the off-checkout descendant",
+    )?;
 
-    let mut replacement = repo.find_commit(a.commit_id)?.decode()?.into_owned()?;
-    replacement.message = "updated A\n".into();
-    let outcome = rebase::perform(
-        &repo,
-        &graph(&repo)?,
-        rebase::Edit::Replace {
-            target: a.commit_id,
-            commit: replacement,
-        },
-        rebase::Signature::RedoIfNeeded,
-        rebase::Tree::LeaveAsIsAndMark,
-    )?
-    .complete()?;
-    let first_updated = outcome.map(first_merge_commit_id).context("the first merge remains")?;
-    let outer_updated = outcome.map(outer_commit_id).context("the outer merge remains")?;
+    let outcome =
+        super::super::reword::apply_message_reporting(repo.clone(), &graph(&repo)?, a.commit_id, b"updated A\n", None)?;
+    let first_updated = input(&repo, "combined")?.commit_id;
+    let outer_updated = repo
+        .find_reference("refs/worktree/tix/pins/outer")?
+        .peel_to_commit()?
+        .id;
+    let updated_descendant_commit_id = input(&repo, "after-merge")?.commit_id;
     assert_ne!(
         first_updated, first_merge_commit_id,
         "the checked-out merge is maintained"
@@ -1184,12 +1196,36 @@ fn editing_an_input_updates_nested_merges_and_undo_restores_the_whole_operation(
     );
     let outer = repo.find_commit(outer_updated)?.decode()?.into_owned()?;
     assert!(
-        rebase::is_pending(&outer),
-        "an off-checkout merge can wait for travel to generate its tree"
+        !rebase::is_pending(&outer),
+        "unchanged input trees leave the off-checkout merge final"
     );
     assert_eq!(
-        Definition::from_commit(&outer)?.expect("outer recipe survives").inputs[0].commit_id,
-        first_updated
+        outer.tree, outer_tree_id,
+        "rewording inputs preserves the generated tree"
+    );
+    assert_eq!(
+        outer.message, outer_message,
+        "the generated title retains its muted marker"
+    );
+    expected_definition.inputs[0].commit_id = first_updated;
+    assert_eq!(
+        Definition::from_commit(&outer)?.expect("outer recipe survives"),
+        expected_definition,
+        "only the rewritten input ID changes; subscription order and muted state survive"
+    );
+    let descendant = repo.find_commit(updated_descendant_commit_id)?.decode()?.into_owned()?;
+    assert!(
+        !rebase::is_pending(&descendant),
+        "the ordinary descendant of the final merge stays final too"
+    );
+    assert_eq!(
+        descendant.tree, descendant_tree_id,
+        "metadata-only ancestor changes preserve the descendant's content"
+    );
+    assert_eq!(
+        descendant.parents.as_slice(),
+        &[outer_updated],
+        "the ordinary descendant follows the rewritten merge"
     );
     assert_eq!(repo.head_id()?, first_updated);
     undo::record(&repo, "edit input", &outcome.ref_changes)?;
@@ -1202,8 +1238,18 @@ fn editing_an_input_updates_nested_merges_and_undo_restores_the_whole_operation(
             .id,
         outer_commit_id
     );
+    assert_eq!(
+        input(&repo, "after-merge")?.commit_id,
+        descendant_commit_id,
+        "undo restores the off-checkout descendant"
+    );
     undo::plan_redo(&repo)?.context("the edit is redoable")?.apply(&repo)?;
     assert_eq!(repo.head_id()?, first_updated);
+    assert_eq!(
+        input(&repo, "after-merge")?.commit_id,
+        updated_descendant_commit_id,
+        "redo restores the final descendant"
+    );
     Ok(())
 }
 
