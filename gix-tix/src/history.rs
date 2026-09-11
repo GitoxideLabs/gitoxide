@@ -154,11 +154,13 @@ pub(crate) struct HistoryGraph {
     by_id: HashMap<ObjectId, CommitIndex>,
     stored_order: Vec<CommitIndex>,
     edit_scope: HashSet<ObjectId>,
+    read_only: HashSet<ObjectId>,
     /// Active history bounded by hidden tips, retained separately when an edit expands its scope.
     pub(crate) bounded_history: Option<Vec<ObjectId>>,
     tracking: HashMap<CommitIndex, Vec<SelectionRef>>,
     relations: HashMap<(CommitIndex, CommitIndex), (usize, usize)>,
-    auto_merge_checked: HashSet<ObjectId>,
+    edit_metadata_checked: HashSet<ObjectId>,
+    pub(crate) unavailable_patches: HashSet<ObjectId>,
     pub(crate) auto_merges: HashMap<ObjectId, crate::edit::auto_merge::Definition>,
 }
 
@@ -238,7 +240,7 @@ impl HistoryGraph {
         }
         graph.set_current_view(ids);
         graph.edit_scope.extend(ids.iter().copied());
-        graph.inspect_auto_merges(repo)?;
+        graph.inspect_edit_metadata(repo)?;
         Ok(graph)
     }
 
@@ -284,6 +286,10 @@ impl HistoryGraph {
         self.edit_scope.contains(&id)
     }
 
+    pub(crate) fn is_read_only(&self, commit_id: ObjectId) -> bool {
+        self.read_only.contains(&commit_id)
+    }
+
     pub(crate) fn edit_commit_ids(&self) -> Vec<ObjectId> {
         self.commits
             .iter()
@@ -292,13 +298,20 @@ impl HistoryGraph {
             .collect()
     }
 
-    fn inspect_auto_merges(&mut self, repo: &gix::Repository) -> Result<()> {
+    fn inspect_edit_metadata(&mut self, repo: &gix::Repository) -> Result<()> {
         for commit_id in self.edit_commit_ids() {
-            if self.auto_merge_checked.contains(&commit_id) {
+            if self.edit_metadata_checked.contains(&commit_id) {
                 continue;
             }
             let commit = repo.find_commit(commit_id)?;
             let decoded = commit.decode()?;
+            if decoded
+                .extra_headers()
+                .find_all(crate::patch_id::HEADER)
+                .any(|value| value == crate::patch_id::UNAVAILABLE)
+            {
+                self.unavailable_patches.insert(commit_id);
+            }
             if let Some(definition) = crate::edit::auto_merge::Definition::from_headers(
                 decoded
                     .extra_headers
@@ -307,7 +320,7 @@ impl HistoryGraph {
             )? {
                 self.auto_merges.insert(commit_id, definition);
             }
-            self.auto_merge_checked.insert(commit_id);
+            self.edit_metadata_checked.insert(commit_id);
         }
         Ok(())
     }
@@ -395,43 +408,49 @@ impl HistoryGraph {
             return None;
         }
         let root = self.index(root)?;
-        let mut included = HashSet::from([root]);
-        loop {
-            let mut changed = false;
-            for index in 0..self.commits.len() {
-                let index = CommitIndex::new(index).expect("an existing graph index fits into u32");
-                if !self.is_in_edit_scope(self.id(index))
-                    || included.contains(&index)
-                    || !self.known_parents(index).iter().any(|parent| included.contains(parent))
-                {
-                    continue;
-                }
-                included.insert(index);
-                changed = true;
+        let mut children = vec![Vec::new(); self.commits.len()];
+        for (index, commit) in self.commits.iter().enumerate() {
+            if !self.is_in_edit_scope(commit.id) {
+                continue;
             }
-            if !changed {
-                break;
+            let index = CommitIndex::new(index).expect("an existing graph index fits into u32");
+            for parent in self.known_parents(index) {
+                children[parent.as_usize()].push(index);
             }
         }
-        let mut out = Vec::with_capacity(included.len());
-        while out.len() < included.len() {
-            let before = out.len();
-            for index in &included {
-                if out.contains(index)
-                    || self
-                        .known_parents(*index)
-                        .iter()
-                        .any(|parent| included.contains(parent) && !out.contains(parent))
-                {
-                    continue;
-                }
-                out.push(*index);
+        let mut included = vec![false; self.commits.len()];
+        let mut pending = vec![root];
+        let mut total = 0;
+        while let Some(index) = pending.pop() {
+            if std::mem::replace(&mut included[index.as_usize()], true) {
+                continue;
             }
-            if out.len() == before {
-                return None;
+            total += 1;
+            pending.extend_from_slice(&children[index.as_usize()]);
+        }
+        let mut remaining_parents = vec![0; self.commits.len()];
+        for (index, _) in included.iter().enumerate().filter(|(_, present)| **present) {
+            let index = CommitIndex::new(index).expect("an existing graph index fits into u32");
+            remaining_parents[index.as_usize()] = self
+                .known_parents(index)
+                .iter()
+                .filter(|parent| included[parent.as_usize()])
+                .count();
+            if remaining_parents[index.as_usize()] == 0 {
+                pending.push(index);
             }
         }
-        Some(out.into_iter().map(|index| self.id(index)).collect())
+        let mut out = Vec::with_capacity(total);
+        while let Some(index) = pending.pop() {
+            out.push(self.id(index));
+            for child in &children[index.as_usize()] {
+                remaining_parents[child.as_usize()] -= 1;
+                if remaining_parents[child.as_usize()] == 0 {
+                    pending.push(*child);
+                }
+            }
+        }
+        (out.len() == total).then_some(out)
     }
 
     pub(crate) fn set_current_view(&mut self, tips: &[ObjectId]) {
@@ -464,7 +483,8 @@ impl HistoryGraph {
             }
         });
         self.edit_scope = visible;
-        self.edit_scope.extend(boundary);
+        self.edit_scope.extend(boundary.iter().copied());
+        self.read_only = boundary;
         self.bounded_history = (!hidden_tips.is_empty()).then(|| self.edit_commit_ids());
     }
 
@@ -971,7 +991,7 @@ impl HistoryGraph {
         }
         self.tracking.extend(tracking);
         self.switch_view(&refs.view_tips, &refs.hidden_tips);
-        self.inspect_auto_merges(repo)?;
+        self.inspect_edit_metadata(repo)?;
         let decorations = match authors {
             Some(_) => decorations(repo, &refs.pins, &refs.worktrees)?,
             None => Decorations::new(),
@@ -1266,7 +1286,7 @@ pub(crate) fn load(
         }
         emit(Event::VisibleComplete);
         graph.switch_view(&tips, &hidden_tips);
-        graph.inspect_auto_merges(repo)?;
+        graph.inspect_edit_metadata(repo)?;
         emit(Event::Complete(graph));
         return Ok(());
     }
@@ -1483,7 +1503,7 @@ pub(crate) fn load(
     emit(Event::VisibleComplete);
     graph.tracking = tracking;
     graph.switch_view(&tips, &hidden_tips);
-    graph.inspect_auto_merges(repo)?;
+    graph.inspect_edit_metadata(repo)?;
     emit(Event::Complete(graph));
     Ok(())
 }
@@ -3180,6 +3200,26 @@ mod tests {
     }
 
     #[test]
+    fn edit_metadata_retains_conflict_barriers_without_loading_patch_trees() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let original_commit_id = repo.head_id()?.detach();
+        let mut commit = repo.find_commit(original_commit_id)?.decode()?.into_owned()?;
+        crate::patch_id::mark_unavailable(&mut commit);
+        let conflict_commit_id = repo.write_object(&commit)?.detach();
+        let graph = HistoryGraph::for_commits(&repo, &[original_commit_id, conflict_commit_id])?;
+        assert!(
+            graph.unavailable_patches.contains(&conflict_commit_id),
+            "conflict placeholders remain source barriers even outside the viewport"
+        );
+        assert!(
+            !graph.unavailable_patches.contains(&original_commit_id),
+            "ordinary commits are not confused with unresolved placeholders"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn edit_scope_is_visible_history_plus_its_hidden_boundary() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
@@ -3196,6 +3236,11 @@ mod tests {
             .expect("history loading returns the completed graph");
 
         assert!(graph.is_in_edit_scope(topic), "visible commits are in the edit scope");
+        assert!(!graph.is_read_only(topic), "visible commits can be transplanted");
+        assert!(
+            graph.is_read_only(boundary),
+            "hidden boundaries remain read-only anchors"
+        );
         assert!(
             graph.is_in_edit_scope(boundary),
             "the displayed hidden base is in the edit scope"
@@ -3492,6 +3537,47 @@ mod tests {
             "refresh retains tracking metadata cached for another view"
         );
         Ok(())
+    }
+
+    #[test]
+    fn descendants_order_all_parents_and_do_not_bridge_excluded_commits() {
+        let mut graph = HistoryGraph::from_test_commits(&[
+            (id(6), vec![id(5)]),
+            (id(5), vec![id(3), id(4)]),
+            (id(4), vec![id(2)]),
+            (id(3), vec![id(2)]),
+            (id(2), vec![id(1)]),
+            (id(1), Vec::new()),
+        ]);
+        let descendants = graph.descendants_in_parent_order(id(2)).expect("the tree is acyclic");
+        assert_eq!(
+            descendants.len(),
+            5,
+            "only the selected root and descendants enter scope"
+        );
+        let positions: HashMap<_, _> = descendants.iter().enumerate().map(|(index, id)| (*id, index)).collect();
+        for commit_id in &descendants {
+            for parent_id in graph.parents_of(*commit_id).expect("test parents are loaded") {
+                if let Some(parent) = positions.get(&parent_id) {
+                    assert!(parent < &positions[commit_id], "every merge parent precedes its child");
+                }
+            }
+        }
+        graph.edit_scope.remove(&id(5));
+        let descendants = graph
+            .descendants_in_parent_order(id(2))
+            .expect("the editable subtree is acyclic");
+        assert_eq!(descendants.len(), 3, "out-of-scope nodes are traversal barriers");
+        assert!(
+            !descendants.contains(&id(6)),
+            "excluded ancestry cannot bridge into an editable descendant"
+        );
+        let cycle = HistoryGraph::from_test_commits(&[(id(1), vec![id(2)]), (id(2), vec![id(1)])]);
+        assert_eq!(
+            cycle.descendants_in_parent_order(id(1)),
+            None,
+            "cycles cannot produce a rebase order"
+        );
     }
 
     #[test]

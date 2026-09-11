@@ -450,6 +450,8 @@ fn todos_place_change_inputs_before_merging_and_remove_dropped_or_folded_identit
             _ => {}
         }
         let plan = rebase::Plan {
+            eager: Vec::new(),
+            selection: None,
             base: main,
             expected_refs: rebase::capture_refs(&repo, &scope, &[])?,
             scope,
@@ -646,6 +648,8 @@ fn nested_change_inputs_keep_conflicting_replays_muted_and_retained_by_parents()
         &repo,
         &super::super::loaded_graph(&repo)?,
         rebase::Plan {
+            eager: Vec::new(),
+            selection: None,
             base: main,
             scope: vec![c.commit_id],
             expected_refs: Vec::new(),
@@ -1129,6 +1133,8 @@ fn todos_resolve_inputs_from_later_fork_sections() -> gix_testtools::Result {
     let base_commit_id = repo.write_object(&base)?.detach();
     let scope = vec![a.commit_id, c.commit_id, merge_commit_id];
     let plan = rebase::Plan {
+        eager: Vec::new(),
+        selection: None,
         base: main,
         expected_refs: rebase::capture_refs(&repo, &scope, &[a.commit_id, c.commit_id])?,
         scope,
@@ -1205,6 +1211,8 @@ fn todo_inputs_keep_explicit_existing_ref_destinations() -> gix_testtools::Resul
     );
     reference.destination = rebase::RefDestination::Existing(a.commit_id);
     let plan = rebase::Plan {
+        eager: Vec::new(),
+        selection: None,
         base: input(&repo, "main")?.commit_id,
         scope: vec![a.commit_id, merge_commit_id],
         expected_refs,
@@ -1255,6 +1263,8 @@ fn a_todo_conflict_continuation_maintains_auto_merge_descendants() -> gix_testto
     )?;
     let scope = vec![a.commit_id, merge_commit_id];
     let plan = rebase::Plan {
+        eager: Vec::new(),
+        selection: None,
         base: input(&repo, "main")?.commit_id,
         expected_refs: rebase::capture_refs(&repo, &scope, &[])?,
         scope,
@@ -1902,6 +1912,8 @@ fn a_plan_maintains_offscreen_merges_and_replays_pending_inputs_outside_its_scop
         "pending outside todo",
     )?;
     let plan = rebase::Plan {
+        eager: Vec::new(),
+        selection: None,
         base: main,
         scope: vec![a.commit_id],
         steps: vec![rebase::PlanStep {

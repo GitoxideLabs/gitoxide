@@ -63,8 +63,8 @@ enum Command {
     Stash,
     /// Pin one or more commits as persistent history tips.
     Pin(Pin),
-    /// Copy the change introduced by one commit above another commit.
-    CopyInsert(CopyInsert),
+    /// Copy or move a selected tree of commits to another position.
+    Transplant(Transplant),
     /// Travel to a commit while preserving reachable history through tix pins.
     Travel(travel::Args),
     /// Edit a commit and lazily rebase every descendant retained by a tix pin.
@@ -194,9 +194,39 @@ struct Pin {
 
 #[derive(Debug, clap::Args)]
 #[command(
-    after_long_help = "Conflicts change nothing by default. To materialize one and write a continuation todo:\n  tix copy-insert --materialize-conflicts=todo.continue.md C I\nResolve the index, then run:\n  tix rebase apply todo.continue.md\nUse --materialize-conflicts=- to write a continuation to non-terminal stdout."
+    group(clap::ArgGroup::new("mode").required(true).args(["copy", "move_commits"])),
+    group(clap::ArgGroup::new("connection").required(true).args(["fork", "insert"])),
+    group(clap::ArgGroup::new("placement").required(true).args(["above", "below"])),
+    after_long_help = "ROOT alone selects one commit. --leaf selects the paths from ROOT to each TIP; --subtree selects all eligible descendants in the Tix view.\nConflicts change nothing by default. To materialize one and write a continuation todo:\n  tix transplant C --copy --insert --above I --materialize-conflicts=todo.continue.md\nResolve the index, then run:\n  tix rebase apply todo.continue.md\nUse --materialize-conflicts=- to write a continuation to non-terminal stdout."
 )]
-struct CopyInsert {
+struct Transplant {
+    /// Revision resolving to the root of the selected commit tree.
+    #[arg(value_name = "ROOT")]
+    root: OsString,
+    /// Include the path from ROOT to each TIP; repeat to select multiple branches.
+    #[arg(long, value_name = "TIP", num_args = 1.., conflicts_with = "subtree")]
+    leaf: Vec<OsString>,
+    /// Include all eligible descendants of ROOT in the Tix view.
+    #[arg(long)]
+    subtree: bool,
+    /// Keep the original commits and transplant copies.
+    #[arg(long)]
+    copy: bool,
+    /// Remove the selected commits from their old position.
+    #[arg(long = "move")]
+    move_commits: bool,
+    /// Add a separate branch at the destination.
+    #[arg(long)]
+    fork: bool,
+    /// Connect the destination's displaced history above the transplanted tree.
+    #[arg(long)]
+    insert: bool,
+    /// Place the selected root directly above DEST.
+    #[arg(long, value_name = "DEST")]
+    above: Option<OsString>,
+    /// Place the selected tree directly below DEST.
+    #[arg(long, value_name = "DEST")]
+    below: Option<OsString>,
     /// On conflict, materialize it and write a continuation todo to FILE, or stdout if omitted or '-'.
     #[arg(
         long,
@@ -206,12 +236,6 @@ struct CopyInsert {
         require_equals = true
     )]
     materialize_conflicts: Option<PathBuf>,
-    /// Revision resolving to the commit to copy.
-    #[arg(value_name = "SOURCE")]
-    source: OsString,
-    /// Revision resolving to the commit above which to insert the copy.
-    #[arg(value_name = "TARGET")]
-    target: OsString,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -416,7 +440,7 @@ impl Platform {
                 println!("{}", notice_with_change_id(&repository, &notice, id)?);
             }
             Command::Pin(args) => pin(&repository, args)?,
-            Command::CopyInsert(args) => return copy_insert(repository, args),
+            Command::Transplant(args) => return transplant(repository, args),
             Command::Admin(Admin::ClearUndo) => crate::edit::undo::clear(&repository)?,
             Command::Travel(args) => return travel::run(repository, args),
             Command::Reword(args) => return reword::run(repository, args),
@@ -739,23 +763,53 @@ fn resolve_commit(
     }
 }
 
-fn copy_insert(repository: gix::Repository, args: CopyInsert) -> Result<()> {
-    repository.workdir().context("copy-insert requires a worktree")?;
-    let (source, _) = resolve_commit(&repository, &args.source, "copy source")?;
-    let (target, _) = resolve_commit(&repository, &args.target, "copy target")?;
-    let revisions = [
+fn transplant(repository: gix::Repository, args: Transplant) -> Result<()> {
+    use crate::edit::transplant::{Connection, Mode, Placement, Request, Selection};
+
+    repository.workdir().context("transplant requires a worktree")?;
+    let (root, _) = resolve_commit(&repository, &args.root, "transplant root")?;
+    let (placement, destination) = match (&args.above, &args.below) {
+        (Some(destination), None) => (Placement::Above, destination),
+        (None, Some(destination)) => (Placement::Below, destination),
+        _ => anyhow::bail!("transplant requires exactly one of --above or --below"),
+    };
+    let (destination, _) = resolve_commit(&repository, destination, "transplant destination")?;
+    let leaves = args
+        .leaf
+        .iter()
+        .map(|leaf| resolve_commit(&repository, leaf, "transplant leaf").map(|(id, _)| id))
+        .collect::<Result<Vec<_>>>()?;
+    let mut revisions = vec![
         OsString::from("HEAD"),
-        OsString::from(source.to_string()),
-        OsString::from(target.to_string()),
+        OsString::from(root.to_string()),
+        OsString::from(destination.to_string()),
     ];
-    let graph = crate::edit::loaded_explicit_view_graph(&repository, &revisions, &[])?;
-    let plan = crate::edit::rebase::copy_insert_plan(&repository, &graph, source, target, false)?;
+    revisions.extend(leaves.iter().map(|id| OsString::from(id.to_string())));
+    let hidden = crate::history::available_hidden_revisions(&repository, &[], true)?.0;
+    let graph = crate::edit::loaded_explicit_view_graph(&repository, &revisions, &hidden)?;
+    let selection = if args.subtree {
+        Selection::subtree(&repository, &graph, root)?
+    } else {
+        Selection::normalize(&repository, &graph, root, &leaves)?
+    };
+    let request = Request {
+        selection,
+        mode: if args.copy { Mode::Copy } else { Mode::Move },
+        connection: if args.fork {
+            Connection::Fork
+        } else {
+            Connection::Insert
+        },
+        placement,
+        destination,
+    };
+    let plan = crate::edit::transplant::plan(&repository, &graph, &request, graph.is_read_only(destination))?;
     match crate::edit::rebase::perform_plan(&repository, &graph, plan)? {
         crate::edit::rebase::PlanPerform::Complete(outcome) => {
-            let copied = outcome.selected.context("copy-insert did not produce a selection")?;
-            println!("{}", crate::change_id::display(&repository, copied, 7)?);
+            let selected = outcome.selected.context("transplant did not produce a selection")?;
+            println!("{}", crate::change_id::display(&repository, selected, 7)?);
             print_ref_rewrites(&repository, &outcome.ref_rewrites)?;
-            record_undo(&repository, "copy-insert commit", Ok(outcome.ref_changes));
+            record_undo(&repository, "transplant commits", Ok(outcome.ref_changes));
             Ok(())
         }
         crate::edit::rebase::PlanPerform::Conflict(conflict) => rebase::handle_plan_conflict(
@@ -763,7 +817,7 @@ fn copy_insert(repository: gix::Repository, args: CopyInsert) -> Result<()> {
             conflict,
             args.materialize_conflicts.as_deref(),
             &[],
-            "copy-insert",
+            "transplant",
         ),
     }
 }
@@ -1320,31 +1374,50 @@ mod tests {
             panic!("pin was expected")
         };
         assert_eq!(pin.revisions, ["main", "HEAD~2"]);
-        let copy_insert = Cli::try_parse_from([
+        let Some(Command::Transplant(args)) = Cli::try_parse_from([
             "tix",
-            "copy-insert",
-            "--materialize-conflicts=continue.md",
+            "transplant",
             "main",
+            "--leaf",
+            "topic",
+            "side",
+            "--copy",
+            "--insert",
+            "--above",
             "HEAD~1",
+            "--materialize-conflicts=continue.md",
         ])
-        .expect("copy-insert parses")
+        .expect("a tree transplant parses")
         .platform
-        .command;
-        let Some(Command::CopyInsert(copy_insert)) = copy_insert else {
-            panic!("copy-insert was expected")
-        };
-        assert_eq!(copy_insert.source, "main");
-        assert_eq!(copy_insert.target, "HEAD~1");
-        assert_eq!(copy_insert.materialize_conflicts, Some("continue.md".into()));
-        let Some(Command::CopyInsert(copy_insert)) =
-            Cli::try_parse_from(["tix", "copy-insert", "--materialize-conflicts", "HEAD", "main~1"])
-                .expect("copy-insert defaults continuation output to stdout")
-                .platform
-                .command
+        .command
         else {
-            panic!("copy-insert was expected")
+            panic!("transplant was expected")
         };
-        assert_eq!(copy_insert.materialize_conflicts, Some("-".into()));
+        assert_eq!(args.root, "main");
+        assert_eq!(args.leaf, ["topic", "side"]);
+        assert!(args.copy && args.insert);
+        assert_eq!(args.above.as_deref(), Some(OsStr::new("HEAD~1")));
+        assert_eq!(args.materialize_conflicts, Some("continue.md".into()));
+        let Some(Command::Transplant(args)) = Cli::try_parse_from([
+            "tix",
+            "transplant",
+            "HEAD",
+            "--subtree",
+            "--move",
+            "--fork",
+            "--below",
+            "main~1",
+            "--materialize-conflicts",
+        ])
+        .expect("a subtree move defaults continuation output to stdout")
+        .platform
+        .command
+        else {
+            panic!("transplant was expected")
+        };
+        assert!(args.subtree && args.move_commits && args.fork);
+        assert_eq!(args.below.as_deref(), Some(OsStr::new("main~1")));
+        assert_eq!(args.materialize_conflicts, Some("-".into()));
         let travel = Cli::try_parse_from(["tix", "travel", "--materialize-conflicts", "HEAD~1"])
             .expect("travel parses")
             .platform
@@ -1737,7 +1810,40 @@ mod tests {
     }
 
     #[test]
-    fn copy_insert_command_rewrites_the_target_stack_and_is_undoable() -> gix_testtools::Result {
+    fn transplant_requires_exclusive_operation_choices() {
+        for args in [
+            vec!["HEAD", "--fork", "--above", "main"],
+            vec!["HEAD", "--copy", "--above", "main"],
+            vec!["HEAD", "--copy", "--fork"],
+            vec!["HEAD", "--copy", "--move", "--fork", "--above", "main"],
+            vec!["HEAD", "--copy", "--fork", "--insert", "--above", "main"],
+            vec!["HEAD", "--copy", "--fork", "--above", "main", "--below", "topic"],
+            vec![
+                "HEAD",
+                "--leaf",
+                "topic",
+                "--subtree",
+                "--copy",
+                "--fork",
+                "--above",
+                "main",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(["tix", "transplant"].into_iter().chain(args)).is_err(),
+                "a transplant must name exactly one mode, connection, placement, and selection extent"
+            );
+        }
+        assert!(
+            Cli::command()
+                .get_subcommands()
+                .all(|command| command.get_name() != "copy-insert"),
+            "the replaced command is not retained as an alias"
+        );
+    }
+
+    #[test]
+    fn transplant_command_rewrites_the_target_stack_and_is_undoable() -> gix_testtools::Result {
         fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
             let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
             if !output.status.success() {
@@ -1771,18 +1877,39 @@ mod tests {
 
         let repository = crate::test_repository::open(path)?;
         let source = repository.rev_parse_single("main")?.detach();
-        copy_insert(
+        transplant(
             repository,
-            CopyInsert {
+            Transplant {
+                leaf: Vec::new(),
+                subtree: false,
+                copy: true,
+                move_commits: false,
+                fork: false,
+                insert: true,
+                below: None,
                 materialize_conflicts: None,
-                source: "main".into(),
-                target: target.to_string().into(),
+                root: "main".into(),
+                above: Some(target.to_string().into()),
             },
         )?;
 
         let repository = crate::test_repository::open(path)?;
-        let copied = repository.head_id()?.detach();
-        assert!(repository.head()?.is_detached(), "the new copy is checked out detached");
+        let destination_after = repository.find_reference("refs/heads/destination")?.id().detach();
+        let copied = repository
+            .find_commit(destination_after)?
+            .parent_ids()
+            .next()
+            .context("the destination follows the inserted copy")?
+            .detach();
+        assert_eq!(
+            repository.head_id()?,
+            destination_after,
+            "the checkout follows its rewritten occurrence"
+        );
+        assert_eq!(
+            repository.head()?.referent_name().expect("the checkout stays attached"),
+            "refs/heads/destination"
+        );
         assert_eq!(
             repository.find_reference("refs/heads/main")?.id(),
             source,
@@ -1798,7 +1925,6 @@ mod tests {
             Some(target),
             "the copy is inserted immediately above the target"
         );
-        let destination_after = repository.find_reference("refs/heads/destination")?.id().detach();
         assert_ne!(
             destination_after, destination_before,
             "the target descendant is rewritten"
@@ -1814,19 +1940,16 @@ mod tests {
         );
         assert_eq!(
             crate::edit::undo::position(&repository)?.title,
-            "copy-insert commit",
+            "transplant commits",
             "the command records one undoable operation"
         );
-        let pins = crate::history::all_pins(&repository)?;
-        assert_eq!(pins.len(), 1, "the previous checkout receives one HEAD pin");
-        assert_eq!(
-            pins[0].target.try_name().expect("the pin is symbolic"),
-            "refs/heads/destination",
-            "the HEAD pin remembers the destination branch"
+        assert!(
+            crate::history::all_pins(&repository)?.is_empty(),
+            "the retained checkout needs no departure pin"
         );
 
         crate::edit::undo::plan_undo(&repository)?
-            .context("copy-insert can be undone")?
+            .context("transplant can be undone")?
             .apply(&repository)?;
         let repository = crate::test_repository::open(path)?;
         assert_eq!(
@@ -1854,22 +1977,29 @@ mod tests {
     }
 
     #[test]
-    fn copy_insert_conflicts_are_atomic_or_materialize_a_continuation() -> gix_testtools::Result {
+    fn transplant_conflicts_are_atomic_or_materialize_a_continuation() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
         let path = fixture.path();
         let repository = crate::test_repository::open(path)?;
         let source = repository.head_id()?.detach();
         let target = repository.rev_parse_single("HEAD~2")?.detach();
         let before = gix_testtools::repository::snapshot(path)?;
-        let err = copy_insert(
+        let err = transplant(
             repository,
-            CopyInsert {
+            Transplant {
+                leaf: Vec::new(),
+                subtree: false,
+                copy: true,
+                move_commits: false,
+                fork: false,
+                insert: true,
+                below: None,
                 materialize_conflicts: None,
-                source: source.to_string().into(),
-                target: target.to_string().into(),
+                root: source.to_string().into(),
+                above: Some(target.to_string().into()),
             },
         )
-        .expect_err("copy-insert conflicts are atomic by default");
+        .expect_err("transplant conflicts are atomic by default");
         assert!(format!("{err:#}").contains("pass --materialize-conflicts"));
         assert_eq!(
             gix_testtools::repository::snapshot(path)?,
@@ -1880,16 +2010,23 @@ mod tests {
         let output_dir = gix_testtools::tempfile::tempdir()?;
         let continuation = output_dir.path().join("continue.md");
         let repository = crate::test_repository::open(path)?;
-        let err = copy_insert(
+        let err = transplant(
             repository,
-            CopyInsert {
+            Transplant {
+                leaf: Vec::new(),
+                subtree: false,
+                copy: true,
+                move_commits: false,
+                fork: false,
+                insert: true,
+                below: None,
                 materialize_conflicts: Some(continuation.clone()),
-                source: source.to_string().into(),
-                target: target.to_string().into(),
+                root: source.to_string().into(),
+                above: Some(target.to_string().into()),
             },
         )
         .expect_err("materializing a conflict exits unsuccessfully");
-        assert!(format!("{err:#}").contains("copy-insert stopped at a materialized conflict"));
+        assert!(format!("{err:#}").contains("transplant stopped at a materialized conflict"));
         let document = std::fs::read(&continuation)?;
         let repository = crate::test_repository::open(path)?;
         assert!(
@@ -1942,7 +2079,113 @@ mod tests {
     }
 
     #[test]
-    fn copy_insert_rejects_a_bare_repository_before_rewriting_it() -> gix_testtools::Result {
+    fn transplant_continues_two_conflicts_and_restores_an_unaffected_checkout() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let path = fixture.path();
+        let repository = crate::test_repository::open(path)?;
+        let source_root = repository.rev_parse_single("HEAD~1")?.detach();
+        let original_head = repository.head_id()?.detach();
+        let git = |args: &[&str]| -> gix_testtools::Result {
+            let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(())
+        };
+        git(&["checkout", "-q", "-b", "destination", "HEAD~2"])?;
+        std::fs::write(path.join("file"), b"destination\n")?;
+        git(&["commit", "-qam", "destination"])?;
+        let destination = crate::test_repository::open(path)?.head_id()?.detach();
+        git(&["checkout", "-q", "main"])?;
+        let outputs = gix_testtools::tempfile::tempdir()?;
+        let first = outputs.path().join("first.md");
+        let second = outputs.path().join("second.md");
+        let err = transplant(
+            crate::test_repository::open(path)?,
+            Transplant {
+                root: source_root.to_string().into(),
+                leaf: vec![original_head.to_string().into()],
+                subtree: false,
+                copy: true,
+                move_commits: false,
+                fork: true,
+                insert: false,
+                above: Some(destination.to_string().into()),
+                below: None,
+                materialize_conflicts: Some(first.clone()),
+            },
+        )
+        .expect_err("the selected root conflicts with the destination");
+        assert!(format!("{err:#}").contains("materialized conflict"));
+        std::fs::write(path.join("file"), b"resolved root\n")?;
+        git(&["add", "file"])?;
+        let err = rebase::run(
+            crate::test_repository::open(path)?,
+            rebase::Command::Apply(rebase::Apply {
+                materialize_conflicts: Some(second.clone()),
+                file: Some(first),
+            }),
+        )
+        .expect_err("the child remains eager and conflicts after the root is resolved");
+        assert!(format!("{err:#}").contains("materialized conflict"));
+        let repository = crate::test_repository::open(path)?;
+        let continued = crate::edit::todo::parse(&repository, &std::fs::read(&second)?)?
+            .context("the second continuation parses")?;
+        let Some(crate::edit::rebase::PlanParent::Existing(selected_root)) = continued.plan.selection else {
+            return Err("the completed transplanted root must remain the independent result selection".into());
+        };
+        assert_ne!(selected_root, source_root, "the selected root is the completed copy");
+        assert_eq!(
+            continued.plan.checkout.as_ref().map(|checkout| checkout.target),
+            Some(crate::edit::rebase::PlanParent::Existing(original_head)),
+            "another conflict preserves the original unaffected checkout"
+        );
+        assert!(
+            !continued.plan.eager.is_empty(),
+            "the remaining child still requires replay"
+        );
+        std::fs::write(path.join("file"), b"resolved child\n")?;
+        git(&["add", "file"])?;
+        rebase::run(
+            crate::test_repository::open(path)?,
+            rebase::Command::Apply(rebase::Apply {
+                materialize_conflicts: None,
+                file: Some(second),
+            }),
+        )?;
+        let repository = crate::test_repository::open(path)?;
+        assert_eq!(
+            repository.head_id()?,
+            original_head,
+            "completion restores the unaffected checkout"
+        );
+        assert_eq!(
+            repository
+                .head()?
+                .referent_name()
+                .expect("the original branch is restored"),
+            "refs/heads/main"
+        );
+        assert_eq!(
+            repository.find_reference("refs/heads/destination")?.id(),
+            destination,
+            "fork keeps the destination branch at its original commit"
+        );
+        assert_eq!(
+            repository
+                .find_commit(selected_root)?
+                .parent_ids()
+                .next()
+                .map(gix::Id::detach),
+            Some(destination)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn transplant_rejects_a_bare_repository_before_rewriting_it() -> gix_testtools::Result {
         let source = gix_testtools::scripted_fixture_read_only("rebase_edit.sh")?;
         let fixture = gix_testtools::tempfile::tempdir()?;
         assert!(
@@ -1956,15 +2199,22 @@ mod tests {
         let repository = crate::test_repository::open(fixture.path())?;
         let before = repository.head_id()?.detach();
         let target = repository.rev_parse_single("HEAD~2")?.detach();
-        let err = copy_insert(
+        let err = transplant(
             repository,
-            CopyInsert {
+            Transplant {
+                leaf: Vec::new(),
+                subtree: false,
+                copy: true,
+                move_commits: false,
+                fork: false,
+                insert: true,
+                below: None,
                 materialize_conflicts: None,
-                source: before.to_string().into(),
-                target: target.to_string().into(),
+                root: before.to_string().into(),
+                above: Some(target.to_string().into()),
             },
         )
-        .expect_err("copy-insert requires a checkout");
+        .expect_err("transplant requires a checkout");
         assert!(format!("{err:#}").contains("requires a worktree"));
         assert_eq!(
             crate::test_repository::open(fixture.path())?.head_id()?,
@@ -2042,7 +2292,7 @@ mod tests {
             &["split"],
             &["stash"],
             &["pin"],
-            &["copy-insert"],
+            &["transplant"],
             &["travel"],
             &["reword"],
             &["admin"],

@@ -34,10 +34,8 @@ pub(crate) enum CommandId {
     StartReview,
     FinishReview,
     Squash,
-    CopyInsert,
-    MoveInsert,
-    StackInsert,
-    ForkCommit,
+    SelectTree,
+    SelectSubtree,
     Attach,
     AutoMerge,
     Remerge,
@@ -96,10 +94,8 @@ const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
         (Id::StartReview, Actions, "ar", Action::Review),
         (Id::FinishReview, Actions, "ar", Action::Review),
         (Id::Squash, Actions, "as", Action::Squash),
-        (Id::CopyInsert, Actions, "ay", Action::CopyInsert),
-        (Id::MoveInsert, Actions, "am", Action::MoveInsert),
-        (Id::StackInsert, Actions, "at", Action::StackInsert),
-        (Id::ForkCommit, Actions, "af", Action::ForkCommit),
+        (Id::SelectTree, Actions, "", Action::SelectTree),
+        (Id::SelectSubtree, Actions, "", Action::SelectSubtree),
         (Id::Attach, Actions, "ah", Action::Attach),
         (Id::AutoMerge, Actions, "aM", Action::AutoMerge),
         (Id::Remerge, Actions, "aR", Action::Remerge),
@@ -166,11 +162,8 @@ pub(crate) struct Command {
 }
 
 impl Command {
-    pub(crate) fn key(&self) -> char {
-        self.shortcut
-            .chars()
-            .next_back()
-            .expect("command shortcuts always contain a leaf key")
+    pub(crate) fn key(&self) -> Option<char> {
+        self.shortcut.chars().next_back()
     }
 
     pub(crate) fn search_prefix(&self) -> &'static str {
@@ -350,17 +343,11 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
         if app.changes_focus.is_none() && app.can_squash() {
             push(CommandId::Squash, 1, "squash", true);
         }
-        if app.changes_focus.is_none() && app.can_copy_insert() {
-            push(CommandId::CopyInsert, 1, "copy-insert", true);
+        if app.can_select_tree() {
+            push(CommandId::SelectTree, 1, "select tree", true);
         }
-        if app.changes_focus.is_none() && app.can_move_insert() {
-            push(CommandId::MoveInsert, 1, "move-insert", true);
-        }
-        if app.changes_focus.is_none() && app.can_stack_insert() {
-            push(CommandId::StackInsert, 1, "stack-insert", true);
-        }
-        if app.changes_focus.is_none() && app.can_fork_commit() {
-            push(CommandId::ForkCommit, 1, "fork", true);
+        if app.can_select_subtree() {
+            push(CommandId::SelectSubtree, 1, "Select subtree", true);
         }
         if app.changes_focus.is_none() && app.can_attach() {
             push(CommandId::Attach, 1, "attach", true);
@@ -395,6 +382,7 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
         push(CommandId::Changes, 0, "changes", app.changes_mode.is_some());
     }
 
+    out.retain(|command| app.tree_selection_allows(&command.action));
     let mut positions = [0; 4];
     let mut balanced = out
         .into_iter()
@@ -446,6 +434,73 @@ mod tests {
 
     fn has(commands: &[Command], id: CommandId) -> bool {
         commands.iter().any(|command| command.id == id)
+    }
+
+    #[test]
+    fn subtree_palette_fallback_is_searchable_and_selection_blocks_unrelated_commands() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![row(3, &[2]), row(2, &[1]), row(1, &[])]);
+        let rows = app.start_lane_computation().expect("the source graph can be completed");
+        let (rows, graph, elapsed) = crate::app::compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, elapsed);
+        app.select_commit(id(2));
+        let decorations = Decorations::default();
+        let catalog = commands(&app, &decorations, false);
+        for command_id in [CommandId::SelectTree, CommandId::SelectSubtree] {
+            let command = catalog
+                .iter()
+                .find(|command| command.id == command_id)
+                .expect("an eligible root offers both selection commands");
+            assert_eq!(command.key(), None, "selection commands have no prefix shortcut");
+        }
+        for old_key in ['y', 'm', 't', 'f'] {
+            assert_eq!(
+                shortcut_action(CommandGroup::Actions, old_key),
+                None,
+                "legacy insert and fork shortcuts have been removed"
+            );
+        }
+
+        app.update(Action::SelectTree);
+        let catalog = commands(&app, &decorations, true);
+        assert!(has(&catalog, CommandId::SelectSubtree));
+        assert!(has(&catalog, CommandId::CommitMessage));
+        assert!(has(&catalog, CommandId::VerifySignatures));
+        for blocked in [
+            CommandId::SelectTree,
+            CommandId::Select,
+            CommandId::NewCommit,
+            CommandId::NewEmptyCommit,
+            CommandId::Reword,
+            CommandId::Delete,
+            CommandId::Pin,
+            CommandId::Todo,
+            CommandId::ChecksPass,
+            CommandId::GitNote,
+            CommandId::Alignment,
+            CommandId::RefTree,
+        ] {
+            assert!(
+                !has(&catalog, blocked),
+                "an armed selection hides unrelated mutation and focus commands: {blocked:?}"
+            );
+        }
+        let items = crate::command_picker_items(&catalog);
+        let mut menu = Menu::default();
+        menu.open(&items);
+        menu.paste("Select subtree", &items);
+        assert_eq!(
+            menu.submit_selected(&items),
+            Some(CommandId::SelectSubtree),
+            "the palette provides the Shift-Space fallback while selection is active"
+        );
+        app.update(Action::SelectSubtree);
+        assert!(
+            app.notice()
+                .expect("the selection summary remains visible")
+                .text
+                .contains("Source: 2 commits")
+        );
     }
 
     #[test]
@@ -719,7 +774,14 @@ mod tests {
         let commands = commands(&App::new(1), &Decorations::default(), true);
         let entries = commands
             .iter()
-            .map(|command| (command.group, command.label, command.shortcut, command.key()))
+            .map(|command| {
+                (
+                    command.group,
+                    command.label,
+                    command.shortcut,
+                    command.key().expect("default commands have shortcuts"),
+                )
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(

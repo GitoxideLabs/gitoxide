@@ -146,13 +146,17 @@ without trading responsiveness for metadata that is not visible.
   then exits with an error so resolution cannot be mistaken for completion.
 - `tix stash` saves the index and worktree state in a gix stash associated with
   the `HEAD` commit through the same commit-stash operation as the TUI.
-- `tix copy-insert [--materialize-conflicts [CONTINUE]] C I` exposes the TUI
-  copy-insert action without opening it.
-  Both operands accept Git revisions or unambiguous reverse-hex change-ID
-  prefixes from the default Tix view; `C` is the commit to copy and `I` is the
-  commit above which the copy is inserted. A conflict aborts without changing
-  repository state unless explicitly materialized into the ordinary rebase
-  continuation workflow.
+- `tix transplant ROOT [--leaf TIP ... | --subtree] (--copy | --move)
+  (--fork | --insert) (--above DEST | --below DEST)
+  [--materialize-conflicts[=CONTINUE]]` applies the same tree selection and
+  transplant rules as the TUI. Root alone selects one commit; repeated leaves
+  select inclusive root-to-leaf paths, and `--subtree` selects every eligible
+  descendant. Overlapping paths and duplicate leaves are normalized. Operands
+  accept Git revisions or unambiguous reverse-hex change-ID prefixes from the
+  default Tix view. The copy/move, fork/insert, and placement choices are required.
+  Success prints the transplanted root's commit/change IDs followed by reference
+  rewrites. A conflict changes nothing unless explicitly materialized into the
+  existing editable rebase continuation workflow.
 - `tix admin clear-undo` atomically and idempotently deletes the current
   worktree's undo and redo queue. It does not apply or reverse queued operations,
   change their recorded references, or affect another worktree's queue.
@@ -319,7 +323,7 @@ without trading responsiveness for metadata that is not visible.
   and can be selected, paged to, restored as a selection, copied, and inspected.
   They cannot be reworded, deleted, or signature-verified. During review-base
   selection, only an eligible base boundary remains selectable among hidden rows.
-  They may be used for time travel or as the parent of an independent fork commit.
+  They may be used for time travel or as the anchor of an independent transplant.
   A boundary whose visible descendants contain no merge commit offers the
   history-rebase editor, including when those descendants fork into multiple
   linear stacks.
@@ -631,7 +635,8 @@ without trading responsiveness for metadata that is not visible.
 | --- | --- |
 | `j`/Down, `k`/Up | Move one selectable row or changed path. `J`/Shift-Down moves to an ancestor and `K`/Shift-Up moves to a child. |
 | Mouse/trackpad vertical scroll | Pan history by the coalesced scroll distance without moving its cursor; Shift moves the cursor instead. Mouse input continues to move paths when a changes block is focused. |
-| `h`/`l` | Pan history or the focused changes block horizontally; cycle an ambiguous topological destination while one is pending. |
+| `h`/`l` | Pan history or the focused changes block horizontally; cycle candidate leaves during tree selection or an ambiguous topological destination. |
+| Space / Shift-Space | Start or adjust a tree selection / select the eligible subtree; the palette provides Select subtree on terminals without shifted Space. |
 | `Ctrl-u`/`Ctrl-d` | Move the cursor half a page; Shift pans the viewport half a page. |
 | `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move the cursor a page; Shift pans the viewport a page. Both forms scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
@@ -895,7 +900,7 @@ paging retains priority, and undo/redo still ignore key-repeat events.
   source or HEAD pin, and leave destination pins intact. Successful travel
   consumes a destination pin and applies the same source-pin reconciliation for
   ancestor, descendant, and sideways moves. Conflict acceptance, history-rebase
-  checkout, and automatic fork travel use this same primitive. Successful travel
+  checkout, and paste checkout use this same primitive. Successful travel
   preserves the selected row, refreshes history directly, and invalidates
   worktree status.
 - Active review commits define review trees containing all of their descendants.
@@ -1133,22 +1138,6 @@ views.
   branches, custom refs, direct tix pins, and a detached `HEAD`, while excluding
   tags and remote-tracking refs. Checked-out affected worktrees are preflighted;
   inaccessible or conflicting affected worktrees abort safely.
-
-### Fork commits
-
-- `a f` creates an independent child of any selected commit, including a hidden
-  boundary or merge commit. It requires completed history and a live,
-  conflict-free worktree, but unlike `a w` it is not restricted by descendants
-  because it rewrites none of them. It is unavailable for unborn history.
-- Fork preparation reuses the new-commit editor, candidate-tree, identity,
-  enrichment, and signing rules. Empty-delta children are allowed so historical
-  commits can be forked without borrowing the current worktree's changes.
-- Saving writes only the new commit and a temporary direct
-  `refs/worktree/tix/pins/*` ref; existing refs, descendants, indexes, and
-  worktrees do not move during creation.
-- Tix immediately time-travels to the new fork. A successful checkout consumes
-  its temporary pin and reconciles the departed `HEAD` through the standard pin
-  primitive. If checkout fails, the fork remains pinned and visible.
 
 ### Amend, spill, and split
 
@@ -1466,8 +1455,9 @@ views.
   Any edit that rewrites the current worktree's checked-out ancestry eagerly
   cherry-picks that affected path before committing the operation. The edited
   root of a direct amend or spill already has its final tree and does not receive
-  a redundant worktree transition. Descendants on unrelated branches and in
-  other worktrees remain lazy unless their delta is empty and their parent is
+  a redundant worktree transition. Transplants additionally replay every selected
+  path and required pending destination ancestry. Other affected descendants on
+  unrelated branches and in other worktrees remain lazy unless their delta is empty and their parent is
   final, or the metadata-only rewrite rule below applies. A successful repeated
   rebase clears the marker through its checkout destination.
   On conflict, `tix-rebase-parent` identifies the original base and later descendants
@@ -1698,6 +1688,80 @@ views.
   the file or removing the `tix-rebase-state-v2` comment cancels. Continuation
   todos likewise state that saving unchanged continues the materialized rebase.
 
+### Tree selection and transplants
+
+- Space fixes an inclusive source root, initially selecting only that commit.
+  Sources are editable ordinary commits with exactly one parent. Hidden
+  boundaries, ordinary merges, AutoMerges, and unresolved conflict placeholders
+  stop traversal. Pending ordinary commits remain selectable. Discovery uses the
+  complete editable projection, including off-screen commits; it never bridges
+  a forbidden node by contracting it out of navigation.
+- Shift-Space selects the entire eligible subtree and resets adjusted endpoints
+  to its original tips. The command palette also offers **Select subtree**;
+  the shifted shortcut is advertised only with enhanced keyboard support.
+- Before leaf focus, navigation browses with the root fixed. Space on an
+  unselected eligible commit adds its root-to-cursor path using the first
+  candidate tip containing it in display order; Space on selected membership
+  does nothing. Candidate leaf slots retain their original tip, current
+  endpoint, and inclusion state.
+- The first `h` or `l` focuses the first candidate leaf; subsequent presses cycle
+  all candidate slots, including unselected ones, restoring each remembered
+  endpoint. `j`/`k` retain row navigation and `J`/`K` retain topological navigation.
+  While leaf-focused, movement stays on that candidate's root-to-original-tip
+  path. Selected slots change membership live; unselected slots change only the
+  preview. Space toggles the focused slot. Effective membership is the root plus
+  all included paths; effective leaves discard overlapping ancestor endpoints.
+- Enter advances through separate source, Copy/Move, Fork/Insert, destination,
+  Above/Below, and final confirmation stages. Choices default to Copy, Fork,
+  and Above when available. Multiple effective leaves permit only Fork. Each
+  Enter confirms exactly one stage, and a distinct final Enter applies the
+  rebase. Space and confirmation ignore key repeats/releases. Escape aborts
+  everything, including nested menus and topological choices. No external todo
+  editor is offered for the initial transplant.
+- A dedicated selection gutter distinguishes root, selected paths, preview
+  paths, numbered endpoints, and destination independently of the ordinary
+  cursor and existing graph/status symbols. A persistent summary names the
+  root, commit/leaf counts, operation, destination, and placement. Compressed
+  history temporarily expands and is restored on exit. Resize and redraw retain
+  selection. Topology or reference changes invalidate it with an explanation;
+  unrelated mutations and paste cannot bypass it through the command palette.
+  Idle state contains detached IDs and cached membership masks; navigation and
+  drawing perform no patch hashing or tree replay. Source discovery indexes
+  shared paths once; preview-only movement leaves selected membership cached.
+  Descendant scope traversal visits each node and edge once per walk.
+- Copy creates new occurrences without source refs; Move retains the selected
+  internal branches and moves their refs with them. Excluded source descendants
+  reconnect around the entire removed selection to the nearest unselected old
+  ancestor. Fork leaves destination children and refs unchanged. Insert requires
+  one effective leaf and advances applicable destination-tip refs to that leaf.
+- Above makes the destination the source root's parent; Insert reconnects its
+  former children above the selected leaf. Below uses the destination's parent;
+  Insert reconnects only the destination above the leaf and preserves its
+  siblings. Below is unavailable at hidden boundaries, parentless commits, or
+  merge destinations. Above a hidden boundary adds independent children while
+  preserving hidden history and its refs.
+- Destinations inside the selection, resulting cycles, and unsupported affected
+  merges are rejected. Ancestor and excluded-descendant destinations are valid
+  when the final graph is acyclic. An unchanged graph/ref result is a no-op.
+  AutoMerge dependents continue through the existing automatic maintenance.
+- All selected commits replay eagerly even when HEAD is elsewhere. Pending
+  destination ancestors replay in the same transaction before selected commits;
+  unrelated affected descendants remain lazy. A pending read-only anchor is
+  rejected. Source refs follow moved originals, unreferenced result leaves are
+  pinned, and HEAD stays on its logical original or mapped successor. Attachment
+  survives when its branch still points there; otherwise HEAD detaches while
+  preserving the advanced branch through existing pin rules. Successful UI/CLI
+  selection identifies the transplanted root independently of HEAD.
+- Final apply opens a fresh repository and revalidates the frozen references,
+  source, destination, and HEAD. Loading, planning, and replay run in the progress
+  worker, showing **Preparing rebase** before replay starts. The existing executor prepares changes,
+  preflights affected worktree/index transitions, and publishes refs atomically.
+  Checkout blockers preserve refs and worktrees. Conflicts use the existing
+  materialize-or-abort flow; accepted continuations retain eager replay, result
+  selection, and an unaffected existing checkout by produced commit ID so todo
+  reordering is safe. Dropped commits stop requiring eager replay; a dropped
+  result selection falls back to checkout.
+
 ### Commit and action shortcuts
 
 - `a` toggles a two-line shortcut group with commit operations above general
@@ -1713,11 +1777,7 @@ views.
   `a b` rebases an eligible hidden base,
   `a u` rebases it onto the newer hidden branch tip when available, `a r` starts
   or finishes a review, `a s` squashes the selected commit, `a Shift-T` stashes or
-  restores changes at `@`, `a y` starts copy-insert from the selected commit,
-  `a m` starts move-insert from selected `HEAD`, `a t` starts
-  stack-insert for the linear ancestry from the selected commit through `HEAD`,
-  `a f` creates and travels to a standalone child of the selected commit, and
-  `a h` attaches the remembered branch at detached `HEAD` when available.
+  restores changes at `@`, and `a h` attaches the remembered branch at detached `HEAD` when available.
   `a Shift-M` creates or extends AutoMerge at HEAD, or adds a selected nonancestor
   commit to HEAD. `a Shift-R` remerges it, `a x` removes
   the selected input from an AutoMerge, and `a Shift-X` removes an input from the
@@ -1760,53 +1820,20 @@ views.
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
   forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
-- Copy-, move-, and stack-insert, including bracketed paste, accept displayed
-  hidden boundaries as read-only targets. An insertion may add a child there but
-  does not rewrite the hidden target or its existing descendants, and leaves
-  their refs unchanged. The sole target-ref exception is an attached current
-  `HEAD` branch, which advances to a newly copied child and remains attached. A
-  moved stack cannot use a read-only target that descends from that stack.
-- Copy-insert requires a non-root, single-parent selected source. `a y` limits
-  navigation to valid insertion targets; Enter copies the source above the
-  selected target and Escape cancels. `tix copy-insert C I` accepts any
-  resolvable source `C`. It inserts
-  another occurrence of its change above the target without removing the source
-  occurrence, including when the target is the source's current parent. A copy
-  of an active review commit is ordinary and does not share its review resources.
-  When inserted away from the current `HEAD`, the new copy becomes detached
-  `HEAD`; the branch checked out before the operation remains visible through
-  the ordinary HEAD pin. At an ordinary visible current `HEAD`, only its attached
-  branch advances to the copy and remains attached; every other ref at the target
-  stays unchanged. If a visible target is an ancestor of the source, that source
-  occurrence is retained in its original logical position while its branch
-  follows the necessary rewrite. Git notes are copied to the new occurrence.
-  Copy-insert uses the history-todo conflict and continuation rules.
-- Bracketed paste in the history view trims surrounding whitespace and accepts
-  one uniquely resolvable hexadecimal object-ID prefix or one full reverse-hex
-  change ID present in the Tix view. If it identifies one commit, its change is
-  copy-inserted above the commit at the cursor using the same progress, conflict,
-  checkout, and undo behavior as `a y`. Any selected hidden boundary is a valid
-  read-only target. An ambiguous change ID switches the history view to commit
-  hashes, selects the closest matching sibling, and prompts the user to press
-  `x` to switch siblings and copy/paste the hash instead. Other text, ambiguous
-  or missing object IDs, missing change IDs, non-commit objects, and unavailable
-  targets produce an attention message without changing the repository.
-- Move-insert requires selecting a non-root, single-parent `HEAD`, then limits
-  navigation to valid insertion targets; Enter applies and Escape cancels. It removes `HEAD` from
-  its old position, reconnects its former children to its parent, inserts its
-  rewritten change above the selected target, and for visible targets reparents
-  every former direct child of the target above it. A visible target may be an
-  ancestor, descendant, or in unrelated history; selecting `HEAD` or its current
-  parent is a no-op. An unchanged merge target is permitted, but any move that
-  would rewrite an ordinary merge is unavailable. Mutable refs, pins, Git notes,
-  enrichments, review resources, and attached or detached checkout state follow
-  their rewritten commits.
-  Move-insert uses the history-todo conflict and continuation rules.
-- Stack-insert requires the selected commit to be an inclusive base in the linear
-  ancestry of `HEAD`. It then limits navigation to eligible insertion targets;
-  `<enter>` moves the complete inclusive base-through-`HEAD` stack as a unit above the selected
-  target, and Escape cancels. The stack follows the same eligibility, rewrite,
-  no-op, metadata, checkout, and conflict rules as move-insert.
+- Bracketed paste in history trims whitespace and accepts one uniquely
+  resolvable hexadecimal commit-ID prefix or one full reverse-hex change ID in
+  the Tix view. It copies that single-parent commit above the cursor through the
+  shared transplant planner. A hidden boundary is a read-only anchor: its
+  existing descendants and refs stay unchanged. An ambiguous change ID switches
+  to commit IDs, selects the closest matching sibling, and offers `x` to cycle
+  siblings. Invalid or unavailable operands produce an attention message.
+- Paste preserves its checkout policy: the copied commit becomes HEAD. Away
+  from current HEAD, checkout detaches and retains the departed branch through
+  its ordinary HEAD pin. At attached HEAD, only the attached branch advances to
+  the copy, including at a hidden anchor. Other refs at the destination stay
+  put. Copies retain Git notes and change enrichment but do not duplicate active
+  review resources. Paste uses ordinary progress, conflict, continuation, and
+  undo handling, and is blocked while a tree selection is active.
 - `@` invokes time travel directly, outside the group. Invoking it leaves an
   already expanded actions group open.
 - Commit and action shortcuts keep the actions group open. Navigation or
