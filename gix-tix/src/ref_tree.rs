@@ -868,7 +868,7 @@ fn pinnable_kind(kind: DecorationKind) -> Option<DecorationKind> {
         | DecorationKind::WorktreeBranch
         | DecorationKind::HeadPinBranch => Some(DecorationKind::Local),
         DecorationKind::Tag | DecorationKind::AnnotatedTag => Some(DecorationKind::Tag),
-        DecorationKind::Remote | DecorationKind::Review => Some(kind),
+        DecorationKind::Remote | DecorationKind::Review | DecorationKind::WorktreeDetached => Some(kind),
         _ => None,
     }
 }
@@ -913,6 +913,14 @@ pub(crate) fn pin_references_reporting(
             continue;
         }
         names.push(name);
+    }
+    if kinds.contains(&DecorationKind::WorktreeDetached) {
+        names.extend(
+            crate::history::worktree_checkouts(repository)
+                .into_iter()
+                .filter(|worktree| !worktree.is_current && worktree.is_detached && worktree.id == id)
+                .map(|worktree| worktree.head_reference),
+        );
     }
     names.sort();
     names.dedup();
@@ -2127,6 +2135,7 @@ mod tests {
         });
         refs.worktrees.push(crate::history::WorktreeCheckout {
             id: id(3),
+            head_reference: "main-worktree/HEAD".try_into().expect("valid"),
             label_id: id(6),
             checkout_name: "main-wt".into(),
             reference: Some("refs/heads/main".try_into().expect("valid")),
@@ -2135,6 +2144,7 @@ mod tests {
         });
         refs.worktrees.push(crate::history::WorktreeCheckout {
             id: id(4),
+            head_reference: "worktrees/foreign-wt/HEAD".try_into().expect("valid"),
             label_id: id(6),
             checkout_name: "foreign-wt".into(),
             reference: Some("refs/heads/main".try_into().expect("valid")),
@@ -2524,6 +2534,152 @@ mod tests {
             Input::Handled,
             "p on a synthetic node stays in the reference tree"
         );
+    }
+
+    #[test]
+    fn enter_and_p_pin_foreign_detached_worktrees() {
+        let (graph, refs, mut decorations) = fixture();
+        for kind in [
+            DecorationKind::WorktreeDetached,
+            DecorationKind::CurrentWorktreeDetached,
+        ] {
+            decorations.get_mut(&id(6)).expect("main is decorated")[0] = Decoration {
+                name: "experiment".into(),
+                kind,
+            };
+            let mut tree = Tree::default();
+            tree.rebuild(&graph, &refs, &decorations);
+            assert!(tree.toggle(), "the reference tree opens at HEAD");
+            for key in [KeyCode::Enter, KeyCode::Char('p')] {
+                assert_eq!(
+                    tree.handle_key(KeyEvent::new(key, KeyModifiers::NONE)),
+                    if kind == DecorationKind::WorktreeDetached {
+                        Input::PinReferences {
+                            id: id(6),
+                            kinds: vec![DecorationKind::WorktreeDetached],
+                        }
+                    } else {
+                        Input::Handled
+                    },
+                    "{key:?} pins the foreign worktree, while the current detached checkout stays inert"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pin_detached_worktrees_tracks_physical_heads_and_reuses_each_pin() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let main = crate::test_repository::open(fixture.path())?;
+        let commit_id = main.rev_parse_single("main~2")?.detach();
+        let remembered_commit_id = main.head_id()?.detach();
+        let interrupt = AtomicBool::default();
+        let checkouts = fixture.path().join("checkouts");
+        std::fs::create_dir(&checkouts)?;
+        let git = |path: &std::path::Path, args: &[&str]| -> gix_testtools::Result {
+            let output = std::process::Command::new("git")
+                .current_dir(path)
+                .args(args)
+                .output()?;
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(())
+        };
+        for name in ["source", "main", "second"] {
+            main.create_worktree(
+                checkouts.join(name),
+                gix::worktree::create::Head::Detached(commit_id),
+                gix::progress::Discard,
+                &interrupt,
+            )?;
+        }
+        git(fixture.path(), &["switch", "--detach", &commit_id.to_string()])?;
+        let source = crate::test_repository::open(checkouts.join("source"))?;
+        let linked = crate::test_repository::open(checkouts.join("main"))?;
+        crate::edit::time_travel::create_named_pin(
+            &linked,
+            crate::history::HEAD_PIN_NAME.as_bstr().try_into()?,
+            gix::refs::Target::Symbolic("refs/heads/main".try_into()?),
+            remembered_commit_id,
+            "remember the branch separately from the worktree HEAD",
+        )?;
+        let linked_pins = crate::history::all_pins(&linked)?;
+
+        let (pins, changes) = pin_references_reporting(&source, commit_id, &[DecorationKind::WorktreeDetached])?;
+        assert_eq!(
+            pins.len(),
+            3,
+            "every foreign detached worktree at this commit gets a pin"
+        );
+        assert_eq!(changes.len(), 3, "each new pin is recorded for undo");
+        assert_eq!(
+            pins.iter()
+                .filter_map(|pin| pin.target.try_name().map(gix::refs::FullNameRef::as_bstr))
+                .collect::<Vec<_>>(),
+            ["main-worktree/HEAD", "worktrees/main/HEAD", "worktrees/second/HEAD"],
+            "main and linked worktrees remain distinct even when a linked worktree is named main"
+        );
+        assert!(
+            pins.iter().all(|pin| pin.id == commit_id),
+            "pins use physical HEAD rather than the remembered branch"
+        );
+        let (reused, changes) = pin_references_reporting(&source, commit_id, &[DecorationKind::WorktreeDetached])?;
+        assert_eq!(reused, pins, "repeated pinning reuses each worktree target");
+        assert!(changes.is_empty(), "reused pins create no additional undo changes");
+        assert!(
+            crate::history::all_pins(&main)?.is_empty(),
+            "pins stay private to the source"
+        );
+        assert_eq!(
+            crate::history::all_pins(&linked)?,
+            linked_pins,
+            "target pins stay unchanged"
+        );
+
+        for (name, pin) in ["", "main", "second"].into_iter().zip(&pins) {
+            let path = if name.is_empty() {
+                fixture.path().to_owned()
+            } else {
+                checkouts.join(name)
+            };
+            git(&path, &["commit", "--allow-empty", "-m", &format!("advance {name}")])?;
+            if name == "main" {
+                git(&path, &["switch", "main"])?;
+                git(&path, &["commit", "--allow-empty", "-m", "advance attached worktree"])?;
+            }
+            let worktree = crate::test_repository::open(&path)?;
+            let advanced_commit_id = worktree.head_id()?.detach();
+            let mut reference = source.find_reference(pin.name.as_ref())?;
+            assert_eq!(
+                reference.target().into_owned(),
+                pin.target,
+                "the pin keeps its HEAD target"
+            );
+            assert_eq!(
+                reference.peel_to_id()?,
+                advanced_commit_id,
+                "the pin follows external HEAD changes"
+            );
+            assert!(
+                crate::history::snapshot(&source, &[], &[], false)?
+                    .view_tips
+                    .contains(&advanced_commit_id),
+                "the updated worktree tip enters source history"
+            );
+        }
+        assert!(
+            pin_references(&source, commit_id, &[DecorationKind::WorktreeDetached])?.is_empty(),
+            "a stale selection creates no pin after the foreign heads move away"
+        );
+        assert_eq!(
+            source.head_id()?,
+            commit_id,
+            "pinning never changes the source checkout"
+        );
+        Ok(())
     }
 
     #[test]

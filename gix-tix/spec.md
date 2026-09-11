@@ -589,12 +589,18 @@ without trading responsiveness for metadata that is not visible.
   map uniquely through a named remote's fetch refspecs; it deletes every resolved
   remote reference, grouped into one Git push per remote. Pushes continue after
   individual failures and run with the terminal suspended for output and authentication.
-- `p` or `<enter>` on a node with visible references creates or reuses symbolic
-  current-worktree pins for every displayed local branch, tag, remote-tracking
-  reference, or review reference at that commit. It returns to history and
-  selects the pinned commit in the first refreshed frame, with its cached
-  ancestry and hidden merge-base boundary already projected. Synthetic nodes, raw tips, detached-worktree labels,
-  and stash associations have no pin action.
+- `p` or `<enter>` on a node with visible references or foreign detached-worktree
+  labels creates or reuses symbolic current-worktree pins for every displayed
+  local branch, tag, remote-tracking reference, review reference, or foreign
+  detached worktree at that commit. Detached-worktree pins target
+  `main-worktree/HEAD` or `worktrees/<admin-id>/HEAD` and follow that worktree's
+  physical `HEAD` through later commits and branch checkouts, including changes
+  made outside Tix. Multiple worktrees at one commit retain distinct pins;
+  attached worktree branch labels continue to pin their branches.
+  The action returns to history and selects the pinned commit in the first
+  refreshed frame, with its cached ancestry and hidden merge-base boundary
+  already projected. Synthetic nodes, raw tips, the current detached-worktree
+  marker itself, and stash associations have no pin action.
 - Worktree branch labels keep the history view's `@branch`, `branch@`, and
   `★branch` forms at the branch's actual tip. A detached current worktree is
   additionally shown with one `📌`; a detached foreign worktree instead uses
