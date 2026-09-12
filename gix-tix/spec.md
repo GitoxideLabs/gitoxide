@@ -1122,6 +1122,10 @@ views.
   an edited commit whose tree and parent are already final needs no replay marker.
   Mutable refs follow every rewritten commit; tags and remote-tracking refs remain
   unchanged.
+- Rewording preserves staged and unstaged changes. A metadata-only rewrite does
+  not reset the index of any worktree whose checked-out tree is unchanged,
+  including linked worktrees and empty rewritten descendants. Index entries,
+  flags, and staged-only files are retained exactly.
 - Every commit object actually rewritten by an edit receives the repository's
   current committer identity and date immediately before signing and writing.
   Edited committer fields cannot override it; untouched commit objects retain
