@@ -106,6 +106,22 @@ Follow "purposeful conventional commits" style:
 
 ### Test Best Practices
 
+- Tests must be isolated from the developer's checkout, other worktrees, shared
+  Git metadata, and user configuration. Use disposable repositories provided by
+  `gix-testtools`, such as `scripted_fixture_writable()`; never mutate a shared
+  read-only fixture or use the source checkout as a test repository.
+- Git invocations in test code must go through `gix_testtools::git()` or fixture
+  scripts executed by `gix-testtools`. Do not spawn Git directly with
+  `Command::new("git")` or ad hoc subprocess wrappers. If a test needs unsupported
+  command options, extend the shared isolated helper instead of bypassing it.
+  The `run_git()` and `invoke_bash()` helpers do not provide equivalent
+  isolation and must not be used as substitutes.
+- Setting a subprocess's working directory or passing `git -C` is not isolation:
+  inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, or
+  object-directory variables can redirect operations outside the fixture. Tests
+  that exercise such overrides must scope them to disposable test repositories.
+  Open repositories through the crate's isolated test helper or isolated `gix`
+  options, with only test-specific configuration overrides.
 - Run tests before making changes to understand existing issues
 - Use `GIX_TEST_IGNORE_ARCHIVES=1` when testing on macOS/Windows
 - Journey tests validate CLI behavior end-to-end
