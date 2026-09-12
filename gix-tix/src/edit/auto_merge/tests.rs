@@ -59,6 +59,63 @@ fn apply(repo: &gix::Repository, selected_commit_id: ObjectId, change: Change) -
 }
 
 #[test]
+fn ordinary_merge_ancestry_visits_every_parent_until_an_auto_merge_boundary() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let main_commit_id = input(&repo, "main")?.commit_id;
+    let a_commit_id = input(&repo, "A")?.commit_id;
+    let mut side = repo.find_commit(input(&repo, "C")?.commit_id)?.decode()?.into_owned()?;
+    side.extra_headers
+        .push(("tix-rebase-parent".into(), main_commit_id.to_string().into()));
+    let side_commit_id = repo.write_object(&side)?.detach();
+    let mut ordinary = repo.find_commit(a_commit_id)?.decode()?.into_owned()?;
+    ordinary.parents = [a_commit_id, side_commit_id].into_iter().collect();
+    ordinary.message = "merge branches".into();
+    let ordinary_commit_id = repo.write_object(&ordinary)?.detach();
+    let mut automatic = ordinary;
+    automatic.parents = [ordinary_commit_id, a_commit_id].into_iter().collect();
+    Definition {
+        inputs: [ordinary_commit_id, a_commit_id]
+            .into_iter()
+            .map(|commit_id| Input {
+                source: InputSource::Change(commit_id.into()),
+                commit_id,
+                muted: false,
+            })
+            .collect(),
+    }
+    .store(&mut automatic);
+    let automatic_commit_id = repo.write_object(&automatic)?.detach();
+    let graph = crate::history::HistoryGraph::for_commits(
+        &repo,
+        &[
+            main_commit_id,
+            a_commit_id,
+            side_commit_id,
+            ordinary_commit_id,
+            automatic_commit_id,
+        ],
+    )?;
+    assert_eq!(
+        checkout_path(&repo, &graph, Some(ordinary_commit_id))?,
+        HashSet::from([ordinary_commit_id, a_commit_id, side_commit_id, main_commit_id]),
+        "every ordinary parent is required and common ancestors are visited once"
+    );
+    assert_eq!(
+        checkout_path(&repo, &graph, Some(automatic_commit_id))?,
+        HashSet::from([automatic_commit_id]),
+        "AutoMerge input trees remain optional"
+    );
+    let mut affected = vec![ordinary_commit_id];
+    let preparation = prepare(&repo, &graph, &mut affected, Some(automatic_commit_id), None)?;
+    assert!(
+        preparation.optional.contains(&side_commit_id),
+        "a pending secondary parent is replayed before its ordinary merge input"
+    );
+    Ok(())
+}
+
+#[test]
 fn deleting_a_merge_above_head_preserves_the_checkout_and_reparents_descendants() -> gix_testtools::Result {
     let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
     let repo = crate::test_repository::open(fixture.path())?;
@@ -421,7 +478,7 @@ fn todos_place_change_inputs_before_merging_and_remove_dropped_or_folded_identit
         let base_commit_id = repo.write_object(&base)?.detach();
         let mut steps = vec![rebase::PlanStep {
             commit: rebase::PlanCommit::Pick(merge_commit_id),
-            parent: rebase::PlanParent::Existing(main),
+            parents: vec![rebase::PlanParent::Existing(main)],
             squash: Vec::new(),
         }];
         let mut scope = vec![merge_commit_id];
@@ -444,12 +501,12 @@ fn todos_place_change_inputs_before_merging_and_remove_dropped_or_folded_identit
                 } else {
                     rebase::PlanCommit::Copy(c.commit_id)
                 },
-                parent: rebase::PlanParent::Existing(base_commit_id),
+                parents: vec![rebase::PlanParent::Existing(base_commit_id)],
                 squash: Vec::new(),
             }),
             "squash" | "fixup" | "amend" => steps.push(rebase::PlanStep {
                 commit: rebase::PlanCommit::Pick(a.commit_id),
-                parent: rebase::PlanParent::Existing(main),
+                parents: vec![rebase::PlanParent::Existing(main)],
                 squash: vec![rebase::PlanFold {
                     commit_id: c.commit_id,
                     message: fold_message.expect("fold actions have a message mode"),
@@ -663,7 +720,7 @@ fn nested_change_inputs_keep_conflicting_replays_muted_and_retained_by_parents()
             expected_refs: Vec::new(),
             checkout: None,
             steps: vec![rebase::PlanStep {
-                parent: rebase::PlanParent::Existing(base_commit_id),
+                parents: vec![rebase::PlanParent::Existing(base_commit_id)],
                 commit: rebase::PlanCommit::Pick(c.commit_id),
                 squash: Vec::new(),
             }],
@@ -975,6 +1032,64 @@ fn changed_tree(
 }
 
 #[test]
+fn travel_collapse_onto_a_hidden_pending_input_preserves_the_boundary() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let mut pending = repo.find_commit(input(&repo, "A")?.commit_id)?.decode()?.into_owned()?;
+    pending
+        .extra_headers
+        .push(("tix-rebase-parent".into(), pending.parents[0].to_string().into()));
+    let pending_commit_id = repo.write_object(&pending)?.detach();
+    let tag: FullName = "refs/tags/fixed".try_into()?;
+    repo.reference(
+        tag.clone(),
+        pending_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain a fixed pending input",
+    )?;
+    let mut automatic = candidate(&repo, &["A", "C"])?;
+    automatic.parents[0] = pending_commit_id;
+    let mut definition = Definition::from_commit(&automatic)?.context("the candidate has its input recipe")?;
+    definition.inputs[0] = Input {
+        source: InputSource::Reference(tag.clone()),
+        commit_id: pending_commit_id,
+        muted: true,
+    };
+    definition.store(&mut automatic);
+    let automatic_commit_id = repo.write_object(&automatic)?.detach();
+    repo.reference(
+        "refs/heads/combined",
+        automatic_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain the collapsing merge",
+    )?;
+    repo.find_reference(input(&repo, "C")?.reference.as_ref())?.delete()?;
+    let mut graph = crate::edit::loaded_graph(&repo)?;
+    graph.switch_view(&[automatic_commit_id], &[pending_commit_id]);
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        automatic_commit_id,
+        &graph,
+        &[],
+        &[],
+        Default::default(),
+    )?
+    .complete()?;
+    assert_eq!(
+        repo.head_id()?,
+        pending_commit_id,
+        "collapse checks out the exact hidden input without replaying it"
+    );
+    assert_eq!(
+        repo.find_reference(tag.as_ref())?.id(),
+        pending_commit_id,
+        "the fixed input reference remains unchanged"
+    );
+    Ok(())
+}
+
+#[test]
 fn travel_after_merge_collapse_restores_the_departure_and_keeps_undo_consistent() -> gix_testtools::Result {
     for accept in [None, Some(false), Some(true)] {
         let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
@@ -1122,6 +1237,117 @@ fn travel_after_merge_collapse_restores_the_departure_and_keeps_undo_consistent(
                 repo.head_id()?,
                 pending_commit_id,
                 "undo restores the original pending departure"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn travel_refreshes_every_auto_merge_parent_of_an_ordinary_merge() -> gix_testtools::Result {
+    for nested in [false, true] {
+        let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let main_commit_id = input(&repo, "main")?.commit_id;
+        super::super::time_travel::perform(
+            fixture.path(),
+            false,
+            main_commit_id,
+            &graph(&repo)?,
+            &[],
+            &[],
+            Default::default(),
+        )?
+        .complete()?;
+        let mut automatic_commit_ids = Vec::new();
+        for (name, inputs) in [
+            ("left", ["main", "A"]),
+            ("right", [if nested { "left" } else { "main" }, "C"]),
+        ] {
+            let mut commit = candidate(&repo, &inputs)?;
+            rebuild(
+                &repo,
+                &mut commit,
+                &mut References::default(),
+                &HashMap::new(),
+                None,
+                true,
+            )?;
+            let commit_id = repo.write_object(&commit)?.detach();
+            repo.reference(
+                format!("refs/heads/{name}"),
+                commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "retain an AutoMerge input",
+            )?;
+            automatic_commit_ids.push(commit_id);
+        }
+        let mut combined = repo.merge_commits(
+            automatic_commit_ids[0],
+            automatic_commit_ids[1],
+            Default::default(),
+            gix::merge::commit::Options::from(repo.tree_merge_options()?),
+        )?;
+        assert!(
+            !combined
+                .tree_merge
+                .has_unresolved_conflicts(gix::merge::tree::TreatAsUnresolved::git()),
+            "the two AutoMerge trees combine cleanly"
+        );
+        let mut ordinary = repo.find_commit(main_commit_id)?.decode()?.into_owned()?;
+        ordinary.tree = combined.tree_merge.tree.write()?.detach();
+        ordinary.parents = automatic_commit_ids.iter().copied().collect();
+        ordinary.message = "ordinary merge of live AutoMerges\n".into();
+        let ordinary_commit_id = repo.write_object(&ordinary)?.detach();
+        repo.reference(
+            "refs/heads/ordinary",
+            ordinary_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "retain the ordinary merge",
+        )?;
+        for (name, path) in [("A", "left-update"), ("C", "right-update")] {
+            let input = input(&repo, name)?;
+            let mut advanced = changed_tree(
+                &repo,
+                repo.find_commit(input.commit_id)?.decode()?.into_owned()?,
+                path,
+                "external update\n",
+            )?;
+            advanced.parents = [input.commit_id].into_iter().collect();
+            repo.reference(
+                input.reference,
+                repo.write_object(&advanced)?.detach(),
+                gix::refs::transaction::PreviousValue::Any,
+                "advance the external input",
+            )?;
+        }
+        let mut rebased = Vec::new();
+        super::super::time_travel::perform_reporting_rebased(
+            fixture.path(),
+            false,
+            ordinary_commit_id,
+            &graph(&repo)?,
+            &[],
+            &[],
+            Default::default(),
+            |commit_id| rebased.push(commit_id),
+        )?
+        .complete()?;
+        let result = repo.head_commit()?;
+        for path in ["left-update", "right-update"] {
+            assert!(
+                result.tree()?.find_entry(path).is_some(),
+                "travel refreshes {path} through each AutoMerge parent (nested: {nested})"
+            );
+        }
+        for automatic_commit_id in automatic_commit_ids {
+            assert_eq!(
+                rebased
+                    .iter()
+                    .filter(|commit_id| **commit_id == automatic_commit_id)
+                    .count(),
+                1,
+                "each required AutoMerge is refreshed once, including shared nested dependencies"
             );
         }
     }
@@ -1324,17 +1550,17 @@ fn todos_resolve_inputs_from_later_fork_sections() -> gix_testtools::Result {
         scope,
         steps: vec![
             rebase::PlanStep {
-                parent: rebase::PlanParent::Existing(base_commit_id),
+                parents: vec![rebase::PlanParent::Existing(base_commit_id)],
                 commit: rebase::PlanCommit::Pick(a.commit_id),
                 squash: Vec::new(),
             },
             rebase::PlanStep {
-                parent: rebase::PlanParent::Step(0),
+                parents: vec![rebase::PlanParent::Step(0)],
                 commit: rebase::PlanCommit::Pick(merge_commit_id),
                 squash: Vec::new(),
             },
             rebase::PlanStep {
-                parent: rebase::PlanParent::Existing(base_commit_id),
+                parents: vec![rebase::PlanParent::Existing(base_commit_id)],
                 commit: rebase::PlanCommit::Pick(c.commit_id),
                 squash: Vec::new(),
             },
@@ -1402,12 +1628,12 @@ fn todo_inputs_keep_explicit_existing_ref_destinations() -> gix_testtools::Resul
         expected_refs,
         steps: vec![
             rebase::PlanStep {
-                parent: rebase::PlanParent::Existing(c.commit_id),
+                parents: vec![rebase::PlanParent::Existing(c.commit_id)],
                 commit: rebase::PlanCommit::Pick(a.commit_id),
                 squash: Vec::new(),
             },
             rebase::PlanStep {
-                parent: rebase::PlanParent::Step(0),
+                parents: vec![rebase::PlanParent::Step(0)],
                 commit: rebase::PlanCommit::Pick(merge_commit_id),
                 squash: Vec::new(),
             },
@@ -1454,12 +1680,12 @@ fn a_todo_conflict_continuation_maintains_auto_merge_descendants() -> gix_testto
         scope,
         steps: vec![
             rebase::PlanStep {
-                parent: rebase::PlanParent::Existing(input(&repo, "B")?.commit_id),
+                parents: vec![rebase::PlanParent::Existing(input(&repo, "B")?.commit_id)],
                 commit: rebase::PlanCommit::Pick(a.commit_id),
                 squash: Vec::new(),
             },
             rebase::PlanStep {
-                parent: rebase::PlanParent::Step(0),
+                parents: vec![rebase::PlanParent::Step(0)],
                 commit: rebase::PlanCommit::Pick(merge_commit_id),
                 squash: Vec::new(),
             },
@@ -2117,7 +2343,7 @@ fn a_plan_maintains_offscreen_merges_and_replays_pending_inputs_outside_its_scop
         base: main,
         scope: vec![a.commit_id],
         steps: vec![rebase::PlanStep {
-            parent: rebase::PlanParent::Existing(base_commit_id),
+            parents: vec![rebase::PlanParent::Existing(base_commit_id)],
             commit: rebase::PlanCommit::Pick(a.commit_id),
             squash: Vec::new(),
         }],

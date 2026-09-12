@@ -490,7 +490,7 @@ pub(crate) struct Preparation {
     pub eager: HashSet<ObjectId>,
 }
 
-/// Only the checkout's ordinary first-parent path requires conflict materialization.
+/// The checkout's ordinary ancestry requires conflict materialization through every parent.
 /// Inputs beneath an AutoMerge can instead remain pending and be muted.
 pub(crate) fn checkout_path(
     repo: &gix::Repository,
@@ -498,16 +498,18 @@ pub(crate) fn checkout_path(
     checkout: Option<ObjectId>,
 ) -> Result<HashSet<ObjectId>> {
     let mut path = HashSet::new();
-    let mut cursor = checkout;
-    while let Some(commit_id) = cursor {
-        if !graph.is_in_edit_scope(commit_id) || !path.insert(commit_id) {
-            break;
+    let mut pending: Vec<_> = checkout.into_iter().collect();
+    while let Some(commit_id) = pending.pop() {
+        if !graph.is_in_edit_scope(commit_id) || graph.is_read_only(commit_id) || !path.insert(commit_id) {
+            continue;
         }
         let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
-        if is_auto_merge(&commit) {
-            break;
+        if super::review::is_review(&commit) && !rebase::is_pending(&commit) {
+            continue;
         }
-        cursor = commit.parents.first().copied();
+        if !is_auto_merge(&commit) {
+            pending.extend(graph.parents_or_load(repo, commit_id)?);
+        }
     }
     Ok(path)
 }
@@ -580,27 +582,32 @@ pub(crate) fn prepare(
                 .context("an AutoMerge dependency lost its recipe")?,
         };
         for input in definition.inputs {
-            let mut cursor = refs.resolve_input(repo, &input, &HashMap::new(), None)?;
+            let mut pending: Vec<_> = refs
+                .resolve_input(repo, &input, &HashMap::new(), None)?
+                .into_iter()
+                .collect();
             if input.source.is_static() {
                 continue;
             }
             let mut seen = HashSet::new();
-            while let Some(commit_id) = cursor {
-                ensure!(seen.insert(commit_id), "AutoMerge input ancestry contains a cycle");
+            while let Some(commit_id) = pending.pop() {
+                if !seen.insert(commit_id) {
+                    continue;
+                }
                 let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
                 if is_auto_merge(&commit) {
                     queue.push(commit_id);
-                    break;
+                    continue;
                 }
                 if !included.contains(&commit_id) && !rebase::is_pending(&commit) {
-                    break;
+                    continue;
                 }
                 optional.insert(commit_id);
                 if included.insert(commit_id) {
                     refs.rewritten(commit_id, Some(commit_id));
                     affected.push(commit_id);
                 }
-                cursor = commit.parents.first().copied();
+                pending.extend(commit.parents);
             }
         }
     }
@@ -1146,19 +1153,23 @@ pub(crate) fn expand_plan(
         }
     }
     let extra: Vec<_> = affected.into_iter().filter(|id| !original.contains(id)).collect();
+    for (index, &commit_id) in extra.iter().enumerate() {
+        positions.insert(commit_id, plan.steps.len() + index);
+    }
     for &commit_id in &extra {
-        let parent_commit_id = graph
-            .parents_or_load(repo, commit_id)?
-            .first()
-            .copied()
-            .context("a pending input has no parent")?;
-        let parent = positions
-            .get(&parent_commit_id)
-            .copied()
-            .map_or(rebase::PlanParent::Existing(parent_commit_id), rebase::PlanParent::Step);
-        positions.insert(commit_id, plan.steps.len());
+        let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
+        let parents = rebase::replay_parents(&commit)?
+            .unwrap_or_else(|| commit.parents.to_vec())
+            .into_iter()
+            .map(|parent_commit_id| {
+                positions
+                    .get(&parent_commit_id)
+                    .copied()
+                    .map_or(rebase::PlanParent::Existing(parent_commit_id), rebase::PlanParent::Step)
+            })
+            .collect();
         plan.steps.push(rebase::PlanStep {
-            parent,
+            parents,
             commit: rebase::PlanCommit::Pick(commit_id),
             squash: Vec::new(),
         });
@@ -1194,7 +1205,7 @@ pub(crate) fn order_plan(
     for parent in plan
         .steps
         .iter()
-        .map(|step| step.parent)
+        .flat_map(|step| step.parents.iter().copied())
         .chain(plan.checkout.iter().map(|checkout| checkout.target))
         .chain(plan.selection)
         .chain(plan.eager.iter().copied().map(rebase::PlanParent::Step))
@@ -1204,12 +1215,19 @@ pub(crate) fn order_plan(
                 .filter_map(|expected| expected.destination.placement()),
         )
     {
-        if let rebase::PlanParent::Step(index) = parent {
-            ensure!(index < plan.steps.len(), "a rebase plan points to a missing step");
+        match parent {
+            rebase::PlanParent::Step(index) => {
+                ensure!(index < plan.steps.len(), "a rebase plan points to a missing step");
+            }
+            rebase::PlanParent::Existing(commit_id) => {
+                repo.find_commit(commit_id)
+                    .context("a rebase plan points to a missing commit")?;
+            }
         }
     }
     let mut positions = HashMap::new();
     for (index, step) in plan.steps.iter().enumerate() {
+        ensure!(!step.parents.is_empty(), "a rebase step needs a parent");
         if let rebase::PlanCommit::Pick(commit_id) | rebase::PlanCommit::Resolved(commit_id) = step.commit {
             positions.insert(commit_id, index);
         }
@@ -1260,7 +1278,7 @@ pub(crate) fn order_plan(
                 .steps
                 .iter()
                 .enumerate()
-                .position(|(index, step)| step.parent == target && !automatic.contains(&index))
+                .position(|(index, step)| step.parents.first() == Some(&target) && !automatic.contains(&index))
             {
                 ensure!(followed.insert(index), "a reference follows a cycle in the todo");
                 target = rebase::PlanParent::Step(index);
@@ -1338,8 +1356,11 @@ pub(crate) fn order_plan(
                     }
                 }
             }
-        } else if let rebase::PlanParent::Step(parent) = step.parent {
-            parents.push(parent);
+        } else {
+            parents.extend(step.parents.iter().filter_map(|parent| match parent {
+                rebase::PlanParent::Step(index) => Some(*index),
+                rebase::PlanParent::Existing(_) => None,
+            }));
         }
         dependencies.push(parents);
     }
@@ -1355,7 +1376,7 @@ pub(crate) fn order_plan(
         }
         ensure!(
             order.len() != before,
-            "AutoMerge references create a cycle in the rebase todo"
+            "parent dependencies create a cycle in the rebase todo"
         );
     }
     let mut remap = vec![0; order.len()];
@@ -1371,7 +1392,7 @@ pub(crate) fn order_plan(
         .iter()
         .map(|index| {
             let mut step = previous[*index].clone();
-            step.parent = parent(step.parent);
+            step.parents = step.parents.into_iter().map(parent).collect();
             step
         })
         .collect();

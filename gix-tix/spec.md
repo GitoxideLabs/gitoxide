@@ -212,7 +212,7 @@ without trading responsiveness for metadata that is not visible.
   applies to mutation results, rewritten-ref mappings, pins, stash and travel
   notices, raw commit labels in `ref-tree`, and visible commit identifiers in
   rebase todos. Diagnostics on stderr and the full object IDs in the hidden
-  `tix-rebase-state-v2` block remain unchanged.
+  `tix-rebase-state-v3` block remain unchanged.
 - `-x/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
 - `-h/--help` prints Clap's standard help for `tix` and every subcommand.
@@ -327,7 +327,7 @@ without trading responsiveness for metadata that is not visible.
   They cannot be reworded, deleted, or signature-verified. During review-base
   selection, only an eligible base boundary remains selectable among hidden rows.
   They may be used for time travel or as the anchor of an independent transplant.
-  A boundary whose visible descendants contain no merge commit offers the
+  A boundary offers the
   history-rebase editor, including when those descendants fork into multiple
   linear stacks.
 - If a boundary has exactly one leaf among its visible descendants, selecting it
@@ -1083,8 +1083,8 @@ views.
 
 ### Reword
 
-- `e`, then `r`, is available after history completion when no known descendant
-  of the selected commit is a merge commit.
+- `e`, then `r`, is available for editable ordinary commits after history completion,
+  including ancestors of merge commits.
 - The configured Git editor receives a document containing `Author`,
   `AuthorDate`, `Committer`, `CommitterDate`, `CommentChar`, and the complete
   message in a temporary `.md` file for syntax highlighting. Author identity and
@@ -1109,9 +1109,9 @@ views.
   of value.
 - An unchanged editor document is a no-op. Otherwise tix recreates the commit,
   signs it when commit-signing configuration is enabled, and rewrites every
-  linear descendant with unchanged trees and corrected parentage. Descendants
-  whose parent changed retain that original parent for cherry-pick replay during
-  time travel. Rewording an already-pending commit retains its recorded parent;
+  descendant with corrected parentage, preserving its tree when parent content is
+  unchanged. Pending descendants retain their original parent or merge replay
+  checkpoint for time travel. Rewording an already-pending commit retains that state;
   an edited commit whose tree and parent are already final needs no replay marker.
   Mutable refs follow every rewritten commit; tags and remote-tracking refs remain
   unchanged.
@@ -1137,7 +1137,7 @@ views.
   commit for an unborn `HEAD`. A changed index wins; otherwise, tracked worktree
   changes are used. Untracked files never enter an implicit new commit and remain
   untracked. It is available only with a live worktree, after history completion,
-  and when the selected parent has no known merge descendant.
+  including when the selected parent has merge descendants.
 - `a Shift-N` creates an explicit empty commit which reuses the selected parent's
   tree, or the empty tree for an unborn history. Existing index and worktree
   state is preserved exactly. Both forms reject unresolved index conflicts.
@@ -1159,7 +1159,7 @@ views.
   title, a `why` body, optional attribution trailers, and a commented Git-style
   per-path diffstat with signed net line counts. Commit hooks are not run.
 - After editing, tix revalidates the destination, applies configured signing,
-  marks linear descendants needing tree replay as pending, persists the prepared
+  marks descendants needing tree replay as pending, persists the prepared
   objects, and atomically advances mutable refs throughout the rewritten stack. This includes local
   branches, custom refs, direct tix pins, and a detached `HEAD`, while excluding
   tags and remote-tracking refs. Checked-out affected worktrees are preflighted;
@@ -1214,8 +1214,9 @@ views.
   the upper commit receives the edited message. Their final trees and ancestry
   need no replay marker; rewritten descendants use the same lazy rebase as amend
   and spill.
-- All three operations leave worktree files untouched and cheaply rewrite linear
-  descendants. Whole-commit edits reset the affected
+- Editing final commits leaves worktree files untouched and cheaply rewrites
+  descendants. Resolving a pending merge can update the worktree to the next
+  conflict phase or completed merge result. Whole-commit edits reset the affected
   worktree's index to the rewritten commit; selected-path amend synchronizes only
   its destination and renamed source. A directly amended or spilled non-review
   commit already has its final tree and unchanged parent, so it is signed
@@ -1230,8 +1231,10 @@ views.
   exact commit instead of being replayed merely because it is checked out.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
   targets are trees, blobs, or other non-commit objects.
-- Time travel toward a pending destination cherry-picks and signs only the pending
-  ancestry through that destination. Later non-empty descendants needing tree
+- Time travel cherry-picks and signs pending editable ancestry through its
+  destination, including pending sides retained beneath finalized ordinary merges
+  and their descendants. Finalized review roots, hidden boundaries, and shallow
+  boundaries stop this traversal. Later non-empty descendants needing tree
   replay become or remain lazy and unsigned; zero-delta descendants finalize
   immediately while their parent is final and remain lazy behind a pending parent. Traveling toward
   a non-pending ancestor leaves the entire pending region untouched. A completed
@@ -1343,7 +1346,8 @@ views.
   projection. Unrelated histories belonging to other worktrees are not expanded.
   Generated commits away from the checkout ancestry may remain lazily rebased.
   `a Shift-R` explicitly remerges the selected AutoMerge HEAD. Traveling onto an
-  AutoMerge or an ordinary descendant also refreshes changes made outside Tix.
+  AutoMerge or an ordinary descendant also refreshes changes made outside Tix,
+  including every required AutoMerge parent when ordinary histories merge.
   Watchers only refresh display data and never initiate a remerge.
 - Travel replays pending inputs independently. An input whose replay conflicts
   keeps its original tree and replay-base metadata and is muted; other inputs
@@ -1359,8 +1363,8 @@ views.
   checkout cleanup never consumes a subscribed ordinary pin.
 - AutoMerges remain ordinary `pick` lines in rebase todos. Their parents derive
   from refs' planned destinations and change inputs' retained picks across all
-  fork sections; deleting a pick drops that AutoMerge. Other merge commits retain
-  their rebase restrictions.
+  fork sections; deleting a pick drops that AutoMerge. Ordinary merge commands
+  preserve their explicit ordered parent slots.
   Derived updates, input replays, notes, signing, ref checks, checkout preflights,
   and undo use the shared edit machinery and one grouped undo operation.
   Input refs are snapshots for each operation. Concurrent changes to inputs that
@@ -1381,7 +1385,7 @@ views.
 
 ### Reviews
 
-- `a r` starts a review from any non-boundary commit without merge descendants.
+- `a r` starts a review from any eligible non-boundary commit, including ancestors of merges.
   If exactly one selectable strict ancestor can be the review base, review starts
   with it immediately. Otherwise tix limits navigation to the selected commit's
   ancestry; the connected hidden base remains selectable, `<enter>` confirms it,
@@ -1452,9 +1456,9 @@ views.
 ### Delete commits
 
 - `a d` immediately deletes a selected ordinary or AutoMerge commit after history
-  completion when it has no known ordinary merge descendant. Other merge commits
+  completion, including when it has ordinary merge descendants. Other merge commits
   remain ineligible.
-- Deleting does not require a worktree. Linear descendants are reparented with
+- Deleting does not require a worktree. Descendants are reparented with
   unchanged trees and marked when tree replay is needed; mutable refs throughout the
   rewritten stack move atomically. Tags and remote-tracking refs remain unchanged.
 - When the selected commit is the current worktree `HEAD`, Git preflights and
@@ -1472,12 +1476,13 @@ views.
 ### Transactional rebases
 
 - All edits share one in-memory rebase primitive.
-  Forks are preserved, ordinary descendant merges are rejected, and all commit/tree
+  Forks and ordered merge parents are preserved, and all commit/tree
   preparation—including cherry-pick conflict detection—finishes before objects
   become reachable through refs.
 - `Tree::LeaveAsIs` rewrites parentage without changing trees;
-  `LeaveAsIsAndMark` writes the original first parent to `tix-rebase-parent` only
-  when later replay needs it; and `CherryPick` transplants each tree delta.
+  `LeaveAsIsAndMark` records the original parent in `tix-rebase-parent` for ordinary
+  single-parent commits, or the merge replay state described below, only when later
+  replay needs it; and `CherryPick` transplants each tree delta.
   Any edit that rewrites the current worktree's checked-out ancestry eagerly
   cherry-picks that affected path before committing the operation. The edited
   root of a direct amend or spill already has its final tree and does not receive
@@ -1488,13 +1493,61 @@ views.
   rebase clears the marker through its checkout destination.
   On conflict, `tix-rebase-parent` identifies the original base and later descendants
   remain marked instead of being cherry-picked.
+- Ordinary merges replay every changed parent against the original recorded merge
+  tree. For each parent, Tix merges its old tree, the recorded merge tree, and its
+  new tree to obtain a candidate; it then combines that candidate with the
+  accumulated result using the recorded merge tree as the base. The recorded
+  baseline stays fixed throughout replay. This preserves manual resolutions and
+  merge-only edits, incorporates shared updates once, and exposes contradictory
+  parent updates as conflicts. Ordinary merges never mute a contribution, and
+  changed parent IDs must be final before the merge finishes; an unchanged
+  parent can remain pending because its recorded contribution stays fixed. An
+  unchanged corresponding parent tree requires no content replay. Parent order
+  and slots remain intact through planning; identical resulting IDs are deduplicated only
+  when writing the Git commit, while ancestry-redundant edges remain.
+- Lazy and conflicting ordinary merges carry `tix-rebase-merge` metadata containing
+  the original merge ID, current parent index, parent/combine phase, checkpoint ID,
+  and ordered destination parent slots. Their actual Git parents always describe
+  the intended destination topology. `refs/tix/replay/<pending-commit-id>` retains
+  the checkpoint: either the original merge itself, or a private checkpoint commit
+  whose tree is the accumulated result and whose sole parent is that original
+  merge. These refs and checkpoint commits are hidden from ordinary history,
+  decorations, reference following, and editable todo refs. They are published
+  atomically with accepted conflicts or lazy results and participate in rollback
+  and undo. Cancelling a preview publishes no replay resources.
+- A clean staged index resolves the current merge phase through either `tix amend`
+  or todo continuation. A parent-phase resolution becomes a candidate to combine;
+  a combine-phase resolution becomes the accumulator for the next parent. Another
+  conflict materializes the next phase and preserves pending state. Signatures and
+  patch identity are finalized only after every phase finishes. Git amend with
+  preserved headers likewise resolves one phase. Amending a merge does not execute
+  its surrounding todo; later continuation recognizes its finalized replacement.
+  An unchanged lazy merge can be replayed by amend; staged content edits to a lazy
+  merge require time travel to HEAD first, so they cannot be mistaken for a
+  conflict-phase resolution or lost during replay.
+- Accepted todos also retain every continuation source, including later lazy
+  commits and remaining fold sources, through `refs/tix/replay/todo-<conflict-id>/<commit-id>`.
+  Each conflict owns its retention refs, so overlapping continuations remain
+  independent. These hidden refs survive amendments and are released only when the surrounding
+  continuation consumes their scope. This keeps saved todos usable after restart,
+  clearing undo, and Git garbage collection. Their creation and release are
+  transactional and undoable.
+- Replay checkpoints survive restart and Git garbage collection independently of
+  undo. Copying preserves the source occurrence's resources. An affected old
+  resource is retired only after a bounded traversal proves its owner unreachable
+  from active saved continuations, final non-replay/non-undo refs, and every
+  worktree HEAD, including tags,
+  remotes, stashes, and other branches. Incomplete traversal retains it. Undo keeps
+  deleted checkpoints reachable and restores their refs; clearing undo leaves
+  active replay resources intact. There is no background cleanup or idle
+  repository ownership for replay resources.
 - A previously final commit remains final when a rewrite changes only metadata:
   its result tree and ordered parent trees are unchanged, and every rewritten
   parent is final. Rewording a message or adding a commit header therefore
   reparents and re-signs affected final descendants without tree replay or
-  pending markers, including off-checkout forks and qualifying AutoMerges.
+  pending markers, including off-checkout forks, ordinary merges, and qualifying AutoMerges.
   Existing pending commits still require their normal replay; metadata changes
-  alone never finalize them. Hidden-boundary, descendant-merge, checkout, and
+  alone never finalize them. Hidden-boundary, checkout, and
   signature restrictions remain in force.
 - Checkout-path validation considers only the current edit scope: visible
   commits and their displayed hidden boundary, or the frozen scope of a
@@ -1544,6 +1597,12 @@ views.
   separator is `fork <id> (updated-base) <title>`, with the raw title exactly as
   shown in history, including `[A]` and `[N]`. The hidden branch
   itself is not moved.
+- `merge <source> <side-parent>…` replays an ordinary merge. The surrounding fork
+  supplies its first parent; side parents are ordered commit IDs and can refer to
+  results in other fork sections. The command preserves the source's parent-slot
+  count, including through continuation; the editor cannot create merges or change
+  their arity. All parent dependencies participate in cycle checks and replay
+  ordering. Ordinary merges and AutoMerges cannot be fold sources or targets.
 - Pick lines may be reordered or removed. `squash <id>`, `fixup <id>`, and
   `fixup -C <id>` fold an existing non-merge commit into the following `pick`
   or `empty` below it in the same fork. A fold may carry `@`, and fork
@@ -1609,7 +1668,7 @@ views.
   use Git-compatible C-style quoting so arbitrary ref bytes round-trip. Missing
   state cancels; present invalid state never reaches repository mutation. The
   state comment follows the complete help at the end of the document. Bottom-up
-  todos use `tix-rebase-state-v2`; older state versions are rejected rather than
+  todos use `tix-rebase-state-v3`; older state versions are rejected rather than
   interpreted with the opposite command order.
 - Standalone `(ref, ref)` lines place direct mutable refs at the following fork
   separator or command result below them. Multiple consecutive lines share that
@@ -1711,8 +1770,9 @@ views.
   `tix rebase apply` always
   applies a valid plan, even when its editable commands are unchanged. The first
   Markdown comment states which of these modes applies and explains that emptying
-  the file or removing the `tix-rebase-state-v2` comment cancels. Continuation
+  the file or removing the `tix-rebase-state-v3` comment cancels. Continuation
   todos likewise state that saving unchanged continues the materialized rebase.
+
 
 ### Tree selection and transplants
 

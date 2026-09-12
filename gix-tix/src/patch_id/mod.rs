@@ -104,7 +104,8 @@ pub(crate) fn for_commit(repo: &gix::Repository, commit_id: ObjectId) -> Result<
 
 pub(crate) fn current(repo: &gix::Repository, commit: &gix::objs::CommitRef<'_>) -> Result<Option<PatchId>> {
     if commit.extra_headers.iter().any(|(name, value)| {
-        *name == "tix-rebase-parent" || ((*name == "gpgsig" || *name == "gpgsig-sha256") && value.is_empty())
+        (*name == "tix-rebase-parent" || *name == "tix-rebase-merge")
+            || ((*name == "gpgsig" || *name == "gpgsig-sha256") && value.is_empty())
     }) {
         return Ok(None);
     }
@@ -120,7 +121,8 @@ pub(crate) fn current(repo: &gix::Repository, commit: &gix::objs::CommitRef<'_>)
 /// Refresh a final commit's cache before signing. Lazy rewrites keep their existing header instead.
 pub(crate) fn refresh(repo: &gix::Repository, commit: &mut gix::objs::Commit) -> Result<RefreshOutcome> {
     anyhow::ensure!(
-        commit.extra_headers().find("tix-rebase-parent").is_none(),
+        commit.extra_headers().find("tix-rebase-parent").is_none()
+            && commit.extra_headers().find("tix-rebase-merge").is_none(),
         "a pending rebase cannot refresh its patch identity"
     );
     anyhow::ensure!(

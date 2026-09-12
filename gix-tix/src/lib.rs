@@ -163,6 +163,7 @@ struct PendingConflictResolution {
 struct ConflictHead {
     reference: Option<gix::refs::FullName>,
     parents: Vec<gix::ObjectId>,
+    pending: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,6 +181,7 @@ struct WorktreeStatusParts {
 enum ExternalConflictResolution {
     Current,
     Changed,
+    Advanced(gix::ObjectId),
     Complete(gix::ObjectId, Vec<edit::undo::RefChange>, bool),
 }
 
@@ -188,6 +190,7 @@ enum ConflictReconcileStatus {
     Inactive,
     Amend,
     Blocked,
+    Advanced,
     Complete,
 }
 
@@ -1425,6 +1428,15 @@ fn event_loop(
     if recovered_at_startup {
         app.leave_attention("worktree removed; using the common repository without worktree changes");
     }
+    let mut pending_conflict_resolution = None;
+    if !preview_mode {
+        restore_merge_conflict_resolution(
+            &mut app,
+            &repository_path,
+            repository_is_bare,
+            &mut pending_conflict_resolution,
+        );
+    }
     let mut lane_receiver: Option<mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)>> = None;
     let mut refresh_receiver: Option<mpsc::Receiver<(RefreshKind, HistoryGraph, Result<HistoryRefresh>)>> = None;
     let mut refresh_pending = false;
@@ -1524,7 +1536,6 @@ fn event_loop(
     let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
     let mut pending_todo_rebase_plan: Option<edit::rebase::Plan> = None;
     let mut pending_todo_ref_changes = Vec::new();
-    let mut pending_conflict_resolution: Option<PendingConflictResolution> = None;
     let result: Result<EventLoopExit> = (|| loop {
         if picker.as_deref_mut().is_some_and(worktrunk::Worktrees::drain_updates) {
             dirty = true;
@@ -1795,14 +1806,31 @@ fn event_loop(
                 dirty = true;
                 urgent = true;
             }
+            if !preview_mode
+                && pending_rebase_conflict.is_none()
+                && pending_todo_rebase_conflict.is_none()
+                && pending_todo_rebase_plan.is_none()
+                && restore_merge_conflict_resolution(
+                    &mut app,
+                    &repository_path,
+                    repository_is_bare,
+                    &mut pending_conflict_resolution,
+                )
+            {
+                dirty = true;
+                urgent = true;
+            }
         }
         if conflict_refresh_due
-            && reconcile_external_conflict_reporting(
-                &mut app,
-                &repository_path,
-                repository_is_bare,
-                &mut pending_conflict_resolution,
-            ) == ConflictReconcileStatus::Complete
+            && matches!(
+                reconcile_external_conflict_reporting(
+                    &mut app,
+                    &repository_path,
+                    repository_is_bare,
+                    &mut pending_conflict_resolution,
+                ),
+                ConflictReconcileStatus::Complete | ConflictReconcileStatus::Advanced
+            )
         {
             invalidate_worktree_changes(&mut worktree_changes);
             refresh_pending = true;
@@ -2002,6 +2030,12 @@ fn event_loop(
                         app.set_worktree_head(
                             (!repository_is_bare).then(|| decoration_head(&decorations)).flatten(),
                             false,
+                        );
+                        restore_merge_conflict_resolution(
+                            &mut app,
+                            &repository_path,
+                            repository_is_bare,
+                            &mut pending_conflict_resolution,
                         );
                         app.set_review_roots(decoration_review_roots(&decorations));
                         line_diff_pool = None;
@@ -3379,7 +3413,10 @@ fn event_loop(
                 &mut pending_conflict_resolution,
             )
         };
-        if conflict_reconcile == ConflictReconcileStatus::Complete {
+        if matches!(
+            conflict_reconcile,
+            ConflictReconcileStatus::Complete | ConflictReconcileStatus::Advanced
+        ) {
             invalidate_worktree_changes(&mut worktree_changes);
             refresh_pending = true;
             dirty = true;
@@ -4218,35 +4255,62 @@ fn event_loop(
                             })
                         });
                     match result {
-                        Ok(Some(outcome)) => {
+                        Ok(Some(mut outcome)) => {
                             let new_id = outcome.selected.context("editing HEAD did not select its result")?;
-                            let pending = if kind == edit::head::Kind::Amend {
+                            let mut pending = if kind == edit::head::Kind::Amend {
                                 pending_conflict_resolution.take()
                             } else {
                                 None
                             };
-                            let resolved_conflict = pending.is_some();
-                            let record_undo = pending.as_ref().is_none_or(|pending| pending.record_undo);
-                            let mut changes = pending.map(|pending| pending.ref_changes).unwrap_or_default();
-                            changes.extend(outcome.ref_changes.iter().cloned());
-                            let message = outcome.notice.unwrap_or_else(|| {
+                            let mut message = outcome.notice.unwrap_or_else(|| {
                                 format!("{verb}ed {} as {}", id.to_hex_with_len(7), new_id.to_hex_with_len(7))
                             });
-                            if record_undo {
-                                leave_recorded_success(
-                                    &mut app,
-                                    &repository_path,
-                                    repository_is_bare,
-                                    if resolved_conflict {
-                                        "resolve rebase conflict"
-                                    } else {
-                                        verb
-                                    },
-                                    &changes,
-                                    message,
-                                );
+                            let continued = if let Some(pending) = &mut pending {
+                                pending.commit = new_id;
+                                pending.ref_changes.append(&mut outcome.ref_changes);
+                                match conflict_head(&repository_path, repository_is_bare, new_id) {
+                                    Ok(head) => {
+                                        let continued = head.pending;
+                                        pending.head = Some(head);
+                                        continued
+                                    }
+                                    Err(err) => {
+                                        pending.head = None;
+                                        message =
+                                            format!("{message}; could not inspect the next replay stage: {err:#}");
+                                        true
+                                    }
+                                }
                             } else {
-                                app.leave_success(message);
+                                false
+                            };
+                            if continued {
+                                pending_conflict_resolution = pending;
+                                app.begin_conflict_resolution();
+                                app.leave_attention(message);
+                            } else {
+                                let resolved_conflict = pending.is_some();
+                                let record_undo = pending.as_ref().is_none_or(|pending| pending.record_undo);
+                                let changes = pending.map_or(outcome.ref_changes, |pending| pending.ref_changes);
+                                if resolved_conflict {
+                                    app.set_worktree_conflicted(false);
+                                }
+                                if record_undo {
+                                    leave_recorded_success(
+                                        &mut app,
+                                        &repository_path,
+                                        repository_is_bare,
+                                        if resolved_conflict {
+                                            "resolve rebase conflict"
+                                        } else {
+                                            verb
+                                        },
+                                        &changes,
+                                        message,
+                                    );
+                                } else {
+                                    app.leave_success(message);
+                                }
                             }
                             invalidate_worktree_changes(&mut worktree_changes);
                             app.select_commit_after_refresh(new_id);
@@ -5911,6 +5975,47 @@ fn record_and_clear_pending_undo(
     result
 }
 
+fn restore_merge_conflict_resolution(
+    app: &mut App,
+    repository_path: &Path,
+    bare: bool,
+    pending: &mut Option<PendingConflictResolution>,
+) -> bool {
+    if bare || pending.is_some() {
+        return false;
+    }
+    let restored = (|| -> Result<Option<PendingConflictResolution>> {
+        let repository = open_repository(repository_path, bare, false)?;
+        let Some(commit_id) = repository.head()?.id().map(gix::Id::detach) else {
+            return Ok(None);
+        };
+        let commit = repository.find_commit(commit_id)?.decode()?.into_owned()?;
+        if !edit::rebase::has_merge_replay(&commit) || !patch_id::is_unavailable(&commit) {
+            return Ok(None);
+        }
+        drop(repository);
+        Ok(Some(PendingConflictResolution {
+            commit: commit_id,
+            head: Some(conflict_head(repository_path, bare, commit_id)?),
+            ref_changes: Vec::new(),
+            record_undo: true,
+        }))
+    })();
+    match restored {
+        Ok(Some(state)) => {
+            *pending = Some(state);
+            app.begin_conflict_resolution();
+            app.leave_attention("resolve the checked-out merge conflict, then press <enter> to amend");
+            true
+        }
+        Ok(None) => false,
+        Err(err) => {
+            tracing::warn!(error = %err, "could not restore merge conflict continuation");
+            false
+        }
+    }
+}
+
 fn conflict_head(repository_path: &Path, bare: bool, commit: gix::ObjectId) -> Result<ConflictHead> {
     let repository = open_repository(repository_path, bare, false)
         .context("could not reopen the repository after checking out a conflict")?;
@@ -5929,13 +6034,16 @@ fn conflict_head(repository_path: &Path, bare: bool, commit: gix::ObjectId) -> R
         edit::undo::state(&repository, name.as_ref())? == edit::undo::State::Object(commit),
         "the conflicted HEAD attachment does not directly reference {commit}"
     );
-    let parents = repository
+    let commit = repository
         .find_commit(commit)
         .context("could not find the checked-out conflict commit")?
-        .parent_ids()
-        .map(gix::Id::detach)
-        .collect();
-    Ok(ConflictHead { reference, parents })
+        .decode()?
+        .into_owned()?;
+    Ok(ConflictHead {
+        reference,
+        pending: edit::rebase::is_pending(&commit),
+        parents: commit.parents.into_iter().collect(),
+    })
 }
 
 fn reconcile_external_conflict(
@@ -6014,14 +6122,15 @@ fn reconcile_external_conflict(
         None
     };
     let accepted = state.commit;
-    let mut state = pending
-        .take()
-        .expect("the pending conflict was inspected immediately before completion");
+    let state = pending
+        .as_mut()
+        .expect("the pending conflict was inspected immediately before accepting the stage");
     state.ref_changes.push(edit::undo::RefChange {
         name,
         before: edit::undo::State::Object(accepted),
         after: edit::undo::State::Object(replacement),
     });
+    let finalized_pending = finalized.is_some();
     let replacement = match finalized {
         Some((selected, changes)) => {
             state.ref_changes.extend(changes);
@@ -6029,6 +6138,18 @@ fn reconcile_external_conflict(
         }
         None => replacement,
     };
+    state.commit = replacement;
+    if finalized_pending {
+        let head = conflict_head(repository_path, bare, replacement)?;
+        let still_pending = head.pending;
+        state.head = Some(head);
+        if still_pending {
+            return Ok(ExternalConflictResolution::Advanced(replacement));
+        }
+    }
+    let state = pending
+        .take()
+        .expect("the completed conflict state was retained while checking for another stage");
     Ok(ExternalConflictResolution::Complete(
         replacement,
         state.ref_changes,
@@ -6046,6 +6167,12 @@ fn reconcile_external_conflict_reporting(
         return ConflictReconcileStatus::Inactive;
     }
     match reconcile_external_conflict(repository_path, bare, pending) {
+        Ok(ExternalConflictResolution::Advanced(replacement)) => {
+            app.begin_conflict_resolution();
+            app.leave_attention("merge replay reached another conflict; resolve it, then press <enter> to amend");
+            app.select_commit_after_refresh(replacement);
+            ConflictReconcileStatus::Advanced
+        }
         Ok(ExternalConflictResolution::Complete(replacement, changes, record_undo)) => {
             let message = format!("resolved rebase conflict as {}", replacement.to_hex_with_len(7));
             if record_undo {
@@ -9948,6 +10075,132 @@ mod tests {
     }
 
     #[test]
+    fn external_merge_amends_resume_successive_conflicts_and_keep_one_undo_record() -> gix_testtools::Result {
+        let (fixture, outcome) = edit::head::tests::merge_conflict_fixture()?;
+        let accepted_commit_id = outcome.selected.context("the first merge conflict is selected")?;
+        let mut pending = Some(PendingConflictResolution {
+            commit: accepted_commit_id,
+            head: Some(conflict_head(fixture.path(), false, accepted_commit_id)?),
+            ref_changes: Vec::new(),
+            record_undo: true,
+        });
+        let mut app = App::new(1);
+        for (contents, message, expected) in [
+            ("tip\n", "resolve parent phase", ConflictReconcileStatus::Advanced),
+            ("resolved\n", "resolve combine phase", ConflictReconcileStatus::Complete),
+        ] {
+            std::fs::write(fixture.path().join("file"), contents)?;
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["add", "file"])
+                .status()?;
+            assert!(status.success(), "the current merge-phase resolution is staged");
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["commit", "--amend", "-qm", message])
+                .status()?;
+            assert!(
+                status.success(),
+                "Git records the current stage and preserves replay headers"
+            );
+            assert_eq!(
+                reconcile_external_conflict_reporting(&mut app, fixture.path(), false, &mut pending),
+                expected,
+                "an external amend resolves one stage of the merge replay"
+            );
+            if expected == ConflictReconcileStatus::Advanced {
+                let repo = test_repository::open(fixture.path())?;
+                let state = pending
+                    .as_ref()
+                    .context("another conflict retains continuation state")?;
+                assert_eq!(
+                    state.commit,
+                    repo.head_id()?.detach(),
+                    "continuation tracks the next conflicted commit"
+                );
+                assert!(
+                    repo.open_index()?
+                        .entries()
+                        .iter()
+                        .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted),
+                    "the next phase has real unresolved index entries"
+                );
+                assert!(
+                    edit::undo::plan_undo(&repo)?.is_none(),
+                    "undo is recorded after every phase finishes"
+                );
+            }
+        }
+        assert!(
+            pending.is_none(),
+            "the final merge resolution releases continuation state"
+        );
+        let repo = test_repository::open(fixture.path())?;
+        edit::undo::plan_undo(&repo)?
+            .context("both external amends are recorded together")?
+            .apply(&repo)?;
+        assert_eq!(
+            repo.head_id()?,
+            accepted_commit_id,
+            "undo restores the first conflict checkout"
+        );
+        assert!(
+            edit::undo::plan_undo(&repo)?.is_none(),
+            "both merge phases form one undo action"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restores_merge_conflict_continuation_after_restart_but_keeps_lazy_merges_lazy() -> gix_testtools::Result {
+        for eager in [false, true] {
+            let (fixture, outcome) = edit::head::tests::merge_replay_fixture(eager)?;
+            let commit_id = outcome.selected.context("the prepared merge is selected")?;
+            let mut app = App::new(1);
+            let mut pending = None;
+            assert_eq!(
+                restore_merge_conflict_resolution(&mut app, fixture.path(), false, &mut pending),
+                eager,
+                "only a materialized conflict is restored as an active resolution"
+            );
+            if eager {
+                let state = pending
+                    .as_ref()
+                    .context("the restarted conflict is ready to continue")?;
+                assert_eq!(
+                    state.commit, commit_id,
+                    "the resumed state tracks the checked-out merge"
+                );
+                assert!(
+                    state.ref_changes.is_empty(),
+                    "a new session records only its own reference edits"
+                );
+                assert!(app.has_conflict_marker(), "the restarted conflict remains visible");
+                std::fs::write(fixture.path().join("file"), "tip\n")?;
+                let status = Command::new("git")
+                    .arg("-C")
+                    .arg(fixture.path())
+                    .args(["add", "file"])
+                    .status()?;
+                assert!(status.success(), "the conflict is staged before restarting again");
+                pending = None;
+                assert!(
+                    restore_merge_conflict_resolution(&mut app, fixture.path(), false, &mut pending),
+                    "a staged resolution still needs its merge replay to continue"
+                );
+            } else {
+                assert!(
+                    pending.is_none(),
+                    "a lazy merge is not treated as an already materialized conflict"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn external_conflict_resolution_requires_a_commit_and_rejects_unrelated_head_moves() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
         let accepted = test_repository::open(fixture.path())?.head_id()?.detach();
@@ -13309,7 +13562,7 @@ mod tests {
             base: parent,
             scope: vec![head],
             steps: vec![edit::rebase::PlanStep {
-                parent: edit::rebase::PlanParent::Existing(parent),
+                parents: vec![edit::rebase::PlanParent::Existing(parent)],
                 commit: edit::rebase::PlanCommit::Resolved(head),
                 squash: Vec::new(),
             }],
@@ -13456,7 +13709,7 @@ mod tests {
                 base: base_commit_id,
                 scope: vec![middle_commit_id, tip_commit_id],
                 steps: vec![edit::rebase::PlanStep {
-                    parent: edit::rebase::PlanParent::Existing(base_commit_id),
+                    parents: vec![edit::rebase::PlanParent::Existing(base_commit_id)],
                     commit: edit::rebase::PlanCommit::Pick(tip_commit_id),
                     squash: Vec::new(),
                 }],
