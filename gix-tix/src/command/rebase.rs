@@ -659,7 +659,7 @@ mod tests {
             },
         )?;
         let document = String::from_utf8(prepared.document)?;
-        assert!(document.contains("<!-- tix-rebase-state-v2"), "state is embedded");
+        assert!(document.contains("<!-- tix-rebase-state-v3"), "state is embedded");
         assert!(document.contains("`@pick "), "HEAD is the generated checkout");
         assert!(
             document.contains("2000-01-02 author middle"),
@@ -943,7 +943,7 @@ mod tests {
         )?;
         let generated = std::str::from_utf8(&prepared.document)?;
         let state = &generated[generated
-            .find("<!-- tix-rebase-state-v2")
+            .find("<!-- tix-rebase-state-v3")
             .expect("generated state is present")..];
         let edited = format!(
             "`@pick {}` after\n`pick {}` tip\n──── fork {} ────\n\n{state}",

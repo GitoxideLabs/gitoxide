@@ -2591,7 +2591,6 @@ impl App {
         #[derive(Clone, Copy)]
         struct State {
             leaf: Option<ObjectId>,
-            has_merge: bool,
         }
 
         let visible_parents: HashSet<_> = self
@@ -2605,29 +2604,18 @@ impl App {
         let mut rebase_bases = HashSet::new();
         for row in &self.rows {
             let state = if self.hidden_rows.contains(&row.id) {
-                Some(states.get(&row.id).copied().unwrap_or(State {
-                    leaf: None,
-                    has_merge: false,
-                }))
+                Some(states.get(&row.id).copied().unwrap_or(State { leaf: None }))
             } else if !visible_parents.contains(&row.id) {
-                Some(State {
-                    leaf: Some(row.id),
-                    has_merge: row.parent_ids.len() > 1 && !self.auto_merges.contains_key(&row.id),
-                })
+                Some(State { leaf: Some(row.id) })
             } else {
-                states.get(&row.id).copied().map(|mut state| {
-                    state.has_merge |= row.parent_ids.len() > 1 && !self.auto_merges.contains_key(&row.id);
-                    state
-                })
+                states.get(&row.id).copied()
             };
             let Some(state) = state else { continue };
             if self.hidden_rows.contains(&row.id) {
                 if let Some(tip) = state.leaf {
                     targets.insert(row.id, tip);
                 }
-                if !state.has_merge {
-                    rebase_bases.insert(row.id);
-                }
+                rebase_bases.insert(row.id);
                 continue;
             }
             for parent in &row.parent_ids {
@@ -2637,7 +2625,6 @@ impl App {
                         if existing.leaf != state.leaf {
                             existing.leaf = None;
                         }
-                        existing.has_merge |= state.has_merge;
                     })
                     .or_insert(state);
             }
@@ -3254,9 +3241,10 @@ impl App {
         self.state == State::Complete
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
-                !self.hidden_rows.contains(&row.id) && !self.known_merge_descendants.contains(&row.id)
-            })
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| !self.hidden_rows.contains(&row.id))
     }
 
     pub(crate) fn can_refackiew(&self) -> bool {
@@ -3275,11 +3263,10 @@ impl App {
     pub(crate) fn reword_shortcut_visible(&self) -> bool {
         self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
-                !self.hidden_rows.contains(&row.id)
-                    && !self.known_merge_descendants.contains(&row.id)
-                    && !self.auto_merges.contains_key(&row.id)
-            })
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| !self.hidden_rows.contains(&row.id) && !self.auto_merges.contains_key(&row.id))
     }
 
     pub(crate) fn can_auto_merge(&self) -> bool {
@@ -3354,10 +3341,9 @@ impl App {
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && match self.selected.and_then(|index| self.rows.get(index)) {
                 Some(row) => {
-                    (self.worktree_head_unborn
+                    self.worktree_head_unborn
                         || !self.hidden_rows.contains(&row.id)
-                        || self.worktree_head == Some(row.id))
-                        && !self.known_merge_descendants.contains(&row.id)
+                        || self.worktree_head == Some(row.id)
                 }
                 None => self.worktree_head_unborn,
             }
@@ -3391,7 +3377,6 @@ impl App {
             && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
                 !self.hidden_rows.contains(&row.id)
                     && (row.parent_ids.len() <= 1 || self.auto_merges.contains_key(&row.id))
-                    && !self.known_merge_descendants.contains(&row.id)
                     && (!row.is_review || !self.has_known_descendant(row.id))
             })
     }
@@ -3457,12 +3442,10 @@ impl App {
             && self.pending_rebase_conflict.is_none()
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
-                !self.hidden_rows.contains(&row.id)
-                    && !row.parent_ids.is_empty()
-                    && !self.known_merge_descendants.contains(&row.id)
-                    && !row.is_review
-            })
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| !self.hidden_rows.contains(&row.id) && !row.parent_ids.is_empty() && !row.is_review)
     }
 
     pub(crate) fn can_finish_review(&self) -> bool {
@@ -3508,7 +3491,6 @@ impl App {
             && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
                 !self.hidden_rows.contains(&row.id)
                     && Some(row.id) == self.worktree_head
-                    && !self.known_merge_descendants.contains(&row.id)
                     && !self.auto_merges.contains_key(&row.id)
             })
     }
@@ -5410,27 +5392,21 @@ mod tests {
         merge.hidden_rows.remove(&id(3));
         merge.set_known_merge_descendants(HashSet::from([id(3)]));
         assert!(
-            !merge.can_delete(),
-            "an ordinary merge descendant still prevents deletion"
+            merge.can_delete(),
+            "ordinary merge descendants can be replayed after deleting an AutoMerge"
         );
     }
 
     #[test]
-    fn editing_rejects_merge_descendants_and_new_commits_support_unborn_head() {
+    fn editing_supports_merge_descendants_and_new_commits_support_unborn_head() {
         let mut app = App::new(10);
         app.extend_commits(vec![row(2)]);
         app.set_worktree_head(Some(id(2)), false);
         complete(&mut app);
         app.set_known_descendants(HashSet::from([id(2)]));
         app.set_known_merge_descendants(HashSet::from([id(2)]));
-        assert!(
-            !app.can_reword(),
-            "a merge descendant outside the visible projection prevents rewording"
-        );
-        assert!(
-            !app.can_create_commit(),
-            "a merge descendant outside the visible projection prevents a child"
-        );
+        assert!(app.can_reword(), "merge descendants allow rewording their ancestors");
+        assert!(app.can_create_commit(), "merge descendants allow inserting a child");
 
         let mut unborn = App::new(10);
         unborn.set_worktree_head_unborn(true);
@@ -7364,7 +7340,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_boundary_rebase_accepts_forks_but_rejects_descendant_merges() {
+    fn hidden_boundary_rebase_accepts_forks_and_descendant_merges() {
         let eligible = |visible: Vec<LoadedCommit>| {
             let mut app = App::new(10);
             app.extend_commits(visible);
@@ -7406,7 +7382,10 @@ mod tests {
             row_with_parents(3, &[1]),
             row_with_parents(2, &[1]),
         ]);
-        assert!(!merged.can_rebase(), "a merge across editable descendants is rejected");
+        assert!(
+            merged.can_rebase(),
+            "a merge across editable descendants can be replayed"
+        );
     }
 
     #[test]

@@ -389,7 +389,7 @@ fn build_plan(
                 .map_or(PlanParent::Existing(parent.commit_id()), PlanParent::Step);
             positions.insert(node, steps.len());
             steps.push(PlanStep {
-                parent,
+                parents: vec![parent],
                 commit: match node {
                     Node::Original(id) => PlanCommit::Pick(id),
                     Node::Copy(id) => PlanCommit::Copy(id),
