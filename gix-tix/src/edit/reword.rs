@@ -1182,6 +1182,105 @@ mod tests {
     }
 
     #[test]
+    fn reword_preserves_indexes_and_worktrees() -> gix_testtools::Result {
+        for scenario in ["head", "empty-head", "linked-target", "empty-linked-descendant"] {
+            for from_editor in [true, false] {
+                let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+                if matches!(scenario, "empty-head" | "empty-linked-descendant") {
+                    gix_testtools::git(fixture.path(), "commit --allow-empty -q -m empty")?;
+                }
+                let linked_root = gix_testtools::tempfile::tempdir()?;
+                let linked = linked_root.path().join("linked");
+                let mut worktrees = vec![fixture.path().to_owned()];
+                if matches!(scenario, "linked-target" | "empty-linked-descendant") {
+                    gix_testtools::git(fixture.path(), "checkout -q --detach HEAD^")?;
+                    assert!(
+                        gix_testtools::git_command(fixture.path())
+                            .args(["worktree", "add", "-q"])
+                            .arg(&linked)
+                            .arg("main")
+                            .status()?
+                            .success(),
+                        "the target or its empty descendant has a separate checkout"
+                    );
+                    worktrees.push(linked.clone());
+                }
+                let mut before = Vec::new();
+                for path in &worktrees {
+                    std::fs::write(path.join("base"), b"staged base\n")?;
+                    std::fs::write(path.join("staged-only"), b"only the index retains these bytes\n")?;
+                    gix_testtools::git(path, "add base staged-only")?;
+                    std::fs::write(path.join("base"), b"unstaged base\n")?;
+                    std::fs::remove_file(path.join("staged-only"))?;
+                    let repository = crate::test_repository::open(path)?;
+                    before.push((
+                        path,
+                        repository.head_id()?.detach(),
+                        std::fs::read(repository.index_path())?,
+                        gix_testtools::repository::snapshot(path)?.worktree,
+                    ));
+                }
+
+                let repository = crate::test_repository::open(fixture.path())?;
+                let target_commit_id = if scenario == "linked-target" {
+                    repository.rev_parse_single("main")?.detach()
+                } else {
+                    repository.head_id()?.detach()
+                };
+                let original_tree_id = repository.find_commit(target_commit_id)?.tree_id()?.detach();
+                let graph = super::super::loaded_graph(&repository)?;
+                let outcome = if from_editor {
+                    let (_, document) = document(&repository, target_commit_id)?;
+                    let old_title = if scenario == "empty-head" {
+                        b"\nempty\n".as_slice()
+                    } else {
+                        b"\ntip\n".as_slice()
+                    };
+                    let edited = document.replacen(old_title, b"\nrewritten message\n", 1);
+                    apply_conflict_reporting(repository.clone(), &graph, target_commit_id, &edited, |_| {})?
+                        .complete()?
+                } else {
+                    apply_message_reporting(
+                        repository.clone(),
+                        &graph,
+                        target_commit_id,
+                        b"rewritten message\n",
+                        None,
+                    )?
+                };
+                let rewritten_commit_id = outcome.commit.expect("the changed message rewrites the target");
+                assert_eq!(
+                    repository.find_commit(rewritten_commit_id)?.tree_id()?,
+                    original_tree_id,
+                    "rewording changes no committed content ({scenario}, editor: {from_editor})"
+                );
+                for (path, old_head_commit_id, index, worktree) in before {
+                    let repository = crate::test_repository::open(path)?;
+                    assert_eq!(
+                        std::fs::read(repository.index_path())?,
+                        index,
+                        "rewording preserves the exact index ({scenario}, editor: {from_editor}, {})",
+                        path.display()
+                    );
+                    assert_eq!(
+                        gix_testtools::repository::snapshot(path)?.worktree,
+                        worktree,
+                        "rewording preserves all worktree contents ({scenario}, editor: {from_editor})"
+                    );
+                    if scenario != "linked-target" || path == &linked {
+                        assert_ne!(
+                            repository.head_id()?,
+                            old_head_commit_id,
+                            "the checkout follows its rewritten commit ({scenario}, editor: {from_editor})"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn eagerly_replays_checked_out_reword_descendants() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repository = crate::test_repository::open_with(

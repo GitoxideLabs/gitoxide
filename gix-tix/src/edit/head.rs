@@ -723,6 +723,77 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn pending_path_amend_updates_the_index_even_when_the_commit_tree_is_unchanged() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        std::fs::write(fixture.path().join("base"), b"staged base\n")?;
+        std::fs::write(fixture.path().join("other"), b"unrelated staging\n")?;
+        git(fixture.path(), &["add", "base", "other"])?;
+        std::fs::write(fixture.path().join("base"), b"base\n")?;
+        let repo = open(fixture.path())?;
+        let old_commit_id = repo.head_id()?.detach();
+        let mut commit = repo.find_commit(old_commit_id)?.decode()?.into_owned()?;
+        let old_tree_id = commit.tree;
+        let parent_commit_id = commit.parents.first().copied().expect("the fixture HEAD has a parent");
+        commit
+            .extra_headers
+            .push(("tix-rebase-parent".into(), parent_commit_id.to_string().into()));
+        let pending_commit_id = repo.write_object(&commit)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(pending_commit_id, "prepare pending path amend")?;
+        let worktree = gix_testtools::repository::snapshot(fixture.path())?.worktree;
+        let graph = super::super::loaded_graph(&repo)?;
+        let selected = PathChange {
+            kind: ChangeKind::Modified,
+            group: crate::ChangeGroup::Unstaged,
+            source: None,
+            path: "base".into(),
+            lines: None,
+        };
+
+        let finalized_commit_id = perform_with_changes(
+            repo.clone(),
+            &graph,
+            Kind::Amend,
+            Some((std::slice::from_ref(&selected), None)),
+            rebase::PendingCheckout::FinalizeEditedHead,
+            |_| {},
+        )?
+        .context("the selected path finalizes the pending commit")?
+        .selected
+        .context("the finalized commit remains selected")?;
+        let finalized = repo.find_commit(finalized_commit_id)?.decode()?.into_owned()?;
+        assert_eq!(
+            finalized.tree, old_tree_id,
+            "the selected worktree path restores content already present in the commit"
+        );
+        assert!(
+            !rebase::is_pending(&finalized),
+            "the amendment finalizes the pending HEAD"
+        );
+        assert_eq!(
+            git(fixture.path(), &["show", ":base"])?,
+            b"base\n",
+            "explicit path amendment synchronizes its index entry with the committed worktree content"
+        );
+        assert_eq!(
+            git(fixture.path(), &["diff", "--cached", "--name-only"])?,
+            b"other\n",
+            "only the selected path is consumed"
+        );
+        assert_eq!(
+            git(fixture.path(), &["show", ":other"])?,
+            b"unrelated staging\n",
+            "unrelated staged contents remain available"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?.worktree,
+            worktree,
+            "finalizing the selected path leaves all worktree contents intact"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn non_resolving_amend_rejects_a_pending_head() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
