@@ -98,6 +98,18 @@ pub(crate) fn reflog_or_default(
 
 pub(crate) type ObjectCaches = (Option<usize>, Option<usize>, usize, Option<usize>);
 
+pub(crate) fn parse_object_refresh_mode(
+    config: &gix_config::File,
+    lenient: bool,
+    mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
+) -> Result<gix_odb::store::RefreshMode, Error> {
+    let refresh_after = gitoxide::Objects::REFRESH_AFTER
+        .try_into_duration(config.integer_filter("gitoxide.objects.refreshAfter", &mut filter_config_section))
+        .with_leniency(lenient)?
+        .unwrap_or(gitoxide::Objects::REFRESH_AFTER_DEFAULT);
+    Ok(gix_odb::store::RefreshMode::AfterDuration(refresh_after))
+}
+
 /// Return `(static_pack_cache_limit, pack_cache_bytes, object_cache_bytes, alloc_limit_bytes)` as parsed from gix-config.
 pub(crate) fn parse_object_caches(
     config: &gix_config::File,

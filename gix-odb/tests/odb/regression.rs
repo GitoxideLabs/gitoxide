@@ -25,7 +25,8 @@ mod repo_with_small_packs {
                 .join("objects");
             let store = crate::odb_at(base)?;
             let (tx, barrier) = crossbeam_channel::unbounded::<()>();
-            let handles = (0..std::thread::available_parallelism()?.get()).map(|tid| {
+            let num_workers = std::thread::available_parallelism()?.get().max(2);
+            let handles = (0..num_workers).map(|tid| {
                 std::thread::spawn({
                     let store = store.clone();
                     let barrier = barrier.clone();
@@ -35,10 +36,8 @@ mod repo_with_small_packs {
                         let mut count = 0;
                         for id in store.iter()? {
                             let id = id?;
-                            assert!(
-                                store.try_find(&id, &mut buf).is_ok(),
-                                "Thread {tid} could not find {id}"
-                            );
+                            let found = store.try_find(&id, &mut buf)?;
+                            assert!(found.is_some(), "Thread {tid} could not find {id}");
                             count += 1;
                         }
                         Ok(count)

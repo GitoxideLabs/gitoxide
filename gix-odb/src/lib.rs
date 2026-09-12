@@ -125,7 +125,8 @@ use store::types;
 ///
 /// ### Features
 ///
-/// - entirely lazy, creating an instance does no disk IO at all if [`Slots::Given`][store::init::Slots::Given] is used.
+/// - creating an instance does not scan the object directory unless
+///   [`Slots::AsNeededByDiskState`][store::init::Slots::AsNeededByDiskState] is used.
 /// - multi-threaded lazy-loading of indices and packs
 /// - per-thread pack and object caching avoiding cache trashing.
 /// - most-recently-used packs are always first for speedups if objects are stored in the same pack, typical for packs organized by
@@ -135,7 +136,7 @@ use store::types;
 /// - sync with the state on disk if objects aren't found to catch up with changes if an object seems to be missing.
 ///    - turn off the behaviour above for all handles if objects are expected to be missing due to spare checkouts.
 pub struct Store {
-    /// The central write lock without which the slotmap index can't be changed.
+    /// The central write lock without which the catalog can't be changed.
     write: parking_lot::Mutex<()>,
 
     /// The source directory from which all content is loaded, and the central write lock for use when a directory refresh is needed.
@@ -149,22 +150,25 @@ pub struct Store {
     /// A set of replacements that given a source OID return a destination OID. The vector is sorted.
     pub(crate) replacements: Vec<(gix_hash::ObjectId, gix_hash::ObjectId)>,
 
-    /// A list of indices keeping track of which slots are filled with data. These are usually, but not always, consecutive.
-    pub(crate) index: ArcSwap<types::SlotMapIndex>,
+    /// The current index and its backing slots, published together so readers always observe a coherent catalog.
+    ///
+    /// Each slot remains independently mutable so multiple handles can load different indices or packs concurrently.
+    /// Existing slots retain their address when a larger catalog is published.
+    pub(crate) catalog: ArcSwap<types::Catalog>,
+    /// The user-provided hard limit, or `None` if the slot map may grow as needed.
+    slot_limit: Option<usize>,
 
-    /// The below state acts like a slot-map with each slot is mutable when the write lock is held, but readable independently of it.
-    /// This allows multiple file to be loaded concurrently if there is multiple handles requesting to load packs or additional indices.
-    /// The map is static and cannot change.
-    /// It's read often and changed rarely.
-    pub(crate) files: Vec<types::MutableIndexAndPack>,
-
-    /// The amount of handles that would prevent us from unloading packs or indices
-    pub(crate) num_handles_stable: AtomicUsize,
-    /// The amount of handles that don't affect our ability to compact our internal data structures or unload packs or indices.
-    pub(crate) num_handles_unstable: AtomicUsize,
+    /// The amount of handles currently sharing this store.
+    pub(crate) num_handles: AtomicUsize,
 
     /// The amount of times we re-read the disk state to consolidate our in-memory representation.
     pub(crate) num_disk_state_consolidation: AtomicUsize,
+    /// The amount of completed disk-state consolidations, used to coalesce callers that waited for the same refresh.
+    pub(crate) num_disk_state_consolidations_completed: AtomicUsize,
+    /// The most recent failed consolidation, shared only with callers that were already waiting for it.
+    pub(crate) last_disk_state_consolidation_error: parking_lot::Mutex<Option<(usize, Arc<store::load_index::Error>)>>,
+    /// The last successful post-initialization disk-state consolidation, used to throttle miss-triggered refreshes.
+    pub(crate) last_successful_disk_state_consolidation: parking_lot::Mutex<Option<std::time::Instant>>,
     /// If true, we are allowed to use multi-pack indices and they must have the `object_hash` or be ignored.
     use_multi_pack_index: bool,
     /// The hash kind to use for some operations
@@ -173,6 +177,8 @@ pub struct Store {
     alloc_limit_bytes: Option<usize>,
     /// The compression level to use when writing loose objects.
     loose_compression: gix_zlib::Compression,
+    #[cfg(feature = "test-support")]
+    debug: Option<store::init::debug::Options>,
 }
 
 /// Create a new cached handle to the object store with support for additional options.

@@ -262,12 +262,12 @@ fn multi_index_keep_open() -> crate::Result {
             known_reachable_indices: 1,
             open_reachable_packs: 0, /*no pack is open anymore at least as seen from the index*/
             known_packs: expected.packs,
-            unused_slots: 30,
+            unused_slots: 31,
             loose_dbs: 1,
-            unreachable_indices: 1,
-            unreachable_packs: 1
+            unreachable_indices: 0,
+            unreachable_packs: 0
         },
-        "now there is an unreachable index and pack which is still loaded, but whose pack hasn't been loaded"
+        "the old catalog resources are retained only by the stable handle"
     );
 
     assert!(
@@ -1045,20 +1045,29 @@ fn auto_refresh_with_and_without_id_stability() -> crate::Result {
                 known_reachable_indices: 1,
                 open_reachable_packs: 1,
                 known_packs: 1,
-                unused_slots: 30,
+                unused_slots: 31,
                 loose_dbs: 1,
-                unreachable_indices: 1,
-                unreachable_packs: 1
+                unreachable_indices: 0,
+                unreachable_packs: 0
             },
-            "the removed pack is still loaded"
+            "the removed pack is retained by the stable handle, not the store"
         );
         assert!(
             stable_handle.entry_by_location(&location).is_some(),
             "it finds the old removed location (still loaded) on the old id, it's still cached in the handle, too"
         );
         assert!(
-            stable_handle.clone().entry_by_location(&location).is_some(),
+            stable_handle.pack_offsets_and_oid(location.pack_id).is_some(),
+            "the index describing the removed pack is retained along with its data"
+        );
+        let cloned_stable_handle = stable_handle.clone();
+        assert!(
+            cloned_stable_handle.entry_by_location(&location).is_some(),
             "handles without any internal cache also work"
+        );
+        assert!(
+            cloned_stable_handle.pack_offsets_and_oid(location.pack_id).is_some(),
+            "clones retain enough index information to consume an existing location"
         );
     }
 
@@ -1080,12 +1089,12 @@ fn auto_refresh_with_and_without_id_stability() -> crate::Result {
             known_reachable_indices: 1,
             open_reachable_packs: 1,
             known_packs: 1,
-            unused_slots: 30,
+            unused_slots: 31,
             loose_dbs: 1,
-            unreachable_indices: 1,
-            unreachable_packs: 1
+            unreachable_indices: 0,
+            unreachable_packs: 0
         },
-        "garbaged slots aren't reclaimed until there is the need. Keeping indices open despite them not being accessible anymore."
+        "the store can immediately reclaim slots after stable handles release their retained resources"
     );
     Ok(())
 }

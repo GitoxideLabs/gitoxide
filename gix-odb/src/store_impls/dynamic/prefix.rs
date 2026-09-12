@@ -133,8 +133,10 @@ where
     ///
     /// ### Performance Note
     ///
-    /// - Unless the handles refresh mode is set to `Never`, each lookup will trigger a refresh of the object databases files
-    ///   on disk if the prefix doesn't lead to ambiguous results.
+    /// - With [`RefreshMode::AfterAllIndicesLoaded`](super::RefreshMode::AfterAllIndicesLoaded), each lookup will refresh the
+    ///   object database files on disk if the prefix doesn't lead to ambiguous results. Use
+    ///   [`RefreshMode::AfterDuration`](super::RefreshMode::AfterDuration) to throttle these scans, or
+    ///   [`RefreshMode::Never`](super::RefreshMode::Never) to disable them.
     /// - Since all objects need to be examined to assure non-ambiguous return values, after calling this method all indices will
     ///   be loaded.
     /// - If `candidates` is `Some(…)`, the traversal will continue to obtain all candidates, which takes more time
