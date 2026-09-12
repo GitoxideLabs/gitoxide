@@ -209,10 +209,10 @@ struct Transplant {
     /// Include all eligible descendants of ROOT in the Tix view.
     #[arg(long)]
     subtree: bool,
-    /// Keep the original commits and transplant copies.
+    /// Keep the original commits and transplant copies, freezing included AutoMerges.
     #[arg(long)]
     copy: bool,
-    /// Remove the selected commits from their old position.
+    /// Remove the selected commits from their old position, keeping AutoMerges live.
     #[arg(long = "move")]
     move_commits: bool,
     /// Add a separate branch at the destination.
@@ -1997,6 +1997,229 @@ mod tests {
             crate::history::all_pins(&repository)?.is_empty(),
             "undo removes the checkout pin"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn transplant_command_preserves_merge_trees_and_freezes_only_copies() -> gix_testtools::Result {
+        use crate::edit::auto_merge::{Definition, Input, InputSource};
+
+        fn git(path: &Path, args: &[&str]) -> Result<Vec<u8>> {
+            let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "git failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(output.stdout)
+        }
+        for automatic in [false, true] {
+            for copy in [false, true] {
+                let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+                let path = fixture.path();
+                let repo = crate::test_repository::open(path)?;
+                let base_commit_id = repo.rev_parse_single("main~2")?.detach();
+                let root_commit_id = repo.rev_parse_single("main~1")?.detach();
+                let left_commit_id = repo.head_id()?.detach();
+                let mut right = repo.find_commit(root_commit_id)?.decode()?.into_owned()?;
+                right.parents = [root_commit_id].into_iter().collect();
+                let side_blob_id = repo.write_blob("right side\n")?.detach();
+                let mut right_tree = repo.find_tree(right.tree)?.edit()?;
+                right_tree.upsert("right", gix::objs::tree::EntryKind::Blob, side_blob_id)?;
+                right.tree = right_tree.write()?.detach();
+                right.message = "right side\n".into();
+                let right_commit_id = repo.write_object(&right)?.detach();
+                repo.reference(
+                    "refs/heads/right",
+                    right_commit_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "fixture",
+                )?;
+
+                let mut merged = repo.find_commit(left_commit_id)?.decode()?.into_owned()?;
+                merged.parents = [left_commit_id, right_commit_id].into_iter().collect();
+                let mut tree = repo.find_tree(merged.tree)?.edit()?;
+                tree.upsert("right", gix::objs::tree::EntryKind::Blob, side_blob_id)?;
+                tree.upsert(
+                    "merge-only",
+                    gix::objs::tree::EntryKind::Blob,
+                    repo.write_blob("recorded merge edit\n")?,
+                )?;
+                merged.tree = tree.write()?.detach();
+                let body = b"\n\nKeep this body byte-for-byte.\r\n\xff\n";
+                merged.message = if automatic {
+                    "[✔️ main] [✔️ right]"
+                } else {
+                    "Manual merge"
+                }
+                .into();
+                merged.message.extend_from_slice(body);
+                if automatic {
+                    Definition {
+                        inputs: [
+                            ("refs/heads/main", left_commit_id),
+                            ("refs/heads/right", right_commit_id),
+                        ]
+                        .into_iter()
+                        .map(|(name, commit_id)| {
+                            Ok(Input {
+                                source: InputSource::Reference(name.try_into()?),
+                                commit_id,
+                                muted: false,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                    }
+                    .store(&mut merged);
+                }
+                let merge_commit_id = repo.write_object(&merged)?.detach();
+                repo.reference(
+                    "refs/heads/combined",
+                    merge_commit_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "fixture",
+                )?;
+                let mut destination = repo.find_commit(base_commit_id)?.decode()?.into_owned()?;
+                destination.parents = [base_commit_id].into_iter().collect();
+                let mut tree = repo.find_tree(destination.tree)?.edit()?;
+                tree.upsert(
+                    "destination",
+                    gix::objs::tree::EntryKind::Blob,
+                    repo.write_blob("destination\n")?,
+                )?;
+                destination.tree = tree.write()?.detach();
+                destination.message = "destination\n".into();
+                let destination_commit_id = repo.write_object(&destination)?.detach();
+                repo.reference(
+                    "refs/heads/destination",
+                    destination_commit_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "fixture",
+                )?;
+                git(path, &["checkout", "-q", "combined"])?;
+                git(
+                    path,
+                    &["notes", "add", "-m", "merge note", &merge_commit_id.to_string()],
+                )?;
+                transplant(
+                    repo,
+                    Transplant {
+                        root: root_commit_id.to_string().into(),
+                        leaf: vec!["combined".into()],
+                        subtree: false,
+                        copy,
+                        move_commits: !copy,
+                        fork: true,
+                        insert: false,
+                        above: Some("destination".into()),
+                        below: None,
+                        materialize_conflicts: None,
+                    },
+                )?;
+                let repo = crate::test_repository::open(path)?;
+                let result_commit_id = if copy {
+                    let pins = crate::history::all_pins(&repo)?;
+                    assert_eq!(pins.len(), 1, "the copied merge leaf has one retention pin");
+                    assert_eq!(repo.head_id()?, merge_commit_id, "Copy preserves the original checkout");
+                    pins[0].id
+                } else {
+                    let result_commit_id = repo.find_reference("refs/heads/combined")?.id().detach();
+                    assert_eq!(
+                        repo.head_id()?,
+                        result_commit_id,
+                        "Move follows the selected merge occurrence"
+                    );
+                    result_commit_id
+                };
+                let result = repo.find_commit(result_commit_id)?.decode()?.into_owned()?;
+                assert_eq!(
+                    crate::edit::auto_merge::is_auto_merge(&result),
+                    automatic && !copy,
+                    "only copied AutoMerges are frozen; moved AutoMerges keep their live recipe"
+                );
+                assert!(
+                    !crate::edit::rebase::is_pending(&result),
+                    "all selected merge parents are replayed eagerly"
+                );
+                assert_eq!(result.parents.len(), 2, "the diamond remains a merge");
+                for name in ["base", "middle", "tip", "right", "destination"] {
+                    assert!(
+                        repo.find_tree(result.tree)?.find_entry(name).is_some(),
+                        "the result retains {name}"
+                    );
+                }
+                assert_eq!(
+                    repo.find_tree(result.tree)?.find_entry("merge-only").is_some(),
+                    !automatic || copy,
+                    "ordinary merges and frozen copies retain merge-only edits; live AutoMerges rebuild from their inputs"
+                );
+                let mut expected_message = if automatic {
+                    b"Merge main and right".to_vec()
+                } else {
+                    b"Manual merge".to_vec()
+                };
+                expected_message.extend_from_slice(body);
+                if automatic && !copy {
+                    let definition = Definition::from_commit(&result)?.context("the moved AutoMerge remains live")?;
+                    assert_eq!(definition.inputs.len(), 2, "Move retains every subscription");
+                    for (input, name) in definition.inputs.iter().zip(["refs/heads/main", "refs/heads/right"]) {
+                        assert_eq!(
+                            input.source,
+                            InputSource::Reference(name.try_into()?),
+                            "Move retains the original subscription identity and order"
+                        );
+                        assert_eq!(
+                            input.commit_id,
+                            repo.find_reference(name)?.id(),
+                            "live subscriptions follow the moved input refs"
+                        );
+                    }
+                    assert!(
+                        result.message.starts_with(&definition.title()) && result.message.ends_with(body),
+                        "Move regenerates the AutoMerge subject and legend while retaining its custom body"
+                    );
+                } else {
+                    assert_eq!(
+                        result.message, expected_message,
+                        "freezing replaces only the generated subject"
+                    );
+                }
+                assert_eq!(
+                    git(path, &["notes", "show", &result_commit_id.to_string()])?,
+                    b"merge note\n",
+                    "merge notes follow the result"
+                );
+                assert_eq!(
+                    crate::change_id::for_commit(&repo, result_commit_id)?,
+                    crate::change_id::for_commit(&repo, merge_commit_id)?,
+                    "copy and move retain change identity"
+                );
+                if copy {
+                    assert_eq!(
+                        crate::edit::auto_merge::is_auto_merge(
+                            &repo.find_commit(merge_commit_id)?.decode()?.into_owned()?
+                        ),
+                        automatic,
+                        "the original AutoMerge remains live"
+                    );
+                    assert_eq!(
+                        repo.find_reference("refs/heads/main")?.id(),
+                        left_commit_id,
+                        "source branches stay on their original occurrences"
+                    );
+                    assert_eq!(repo.find_reference("refs/heads/right")?.id(), right_commit_id);
+                }
+                crate::edit::undo::plan_undo(&repo)?
+                    .context("the transplant is undoable")?
+                    .apply(&repo)?;
+                assert_eq!(repo.head_id()?, merge_commit_id, "undo restores the merge checkout");
+                assert_eq!(repo.find_reference("refs/heads/combined")?.id(), merge_commit_id);
+                assert!(
+                    crate::history::all_pins(&repo)?.is_empty(),
+                    "undo removes copied leaves"
+                );
+            }
+        }
         Ok(())
     }
 
