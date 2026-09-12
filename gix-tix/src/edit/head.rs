@@ -113,6 +113,7 @@ fn perform_inner(
     repo = repo.with_object_memory();
     let old_tree = commit.tree;
     let pending = rebase::is_pending(&commit);
+    let merge_replay = rebase::has_merge_replay(&commit);
     let review = super::review::is_review(&commit);
     let parent_tree = match commit.parents.first().copied() {
         Some(parent) => repo.find_commit(parent)?.tree_id()?.detach(),
@@ -141,7 +142,7 @@ fn perform_inner(
             }
             if let Some(path) = selected_amend_path {
                 amend_path_tree(&repo, old_tree, path, &index)?
-            } else if index_only {
+            } else if index_only || merge_replay {
                 let index_tree = create::index_tree(&repo, &index)?;
                 if index_tree == old_tree && !pending {
                     return Ok(None);
@@ -220,7 +221,15 @@ fn perform_inner(
         }
         _ => rebase::perform_with_progress(&repo, graph, edit, signature, tree_mode, None, &mut report)?,
     };
-    Ok(Some(performed.complete()?))
+    let outcome = match performed {
+        rebase::Perform::Conflict(conflict)
+            if pending && kind == Kind::Amend && pending_checkout == rebase::PendingCheckout::FinalizeEditedHead =>
+        {
+            conflict.persist(rebase::CheckoutOptions::default())?
+        }
+        performed => performed.complete()?,
+    };
+    Ok(Some(outcome))
 }
 
 fn amend_path_tree(
@@ -338,7 +347,7 @@ fn restore_path(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{path::Path, process::Command};
 
     use gix::bstr::ByteSlice;
@@ -358,6 +367,232 @@ mod tests {
             return Err(format!("git {} failed: {}", args.join(" "), output.stderr.to_str_lossy()).into());
         }
         Ok(output.stdout)
+    }
+
+    pub(crate) fn merge_conflict_fixture() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, rebase::Outcome)>
+    {
+        merge_replay_fixture(true)
+    }
+
+    pub(crate) fn merge_replay_fixture(
+        eager: bool,
+    ) -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, rebase::Outcome)> {
+        // The recorded merge chose `base` over `middle`. Replacing its parents with
+        // `middle` and `tip` first conflicts while replaying the second parent; choosing
+        // `tip` then conflicts again when combining that candidate with `middle`.
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repo = open(fixture.path())?;
+        let tip_commit_id = repo.head_id()?.detach();
+        let middle_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+        let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+        let mut merge = repo.find_commit(base_commit_id)?.decode()?.into_owned()?;
+        let other_blob_id = repo.write_blob(b"merge-only edit\n")?;
+        merge.tree = repo
+            .find_tree(merge.tree)?
+            .edit()?
+            .upsert("other", gix::objs::tree::EntryKind::Blob, other_blob_id)?
+            .write()?
+            .detach();
+        merge.parents = [base_commit_id, middle_commit_id].into_iter().collect();
+        merge.message = "recorded manual merge resolution".into();
+        let merge_commit_id = repo.write_object(&merge)?.detach();
+        repo.reference(
+            "refs/heads/side-new",
+            tip_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "keep the new side parent",
+        )?;
+        git(fixture.path(), &["reset", "--hard", &merge_commit_id.to_string()])?;
+        if !eager {
+            git(
+                fixture.path(),
+                &["checkout", "-q", "--detach", &base_commit_id.to_string()],
+            )?;
+        }
+        let graph = super::super::loaded_graph(&repo)?;
+        let main: gix::refs::FullName = "refs/heads/main".try_into()?;
+        let plan = rebase::Plan {
+            base: base_commit_id,
+            scope: vec![merge_commit_id],
+            steps: vec![rebase::PlanStep {
+                parents: vec![
+                    rebase::PlanParent::Existing(middle_commit_id),
+                    rebase::PlanParent::Existing(tip_commit_id),
+                ],
+                commit: rebase::PlanCommit::Pick(merge_commit_id),
+                squash: Vec::new(),
+            }],
+            checkout: eager.then_some(rebase::PlanCheckout {
+                target: rebase::PlanParent::Step(0),
+                reference: Some(main.clone()),
+            }),
+            expected_refs: vec![rebase::PlanRef {
+                name: main,
+                old: Some(merge_commit_id),
+                source: merge_commit_id,
+                destination: rebase::RefDestination::Step(0),
+                editable: true,
+            }],
+            eager: Vec::new(),
+            selection: Some(rebase::PlanParent::Step(0)),
+        };
+        let outcome = match rebase::perform_plan(&repo, &graph, plan)? {
+            rebase::PlanPerform::Conflict(conflict) if eager => {
+                conflict.into_conflict().persist(rebase::CheckoutOptions::default())?
+            }
+            rebase::PlanPerform::Complete(outcome) if !eager => outcome,
+            _ => return Err("independent changes to the recorded merge conflict only when replayed eagerly".into()),
+        };
+        if !eager {
+            git(fixture.path(), &["checkout", "-q", "main"])?;
+        }
+        Ok((fixture, outcome))
+    }
+
+    #[test]
+    fn amending_an_unchanged_lazy_merge_replays_every_parent_before_accepting_a_resolution() -> gix_testtools::Result {
+        let (fixture, _) = merge_replay_fixture(false)?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let outcome = amend_index_reporting(repo, &graph)?.context("amend replays the unchanged lazy merge")?;
+        let commit_id = outcome.selected.context("the first replay conflict is selected")?;
+        let repo = open(fixture.path())?;
+        let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
+        let checkpoint_commit_id =
+            rebase::replay_checkpoint(&commit)?.context("the merge retains its completed phases")?;
+        assert_eq!(
+            git(fixture.path(), &["show", &format!("{checkpoint_commit_id}:file")])?,
+            b"middle\n",
+            "an untouched lazy baseline is not mistaken for a first-parent resolution"
+        );
+        std::fs::write(fixture.path().join("file"), "tip\n")?;
+        git(fixture.path(), &["add", "file"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let outcome = amend_index_reporting(repo, &graph)?.context("the first actual resolution advances the merge")?;
+        let repo = open(fixture.path())?;
+        assert!(
+            rebase::is_pending(
+                &repo
+                    .find_commit(outcome.selected.context("the combine conflict is selected")?)?
+                    .decode()?
+                    .into_owned()?
+            ),
+            "the first parent's preserved update still conflicts with the second candidate"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn editing_a_lazy_merge_requires_materializing_its_replay_first() -> gix_testtools::Result {
+        let (fixture, _) = merge_replay_fixture(false)?;
+        std::fs::write(fixture.path().join("file"), "unmaterialized edit\n")?;
+        git(fixture.path(), &["add", "file"])?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let err = match amend_index_reporting(repo, &graph) {
+            Ok(_) => return Err("a lazy merge's edits cannot be interpreted as a conflict resolution".into()),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("time-travel"),
+            "the diagnostic explains how to materialize the lazy merge: {err:#}"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "rejected edits leave repository state intact"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn amend_resumes_each_merge_phase_before_finalizing() -> gix_testtools::Result {
+        let (fixture, accepted) = merge_conflict_fixture()?;
+        let repo = open(fixture.path())?;
+        let pending_commit_id = accepted.selected.context("the first conflict is selected")?;
+        let parents = repo.find_commit(pending_commit_id)?.decode()?.into_owned()?.parents;
+        std::fs::write(fixture.path().join("file"), "tip\n")?;
+        git(fixture.path(), &["add", "file"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let next =
+            amend_index_reporting(repo, &graph)?.context("the staged parent-phase resolution advances replay")?;
+        let next_commit_id = next.selected.context("the next conflict is selected")?;
+        let repo = open(fixture.path())?;
+        let next_commit = repo.find_commit(next_commit_id)?.decode()?.into_owned()?;
+        assert!(
+            rebase::is_pending(&next_commit),
+            "the combine-phase conflict stays pending"
+        );
+        assert_eq!(
+            next_commit.parents.as_slice(),
+            parents.as_slice(),
+            "every stage keeps the intended final ordered parents"
+        );
+        assert!(
+            repo.open_index()?
+                .entries()
+                .iter()
+                .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted),
+            "amend materializes real index conflict stages for the next replay phase"
+        );
+
+        std::fs::write(fixture.path().join("file"), "resolved\n")?;
+        git(fixture.path(), &["add", "file"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let final_outcome =
+            amend_index_reporting(repo, &graph)?.context("the final stage resolution completes replay")?;
+        let final_commit_id = final_outcome.selected.context("the finalized merge is selected")?;
+        let repo = open(fixture.path())?;
+        let final_commit = repo.find_commit(final_commit_id)?.decode()?.into_owned()?;
+        assert!(
+            !rebase::is_pending(&final_commit),
+            "only the final stage clears replay metadata"
+        );
+        assert_eq!(
+            final_commit.parents.as_slice(),
+            parents.as_slice(),
+            "the finalized merge retains both parents"
+        );
+        assert_eq!(
+            git(fixture.path(), &["show", "HEAD:file"])?,
+            b"resolved\n",
+            "the final resolution is recorded"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_unchanged_merge_resolution_uses_the_index_and_leaves_unstaged_changes_alone() -> gix_testtools::Result {
+        let (fixture, _) = merge_conflict_fixture()?;
+        git(fixture.path(), &["read-tree", "HEAD"])?;
+        std::fs::write(fixture.path().join("file"), "base\n")?;
+        std::fs::write(fixture.path().join("other"), "unrelated worktree edit\n")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let outcome = amend_reporting(repo, &graph)?.context("an all-ours stage resolution still advances replay")?;
+        let commit_id = outcome.selected.context("the finalized merge is selected")?;
+        let repo = open(fixture.path())?;
+        assert!(
+            !rebase::is_pending(&repo.find_commit(commit_id)?.decode()?.into_owned()?),
+            "the unchanged candidate combines with the already replayed first parent"
+        );
+        assert_eq!(
+            git(fixture.path(), &["show", "HEAD:file"])?,
+            b"middle\n",
+            "the first parent's update is retained"
+        );
+        assert_eq!(
+            git(fixture.path(), &["show", "HEAD:other"])?,
+            b"merge-only edit\n",
+            "the staged resolution preserves the recorded merge-only edit"
+        );
+        assert_eq!(
+            std::fs::read(fixture.path().join("other"))?,
+            b"unrelated worktree edit\n",
+            "unstaged content is not used to resolve the pending merge"
+        );
+        Ok(())
     }
 
     #[test]

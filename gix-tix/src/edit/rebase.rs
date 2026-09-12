@@ -21,6 +21,8 @@ use gix::{
 use super::auto_merge;
 use crate::history::HistoryGraph;
 
+mod merge;
+
 const ORIGINAL_PARENT: &[u8] = b"tix-rebase-parent";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,7 +107,7 @@ impl PlanCommit {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlanStep {
-    pub parent: PlanParent,
+    pub parents: Vec<PlanParent>,
     pub commit: PlanCommit,
     pub squash: Vec<PlanFold>,
 }
@@ -300,7 +302,7 @@ impl PlanConflict {
             .collect();
         let mut scope = self.produced[self.continuation_start..].to_vec();
         scope.extend(self.remaining_squash.iter().flatten().map(|fold| fold.commit_id));
-        let base = match self.plan.steps[self.continuation_start].parent {
+        let base = match self.plan.steps[self.continuation_start].parents[0] {
             PlanParent::Existing(id) => id,
             PlanParent::Step(parent) => self.produced[parent],
         };
@@ -313,20 +315,47 @@ impl PlanConflict {
                 .iter()
                 .enumerate()
                 .skip(self.continuation_start)
-                .map(|(index, step)| PlanStep {
-                    parent: match step.parent {
-                        PlanParent::Existing(id) => PlanParent::Existing(id),
-                        PlanParent::Step(parent) if parent < self.continuation_start => {
-                            PlanParent::Existing(self.produced[parent])
-                        }
-                        PlanParent::Step(parent) => PlanParent::Step(parent - self.continuation_start),
-                    },
-                    commit: if index == self.conflict_step {
-                        PlanCommit::Resolved(self.produced[index])
-                    } else {
-                        PlanCommit::Pick(self.produced[index])
-                    },
-                    squash: self.remaining_squash[index].clone(),
+                .map(|(index, step)| {
+                    let commit = self
+                        .conflict
+                        .prepared
+                        .repo
+                        .find_commit(self.produced[index])
+                        .expect("the plan produced every continuation commit");
+                    let pending_merge = commit
+                        .decode()
+                        .expect("produced commits are valid")
+                        .extra_headers()
+                        .find(merge::HEADER)
+                        .is_some();
+                    let mut seen = HashSet::new();
+                    let parents = step
+                        .parents
+                        .iter()
+                        .filter(|parent| {
+                            let commit_id = match parent {
+                                PlanParent::Existing(commit_id) => *commit_id,
+                                PlanParent::Step(index) => self.produced[*index],
+                            };
+                            pending_merge || seen.insert(commit_id)
+                        })
+                        .map(|parent| match *parent {
+                            PlanParent::Existing(id) => PlanParent::Existing(id),
+                            PlanParent::Step(parent) if parent < self.continuation_start => {
+                                PlanParent::Existing(self.produced[parent])
+                            }
+                            PlanParent::Step(parent) => PlanParent::Step(parent - self.continuation_start),
+                        })
+                        .collect();
+                    PlanStep {
+                        parents,
+                        commit: if index == self.conflict_step {
+                            PlanCommit::Resolved(self.produced[index])
+                        } else {
+                            PlanCommit::Pick(self.produced[index])
+                        },
+                        squash: self.remaining_squash[index].clone(),
+                    }
                 })
                 .collect(),
             checkout: self.plan.checkout.as_ref().map(|checkout| PlanCheckout {
@@ -484,6 +513,8 @@ struct Prepared {
     pins: Vec<ObjectId>,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     enrichment: Option<(&'static str, ObjectId, BString)>,
+    continuation: Option<(ObjectId, Vec<ObjectId>)>,
+    release_continuation: Option<(ObjectId, Vec<ObjectId>)>,
 }
 
 pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[ObjectId]) -> Result<Vec<PlanRef>> {
@@ -501,6 +532,7 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[O
             reference.name().category(),
             Some(Category::Tag | Category::RemoteBranch)
         ) || super::undo::is_queue_ref(reference.name().as_bstr())
+            || super::replay_refs::is_ref(reference.name().as_bstr())
         {
             continue;
         }
@@ -581,7 +613,7 @@ pub(crate) fn squash_plan(
             .map_or(PlanParent::Existing(parent), PlanParent::Step);
         let index = steps.len();
         steps.push(PlanStep {
-            parent,
+            parents: vec![parent],
             commit: PlanCommit::Pick(id),
             squash: (id == target).then_some(source.into()).into_iter().collect(),
         });
@@ -954,8 +986,20 @@ fn perform_inner(
         .collect();
     if repeat {
         checkout_path = auto_merge::checkout_path(&repo, graph, repeat_checkout)?;
+        let mut included: HashSet<_> = affected.iter().copied().collect();
+        for commit_id in &checkout_path {
+            if graph.auto_merges.contains_key(commit_id)
+                || is_pending(&repo.find_commit(*commit_id)?.decode()?.into_owned()?)
+            {
+                for descendant_commit_id in graph.descendants_in_parent_order(*commit_id).into_iter().flatten() {
+                    if included.insert(descendant_commit_id) {
+                        affected.push(descendant_commit_id);
+                    }
+                }
+            }
+        }
     }
-    let mut auto = if graph.auto_merges.is_empty() {
+    let mut auto = if graph.auto_merges.is_empty() && !repeat {
         auto_merge::Preparation {
             refs: Default::default(),
             optional: HashSet::new(),
@@ -980,16 +1024,11 @@ fn perform_inner(
             && root == Some(checkout)
             && replacement.as_ref().is_some_and(is_pending)
         {
-            repo.find_commit(checkout)?
-                .decode()?
-                .into_owned()?
-                .parents
-                .first()
-                .copied()
+            repo.find_commit(checkout)?.decode()?.into_owned()?.parents.to_vec()
         } else {
-            Some(checkout)
+            vec![checkout]
         };
-        if let Some(id) = scan_from {
+        for id in scan_from {
             reject_pending_checkout_path(&repo, id, review_boundary, |id| graph.is_in_edit_scope(id))?;
         }
     }
@@ -1090,21 +1129,36 @@ fn perform_inner(
             continue;
         }
         let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
+        let resolving_merge_phase = Some(old_id) == root
+            && pending_checkout == PendingCheckout::FinalizeEditedHead
+            && has_merge_replay(&commit)
+            && crate::patch_id::is_unavailable(&commit);
+        if Some(old_id) == root
+            && pending_checkout == PendingCheckout::FinalizeEditedHead
+            && has_merge_replay(&commit)
+            && !resolving_merge_phase
+        {
+            anyhow::ensure!(
+                commit.tree == repo.find_commit(old_id)?.tree_id()?,
+                "time-travel to HEAD to finish the pending merge before amending its content"
+            );
+        }
         if Some(old_id) == root && pending_checkout == PendingCheckout::FinalizeEditedHead {
             crate::patch_id::clear_unavailable(&mut commit);
         }
         let original_parents =
             recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
         let optional = auto.optional.contains(&old_id) && !checkout_path.contains(&old_id);
-        let parent_pending = new_parents
-            .first()
-            .map(|parent| -> Result<bool> { Ok(is_pending(&repo.find_commit(*parent)?.decode()?.into_owned()?)) })
-            .transpose()?
-            .unwrap_or(false);
+        let parent_pending = replay_parents_pending(&repo, &commit, &new_parents)?;
+        let resolving_merge = Some(old_id) == root
+            && pending_checkout == PendingCheckout::FinalizeEditedHead
+            && has_merge_replay(&commit);
         let eager = !header_only
             && conflict.is_none()
             && !parent_pending
-            && if repeat {
+            && if resolving_merge {
+                true
+            } else if repeat {
                 checkout_path.contains(&old_id) || optional
             } else {
                 Some(old_id) != root && (checkout_path.contains(&old_id) || optional)
@@ -1117,7 +1171,9 @@ fn perform_inner(
         } else {
             tree_mode
         };
-        let finalize_empty = !header_only
+        let finalize_empty = original_parents.len() <= 1
+            && !has_merge_replay(&commit)
+            && !header_only
             && conflict.is_none()
             && !crate::patch_id::is_unavailable(&commit)
             && matches!(
@@ -1138,6 +1194,7 @@ fn perform_inner(
             conflict: new_conflict,
             muted: optional_conflict,
         } = replay.tree(
+            Some(old_id),
             &mut commit,
             if commit_tree_mode == Tree::CherryPick {
                 &original_parents
@@ -1147,6 +1204,7 @@ fn perform_inner(
             &new_parents,
             commit_tree_mode,
             optional,
+            resolving_merge_phase,
             eager.then_some(&mut progress),
         )?;
         let pending = commit_tree_mode == Tree::LeaveAsIsAndMark
@@ -1154,7 +1212,8 @@ fn perform_inner(
             || conflict.is_some()
             || optional_conflict
             || new_conflict.is_some();
-        let preserve_pending_root = recorded_parent.is_some() && pending_checkout == PendingCheckout::Reject;
+        let preserve_pending_root =
+            (recorded_parent.is_some() || has_merge_replay(&commit)) && pending_checkout == PendingCheckout::Reject;
         let is_conflicting_commit = new_conflict.is_some();
         let signature = if conflict.is_some() || is_conflicting_commit || (repeat && !eager) {
             Signature::InvalidateExisting
@@ -1237,11 +1296,15 @@ fn perform_inner(
         committer,
         expected_refs: None,
         checkout_reference: None,
-        checkout_tree: None,
+        checkout_tree: (pending_checkout == PendingCheckout::FinalizeEditedHead)
+            .then(|| replacement.as_ref().map(|commit| commit.tree))
+            .flatten(),
         departure: None,
         pins: Vec::new(),
         delete_refs,
         enrichment: None,
+        continuation: None,
+        release_continuation: None,
     };
     let enrichment = prepare_enrichment(&mut prepared, enrichment_headers)?;
     let perform = match conflict {
@@ -1335,13 +1398,6 @@ pub(super) fn finish_review_with_progress(
             None,
             |id| graph.is_in_edit_scope(id),
         )?;
-    }
-    for id in review_ids.iter().chain(&natural_ids) {
-        if graph.parents_or_load(&repo, *id)?.len() > 1
-            && !auto_merge::is_auto_merge(&repo.find_commit(*id)?.decode()?.into_owned()?)
-        {
-            anyhow::bail!("review finish cannot rewrite merge descendants");
-        }
     }
 
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
@@ -1437,18 +1493,16 @@ pub(super) fn finish_review_with_progress(
         let original_parents =
             recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
         let optional = auto.optional.contains(&old) && !checkout_path.contains(&old);
-        let parent_pending = new_parents
-            .first()
-            .map(|parent| -> Result<_> { Ok(is_pending(&repo.find_commit(*parent)?.decode()?.into_owned()?)) })
-            .transpose()?
-            .unwrap_or(false);
+        let parent_pending = replay_parents_pending(&repo, &commit, &new_parents)?;
         let eager = conflict.is_none() && !parent_pending && (checkout_path.contains(&old) || optional);
         let mut mode = if eager {
             Tree::CherryPick
         } else {
             Tree::LeaveAsIsAndMark
         };
-        let finalize_empty = conflict.is_none()
+        let finalize_empty = original_parents.len() <= 1
+            && !has_merge_replay(&commit)
+            && conflict.is_none()
             && !crate::patch_id::is_unavailable(&commit)
             && empty_commit_has_final_parent(
                 &repo,
@@ -1463,11 +1517,13 @@ pub(super) fn finish_review_with_progress(
             conflict: new_conflict,
             muted: optional_conflict,
         } = replay.tree(
+            Some(old),
             &mut commit,
             &original_parents,
             &new_parents,
             mode,
             optional,
+            false,
             eager.then_some(&mut progress),
         )?;
         let pending = !(eager || finalize_empty) || conflict.is_some() || new_conflict.is_some() || optional_conflict;
@@ -1518,6 +1574,8 @@ pub(super) fn finish_review_with_progress(
         pins: Vec::new(),
         delete_refs,
         enrichment: None,
+        continuation: None,
+        release_continuation: None,
     };
     match conflict {
         Some((original, merged_tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
@@ -1560,6 +1618,7 @@ pub(crate) fn perform_plan_with_progress(
     let scope: HashSet<_> = plan.scope.iter().copied().collect();
     let mut picked = HashSet::new();
     for step in &plan.steps {
+        anyhow::ensure!(!step.parents.is_empty(), "a rebase step must have a parent");
         if let PlanCommit::Copy(id) = step.commit
             && (graph.parents_of(id).context("a copied commit is incomplete")?.len() != 1
                 || auto_merge::is_auto_merge(&repo.find_commit(id)?.decode()?.into_owned()?))
@@ -1578,8 +1637,18 @@ pub(crate) fn perform_plan_with_progress(
             if automatic && step.squash.iter().any(|fold| fold.commit_id == id) {
                 anyhow::bail!("an AutoMerge cannot be squashed");
             }
-            if graph.parents_or_load(&repo, id)?.len() > 1 && !automatic {
-                anyhow::bail!("merge commits cannot be picked by the rebase editor");
+            if graph.parents_or_load(&repo, id)?.len() > 1 && !automatic && !step.squash.is_empty() {
+                anyhow::bail!("merge commits cannot be squashed");
+            }
+        }
+        if let Some(commit_id) = step.commit.source() {
+            let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
+            if !auto_merge::is_auto_merge(&commit) {
+                let original_parents = replay_parents(&commit)?.unwrap_or_else(|| commit.parents.to_vec());
+                anyhow::ensure!(
+                    original_parents.len() == step.parents.len(),
+                    "a rebase step must preserve its parent slots"
+                );
             }
         }
     }
@@ -1626,13 +1695,14 @@ pub(crate) fn perform_plan_with_progress(
         .into_iter()
         .chain(plan.eager.iter().copied().map(PlanParent::Step))
     {
-        let mut cursor = target;
-        while let PlanParent::Step(index) = cursor {
+        let mut pending = vec![target];
+        while let Some(parent) = pending.pop() {
+            let PlanParent::Step(index) = parent else { continue };
             // The ordered plan is acyclic; required paths can share ancestors.
             if !eager.insert(index) || automatic.contains(&index) {
-                break;
+                continue;
             }
-            cursor = plan.steps.get(index).context("an eager step is missing")?.parent;
+            pending.extend(&plan.steps.get(index).context("an eager step is missing")?.parents);
         }
     }
 
@@ -1688,21 +1758,20 @@ pub(crate) fn perform_plan_with_progress(
             continue;
         }
         let mut resolved_head = None;
-        let parent = match step.parent {
-            PlanParent::Existing(id) => {
-                repo.find_commit(id).context("could not find a fork target")?;
-                id
-            }
-            PlanParent::Step(parent) => *produced.get(parent).context("a fork points to a later commit")?,
-        };
+        let mut resolving_merge_phase = false;
+        let parents = step
+            .parents
+            .iter()
+            .map(|parent| match *parent {
+                PlanParent::Existing(id) => {
+                    repo.find_commit(id).context("could not find a fork target")?;
+                    Ok(id)
+                }
+                PlanParent::Step(parent) => produced.get(parent).copied().context("a fork points to a later commit"),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let parent = parents[0];
         let optional_input = optional.contains(&index) && !eager.contains(&index) && step.squash.is_empty();
-        let parent_pending = is_pending(&repo.find_commit(parent)?.decode()?.into_owned()?);
-        let eager = conflict.is_none()
-            && !(optional_input && parent_pending)
-            && (matches!(step.commit, PlanCommit::Copy(_))
-                || eager.contains(&index)
-                || optional_input
-                || !step.squash.is_empty());
         let mut commit = match &step.commit {
             PlanCommit::Pick(id) | PlanCommit::Copy(id) => repo
                 .find_commit(*id)
@@ -1734,6 +1803,7 @@ pub(crate) fn perform_plan_with_progress(
                 }
                 commit.tree = super::create::index_tree(&repo, &index)?;
                 checkout_tree = Some(commit.tree);
+                resolving_merge_phase = has_merge_replay(&commit) && crate::patch_id::is_unavailable(&commit);
                 crate::patch_id::clear_unavailable(&mut commit);
                 commit
             }
@@ -1747,6 +1817,13 @@ pub(crate) fn perform_plan_with_progress(
                 extra_headers: Vec::new(),
             },
         };
+        let parent_pending = replay_parents_pending(&repo, &commit, &parents)?;
+        let eager = conflict.is_none()
+            && !parent_pending
+            && (matches!(step.commit, PlanCommit::Copy(_))
+                || eager.contains(&index)
+                || optional_input
+                || !step.squash.is_empty());
         if matches!(step.commit, PlanCommit::Copy(_))
             && let Some(reference) = super::review::reference(&commit)?
         {
@@ -1762,7 +1839,7 @@ pub(crate) fn perform_plan_with_progress(
         if let PlanCommit::Pick(id) = step.commit
             && step.squash.is_empty()
             && !is_pending(&commit)
-            && graph_parents.as_slice() == [parent]
+            && graph_parents == parents
         {
             rewritten.insert(id, Some(id));
             produced.push(id);
@@ -1774,7 +1851,9 @@ pub(crate) fn perform_plan_with_progress(
             || graph_parents.clone(),
             |parent| parent.into_iter().collect::<Vec<_>>(),
         );
-        let finalize_empty = conflict.is_none()
+        let finalize_empty = replay_parents.len() <= 1
+            && !has_merge_replay(&commit)
+            && conflict.is_none()
             && !crate::patch_id::is_unavailable(&commit)
             && step.squash.is_empty()
             && empty_commit_has_final_parent(&repo, commit.tree, replay_parents.first().copied(), Some(parent))?;
@@ -1787,11 +1866,13 @@ pub(crate) fn perform_plan_with_progress(
             conflict: tree_conflict,
             muted: optional_conflict,
         } = replay.tree(
+            step.commit.source(),
             &mut commit,
             &replay_parents,
-            &[parent],
+            &parents,
             mode,
             optional_input,
+            resolving_merge_phase,
             (eager && step.commit.source().is_some()).then_some(&mut progress),
         )?;
         let mut step_conflict = tree_conflict.map(|(merged, conflicts)| {
@@ -2007,6 +2088,11 @@ pub(crate) fn perform_plan_with_progress(
         pins,
         delete_refs,
         enrichment: None,
+        continuation: None,
+        release_continuation: plan.steps.iter().find_map(|step| match step.commit {
+            PlanCommit::Resolved(commit_id) => Some((commit_id, plan.scope.clone())),
+            _ => None,
+        }),
     };
     tracing::info!(
         total = progress.total,
@@ -2051,6 +2137,9 @@ pub(crate) fn perform_plan_with_progress(
     for (index, step) in plan.steps.iter().enumerate().skip(conflict_step + 1) {
         remaining_squash[index].clone_from(&step.squash);
     }
+    let mut continuation = produced[continuation_start..].to_vec();
+    continuation.extend(remaining_squash.iter().flatten().map(|fold| fold.commit_id));
+    prepared.continuation = Some((commit, continuation));
     prepared.selected = None;
     prepared.checkout_reference = None;
     prepared.departure = prepared.repo.head()?.id().map(|id| {
@@ -2184,6 +2273,15 @@ impl Prepared {
                 forward: Vec::new(),
                 rollback: Vec::new(),
             });
+        let continuation_edits = super::replay_refs::continuation_edits(
+            &self.repo,
+            self.continuation.as_ref().map(|(owner, ids)| (*owner, ids.as_slice())),
+            self.release_continuation
+                .as_ref()
+                .map(|(owner, ids)| (*owner, ids.as_slice())),
+        )?;
+        resource_edits.forward.extend(continuation_edits.forward);
+        resource_edits.rollback.extend(continuation_edits.rollback);
         resource_edits.forward.extend(note_edits.forward);
         resource_edits.rollback.extend(note_edits.rollback);
         resource_edits.forward.extend(enrichment_edits.forward);
@@ -2263,6 +2361,21 @@ impl Prepared {
             self.expected_refs.take(),
             (&self.pins, &self.delete_refs),
             resource_edits,
+            (
+                &self.note_rewrites.iter().map(|(_, new)| *new).collect::<Vec<_>>(),
+                &self
+                    .stash_rewritten
+                    .keys()
+                    .copied()
+                    .chain(
+                        self.release_continuation
+                            .iter()
+                            .flat_map(|(_, ids)| ids.iter().copied()),
+                    )
+                    .chain(self.removed.iter().copied())
+                    .collect::<Vec<_>>(),
+                checkout.and(self.selected),
+            ),
         )?;
         for (transitioned, transition) in transitions.iter().enumerate() {
             if let Err(err) = super::delete::apply_tree_transition(&transition.workdir, transition.old, transition.new)
@@ -2651,15 +2764,16 @@ fn validate(
     affected: &[ObjectId],
     removed: bool,
     repeat: Option<ObjectId>,
-    tree: Tree,
+    _tree: Tree,
 ) -> Result<()> {
     for (position, id) in affected.iter().enumerate() {
         let parents = graph.parents_or_load(repo, *id)?;
         if parents.len() > 1
-            && (position > 0 || removed || tree == Tree::CherryPick)
+            && position == 0
+            && removed
             && !auto_merge::is_auto_merge(&repo.find_commit(*id)?.decode()?.into_owned()?)
         {
-            anyhow::bail!("descendant merge commits cannot be rebased");
+            anyhow::bail!("a merge commit cannot be removed");
         }
         if repeat == Some(*id) {
             let commit = repo.find_commit(*id)?.decode()?.into_owned()?;
@@ -2670,8 +2784,7 @@ fn validate(
     }
     if let Some(base) = repeat
         && !auto_merge::is_auto_merge(&repo.find_commit(base)?.decode()?.into_owned()?)
-        && let Some(parent) = graph.parents_of(base).and_then(|parents| parents.first().copied())
-        && is_pending(&repo.find_commit(parent)?.decode()?.into_owned()?)
+        && parents_pending(repo, &graph.parents_or_load(repo, base)?)?
     {
         anyhow::bail!("the parent of a repeated rebase must not be pending");
     }
@@ -2680,26 +2793,27 @@ fn validate(
 
 fn reject_pending_checkout_path(
     repo: &gix::Repository,
-    mut id: ObjectId,
+    commit_id: ObjectId,
     review_boundary: Option<ObjectId>,
     is_in_scope: impl Fn(ObjectId) -> bool,
 ) -> Result<()> {
     let mut seen = HashSet::new();
-    while is_in_scope(id) && seen.insert(id) {
-        let commit = repo.find_commit(id)?.decode()?.into_owned()?;
+    let mut pending = vec![commit_id];
+    while let Some(commit_id) = pending.pop() {
+        if !is_in_scope(commit_id) || !seen.insert(commit_id) {
+            continue;
+        }
+        let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
         if auto_merge::is_auto_merge(&commit) {
-            break;
+            continue;
         }
-        if is_pending(&commit) {
-            anyhow::bail!("the current checkout has a pending rebase; time-travel to HEAD before editing it");
+        anyhow::ensure!(
+            !is_pending(&commit),
+            "the current checkout has a pending rebase; time-travel to HEAD before editing it"
+        );
+        if review_boundary != Some(commit_id) {
+            pending.extend(commit.parents);
         }
-        if review_boundary == Some(id) {
-            break;
-        }
-        let Some(parent) = commit.parents.first().copied() else {
-            break;
-        };
-        id = parent;
     }
     Ok(())
 }
@@ -2972,11 +3086,41 @@ pub(super) fn has_marker(commit: &gix::objs::Commit) -> bool {
 
 pub(crate) fn is_pending(commit: &gix::objs::Commit) -> bool {
     has_marker(commit)
+        || has_merge_replay(commit)
         || crate::patch_id::is_unavailable(commit)
         || commit
             .extra_headers
             .iter()
             .any(|(name, value)| is_signature(name) && value.is_empty())
+}
+
+pub(crate) fn has_merge_replay(commit: &gix::objs::Commit) -> bool {
+    commit.extra_headers.iter().any(|(name, _)| name == merge::HEADER)
+}
+
+pub(crate) fn replay_parents(commit: &gix::objs::Commit) -> Result<Option<Vec<ObjectId>>> {
+    merge::parents(commit)
+}
+
+pub(crate) fn replay_checkpoint(commit: &gix::objs::Commit) -> Result<Option<ObjectId>> {
+    merge::checkpoint(commit)
+}
+
+fn parents_pending(repo: &gix::Repository, parents: &[ObjectId]) -> Result<bool> {
+    for parent_commit_id in parents {
+        if is_pending(&repo.find_commit(*parent_commit_id)?.decode()?.into_owned()?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn replay_parents_pending(repo: &gix::Repository, commit: &gix::objs::Commit, parents: &[ObjectId]) -> Result<bool> {
+    if commit.parents.len() > 1 || has_merge_replay(commit) {
+        merge::parents_pending(repo, commit, parents)
+    } else {
+        parents_pending(repo, parents)
+    }
 }
 
 /// Bounded execution shared by edits, review completion, and todo replay.
@@ -3007,13 +3151,19 @@ impl<'repo> Replay<'repo> {
         })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "shared replay includes source identity and staged phase resolution"
+    )]
     fn tree(
         &self,
+        source_commit_id: Option<ObjectId>,
         commit: &mut gix::objs::Commit,
         old_parents: &[ObjectId],
         new_parents: &[ObjectId],
         mode: Tree,
         optional: bool,
+        resolution: bool,
         progress: Option<&mut Progress>,
     ) -> Result<ReplayedTree> {
         if mode == Tree::CherryPick && crate::patch_id::is_unavailable(commit) {
@@ -3033,14 +3183,27 @@ impl<'repo> Replay<'repo> {
             conflict: None,
             muted: false,
         };
-        commit.tree = match rewritten_tree(self.repo, commit, old_parents, new_parents, mode)? {
+        let ordinary_merge = old_parents.len() > 1 || has_merge_replay(commit);
+        let tree = if ordinary_merge {
+            merge::rewrite(
+                self.repo,
+                source_commit_id.context("a merge replay needs its source")?,
+                commit,
+                new_parents,
+                mode == Tree::CherryPick,
+                resolution,
+            )?
+        } else {
+            rewritten_tree(self.repo, commit, old_parents, new_parents, mode)?
+        };
+        commit.tree = match tree {
             TreeRewrite::Complete(tree) => tree,
             TreeRewrite::Conflict {
                 ours,
                 merged,
                 conflicts,
             } => {
-                if optional {
+                if optional && !ordinary_merge {
                     replayed.muted = true;
                     commit.tree
                 } else {
@@ -3165,13 +3328,19 @@ impl<'repo> Replay<'repo> {
         let signature = match state {
             CommitState::Unmarked(signature) => {
                 marker(&mut commit, false, None);
+                if !conflicted {
+                    merge::clear(&mut commit);
+                }
                 signature
             }
             CommitState::Pending { original_parent } => {
-                marker(&mut commit, true, original_parent);
+                let ordinary_merge = has_merge_replay(&commit);
+                marker(&mut commit, !ordinary_merge, original_parent);
                 Signature::InvalidateExisting
             }
         };
+        let mut seen = HashSet::new();
+        commit.parents.retain(|parent| seen.insert(*parent));
         if conflicted {
             crate::patch_id::mark_unavailable(&mut commit);
         } else if final_patch && !crate::patch_id::is_unavailable(&commit) {
@@ -3318,6 +3487,7 @@ fn update_refs(
     expected_refs: Option<Vec<PlanRef>>,
     resources: (&[ObjectId], &[(gix::refs::FullName, Target)]),
     stash_edits: super::stash::RewriteEdits,
+    replay_resources: (&[ObjectId], &[ObjectId], Option<ObjectId>),
 ) -> Result<UpdatedRefs> {
     let (pins, delete_refs) = resources;
     let mut edits = stash_edits.forward;
@@ -3356,6 +3526,7 @@ fn update_refs(
                 reference.name().category(),
                 Some(Category::Tag | Category::RemoteBranch)
             ) || super::undo::is_queue_ref(reference.name().as_bstr())
+                || super::replay_refs::is_ref(reference.name().as_bstr())
             {
                 continue;
             }
@@ -3438,6 +3609,15 @@ fn update_refs(
             log_change(),
         ));
     }
+    let replay_edits = super::replay_refs::prepare(
+        repo,
+        replay_resources.0.iter().copied(),
+        replay_resources.1.iter().copied(),
+        &edits,
+        replay_resources.2,
+    )?;
+    edits.extend(replay_edits.forward);
+    rollback.extend(replay_edits.rollback);
     if edits.is_empty() {
         return Ok(UpdatedRefs::default());
     }
@@ -3727,7 +3907,7 @@ mod tests {
                 base: base_commit_id,
                 scope: vec![middle_commit_id, approved_commit_id],
                 steps: vec![PlanStep {
-                    parent: PlanParent::Existing(base_commit_id),
+                    parents: vec![PlanParent::Existing(base_commit_id)],
                     commit: PlanCommit::Pick(approved_commit_id),
                     squash: Vec::new(),
                 }],
@@ -3824,7 +4004,7 @@ mod tests {
                 base,
                 scope: vec![middle, tip],
                 steps: vec![PlanStep {
-                    parent: PlanParent::Existing(base),
+                    parents: vec![PlanParent::Existing(base)],
                     commit: PlanCommit::Pick(tip),
                     squash: Vec::new(),
                 }],
@@ -4740,12 +4920,12 @@ mod tests {
                 scope: vec![pending, tip],
                 steps: vec![
                     PlanStep {
-                        parent: PlanParent::Existing(base),
+                        parents: vec![PlanParent::Existing(base)],
                         commit: PlanCommit::Pick(pending),
                         squash: Vec::new(),
                     },
                     PlanStep {
-                        parent: PlanParent::Step(0),
+                        parents: vec![PlanParent::Step(0)],
                         commit: PlanCommit::Pick(tip),
                         squash: Vec::new(),
                     },
@@ -4791,7 +4971,7 @@ mod tests {
                 base,
                 scope: vec![middle, tip],
                 steps: vec![PlanStep {
-                    parent: PlanParent::Existing(base),
+                    parents: vec![PlanParent::Existing(base)],
                     commit: PlanCommit::Pick(tip),
                     squash: Vec::new(),
                 }],
@@ -4932,7 +5112,7 @@ mod tests {
                     expected_refs: capture_refs(&repo, &scope, &[trailing_commit_id])?,
                     scope,
                     steps: vec![PlanStep {
-                        parent: PlanParent::Existing(base_commit_id),
+                        parents: vec![PlanParent::Existing(base_commit_id)],
                         commit: PlanCommit::Pick(target_commit_id),
                         squash: vec![
                             PlanFold {
@@ -5043,17 +5223,17 @@ mod tests {
                 scope: vec![middle, tip],
                 steps: vec![
                     PlanStep {
-                        parent: PlanParent::Existing(base),
+                        parents: vec![PlanParent::Existing(base)],
                         commit: PlanCommit::Pick(tip),
                         squash: Vec::new(),
                     },
                     PlanStep {
-                        parent: PlanParent::Step(0),
+                        parents: vec![PlanParent::Step(0)],
                         commit: PlanCommit::Pick(middle),
                         squash: Vec::new(),
                     },
                     PlanStep {
-                        parent: PlanParent::Step(1),
+                        parents: vec![PlanParent::Step(1)],
                         commit: PlanCommit::Empty("checkpoint".into()),
                         squash: Vec::new(),
                     },
@@ -5172,17 +5352,17 @@ mod tests {
                 scope: vec![clean, checkout, descendant],
                 steps: vec![
                     PlanStep {
-                        parent: PlanParent::Existing(base),
+                        parents: vec![PlanParent::Existing(base)],
                         commit: PlanCommit::Pick(clean),
                         squash: Vec::new(),
                     },
                     PlanStep {
-                        parent: PlanParent::Step(0),
+                        parents: vec![PlanParent::Step(0)],
                         commit: PlanCommit::Pick(checkout),
                         squash: Vec::new(),
                     },
                     PlanStep {
-                        parent: PlanParent::Step(1),
+                        parents: vec![PlanParent::Step(1)],
                         commit: PlanCommit::Pick(descendant),
                         squash: Vec::new(),
                     },
@@ -5253,7 +5433,7 @@ mod tests {
                 base,
                 scope: vec![middle, tip],
                 steps: vec![PlanStep {
-                    parent: PlanParent::Existing(base),
+                    parents: vec![PlanParent::Existing(base)],
                     commit: PlanCommit::Pick(middle),
                     squash: vec![tip.into()],
                 }],
@@ -5341,7 +5521,7 @@ mod tests {
                     expected_refs: capture_refs(&repo, &scope, &[source_commit_id])?,
                     scope,
                     steps: vec![PlanStep {
-                        parent: PlanParent::Existing(base_commit_id),
+                        parents: vec![PlanParent::Existing(base_commit_id)],
                         commit: PlanCommit::Pick(target_commit_id),
                         squash: vec![PlanFold {
                             commit_id: source_commit_id,
@@ -5473,8 +5653,11 @@ mod tests {
         let intermediate_step = step_for(intermediate);
         let side_step = step_for(side);
         assert_eq!(plan.steps[target_step].squash, [source.into()]);
-        assert_eq!(plan.steps[intermediate_step].parent, PlanParent::Step(target_step));
-        assert_eq!(plan.steps[side_step].parent, PlanParent::Step(target_step));
+        assert_eq!(
+            plan.steps[intermediate_step].parents,
+            vec![PlanParent::Step(target_step)]
+        );
+        assert_eq!(plan.steps[side_step].parents, vec![PlanParent::Step(target_step)]);
         assert_eq!(
             plan.checkout.as_ref().map(|checkout| checkout.target),
             Some(PlanParent::Step(intermediate_step)),
@@ -6098,7 +6281,7 @@ mod tests {
                 base,
                 scope: vec![middle, tip],
                 steps: vec![PlanStep {
-                    parent: PlanParent::Existing(base),
+                    parents: vec![PlanParent::Existing(base)],
                     commit: PlanCommit::Pick(middle),
                     squash: vec![tip.into()],
                 }],
@@ -6310,17 +6493,17 @@ mod tests {
                 scope: vec![middle, tip],
                 steps: vec![
                     PlanStep {
-                        parent: PlanParent::Existing(base),
+                        parents: vec![PlanParent::Existing(base)],
                         commit: PlanCommit::Pick(tip),
                         squash: Vec::new(),
                     },
                     PlanStep {
-                        parent: PlanParent::Step(0),
+                        parents: vec![PlanParent::Step(0)],
                         commit: PlanCommit::Pick(middle),
                         squash: Vec::new(),
                     },
                     PlanStep {
-                        parent: PlanParent::Step(0),
+                        parents: vec![PlanParent::Step(0)],
                         commit: PlanCommit::Empty("side".into()),
                         squash: Vec::new(),
                     },
@@ -6373,12 +6556,12 @@ mod tests {
                 scope: vec![middle, tip],
                 steps: vec![
                     PlanStep {
-                        parent: PlanParent::Existing(base),
+                        parents: vec![PlanParent::Existing(base)],
                         commit: PlanCommit::Pick(middle),
                         squash: Vec::new(),
                     },
                     PlanStep {
-                        parent: PlanParent::Step(0),
+                        parents: vec![PlanParent::Step(0)],
                         commit: PlanCommit::Empty("replacement tip".into()),
                         squash: Vec::new(),
                     },
@@ -6418,12 +6601,12 @@ mod tests {
             scope: vec![middle, tip],
             steps: vec![
                 PlanStep {
-                    parent: PlanParent::Existing(base),
+                    parents: vec![PlanParent::Existing(base)],
                     commit: PlanCommit::Pick(middle),
                     squash: Vec::new(),
                 },
                 PlanStep {
-                    parent: PlanParent::Step(0),
+                    parents: vec![PlanParent::Step(0)],
                     commit: PlanCommit::Empty("replacement tip".into()),
                     squash: Vec::new(),
                 },
@@ -6476,12 +6659,12 @@ mod tests {
                 scope: vec![middle, tip],
                 steps: vec![
                     PlanStep {
-                        parent: PlanParent::Existing(onto),
+                        parents: vec![PlanParent::Existing(onto)],
                         commit: PlanCommit::Pick(middle),
                         squash: Vec::new(),
                     },
                     PlanStep {
-                        parent: PlanParent::Step(0),
+                        parents: vec![PlanParent::Step(0)],
                         commit: PlanCommit::Pick(tip),
                         squash: Vec::new(),
                     },
@@ -6538,7 +6721,7 @@ mod tests {
                 base,
                 scope: vec![middle, tip],
                 steps: vec![PlanStep {
-                    parent: PlanParent::Existing(base),
+                    parents: vec![PlanParent::Existing(base)],
                     commit: PlanCommit::Pick(tip),
                     squash: Vec::new(),
                 }],
@@ -6590,12 +6773,12 @@ mod tests {
         let steps = || {
             vec![
                 PlanStep {
-                    parent: PlanParent::Existing(base),
+                    parents: vec![PlanParent::Existing(base)],
                     commit: PlanCommit::Pick(middle),
                     squash: Vec::new(),
                 },
                 PlanStep {
-                    parent: PlanParent::Step(0),
+                    parents: vec![PlanParent::Step(0)],
                     commit: PlanCommit::Pick(tip),
                     squash: Vec::new(),
                 },
@@ -6690,7 +6873,7 @@ mod tests {
                 base,
                 scope: vec![middle, tip],
                 steps: vec![PlanStep {
-                    parent: PlanParent::Existing(base),
+                    parents: vec![PlanParent::Existing(base)],
                     commit: PlanCommit::Pick(tip),
                     squash: Vec::new(),
                 }],
@@ -6728,7 +6911,7 @@ mod tests {
                 base,
                 scope: vec![middle, tip],
                 steps: vec![PlanStep {
-                    parent: PlanParent::Existing(base),
+                    parents: vec![PlanParent::Existing(base)],
                     commit: PlanCommit::Pick(tip),
                     squash: Vec::new(),
                 }],
@@ -6793,7 +6976,7 @@ mod tests {
                 base,
                 scope: vec![middle, tip],
                 steps: vec![PlanStep {
-                    parent: PlanParent::Existing(base),
+                    parents: vec![PlanParent::Existing(base)],
                     commit: PlanCommit::Pick(tip),
                     squash: Vec::new(),
                 }],
@@ -6858,7 +7041,7 @@ mod tests {
                 base,
                 scope: vec![middle, tip],
                 steps: vec![PlanStep {
-                    parent: PlanParent::Existing(base),
+                    parents: vec![PlanParent::Existing(base)],
                     commit: PlanCommit::Pick(tip),
                     squash: vec![middle.into()],
                 }],

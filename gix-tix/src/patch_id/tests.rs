@@ -168,6 +168,7 @@ fn reads_validate_witnesses_without_loading_trees_and_hide_pending_states() -> g
 
     for (name, value) in [
         ("tix-rebase-parent", "invalid but pending"),
+        ("tix-rebase-merge", "invalid but pending"),
         ("gpgsig", ""),
         ("gpgsig-sha256", ""),
     ] {
