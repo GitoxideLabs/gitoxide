@@ -3,6 +3,9 @@ mod bare {
 
     #[test]
     fn init_into_non_existing_directory_creates_it() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let git_dir = tmp.path().join("bare.git");
         let repo = gix::init_bare(&git_dir)?;
@@ -22,6 +25,9 @@ mod bare {
 
     #[test]
     fn init_into_empty_directory_uses_it_directly() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let repo = gix::init_bare(tmp.path())?;
         assert_eq!(repo.kind(), gix::repository::Kind::Common);
@@ -40,6 +46,9 @@ mod bare {
 
     #[test]
     fn init_into_non_empty_directory_is_not_allowed() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         std::fs::write(tmp.path().join("existing.txt"), b"I was here before you")?;
 
@@ -143,6 +152,9 @@ mod non_bare {
 
     #[test]
     fn init_into_empty_directory_creates_a_dot_git_dir() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let repo = gix::init(tmp.path())?;
         assert_eq!(repo.kind(), gix::repository::Kind::Common);

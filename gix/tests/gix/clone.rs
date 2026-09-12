@@ -27,6 +27,9 @@ mod blocking_io {
     #[test]
     #[serial_test::serial]
     fn inherited_core_symlinks_false_is_respected() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         use gix_sec::Permission;
 
         let fixture = gix_testtools::scripted_fixture_read_only("make_clone_with_symlink.sh")?;
@@ -124,6 +127,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_shallow_no_checkout_then_unshallow() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let called_configure_remote = std::sync::Arc::new(AtomicBool::default());
         let remote_name = "special";
@@ -187,6 +193,9 @@ mod blocking_io {
 
     #[test]
     fn shallow_clone_uses_single_branch_refspec() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let (repo, _out) = gix::prepare_clone_bare(remote::repo("base").path(), tmp.path())?
             .with_shallow(Shallow::DepthAtRemote(1.try_into()?))
@@ -216,6 +225,9 @@ mod blocking_io {
 
     #[test]
     fn shallow_clone_with_ambiguous_branch_and_tag_name_prefers_branch() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let fixture = gix_testtools::scripted_fixture_writable("make_remote_repos.sh")?;
         let remote_repo = gix::open_opts(fixture.path().join("base"), restricted())?;
         let branch_name = "b";
@@ -270,6 +282,9 @@ mod blocking_io {
 
     #[test]
     fn from_shallow_prohibited_with_option() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let err = gix::clone::PrepareFetch::new(
             remote::repo("base.shallow").path(),
@@ -294,6 +309,9 @@ mod blocking_io {
 
     #[test]
     fn from_shallow_allowed_by_default() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let (repo, _change) = gix::prepare_clone_bare(remote::repo("base.shallow").path(), tmp.path())?
             .with_in_memory_config_overrides(Some("my.marker=1"))
@@ -323,6 +341,9 @@ mod blocking_io {
 
     #[test]
     fn from_non_shallow_then_deepen_then_deepen_since_to_unshallow() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let (repo, _change) = gix::prepare_clone_bare(remote::repo("base").path(), tmp.path())?
             .with_shallow(Shallow::DepthAtRemote(2.try_into()?))
@@ -386,6 +407,9 @@ mod blocking_io {
 
     #[test]
     fn from_non_shallow_by_deepen_exclude_then_deepen_to_unshallow() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let excluded_leaf_refs = ["g", "h", "j"];
 
@@ -427,6 +451,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_only_with_configuration() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let called_configure_remote = std::sync::Arc::new(AtomicBool::default());
         let remote_name = "special";
@@ -677,6 +704,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_and_checkout() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let mut prepare = gix::clone::PrepareFetch::new(
             remote::repo("base").path(),
@@ -698,6 +728,9 @@ mod blocking_io {
     #[test]
     #[cfg(unix)]
     fn fetch_and_checkout_does_not_follow_delayed_symlink_prefixes() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         use std::os::unix::fs::PermissionsExt;
 
         let fixture = gix_testtools::scripted_fixture_read_only("make_symlink_prefix_reuse_advisory.sh")?;
@@ -733,6 +766,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_and_checkout_into_non_empty_directory() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let fixture = gix_testtools::scripted_fixture_writable("make_clone_destinations.sh")?;
         let destination = fixture.path().join("non-empty");
         let existing_path = destination.join("existing.txt");
@@ -761,6 +797,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_and_checkout_into_non_empty_directory_does_not_overwrite_pre_existing_tracked_file() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let fixture = gix_testtools::scripted_fixture_writable("make_clone_destinations.sh")?;
         let destination = fixture.path().join("non-empty-with-conflicting-file");
         let existing_path = destination.join("file");
@@ -802,6 +841,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_and_checkout_into_non_empty_directory_with_existing_dot_git_is_rejected() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let fixture = gix_testtools::scripted_fixture_writable("make_clone_destinations.sh")?;
         let destination = fixture.path().join("non-empty-with-dot-git");
         let existing_path = destination.join("existing.txt");
@@ -836,6 +878,9 @@ mod blocking_io {
 
     #[test]
     fn drop_after_failed_fetch_into_non_empty_directory_preserves_destination() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let fixture = gix_testtools::scripted_fixture_writable("make_clone_destinations.sh")?;
         let destination = fixture.path().join("non-empty");
         let existing_path = destination.join("existing.txt");
@@ -871,6 +916,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_and_checkout_specific_ref() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let remote_repo = remote::repo("base");
         let ref_to_checkout = "a";
@@ -916,6 +964,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_and_checkout_specific_revision() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let remote_repo = remote::repo("base");
         let branch_id = remote_repo.find_reference("refs/heads/a")?.peel_to_id()?.detach();
@@ -965,6 +1016,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_specific_revision_bare_and_shallow() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let remote_repo = remote::repo("base");
         let revision = "refs/heads/a";
@@ -1009,6 +1063,9 @@ mod blocking_io {
 
     #[test]
     fn invalid_specific_revisions_are_rejected() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let remote_repo = remote::repo("base");
         for invalid in ["main", "deadbeef", "refs/heads/main^"] {
@@ -1063,6 +1120,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_and_checkout_specific_non_existing() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let remote_repo = remote::repo("base");
         let ref_to_checkout = "does-not-exist";
@@ -1088,6 +1148,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_succeeds_despite_remote_head_ref() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let remote_repo = remote::repo("head-ref");
         let mut prepare = gix::clone::PrepareFetch::new(
@@ -1106,6 +1169,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_and_checkout_specific_annotated_tag() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let remote_repo = remote::repo("base");
         let ref_to_checkout = "annotated-detached-tag";
@@ -1171,6 +1237,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_and_checkout_empty_remote_repo() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         for version in [
             gix::protocol::transport::Protocol::V0,
             gix::protocol::transport::Protocol::V2,
@@ -1220,6 +1289,9 @@ mod blocking_io {
 
     #[test]
     fn fetch_only_without_configuration() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let (repo, out) = gix::clone::PrepareFetch::new(
             remote::repo("base").path(),

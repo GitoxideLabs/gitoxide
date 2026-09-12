@@ -25,6 +25,9 @@ mod blocking_io {
         #[test]
         #[serial]
         fn user() -> crate::Result {
+            if gix_testtools::run_in_isolated_process()? {
+                return Ok(());
+            }
             for (env_value, should_allow) in [
                 (None, Some(true)),
                 (Some("0"), Some(false)),

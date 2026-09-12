@@ -202,22 +202,30 @@ fn subdomain_globs_match_on_their_level() {
 
 #[test]
 #[serial_test::serial]
-fn http_urls_match_the_host_without_path_as_well() {
+fn http_urls_match_the_host_without_path_as_well() -> crate::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let _env = Env::new().set("GIT_ASKPASS", "foo");
     baseline::agrees_with("http://example.com:8080/other/path");
     baseline::agrees_with_but_drops_default_port_in_prompt("http://example.com:80/");
     baseline::agrees_with_but_drops_default_port_in_prompt("http://example.com:80");
     baseline::agrees_with("http://example.com");
+    Ok(())
 }
 
 #[test]
 #[serial_test::serial]
-fn user_rules_only_match_urls_with_user() {
+fn user_rules_only_match_urls_with_user() -> crate::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let _env = Env::new().set("SSH_ASKPASS", "foo");
     baseline::agrees_with("https://user@example.com/with-user");
     baseline::agrees_with("https://example.com/with-user");
     baseline::agrees_with("ssh://user@host/with-user");
     baseline::agrees_with("ssh://host/with-user");
+    Ok(())
 }
 
 #[test]

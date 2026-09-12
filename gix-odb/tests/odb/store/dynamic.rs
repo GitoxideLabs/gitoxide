@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use gix_hash::ObjectId;
 use gix_object::{Exists, FindExt, Write};
 use gix_odb::{Header, store, store::iter::Ordering};
@@ -942,9 +940,7 @@ fn iterate_over_a_bunch_of_loose_and_packed_objects() -> crate::Result {
 fn auto_refresh_with_and_without_id_stability() -> crate::Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     assert!(
-        Command::new("git")
-            .arg("-C")
-            .arg(tmp.path())
+        gix_testtools::git_command(tmp.path())
             .arg("init")
             .arg("--bare")
             .status()?

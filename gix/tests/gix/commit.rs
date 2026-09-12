@@ -90,8 +90,6 @@ mod describe {
 
 #[cfg(feature = "command")]
 mod signature {
-    use std::process::Command;
-
     use gix::config::tree::{Gpg, Key, User, gpg};
     use gix_testtools::signature;
     use serial_test::serial;
@@ -113,12 +111,7 @@ mod signature {
         // interpretation while retaining the drive prefix. An MSYS path like `/c/...` isn't accepted here.
         let key_for_git = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(&key));
         let signing_key = User::SIGNING_KEY.validated_assignment(key_for_git.as_ref())?;
-        let output = Command::new(gix_path::env::exe_invocation())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
-            .env("GIT_CONFIG_COUNT", "0")
-            .arg("-C")
-            .arg(fixture.path())
+        let output = gix_testtools::git_command(fixture.path())
             .args(["-c", "user.name=Gitoxide Signing Fixture", "-c"])
             .arg(gix_path::from_bstring(email).into_os_string())
             .args(["-c", "gpg.format=ssh", "-c"])
