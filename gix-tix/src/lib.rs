@@ -139,6 +139,7 @@ struct PushRequest {
     repository_path: PathBuf,
     remote: BString,
     branch: BString,
+    hidden_tips: Vec<gix::ObjectId>,
 }
 
 enum PushOutcome {
@@ -5112,6 +5113,11 @@ fn event_loop(
                                     repository_path: directory,
                                     remote,
                                     branch,
+                                    hidden_tips: if app.show_hidden {
+                                        Vec::new()
+                                    } else {
+                                        ref_snapshot.hidden_tips.clone()
+                                    },
                                 },
                                 false,
                             ));
@@ -5191,11 +5197,12 @@ fn start_lane_worker(rows: app::LaneInput) -> mpsc::Receiver<(Vec<SharedCommitRo
 
 fn start_push_worker(request: PushRequest, force_with_lease: bool) -> BackgroundWorker {
     let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
+    let join = std::thread::spawn(move || {
         let completion = match push_branch(
             &request.repository_path,
             request.remote.as_bstr(),
             request.branch.as_bstr(),
+            &request.hidden_tips,
             force_with_lease,
         ) {
             Ok(PushOutcome::Pushed(message)) => Ok(BackgroundCompletion::Success(message)),
@@ -5208,7 +5215,7 @@ fn start_push_worker(request: PushRequest, force_with_lease: bool) -> Background
         receiver,
         progress: None,
         kind: BackgroundTaskKind::References,
-        join: None,
+        join: Some(join),
     }
 }
 
@@ -5341,7 +5348,74 @@ fn fetch_remote(
     Ok(format!("fetched {remote_name}"))
 }
 
-fn push_branch(repository_path: &Path, remote: &BStr, branch: &BStr, force_with_lease: bool) -> Result<PushOutcome> {
+fn push_branch(
+    repository_path: &Path,
+    remote: &BStr,
+    branch: &BStr,
+    hidden_tips: &[gix::ObjectId],
+    force_with_lease: bool,
+) -> Result<PushOutcome> {
+    let _source_locks = if hidden_tips.is_empty() {
+        Vec::new()
+    } else {
+        let mut repository = gix::open(repository_path).context("could not open repository to validate push")?;
+        // Native Git resolves local push sources outside the server-side ref namespace.
+        repository.clear_namespace();
+        repository.objects.ignore_replacements = true;
+        repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
+        let mut name = gix::refs::Category::LocalBranch.to_full_name(branch)?;
+        let mut locks = Vec::new();
+        let commit_id = loop {
+            // Lock each symbolic link before reading it, then its referent, so Git
+            // must push the same commit whose ancestry is validated below.
+            let (directory, relative) = match name.category_and_short_name() {
+                Some((gix::refs::Category::MainRef | gix::refs::Category::MainPseudoRef, short)) => {
+                    (repository.common_dir(), short)
+                }
+                Some((gix::refs::Category::LinkedRef { .. }, short))
+                    if !<&gix::refs::FullNameRef>::try_from(short)?
+                        .category()
+                        .is_some_and(|category| category.is_worktree_private()) =>
+                {
+                    (repository.common_dir(), short)
+                }
+                Some((category, _))
+                    if category.is_worktree_private()
+                        && !matches!(category, gix::refs::Category::LinkedPseudoRef { .. }) =>
+                {
+                    (repository.git_dir(), name.as_bstr())
+                }
+                _ => (repository.common_dir(), name.as_bstr()),
+            };
+            locks.push(
+                gix::lock::Marker::acquire_to_hold_resource(
+                    directory.join(gix::path::from_bstr(relative)),
+                    gix::lock::acquire::Fail::Immediately,
+                    Some(directory.to_owned()),
+                )
+                .with_context(|| format!("cannot push {branch}: could not lock {name}"))?,
+            );
+            let mut reference = repository.find_reference(name.as_bstr())?;
+            match reference.target() {
+                gix::refs::TargetRef::Symbolic(target) => name = target.to_owned(),
+                gix::refs::TargetRef::Object(_) => break reference.peel_to_id()?,
+            }
+        };
+        for info in repository
+            .rev_walk([commit_id])
+            .with_hidden(hidden_tips.iter().copied())
+            .all()?
+        {
+            let info = info.context("could not traverse the branch being pushed")?;
+            let commit = info.object()?.decode()?.into_owned()?;
+            anyhow::ensure!(
+                edit::auto_merge::is_auto_merge(&commit) || !edit::rebase::is_pending(&commit),
+                "cannot push {branch}: commit {} is not finalized; finish its rebase or conflict resolution before pushing",
+                info.id.to_hex_with_len(7)
+            );
+        }
+        locks
+    };
     let mut command = Command::new("git");
     command.arg("-C").arg(repository_path).arg("push").arg("--porcelain");
     if force_with_lease {
@@ -10307,6 +10381,332 @@ mod tests {
     }
 
     #[test]
+    fn push_rejects_unfinished_commits_in_all_parent_paths() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let head_commit_id = repository.head_id()?.detach();
+        let original = repository.find_commit(head_commit_id)?.decode()?.into_owned()?;
+        let parent_commit_id = original.parents[0];
+        repository.reference(
+            "refs/namespaces/push-test/refs/heads/to-push",
+            head_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "a namespaced branch is not the source used by native Git push",
+        )?;
+        gix_testtools::git(fixture.path(), "config gitoxide.core.refsNamespace push-test")?;
+        gix_testtools::git(fixture.path(), "config core.useReplaceRefs false")?;
+        assert!(
+            test_repository::open(fixture.path())?.namespace().is_some(),
+            "gix must see the namespace that native Git ignores for local push sources"
+        );
+        for (name, value) in [
+            ("tix-rebase-parent", parent_commit_id.to_string()),
+            (
+                "tix-rebase-merge",
+                format!(
+                    "{head_commit_id} 0 parent {head_commit_id} {parent_commit_id} {}",
+                    original.parents[1]
+                ),
+            ),
+            (
+                "tix-rebase-merge",
+                format!(
+                    "{head_commit_id} 1 combine {head_commit_id} {parent_commit_id} {}",
+                    original.parents[1]
+                ),
+            ),
+            (patch_id::HEADER, String::from_utf8(patch_id::UNAVAILABLE.to_vec())?),
+            ("gpgsig", String::new()),
+            ("gpgsig-sha256", String::new()),
+        ] {
+            let mut unfinished = original.clone();
+            unfinished.extra_headers.push((name.into(), value.into()));
+            let unfinished_commit_id = repository.write_object(&unfinished)?.detach();
+            for prefix in ["refs/replace", "refs/namespaces/push-test/refs/replace"] {
+                repository.reference(
+                    format!("{prefix}/{unfinished_commit_id}").as_str(),
+                    head_commit_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "replacement views must not hide the original commit that Git transfers",
+                )?;
+            }
+            assert!(
+                !edit::rebase::is_pending(
+                    &test_repository::open(fixture.path())?
+                        .find_commit(unfinished_commit_id)?
+                        .decode()?
+                        .into_owned()?
+                ),
+                "the replacement view disguises the unfinished original commit"
+            );
+            let mut merge = original.clone();
+            merge.parents = vec![head_commit_id, unfinished_commit_id].into();
+            let merge_commit_id = repository.write_object(&merge)?.detach();
+            edit::auto_merge::Definition {
+                inputs: vec![edit::auto_merge::Input {
+                    source: edit::auto_merge::InputSource::Reference("refs/heads/main".try_into()?),
+                    commit_id: unfinished_commit_id,
+                    muted: true,
+                }],
+            }
+            .store(&mut merge);
+            let auto_merge_commit_id = repository.write_object(&merge)?.detach();
+
+            for tip_commit_id in [unfinished_commit_id, merge_commit_id, auto_merge_commit_id] {
+                repository.reference(
+                    "refs/heads/to-push",
+                    tip_commit_id,
+                    gix::refs::transaction::PreviousValue::Any,
+                    "test push validation",
+                )?;
+                let before = gix_testtools::repository::snapshot(fixture.path())?;
+                for force_with_lease in [false, true] {
+                    let err = push_branch(
+                        repository.git_dir(),
+                        "missing-remote".into(),
+                        "to-push".into(),
+                        &[head_commit_id],
+                        force_with_lease,
+                    )
+                    .err()
+                    .context("unfinished history must fail before Git tries to contact the remote")?;
+                    let message = format!("{err:#}");
+                    assert!(message.contains("not finalized"), "{name}: {message}");
+                    assert!(
+                        message.contains("to-push"),
+                        "the error identifies the branch: {message}"
+                    );
+                    assert!(
+                        message.contains(&unfinished_commit_id.to_hex_with_len(7).to_string()),
+                        "the error identifies the unfinished ancestor: {message}"
+                    );
+                    assert!(
+                        !repository.common_dir().join("refs/heads/to-push.lock").exists(),
+                        "refusing to push releases the source branch lock"
+                    );
+                }
+                assert_eq!(
+                    gix_testtools::repository::snapshot(fixture.path())?,
+                    before,
+                    "refusing to push must not replay commits or change local state"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn push_ignores_unfinished_history_outside_the_visible_view() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let remote = gix_testtools::tempfile::tempdir()?;
+        gix_testtools::git(remote.path(), "init -q --bare")?;
+        let repository = test_repository::open(fixture.path())?;
+        let remote_repository = test_repository::open(remote.path())?;
+        let original = repository.head_commit()?.decode()?.into_owned()?;
+        let mut unfinished = original.clone();
+        unfinished
+            .extra_headers
+            .push(("tix-rebase-parent".into(), original.parents[0].to_string().into()));
+        let unfinished_commit_id = repository.write_object(&unfinished)?.detach();
+        let child = |message: &str| -> Result<gix::ObjectId> {
+            let mut commit = original.clone();
+            commit.parents = vec![unfinished_commit_id].into();
+            commit.message = message.into();
+            Ok(repository.write_object(&commit)?.detach())
+        };
+        let left_commit_id = child("left")?;
+        let right_commit_id = child("right")?;
+        let external_commit_id = child("outside the pushed ancestry")?;
+        let mut merge = original;
+        merge.parents = vec![left_commit_id, right_commit_id].into();
+        let merge_commit_id = repository.write_object(&merge)?.detach();
+
+        for (branch, commit_id, hidden_tips) in [
+            ("unbounded-tip", unfinished_commit_id, Vec::new()),
+            ("unbounded-merge", merge_commit_id, Vec::new()),
+            ("hidden-tip", merge_commit_id, vec![unfinished_commit_id]),
+            ("hidden-parent", merge_commit_id, vec![right_commit_id]),
+            ("hidden-external", merge_commit_id, vec![external_commit_id]),
+        ] {
+            let reference = format!("refs/heads/{branch}");
+            repository.reference(
+                reference.as_str(),
+                commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "test visible push history",
+            )?;
+            let _source_lock = hidden_tips
+                .is_empty()
+                .then(|| {
+                    gix::lock::Marker::acquire_to_hold_resource(
+                        repository.common_dir().join(&reference),
+                        gix::lock::acquire::Fail::Immediately,
+                        Some(repository.common_dir().to_owned()),
+                    )
+                })
+                .transpose()?;
+            for force_with_lease in [false, true] {
+                assert!(
+                    matches!(
+                        push_branch(
+                            repository.git_dir(),
+                            gix::path::into_bstr(remote.path()).as_ref(),
+                            branch.into(),
+                            &hidden_tips,
+                            force_with_lease,
+                        )?,
+                        PushOutcome::Pushed(_)
+                    ),
+                    "hidden commits are not checked; an unbounded view also skips validation locks"
+                );
+                assert_eq!(
+                    remote_repository.find_reference(reference.as_str())?.id(),
+                    commit_id,
+                    "both push attempts preserve the original history, including hidden pending ancestors"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn push_locks_its_source_through_completion_from_a_linked_worktree() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let remote = gix_testtools::tempfile::tempdir()?;
+        gix_testtools::git(remote.path(), "init -q --bare")?;
+        gix_testtools::git(fixture.path(), "worktree add -q --detach linked main")?;
+        gix_testtools::git(fixture.path(), "symbolic-ref refs/heads/to-push refs/heads/main")?;
+        gix_testtools::git(fixture.path(), "pack-refs --all --prune")?;
+        let repository = test_repository::open(fixture.path().join("linked"))?;
+        let main_commit_id = repository.rev_parse_single("main")?.detach();
+        let mut unfinished = repository.find_commit(main_commit_id)?.decode()?.into_owned()?;
+        unfinished
+            .extra_headers
+            .push(("tix-rebase-parent".into(), unfinished.parents[0].to_string().into()));
+        let unfinished_commit_id = repository.write_object(&unfinished)?.detach();
+        let hook = repository.common_dir().join("hooks/pre-push");
+        std::fs::create_dir_all(hook.parent().expect("the hook has a directory"))?;
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\n\
+                 if git -c core.filesRefLockTimeout=0 update-ref refs/heads/main {unfinished_commit_id} {main_commit_id} \
+                 2>\"$(git rev-parse --git-common-dir)/push-lock-error\"; then\n\
+                 exit 1\n\
+                 fi\n"
+            ),
+        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+        }
+        let remote_repository = test_repository::open(remote.path())?;
+        for branch in ["main", "to-push"] {
+            assert!(
+                matches!(
+                    push_branch(
+                        repository.git_dir(),
+                        gix::path::into_bstr(remote.path()).as_ref(),
+                        branch.into(),
+                        &unfinished.parents,
+                        false,
+                    )?,
+                    PushOutcome::Pushed(_)
+                ),
+                "a direct or symbolic source remains locked throughout the actual Git push"
+            );
+            let message = std::fs::read_to_string(repository.common_dir().join("push-lock-error"))?;
+            assert!(message.contains("cannot lock ref"), "{message}");
+            assert_eq!(
+                remote_repository.find_reference("refs/heads/main")?.id(),
+                main_commit_id,
+                "the remote receives the validated history"
+            );
+            assert_eq!(
+                repository.rev_parse_single("main")?,
+                main_commit_id,
+                "a concurrent rewrite cannot replace the source with unfinished history"
+            );
+            for name in ["main", "to-push"] {
+                assert!(
+                    !repository.common_dir().join(format!("refs/heads/{name}.lock")).exists(),
+                    "push completion releases source and symbolic-target locks"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn push_allows_auto_merges_in_any_state() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let remote = gix_testtools::tempfile::tempdir()?;
+        gix_testtools::git(remote.path(), "init -q --bare")?;
+        let repository = test_repository::open(fixture.path())?;
+        let remote_repository = test_repository::open(remote.path())?;
+        let original = repository.head_commit()?.decode()?.into_owned()?;
+        for muted in [false, true] {
+            let mut commit = original.clone();
+            edit::auto_merge::Definition {
+                inputs: original
+                    .parents
+                    .iter()
+                    .zip(["refs/heads/main", "refs/heads/merged"])
+                    .map(|(commit_id, reference)| {
+                        Ok(edit::auto_merge::Input {
+                            source: edit::auto_merge::InputSource::Reference(reference.try_into()?),
+                            commit_id: *commit_id,
+                            muted,
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+            }
+            .store(&mut commit);
+            commit.extra_headers.extend([
+                ("tix-rebase-parent".into(), original.parents[0].to_string().into()),
+                (patch_id::HEADER.into(), patch_id::UNAVAILABLE.into()),
+                ("gpgsig".into(), BString::default()),
+            ]);
+            let auto_merge_commit_id = repository.write_object(&commit)?.detach();
+            let mut descendant = original.clone();
+            descendant.parents = vec![auto_merge_commit_id].into();
+            let descendant_commit_id = repository.write_object(&descendant)?.detach();
+            for (suffix, commit_id) in [("tip", auto_merge_commit_id), ("ancestor", descendant_commit_id)] {
+                let branch = format!("auto-{muted}-{suffix}");
+                let reference = format!("refs/heads/{branch}");
+                repository.reference(
+                    reference.as_str(),
+                    commit_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "test AutoMerge push",
+                )?;
+                for force_with_lease in [false, true] {
+                    assert!(
+                        matches!(
+                            push_branch(
+                                repository.git_dir(),
+                                gix::path::into_bstr(remote.path()).as_ref(),
+                                branch.as_str().into(),
+                                &original.parents,
+                                force_with_lease,
+                            )?,
+                            PushOutcome::Pushed(_)
+                        ),
+                        "AutoMerges with pending markers and included or muted inputs are publishable"
+                    );
+                    assert_eq!(
+                        remote_repository.find_reference(reference.as_str())?.id(),
+                        commit_id,
+                        "the remote receives the exact history without replay or AutoMerge refresh"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn pushes_the_remembered_active_branch_and_retries_rewrites_with_a_lease() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let remote = gix_testtools::tempfile::tempdir()?;
@@ -10354,7 +10754,7 @@ mod tests {
         let git_dir = repository.git_dir().to_owned();
         drop(repository);
 
-        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), false)?
+        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], false)?
         else {
             panic!("the empty remote accepts the initial push");
         };
@@ -10376,12 +10776,13 @@ mod tests {
         assert!(rewritten.success(), "the pushed branch is rewritten locally");
         assert!(
             matches!(
-                push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), false)?,
+                push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], false)?,
                 PushOutcome::NeedsForce
             ),
             "a non-fast-forward push offers the guarded retry"
         );
-        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), true)? else {
+        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], true)?
+        else {
             panic!("a forced retry cannot request another retry");
         };
         assert_eq!(message, "pushed main to origin");
@@ -10397,7 +10798,7 @@ mod tests {
             .args(["update-ref", "refs/heads/main", &main_id.to_hex().to_string()])
             .status()?;
         assert!(stale_remote.success(), "the remote changes without local knowledge");
-        let err = match push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), true) {
+        let err = match push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], true) {
             Err(err) => err,
             Ok(_) => panic!("a stale lease fails permanently"),
         };
@@ -10645,6 +11046,7 @@ mod tests {
                 repository_path: "repository".into(),
                 remote: "origin".into(),
                 branch: "main".into(),
+                hidden_tips: Vec::new(),
             })),
         );
         assert!(!succeeded);
