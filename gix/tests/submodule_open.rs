@@ -1,4 +1,5 @@
 #[test]
+#[serial_test::serial]
 #[cfg(feature = "status")]
 #[cfg_attr(
     windows,
@@ -8,7 +9,7 @@ fn on_nested_symlink() -> gix_testtools::Result {
     let symlink_root =
         gix_testtools::scripted_fixture_read_only("make_submodules.sh")?.join("link-to-dir-in-changed-parent-repo");
     // Note: even though this refers to a symlink, the CWD that is actually set will be the resolved directory.
-    std::env::set_current_dir(&symlink_root)?;
+    let _cwd = gix_testtools::set_current_dir(&symlink_root)?;
 
     assert!(
         gix::open_opts(&symlink_root, gix::open::Options::isolated()).is_err(),
@@ -16,7 +17,7 @@ fn on_nested_symlink() -> gix_testtools::Result {
     );
     // TODO(symlink): This should work though
     // let repo = gix::discover(&repo_root)?;
-    let repo = gix::discover(".")?;
+    let repo = gix::discover_opts(".", Default::default(), gix::open::Options::isolated())?;
     let sm = repo.submodules()?.into_iter().flatten().next().expect("one submodule");
     assert_eq!(
         sm.work_dir()?,

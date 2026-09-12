@@ -145,12 +145,8 @@ fn git_init(dir: impl AsRef<std::path::Path>, bare: bool) -> crate::Result {
     if bare {
         args.push("--bare");
     }
-    let output = std::process::Command::new(gix_path::env::exe_invocation())
-        .args(args)
-        .arg(dir)
-        .env_remove("GIT_CONFIG_COUNT")
-        .env_remove("XDG_CONFIG_HOME")
-        .output()?;
+    std::fs::create_dir_all(dir)?;
+    let output = gix_testtools::git_command(dir).args(args).output()?;
 
     assert!(output.status.success(), "{output:?}, {dir:?}");
     Ok(())

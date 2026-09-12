@@ -288,8 +288,7 @@ fn git_graph_internal(repo_dir: impl AsRef<std::path::Path>, with_time: bool) ->
     } else {
         "--pretty=format:%H %d %s"
     };
-    let out = std::process::Command::new(gix_path::env::exe_invocation())
-        .current_dir(repo_dir)
+    let out = gix_testtools::git_command(repo_dir)
         .args(["log", "--oneline", "--graph", "--decorate", "--all", format])
         .output()?;
     if !out.status.success() {
@@ -301,8 +300,7 @@ fn git_graph_internal(repo_dir: impl AsRef<std::path::Path>, with_time: bool) ->
 /// Parse commit names to IDs from git log output.
 /// Returns a map of commit message (first word) to ObjectId.
 pub fn parse_commit_names(repo_path: &std::path::Path) -> Result<std::collections::HashMap<String, ObjectId>> {
-    let output = std::process::Command::new("git")
-        .current_dir(repo_path)
+    let output = gix_testtools::git_command(repo_path)
         .args(["log", "--all", "--format=%H %s"])
         .output()?;
     let mut commits = std::collections::HashMap::new();
@@ -318,8 +316,7 @@ pub fn parse_commit_names(repo_path: &std::path::Path) -> Result<std::collection
 /// Run `git rev-list` with the given arguments and return the resulting commit IDs.
 /// Useful for verifying traversal results against git's baseline behavior.
 pub fn git_rev_list(repo_path: &std::path::Path, args: &[&str]) -> Result<Vec<ObjectId>> {
-    let output = std::process::Command::new("git")
-        .current_dir(repo_path)
+    let output = gix_testtools::git_command(repo_path)
         .arg("rev-list")
         .args(args)
         .output()?;

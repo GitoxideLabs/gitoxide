@@ -152,6 +152,9 @@ mod blocking_and_async_io {
     #[test]
     #[cfg(feature = "blocking-network-client")]
     fn fetch_more_packs_than_can_be_handled() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         use gix::{config::tree::User, interrupt::IS_INTERRUPTED};
         use gix_odb::store::init::Slots;
         use gix_testtools::tempfile;
@@ -200,7 +203,13 @@ mod blocking_and_async_io {
         }
         for max_packs in 1..=3 {
             let remote_dir = tempfile::tempdir()?;
-            let mut remote_repo = gix::init_bare(remote_dir.path())?;
+            let mut remote_repo = gix::ThreadSafeRepository::init_opts(
+                remote_dir.path(),
+                gix::create::Kind::Bare,
+                Default::default(),
+                gix::open::Options::isolated(),
+            )?
+            .to_thread_local();
             {
                 let mut config = remote_repo.config_snapshot_mut();
                 config.set_value(&User::NAME, "author")?;
@@ -288,6 +297,9 @@ mod blocking_and_async_io {
     #[test]
     #[cfg(feature = "blocking-network-client")]
     fn fetch_with_alternates_adds_tips_from_alternates() -> crate::Result<()> {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let remote_repo = remote::repo("base");
         let (_repo, out) = gix::clone::PrepareFetch::new(
@@ -337,6 +349,10 @@ mod blocking_and_async_io {
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn local_transport_fetches_head_against_remote_refs() -> crate::Result {
+        #[cfg(feature = "blocking-network-client")]
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let remote_dir = TempDir::new()?;
         let remote_repo = init_repo(remote_dir.path())?;
         let remote_main = commit_empty(&remote_repo, "remote-main")?;
@@ -389,6 +405,10 @@ mod blocking_and_async_io {
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn fetch_ignores_dangling_symbolic_refs_during_negotiation() -> crate::Result {
+        #[cfg(feature = "blocking-network-client")]
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let remote_dir = TempDir::new()?;
         let remote_repo = init_repo(remote_dir.path())?;
         let remote_main = commit_empty(&remote_repo, "remote-main")?;
@@ -431,6 +451,10 @@ mod blocking_and_async_io {
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn fetch_with_multi_round_negotiation() -> crate::Result {
+        #[cfg(feature = "blocking-network-client")]
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         for (algorithm, expected_negotiation_rounds) in [
             (gix::negotiate::Algorithm::Consecutive, 4),
             (gix::negotiate::Algorithm::Skipping, 2),
@@ -511,6 +535,10 @@ mod blocking_and_async_io {
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn fetch_shallow_deepen_zero_does_not_fail() -> crate::Result {
+        #[cfg(feature = "blocking-network-client")]
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let (repo, tmp) = try_repo_rw_args("two-origins", ["--depth=2"], Mode::CloneWithShallowSupport)?;
         let daemon = spawn_git_daemon_if_async(tmp.path().join("base"))?;
         let remote = into_daemon_remote_if_async(
@@ -549,6 +577,10 @@ mod blocking_and_async_io {
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn fetch_shallow_deepen_not_possible() -> crate::Result {
+        #[cfg(feature = "blocking-network-client")]
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let (repo, tmp) = try_repo_rw_args("two-origins", ["--depth=2"], Mode::CloneWithShallowSupport)?;
         let daemon = spawn_git_daemon_if_async(tmp.path().join("base"))?;
         let remote = into_daemon_remote_if_async(
@@ -604,6 +636,10 @@ mod blocking_and_async_io {
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn fetch_empty_pack() -> crate::Result {
+        #[cfg(feature = "blocking-network-client")]
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         for version in [
             gix::protocol::transport::Protocol::V1,
             gix::protocol::transport::Protocol::V2,
@@ -684,6 +720,10 @@ mod blocking_and_async_io {
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn fetch_pack_without_local_destination() -> crate::Result {
+        #[cfg(feature = "blocking-network-client")]
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let daemon = spawn_git_daemon_if_async(repo_path("clone-as-base-with-changes"))?;
         for (fetch_tags, expected_pack_objects, expected_ref_edits) in [
             (gix::remote::fetch::Tags::None, PACK_OBJECTS_WITHOUT_TAG, 0),
@@ -753,6 +793,10 @@ mod blocking_and_async_io {
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn fetching_a_missing_explicit_ref_fails_even_if_ls_refs_returns_nothing() -> crate::Result {
+        #[cfg(feature = "blocking-network-client")]
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let daemon = spawn_git_daemon_if_async({
             let mut p = repo_path("base");
             p.pop();
@@ -786,6 +830,10 @@ mod blocking_and_async_io {
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn fetch_pack() -> crate::Result {
+        #[cfg(feature = "blocking-network-client")]
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let daemon = spawn_git_daemon_if_async({
             let mut p = repo_path("base");
             p.pop();

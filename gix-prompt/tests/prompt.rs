@@ -20,10 +20,15 @@ mod ask {
             .spawn()
             .expect("jq utility is available in PATH");
 
-        let output = jq_proc
-            .wait_with_output()
-            .expect(".target_directory is a valid search path for manifest format version 1");
-        manifest_proc.wait().unwrap();
+        let output = jq_proc.wait_with_output().expect("jq finishes reading Cargo metadata");
+        assert!(
+            manifest_proc
+                .wait()
+                .expect("Cargo metadata process can be waited on")
+                .success(),
+            "Cargo metadata must succeed before resolving the example executable"
+        );
+        assert!(output.status.success(), "jq extracts the target directory successfully");
 
         output
             .stdout
@@ -35,24 +40,37 @@ mod ask {
 
     #[test]
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
-    fn askpass_only() {
+    fn askpass_only() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let mut cmd = std::process::Command::new(env!("CARGO"));
         cmd.args(["build", "--example", "use-askpass", "--example", "askpass"]);
-        cmd.spawn().unwrap().wait().expect("example builds OK");
+        assert!(
+            cmd.status().expect("Cargo can build prompt examples").success(),
+            "prompt examples must build successfully before they run"
+        );
 
         let mut p = expectrl::spawn(evaluate_target_dir() + "/debug/examples/use-askpass").unwrap();
         p.expect("Password: ").unwrap();
         p.send_line(" password with space ").unwrap();
         p.expect("\" password with space \"").unwrap();
         p.expect(expectrl::Eof).unwrap();
+        Ok(())
     }
 
     #[test]
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
-    fn username_password() {
+    fn username_password() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let mut cmd = std::process::Command::new(env!("CARGO"));
         cmd.args(["build", "--example", "credentials"]);
-        cmd.spawn().unwrap().wait().expect("example builds OK");
+        assert!(
+            cmd.status().expect("Cargo can build prompt examples").success(),
+            "prompt examples must build successfully before they run"
+        );
 
         let mut p = expectrl::spawn(evaluate_target_dir() + "/debug/examples/credentials").unwrap();
         p.expect("Username: ").unwrap();
@@ -62,5 +80,6 @@ mod ask {
         p.send_line(" password with space ").unwrap();
         p.expect("\" password with space \"").unwrap();
         p.expect(expectrl::Eof).unwrap();
+        Ok(())
     }
 }

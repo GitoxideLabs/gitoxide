@@ -19,6 +19,10 @@ if [[ $jtt != /* ]]; then
   jtt="${root}/../$jtt"
 fi
 
+if [[ ${5:-} != --isolated ]]; then
+  exec "$jtt" run "$BASH" "$root/journey.sh" "$exe" "$exe_plumbing" "$jtt" "$kind" --isolated
+fi
+
 # shellcheck disable=1090
 source "$root/utilities.sh"
 source "$root/helpers.sh"
