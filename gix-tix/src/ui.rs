@@ -3210,6 +3210,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -3611,6 +3612,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -3659,6 +3661,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -3694,6 +3697,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -3826,6 +3830,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -3888,6 +3893,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -4089,6 +4095,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -4184,6 +4191,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         };
         let mut app = App::new(3);
@@ -4253,6 +4261,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         };
         let mailmap =
@@ -4375,6 +4384,7 @@ mod tests {
                 metadata_loaded: true,
                 has_agent_marker: false,
                 is_review: false,
+                has_merge_replay: false,
                 signature: SignatureState::Unsigned,
             }],
             attributions: vec![
@@ -4511,6 +4521,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         app.selected = None;
@@ -4543,6 +4554,7 @@ mod tests {
                 metadata_loaded: true,
                 has_agent_marker: false,
                 is_review: false,
+                has_merge_replay: false,
                 signature: SignatureState::Unsigned,
             }],
             attributions: vec![Attribution {
@@ -4584,6 +4596,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -4859,6 +4872,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -5136,6 +5150,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         })
         .collect::<Vec<_>>();
@@ -5254,6 +5269,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         };
         let mut app = App::new(5);
@@ -5314,6 +5330,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         app.set_worktree_head(Some(id), false);
@@ -5524,6 +5541,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         };
         let mut app = App::new(2);
@@ -5629,6 +5647,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -5693,6 +5712,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -5852,6 +5872,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -5910,6 +5931,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         };
         let mut app = App::new(2);
@@ -6019,6 +6041,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         };
         let mut app = App::new(4);
@@ -6153,6 +6176,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -6436,6 +6460,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unverified,
         }]);
         complete(&mut app);
@@ -6490,6 +6515,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         let mut terminal = Terminal::new(TestBackend::new(120, 8))?;
@@ -6610,6 +6636,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         app.update(Action::ToggleCommit);
@@ -6712,6 +6739,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -6770,6 +6798,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -6878,6 +6907,7 @@ mod tests {
                 metadata_loaded: true,
                 has_agent_marker: false,
                 is_review: false,
+                has_merge_replay: false,
                 signature: SignatureState::Unsigned,
             },
             Commit {
@@ -6891,6 +6921,7 @@ mod tests {
                 metadata_loaded: true,
                 has_agent_marker: false,
                 is_review: false,
+                has_merge_replay: false,
                 signature: SignatureState::Unsigned,
             },
         ]);
@@ -7969,6 +8000,7 @@ mod tests {
                 metadata_loaded: true,
                 has_agent_marker: false,
                 is_review: false,
+                has_merge_replay: false,
                 signature: SignatureState::Unsigned,
             }]);
             complete(&mut app);
@@ -8057,6 +8089,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -8162,6 +8195,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: true,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
         app.set_notes(id, vec!["review *note*".into()]);
@@ -8224,6 +8258,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -8264,6 +8299,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unverified,
         };
         let mut app = App::new(2);
@@ -8422,6 +8458,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         };
         let decorations = Decorations::from([(
@@ -8555,6 +8592,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         };
         app.extend_commits(vec![
@@ -8656,6 +8694,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 },
                 Commit {
@@ -8669,6 +8708,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: true,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 },
                 Commit {
@@ -8682,6 +8722,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 },
             ],
@@ -8811,6 +8852,7 @@ mod tests {
                     metadata_loaded: true,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),

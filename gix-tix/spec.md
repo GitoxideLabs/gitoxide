@@ -1773,20 +1773,20 @@ views.
   the file or removing the `tix-rebase-state-v3` comment cancels. Continuation
   todos likewise state that saving unchanged continues the materialized rebase.
 
-
 ### Tree selection and transplants
 
 - Space fixes an inclusive source root, initially selecting only that commit.
-  Sources are editable ordinary commits with exactly one parent. Hidden
-  boundaries, ordinary merges, AutoMerges, and unresolved conflict placeholders
-  stop traversal. Pending ordinary commits remain selectable. Discovery uses the
+  The root must be an editable ordinary commit with exactly one parent. Selected
+  paths can include ordinary merges and eligible AutoMerges. Hidden boundaries
+  and unresolved conflict placeholders stop traversal; pending ordinary commits
+  remain selectable. Discovery uses the
   complete editable projection, including off-screen commits; it never bridges
   a forbidden node by contracting it out of navigation.
 - Shift-Space selects the entire eligible subtree and resets adjusted endpoints
   to its original tips. The command palette also offers **Select subtree**;
   the shifted shortcut is advertised only with enhanced keyboard support.
 - Before leaf focus, navigation browses with the root fixed. Space on an
-  unselected eligible commit adds its root-to-cursor path using the first
+  unselected eligible commit adds every eligible root-to-cursor path using the first
   candidate tip containing it in display order; Space on selected membership
   does nothing. Candidate leaf slots retain their original tip, current
   endpoint, and inclusion state.
@@ -1794,12 +1794,14 @@ views.
   all candidate slots, including unselected ones, restoring each remembered
   endpoint. `j`/`k` retain row navigation and `J`/`K` retain topological navigation.
   While leaf-focused, movement stays on that candidate's root-to-original-tip
-  path. Selected slots change membership live; unselected slots change only the
+  paths. Selected slots change membership live; unselected slots change only the
   preview. Space toggles the focused slot. Effective membership is the root plus
   all included paths; effective leaves discard overlapping ancestor endpoints.
 - Enter advances through separate source, Copy/Move, Fork/Insert, destination,
   Above/Below, and final confirmation stages. Choices default to Copy, Fork,
-  and Above when available. Multiple effective leaves permit only Fork. Each
+  and Above when available. Selections containing AutoMerges offer both Copy
+  and Move; the mode prompt explains that Copy freezes them and Move keeps them
+  live. Multiple effective leaves permit only Fork. Each
   Enter confirms exactly one stage, and a distinct final Enter applies the
   rebase. Space and confirmation ignore key repeats/releases. Escape aborts
   everything, including nested menus and topological choices. No external todo
@@ -1817,8 +1819,13 @@ views.
   Descendant scope traversal visits each node and edge once per walk.
 - Copy creates new occurrences without source refs; Move retains the selected
   internal branches and moves their refs with them. Excluded source descendants
-  reconnect around the entire removed selection to the nearest unselected old
-  ancestor. Fork leaves destination children and refs unchanged. Insert requires
+  reconnect independently on every affected parent edge, bypassing selected
+  commits along their first-parent chains to the nearest unselected ancestor.
+  Selected parent edges map to their copied or moved occurrences; parents outside
+  selection stay fixed and do not import unrelated side histories. Parent order
+  and correspondence remain intact, including ancestry-redundant edges; identical
+  resulting IDs are deduplicated only when writing commits.
+  Fork leaves destination children and refs unchanged. Insert requires
   one effective leaf and advances applicable destination-tip refs to that leaf.
 - Above makes the destination the source root's parent; Insert reconnects its
   former children above the selected leaf. Below uses the destination's parent;
@@ -1826,10 +1833,31 @@ views.
   siblings. Below is unavailable at hidden boundaries, parentless commits, or
   merge destinations. Above a hidden boundary adds independent children while
   preserving hidden history and its refs.
-- Destinations inside the selection, resulting cycles, and unsupported affected
-  merges are rejected. Ancestor and excluded-descendant destinations are valid
-  when the final graph is acyclic. An unchanged graph/ref result is a no-op.
-  AutoMerge dependents continue through the existing automatic maintenance.
+- Destinations inside the selection and resulting cycles are rejected before
+  publication. Ancestor and excluded-descendant destinations are valid when the
+  final graph is acyclic. An unchanged graph/ref result is a no-op. Live AutoMerge
+  dependents continue through the existing automatic maintenance.
+- Copy implicitly freezes each included AutoMerge into an ordinary merge using
+  its recorded tree and ordered parents. Only the copied occurrence is frozen;
+  the original remains subscribed to its inputs. Move keeps included AutoMerges
+  live with their subscriptions and uses ordinary AutoMerge maintenance, as do
+  ordinary rebases. There is no standalone freeze command, editor, action, or shortcut.
+  If maintenance collapses a moved AutoMerge onto another result, conflict
+  continuations reuse that commit and retain its ref and checkout destinations.
+  Consuming the continuation releases all of its retained source refs, including
+  external inputs no longer represented by a todo command.
+- Freezing requires valid AutoMerge metadata matching its recorded parent slots,
+  no muted inputs, and finalized recorded content. The frozen subject becomes
+  prose such as `Merge A and B` or `Merge A, B, and C`, omitting generated icons,
+  brackets, and pin entries; no remaining labels produces `Merge`. The original
+  subject's line ending and every following byte are retained, including CRLF,
+  blank lines, and non-UTF-8 body content. Freezing never resolves live input refs
+  to regenerate that content.
+- Frozen occurrences become ordinary before dependency expansion, including
+  placeholders written after an earlier conflict. A plan may contain the live
+  original and its frozen copy simultaneously. Copy preserves identity and notes
+  without redirecting source refs or subscriptions. Freezing a copy survives
+  conflict continuation and undo.
 - All selected commits replay eagerly even when HEAD is elsewhere. Pending
   destination ancestors replay in the same transaction before selected commits;
   unrelated affected descendants remain lazy. A pending read-only anchor is

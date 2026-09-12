@@ -435,8 +435,33 @@ fn saved_continuations_retain_owners_and_checkpoints_until_consumed() -> gix_tes
     let retained = continuation_edits(&repo, owner, None)?;
     repo.edit_references(retained.forward)?;
     assert!(
-        continuation_edits(&repo, owner, owner)?.forward.is_empty(),
+        continuation_edits(&repo, owner, Some(replay.pending_commit_id))?
+            .forward
+            .is_empty(),
         "a repeated conflict keeps the sources still needed by its next continuation"
+    );
+    let next = continuation_edits(
+        &repo,
+        Some((replay.pending_commit_id, &scope[..2])),
+        Some(replay.pending_commit_id),
+    )?;
+    assert_eq!(
+        next.forward.len(),
+        1,
+        "a smaller continuation retires only the source its owner no longer needs"
+    );
+    repo.edit_references(next.forward)?;
+    assert!(
+        repo.try_find_reference(continuation_reference(replay.pending_commit_id, squash_commit_id)?.as_ref())?
+            .is_none(),
+        "sources outside the next continuation's scope are released"
+    );
+    repo.edit_references(next.rollback)?;
+    assert_eq!(
+        repo.find_reference(continuation_reference(replay.pending_commit_id, squash_commit_id)?.as_ref())?
+            .id(),
+        squash_commit_id,
+        "rollback restores sources retired from the ownership group"
     );
     for commit_id in scope {
         let name = continuation_reference(replay.pending_commit_id, commit_id)?;
@@ -474,7 +499,7 @@ fn saved_continuations_retain_owners_and_checkpoints_until_consumed() -> gix_tes
         );
     }
 
-    let mut edits = continuation_edits(&repo, None, owner)?.forward;
+    let mut edits = continuation_edits(&repo, None, Some(replay.pending_commit_id))?.forward;
     let released = prepare(&repo, [], [replay.pending_commit_id], &edits, None)?;
     assert_eq!(
         released.forward.len(),
@@ -529,7 +554,7 @@ fn consuming_one_continuation_keeps_another_continuations_shared_sources() -> gi
     let second = Some((replay.completed_commit_id, second_scope.as_slice()));
     repo.edit_references(continuation_edits(&repo, first, None)?.forward)?;
     repo.edit_references(continuation_edits(&repo, second, None)?.forward)?;
-    repo.edit_references(continuation_edits(&repo, None, first)?.forward)?;
+    repo.edit_references(continuation_edits(&repo, None, Some(replay.pending_commit_id))?.forward)?;
     assert!(
         repo.try_find_reference(continuation_reference(replay.pending_commit_id, replay.source_commit_id)?.as_ref())?
             .is_none(),
@@ -548,10 +573,39 @@ fn consuming_one_continuation_keeps_another_continuations_shared_sources() -> gi
         replay.source_commit_id,
         "each saved continuation owns an independent source reference"
     );
-    repo.edit_references(continuation_edits(&repo, None, second)?.forward)?;
+    repo.edit_references(continuation_edits(&repo, None, Some(replay.completed_commit_id))?.forward)?;
     assert!(
         repo.references()?.prefixed(PREFIX.as_bstr())?.next().is_none(),
         "consuming both continuations releases both ownership groups"
     );
+    Ok(())
+}
+
+#[test]
+fn continuation_release_rejects_mismatched_and_symbolic_targets() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let replay = replay(&repo)?;
+    let resource = continuation_reference(replay.pending_commit_id, replay.source_commit_id)?;
+    for target in [
+        Target::Object(replay.completed_commit_id),
+        Target::Symbolic("refs/heads/missing".try_into()?),
+    ] {
+        repo.edit_reference(RefEdit::update(
+            resource.clone(),
+            target.clone(),
+            PreviousValue::Any,
+            "divert continuation resource",
+        ))?;
+        assert!(
+            continuation_edits(&repo, None, Some(replay.pending_commit_id)).is_err(),
+            "release requires a direct target matching the commit ID in its name"
+        );
+        assert_eq!(
+            repo.find_reference(resource.as_ref())?.target().into_owned(),
+            target,
+            "rejecting an invalid resource leaves it untouched"
+        );
+    }
     Ok(())
 }

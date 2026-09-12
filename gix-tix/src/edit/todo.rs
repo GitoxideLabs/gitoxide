@@ -381,12 +381,11 @@ pub(crate) fn prepare_continuation(
     let commit_at = |position: rebase::PlanParent| -> Result<ObjectId> {
         match position {
             rebase::PlanParent::Existing(id) => Ok(id),
-            rebase::PlanParent::Step(index) => match plan.steps.get(index).map(|step| &step.commit) {
-                Some(
-                    rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Copy(id) | rebase::PlanCommit::Resolved(id),
-                ) => Ok(*id),
-                _ => anyhow::bail!("continuation metadata requires a produced commit"),
-            },
+            rebase::PlanParent::Step(index) => plan
+                .steps
+                .get(index)
+                .and_then(|step| step.commit.source())
+                .context("continuation metadata requires a produced commit"),
         }
     };
     let scope: HashSet<_> = plan.scope.iter().copied().collect();
@@ -396,9 +395,7 @@ pub(crate) fn prepare_continuation(
         .flat_map(|step| step.squash.iter().map(|fold| fold.commit_id))
         .collect();
     for step in &plan.steps {
-        if let rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Copy(id) | rebase::PlanCommit::Resolved(id) =
-            step.commit
-        {
+        if let Some(id) = step.commit.source() {
             let parent = repo.find_commit(id)?.parent_ids().next().map(gix::Id::detach);
             if parent.is_some_and(|parent| parent != plan.base && !scope.contains(&parent)) {
                 continuation_sources.push(id);
@@ -462,14 +459,10 @@ pub(crate) fn prepare_continuation(
             }
             let parent = match first_parent {
                 rebase::PlanParent::Existing(id) => id,
-                rebase::PlanParent::Step(parent) => match plan.steps[parent].commit {
-                    rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Copy(id) | rebase::PlanCommit::Resolved(id) => {
-                        id
-                    }
-                    rebase::PlanCommit::Empty(_) => {
-                        anyhow::bail!("a continuation fork cannot target an unwritten empty commit")
-                    }
-                },
+                rebase::PlanParent::Step(parent) => plan.steps[parent]
+                    .commit
+                    .source()
+                    .context("a continuation fork cannot target an unwritten empty commit")?,
             };
             let base_title = (parent == plan.base)
                 .then(|| anchor_title(repo, parent))
@@ -496,7 +489,10 @@ pub(crate) fn prepare_continuation(
             ""
         };
         match step.commit {
-            rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Copy(id) | rebase::PlanCommit::Resolved(id) => {
+            rebase::PlanCommit::Pick(id)
+            | rebase::PlanCommit::Copy(id)
+            | rebase::PlanCommit::FrozenCopy(id)
+            | rebase::PlanCommit::Resolved(id) => {
                 let decoded = repo.find_commit(id)?.decode()?.into_owned()?;
                 let ordinary_merge = step.parents.len() > 1 && !super::auto_merge::is_auto_merge(&decoded);
                 let verb = if ordinary_merge { "merge" } else { "pick" };

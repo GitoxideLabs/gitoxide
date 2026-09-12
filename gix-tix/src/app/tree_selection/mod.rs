@@ -29,7 +29,7 @@ struct Leaf {
 #[derive(Debug)]
 pub(super) struct SelectionFlow {
     root: ObjectId,
-    parents: HashMap<ObjectId, ObjectId>,
+    parents: HashMap<ObjectId, Vec<ObjectId>>,
     candidates: Vec<Leaf>,
     candidate_for_commit: HashMap<ObjectId, usize>,
     active: Option<usize>,
@@ -46,32 +46,35 @@ pub(super) struct SelectionFlow {
 }
 
 impl SelectionFlow {
-    fn path(&self, mut endpoint: ObjectId) -> HashSet<ObjectId> {
+    fn paths(&self, endpoints: impl IntoIterator<Item = ObjectId>) -> HashSet<ObjectId> {
         let mut path = HashSet::new();
-        while path.insert(endpoint) && endpoint != self.root {
-            let Some(parent) = self.parents.get(&endpoint) else {
-                break;
+        let mut pending: Vec<_> = endpoints.into_iter().collect();
+        while let Some(commit_id) = pending.pop() {
+            let Some(parents) = self.parents.get(&commit_id) else {
+                continue;
             };
-            endpoint = *parent;
+            if path.insert(commit_id) && commit_id != self.root {
+                pending.extend(parents.iter().rev().copied());
+            }
         }
         path
     }
 
     fn update_members(&mut self) {
-        self.members = HashSet::from([self.root]);
-        for leaf in self.candidates.iter().filter(|leaf| leaf.selected) {
-            let mut endpoint = leaf.endpoint;
-            while self.members.insert(endpoint) && endpoint != self.root {
-                let Some(parent) = self.parents.get(&endpoint) else {
-                    break;
-                };
-                endpoint = *parent;
-            }
-        }
+        self.members = self.paths(
+            std::iter::once(self.root).chain(
+                self.candidates
+                    .iter()
+                    .filter(|leaf| leaf.selected)
+                    .map(|leaf| leaf.endpoint),
+            ),
+        );
         let non_leaves: HashSet<_> = self
             .members
             .iter()
-            .filter_map(|commit_id| self.parents.get(commit_id).copied())
+            .filter_map(|commit_id| self.parents.get(commit_id))
+            .flatten()
+            .copied()
             .collect();
         self.leaves.clear();
         self.leaf_slots.clear();
@@ -98,7 +101,7 @@ impl SelectionFlow {
     fn update_preview(&mut self) {
         self.preview = self
             .active
-            .map_or_else(HashSet::new, |active| self.path(self.candidates[active].endpoint));
+            .map_or_else(HashSet::new, |active| self.paths([self.candidates[active].endpoint]));
     }
 
     pub(super) fn notice(&self, app: &App) -> String {
@@ -183,10 +186,20 @@ impl SelectionFlow {
                 });
                 notice.push_str(" · Enter continue · Esc abort");
             }
-            Stage::Mode => notice.push_str(match self.mode {
-                Mode::Copy => "[Copy]  Move · j/k choose · Enter continue · Esc abort",
-                Mode::Move => "Copy  [Move] · j/k choose · Enter continue · Esc abort",
-            }),
+            Stage::Mode => {
+                notice.push_str(match self.mode {
+                    Mode::Copy => "[Copy]  Move",
+                    Mode::Move => "Copy  [Move]",
+                });
+                if self
+                    .members
+                    .iter()
+                    .any(|commit_id| app.auto_merges.contains_key(commit_id))
+                {
+                    notice.push_str(" · Copy freezes AutoMerges; Move keeps them live");
+                }
+                notice.push_str(" · j/k choose · Enter continue · Esc abort");
+            }
             Stage::Connection => notice.push_str(if self.leaves.len() > 1 {
                 "[Fork] · multiple leaves require Fork · Enter continue · Esc abort"
             } else {
@@ -287,9 +300,21 @@ impl App {
 
     fn tree_source_eligible(&self, row: &CommitRow) -> bool {
         !self.hidden_rows.contains(&row.id)
-            && row.parent_ids.len() == 1
+            && !row.parent_ids.is_empty()
             && !self.unavailable_patches.contains(&row.id)
-            && !self.auto_merges.contains_key(&row.id)
+            && self.auto_merges.get(&row.id).is_none_or(|definition| {
+                let mut seen = HashSet::new();
+                row.metadata_loaded
+                    && row.signature != SignatureState::PendingRebase
+                    && !definition.inputs.is_empty()
+                    && definition.inputs.iter().all(|input| !input.muted)
+                    && definition
+                        .inputs
+                        .iter()
+                        .map(|input| input.commit_id)
+                        .filter(|commit_id| seen.insert(*commit_id))
+                        .eq(row.parent_ids.iter().copied())
+            })
     }
 
     pub(crate) fn can_select_tree(&self) -> bool {
@@ -301,10 +326,13 @@ impl App {
             && self.changes_focus.is_none()
             && self.reachable_rows.is_none()
             && !self.has_conflict_marker()
-            && self
-                .selected
-                .and_then(|index| self.rows.get(index))
-                .is_some_and(|row| self.tree_source_eligible(row))
+            && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
+                row.metadata_loaded
+                    && row.parent_ids.len() == 1
+                    && !row.has_merge_replay
+                    && !self.auto_merges.contains_key(&row.id)
+                    && self.tree_source_eligible(row)
+            })
     }
 
     pub(crate) fn can_select_subtree(&self) -> bool {
@@ -324,16 +352,12 @@ impl App {
         let mut parents = HashMap::new();
         for row in self.rows.iter().rev() {
             if self.tree_source_eligible(row)
-                && (row.id == root
-                    || row
-                        .parent_ids
-                        .first()
-                        .is_some_and(|parent| parents.contains_key(parent)))
+                && (row.id == root || row.parent_ids.iter().any(|parent| parents.contains_key(parent)))
             {
-                parents.insert(row.id, row.parent_ids[0]);
+                parents.insert(row.id, row.parent_ids.to_vec());
             }
         }
-        let non_leaves: HashSet<_> = parents.values().copied().collect();
+        let non_leaves: HashSet<_> = parents.values().flatten().copied().collect();
         let candidates: Vec<_> = self
             .rows
             .iter()
@@ -346,14 +370,18 @@ impl App {
             .collect();
         let mut candidate_for_commit = HashMap::with_capacity(parents.len());
         for (slot, leaf) in candidates.iter().enumerate() {
-            let mut commit_id = leaf.tip;
+            let mut pending = vec![leaf.tip];
             // Shared stems belong to the first displayed candidate. Each commit is indexed once.
-            while let Entry::Vacant(entry) = candidate_for_commit.entry(commit_id) {
-                entry.insert(slot);
-                if commit_id == root {
-                    break;
+            while let Some(commit_id) = pending.pop() {
+                let Some(edges) = parents.get(&commit_id) else {
+                    continue;
+                };
+                if let Entry::Vacant(entry) = candidate_for_commit.entry(commit_id) {
+                    entry.insert(slot);
+                    if commit_id != root {
+                        pending.extend(edges.iter().rev().copied());
+                    }
                 }
-                commit_id = parents[&commit_id];
             }
         }
         self.materialize_compressed_selection();
@@ -388,13 +416,15 @@ impl App {
             return false;
         }
         if placement == Placement::Below
-            && (self.is_row_hidden(index) || row.parent_ids.len() != 1 || self.auto_merges.contains_key(&row.id))
+            && (!row.metadata_loaded
+                || self.is_row_hidden(index)
+                || row.parent_ids.len() != 1
+                || row.has_merge_replay
+                || self.auto_merges.contains_key(&row.id))
         {
             return false;
         }
-        flow.connection == Connection::Fork
-            || self.is_row_hidden(index)
-            || !self.known_merge_descendants.contains(&row.id)
+        true
     }
 
     pub(super) fn update_tree_selection_mask(&mut self) {
@@ -526,7 +556,7 @@ impl App {
                     Some(index) => (index + flow.candidates.len() - 1) % flow.candidates.len(),
                 };
                 flow.active = Some(active);
-                flow.active_path = flow.path(flow.candidates[active].tip);
+                flow.active_path = flow.paths([flow.candidates[active].tip]);
                 flow.update_preview();
                 let endpoint = flow.candidates[active].endpoint;
                 self.update_tree_selection_mask();

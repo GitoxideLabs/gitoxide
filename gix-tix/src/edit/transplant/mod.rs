@@ -55,20 +55,32 @@ impl Selection {
         Ok(selection)
     }
 
-    fn normalize_leaves(&mut self, parents: &HashMap<ObjectId, ObjectId>) {
+    fn normalize_leaves(&mut self, parents: &HashMap<ObjectId, Vec<ObjectId>>) {
         if self.leaves.is_empty() {
             self.leaves.push(self.root);
         }
         self.leaves.sort_unstable();
         self.leaves.dedup();
-        let internal: HashSet<_> = parents.values().copied().collect();
+        let internal: HashSet<_> = parents.values().flatten().copied().collect();
         self.leaves.retain(|id| !internal.contains(id));
     }
 
     pub(crate) fn subtree(repo: &gix::Repository, graph: &HistoryGraph, root: ObjectId) -> Result<Self> {
-        eligible_parent(repo, graph, root)?;
-        let mut selected = HashSet::from([root]);
-        let mut leaves = selected.clone();
+        let parents = Self::reachable_parents(repo, graph, root)?;
+        let mut selection = Self {
+            root,
+            leaves: parents.keys().copied().collect(),
+        };
+        selection.normalize_leaves(&parents);
+        Ok(selection)
+    }
+
+    fn reachable_parents(
+        repo: &gix::Repository,
+        graph: &HistoryGraph,
+        root: ObjectId,
+    ) -> Result<HashMap<ObjectId, Vec<ObjectId>>> {
+        let mut selected = HashMap::from([(root, vec![eligible_root_parent(repo, graph, root)?])]);
         for commit_id in graph
             .descendants_in_parent_order(root)
             .context("the selection root is outside editable history")?
@@ -79,71 +91,86 @@ impl Selection {
             let Some(parents) = graph.parents_of(commit_id) else {
                 continue;
             };
-            let [parent] = parents.as_slice() else { continue };
-            if selected.contains(parent)
-                && !graph.is_read_only(commit_id)
-                && !graph.auto_merges.contains_key(&commit_id)
-                && !graph.unavailable_patches.contains(&commit_id)
-            {
-                eligible_parent(repo, graph, commit_id)?;
-                selected.insert(commit_id);
-                leaves.remove(parent);
-                leaves.insert(commit_id);
+            if !parents.iter().any(|parent| selected.contains_key(parent)) || graph.is_read_only(commit_id) {
+                continue;
             }
+            let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
+            if crate::patch_id::is_unavailable(&commit)
+                || auto_merge::is_auto_merge(&commit) && auto_merge::ensure_freezable(&commit).is_err()
+            {
+                continue;
+            }
+            selected.insert(
+                commit_id,
+                rebase::replay_parents(&commit)?.unwrap_or_else(|| commit.parents.to_vec()),
+            );
         }
-        let mut leaves: Vec<_> = leaves.into_iter().collect();
-        leaves.sort_unstable();
-        Ok(Self { root, leaves })
+        Ok(selected)
     }
 
-    fn parents(&self, repo: &gix::Repository, graph: &HistoryGraph) -> Result<HashMap<ObjectId, ObjectId>> {
-        let mut parents = HashMap::from([(self.root, eligible_parent(repo, graph, self.root)?)]);
-        for &leaf in &self.leaves {
-            let mut cursor = leaf;
-            let mut seen = HashSet::new();
-            loop {
-                ensure!(seen.insert(cursor), "the selection ancestry contains a cycle");
-                if parents.contains_key(&cursor) {
-                    break;
-                }
-                let parent = eligible_parent(repo, graph, cursor)
-                    .context("every selected leaf must have the source root as an ancestor")?;
-                parents.insert(cursor, parent);
-                cursor = parent;
+    fn parents(&self, repo: &gix::Repository, graph: &HistoryGraph) -> Result<HashMap<ObjectId, Vec<ObjectId>>> {
+        let reachable = Self::reachable_parents(repo, graph, self.root)?;
+        let mut pending = self.leaves.clone();
+        pending.push(self.root);
+        for &leaf in &pending {
+            if !reachable.contains_key(&leaf) {
+                eligible_parents(repo, graph, leaf)?;
+                anyhow::bail!("every selected leaf must have an eligible path from the source root");
             }
+        }
+        let mut parents = HashMap::new();
+        while let Some(commit_id) = pending.pop() {
+            if parents.contains_key(&commit_id) {
+                continue;
+            }
+            let edges = &reachable[&commit_id];
+            // Side histories outside the root-connected selection stay fixed.
+            pending.extend(edges.iter().filter(|parent| reachable.contains_key(*parent)).copied());
+            parents.insert(commit_id, edges.clone());
         }
         Ok(parents)
     }
 }
 
-fn eligible_parent(repo: &gix::Repository, graph: &HistoryGraph, commit_id: ObjectId) -> Result<ObjectId> {
+fn eligible_root_parent(repo: &gix::Repository, graph: &HistoryGraph, commit_id: ObjectId) -> Result<ObjectId> {
+    let parents = eligible_parents(repo, graph, commit_id)?;
+    let [parent] = parents.as_slice() else {
+        anyhow::bail!("the selection root must have exactly one parent");
+    };
+    auto_merge::ensure_editable(&repo.find_commit(commit_id)?.decode()?.into_owned()?)?;
+    Ok(*parent)
+}
+
+fn eligible_parents(repo: &gix::Repository, graph: &HistoryGraph, commit_id: ObjectId) -> Result<Vec<ObjectId>> {
     ensure!(
         graph.is_in_edit_scope(commit_id) && !graph.is_read_only(commit_id),
         "a selected commit is outside editable history"
     );
-    let parents = graph.parents_of(commit_id).context("a selected commit is incomplete")?;
-    let [parent] = parents.as_slice() else {
-        anyhow::bail!("every selected commit must have exactly one parent");
-    };
+    graph.parents_of(commit_id).context("a selected commit is incomplete")?;
     let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
-    auto_merge::ensure_editable(&commit)?;
+    if auto_merge::is_auto_merge(&commit) {
+        auto_merge::ensure_freezable(&commit)?;
+    }
     ensure!(
         !crate::patch_id::is_unavailable(&commit),
         "resolve and amend the conflicting commit before selecting it"
     );
-    Ok(*parent)
+    let parents = rebase::replay_parents(&commit)?.unwrap_or_else(|| commit.parents.to_vec());
+    ensure!(!parents.is_empty(), "a selected commit must have a parent");
+    Ok(parents)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Node {
     Original(ObjectId),
     Copy(ObjectId),
+    Fixed(ObjectId),
 }
 
 impl Node {
     fn commit_id(self) -> ObjectId {
         match self {
-            Self::Original(commit_id) | Self::Copy(commit_id) => commit_id,
+            Self::Original(commit_id) | Self::Copy(commit_id) | Self::Fixed(commit_id) => commit_id,
         }
     }
 }
@@ -199,7 +226,15 @@ fn build_plan(
         request.connection != Connection::Insert || selection.leaves.len() == 1,
         "inserting requires one selected leaf; fork a branching selection instead"
     );
-    let root_parent = selected_parents[&selection.root];
+    let root_parent = selected_parents[&selection.root][0];
+    let mut frozen = HashSet::new();
+    for &commit_id in selected_parents.keys() {
+        if request.mode == Mode::Copy
+            && auto_merge::is_auto_merge(&repo.find_commit(commit_id)?.decode()?.into_owned()?)
+        {
+            frozen.insert(commit_id);
+        }
+    }
     let destination = request.destination;
     ensure!(
         selection.root != destination,
@@ -216,7 +251,8 @@ fn build_plan(
     if request.placement == Placement::Below {
         ensure!(!target_is_read_only, "cannot transplant below a hidden boundary");
         ensure!(
-            destination_parents.len() == 1,
+            destination_parents.len() == 1
+                && !rebase::has_merge_replay(&repo.find_commit(destination)?.decode()?.into_owned()?),
             "transplanting below requires a single-parent destination"
         );
         ensure!(
@@ -233,7 +269,7 @@ fn build_plan(
     let cut_parent = |mut parent: ObjectId| {
         if request.mode == Mode::Move {
             while let Some(previous) = selected_parents.get(&parent) {
-                parent = *previous;
+                parent = previous[0];
             }
         }
         parent
@@ -262,16 +298,17 @@ fn build_plan(
 
     // Required paths may leave the planned edits at a pending destination. Complete
     // that ancestry in the same transaction; its other descendants remain lazy.
-    let mut cursor = anchor;
+    let mut ancestry = vec![anchor];
     let mut seen = HashSet::new();
     let mut pending = HashSet::new();
-    let mut oldest_pending = None;
-    loop {
-        ensure!(seen.insert(cursor), "the destination ancestry contains a cycle");
+    while let Some(cursor) = ancestry.pop() {
+        if !seen.insert(cursor) {
+            continue;
+        }
         let commit = repo.find_commit(cursor)?.decode()?.into_owned()?;
         let is_pending = rebase::is_pending(&commit);
         if !is_pending && !scope.contains(&cursor) {
-            break;
+            continue;
         }
         if is_pending {
             ensure!(
@@ -285,20 +322,16 @@ fn build_plan(
                 "resolve the conflicting destination before transplanting"
             );
             pending.insert(cursor);
-            oldest_pending = Some(cursor);
+            scope.extend(
+                graph
+                    .descendants_in_parent_order(cursor)
+                    .context("pending destination ancestry is unavailable")?,
+            );
         }
         if auto_merge::is_auto_merge(&commit) {
-            break;
+            continue;
         }
-        let Some(parent) = commit.parents.first() else { break };
-        cursor = cut_parent(*parent);
-    }
-    if let Some(commit_id) = oldest_pending {
-        scope.extend(
-            graph
-                .descendants_in_parent_order(commit_id)
-                .context("pending destination ancestry is unavailable")?,
-        );
+        ancestry.extend(commit.parents.into_iter().map(cut_parent));
     }
 
     let selected_node = |id| match request.mode {
@@ -306,7 +339,23 @@ fn build_plan(
         Mode::Move => Node::Original(id),
     };
     let leaf = selected_node(selection.leaves[0]);
-    let mut parents = HashMap::<Node, Node>::new();
+    let selected_edges = |commit_id: ObjectId, edges: &[ObjectId]| {
+        if commit_id == selection.root {
+            vec![Node::Original(anchor)]
+        } else {
+            edges
+                .iter()
+                .map(|parent| {
+                    if selected_parents.contains_key(parent) {
+                        selected_node(*parent)
+                    } else {
+                        Node::Fixed(*parent)
+                    }
+                })
+                .collect()
+        }
+    };
+    let mut parents = HashMap::<Node, Vec<Node>>::new();
     let mut scope: Vec<_> = scope.into_iter().collect();
     scope.sort_unstable();
     for &commit_id in &scope {
@@ -314,89 +363,64 @@ fn build_plan(
             !graph.is_read_only(commit_id),
             "transplant cannot rewrite hidden history"
         );
-        let old_parents = graph
-            .parents_of(commit_id)
-            .context("an affected commit is incomplete")?;
-        let Some(&old_parent) = old_parents
-            .first()
-            .filter(|_| old_parents.len() == 1 || graph.auto_merges.contains_key(&commit_id))
-        else {
-            anyhow::bail!("transplant cannot rewrite root or ordinary merge commits");
-        };
-        let mut parent = if selected_parents.contains_key(&commit_id) && request.mode == Mode::Move {
-            old_parent
+        let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
+        let old_parents = rebase::replay_parents(&commit)?.unwrap_or_else(|| commit.parents.to_vec());
+        ensure!(!old_parents.is_empty(), "transplant cannot rewrite root commits");
+        let edges = if selected_parents.contains_key(&commit_id) && request.mode == Mode::Move {
+            selected_edges(commit_id, &selected_parents[&commit_id])
         } else {
-            cut_parent(old_parent)
+            old_parents
+                .into_iter()
+                .map(|parent| {
+                    let parent = cut_parent(parent);
+                    let inserted = request.connection == Connection::Insert
+                        && !target_is_read_only
+                        && match request.placement {
+                            Placement::Above => parent == destination,
+                            Placement::Below => commit_id == destination,
+                        };
+                    if inserted { leaf } else { Node::Original(parent) }
+                })
+                .collect()
         };
-        let inserted = request.connection == Connection::Insert
-            && !target_is_read_only
-            && !(request.mode == Mode::Move && selected_parents.contains_key(&commit_id))
-            && match request.placement {
-                Placement::Above => parent == destination,
-                Placement::Below => commit_id == destination,
-            };
-        if commit_id == selection.root && request.mode == Mode::Move {
-            parent = anchor;
-        }
-        parents.insert(
-            Node::Original(commit_id),
-            if inserted { leaf } else { Node::Original(parent) },
-        );
+        parents.insert(Node::Original(commit_id), edges);
     }
     if request.mode == Mode::Copy {
-        for (&commit_id, &parent) in &selected_parents {
-            parents.insert(
-                Node::Copy(commit_id),
-                if commit_id == selection.root {
-                    Node::Original(anchor)
-                } else {
-                    Node::Copy(parent)
-                },
-            );
+        for (&commit_id, edges) in &selected_parents {
+            parents.insert(Node::Copy(commit_id), selected_edges(commit_id, edges));
         }
     }
     ensure!(
         request.mode == Mode::Copy
-            || parents.iter().any(|(node, parent)| {
-                graph
-                    .parents_of(node.commit_id())
-                    .and_then(|parents| parents.first().copied())
-                    != Some(parent.commit_id())
+            || parents.iter().any(|(node, edges)| {
+                graph.parents_of(node.commit_id()) != Some(edges.iter().map(|parent| parent.commit_id()).collect())
             }),
         "the selection is already at that destination"
     );
     let mut nodes: Vec<_> = parents.keys().copied().collect();
     nodes.sort_unstable_by_key(|node| (node.commit_id(), matches!(node, Node::Copy(_))));
-    let mut positions = HashMap::new();
+    let positions: HashMap<_, _> = nodes.iter().enumerate().map(|(index, node)| (*node, index)).collect();
     let mut steps = Vec::with_capacity(nodes.len());
     for node in nodes {
-        let mut path = Vec::new();
-        let mut seen = HashSet::new();
-        let mut cursor = node;
-        while parents.contains_key(&cursor) && !positions.contains_key(&cursor) {
-            ensure!(
-                seen.insert(cursor),
-                "transplanting the selection would create a commit cycle"
-            );
-            path.push(cursor);
-            cursor = parents[&cursor];
-        }
-        for node in path.into_iter().rev() {
-            let parent = parents[&node];
-            let parent = positions
-                .get(&parent)
-                .copied()
-                .map_or(PlanParent::Existing(parent.commit_id()), PlanParent::Step);
-            positions.insert(node, steps.len());
-            steps.push(PlanStep {
-                parents: vec![parent],
-                commit: match node {
-                    Node::Original(id) => PlanCommit::Pick(id),
-                    Node::Copy(id) => PlanCommit::Copy(id),
-                },
-                squash: Vec::new(),
-            });
-        }
+        let edges = parents[&node]
+            .iter()
+            .map(|parent| {
+                positions
+                    .get(parent)
+                    .copied()
+                    .map_or(PlanParent::Existing(parent.commit_id()), PlanParent::Step)
+            })
+            .collect();
+        steps.push(PlanStep {
+            parents: edges,
+            commit: match node {
+                Node::Copy(id) if frozen.contains(&id) => PlanCommit::FrozenCopy(id),
+                Node::Original(id) => PlanCommit::Pick(id),
+                Node::Copy(id) => PlanCommit::Copy(id),
+                Node::Fixed(_) => unreachable!("fixed parents are never rewritten"),
+            },
+            squash: Vec::new(),
+        });
     }
     let original_destination = |commit_id| {
         positions
@@ -518,6 +542,29 @@ mod tests {
         Ok(repo.write_object(&commit)?.detach())
     }
 
+    fn merge(repo: &gix::Repository, parents: &[ObjectId], path: &str) -> Result<ObjectId> {
+        let mut commit = repo.find_commit(parents[0])?.decode()?.into_owned()?;
+        let mut tree = repo.find_tree(commit.tree)?.edit()?;
+        // These fixtures use distinct flat paths, so their recorded merge also
+        // has an explicit merge-only addition whose survival can be checked.
+        for parent_commit_id in &parents[1..] {
+            for entry in repo.find_commit(*parent_commit_id)?.tree()?.iter() {
+                let entry = entry?;
+                tree.upsert(entry.filename(), entry.mode().kind(), entry.object_id())?;
+            }
+        }
+        tree.upsert(
+            path,
+            gix::objs::tree::EntryKind::Blob,
+            repo.write_blob(format!("{path}\n"))?,
+        )?;
+        commit.tree = tree.write()?.detach();
+        commit.parents = parents.iter().copied().collect();
+        commit.message = format!("merge {path}\n").into();
+        commit.extra_headers.clear();
+        Ok(repo.write_object(&commit)?.detach())
+    }
+
     fn reference(repo: &gix::Repository, name: &str, commit_id: ObjectId) -> Result<()> {
         repo.reference(format!("refs/heads/{name}"), commit_id, PreviousValue::Any, "fixture")?;
         Ok(())
@@ -546,6 +593,577 @@ mod tests {
             placement,
             destination,
         }
+    }
+
+    #[test]
+    fn merges_cannot_be_roots_or_below_destinations_even_when_pending_parent_slots_coincide() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let left_commit_id = repo.head_id()?.detach();
+        let root_commit_id = parent(&repo, left_commit_id)?;
+        let base_commit_id = parent(&repo, root_commit_id)?;
+        let right_commit_id = child(&repo, root_commit_id, "right")?;
+        let merge_commit_id = merge(&repo, &[left_commit_id, right_commit_id], "merge-only")?;
+        let destination_commit_id = child(&repo, base_commit_id, "destination")?;
+        reference(&repo, "merge", merge_commit_id)?;
+        reference(&repo, "destination", destination_commit_id)?;
+        let graph = super::super::loaded_graph(&repo)?;
+        assert!(
+            Selection::normalize(&repo, &graph, merge_commit_id, &[]).is_err(),
+            "ordinary merges cannot be selection roots"
+        );
+        let below = request(
+            destination_commit_id,
+            vec![],
+            Mode::Copy,
+            Connection::Fork,
+            Placement::Below,
+            merge_commit_id,
+        );
+        assert!(
+            plan(&repo, &graph, &below, false)
+                .expect_err("an ordinary merge is not a Below destination")
+                .to_string()
+                .contains("single-parent destination"),
+            "Below rejects the destination's merge topology"
+        );
+        let outcome = rebase::perform_plan(
+            &repo,
+            &graph,
+            plan(
+                &repo,
+                &graph,
+                &request(
+                    root_commit_id,
+                    vec![left_commit_id, right_commit_id],
+                    Mode::Move,
+                    Connection::Fork,
+                    Placement::Above,
+                    destination_commit_id,
+                ),
+                false,
+            )?,
+        )?
+        .complete()?;
+        let pending_commit_id = outcome.map(merge_commit_id).context("the excluded merge survives")?;
+        let pending = repo.find_commit(pending_commit_id)?.decode()?.into_owned()?;
+        assert_eq!(
+            pending.parents.as_slice(),
+            [base_commit_id],
+            "identical Git parent IDs are deduplicated while replay remains pending"
+        );
+        assert_eq!(
+            rebase::replay_parents(&pending)?,
+            Some(vec![base_commit_id, base_commit_id]),
+            "the excluded merge retains both replay slots"
+        );
+        let graph = super::super::loaded_graph(&repo)?;
+        assert!(
+            Selection::normalize(&repo, &graph, pending_commit_id, &[]).is_err(),
+            "a pending merge remains ineligible as a root after its Git parents deduplicate"
+        );
+        assert!(
+            plan(
+                &repo,
+                &graph,
+                &Request {
+                    destination: pending_commit_id,
+                    ..below
+                },
+                false
+            )
+            .expect_err("a pending merge is not a Below destination")
+            .to_string()
+            .contains("single-parent destination"),
+            "Below rejects durable merge slots even when only one Git parent remains"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn octopus_transplants_keep_all_selected_paths_external_parents_and_redundant_edges() -> gix_testtools::Result {
+        for mode in [Mode::Copy, Mode::Move] {
+            for connection in [Connection::Fork, Connection::Insert] {
+                for placement in [Placement::Above, Placement::Below] {
+                    let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+                    let repo = crate::test_repository::open(fixture.path())?;
+                    let left_commit_id = repo.head_id()?.detach();
+                    let root_commit_id = parent(&repo, left_commit_id)?;
+                    let base_commit_id = parent(&repo, root_commit_id)?;
+                    let right_commit_id = child(&repo, root_commit_id, "right")?;
+                    let outside_commit_id = child(&repo, root_commit_id, "outside")?;
+                    let external_commit_id = child(&repo, base_commit_id, "external")?;
+                    let merge_commit_id = merge(
+                        &repo,
+                        &[left_commit_id, right_commit_id, external_commit_id, root_commit_id],
+                        "merge-only",
+                    )?;
+                    let destination_base_commit_id = child(&repo, base_commit_id, "advanced-base")?;
+                    let destination_commit_id = child(&repo, destination_base_commit_id, "destination")?;
+                    for (name, commit_id) in [
+                        ("main", merge_commit_id),
+                        ("outside", outside_commit_id),
+                        ("destination", destination_commit_id),
+                    ] {
+                        reference(&repo, name, commit_id)?;
+                    }
+                    git(fixture.path(), &["reset", "--hard", "main"])?;
+                    let graph = super::super::loaded_graph(&repo)?;
+                    let selection = Selection::normalize(
+                        &repo,
+                        &graph,
+                        root_commit_id,
+                        &[root_commit_id, left_commit_id, right_commit_id, merge_commit_id],
+                    )?;
+                    assert_eq!(
+                        selection.leaves,
+                        [merge_commit_id],
+                        "the merge is the common endpoint of every selected path"
+                    );
+                    let selected = selection.parents(&repo, &graph)?;
+                    assert_eq!(
+                        selected.keys().copied().collect::<HashSet<_>>(),
+                        HashSet::from([root_commit_id, left_commit_id, right_commit_id, merge_commit_id]),
+                        "selection follows every root-to-endpoint path without importing side histories"
+                    );
+                    let outcome = rebase::perform_plan(
+                        &repo,
+                        &graph,
+                        plan(
+                            &repo,
+                            &graph,
+                            &Request {
+                                selection,
+                                mode,
+                                connection,
+                                placement,
+                                destination: destination_commit_id,
+                            },
+                            false,
+                        )?,
+                    )?
+                    .complete()?;
+                    let new_root_commit_id = outcome.selected.context("the transplanted root is selected")?;
+                    assert_eq!(
+                        parent(&repo, new_root_commit_id)?,
+                        if placement == Placement::Above {
+                            destination_commit_id
+                        } else {
+                            destination_base_commit_id
+                        },
+                        "{mode:?} {connection:?} {placement:?} uses the requested destination edge"
+                    );
+                    let new_merge_commit_id = match mode {
+                        Mode::Move => outcome.map(merge_commit_id).context("the moved merge survives")?,
+                        Mode::Copy => super::super::loaded_graph(&repo)?
+                            .edit_commit_ids()
+                            .into_iter()
+                            .find_map(|commit_id| {
+                                repo.find_commit(commit_id)
+                                    .ok()?
+                                    .parent_ids()
+                                    .last()
+                                    .is_some_and(|parent| parent == new_root_commit_id)
+                                    .then_some(commit_id)
+                            })
+                            .context("the copied merge tip remains visible")?,
+                    };
+                    let new_merge = repo.find_commit(new_merge_commit_id)?.decode()?.into_owned()?;
+                    assert_eq!(
+                        new_merge.parents.len(),
+                        4,
+                        "ancestry-redundant edges retain their original slots"
+                    );
+                    assert_eq!(
+                        new_merge.parents[2], external_commit_id,
+                        "the external parent remains fixed"
+                    );
+                    assert_eq!(
+                        new_merge.parents[3], new_root_commit_id,
+                        "the redundant selected root maps to its successor"
+                    );
+                    for (&side_commit_id, path) in new_merge.parents[..2].iter().zip(["tip", "right"]) {
+                        assert_eq!(
+                            parent(&repo, side_commit_id)?,
+                            new_root_commit_id,
+                            "both selected branches map to the same root"
+                        );
+                        assert!(
+                            repo.find_commit(side_commit_id)?.tree()?.find_entry(path).is_some(),
+                            "selected branch order preserves the {path} parent slot"
+                        );
+                    }
+                    let tree = repo.find_tree(new_merge.tree)?;
+                    for path in ["tip", "right", "external", "merge-only", "advanced-base"] {
+                        assert!(
+                            tree.find_entry(path).is_some(),
+                            "{mode:?} {connection:?} {placement:?} retains {path}"
+                        );
+                    }
+                    assert!(
+                        !rebase::is_pending(&new_merge),
+                        "every selected merge is replayed eagerly"
+                    );
+                    assert_eq!(
+                        repo.head_id()?.detach(),
+                        outcome.map(merge_commit_id).context("logical HEAD survives")?,
+                        "transplant preserves logical HEAD"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn copying_keeps_an_external_parent_fixed_even_when_insertion_rewrites_that_parent() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let left_commit_id = repo.head_id()?.detach();
+        let root_commit_id = parent(&repo, left_commit_id)?;
+        let base_commit_id = parent(&repo, root_commit_id)?;
+        let external_commit_id = child(&repo, base_commit_id, "external")?;
+        let merge_commit_id = merge(&repo, &[left_commit_id, external_commit_id], "merge-only")?;
+        reference(&repo, "main", merge_commit_id)?;
+        reference(&repo, "external", external_commit_id)?;
+        git(fixture.path(), &["reset", "--hard", "main"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let plan = plan(
+            &repo,
+            &graph,
+            &request(
+                root_commit_id,
+                vec![merge_commit_id],
+                Mode::Copy,
+                Connection::Insert,
+                Placement::Above,
+                base_commit_id,
+            ),
+            false,
+        )?;
+        let copied_merge_step = plan
+            .steps
+            .iter()
+            .position(|step| step.commit == rebase::PlanCommit::Copy(merge_commit_id))
+            .context("the merge has a copied result")?;
+        let external_step = plan
+            .steps
+            .iter()
+            .find(|step| step.commit == rebase::PlanCommit::Pick(external_commit_id))
+            .context("insertion also rewrites the external source parent")?;
+        assert_eq!(
+            plan.steps[copied_merge_step].parents[1],
+            rebase::PlanParent::Existing(external_commit_id),
+            "a fixed source edge is not redirected through an unrelated rewrite"
+        );
+        assert_eq!(
+            external_step.parents,
+            [rebase::PlanParent::Step(copied_merge_step)],
+            "the external source parent follows the inserted tree separately"
+        );
+        let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
+        let new_external_commit_id = outcome
+            .map(external_commit_id)
+            .context("the external source parent survives")?;
+        let copied_merge_commit_id = parent(&repo, new_external_commit_id)?;
+        let copied_merge = repo.find_commit(copied_merge_commit_id)?.decode()?.into_owned()?;
+        assert_eq!(
+            copied_merge.parents[1], external_commit_id,
+            "copying preserves the original external parent exactly"
+        );
+        assert_ne!(
+            new_external_commit_id, external_commit_id,
+            "the original branch still receives the insertion"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_fixed_pending_side_does_not_prevent_replaying_the_changed_selected_parents() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let left_commit_id = repo.head_id()?.detach();
+        let root_commit_id = parent(&repo, left_commit_id)?;
+        let base_commit_id = parent(&repo, root_commit_id)?;
+        let side_commit_id = child(&repo, root_commit_id, "side")?;
+        let mut side = repo.find_commit(side_commit_id)?.decode()?.into_owned()?;
+        crate::patch_id::mark_unavailable(&mut side);
+        let pending_side_commit_id = repo.write_object(&side)?.detach();
+        let merge_commit_id = merge(&repo, &[left_commit_id, pending_side_commit_id], "manual-resolution")?;
+        let destination_commit_id = child(&repo, base_commit_id, "destination")?;
+        reference(&repo, "main", merge_commit_id)?;
+        reference(&repo, "destination", destination_commit_id)?;
+        git(fixture.path(), &["reset", "--hard", "main"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let selection = Selection::normalize(&repo, &graph, root_commit_id, &[merge_commit_id])?;
+        let selected = selection.parents(&repo, &graph)?;
+        assert!(
+            !selected.contains_key(&pending_side_commit_id),
+            "an unavailable side is outside the eligible selection"
+        );
+        assert!(
+            selected.contains_key(&merge_commit_id),
+            "the merge remains reachable through its other parent"
+        );
+        let outcome = rebase::perform_plan(
+            &repo,
+            &graph,
+            plan(
+                &repo,
+                &graph,
+                &Request {
+                    selection,
+                    mode: Mode::Copy,
+                    connection: Connection::Fork,
+                    placement: Placement::Above,
+                    destination: destination_commit_id,
+                },
+                false,
+            )?,
+        )?
+        .complete()?;
+        let copied_root_commit_id = outcome.selected.context("the copied root is selected")?;
+        let copied_merge_commit_id = crate::history::all_pins(&repo)?
+            .into_iter()
+            .find_map(|pin| {
+                let commit = repo.find_commit(pin.id).ok()?.decode().ok()?.into_owned().ok()?;
+                (commit.parents.len() == 2
+                    && commit.parents[1] == pending_side_commit_id
+                    && parent(&repo, commit.parents[0]).ok() == Some(copied_root_commit_id))
+                .then_some(pin.id)
+            })
+            .context("the copied merge tip is retained")?;
+        let copied_merge = repo.find_commit(copied_merge_commit_id)?.decode()?.into_owned()?;
+        assert!(
+            !rebase::is_pending(&copied_merge),
+            "the unchanged external parent needs no replay contribution"
+        );
+        assert!(
+            repo.find_tree(copied_merge.tree)?.find_entry("destination").is_some(),
+            "the selected parent update was replayed eagerly"
+        );
+        assert!(
+            rebase::is_pending(&repo.find_commit(pending_side_commit_id)?.decode()?.into_owned()?),
+            "the fixed side's pending state is untouched"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn moving_bypasses_each_excluded_merge_edge_and_pending_copies_keep_duplicate_parent_slots() -> gix_testtools::Result
+    {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let left_commit_id = repo.head_id()?.detach();
+        let root_commit_id = parent(&repo, left_commit_id)?;
+        let base_commit_id = parent(&repo, root_commit_id)?;
+        let external_commit_id = child(&repo, base_commit_id, "external")?;
+        let other_commit_id = child(&repo, base_commit_id, "other")?;
+        let merge_commit_id = merge(&repo, &[left_commit_id, external_commit_id], "merge-only")?;
+        let excluded_commit_id = merge(
+            &repo,
+            &[merge_commit_id, left_commit_id, other_commit_id],
+            "excluded-only",
+        )?;
+        let destination_commit_id = child(&repo, base_commit_id, "destination")?;
+        for (name, commit_id) in [
+            ("main", merge_commit_id),
+            ("excluded", excluded_commit_id),
+            ("destination", destination_commit_id),
+        ] {
+            reference(&repo, name, commit_id)?;
+        }
+        git(fixture.path(), &["reset", "--hard", "main"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let moved = plan(
+            &repo,
+            &graph,
+            &request(
+                root_commit_id,
+                vec![merge_commit_id],
+                Mode::Move,
+                Connection::Fork,
+                Placement::Above,
+                destination_commit_id,
+            ),
+            false,
+        )?;
+        let excluded = moved
+            .steps
+            .iter()
+            .find(|step| step.commit == rebase::PlanCommit::Pick(excluded_commit_id))
+            .context("the excluded descendant must follow the move")?;
+        assert_eq!(
+            excluded.parents,
+            [
+                rebase::PlanParent::Existing(base_commit_id),
+                rebase::PlanParent::Existing(base_commit_id),
+                rebase::PlanParent::Existing(other_commit_id)
+            ],
+            "each removed edge follows the selected first-parent chain without deduplicating slots"
+        );
+        let outcome = rebase::perform_plan(&repo, &graph, moved)?.complete()?;
+        let pending_commit_id = outcome.map(excluded_commit_id).context("the excluded merge survives")?;
+        let pending = repo.find_commit(pending_commit_id)?.decode()?.into_owned()?;
+        assert_eq!(
+            pending.parents.as_slice(),
+            [base_commit_id, other_commit_id],
+            "written Git parents deduplicate identical IDs"
+        );
+        assert_eq!(
+            rebase::replay_parents(&pending)?,
+            Some(vec![base_commit_id, base_commit_id, other_commit_id]),
+            "durable replay retains every corresponding parent slot"
+        );
+        let graph = super::super::loaded_graph(&repo)?;
+        let copied = plan(
+            &repo,
+            &graph,
+            &request(
+                other_commit_id,
+                vec![pending_commit_id],
+                Mode::Copy,
+                Connection::Fork,
+                Placement::Above,
+                destination_commit_id,
+            ),
+            false,
+        )?;
+        let copied_merge_step = copied
+            .steps
+            .iter()
+            .find(|step| step.commit == rebase::PlanCommit::Copy(pending_commit_id))
+            .context("the pending ordinary merge can be copied")?;
+        assert_eq!(
+            copied_merge_step.parents.len(),
+            3,
+            "selection reads the pending merge's full intended slots"
+        );
+        let outcome = rebase::perform_plan(&repo, &graph, copied)?.complete()?;
+        let copied_other_commit_id = outcome.selected.context("the copied source root is selected")?;
+        let copied_merge_commit_id = crate::history::all_pins(&repo)?
+            .into_iter()
+            .find_map(|pin| {
+                repo.find_commit(pin.id)
+                    .ok()?
+                    .parent_ids()
+                    .last()
+                    .is_some_and(|parent| parent == copied_other_commit_id)
+                    .then_some(pin.id)
+            })
+            .context("the copied merge is retained")?;
+        let copied_merge = repo.find_commit(copied_merge_commit_id)?.decode()?.into_owned()?;
+        assert!(
+            !rebase::is_pending(&copied_merge),
+            "copying finishes all pending merge contributions"
+        );
+        assert_eq!(
+            copied_merge.parents.as_slice(),
+            [base_commit_id, copied_other_commit_id],
+            "final parent order is preserved after deduplication"
+        );
+        assert!(
+            repo.find_tree(copied_merge.tree)?.find_entry("excluded-only").is_some(),
+            "the excluded merge's own edit survives replay"
+        );
+        assert!(
+            rebase::is_pending(&repo.find_commit(pending_commit_id)?.decode()?.into_owned()?),
+            "copying leaves the original pending occurrence intact"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn transplant_freezes_only_the_copied_occurrence_and_preserves_the_live_original() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let left_commit_id = repo.head_id()?.detach();
+        let root_commit_id = parent(&repo, left_commit_id)?;
+        let base_commit_id = parent(&repo, root_commit_id)?;
+        let right_commit_id = child(&repo, root_commit_id, "right")?;
+        reference(&repo, "left", left_commit_id)?;
+        reference(&repo, "right", right_commit_id)?;
+        let merge_commit_id = merge(&repo, &[left_commit_id, right_commit_id], "merge-only")?;
+        let mut automatic = repo.find_commit(merge_commit_id)?.decode()?.into_owned()?;
+        let definition = auto_merge::Definition {
+            inputs: vec![
+                auto_merge::Input {
+                    source: auto_merge::InputSource::Reference("refs/heads/left".try_into()?),
+                    commit_id: left_commit_id,
+                    muted: false,
+                },
+                auto_merge::Input {
+                    source: auto_merge::InputSource::Reference("refs/heads/right".try_into()?),
+                    commit_id: right_commit_id,
+                    muted: false,
+                },
+            ],
+        };
+        definition.store(&mut automatic);
+        automatic.message = definition.title();
+        automatic.message.extend_from_slice(b"\n\nrecorded body\n");
+        let automatic_commit_id = repo.write_object(&automatic)?.detach();
+        reference(&repo, "main", automatic_commit_id)?;
+        git(fixture.path(), &["reset", "--hard", "main"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        assert!(
+            Selection::normalize(&repo, &graph, automatic_commit_id, &[]).is_err(),
+            "AutoMerges cannot be selection roots"
+        );
+        let plan = plan(
+            &repo,
+            &graph,
+            &request(
+                root_commit_id,
+                vec![automatic_commit_id],
+                Mode::Copy,
+                Connection::Insert,
+                Placement::Above,
+                base_commit_id,
+            ),
+            false,
+        )?;
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| step.commit == rebase::PlanCommit::FrozenCopy(automatic_commit_id)),
+            "the selected result occurrence is explicitly frozen before dependency expansion"
+        );
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| step.commit == rebase::PlanCommit::Pick(automatic_commit_id)),
+            "the same plan also maintains the live original occurrence"
+        );
+        let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
+        let rewritten_root_commit_id = outcome
+            .map(root_commit_id)
+            .context("insertion rewrites the original source root")?;
+        let live_commit_id = outcome.map(automatic_commit_id).context("the live original survives")?;
+        assert!(
+            auto_merge::is_auto_merge(&repo.find_commit(live_commit_id)?.decode()?.into_owned()?),
+            "copying leaves the original occurrence live during the same transaction"
+        );
+        let frozen_commit_id = parent(&repo, rewritten_root_commit_id)?;
+        let frozen = repo.find_commit(frozen_commit_id)?.decode()?.into_owned()?;
+        assert!(
+            !auto_merge::is_auto_merge(&frozen),
+            "the transplanted occurrence becomes an ordinary merge"
+        );
+        assert_eq!(
+            frozen.message.as_slice(),
+            b"Merge left and right\n\nrecorded body\n",
+            "freeze uses prose and preserves the recorded body"
+        );
+        assert!(
+            !rebase::is_pending(&frozen),
+            "the frozen selected occurrence is finalized eagerly"
+        );
+        assert!(
+            repo.find_tree(frozen.tree)?.find_entry("merge-only").is_some(),
+            "freeze preserves the recorded merge-only edit"
+        );
+        Ok(())
     }
 
     #[test]
