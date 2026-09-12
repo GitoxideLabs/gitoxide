@@ -372,7 +372,7 @@ fn commit_from_parsed_edit(
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, process::Command};
+    use std::path::Path;
 
     use super::*;
 
@@ -381,9 +381,7 @@ mod tests {
     }
 
     fn object_count(path: &Path) -> gix_testtools::Result<Vec<u8>> {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(path)
+        let output = gix_testtools::git_command(path)
             .args(["count-objects", "-v"])
             .output()?;
         if !output.status.success() {
@@ -398,9 +396,7 @@ mod tests {
         let parent = open(fixture.path())?.head_id()?.detach();
         for name in ["refs/patches/create", "refs/tags/keep", "refs/remotes/origin/keep"] {
             assert!(
-                Command::new("git")
-                    .arg("-C")
-                    .arg(fixture.path())
+                gix_testtools::git_command(fixture.path())
                     .args(["update-ref", name, &parent.to_string()])
                     .status()?
                     .success(),
@@ -450,9 +446,7 @@ mod tests {
             "preparation writes no loose objects"
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["update-ref", "refs/patches/late", &parent.to_string()])
                 .status()?
                 .success(),
@@ -520,9 +514,7 @@ mod tests {
     fn worktree_changes_supply_the_tree_when_the_index_is_unchanged() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["reset", "-q", "HEAD"])
                 .status()?
                 .success()
@@ -557,9 +549,7 @@ mod tests {
     fn creates_an_empty_root_commit_for_an_unborn_head() -> gix_testtools::Result {
         let fixture = gix_testtools::tempfile::tempdir()?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["init", "-q", "-b", "main"])
                 .status()?
                 .success()
@@ -598,9 +588,7 @@ mod tests {
         let graph = crate::history::HistoryGraph::for_commits(&repository, &[base])?;
         drop(repository);
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["symbolic-ref", "HEAD", "refs/heads/unborn"])
                 .status()?
                 .success()
@@ -652,9 +640,7 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
         crate::test_repository::disable_autocrlf(fixture.path())?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["reset", "--hard", "-q", "HEAD"])
                 .status()?
                 .success(),
@@ -671,34 +657,26 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
         let parent = open(fixture.path())?.head_id()?.detach();
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["checkout", "-q", "--orphan", "other"])
                 .status()?
                 .success()
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["rm", "-rf", "-q", "."])
                 .status()?
                 .success()
         );
         std::fs::write(fixture.path().join("other"), b"other\n")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["add", "other"])
                 .status()?
                 .success()
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["-c", "commit.gpgSign=false", "commit", "-q", "-m", "other"])
                 .status()?
                 .success()

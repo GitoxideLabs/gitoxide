@@ -123,7 +123,7 @@ pub(crate) fn apply_reporting(
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, process::Command};
+    use std::path::Path;
 
     use gix::bstr::ByteSlice;
 
@@ -137,7 +137,7 @@ mod tests {
     }
 
     fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-        let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
+        let output = gix_testtools::git_command(path).args(args).output()?;
         if !output.status.success() {
             return Err(format!("git {} failed: {}", args.join(" "), output.stderr.to_str_lossy()).into());
         }

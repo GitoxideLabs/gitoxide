@@ -430,7 +430,7 @@ impl Worktrees {
                     if cancel.load(Ordering::Relaxed) {
                         break;
                     }
-                    let result = gix::open(&path)
+                    let result = crate::open_repository(&path, false, false)
                         .with_context(|| format!("could not open worktree {}", path.display()))
                         .and_then(|repository| is_dirty(&repository, &cancel))
                         .map_err(|err| format!("{err:#}"));
@@ -586,7 +586,7 @@ pub(crate) fn graph_metadata_for_paths(
     let mut head_ids = Vec::new();
     let mut metadata = Vec::with_capacity(paths.len());
     for (index, path) in paths.into_iter().enumerate() {
-        match gix::open(&path)
+        match crate::open_repository(&path, false, false)
             .with_context(|| format!("could not open worktree {}", path.display()))
             .and_then(|repository| logical_head(&repository).map(|head| (repository, head)))
         {
@@ -799,7 +799,7 @@ where
             .with_context(|| format!("could not create local branch {branch}"))?;
     }
     for row in &rows {
-        let Ok(worktree) = gix::open(&row.path) else {
+        let Ok(worktree) = crate::open_repository(&row.path, false, false) else {
             continue;
         };
         if logical_head(&worktree)?.branch.as_ref() == Some(&branch) {
@@ -1242,7 +1242,7 @@ fn truncate_left(value: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{process::Command, time::Duration};
+    use std::time::Duration;
 
     use gix::refs::transaction::PreviousValue;
     use ratatui::{Terminal, backend::TestBackend};
@@ -1265,7 +1265,7 @@ mod tests {
     }
 
     fn git(path: &Path, args: &[&str]) -> gix_testtools::Result {
-        let output = Command::new("git").current_dir(path).args(args).output()?;
+        let output = gix_testtools::git_command(path).args(args).output()?;
         if !output.status.success() {
             return Err(format!(
                 "git {} failed: {}",
