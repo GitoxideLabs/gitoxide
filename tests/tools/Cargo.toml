@@ -22,7 +22,7 @@ default = ["worktree-exclusions", "repo-snapshot"]
 ## Use the current repository's complete ignore rules to decide if generated fixture archives should be written.
 ## Without this feature, only the `.gitignore` next to the archive is consulted using a fallback matcher
 ## that supports literal patterns and `*`, but not the full `.gitignore` syntax.
-worktree-exclusions = ["dep:gix-discover", "dep:gix-worktree", "dep:gix-fs"]
+worktree-exclusions = ["dep:gix-config", "dep:gix-discover", "dep:gix-worktree"]
 ## Capture repository snapshots using `gix-*` plumbing crates instead of invoking Git.
 ## Without this feature, repository snapshots use the Git executable selected by `gix-path`.
 repo-snapshot = [
@@ -71,7 +71,6 @@ gix-odb = { version = "^0.84.0", path = "../../gix-odb", optional = true, defaul
 gix-ref = { version = "^0.67.1", path = "../../gix-ref", optional = true, default-features = false }
 gix-shallow = { version = "^0.13.0", path = "../../gix-shallow", optional = true }
 gix-worktree = { version = "^0.56.0", path = "../../gix-worktree", optional = true, features = ["parallel"] }
-gix-fs = { version = "^0.22.1", path = "../../gix-fs", optional = true }
 gix-tempfile = { version = "^24.0.0", path = "../../gix-tempfile", default-features = false, features = ["signals"] }
 
 fastrand = "2.0.0"
