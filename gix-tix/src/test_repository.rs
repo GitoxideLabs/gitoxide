@@ -9,8 +9,25 @@ const DEFAULT_OVERRIDES: &[&str] = &[
     "core.editor=:",
 ];
 
+pub(crate) fn options() -> gix::open::Options {
+    gix::open::Options::isolated().config_overrides(DEFAULT_OVERRIDES.iter().copied())
+}
+
+/// Supply defaults for command reopens while retaining deliberate fixture-local configuration.
+pub(crate) fn with_defaults(mut repo: gix::Repository) -> anyhow::Result<gix::Repository> {
+    let mut config = repo.config_snapshot_mut();
+    for setting in DEFAULT_OVERRIDES {
+        let (key, _) = setting.split_once('=').expect("test defaults contain a key and value");
+        if config.string(key).is_none() {
+            config.append_config([setting], gix::config::Source::Api)?;
+        }
+    }
+    config.commit()?;
+    Ok(repo)
+}
+
 pub(crate) fn open(path: impl AsRef<Path>) -> Result<gix::Repository, gix::open::Error> {
-    open_with(path, std::iter::empty::<String>())
+    gix::open_opts(path.as_ref(), options())
 }
 
 pub(crate) fn open_with<I, S>(path: impl AsRef<Path>, overrides: I) -> Result<gix::Repository, gix::open::Error>
@@ -20,10 +37,7 @@ where
 {
     let mut config: Vec<String> = DEFAULT_OVERRIDES.iter().map(ToString::to_string).collect();
     config.extend(overrides.into_iter().map(Into::into));
-    gix::open_opts(
-        path.as_ref().to_owned(),
-        gix::open::Options::isolated().config_overrides(config),
-    )
+    gix::open_opts(path.as_ref(), gix::open::Options::isolated().config_overrides(config))
 }
 
 pub(crate) fn replacing_editor(old: &str, new: &str) -> String {
@@ -40,9 +54,7 @@ pub(crate) fn replacing_editor(old: &str, new: &str) -> String {
 
 /// Keep Git from converting fixture contents while a test compares exact worktree and index bytes.
 pub(crate) fn disable_autocrlf(path: impl AsRef<Path>) -> std::io::Result<()> {
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(path.as_ref())
+    let status = gix_testtools::git_command(path.as_ref())
         .args(["config", "--local", "core.autocrlf", "false"])
         .status()?;
     if status.success() {
@@ -56,9 +68,7 @@ pub(crate) fn disable_autocrlf(path: impl AsRef<Path>) -> std::io::Result<()> {
 
 /// Remove the test-local line-ending override before assertions which snapshot repository configuration.
 pub(crate) fn clear_autocrlf(path: impl AsRef<Path>) -> std::io::Result<()> {
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(path.as_ref())
+    let status = gix_testtools::git_command(path.as_ref())
         .args(["config", "--local", "--unset", "core.autocrlf"])
         .status()?;
     if status.success() {

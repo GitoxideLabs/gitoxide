@@ -1212,9 +1212,7 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("forget_commit.sh")?;
         crate::test_repository::disable_autocrlf(fixture.path())?;
         let linked = fixture.path().join("linked");
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["worktree", "add", "-q", "-b", "linked"])
             .arg(&linked)
             .arg("HEAD")
@@ -1235,9 +1233,7 @@ mod tests {
             .expect("the linked worktree HEAD is attached")
             .to_owned();
         let top_state = gix_testtools::repository::snapshot(&linked)?;
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&linked)
+        let status = gix_testtools::git_command(&linked)
             .args(["checkout", "-q", "--detach"])
             .arg(parent.to_string())
             .status()?;

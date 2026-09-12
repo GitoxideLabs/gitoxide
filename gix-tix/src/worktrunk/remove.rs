@@ -265,6 +265,10 @@ mod tests {
 
     #[test]
     fn removal_cleans_up_only_an_eligible_associated_branch() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let _env = gix_testtools::Env::new().unset(crate::worktrunk::shell::CD_FILE_ENV);
         let temp = gix_testtools::tempfile::TempDir::new()?;
         let path = temp.path().join("repo");
         std::fs::create_dir(&path)?;
@@ -375,10 +379,7 @@ mod tests {
     }
 
     fn git(path: &Path, args: &[&str]) -> gix_testtools::Result {
-        let output = std::process::Command::new("git")
-            .current_dir(path)
-            .args(args)
-            .output()?;
+        let output = gix_testtools::git_command(path).args(args).output()?;
         if !output.status.success() {
             return Err(format!(
                 "git {} failed: {}",

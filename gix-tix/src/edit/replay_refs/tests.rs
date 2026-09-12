@@ -1,4 +1,4 @@
-use std::{ffi::OsString, process::Command};
+use std::ffi::OsString;
 
 use super::*;
 
@@ -52,9 +52,7 @@ fn replay(repo: &gix::Repository) -> Result<Replay> {
 }
 
 fn git(repo: &gix::Repository, args: &[&str]) -> Result<()> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo.workdir().context("the fixture has a worktree")?)
+    let output = gix_testtools::git_command(repo.workdir().context("the fixture has a worktree")?)
         .args(args)
         .output()?;
     ensure!(
