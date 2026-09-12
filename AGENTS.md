@@ -116,9 +116,14 @@ Follow "purposeful conventional commits" style:
   command options, extend the shared isolated helper instead of bypassing it.
   `run_git()` and `invoke_bash()` share this isolation. Subprocesses that invoke
   Git indirectly must use `gix_testtools::configure_git_environment()` too.
-  Tests of APIs that read the process environment must use
-  `gix_testtools::run_in_isolated_process()` before exercising those APIs or
-  changing environment variables, so they cannot race other tests.
+  Tests of APIs that read the process environment must isolate it before
+  exercising those APIs or changing environment variables. In `#[serial]` tests,
+  keep a `gix_testtools::isolate_git_environment()` guard alive for the entire test;
+  it restores only its recorded changes on drop. Chain test-specific overrides
+  onto that guard or use a separate `gix_testtools::Env` guard to restore them too.
+  All concurrent environment access must participate in the same serialization. Otherwise, use
+  `gix_testtools::run_in_isolated_process()` so changes cannot race other tests.
+  Restore working-directory changes separately with `gix_testtools::set_current_dir()`.
 - Setting a subprocess's working directory or passing `git -C` is not isolation:
   inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, or
   object-directory variables can redirect operations outside the fixture. Tests

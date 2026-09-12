@@ -14,11 +14,12 @@ fn open_permissions_is_isolated() {
 #[test]
 #[serial_test::serial]
 fn discover_with_git_dir_environment_override_uses_it_and_sets_trust() -> crate::Result {
+    let _environment = gix_testtools::isolate_git_environment()?;
     let fallback = gix_testtools::tempfile::TempDir::new()?;
-    gix::init(fallback.path())?;
+    crate::init_repo_isolated(fallback.path(), gix::create::Kind::WithWorktree)?;
     let overridden = gix_testtools::tempfile::TempDir::new()?;
-    let overridden = gix::init(overridden.path())?;
-    let _env = gix_testtools::Env::new()
+    let overridden = crate::init_repo_isolated(overridden.path(), gix::create::Kind::WithWorktree)?;
+    let _environment = _environment
         .unset("GIT_WORK_TREE")
         .set("GIT_DIR", overridden.git_dir().to_string_lossy().into_owned());
 
@@ -91,7 +92,7 @@ fn on_root_with_decomposed_unicode() -> crate::Result {
     let root = tmp.path().join(decomposed);
     std::fs::create_dir(&root)?;
 
-    let repo = gix::init(root)?;
+    let repo = crate::init_repo_isolated(root, gix::create::Kind::WithWorktree)?.to_thread_local();
     let precompose_unicode = repo
         .config_snapshot()
         .boolean("core.precomposeUnicode")

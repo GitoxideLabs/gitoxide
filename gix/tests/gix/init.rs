@@ -2,7 +2,9 @@ mod bare {
     use gix_testtools::tempfile;
 
     #[test]
+    #[serial_test::serial]
     fn init_into_non_existing_directory_creates_it() -> crate::Result {
+        let _environment = gix_testtools::isolate_git_environment()?;
         let tmp = tempfile::tempdir()?;
         let git_dir = tmp.path().join("bare.git");
         let repo = gix::init_bare(&git_dir)?;
@@ -21,7 +23,9 @@ mod bare {
     }
 
     #[test]
+    #[serial_test::serial]
     fn init_into_empty_directory_uses_it_directly() -> crate::Result {
+        let _environment = gix_testtools::isolate_git_environment()?;
         let tmp = tempfile::tempdir()?;
         let repo = gix::init_bare(tmp.path())?;
         assert_eq!(repo.kind(), gix::repository::Kind::Common);
@@ -142,7 +146,9 @@ mod non_bare {
     }
 
     #[test]
+    #[serial_test::serial]
     fn init_into_empty_directory_creates_a_dot_git_dir() -> crate::Result {
+        let _environment = gix_testtools::isolate_git_environment()?;
         let tmp = tempfile::tempdir()?;
         let repo = gix::init(tmp.path())?;
         assert_eq!(repo.kind(), gix::repository::Kind::Common);

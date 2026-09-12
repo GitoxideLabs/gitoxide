@@ -210,6 +210,14 @@ pub fn freeze_time() -> gix_testtools::Env<'static> {
         .unset("GIT_COMMITTER_EMAIL")
         .set("GIT_COMMITTER_DATE", frozen_time)
 }
+/// Initialize a repository with default creation options and isolated opening options.
+pub fn init_repo_isolated(
+    path: impl AsRef<std::path::Path>,
+    kind: gix::create::Kind,
+) -> std::result::Result<ThreadSafeRepository, gix::init::Error> {
+    ThreadSafeRepository::init_opts(path, kind, Default::default(), open::Options::isolated())
+}
+
 pub fn repo(name: &str) -> Result<ThreadSafeRepository> {
     let repo_path = gix_testtools::scripted_fixture_read_only(name)?;
     Ok(ThreadSafeRepository::open_opts(repo_path, restricted())?)

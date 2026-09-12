@@ -325,6 +325,7 @@ fn reload_preserves_the_reduced_trust_allocation_limit() -> crate::Result {
 #[test]
 #[serial_test::serial]
 fn reload_reapplies_per_file_safe_directory_trust() -> crate::Result {
+    let _environment = gix_testtools::isolate_git_environment()?;
     let fixture = gix_testtools::scripted_fixture_writable("make_config_repo.sh")?;
     let included_path = fixture.path().join("a.config");
     let mut included = gix_config::File::from_path_no_includes(included_path.clone(), gix_config::Source::Local)?;
@@ -338,7 +339,7 @@ fn reload_reapplies_per_file_safe_directory_trust() -> crate::Result {
         gix_path::into_bstr(&std::fs::canonicalize(&included_path)?).as_ref(),
     )?;
     std::fs::write(&global_path, global.to_bstring())?;
-    let _env = gix_testtools::Env::new().set("GIT_CONFIG_GLOBAL", global_path.display().to_string());
+    let _environment = _environment.set("GIT_CONFIG_GLOBAL", global_path.display().to_string());
     let mut permissions = gix::open::Permissions::isolated();
     permissions.config.user = true;
     permissions.config.includes = true;

@@ -1,5 +1,6 @@
 mod options;
 
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
 mod ask {
     use gix_testtools::bstr::ByteSlice;
 
@@ -20,10 +21,15 @@ mod ask {
             .spawn()
             .expect("jq utility is available in PATH");
 
-        let output = jq_proc
-            .wait_with_output()
-            .expect(".target_directory is a valid search path for manifest format version 1");
-        manifest_proc.wait().unwrap();
+        let output = jq_proc.wait_with_output().expect("jq finishes reading Cargo metadata");
+        assert!(
+            manifest_proc
+                .wait()
+                .expect("Cargo metadata process can be waited on")
+                .success(),
+            "Cargo metadata must succeed before resolving the example executable"
+        );
+        assert!(output.status.success(), "jq extracts the target directory successfully");
 
         output
             .stdout
@@ -33,34 +39,52 @@ mod ask {
             .to_owned()
     }
 
-    #[test]
-    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
-    fn askpass_only() {
-        let mut cmd = std::process::Command::new(env!("CARGO"));
-        cmd.args(["build", "--example", "use-askpass", "--example", "askpass"]);
-        cmd.spawn().unwrap().wait().expect("example builds OK");
-
-        let mut p = expectrl::spawn(evaluate_target_dir() + "/debug/examples/use-askpass").unwrap();
-        p.expect("Password: ").unwrap();
-        p.send_line(" password with space ").unwrap();
-        p.expect("\" password with space \"").unwrap();
-        p.expect(expectrl::Eof).unwrap();
+    fn spawn_example(name: &str) -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, expectrl::Session)> {
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let example = std::path::PathBuf::from(evaluate_target_dir())
+            .join("debug/examples")
+            .join(name);
+        let mut cmd = std::process::Command::new(example);
+        cmd.env_clear().envs(std::env::vars_os());
+        gix_testtools::configure_git_environment(&mut cmd, temp.path());
+        let session = expectrl::Session::spawn(cmd)?;
+        Ok((temp, session))
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
-    fn username_password() {
+    fn askpass_only() -> gix_testtools::Result {
+        let mut cmd = std::process::Command::new(env!("CARGO"));
+        cmd.args(["build", "--example", "use-askpass", "--example", "askpass"]);
+        assert!(
+            cmd.status().expect("Cargo can build prompt examples").success(),
+            "prompt examples must build successfully before they run"
+        );
+
+        let (_temp, mut p) = spawn_example("use-askpass")?;
+        p.expect("Password: ")?;
+        p.send_line(" password with space ")?;
+        p.expect("\" password with space \"")?;
+        p.expect(expectrl::Eof)?;
+        Ok(())
+    }
+
+    #[test]
+    fn username_password() -> gix_testtools::Result {
         let mut cmd = std::process::Command::new(env!("CARGO"));
         cmd.args(["build", "--example", "credentials"]);
-        cmd.spawn().unwrap().wait().expect("example builds OK");
+        assert!(
+            cmd.status().expect("Cargo can build prompt examples").success(),
+            "prompt examples must build successfully before they run"
+        );
 
-        let mut p = expectrl::spawn(evaluate_target_dir() + "/debug/examples/credentials").unwrap();
-        p.expect("Username: ").unwrap();
-        p.send_line(" user with space ").unwrap();
-        p.expect("\" user with space\"").unwrap();
-        p.expect("Password: ").unwrap();
-        p.send_line(" password with space ").unwrap();
-        p.expect("\" password with space \"").unwrap();
-        p.expect(expectrl::Eof).unwrap();
+        let (_temp, mut p) = spawn_example("credentials")?;
+        p.expect("Username: ")?;
+        p.send_line(" user with space ")?;
+        p.expect("\" user with space\"")?;
+        p.expect("Password: ")?;
+        p.send_line(" password with space ")?;
+        p.expect("\" password with space \"")?;
+        p.expect(expectrl::Eof)?;
+        Ok(())
     }
 }

@@ -79,6 +79,7 @@ crc = "3.4.0"
 tempfile = "3.26.0"
 fs_extra = "1.2.0"
 parking_lot = { version = "0.12.4" }
+serial_test = { version = "3.4.0", default-features = false }
 is_ci = "1.1.1"
 io-close = "0.3.7"
 tar = { version = "0.4.46", default-features = false }
@@ -89,7 +90,6 @@ document-features = { version = "0.2.1", optional = true }
 [dev-dependencies]
 gix-testtools = { path = ".", default-features = false, features = ["sha1", "sha256"] }
 insta = "1.46.3"
-serial_test = { version = "3.4.0", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true

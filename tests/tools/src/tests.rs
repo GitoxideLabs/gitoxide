@@ -120,6 +120,7 @@ fn configure_command_keeps_destructive_git_operations_in_the_fixture() -> Result
 
 #[test]
 fn isolated_process_runs_the_test_with_fixture_defaults() -> Result {
+    // Exercise sanitization in the child process itself, rather than changing this test runner's environment.
     if run_in_isolated_process()? {
         return Ok(());
     }
@@ -128,6 +129,35 @@ fn isolated_process_runs_the_test_with_fixture_defaults() -> Result {
     assert!(
         env::var_os("GIT_DIR").is_none(),
         "repository selectors are not inherited"
+    );
+    Ok(())
+}
+
+#[test]
+fn isolated_process_waits_for_serial_environment_changes() -> Result {
+    #[serial_test::serial]
+    fn launch_while_locked() -> Result<std::thread::JoinHandle<Result<bool>>> {
+        let name = "tests::isolated_process_runs_the_test_with_fixture_defaults";
+        // An unsynchronized reader would mistake this temporary marker for its own child process.
+        let _environment = Env::new().set("GIX_TESTTOOLS_ISOLATED_TEST_NAME", name);
+        let (started, receiver) = std::sync::mpsc::sync_channel(0);
+        let child = std::thread::Builder::new().name(name.into()).spawn(move || {
+            started.send(())?;
+            run_in_isolated_process()
+        })?;
+        receiver.recv()?;
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !child.is_finished(),
+            "the parent must wait for the serial environment guard before inspecting or copying variables"
+        );
+        Ok(child)
+    }
+
+    let child = launch_while_locked()?;
+    assert!(
+        child.join().expect("the isolated test launcher does not panic")?,
+        "after restoration, the launcher starts a child instead of inheriting the temporary marker"
     );
     Ok(())
 }
@@ -659,9 +689,7 @@ fn forced_normal_fixtures_execute_in_place_instead_of_extracting_archives() {
 #[test]
 #[serial_test::serial]
 fn version_incompatible_writable_fixtures_use_required_archives_in_both_creation_modes() -> Result {
-    if run_in_isolated_process()? {
-        return Ok(());
-    }
+    let _environment = isolate_git_environment()?;
     let temp = tempfile::TempDir::new().expect("temporary directory can be created");
     let fixture_base = temp.path().join("tests/fixtures");
     let archive_dir = fixture_base.join(ARCHIVE_DIR_NAME);
@@ -688,7 +716,7 @@ fn version_incompatible_writable_fixtures_use_required_archives_in_both_creation
     );
 
     let _cwd = set_current_dir(temp.path()).expect("temporary fixture root is accessible");
-    let _env = Env::new().set("GIX_TEST_IGNORE_ARCHIVES", "1");
+    let _environment = _environment.set("GIX_TEST_IGNORE_ARCHIVES", "1");
 
     for mode in [Creation::CopyFromReadOnly, Creation::Execute] {
         let fixture =

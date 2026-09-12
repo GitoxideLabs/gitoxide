@@ -143,6 +143,7 @@ fn dot_slash_path_is_replaced_with_directory_containing_the_including_config_fil
 #[test]
 #[serial]
 fn dot_slash_from_environment_causes_error() -> crate::Result {
+    let _isolated_environment = gix_testtools::isolate_git_environment()?;
     let env = GitEnv::repo_name("worktree")?;
     // Only slashes can be used as matches, even on Windows.
     let git_dir = env.git_dir().to_string_lossy().replace('\\', "/");

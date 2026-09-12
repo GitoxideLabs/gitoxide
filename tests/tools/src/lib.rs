@@ -24,6 +24,7 @@
 #![deny(missing_docs)]
 
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashMap},
     env,
     ffi::{OsStr, OsString},
@@ -495,7 +496,7 @@ pub fn run_git(working_dir: &Path, args: &[&str]) -> std::io::Result<std::proces
 ///
 /// This function expects the script to succeed and will panic otherwise.
 pub fn invoke_bash(cwd: impl AsRef<Path>, script: &str) {
-    let mut cmd = std::process::Command::new(bash_program());
+    let mut cmd = command_with_environment_snapshot(bash_program());
     let status = configure_git_environment(&mut cmd, cwd.as_ref())
         .current_dir(cwd)
         .arg("-c")
@@ -533,8 +534,11 @@ fn spawn_git_daemon_process(working_dir: impl AsRef<Path>) -> std::io::Result<Gi
     };
 
     let child = {
-        let mut cmd =
-            std::process::Command::new(GIT_CORE_DIR.join(if cfg!(windows) { "git-daemon.exe" } else { "git-daemon" }));
+        let mut cmd = command_with_environment_snapshot(GIT_CORE_DIR.join(if cfg!(windows) {
+            "git-daemon.exe"
+        } else {
+            "git-daemon"
+        }));
         configure_git_environment(&mut cmd, working_dir.as_ref())
             .current_dir(working_dir)
             .args(["--verbose", "--base-path=.", "--export-all", "--user-path"])
@@ -1727,14 +1731,14 @@ where
         &format!("using script '{}'", script_location.display()),
         |fixture_state| {
             if let FixtureState::Uninitialized(dir) = fixture_state {
-                let mut cmd = std::process::Command::new(&script_absolute_path);
+                let mut cmd = command_with_environment_snapshot(&script_absolute_path);
                 let output = match configure_command(&mut cmd, object_hash, &args, dir).output() {
                     Ok(out) => out,
                     Err(err)
                         if err.kind() == std::io::ErrorKind::PermissionDenied
                             || err.raw_os_error() == Some(193) /* windows */ =>
                     {
-                        cmd = std::process::Command::new(bash_program());
+                        cmd = command_with_environment_snapshot(bash_program());
                         configure_command(cmd.arg(&script_absolute_path), object_hash, &args, dir).output()?
                     }
                     Err(err) => return Err(err.into()),
@@ -1814,13 +1818,54 @@ pub fn git(current_dir: impl AsRef<Path>, arguments: &str) -> Result<String> {
 
 /// Prepare an isolated Git command in `current_dir`, using the same environment as fixture scripts.
 ///
+/// The inherited environment is captured at construction, so subsequent process-wide changes
+/// cannot bypass the command's isolation before it is spawned.
 /// Use this when [`git()`] cannot express the arguments, input, or expected exit status. Standard I/O
 /// follows [`std::process::Command`] defaults. Add test-specific environment overrides only after
 /// calling this helper, and point any repository or file overrides at disposable test data.
 pub fn git_command(current_dir: impl AsRef<Path>) -> std::process::Command {
-    let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
+    let mut cmd = command_with_environment_snapshot(gix_path::env::exe_invocation());
     configure_git_environment(&mut cmd, current_dir.as_ref()).current_dir(current_dir);
     cmd
+}
+
+/// Capture inheritance before sanitizing it, rather than inheriting again at spawn time.
+/// Otherwise a serial test could add a new `GIT_*` variable after configuration and redirect a
+/// concurrently prepared fixture command to a different repository.
+fn command_with_environment_snapshot(program: impl AsRef<OsStr>) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    cmd.env_clear().envs(env::vars_os());
+    cmd
+}
+
+/// Isolate Git's environment in the current process, restoring only the variables it alters on drop.
+///
+/// Uses the same settings as [`configure_git_environment()`], with a temporary XDG configuration
+/// directory kept alive by the returned guard. No subprocess is started and the working directory
+/// is not changed. Chain test-specific overrides onto the returned [`Env`], or use a separate
+/// [`Env`] guard so those changes are restored too.
+///
+/// Use this in `#[serial]` tests instead of [`run_in_isolated_process()`]. The caller must serialize
+/// all access to the process environment for the guard's entire lifetime, including its drop.
+/// A serial test attribute only coordinates tests using the same serialization lock; it does not
+/// protect against other tests or background threads accessing the environment. Use subprocess
+/// isolation when this coordination is not possible.
+///
+/// Nested guards must be dropped in reverse creation order. Only variables set or unset through
+/// the guard are restored, including when unwinding a panic; unrelated changes are left alone.
+/// Working-directory changes still require a separate [`set_current_dir()`] guard.
+pub fn isolate_git_environment() -> Result<Env<'static>> {
+    let config_dir = tempfile::TempDir::new()?;
+    let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
+    configure_git_environment(&mut cmd, config_dir.path());
+    let mut guard = Env {
+        altered_vars: Vec::new(),
+        _config_dir: Some(config_dir),
+    };
+    for (name, value) in cmd.get_envs() {
+        guard.set_or_unset(Cow::Owned(name.to_owned()), value);
+    }
+    Ok(guard)
 }
 
 /// Rerun the current libtest test in an isolated subprocess, returning `true` in the parent.
@@ -1829,22 +1874,18 @@ pub fn git_command(current_dir: impl AsRef<Path>) -> std::process::Command {
 /// return immediately when it returns `true`. In the child it returns `false`, allowing the test
 /// body to run with Git configuration sanitized before any test threads start. Only this test is
 /// run in the child, so process-wide environment or working-directory changes cannot race other tests.
+/// Parent-side setup and spawning share the default `serial_test` lock with `#[serial]` tests, so
+/// they cannot capture temporary environment values. The lock is released before waiting for the
+/// child, allowing isolated tests to run concurrently. This must not run in a `#[parallel]` scope.
+/// For serial tests that restore their process-wide changes, prefer [`isolate_git_environment()`].
 pub fn run_in_isolated_process() -> Result<bool> {
-    const MARKER: &str = "GIX_TESTTOOLS_ISOLATED_TEST_NAME";
-    let thread = std::thread::current();
-    let name = thread
-        .name()
-        .ok_or("isolation must be requested from a named libtest thread")?;
-    if env::var_os(MARKER).as_deref() == Some(OsStr::new(name)) {
+    let Some((child, _config_dir)) = spawn_isolated_test()? else {
         return Ok(false);
-    }
-    let config_dir = tempfile::TempDir::new()?;
-    let mut cmd = std::process::Command::new(env::current_exe()?);
-    let output = configure_git_environment(&mut cmd, config_dir.path())
-        .args(["--exact", name, "--nocapture", "--test-threads=1", "--include-ignored"])
-        .env(MARKER, name)
-        .output()?;
+    };
+    let output = child.wait_with_output()?;
     if !output.status.success() {
+        let thread = std::thread::current();
+        let name = thread.name().expect("spawning validated the named libtest thread");
         return Err(format!(
             "isolated test {name} failed with {}\nstdout: {}\nstderr: {}",
             output.status,
@@ -1854,6 +1895,28 @@ pub fn run_in_isolated_process() -> Result<bool> {
         .into());
     }
     Ok(true)
+}
+
+#[serial_test::serial]
+fn spawn_isolated_test() -> Result<Option<(std::process::Child, tempfile::TempDir)>> {
+    const MARKER: &str = "GIX_TESTTOOLS_ISOLATED_TEST_NAME";
+    let thread = std::thread::current();
+    let name = thread
+        .name()
+        .ok_or("isolation must be requested from a named libtest thread")?;
+    if env::var_os(MARKER).as_deref() == Some(OsStr::new(name)) {
+        return Ok(None);
+    }
+    let config_dir = tempfile::TempDir::new()?;
+    let mut cmd = command_with_environment_snapshot(env::current_exe()?);
+    let child = configure_git_environment(&mut cmd, config_dir.path())
+        .args(["--exact", name, "--nocapture", "--test-threads=1", "--include-ignored"])
+        .env(MARKER, name)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    Ok(Some((child, config_dir)))
 }
 
 fn split_git_arguments(input: &str) -> Result<Vec<String>> {
@@ -2339,18 +2402,25 @@ fn family_name() -> &'static str {
 }
 
 /// A utility to set and unset environment variables, while restoring or removing them on drop.
+///
+/// Each variable's original value is recorded on its first alteration and restored on drop. The
+/// caller must serialize environment access for the guard's entire lifetime, including its drop.
+/// See [`isolate_git_environment()`] for a guard initialized with Git isolation settings.
 #[derive(Default)]
+#[must_use = "dropping the guard immediately restores its environment changes"]
 pub struct Env<'a> {
-    altered_vars: Vec<(&'a str, Option<OsString>)>,
+    altered_vars: Vec<(Cow<'a, OsStr>, Option<OsString>)>,
+    // Dropped after `Env::drop()` restores XDG_CONFIG_HOME, so it never points at a deleted directory.
+    _config_dir: Option<tempfile::TempDir>,
 }
 
-fn set_var(var: &str, value: impl AsRef<OsStr>) {
+fn set_var(var: impl AsRef<OsStr>, value: impl AsRef<OsStr>) {
     // SAFETY: Tests using this helper are responsible for serializing access to
     // process-wide environment variables they mutate.
     unsafe { env::set_var(var, value) };
 }
 
-fn remove_var(var: &str) {
+fn remove_var(var: impl AsRef<OsStr>) {
     // SAFETY: Tests using this helper are responsible for serializing access to
     // process-wide environment variables they mutate.
     unsafe { env::remove_var(var) };
@@ -2359,25 +2429,41 @@ fn remove_var(var: &str) {
 impl<'a> Env<'a> {
     /// Create a new instance.
     pub fn new() -> Self {
-        Env {
-            altered_vars: Vec::new(),
-        }
+        Env::default()
     }
 
     /// Set `var` to `value`.
     pub fn set(mut self, var: &'a str, value: impl Into<String>) -> Self {
-        let prev = env::var_os(var);
-        set_var(var, value.into());
-        self.altered_vars.push((var, prev));
+        self.set_or_unset(Cow::Borrowed(OsStr::new(var)), Some(OsStr::new(&value.into())));
         self
     }
 
     /// Unset `var`.
     pub fn unset(mut self, var: &'a str) -> Self {
-        let prev = env::var_os(var);
-        remove_var(var);
-        self.altered_vars.push((var, prev));
+        self.set_or_unset(Cow::Borrowed(OsStr::new(var)), None);
         self
+    }
+
+    fn set_or_unset(&mut self, var: Cow<'a, OsStr>, value: Option<&OsStr>) {
+        if !self
+            .altered_vars
+            .iter()
+            .any(|(altered, _)| environment_names_equal(altered, &var))
+        {
+            self.altered_vars.push((var.clone(), env::var_os(&var)));
+        }
+        match value {
+            Some(value) => set_var(&var, value),
+            None => remove_var(&var),
+        }
+    }
+}
+
+fn environment_names_equal(left: &OsStr, right: &OsStr) -> bool {
+    if cfg!(windows) {
+        left.as_encoded_bytes().eq_ignore_ascii_case(right.as_encoded_bytes())
+    } else {
+        left == right
     }
 }
 
