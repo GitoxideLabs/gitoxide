@@ -962,6 +962,19 @@ fn perform_inner(
 ) -> Result<(Perform, Option<crate::enrich::Enrichment>)> {
     let mut repo = repo.clone();
     let header_only = matches!(enrichment_headers, Some(EnrichmentEdit::Patch(_)));
+    let metadata_only = pending_checkout == PendingCheckout::Reject
+        && reset_index_paths.is_none()
+        && match &edit {
+            Edit::Replace {
+                target: commit_id,
+                commit,
+            } => {
+                let original = repo.find_commit(*commit_id)?;
+                let original = original.decode()?;
+                original.tree() == commit.tree && original.parents().eq(commit.parents.iter().copied())
+            }
+            _ => false,
+        };
     let (repeat_checkout, stash_before_persist) = match &edit {
         Edit::Repeat {
             checkout,
@@ -1298,6 +1311,17 @@ fn perform_inner(
         .collect();
     if skip_worktree_transitions && !header_only {
         reset_indices.extend(finalized_empty);
+    }
+    if metadata_only {
+        let mut changed = HashSet::new();
+        for old_commit_id in reset_indices {
+            if let Some(Some(new_commit_id)) = rewritten.get(&old_commit_id)
+                && repo.find_commit(old_commit_id)?.tree_id()? != repo.find_commit(*new_commit_id)?.tree_id()?
+            {
+                changed.insert(old_commit_id);
+            }
+        }
+        reset_indices = changed;
     }
     let committer = replay.committer;
     let mut prepared = Prepared {
