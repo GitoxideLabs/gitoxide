@@ -1897,9 +1897,7 @@ mod tests {
             &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"][..],
         ] {
             assert!(
-                std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(fixture.path())
+                gix_testtools::git_command(fixture.path())
                     .args(args)
                     .status()?
                     .success()
@@ -1928,11 +1926,7 @@ mod tests {
     fn remote_deletion_continues_after_a_failed_remote() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let git = |args: &[&str]| -> gix_testtools::Result<()> {
-            let status = std::process::Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
-                .args(args)
-                .status()?;
+            let status = gix_testtools::git_command(fixture.path()).args(args).status()?;
             assert!(status.success(), "git {} succeeds", args.join(" "));
             Ok(())
         };
@@ -2571,10 +2565,7 @@ mod tests {
         let checkouts = fixture.path().join("checkouts");
         std::fs::create_dir(&checkouts)?;
         let git = |path: &std::path::Path, args: &[&str]| -> gix_testtools::Result {
-            let output = std::process::Command::new("git")
-                .current_dir(path)
-                .args(args)
-                .output()?;
+            let output = gix_testtools::git_command(path).args(args).output()?;
             assert!(
                 output.status.success(),
                 "git {args:?}: {}",
@@ -2690,8 +2681,7 @@ mod tests {
             )?;
         }
         assert!(
-            std::process::Command::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args([
                     "symbolic-ref",
                     "refs/remotes/origin/old-head",

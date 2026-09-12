@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use anyhow::{Context, Result};
 use gix::bstr::{BStr, ByteSlice};
 
@@ -35,9 +33,7 @@ pub(crate) fn perform(repo: &gix::Repository, change: &PathChange) -> Result<()>
         "discarding submodule changes is not supported"
     );
     let run = |args: &[&str], paths: &[&BStr]| -> Result<()> {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(workdir)
+        let output = crate::git_command(workdir)
             .arg("--literal-pathspecs")
             .args(args)
             .arg("--")
@@ -85,7 +81,7 @@ mod tests {
     use super::*;
 
     fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-        let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
+        let output = gix_testtools::git_command(path).args(args).output()?;
         if !output.status.success() {
             return Err(format!("git {} failed: {}", args.join(" "), output.stderr.to_str_lossy()).into());
         }
@@ -101,6 +97,59 @@ mod tests {
             .find(|change| change.path == selected && change.group == group)
             .expect("the fixture has the selected change");
         perform(&repo, change)?;
+        Ok(())
+    }
+
+    #[test]
+    fn discard_ignores_inherited_repository_selectors() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let victim = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let before = gix_testtools::repository::snapshot(victim.path())?;
+        let index_before = std::fs::read(victim.path().join(".git/index"))?;
+        {
+            let victim_git_dir = victim.path().join(".git");
+            let mut environment = gix_testtools::Env::new();
+            for (name, path) in [
+                ("GIT_DIR", victim_git_dir.clone()),
+                ("GIT_WORK_TREE", victim.path().to_owned()),
+                ("GIT_COMMON_DIR", victim_git_dir.clone()),
+                ("GIT_INDEX_FILE", victim_git_dir.join("index")),
+                ("GIT_OBJECT_DIRECTORY", victim_git_dir.join("objects")),
+                ("GIT_ALTERNATE_OBJECT_DIRECTORIES", victim_git_dir.join("objects")),
+            ] {
+                environment = environment.set(name, path.to_str().context("fixture paths must be valid UTF-8")?);
+            }
+            discard(fixture.path(), "tracked", ChangeGroup::Staged)?;
+        }
+
+        assert_eq!(
+            std::fs::read(victim.path().join("tracked"))?,
+            b"unstaged\n",
+            "inherited repository selectors must not redirect discard to another worktree"
+        );
+        assert_eq!(
+            std::fs::read(victim.path().join(".git/index"))?,
+            index_before,
+            "the other repository's index must remain unchanged"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(victim.path())?,
+            before,
+            "the other repository must remain unchanged"
+        );
+        assert_eq!(
+            std::fs::read(fixture.path().join("tracked"))?,
+            b"base\n",
+            "discard must restore the selected fixture's worktree"
+        );
+        assert_eq!(
+            gix_testtools::git(fixture.path(), "show :tracked")?,
+            "base\n",
+            "discard must restore the selected fixture's index"
+        );
         Ok(())
     }
 
@@ -194,9 +243,7 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
         let path = fixture.path();
         git(path, &["checkout", "--detach", "HEAD~2"])?;
-        let pick = Command::new("git")
-            .arg("-C")
-            .arg(path)
+        let pick = gix_testtools::git_command(path)
             .args(["cherry-pick", "main"])
             .output()?;
         assert!(!pick.status.success(), "the tip's edit conflicts with the base");

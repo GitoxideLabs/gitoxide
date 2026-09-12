@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
     path::PathBuf,
-    process::Command,
     time::{Duration, Instant},
 };
 
@@ -2717,9 +2716,7 @@ fn reset_index(reset: &mut IndexReset, paths: Option<&[BString]>) -> Result<()> 
     if let Some(paths) = paths {
         return reset_index_paths(&reset.repo, reset.new, paths);
     }
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&reset.workdir)
+    let output = crate::git_command(&reset.workdir)
         .args(["reset", "--mixed", "--quiet"])
         .arg(reset.new.to_string())
         .output()
@@ -3693,7 +3690,7 @@ fn log_change() -> LogChange {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, process::Command};
+    use std::path::Path;
 
     use gix::bstr::ByteSlice;
 
@@ -4023,7 +4020,7 @@ mod tests {
     }
 
     fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-        let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
+        let output = gix_testtools::git_command(path).args(args).output()?;
         if output.status.success() {
             Ok(output.stdout)
         } else {
@@ -4406,9 +4403,7 @@ mod tests {
         let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
         commit.tree = repo.find_commit(base)?.tree_id()?.detach();
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["checkout", "-q", "--detach", &base.to_string()])
                 .status()?
                 .success(),
@@ -4444,9 +4439,7 @@ mod tests {
             assert!(!has_marker(&commit), "repeating clears every pending marker");
             id = commit.parents.first().copied();
         }
-        let files = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let files = gix_testtools::git_command(fixture.path())
             .args(["ls-tree", "-r", "--name-only", &repeated_tip.to_string()])
             .output()?;
         assert!(files.status.success());
@@ -4461,9 +4454,7 @@ mod tests {
     fn a_repeat_finalizes_empty_descendants_above_legacy_signed_pending_commits() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["commit", "--allow-empty", "-q", "-m", "newer"])
                 .status()?
                 .success(),
@@ -4478,9 +4469,7 @@ mod tests {
         let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
         commit.tree = repo.find_commit(base)?.tree_id()?.detach();
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["checkout", "-q", "--detach", &base.to_string()])
                 .status()?
                 .success(),
@@ -4513,18 +4502,14 @@ mod tests {
         drop(repo);
 
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["checkout", "-q", "main"])
                 .status()?
                 .success(),
             "the legacy pending stack becomes the current checkout"
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["commit", "--allow-empty", "-q", "-m", "ordinary descendant"])
                 .status()?
                 .success(),
@@ -4615,9 +4600,7 @@ mod tests {
         let linked_root = gix_testtools::tempfile::tempdir()?;
         let linked = linked_root.path().join("linked");
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["worktree", "add", "-q"])
                 .arg(&linked)
                 .arg("main")
@@ -4669,9 +4652,7 @@ mod tests {
         let tree = repo.find_commit(middle)?.tree_id()?.detach();
         let tree_hex = tree.to_string();
         let middle_hex = middle.to_string();
-        let side = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let side = gix_testtools::git_command(fixture.path())
             .args([
                 "-c",
                 "commit.gpgSign=false",
@@ -4688,9 +4669,7 @@ mod tests {
         assert!(side.status.success(), "the side commit fixture is created");
         let side = ObjectId::from_hex(side.stdout.trim())?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["update-ref", "refs/heads/side", &side.to_string()])
                 .status()?
                 .success(),
@@ -4730,9 +4709,7 @@ mod tests {
         let graph = super::super::loaded_graph(&repo)?;
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
         let before = gix_testtools::repository::snapshot(fixture.path())?;
-        let objects_before = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let objects_before = gix_testtools::git_command(fixture.path())
             .args(["count-objects", "-v"])
             .output()?
             .stdout;
@@ -4754,9 +4731,7 @@ mod tests {
             "refs, index, and worktree remain unchanged"
         );
         assert_eq!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["count-objects", "-v"])
                 .output()?
                 .stdout,
@@ -4939,9 +4914,7 @@ mod tests {
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
         let tip = repo.head_id()?.detach();
         let before = gix_testtools::repository::snapshot(fixture.path())?;
-        let objects_before = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let objects_before = gix_testtools::git_command(fixture.path())
             .args(["count-objects", "-v"])
             .output()?
             .stdout;
@@ -4976,9 +4949,7 @@ mod tests {
             "refs, index, checkout, and worktree remain unchanged"
         );
         assert_eq!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["count-objects", "-v"])
                 .output()?
                 .stdout,
@@ -4993,9 +4964,7 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
         std::fs::write(fixture.path().join("file"), b"source\n")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["commit", "-qam", "source"])
                 .status()?
                 .success()
@@ -5567,27 +5536,21 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         std::fs::write(fixture.path().join("upper"), b"upper\n")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["add", "upper"])
                 .status()?
                 .success(),
             "the extra source file is staged"
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["commit", "-q", "-m", "upper"])
                 .status()?
                 .success(),
             "the non-adjacent squash source is committed"
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["checkout", "-q", "-b", "side", "HEAD~2"])
                 .status()?
                 .success(),
@@ -5595,25 +5558,19 @@ mod tests {
         );
         std::fs::write(fixture.path().join("side"), b"side\n")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["add", "side"])
                 .status()?
                 .success()
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["commit", "-q", "-m", "side"])
                 .status()?
                 .success()
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["checkout", "-q", "main"])
                 .status()?
                 .success()
@@ -6690,9 +6647,7 @@ mod tests {
         let notes_before = repo.find_reference("refs/notes/review")?.id().detach();
         let expected_refs = capture_refs(&repo, &[middle, tip], &[tip])?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["update-ref", "refs/heads/main", &base.to_string(), &tip.to_string()])
                 .status()?
                 .success(),
@@ -6742,9 +6697,7 @@ mod tests {
         let linked_root = gix_testtools::tempfile::tempdir()?;
         let linked = linked_root.path().join("linked");
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["worktree", "add", "-q", "-b", "linked"])
                 .arg(&linked)
                 .arg("HEAD")

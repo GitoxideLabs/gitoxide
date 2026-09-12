@@ -117,8 +117,7 @@ mod tests {
         )?;
         std::fs::write(fixture.path().join("tip"), b"staged\n")?;
         assert!(
-            std::process::Command::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["add", "tip"])
                 .status()?
                 .success(),

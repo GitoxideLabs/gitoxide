@@ -598,7 +598,6 @@ pub(super) fn actor(value: &[u8], time: gix::date::Time, field: &str) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
 
     use super::*;
 
@@ -827,9 +826,7 @@ mod tests {
     fn configured_agent_trailers_show_their_source_after_the_adjacent_suggestions() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["config", "--local", "tix.trailer.assistedBy", "Custom Assistant"])
                 .status()?
                 .success(),
@@ -1017,9 +1014,7 @@ mod tests {
 
         std::fs::write(path.join("concurrent"), b"amended while editing\n")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(path)
+            gix_testtools::git_command(path)
                 .args(["add", "concurrent"])
                 .status()?
                 .success(),
@@ -1221,9 +1216,7 @@ mod tests {
     fn reword_keeps_off_checkout_descendants_final() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["checkout", "-q", "--detach", "HEAD^"])
                 .status()?
                 .success(),
@@ -1309,9 +1302,7 @@ mod tests {
             vec!["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/base"],
         ] {
             assert!(
-                Command::new("git")
-                    .arg("-C")
-                    .arg(fixture.path())
+                gix_testtools::git_command(fixture.path())
                     .args(&args)
                     .status()?
                     .success(),
@@ -1336,9 +1327,7 @@ mod tests {
         );
         std::fs::write(fixture.path().join("tip"), b"amended\n")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["add", "tip"])
                 .status()?
                 .success(),
@@ -1417,9 +1406,7 @@ mod tests {
         let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["checkout", "-q", "--detach", "HEAD^"])
                 .status()?
                 .success(),
@@ -1476,7 +1463,7 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let old_id = crate::test_repository::open(fixture.path())?.head_id()?.detach();
         let git = |args: &[&str]| -> std::io::Result<std::process::ExitStatus> {
-            Command::new("git").arg("-C").arg(fixture.path()).args(args).status()
+            gix_testtools::git_command(fixture.path()).args(args).status()
         };
         for name in ["refs/patches/reword", "refs/tags/keep", "refs/remotes/origin/keep"] {
             assert!(

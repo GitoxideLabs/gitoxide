@@ -511,13 +511,13 @@ fn build_plan(
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, process::Command};
+    use std::path::Path;
 
     use super::*;
     use gix::{bstr::ByteSlice, refs::transaction::PreviousValue};
 
     fn git(path: &Path, args: &[&str]) -> Result<Vec<u8>> {
-        let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
+        let output = gix_testtools::git_command(path).args(args).output()?;
         ensure!(
             output.status.success(),
             "git {} failed: {}",
@@ -1380,9 +1380,7 @@ mod tests {
         let destination_commit_id = parent(&repo, source_commit_id)?;
         let linked_root = gix_testtools::tempfile::tempdir()?;
         let linked = linked_root.path().join("linked");
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let output = gix_testtools::git_command(fixture.path())
             .args(["worktree", "add", "-q", "-b", "linked"])
             .arg(&linked)
             .arg(destination_commit_id.to_string())

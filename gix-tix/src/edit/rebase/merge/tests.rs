@@ -1,4 +1,4 @@
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use gix::ObjectId;
@@ -6,7 +6,7 @@ use gix::ObjectId;
 use crate::edit::{rebase, time_travel};
 
 fn git(path: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let output = Command::new("git").current_dir(path).args(args).output()?;
+    let output = gix_testtools::git_command(path).args(args).output()?;
     anyhow::ensure!(
         output.status.success(),
         "git {} failed: {}",
