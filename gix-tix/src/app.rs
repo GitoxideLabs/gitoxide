@@ -27,6 +27,7 @@ pub(crate) struct Commit<T> {
     pub metadata_loaded: bool,
     pub has_agent_marker: bool,
     pub is_review: bool,
+    pub has_merge_replay: bool,
     pub signature: SignatureState,
 }
 
@@ -39,6 +40,7 @@ pub(crate) struct Metadata<T> {
     pub title: T,
     pub has_agent_marker: bool,
     pub is_review: bool,
+    pub has_merge_replay: bool,
     pub signature: SignatureState,
 }
 
@@ -1309,6 +1311,7 @@ impl App {
                     metadata_loaded: row.metadata_loaded,
                     has_agent_marker: row.has_agent_marker,
                     is_review: row.is_review,
+                    has_merge_replay: row.has_merge_replay,
                     signature: row.signature,
                 };
                 let row = Arc::new(row);
@@ -1355,6 +1358,7 @@ impl App {
             title,
             has_agent_marker,
             is_review,
+            has_merge_replay,
             signature,
         } = metadata;
         let title_start = self.titles.len();
@@ -1369,6 +1373,7 @@ impl App {
         row.metadata_loaded = true;
         row.has_agent_marker = has_agent_marker;
         row.is_review = is_review;
+        row.has_merge_replay = has_merge_replay;
         row.signature = signature;
         self.all_rows.insert(row.id, Arc::clone(&self.rows[index]));
     }
@@ -2822,6 +2827,7 @@ impl App {
                             title: row.title.clone(),
                             has_agent_marker: row.has_agent_marker,
                             is_review: row.is_review,
+                            has_merge_replay: row.has_merge_replay,
                             signature: row.signature,
                         },
                     )
@@ -2847,6 +2853,7 @@ impl App {
                 row.metadata_loaded = true;
                 row.has_agent_marker = metadata.has_agent_marker;
                 row.is_review = metadata.is_review;
+                row.has_merge_replay = metadata.has_merge_replay;
                 row.signature = metadata.signature;
             }
         }
@@ -4388,6 +4395,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }
     }
@@ -5643,6 +5651,7 @@ mod tests {
                 title: "loaded".into(),
                 has_agent_marker: true,
                 is_review: true,
+                has_merge_replay: true,
                 signature: SignatureState::Verified,
             },
             Vec::new(),
@@ -5656,6 +5665,10 @@ mod tests {
         assert_eq!(app.rows[0].committer_time, gix::date::Time::new(456, 120));
         assert!(app.rows[0].has_agent_marker);
         assert!(app.rows[0].is_review);
+        assert!(
+            app.rows[0].has_merge_replay,
+            "merge replay metadata survives lane computation"
+        );
         assert_eq!(app.rows[0].signature, SignatureState::Verified);
     }
 
@@ -6095,7 +6108,7 @@ mod tests {
     }
 
     #[test]
-    fn tree_selection_stops_at_hidden_merge_and_unavailable_patch_barriers() {
+    fn tree_selection_follows_eligible_merge_routes_past_hidden_and_unavailable_barriers() {
         let mut app = App::new(10);
         app.extend_commits(vec![
             row_with_parents(8, &[7]),
@@ -6108,16 +6121,17 @@ mod tests {
             row(1),
         ]);
         app.unavailable_patches.insert(id(3));
+        app.hidden_rows.insert(id(6));
         complete(&mut app);
         app.select_commit(id(2));
         app.update(Action::SelectSubtree);
-        for selected in [2, 4, 6] {
+        for selected in [2, 4, 7, 8] {
             assert!(
                 app.tree_selection_marker(id(selected)).is_some(),
-                "the safe path is included"
+                "eligible routes include a merge despite its excluded side parent"
             );
         }
-        for excluded in [1, 3, 5, 7, 8] {
+        for excluded in [1, 3, 5, 6] {
             assert!(
                 app.tree_selection_marker(id(excluded)).is_none(),
                 "barriers and commits beyond them are excluded"
@@ -6139,6 +6153,385 @@ mod tests {
         app.set_worktree_changes_available(true);
         app.rebase_continuation_pending = true;
         assert!(!app.can_select_tree(), "a pending rebase must finish before selection");
+    }
+
+    #[test]
+    fn tree_selection_follows_every_diamond_and_octopus_route_without_external_side_history() {
+        for octopus in [false, true] {
+            let mut app = App::new(12);
+            app.extend_commits(vec![
+                row_with_parents(8, &[7]),
+                row_with_parents(7, if octopus { &[6, 3, 4, 5] } else { &[3, 4] }),
+                row_with_parents(6, &[1]),
+                row_with_parents(5, &[2]),
+                row_with_parents(4, &[2]),
+                row_with_parents(3, &[2]),
+                row_with_parents(2, &[1]),
+                row(1),
+            ]);
+            complete(&mut app);
+            app.select_commit(id(2));
+            app.update(Action::SelectTree);
+            app.select_commit(id(8));
+            app.update(Action::SelectTree);
+            for selected in [2, 3, 4, 7, 8] {
+                assert!(
+                    app.tree_selection_marker(id(selected)).is_some(),
+                    "an endpoint includes every root-connected parent route through its merge"
+                );
+            }
+            assert_eq!(
+                app.tree_selection_marker(id(5)).is_some(),
+                octopus,
+                "the third rooted arm is included only when the endpoint reaches it"
+            );
+            assert!(
+                app.tree_selection_marker(id(6)).is_none(),
+                "an external first parent stays outside the selected DAG"
+            );
+            assert!(
+                app.tree_selection_marker(id(1)).is_none(),
+                "the source root bounds every path"
+            );
+
+            app.update(Action::NextTreeLeaf);
+            for commit_id in [id(2), id(3), id(4), id(7), id(8)] {
+                let index = app
+                    .rows
+                    .iter()
+                    .position(|row| row.id == commit_id)
+                    .expect("the path row is present");
+                assert!(
+                    app.is_row_reachable(index),
+                    "endpoint navigation can use every rooted merge arm"
+                );
+            }
+            let external = app
+                .rows
+                .iter()
+                .position(|row| row.id == id(6))
+                .expect("the external parent is present");
+            assert!(
+                !app.is_row_reachable(external),
+                "endpoint navigation cannot enter external ancestry"
+            );
+            app.select_commit(id(4));
+            assert!(
+                app.tree_selection_marker(id(3)).is_none(),
+                "shortening the endpoint to one arm removes the other arms"
+            );
+            app.select_commit(id(8));
+            assert!(
+                app.tree_selection_marker(id(3)).is_some(),
+                "extending the endpoint through the merge restores all rooted arms"
+            );
+            app.update(Action::SelectSubtree);
+            assert!(
+                app.tree_selection_marker(id(5)).is_some(),
+                "subtree selection adds an independent rooted arm"
+            );
+            assert!(
+                app.tree_selection_marker(id(6)).is_none(),
+                "subtree selection still excludes external ancestry"
+            );
+            let notice = app.notice().expect("the source summary is shown").text;
+            assert!(
+                notice.contains(if octopus { "1 leaves" } else { "2 leaves" }),
+                "only terminal vertices are effective leaves in the selected DAG"
+            );
+        }
+    }
+
+    #[test]
+    fn tree_selection_normalizes_a_leaf_that_is_a_secondary_merge_parent() {
+        let mut app = App::new(12);
+        app.extend_commits(vec![
+            row_with_parents(9, &[7]),
+            row_with_parents(8, &[3]),
+            row_with_parents(7, &[4, 3]),
+            row_with_parents(4, &[2]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.select_commit(id(2));
+        app.update(Action::SelectTree);
+        app.update(Action::NextTreeLeaf);
+        app.update(Action::SelectTree);
+        app.update(Action::NextTreeLeaf);
+        app.select_commit(id(3));
+        app.update(Action::SelectTree);
+        assert!(
+            app.notice()
+                .expect("the source summary is shown")
+                .text
+                .contains("1 leaves"),
+            "a selected endpoint that is another member's secondary parent is internal"
+        );
+        app.update(Action::ConfirmTreeSelection);
+        app.update(Action::ConfirmTreeSelection);
+        app.update(Action::MoveDown);
+        assert!(
+            app.notice()
+                .expect("the connection choice is shown")
+                .text
+                .contains("[Insert]"),
+            "the normalized single leaf permits insertion"
+        );
+    }
+
+    #[test]
+    fn tree_selection_includes_only_final_auto_merges_with_matching_unmuted_inputs() {
+        use crate::edit::auto_merge::{Definition, Input, InputSource};
+        for state in [
+            "final",
+            "muted",
+            "pending",
+            "unavailable",
+            "wrong-order",
+            "empty",
+            "unloaded",
+        ] {
+            let mut app = App::new(10);
+            let mut merge = row_with_parents(6, &[4, 3]);
+            if state == "pending" {
+                merge.signature = SignatureState::PendingRebase;
+            }
+            merge.metadata_loaded = state != "unloaded";
+            app.extend_commits(vec![
+                row_with_parents(7, &[6]),
+                merge,
+                row_with_parents(4, &[2]),
+                row_with_parents(3, &[2]),
+                row_with_parents(2, &[1]),
+                row(1),
+            ]);
+            let input_ids = if state == "wrong-order" { [3, 4, 3] } else { [4, 3, 4] };
+            let mut inputs = input_ids
+                .into_iter()
+                .enumerate()
+                .map(|(index, commit)| Input {
+                    source: InputSource::Change(id(20 + index as u16).into()),
+                    commit_id: id(commit),
+                    muted: state == "muted" && index == 2,
+                })
+                .collect::<Vec<_>>();
+            if state == "empty" {
+                inputs.clear();
+            }
+            app.auto_merges.insert(id(6), Definition { inputs });
+            if state == "unavailable" {
+                app.unavailable_patches.insert(id(6));
+            }
+            complete(&mut app);
+            app.select_commit(id(2));
+            app.update(Action::SelectSubtree);
+            for commit_id in [id(6), id(7)] {
+                assert_eq!(
+                    app.tree_selection_marker(commit_id).is_some(),
+                    state == "final",
+                    "{state}: only a final recorded AutoMerge with all contributions is traversable"
+                );
+            }
+            for commit_id in [id(2), id(3), id(4)] {
+                assert!(
+                    app.tree_selection_marker(commit_id).is_some(),
+                    "eligible source arms remain selectable"
+                );
+            }
+            app.update(Action::Cancel);
+            app.select_commit(id(6));
+            assert!(!app.can_select_tree(), "an AutoMerge cannot be the source root");
+        }
+    }
+
+    #[test]
+    fn tree_selection_explains_copy_and_move_for_selected_auto_merges() {
+        use crate::edit::{
+            auto_merge::{Definition, Input, InputSource},
+            transplant::Mode,
+        };
+
+        for (automatic, subtree) in [(false, true), (true, false), (true, true)] {
+            let mut app = App::new(10);
+            app.extend_commits(vec![
+                row_with_parents(6, &[1]),
+                row_with_parents(5, &[4, 3]),
+                row_with_parents(4, &[2]),
+                row_with_parents(3, &[2]),
+                row_with_parents(2, &[1]),
+                row(1),
+            ]);
+            if automatic {
+                app.auto_merges.insert(
+                    id(5),
+                    Definition {
+                        inputs: [4, 3]
+                            .into_iter()
+                            .map(|commit| Input {
+                                source: InputSource::Change(id(commit).into()),
+                                commit_id: id(commit),
+                                muted: false,
+                            })
+                            .collect(),
+                    },
+                );
+            }
+            complete(&mut app);
+            app.select_commit(id(2));
+            app.update(if subtree {
+                Action::SelectSubtree
+            } else {
+                Action::SelectTree
+            });
+            app.update(Action::ConfirmTreeSelection);
+            let notice = app.notice().expect("the mode choice is shown").text;
+            assert_eq!(
+                notice.contains("Copy freezes AutoMerges; Move keeps them live"),
+                automatic && subtree,
+                "the mode prompt explains the distinction only when an AutoMerge is selected"
+            );
+            assert!(
+                notice.contains("[Copy]  Move"),
+                "both modes are available and Copy remains the default"
+            );
+
+            for (index, action) in [
+                Action::MoveDown,
+                Action::MoveUp,
+                Action::TopologicalDown,
+                Action::TopologicalUp,
+                Action::MoveDown,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                app.update(action);
+                assert_eq!(
+                    app.notice()
+                        .expect("the mode choice remains visible")
+                        .text
+                        .contains("[Move]"),
+                    index % 2 == 0,
+                    "all mode-choice keys allow Copy and Move for ordinary merges and selected or unselected AutoMerges"
+                );
+            }
+            app.update(Action::ConfirmTreeSelection);
+            app.update(Action::ConfirmTreeSelection);
+            app.select_commit(id(6));
+            app.update(Action::ConfirmTreeSelection);
+            app.update(Action::ConfirmTreeSelection);
+            let effects = app.update(Action::ConfirmTreeSelection);
+            assert!(
+                matches!(effects.as_slice(), [Effect::Transplant(request)] if request.mode == Mode::Move),
+                "the confirmed request allows moving ordinary merges and live AutoMerges"
+            );
+        }
+    }
+
+    #[test]
+    fn tree_selection_roots_are_ordinary_single_parent_commits() {
+        let mut app = App::new(10);
+        let mut pending_merge = row_with_parents(6, &[2]);
+        pending_merge.signature = SignatureState::PendingRebase;
+        pending_merge.has_merge_replay = true;
+        let mut pending_single_parent = row_with_parents(2, &[1]);
+        pending_single_parent.signature = SignatureState::PendingRebase;
+        app.extend_commits(vec![
+            pending_merge,
+            row_with_parents(5, &[2]),
+            row_with_parents(4, &[2, 3]),
+            row_with_parents(3, &[1]),
+            pending_single_parent,
+            row(1),
+        ]);
+        app.auto_merges.insert(
+            id(5),
+            crate::edit::auto_merge::Definition {
+                inputs: vec![crate::edit::auto_merge::Input {
+                    source: crate::edit::auto_merge::InputSource::Change(id(2).into()),
+                    commit_id: id(2),
+                    muted: false,
+                }],
+            },
+        );
+        complete(&mut app);
+        for commit_id in [id(1), id(4), id(5), id(6)] {
+            app.select_commit(commit_id);
+            assert!(
+                !app.can_select_tree(),
+                "roots, ordinary merges, and AutoMerges cannot start selection even with deduplicated parent slots"
+            );
+        }
+        app.select_commit(id(2));
+        assert!(
+            app.can_select_tree(),
+            "an ordinary single-parent commit can start selection even while pending replay"
+        );
+    }
+
+    #[test]
+    fn tree_selection_insert_allows_merge_descendants_but_only_above_merge_destinations() {
+        use crate::edit::transplant::{Connection, Placement};
+        for destination in [4, 5, 6, 7] {
+            let mut app = App::new(10);
+            let mut pending_merge = row_with_parents(7, &[4]);
+            pending_merge.signature = SignatureState::PendingRebase;
+            pending_merge.has_merge_replay = true;
+            app.extend_commits(vec![
+                pending_merge,
+                row_with_parents(6, &[4]),
+                row_with_parents(5, &[4, 1]),
+                row_with_parents(4, &[1]),
+                row_with_parents(3, &[2]),
+                row_with_parents(2, &[1]),
+                row(1),
+            ]);
+            app.auto_merges.insert(
+                id(6),
+                crate::edit::auto_merge::Definition {
+                    inputs: vec![crate::edit::auto_merge::Input {
+                        source: crate::edit::auto_merge::InputSource::Change(id(4).into()),
+                        commit_id: id(4),
+                        muted: false,
+                    }],
+                },
+            );
+            app.set_known_merge_descendants(HashSet::from([id(4), id(1)]));
+            complete(&mut app);
+            app.select_commit(id(2));
+            app.update(Action::SelectTree);
+            app.update(Action::ConfirmTreeSelection);
+            app.update(Action::ConfirmTreeSelection);
+            app.update(Action::MoveDown);
+            app.update(Action::ConfirmTreeSelection);
+            app.select_commit(id(destination));
+            assert_eq!(
+                app.selected.map(|index| app.rows[index].id),
+                Some(id(destination)),
+                "insertion permits destinations whose descendants contain merges"
+            );
+            app.update(Action::ConfirmTreeSelection);
+            let notice = app.notice().expect("the placement choice is shown").text;
+            assert_eq!(
+                notice.contains("Below"),
+                destination == 4,
+                "ordinary and derived merge destinations only permit Above, even with one Git parent"
+            );
+            if destination != 4 {
+                app.update(Action::MoveDown);
+            }
+            app.update(Action::ConfirmTreeSelection);
+            let effects = app.update(Action::ConfirmTreeSelection);
+            assert!(
+                matches!(effects.as_slice(), [Effect::Transplant(request)]
+                if request.destination == id(destination)
+                    && request.connection == Connection::Insert
+                    && request.placement == Placement::Above),
+                "the final request preserves the permitted merge-aware insertion placement"
+            );
+        }
     }
 
     #[test]

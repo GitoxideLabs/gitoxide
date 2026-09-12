@@ -7607,6 +7607,7 @@ fn preview_todo_rebase_conflict(
             metadata_loaded: true,
             has_agent_marker: metadata.has_agent_marker,
             is_review: metadata.is_review,
+            has_merge_replay: metadata.has_merge_replay,
             signature: metadata.signature,
         });
     }
@@ -13644,6 +13645,7 @@ mod tests {
                     metadata_loaded: false,
                     has_agent_marker: false,
                     is_review: false,
+                    has_merge_replay: false,
                     signature: app::SignatureState::Unsigned,
                 })
             })

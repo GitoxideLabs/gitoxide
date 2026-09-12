@@ -74,7 +74,7 @@ fn reference(owner_commit_id: ObjectId) -> Result<FullName> {
 pub(super) fn continuation_edits(
     repo: &gix::Repository,
     retain: Option<(ObjectId, &[ObjectId])>,
-    release: Option<(ObjectId, &[ObjectId])>,
+    release: Option<ObjectId>,
 ) -> Result<stash::RewriteEdits> {
     let mut edits = stash::RewriteEdits {
         forward: Vec::new(),
@@ -89,20 +89,23 @@ pub(super) fn continuation_edits(
             }
         }
     }
-    if let Some((owner_commit_id, commit_ids)) = release {
-        for commit_id in commit_ids {
-            let name = continuation_reference(owner_commit_id, *commit_id)?;
+    if let Some(owner_commit_id) = release {
+        let prefix = format!("refs/tix/replay/todo-{owner_commit_id}/");
+        for existing in repo.references()?.prefixed(prefix.as_str())? {
+            let existing = existing.map_err(anyhow::Error::from_boxed)?;
+            let name = existing.name().to_owned();
             if !seen.insert(name.clone()) {
                 continue;
             }
-            let Some(existing) = repo.try_find_reference(name.as_ref())? else {
-                continue;
-            };
+            let commit_id = existing
+                .try_id()
+                .map(gix::Id::detach)
+                .context("a merge replay continuation reference must point directly to a commit")?;
             ensure!(
-                existing.target().try_id() == Some(commit_id.as_ref()),
+                name == continuation_reference(owner_commit_id, commit_id)?,
                 "a merge replay continuation reference points to a different commit"
             );
-            retire_resource(name, *commit_id, &mut edits);
+            retire_resource(name, commit_id, &mut edits);
         }
     }
     Ok(edits)

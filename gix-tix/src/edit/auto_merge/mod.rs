@@ -219,6 +219,66 @@ pub(crate) fn is_auto_merge(commit: &gix::objs::Commit) -> bool {
     commit.extra_headers.iter().any(|(name, _)| name == HEADER)
 }
 
+pub(crate) fn ensure_freezable(commit: &gix::objs::Commit) -> Result<()> {
+    let definition = Definition::from_commit(commit)?.context("only an AutoMerge can be frozen")?;
+    ensure!(
+        !rebase::is_pending(commit),
+        "resolve the pending AutoMerge before transplanting it"
+    );
+    ensure!(
+        definition.inputs.iter().all(|input| !input.muted),
+        "an AutoMerge with muted inputs cannot be transplanted"
+    );
+    let mut seen = HashSet::new();
+    ensure!(
+        definition
+            .inputs
+            .iter()
+            .map(|input| input.commit_id)
+            .filter(|commit_id| seen.insert(*commit_id))
+            .eq(commit.parents.iter().copied()),
+        "AutoMerge inputs do not match its recorded parents"
+    );
+    Ok(())
+}
+
+/// Copy an AutoMerge's recorded result without retaining its live subscriptions.
+pub(super) fn freeze(commit: &mut gix::objs::Commit) -> Result<()> {
+    ensure_freezable(commit)?;
+    let definition = Definition::from_commit(commit)?.expect("validated AutoMerge has inputs");
+    let labels: Vec<_> = definition
+        .inputs
+        .iter()
+        .filter(|input| {
+            !input
+                .source
+                .reference()
+                .is_some_and(|name| name.as_bstr().starts_with(crate::history::PIN_PREFIX))
+        })
+        .map(|input| input.source.label())
+        .collect();
+    let mut message = BString::from("Merge");
+    for (index, label) in labels.iter().enumerate() {
+        message.push_str(if index == 0 {
+            " "
+        } else if index + 1 != labels.len() {
+            ", "
+        } else if labels.len() == 2 {
+            " and "
+        } else {
+            ", and "
+        });
+        message.push_str(label);
+    }
+    if let Some(newline) = commit.message.find_byte(b'\n') {
+        let separator = newline - usize::from(newline > 0 && commit.message[newline - 1] == b'\r');
+        message.push_str(&commit.message[separator..]);
+    }
+    commit.message = message;
+    commit.extra_headers.retain(|(name, _)| name != HEADER);
+    Ok(())
+}
+
 pub(super) fn ensure_editable(commit: &gix::objs::Commit) -> Result<()> {
     ensure!(
         !is_auto_merge(commit),
@@ -627,12 +687,12 @@ fn ordered(
     let mut dependencies = HashMap::new();
     for &commit_id in ids {
         let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
-        let parents = if let Some(definition) = graph
+        let definition = graph
             .auto_merges
             .get(&commit_id)
             .cloned()
-            .or(Definition::from_commit(&commit)?)
-        {
+            .or(Definition::from_commit(&commit)?);
+        let parents = if let Some(definition) = definition {
             let mut parents = Vec::new();
             for input in definition.inputs {
                 if let Some(parent) = refs.resolve_input(repo, &input, &HashMap::new(), None)? {
@@ -1113,10 +1173,7 @@ pub(crate) fn expand_plan(
         .as_ref()
         .and_then(|checkout| match checkout.target {
             rebase::PlanParent::Existing(commit_id) => Some(commit_id),
-            rebase::PlanParent::Step(index) => plan.steps.get(index).and_then(|step| match step.commit {
-                rebase::PlanCommit::Pick(commit_id) | rebase::PlanCommit::Resolved(commit_id) => Some(commit_id),
-                _ => None,
-            }),
+            rebase::PlanParent::Step(index) => plan.steps.get(index).and_then(|step| step.commit.rewritten_source()),
         })
         .or(repo.head()?.id().map(gix::Id::detach));
     let mut affected = plan.scope.clone();
@@ -1145,7 +1202,7 @@ pub(crate) fn expand_plan(
     let preparation = prepare(repo, graph, &mut affected, checkout, None)?;
     let mut positions = HashMap::new();
     for (index, step) in plan.steps.iter().enumerate() {
-        if let rebase::PlanCommit::Pick(commit_id) | rebase::PlanCommit::Resolved(commit_id) = step.commit {
+        if let Some(commit_id) = step.commit.rewritten_source() {
             positions.insert(commit_id, index);
         }
         for fold in &step.squash {
@@ -1228,7 +1285,7 @@ pub(crate) fn order_plan(
     let mut positions = HashMap::new();
     for (index, step) in plan.steps.iter().enumerate() {
         ensure!(!step.parents.is_empty(), "a rebase step needs a parent");
-        if let rebase::PlanCommit::Pick(commit_id) | rebase::PlanCommit::Resolved(commit_id) = step.commit {
+        if let Some(commit_id) = step.commit.rewritten_source() {
             positions.insert(commit_id, index);
         }
         for fold in &step.squash {
@@ -1312,10 +1369,12 @@ pub(crate) fn order_plan(
                         if scope.contains(&commit_id) {
                             let destination = match positions.get(&commit_id).copied() {
                                 Some(index)
-                                    if matches!(plan.steps[index].commit,
-                                        rebase::PlanCommit::Pick(retained) | rebase::PlanCommit::Resolved(retained)
-                                        if crate::change_id::for_commit(repo, retained)? == *change_id
-                                    ) =>
+                                    if plan.steps[index]
+                                        .commit
+                                        .rewritten_source()
+                                        .map(|retained| crate::change_id::for_commit(repo, retained))
+                                        .transpose()?
+                                        == Some(*change_id) =>
                                 {
                                     parents.push(index);
                                     rebase::RefDestination::Step(index)
