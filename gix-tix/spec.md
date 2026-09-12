@@ -1915,6 +1915,22 @@ views.
   push because it requires force, tix offers `<enter>` to retry once with
   `git push --force-with-lease <remote> <branch>`; Escape cancels, and any
   failure of the guarded retry is final.
+- Before each push attempt, including a force-with-lease retry, Tix checks the
+  visible history of the branch being pushed through every merge parent,
+  independently of the current checkout. The active view's hidden tips and all
+  their ancestors are excluded, including hidden boundary commits. Showing
+  hidden history or having no known hidden tips disables this check completely,
+  including its source locks. A retry retains the original view's hidden tips.
+  Validation uses native Git's local source ref and the original objects being
+  transferred, ignoring replacement objects and ref namespaces. It refuses
+  the push and identifies the blocking commit if an ordinary commit still needs
+  lazy replay, conflict resolution, merge continuation, or signature finalization.
+  AutoMerges count as finalized in any state, including muted inputs and pending
+  metadata, but their visible Git parents are still checked. Refusal does not
+  replay or otherwise change the local history. Standard ref locks protect the
+  source branch and any symbolic referents from validation until Git exits,
+  preventing concurrent rewrites from publishing unchecked history. Every exit
+  path releases these locks; leaving Tix waits for an active push to finish.
 - In blocking-network builds, `a Shift-F` is available whenever a fetch remote
   can be resolved, including at a detached `HEAD` without a remembered branch.
   It runs a gix fetch using the active branch's fetch remote when available,
