@@ -4,7 +4,7 @@ use std::{
     ffi::OsStr,
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
 };
 
 use bstr::{BString, ByteSlice};
@@ -294,9 +294,7 @@ fn git<const N: usize>(path: &Path, args: [&str; N]) -> Result<Vec<u8>> {
 }
 
 fn git_os<'a>(path: &Path, args: impl IntoIterator<Item = &'a OsStr>) -> Result<Vec<u8>> {
-    let output = Command::new(gix_path::env::exe_invocation())
-        .arg("-C")
-        .arg(path)
+    let output = crate::git_command(path)
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_NO_REPLACE_OBJECTS", "1")
@@ -313,9 +311,7 @@ fn git_os<'a>(path: &Path, args: impl IntoIterator<Item = &'a OsStr>) -> Result<
 }
 
 fn git_with_input<const N: usize>(path: &Path, args: [&str; N], input: &[u8]) -> Result<Vec<u8>> {
-    let mut child = Command::new(gix_path::env::exe_invocation())
-        .arg("-C")
-        .arg(path)
+    let mut child = crate::git_command(path)
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_NO_REPLACE_OBJECTS", "1")
@@ -337,9 +333,7 @@ fn git_with_input<const N: usize>(path: &Path, args: [&str; N], input: &[u8]) ->
 }
 
 fn git_optional<const N: usize>(path: &Path, args: [&str; N]) -> Result<Option<Vec<u8>>> {
-    let output = Command::new(gix_path::env::exe_invocation())
-        .arg("-C")
-        .arg(path)
+    let output = crate::git_command(path)
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_NO_REPLACE_OBJECTS", "1")
