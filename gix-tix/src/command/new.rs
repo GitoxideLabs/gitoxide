@@ -210,43 +210,84 @@ mod tests {
     }
 
     #[test]
-    fn new_sources_ignore_pending_history_below_the_hidden_base() -> gix_testtools::Result {
-        for index in [false, true] {
-            let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
-            let parent = prepare_pending_ancestry(fixture.path(), true)?;
-            let mut input = args();
-            input.index = index;
-            run(crate::test_repository::open(fixture.path())?, input)?;
+    fn new_sources_preserve_pending_ancestors_with_or_without_hidden_tips() -> gix_testtools::Result {
+        for hide_pending in [false, true] {
+            for source in ["default", "index", "worktree", "worktree-untracked"] {
+                let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+                let parent_commit_id = prepare_pending_ancestry(fixture.path(), hide_pending)?;
+                std::fs::write(fixture.path().join("tip"), b"unstaged tip\n")?;
+                let repository = crate::test_repository::open(fixture.path())?;
+                let pending_commit_id = repository.rev_parse_single("HEAD~2")?.detach();
+                let before = gix_testtools::repository::snapshot(fixture.path())?;
+                let mut input = args();
+                input.index = source == "index";
+                input.worktree = source == "worktree";
+                input.worktree_untracked = source == "worktree-untracked";
+                run(repository, input)?;
 
-            let repository = crate::test_repository::open(fixture.path())?;
-            assert_eq!(
-                repository.head_commit()?.parent_ids().next().map(gix::Id::detach),
-                Some(parent),
-                "new{} keeps the visible HEAD as its parent",
-                if index { " --index" } else { "" }
-            );
+                let repository = crate::test_repository::open(fixture.path())?;
+                assert_eq!(
+                    repository.head_commit()?.parent_ids().collect::<Vec<_>>(),
+                    [parent_commit_id],
+                    "{source}, hidden={hide_pending}: creation retains the exact selected parent and its ancestry"
+                );
+                assert!(
+                    crate::edit::rebase::is_pending(
+                        &repository.find_commit(pending_commit_id)?.decode()?.into_owned()?
+                    ),
+                    "older pending history stays pending"
+                );
+                let after = gix_testtools::repository::snapshot(fixture.path())?;
+                for reference in before
+                    .references
+                    .iter()
+                    .filter(|reference| reference.name != "refs/heads/main")
+                {
+                    assert!(
+                        after.references.contains(reference),
+                        "{source}, hidden={hide_pending}: creation preserves unrelated refs and their targets"
+                    );
+                }
+            }
         }
         Ok(())
     }
 
     #[test]
-    fn new_sources_reject_visible_pending_history() -> gix_testtools::Result {
-        for index in [false, true] {
+    fn new_sources_reject_a_pending_parent_without_observable_changes() -> gix_testtools::Result {
+        for source in ["default", "index", "worktree", "worktree-untracked"] {
             let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
-            let head = prepare_pending_ancestry(fixture.path(), false)?;
+            let parent_commit_id = prepare_pending_ancestry(fixture.path(), false)?;
+            std::fs::write(fixture.path().join("tip"), b"unstaged tip\n")?;
+            let repository = crate::test_repository::open(fixture.path())?;
+            let mut parent = repository.find_commit(parent_commit_id)?.decode()?.into_owned()?;
+            parent
+                .extra_headers
+                .push(("tix-rebase-parent".into(), parent.parents[0].to_string().into()));
+            let pending_commit_id = repository.write_object(&parent)?.detach();
+            repository
+                .find_reference("refs/heads/main")?
+                .set_target_id(pending_commit_id, "prepare pending creation parent")?;
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let index_before = std::fs::read(repository.index_path())?;
             let mut input = args();
-            input.index = index;
-            let err = run(crate::test_repository::open(fixture.path())?, input)
-                .expect_err("visible pending history blocks creating a commit");
+            input.index = source == "index";
+            input.worktree = source == "worktree";
+            input.worktree_untracked = source == "worktree-untracked";
+            let err = run(repository, input).expect_err("a pending parent blocks creating a commit");
             assert!(
-                format!("{err:#}").contains("the current checkout has a pending rebase"),
-                "new{} reports the visible pending ancestry: {err:#}",
-                if index { " --index" } else { "" }
+                format!("{err:#}").contains("the selected parent has a pending rebase"),
+                "{source}: the error identifies the pending parent: {err:#}"
             );
             assert_eq!(
-                crate::test_repository::open(fixture.path())?.head_id()?,
-                head,
-                "rejected creation leaves HEAD unchanged"
+                gix_testtools::repository::snapshot(fixture.path())?,
+                before,
+                "rejected creation preserves refs, ancestry, index, worktree, and undo state"
+            );
+            assert_eq!(
+                std::fs::read(crate::test_repository::open(fixture.path())?.index_path())?,
+                index_before,
+                "rejected creation leaves the index byte-identical"
             );
         }
         Ok(())
