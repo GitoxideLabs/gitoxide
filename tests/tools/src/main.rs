@@ -48,15 +48,24 @@ fn git_daemon(_url_file: PathBuf) -> io::Result<()> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args_os().skip(1);
     let scmd = args.next().expect("sub command");
-    match &*scmd {
+    match scmd.to_str().ok_or("subcommand is not UTF-8")? {
+        "run" => {
+            let mut cmd = std::process::Command::new(args.next().ok_or("run requires a program")?);
+            let config_dir = gix_testtools::tempfile::TempDir::new()?;
+            let status = gix_testtools::configure_git_environment(&mut cmd, config_dir.path())
+                .args(args)
+                .status()?;
+            drop(config_dir);
+            std::process::exit(status.code().unwrap_or(1));
+        }
         "bash-program" | "bp" => bash_program()?,
         "git-daemon" => git_daemon(PathBuf::from(args.next().expect("path to write the git:// URL to")))?,
         "mess-in-the-middle" => mess_in_the_middle(PathBuf::from(args.next().expect("path to file to mess with")))?,
         #[cfg(unix)]
         "umask" => umask()?,
-        _ => unreachable!("Unknown subcommand: {}", scmd),
+        _ => unreachable!("Unknown subcommand: {}", scmd.to_string_lossy()),
     }
     Ok(())
 }

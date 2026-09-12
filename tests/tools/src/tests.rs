@@ -41,29 +41,95 @@ fn configure_command_clears_external_config() {
     let temp = tempfile::TempDir::new().expect("can create temp dir");
     populate_ad_hoc_config_files(temp.path());
 
-    let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
-    cmd.env("GIT_CONFIG_SYSTEM", SCOPE_ENV_VALUE);
-    cmd.env("GIT_CONFIG_GLOBAL", SCOPE_ENV_VALUE);
-    cmd.env("GIT_CONFIG_COUNT", "invalid ambient count");
-    cmd.env("GIT_CONFIG_PARAMETERS", "invalid ambient parameters");
-    configure_command(
-        &mut cmd,
-        gix_hash::Kind::default(),
-        ["config", "-l", "--show-origin"],
-        temp.path(),
-    );
+    for (count, parameters) in [
+        ("1", "'foo.bar=inherited'"),
+        ("invalid ambient count", "invalid ambient parameters"),
+    ] {
+        let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
+        cmd.env("GIT_CONFIG_SYSTEM", SCOPE_ENV_VALUE);
+        cmd.env("GIT_CONFIG_GLOBAL", SCOPE_ENV_VALUE);
+        cmd.env("GIT_CONFIG", SCOPE_ENV_VALUE);
+        cmd.env("GIT_CONFIG_PARAMETERS", parameters);
+        cmd.env("GIT_CONFIG_COUNT", count);
+        cmd.env("GIT_CONFIG_KEY_0", "foo.bar");
+        cmd.env("GIT_CONFIG_VALUE_0", "inherited");
+        configure_command(
+            &mut cmd,
+            gix_hash::Kind::default(),
+            ["config", "-l", "--show-origin"],
+            temp.path(),
+        );
 
-    let output = cmd.output().expect("can run git");
-    let lines: Vec<_> = output
-        .stdout
-        .to_str()
-        .expect("valid UTF-8")
-        .lines()
-        .filter(|line| !line.starts_with("command line:\t"))
-        .collect();
-    let status = output.status.code().expect("terminated normally");
-    assert_eq!(lines, Vec::<&str>::new(), "should be no config variables from files");
-    assert_eq!(status, 0, "reading the config should succeed");
+        let output = cmd.output().expect("can run git");
+        let lines: Vec<_> = output
+            .stdout
+            .to_str()
+            .expect("valid UTF-8")
+            .lines()
+            .filter(|line| !line.starts_with("command line:\t"))
+            .collect();
+        let status = output.status.code().expect("terminated normally");
+        assert_eq!(lines, Vec::<&str>::new(), "should be no config variables from files");
+        assert_eq!(status, 0, "reading the config should succeed");
+        assert!(
+            !output.stdout.as_bstr().contains_str("foo.bar"),
+            "inherited command-scope configuration must also be discarded"
+        );
+    }
+}
+
+#[test]
+fn configure_command_keeps_destructive_git_operations_in_the_fixture() -> Result {
+    let fixture = tempfile::TempDir::new()?;
+    let outside = tempfile::TempDir::new()?;
+    for dir in [fixture.path(), outside.path()] {
+        git(dir, "init")?;
+        std::fs::write(dir.join("tracked"), "committed\n")?;
+        git(dir, "add tracked")?;
+        git(dir, "commit -m initial")?;
+        std::fs::write(dir.join("tracked"), "uncommitted work\n")?;
+    }
+    let outside_index = std::fs::read(outside.path().join(".git/index"))?;
+    let outside_head = git(outside.path(), "rev-parse HEAD")?;
+
+    let mut cmd = std::process::Command::new(gix_path::env::exe_invocation());
+    cmd.env("GIT_DIR", outside.path().join(".git"))
+        .env("GIT_WORK_TREE", outside.path())
+        .env("GIT_COMMON_DIR", outside.path().join(".git"))
+        .env("GIT_INDEX_FILE", outside.path().join(".git/index"))
+        .env("GIT_OBJECT_DIRECTORY", outside.path().join(".git/objects"))
+        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", outside.path().join(".git/objects"))
+        .env("GIT_NAMESPACE", "outside")
+        .env("GIT_SHALLOW_FILE", outside.path().join("shallow"));
+    let output = configure_command(&mut cmd, object_hash(), ["reset", "--hard", "HEAD"], fixture.path()).output()?;
+    assert!(output.status.success(), "reset must use the fixture: {output:?}");
+    assert_eq!(std::fs::read(fixture.path().join("tracked"))?, b"committed\n");
+    assert_eq!(
+        std::fs::read(outside.path().join("tracked"))?,
+        b"uncommitted work\n",
+        "a reset must not overwrite another repository's worktree"
+    );
+    assert_eq!(
+        std::fs::read(outside.path().join(".git/index"))?,
+        outside_index,
+        "a reset must not touch another repository's index"
+    );
+    assert_eq!(git(outside.path(), "rev-parse HEAD")?, outside_head);
+    Ok(())
+}
+
+#[test]
+fn isolated_process_runs_the_test_with_fixture_defaults() -> Result {
+    if run_in_isolated_process()? {
+        return Ok(());
+    }
+    assert_eq!(env::var("GIT_CONFIG_GLOBAL")?, NULL_DEVICE);
+    assert_eq!(env::var("GIT_AUTHOR_NAME")?, "author");
+    assert!(
+        env::var_os("GIT_DIR").is_none(),
+        "repository selectors are not inherited"
+    );
+    Ok(())
 }
 
 #[test]
@@ -592,7 +658,10 @@ fn forced_normal_fixtures_execute_in_place_instead_of_extracting_archives() {
 
 #[test]
 #[serial_test::serial]
-fn version_incompatible_writable_fixtures_use_required_archives_in_both_creation_modes() {
+fn version_incompatible_writable_fixtures_use_required_archives_in_both_creation_modes() -> Result {
+    if run_in_isolated_process()? {
+        return Ok(());
+    }
     let temp = tempfile::TempDir::new().expect("temporary directory can be created");
     let fixture_base = temp.path().join("tests/fixtures");
     let archive_dir = fixture_base.join(ARCHIVE_DIR_NAME);
@@ -632,6 +701,7 @@ fn version_incompatible_writable_fixtures_use_required_archives_in_both_creation
             "the fixture comes from the archive instead of the incompatible script"
         );
     }
+    Ok(())
 }
 
 #[test]

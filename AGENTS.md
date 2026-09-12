@@ -110,12 +110,15 @@ Follow "purposeful conventional commits" style:
   Git metadata, and user configuration. Use disposable repositories provided by
   `gix-testtools`, such as `scripted_fixture_writable()`; never mutate a shared
   read-only fixture or use the source checkout as a test repository.
-- Git invocations in test code must go through `gix_testtools::git()` or fixture
-  scripts executed by `gix-testtools`. Do not spawn Git directly with
-  `Command::new("git")` or ad hoc subprocess wrappers. If a test needs unsupported
+- Git invocations in test code must go through `gix_testtools::git()`,
+  `git_command()`, or fixture scripts executed by `gix-testtools`. Do not spawn
+  Git directly with `Command::new("git")` or ad hoc subprocess wrappers. If a test needs unsupported
   command options, extend the shared isolated helper instead of bypassing it.
-  The `run_git()` and `invoke_bash()` helpers do not provide equivalent
-  isolation and must not be used as substitutes.
+  `run_git()` and `invoke_bash()` share this isolation. Subprocesses that invoke
+  Git indirectly must use `gix_testtools::configure_git_environment()` too.
+  Tests of APIs that read the process environment must use
+  `gix_testtools::run_in_isolated_process()` before exercising those APIs or
+  changing environment variables, so they cannot race other tests.
 - Setting a subprocess's working directory or passing `git -C` is not isolation:
   inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, or
   object-directory variables can redirect operations outside the fixture. Tests
