@@ -52,7 +52,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .transpose()
         .context("author is not valid UTF-8")?;
 
-    if let Some(message) = explicit_message(&args.edit, std::io::stdin())? {
+    if let Some(message) = explicit_message(&args.edit.message, args.edit.file.as_deref(), std::io::stdin())? {
         let output_repository = repository.clone();
         return finish(
             &output_repository,
@@ -113,10 +113,14 @@ pub(super) fn ensure_retained_target(
     Ok(())
 }
 
-pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Result<Option<Vec<u8>>> {
-    if !args.message.is_empty() {
+pub(super) fn explicit_message(
+    messages: &[OsString],
+    file: Option<&Path>,
+    mut stdin: impl Read,
+) -> Result<Option<Vec<u8>>> {
+    if !messages.is_empty() {
         let mut out = Vec::new();
-        for (index, message) in args.message.iter().enumerate() {
+        for (index, message) in messages.iter().enumerate() {
             if index > 0 {
                 out.extend_from_slice(b"\n\n");
             }
@@ -127,18 +131,18 @@ pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Resu
         }
         return Ok(Some(out));
     }
-    let Some(path) = args.file.as_deref() else {
+    let Some(path) = file else {
         return Ok(None);
     };
     if path == Path::new("-") {
         let mut out = Vec::new();
         stdin
             .read_to_end(&mut out)
-            .context("could not read the commit message from standard input")?;
+            .context("could not read message from standard input")?;
         Ok(Some(out))
     } else {
         std::fs::read(path)
-            .with_context(|| format!("could not read commit message at {}", path.display()))
+            .with_context(|| format!("could not read message at {}", path.display()))
             .map(Some)
     }
 }
@@ -214,7 +218,11 @@ mod tests {
         let mut message_args = args("HEAD");
         message_args.edit.message = vec!["title".into(), "body".into()];
         assert_eq!(
-            explicit_message(&message_args.edit, &b"ignored"[..])?,
+            explicit_message(
+                &message_args.edit.message,
+                message_args.edit.file.as_deref(),
+                &b"ignored"[..]
+            )?,
             Some(b"title\n\nbody".to_vec()),
             "repeated messages become paragraphs without reading stdin"
         );
@@ -222,7 +230,11 @@ mod tests {
         let mut file_args = args("HEAD");
         file_args.edit.file = Some("-".into());
         assert_eq!(
-            explicit_message(&file_args.edit, &b"from stdin\n"[..])?,
+            explicit_message(
+                &file_args.edit.message,
+                file_args.edit.file.as_deref(),
+                &b"from stdin\n"[..]
+            )?,
             Some(b"from stdin\n".to_vec()),
             "a dash reads the entire message from stdin"
         );
@@ -233,7 +245,7 @@ mod tests {
         let mut file_args = args("HEAD");
         file_args.edit.file = Some(path);
         assert_eq!(
-            explicit_message(&file_args.edit, &b"ignored"[..])?,
+            explicit_message(&file_args.edit.message, file_args.edit.file.as_deref(), &b"ignored"[..])?,
             Some(b"from file\n\nbody\n".to_vec()),
             "a file supplies the complete message"
         );

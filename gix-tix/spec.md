@@ -164,13 +164,20 @@ without trading responsiveness for metadata that is not visible.
   worktree's undo and redo queue. It does not apply or reverse queued operations,
   change their recorded references, or affect another worktree's queue.
 - `tix enrich commit todo [--clear] [REVSPEC]`, `tix enrich commit note
-  [REVSPEC]`, `tix enrich commit git-note [REVSPEC]`, `tix enrich tree
+  [REVSPEC] [-m MESSAGE ... | -f FILE]`, `tix enrich commit git-note
+  [REVSPEC] [-m MESSAGE ... | -f FILE]`, `tix enrich tree
   checks-pass [--clear] [REVSPEC]`, and `tix enrich patch refackiewed [--clear]
   [REVSPEC]` expose the TUI's enrichment actions without opening it.
   Targets default to `HEAD` and accept Git revisions or unambiguous
   reverse-hex change-ID prefixes from the default Tix view. Boolean commands
-  idempotently set their marker, or clear it with `--clear`; note commands use
-  Git's editor, remove empty notes, and leave unchanged notes alone. Output
+  idempotently set their marker, or clear it with `--clear`. Note commands use
+  Git's editor by default. Like `tix reword`, repeated `-m/--message` values form
+  paragraphs and `-f/--file` reads a complete message from a file, or standard
+  input with `-`. Explicit input replaces the note without opening an editor;
+  for example, agents can use `tix enrich commit note "$fixup_change" --file "$note_file"`.
+  Both input paths use the existing whitespace cleanup, preserve comment-looking
+  lines and other enrichments, remove empty notes, and leave unchanged notes and
+  undo history alone. Output
   starts with the target's abbreviated commit and change IDs before its status.
   The patch command writes its status to stderr. Marking a legacy patch can
   rewrite its commit to add the identity described below; the status then
