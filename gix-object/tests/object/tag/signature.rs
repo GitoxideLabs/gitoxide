@@ -187,9 +187,8 @@ fn git_verifies_openpgp(tag: &Tag, command_home: &std::ffi::OsStr) -> Result<boo
     use std::{io::Write as _, process::Stdio};
 
     let repo = gix_testtools::tempfile::TempDir::new()?;
-    let init = std::process::Command::new(gix_path::env::exe_invocation())
+    let init = gix_testtools::git_command(repo.path())
         .args(["init", "--bare"])
-        .arg(repo.path())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()?;
@@ -199,9 +198,7 @@ fn git_verifies_openpgp(tag: &Tag, command_home: &std::ffi::OsStr) -> Result<boo
 
     let mut data = Vec::new();
     tag.write_to(&mut data)?;
-    let mut hash = std::process::Command::new(gix_path::env::exe_invocation())
-        .arg("-C")
-        .arg(repo.path())
+    let mut hash = gix_testtools::git_command(repo.path())
         .args(["hash-object", "-t", "tag", "-w", "--stdin"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -216,9 +213,7 @@ fn git_verifies_openpgp(tag: &Tag, command_home: &std::ffi::OsStr) -> Result<boo
         return Ok(false);
     }
     let tag_id = String::from_utf8(hash.stdout)?;
-    Ok(std::process::Command::new(gix_path::env::exe_invocation())
-        .arg("-C")
-        .arg(repo.path())
+    Ok(gix_testtools::git_command(repo.path())
         .args(["-c", "gpg.format=openpgp", "-c", "gpg.program=gpg", "verify-tag"])
         .arg(tag_id.trim())
         .env("GNUPGHOME", command_home)

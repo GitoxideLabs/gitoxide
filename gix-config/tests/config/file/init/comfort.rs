@@ -3,24 +3,42 @@ use gix_testtools::Env;
 use serial_test::serial;
 
 #[test]
-fn from_globals() {
-    let config = gix_config::File::from_globals().unwrap();
+fn from_globals() -> crate::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let worktree_dir = crate::scripted_fixture_read_only("make_config_repo.sh")?.canonicalize()?;
+    let _env = Env::new().set(
+        "GIT_CONFIG_GLOBAL",
+        worktree_dir.join(".gitconfig").display().to_string(),
+    );
+    let config = gix_config::File::from_globals()?;
+    assert!(!config.is_void(), "the fixture supplies global configuration");
     assert!(config.sections().all(|section| {
         let kind = section.meta().source.kind();
         kind != source::Kind::Repository && kind != source::Kind::Override
     }));
+    Ok(())
 }
 
 #[test]
 #[serial]
-fn from_environment_overrides() {
-    let config = gix_config::File::from_environment_overrides().unwrap();
+fn from_environment_overrides() -> crate::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = Env::new().set("GIT_CONFIG_COUNT", "0");
+    let config = gix_config::File::from_environment_overrides()?;
     assert!(config.is_void());
+    Ok(())
 }
 
 #[test]
 #[serial]
 fn from_git_dir() -> crate::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let worktree_dir = crate::scripted_fixture_read_only("make_config_repo.sh")?;
     let git_dir = worktree_dir.join(".git");
     let worktree_dir = worktree_dir.canonicalize()?;
@@ -31,6 +49,9 @@ fn from_git_dir() -> crate::Result {
         )
         .set("HOME", worktree_dir.display().to_string())
         .set("USERPROFILE", worktree_dir.display().to_string())
+        .unset("GIT_CONFIG_GLOBAL")
+        .unset("GIT_CONFIG_NOSYSTEM")
+        .unset("XDG_CONFIG_HOME")
         .set("GIT_CONFIG_COUNT", "1")
         .set("GIT_CONFIG_KEY_0", "include.path")
         .set(
@@ -71,20 +92,20 @@ fn from_git_dir() -> crate::Result {
         "environment includes are resolved"
     );
 
-    // on CI this file actually exists in xdg home and our values aren't present
-    if !(cfg!(unix) && gix_testtools::is_ci::cached()) {
-        assert_eq!(
-            config.string_by("a", None, "git").expect("present"),
-            "git-application",
-            "we load the XDG directories, based on the HOME fallback"
-        );
-    }
+    assert_eq!(
+        config.string_by("a", None, "git").expect("present"),
+        "git-application",
+        "we load the XDG directories, based on the HOME fallback"
+    );
     Ok(())
 }
 
 #[test]
 #[serial]
 fn from_git_dir_with_worktree_extension() -> crate::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let git_dir = crate::scripted_fixture_read_only("config_with_worktree_extension.sh")?
         .join("main-worktree")
         .join(".git");

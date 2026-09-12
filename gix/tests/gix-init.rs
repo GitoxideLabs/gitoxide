@@ -35,6 +35,9 @@ fn discover_with_environment_overrides_isolated(
 #[test]
 #[serial]
 fn globals_from_open_options_match_repository_opening() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let temp = gix_testtools::tempfile::TempDir::new()?;
     let _cwd = gix_testtools::set_current_dir(temp.path())?;
 
@@ -117,7 +120,6 @@ fn globals_from_open_options_match_repository_opening() -> gix_testtools::Result
 }
 
 mod with_overrides {
-    use crate::named_subrepo_opts;
     use gix_sec::Permission;
     use gix_testtools::Env;
     use serial_test::serial;
@@ -125,6 +127,14 @@ mod with_overrides {
     #[test]
     #[serial]
     fn order_from_api_and_cli_and_environment() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let repo_path = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?
+            .join("http-config")
+            .canonicalize()?;
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let _cwd = gix_testtools::set_current_dir(temp.path())?;
         let default_date = "42 +0030";
         let _env = Env::new()
             .set("GIT_HTTP_USER_AGENT", "agent-from-env")
@@ -205,7 +215,7 @@ mod with_overrides {
         opts.permissions.env.http_transport = Permission::Allow;
         opts.permissions.env.identity = Permission::Allow;
         opts.permissions.env.objects = Permission::Allow;
-        let repo = named_subrepo_opts("make_config_repos.sh", "http-config", opts)?;
+        let repo = gix::open_opts(repo_path, opts)?;
         assert_eq!(
             repo.config_snapshot().meta().source,
             gix::config::Source::Local,
@@ -350,7 +360,11 @@ mod with_overrides {
 #[test]
 #[serial]
 fn git_worktree_and_strict_config() -> gix_testtools::Result {
-    let _restore_env_on_drop = gix_testtools::Env::new().set("GIT_WORK_TREE", ".");
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let worktree = gix_testtools::tempfile::tempdir()?;
+    let _restore_env_on_drop = gix_testtools::Env::new().set("GIT_WORK_TREE", worktree.path().to_string_lossy());
     let _repo = named_subrepo_opts(
         "make_empty_repo.sh",
         "",
@@ -368,10 +382,18 @@ fn git_worktree_and_strict_config() -> gix_testtools::Result {
 #[test]
 #[serial]
 fn git_worktree_overrides_core_worktree_and_bare() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     use std::io::Write;
 
     let bare = gix_testtools::tempfile::TempDir::new()?;
-    gix::init_bare(bare.path())?;
+    gix::ThreadSafeRepository::init_opts(
+        bare.path(),
+        gix::create::Kind::Bare,
+        Default::default(),
+        gix::open::Options::isolated(),
+    )?;
     let worktree = gix_testtools::tempfile::TempDir::new()?;
     let configured_worktree = gix_testtools::tempfile::TempDir::new()?;
     writeln!(
@@ -422,8 +444,16 @@ fn git_worktree_overrides_core_worktree_and_bare() -> gix_testtools::Result {
 #[test]
 #[serial]
 fn git_worktree_overrides_discovered_worktree() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let repository = gix_testtools::tempfile::TempDir::new()?;
-    gix::init(repository.path())?;
+    gix::ThreadSafeRepository::init_opts(
+        repository.path(),
+        gix::create::Kind::WithWorktree,
+        Default::default(),
+        gix::open::Options::isolated(),
+    )?;
     let worktree = gix_testtools::tempfile::TempDir::new()?;
     let _env = gix_testtools::Env::new()
         .unset("GIT_DIR")
@@ -443,6 +473,9 @@ fn git_worktree_overrides_discovered_worktree() -> gix_testtools::Result {
 #[serial]
 #[cfg(unix)]
 fn git_worktree_over_root_overrides_bare() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
     let worktree = gix_testtools::tempfile::TempDir::new()?;
     let current_dir = std::env::current_dir()?;
@@ -497,6 +530,9 @@ fn git_worktree_over_root_overrides_bare() -> gix_testtools::Result {
 #[serial]
 #[cfg(unix)]
 fn git_worktree_absolute_over_root_overrides_bare() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
     let worktree = gix_testtools::tempfile::TempDir::new()?;
     let mut absolute_worktree = std::path::PathBuf::from("/");
@@ -519,6 +555,9 @@ fn git_worktree_absolute_over_root_overrides_bare() -> gix_testtools::Result {
 #[test]
 #[serial]
 fn repository_transitions_do_not_inherit_repository_environment_overrides() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     fn assert_paths(
         repo: &Repository,
         git_dir: &Path,
@@ -667,6 +706,9 @@ fn repository_transitions_do_not_inherit_repository_environment_overrides() -> g
 #[serial]
 #[cfg(feature = "attributes")]
 fn git_index_file_override_is_not_inherited_by_opened_submodules() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let fixture = gix_testtools::scripted_fixture_read_only("make_submodules.sh")?;
     let superproject = std::fs::canonicalize(fixture.join("with-submodules"))?;
     let index_file = superproject.join(".git/index");
@@ -699,6 +741,9 @@ fn git_index_file_override_is_not_inherited_by_opened_submodules() -> gix_testto
 #[test]
 #[serial]
 fn git_index_file_relative_paths_use_the_cwd_when_opening() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let repository = gix_testtools::scripted_fixture_writable("make_basic_repo.sh")?;
     let _cwd = gix_testtools::set_current_dir(repository.path())?;
     let _env = gix_testtools::Env::new()

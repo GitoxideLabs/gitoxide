@@ -3,7 +3,6 @@ use std::{
     hash::BuildHasher,
     io::{BufRead, Cursor},
     path::Path,
-    process::Command,
 };
 
 use gix_commitgraph::{Graph, Position as GraphPosition};
@@ -119,15 +118,12 @@ impl RefInfo {
 }
 
 fn inspect_refs(repo_dir: impl AsRef<Path>, refs: &[&'static str]) -> HashMap<String, RefInfo> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_dir.as_ref())
+    let output = gix_testtools::git_command(repo_dir)
         .arg("show")
         .arg("--no-patch")
         .arg("--pretty=format:%S %H %T %ct %P")
         .args(refs)
         .arg("--")
-        .env_remove("GIT_DIR")
         .output()
         .expect("failed to execute `git show`");
     // Output format: <refname> <id> <tree_id> <parent_ids>

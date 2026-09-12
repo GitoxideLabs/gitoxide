@@ -34,7 +34,13 @@ fn config_file_paths_follow_a_precomposed_opening_cwd() -> gix_testtools::Result
     let tmp = gix_testtools::tempfile::tempdir()?;
     let decomposed = tmp.path().join("a\u{308}");
     std::fs::create_dir(&decomposed)?;
-    let repo = gix::init(&decomposed)?;
+    let repo = gix::ThreadSafeRepository::init_opts(
+        &decomposed,
+        gix::create::Kind::WithWorktree,
+        Default::default(),
+        gix::open::Options::isolated(),
+    )?
+    .to_thread_local();
     let config_path = repo.git_dir().join("config");
     let mut disk = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)?;
     disk.set_raw_value("core.precomposeUnicode", "true")?;

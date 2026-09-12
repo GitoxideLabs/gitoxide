@@ -4,6 +4,9 @@ use serial_test::serial;
 #[test]
 #[serial]
 fn literal_only_combines_with_icase() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     {
         let _env = gix_testtools::Env::new()
             .set("GIT_LITERAL_PATHSPECS", "true")
@@ -37,6 +40,9 @@ fn literal_only_combines_with_icase() -> gix_testtools::Result {
 #[test]
 #[serial]
 fn nothing_is_set_then_it_is_like_the_default_impl() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     assert_eq!(
         Defaults::from_environment(&mut |n| std::env::var_os(n))?,
         Defaults::default()
@@ -47,6 +53,9 @@ fn nothing_is_set_then_it_is_like_the_default_impl() -> gix_testtools::Result {
 #[test]
 #[serial]
 fn glob_and_noglob_cause_error() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let _env = gix_testtools::Env::new()
         .set("GIT_GLOB_PATHSPECS", "1")
         .set("GIT_NOGLOB_PATHSPECS", "yes");
@@ -63,6 +72,9 @@ fn glob_and_noglob_cause_error() -> gix_testtools::Result {
 #[test]
 #[serial]
 fn noglob_works() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let _env = gix_testtools::Env::new()
         .set("GIT_GLOB_PATHSPECS", "0")
         .set("GIT_NOGLOB_PATHSPECS", "true");
@@ -81,6 +93,9 @@ fn noglob_works() -> gix_testtools::Result {
 #[test]
 #[serial]
 fn glob_works() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let _env = gix_testtools::Env::new().set("GIT_GLOB_PATHSPECS", "yes");
     assert_eq!(
         Defaults::from_environment(&mut |n| std::env::var_os(n))?,

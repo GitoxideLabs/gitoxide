@@ -25,7 +25,7 @@ rustix = { version = "1.1.2", features = ["termios"] }
 parking_lot = "0.12.4"
 
 [dev-dependencies]
-gix-testtools = { path = "../tests/tools" }
+gix-testtools = { path = "../tests/tools", features = ["sha1"] }
 serial_test = { version = "3.4.0", default-features = false }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))'.dev-dependencies]

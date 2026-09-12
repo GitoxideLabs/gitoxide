@@ -398,7 +398,7 @@ mod write_blob {
 
 #[test]
 fn writes_avoid_io_using_duplicate_check() -> crate::Result {
-    let mut repo = crate::named_repo("make_packed_and_loose.sh")?;
+    let (mut repo, _tmp) = crate::repo_rw("make_packed_and_loose.sh")?;
     let store = gix::odb::loose::Store::at(repo.git_dir().join("objects"), repo.object_hash());
     let loose_count = store.iter().count();
     assert_eq!(loose_count, 3, "there are some loose objects");
@@ -753,6 +753,9 @@ mod commit {
     #[test]
     #[serial_test::serial]
     fn single_line_initial_commit_empty_tree_ref_nonexisting() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let _env = freeze_time();
         let tmp = tempfile::tempdir()?;
         let object_hash = gix_testtools::object_hash();
@@ -791,6 +794,9 @@ mod commit {
     #[test]
     #[serial_test::serial]
     fn multi_line_commit_message_uses_first_line_in_ref_log_ref_nonexisting() -> crate::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let _env = freeze_time();
         let (repo, _keep) = crate::repo_rw_opts("make_basic_repo.sh", restricted_and_git())?;
         let parent = repo.find_reference("HEAD")?.peel_to_id()?;

@@ -3299,6 +3299,7 @@ dependencies = [
  "anyhow",
  "clap",
  "gix",
+ "gix-testtools",
  "regex",
 ]
 

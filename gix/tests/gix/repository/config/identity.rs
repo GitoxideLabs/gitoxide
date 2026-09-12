@@ -9,7 +9,12 @@ use crate::{named_repo, util::named_subrepo_opts};
 #[test]
 fn custom_committer_fallback_is_only_installed_if_needed() -> crate::Result {
     let tmp = tempfile::tempdir()?;
-    let repo = gix::init_bare(tmp.path())?;
+    let repo = gix::ThreadSafeRepository::init_opts(
+        tmp.path(),
+        gix::create::Kind::Bare,
+        Default::default(),
+        gix::open::Options::isolated(),
+    )?;
     let git_dir = repo.git_dir().to_owned();
     drop(repo);
 
@@ -47,7 +52,12 @@ fn custom_committer_fallback_is_only_installed_if_needed() -> crate::Result {
 #[test]
 fn configured_identity_fallbacks_follow_user_identity() -> crate::Result {
     let tmp = tempfile::tempdir()?;
-    let repo = gix::init_bare(tmp.path())?;
+    let repo = gix::ThreadSafeRepository::init_opts(
+        tmp.path(),
+        gix::create::Kind::Bare,
+        Default::default(),
+        gix::open::Options::isolated(),
+    )?;
     let repo = gix::open_opts(
         repo.git_dir(),
         gix::open::Options::isolated().config_overrides([
@@ -87,13 +97,18 @@ fn configured_identity_fallbacks_follow_user_identity() -> crate::Result {
 #[test]
 #[serial]
 fn author_included_by_hasconfig() -> crate::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let repo = named_subrepo_opts("make_config_repos.sh", "with-hasconfig", gix::open::Options::isolated())?;
     let _env = Env::new()
         .set(
             "GIT_CONFIG_SYSTEM",
             repo.git_dir().join("system.config").display().to_string(),
         )
+        .unset("GIT_CONFIG_NOSYSTEM")
         .unset("GIT_AUTHOR_NAME")
+        .unset("GIT_AUTHOR_EMAIL")
         .unset("GIT_COMMITTER_NAME");
     let repo = gix::open_opts(repo.git_dir(), allow_system_options(repo.open_options().clone()))?;
     let author = repo.author().expect("set in system config via include")?;
@@ -105,6 +120,9 @@ fn author_included_by_hasconfig() -> crate::Result {
 #[test]
 #[serial]
 fn author_and_committer_and_fallback() -> crate::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     for trust in [gix_sec::Trust::Full, gix_sec::Trust::Reduced] {
         let repo = named_repo("make_config_repo.sh")?;
         let work_dir = repo.workdir().expect("present").canonicalize()?;
@@ -113,6 +131,7 @@ fn author_and_committer_and_fallback() -> crate::Result {
                 "GIT_CONFIG_SYSTEM",
                 work_dir.join("system.config").display().to_string(),
             )
+            .unset("GIT_CONFIG_NOSYSTEM")
             .set("GIT_AUTHOR_NAME", "author")
             .set("GIT_AUTHOR_EMAIL", "author@email")
             .set("GIT_AUTHOR_DATE", "Thu, 1 Aug 2022 12:45:06 +0800")
@@ -199,16 +218,22 @@ fn author_and_committer_and_fallback() -> crate::Result {
 #[test]
 #[serial]
 fn author_from_different_config_sections() -> crate::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let repo = named_repo("make_signatures_repo.sh")?;
     let work_dir = repo.workdir().unwrap().canonicalize()?;
 
     let _env = Env::new()
         .set("GIT_CONFIG_GLOBAL", work_dir.join("global.config").to_str().unwrap())
         .set("GIT_CONFIG_SYSTEM", work_dir.join("system.config").to_str().unwrap())
+        .unset("GIT_CONFIG_NOSYSTEM")
         .set("GIT_AUTHOR_DATE", "42 +0030")
         .unset("GIT_AUTHOR_NAME")
+        .unset("GIT_AUTHOR_EMAIL")
         .set("GIT_COMMITTER_DATE", "1980-02-26 18:30:00 +0000")
         .unset("GIT_COMMITTER_NAME")
+        .unset("GIT_COMMITTER_EMAIL")
         .set("EMAIL", "general@email-unused");
 
     let repo = gix::open_opts(
