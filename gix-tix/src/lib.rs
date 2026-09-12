@@ -1983,7 +1983,7 @@ fn event_loop(
                             .get(index)
                             .and_then(Clone::clone)
                             .context("completed worktree preview disappeared")?;
-                        let mut next_repository = gix::open(&preview.path)
+                        let mut next_repository = open_repository(&preview.path, false, false)
                             .with_context(|| format!("could not open worktree {}", preview.path.display()))?;
                         next_repository.object_cache_size(None);
                         let next_repository_path = next_repository.git_dir().to_owned();
@@ -5358,7 +5358,8 @@ fn push_branch(
     let _source_locks = if hidden_tips.is_empty() {
         Vec::new()
     } else {
-        let mut repository = gix::open(repository_path).context("could not open repository to validate push")?;
+        let mut repository =
+            open_repository(repository_path, false, false).context("could not open repository to validate push")?;
         // Native Git resolves local push sources outside the server-side ref namespace.
         repository.clear_namespace();
         repository.objects.ignore_replacements = true;
@@ -5416,8 +5417,8 @@ fn push_branch(
         }
         locks
     };
-    let mut command = Command::new("git");
-    command.arg("-C").arg(repository_path).arg("push").arg("--porcelain");
+    let mut command = git_command(repository_path);
+    command.arg("push").arg("--porcelain");
     if force_with_lease {
         command.arg("--force-with-lease");
     }
@@ -6935,19 +6936,41 @@ fn draw(
     Ok(())
 }
 
+fn git_command(path: &Path) -> Command {
+    #[cfg(test)]
+    {
+        gix_testtools::git_command(path)
+    }
+    #[cfg(not(test))]
+    {
+        let mut command = Command::new("git");
+        command.arg("-C").arg(path);
+        command
+    }
+}
+
 fn open_repository(repository_path: &Path, bare: bool, isolated: bool) -> Result<gix::Repository> {
+    #[cfg(test)]
+    let options = {
+        let _ = isolated;
+        gix::open::Options::isolated()
+    };
+    #[cfg(not(test))]
     let options = if isolated {
         gix::open::Options::isolated()
     } else {
         gix::open::Options::default()
-    }
-    .open_path_as_is(bare);
+    };
+    let options = options.open_path_as_is(bare);
     let options = if bare {
         options.cli_overrides(["core.bare=true"])
     } else {
         options
     };
-    Ok(gix::open_opts(repository_path, options)?)
+    let repository = gix::open_opts(repository_path, options)?;
+    #[cfg(test)]
+    let repository = test_repository::with_defaults(repository)?;
+    Ok(repository)
 }
 
 fn configured_author_identity(repository: &gix::Repository) -> Option<gix::actor::Identity> {
@@ -6962,7 +6985,7 @@ fn configured_author_identity(repository: &gix::Repository) -> Option<gix::actor
 }
 
 fn open_history_repository(repository_path: &mut PathBuf, common_dir: &Path) -> Result<(gix::Repository, bool)> {
-    match gix::open(&*repository_path) {
+    match open_repository(repository_path, false, false) {
         Ok(repository) => Ok((repository, false)),
         Err(_err) if worktree_repository_is_gone(repository_path) => {
             let repository = recover_common_repository(common_dir)
@@ -7618,12 +7641,8 @@ fn stage_resolved_conflict_paths(repository: &gix::Repository) -> Result<()> {
     let workdir = repository
         .workdir()
         .context("cannot resolve a conflict without a worktree")?;
-    let mut command = Command::new("git");
-    command
-        .arg("--literal-pathspecs")
-        .arg("-C")
-        .arg(workdir)
-        .args(["add", "-A", "--"]);
+    let mut command = git_command(workdir);
+    command.arg("--literal-pathspecs").args(["add", "-A", "--"]);
     for path in &paths {
         command.arg(gix::path::from_bstr(path.as_bstr()).as_ref());
     }
@@ -8099,10 +8118,8 @@ fn push_remote_deletions(repository_path: &Path, groups: &[ref_tree::RemoteDelet
         failures: Vec::new(),
     };
     for group in groups {
-        let mut command = Command::new("git");
+        let mut command = git_command(repository_path);
         command
-            .arg("-C")
-            .arg(repository_path)
             .arg("push")
             .arg(gix::path::from_bstr(group.remote.as_bstr()).as_ref());
         for reference in &group.references {
@@ -10045,8 +10062,7 @@ mod tests {
         let repository = test_repository::open(fixture.path())?;
         let id = repository.rev_parse_single("topic")?.detach();
         let name: gix::refs::FullName = "refs/heads/cancelled-conflict".try_into()?;
-        let status = Command::new("git")
-            .current_dir(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["update-ref", name.as_bstr().to_str_lossy().as_ref(), &id.to_string()])
             .status()?;
         assert!(
@@ -10088,9 +10104,7 @@ mod tests {
             .extra_headers
             .push(("tix-rebase-parent".into(), original_parent.to_string().into()));
         let accepted = repository.write_object(&commit)?.detach();
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args([
                 "update-ref",
                 "refs/heads/main",
@@ -10106,9 +10120,7 @@ mod tests {
             ref_changes: Vec::new(),
             record_undo: true,
         });
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["commit", "--amend", "-qm", "externally resolved"])
             .status()?;
         assert!(status.success(), "git performs the external amend");
@@ -10165,15 +10177,11 @@ mod tests {
             ("resolved\n", "resolve combine phase", ConflictReconcileStatus::Complete),
         ] {
             std::fs::write(fixture.path().join("file"), contents)?;
-            let status = Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            let status = gix_testtools::git_command(fixture.path())
                 .args(["add", "file"])
                 .status()?;
             assert!(status.success(), "the current merge-phase resolution is staged");
-            let status = Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            let status = gix_testtools::git_command(fixture.path())
                 .args(["commit", "--amend", "-qm", message])
                 .status()?;
             assert!(
@@ -10254,9 +10262,7 @@ mod tests {
                 );
                 assert!(app.has_conflict_marker(), "the restarted conflict remains visible");
                 std::fs::write(fixture.path().join("file"), "tip\n")?;
-                let status = Command::new("git")
-                    .arg("-C")
-                    .arg(fixture.path())
+                let status = gix_testtools::git_command(fixture.path())
                     .args(["add", "file"])
                     .status()?;
                 assert!(status.success(), "the conflict is staged before restarting again");
@@ -10287,9 +10293,7 @@ mod tests {
             record_undo: true,
         });
         std::fs::write(fixture.path().join("file"), "resolved but not committed\n")?;
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["add", "file"])
             .status()?;
         assert!(status.success(), "the resolution is staged");
@@ -10301,9 +10305,7 @@ mod tests {
         );
         assert!(pending.is_some(), "staged state remains mandatory");
 
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["reset", "--hard", "HEAD~1"])
             .status()?;
         assert!(status.success(), "git moves HEAD away from the conflict checkout");
@@ -10710,27 +10712,21 @@ mod tests {
     fn pushes_the_remembered_active_branch_and_retries_rewrites_with_a_lease() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let remote = gix_testtools::tempfile::tempdir()?;
-        let initialized = Command::new("git")
+        let initialized = gix_testtools::git_command(remote.path())
             .args(["init", "-q", "--bare"])
             .arg(remote.path())
             .status()?;
         assert!(initialized.success(), "git creates the local bare remote");
-        let remote_added = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let remote_added = gix_testtools::git_command(fixture.path())
             .args(["remote", "add", "origin"])
             .arg(remote.path())
             .status()?;
         assert!(remote_added.success(), "git configures the push remote");
-        let pinned = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let pinned = gix_testtools::git_command(fixture.path())
             .args(["symbolic-ref", "refs/worktree/tix/pins/HEAD", "refs/heads/main"])
             .status()?;
         assert!(pinned.success(), "git remembers main through the HEAD pin");
-        let detached = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let detached = gix_testtools::git_command(fixture.path())
             .args(["checkout", "-q", "--detach", "main~2"])
             .status()?;
         assert!(detached.success(), "the worktree moves away from the remembered branch");
@@ -10760,7 +10756,9 @@ mod tests {
         };
         assert_eq!(message, "pushed main to origin");
         assert_eq!(
-            gix::open(remote.path())?.find_reference("refs/heads/main")?.id(),
+            test_repository::open(remote.path())?
+                .find_reference("refs/heads/main")?
+                .id(),
             main_id,
             "the branch named by the pin is pushed, not detached HEAD"
         );
@@ -10768,9 +10766,7 @@ mod tests {
         let topic_id = test_repository::open(fixture.path())?
             .rev_parse_single("topic")?
             .detach();
-        let rewritten = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let rewritten = gix_testtools::git_command(fixture.path())
             .args(["update-ref", "refs/heads/main", &topic_id.to_hex().to_string()])
             .status()?;
         assert!(rewritten.success(), "the pushed branch is rewritten locally");
@@ -10787,14 +10783,14 @@ mod tests {
         };
         assert_eq!(message, "pushed main to origin");
         assert_eq!(
-            gix::open(remote.path())?.find_reference("refs/heads/main")?.id(),
+            test_repository::open(remote.path())?
+                .find_reference("refs/heads/main")?
+                .id(),
             topic_id,
             "force-with-lease updates the rewritten branch"
         );
 
-        let stale_remote = Command::new("git")
-            .arg("--git-dir")
-            .arg(remote.path())
+        let stale_remote = gix_testtools::git_command(remote.path())
             .args(["update-ref", "refs/heads/main", &main_id.to_hex().to_string()])
             .status()?;
         assert!(stale_remote.success(), "the remote changes without local knowledge");
@@ -10837,7 +10833,7 @@ mod tests {
     #[test]
     fn selects_the_branch_fetch_remote_then_origin_or_the_sole_remote() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let git = |args: &[&str]| Command::new("git").current_dir(fixture.path()).args(args).status();
+        let git = |args: &[&str]| gix_testtools::git_command(fixture.path()).args(args).status();
         assert!(git(&["remote", "add", "origin", "./origin.git"])?.success());
         assert!(git(&["remote", "add", "upstream", "./upstream.git"])?.success());
         assert!(git(&["config", "branch.main.remote", "upstream"])?.success());
@@ -10893,33 +10889,33 @@ mod tests {
     #[cfg(feature = "blocking-network-client")]
     #[test]
     fn fetches_configured_refspecs_into_remote_tracking_refs_with_gix() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let remote = gix_testtools::tempfile::tempdir()?;
         assert!(
-            Command::new("git")
+            gix_testtools::git_command(remote.path())
                 .args(["init", "-q", "--bare"])
                 .arg(remote.path())
                 .status()?
                 .success()
         );
         assert!(
-            Command::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["remote", "add", "origin"])
                 .arg(remote.path())
                 .status()?
                 .success()
         );
         assert!(
-            Command::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["push", "-q", "origin", "main"])
                 .status()?
                 .success()
         );
         assert!(
-            Command::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["update-ref", "-d", "refs/remotes/origin/main"])
                 .status()?
                 .success()
@@ -11067,8 +11063,7 @@ mod tests {
         let repository = test_repository::open(fixture.path())?;
         let watcher = start_ref_watcher(repository.git_dir(), repository.common_dir())?;
         let topic = repository.rev_parse_single("topic")?.detach();
-        let status = Command::new("git")
-            .current_dir(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["update-ref", "refs/heads/watched", &topic.to_hex().to_string()])
             .status()?;
         assert!(status.success(), "git updates a loose reference");
@@ -11105,8 +11100,7 @@ mod tests {
         drop(repository);
 
         let update_ref = |name: &str, target: gix::ObjectId| -> gix_testtools::Result {
-            let status = Command::new("git")
-                .current_dir(fixture.path())
+            let status = gix_testtools::git_command(fixture.path())
                 .args(["update-ref", name, &target.to_string()])
                 .status()?;
             assert!(status.success(), "git updates {name}");
@@ -11120,8 +11114,7 @@ mod tests {
         );
 
         update_ref("refs/heads/alias", main)?;
-        let status = Command::new("git")
-            .current_dir(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["symbolic-ref", "HEAD", "refs/heads/alias"])
             .status()?;
         assert!(status.success(), "git reattaches HEAD to the alias");
@@ -11148,8 +11141,7 @@ mod tests {
             "moving the checked-out ref changes the baseline"
         );
 
-        let status = Command::new("git")
-            .current_dir(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["symbolic-ref", "HEAD", "refs/heads/unborn"])
             .status()?;
         assert!(status.success(), "git makes HEAD unborn");
@@ -11380,17 +11372,13 @@ mod tests {
             ["config", "branch.topic.remote", "origin"],
             ["config", "branch.topic.merge", "refs/heads/main"],
         ] {
-            let status = std::process::Command::new("git")
-                .current_dir(path)
-                .args(args)
-                .status()?;
+            let status = gix_testtools::git_command(path).args(args).status()?;
             assert!(status.success(), "git config prepares the tracking relationship");
         }
         let repository = test_repository::open(path)?;
         let topic = repository.rev_parse_single("topic")?.detach();
         let main = repository.rev_parse_single("main")?.detach();
-        let status = std::process::Command::new("git")
-            .current_dir(path)
+        let status = gix_testtools::git_command(path)
             .args(["update-ref", "refs/remotes/origin/main", &main.to_hex().to_string()])
             .status()?;
         assert!(status.success(), "the configured tracking ref exists");
@@ -11888,7 +11876,7 @@ mod tests {
             ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
             ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
         ] {
-            let output = Command::new("git").current_dir(fixture.path()).args(args).output()?;
+            let output = gix_testtools::git_command(fixture.path()).args(args).output()?;
             assert!(
                 output.status.success(),
                 "git {args:?} configures the integration branch: {}",
@@ -11948,8 +11936,10 @@ mod tests {
 
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
         let git_dir = test_repository::open(&fixture)?.git_dir().canonicalize()?;
-        let status = Command::new(std::env::current_exe()?)
-            .env(COMMON_DIR, git_dir)
+        let mut command = Command::new(std::env::current_exe()?);
+        let status = gix_testtools::configure_git_environment(&mut command, &git_dir)
+            .current_dir(&git_dir)
+            .env(COMMON_DIR, &git_dir)
             .args([
                 "--exact",
                 "tests::opens_the_common_repository_when_the_initial_worktree_is_already_gone",
@@ -11964,8 +11954,7 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let path = fixture.path();
         let git = |args: &[&str]| -> std::io::Result<std::process::ExitStatus> {
-            std::process::Command::new("git")
-                .current_dir(path)
+            gix_testtools::git_command(path)
                 .args(["-c", "commit.gpgsign=false"])
                 .args(args)
                 .status()
@@ -12059,7 +12048,7 @@ mod tests {
             "path-limited changes equal a fresh status"
         );
 
-        let status = Command::new("git").current_dir(path).args(["add", "main"]).status()?;
+        let status = gix_testtools::git_command(path).args(["add", "main"]).status()?;
         assert!(status.success(), "git stages the tracked change");
         std::fs::write(path.join("main"), "changed in index\nand worktree\n")?;
         let parts = WorktreeStatusParts {
@@ -12096,8 +12085,7 @@ mod tests {
 
         let topic = repository.rev_parse_single("topic")?.detach();
         drop(repository);
-        let status = Command::new("git")
-            .current_dir(path)
+        let status = gix_testtools::git_command(path)
             .args(["update-ref", "refs/heads/main", &topic.to_string()])
             .status()?;
         assert!(status.success(), "git moves the checked-out branch");
@@ -13637,8 +13625,7 @@ mod tests {
         std::fs::create_dir_all(root.join("new/nested"))?;
         std::fs::create_dir_all(root.join("staged"))?;
         std::fs::write(root.join("staged/tracked"), "new\n")?;
-        let status = Command::new("git")
-            .current_dir(root)
+        let status = gix_testtools::git_command(root)
             .args(["add", "staged/tracked"])
             .status()?;
         assert!(status.success(), "git adds a path outside the refresh scope");
@@ -13718,7 +13705,7 @@ mod tests {
         drop(repository);
 
         std::fs::write(root.join("main"), "new contents\n")?;
-        let status = Command::new("git").current_dir(root).args(["add", "main"]).status()?;
+        let status = gix_testtools::git_command(root).args(["add", "main"]).status()?;
         assert!(status.success(), "git stages new contents for an existing path");
         let repository = test_repository::open(root)?;
         let index = repository.index_or_empty()?;
@@ -13732,10 +13719,7 @@ mod tests {
 
         std::fs::create_dir_all(root.join("new"))?;
         std::fs::write(root.join("new/tracked"), "new\n")?;
-        let status = Command::new("git")
-            .current_dir(root)
-            .args(["add", "new/tracked"])
-            .status()?;
+        let status = gix_testtools::git_command(root).args(["add", "new/tracked"]).status()?;
         assert!(status.success(), "git adds a path in a new directory");
         let repository = test_repository::open(root)?;
         let index = repository.index_or_empty()?;
@@ -13898,7 +13882,7 @@ mod tests {
     #[test]
     fn continuing_a_conflict_commits_the_complete_resolved_index() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
-        let git = |args: &[&str]| Command::new("git").arg("-C").arg(fixture.path()).args(args).output();
+        let git = |args: &[&str]| gix_testtools::git_command(fixture.path()).args(args).output();
         #[cfg(unix)]
         let conflict_path = ":(glob)*";
         #[cfg(not(unix))]

@@ -314,7 +314,6 @@ fn mapped_revisions(tips: &[ObjectId], mut map: impl FnMut(ObjectId) -> Option<O
 mod tests {
     use super::*;
     use rebase::FoldMessage;
-    use std::process::Command;
 
     fn repository() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, gix::Repository)> {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
@@ -326,8 +325,7 @@ mod tests {
     }
 
     fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-        let output = Command::new("git")
-            .current_dir(path)
+        let output = gix_testtools::git_command(path)
             .env("GIT_EDITOR", ":")
             .env("GIT_SEQUENCE_EDITOR", "cat")
             .args(args)
@@ -702,7 +700,7 @@ mod tests {
             &["update-ref", "refs/remotes/origin/base", "refs/heads/base"][..],
             &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/base"][..],
         ] {
-            let output = Command::new("git").current_dir(fixture.path()).args(args).output()?;
+            let output = gix_testtools::git_command(fixture.path()).args(args).output()?;
             assert!(
                 output.status.success(),
                 "git {args:?} prepares the remote default: {}",
@@ -833,7 +831,7 @@ mod tests {
             ][..],
             &["checkout", "-q", "main"][..],
         ] {
-            let output = Command::new("git").current_dir(fixture.path()).args(args).output()?;
+            let output = gix_testtools::git_command(fixture.path()).args(args).output()?;
             assert!(
                 output.status.success(),
                 "git {args:?} prepares the updated base: {}",
@@ -893,17 +891,13 @@ mod tests {
         // This descendant is rewritten into object memory and conflicts after the earlier conflict is resolved.
         std::fs::write(fixture.path().join("file"), b"after\n")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["add", "file"])
                 .status()?
                 .success()
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["commit", "-q", "-m", "after"])
                 .status()?
                 .success()
@@ -965,9 +959,7 @@ mod tests {
                 .any(|window| window.iter().all(|byte| *byte == b'0')),
             "the conflicting command is represented by the full null object ID"
         );
-        let unresolved = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let unresolved = gix_testtools::git_command(fixture.path())
             .args(["diff", "--name-only", "--diff-filter=U"])
             .output()?;
         assert!(unresolved.status.success());
@@ -991,17 +983,13 @@ mod tests {
 
         std::fs::write(fixture.path().join("file"), b"resolved first\n")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["add", "file"])
                 .status()?
                 .success()
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["commit", "-q", "--amend", "--no-edit"])
                 .status()?
                 .success(),
@@ -1027,17 +1015,13 @@ mod tests {
         );
         std::fs::write(fixture.path().join("file"), b"resolved again\n")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["add", "file"])
                 .status()?
                 .success()
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["commit", "-q", "--amend", "--no-edit"])
                 .status()?
                 .success(),
@@ -1049,9 +1033,7 @@ mod tests {
         )?;
         apply_document(repo, &std::fs::read(next_output)?, None)?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["diff", "--name-only", "--diff-filter=U"])
                 .output()?
                 .stdout

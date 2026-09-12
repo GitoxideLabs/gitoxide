@@ -1,4 +1,4 @@
-use std::{io::Write, path::Path, process::Command};
+use std::{io::Write, path::Path};
 
 use anyhow::{Context, Result};
 use gix::{ObjectId, bstr::ByteSlice};
@@ -129,9 +129,7 @@ pub(super) fn preflight_tree_transition(
         .context("could not copy the index for delete preflight")?;
     index.flush().context("could not flush the delete preflight index")?;
     let index = index.take().context("the delete preflight index disappeared")?;
-    let refresh = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
+    let refresh = crate::git_command(workdir)
         .env("GIT_INDEX_FILE", index.path())
         .args(["update-index", "-q", "--refresh"])
         .output()
@@ -144,9 +142,7 @@ pub(super) fn preflight_tree_transition(
 }
 
 pub(super) fn apply_tree_transition(workdir: &Path, old: ObjectId, new: ObjectId) -> Result<()> {
-    let refresh = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
+    let refresh = crate::git_command(workdir)
         .args(["update-index", "-q", "--refresh"])
         .output()
         .context("could not refresh the index before applying delete")?;
@@ -157,8 +153,8 @@ pub(super) fn apply_tree_transition(workdir: &Path, old: ObjectId, new: ObjectId
 }
 
 fn run_read_tree(workdir: &Path, index: Option<&Path>, dry_run: bool, old: ObjectId, new: ObjectId) -> Result<()> {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(workdir).arg("read-tree");
+    let mut command = crate::git_command(workdir);
+    command.arg("read-tree");
     if let Some(index) = index {
         command.env("GIT_INDEX_FILE", index);
     }
@@ -265,7 +261,7 @@ mod tests {
     fn deleting_the_checked_out_root_leaves_an_unborn_branch() -> gix_testtools::Result {
         let fixture = gix_testtools::tempfile::tempdir()?;
         let git = |args: &[&str]| -> std::io::Result<std::process::ExitStatus> {
-            Command::new("git").arg("-C").arg(fixture.path()).args(args).status()
+            gix_testtools::git_command(fixture.path()).args(args).status()
         };
         assert!(git(&["init", "-q", "-b", "main"])?.success());
         assert!(git(&["config", "user.name", "author"])?.success());
@@ -296,10 +292,10 @@ mod tests {
 
     #[test]
     fn deleting_without_a_worktree_only_retargets_references() -> gix_testtools::Result {
-        let source = gix_testtools::scripted_fixture_read_only("forget_commit.sh")?;
+        let source = gix_testtools::scripted_fixture_read_only("forget_commit.sh")?.canonicalize()?;
         let fixture = gix_testtools::tempfile::tempdir()?;
         assert!(
-            Command::new("git")
+            gix_testtools::git_command(fixture.path())
                 .args(["clone", "-q", "--bare"])
                 .arg(source)
                 .arg(fixture.path())
@@ -325,7 +321,7 @@ mod tests {
     fn refuses_to_delete_a_checked_out_detached_root() -> gix_testtools::Result {
         let fixture = gix_testtools::tempfile::tempdir()?;
         let git = |args: &[&str]| -> std::io::Result<std::process::ExitStatus> {
-            Command::new("git").arg("-C").arg(fixture.path()).args(args).status()
+            gix_testtools::git_command(fixture.path()).args(args).status()
         };
         assert!(git(&["init", "-q", "-b", "main"])?.success());
         assert!(git(&["config", "user.name", "author"])?.success());

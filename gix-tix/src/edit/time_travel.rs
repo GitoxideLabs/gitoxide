@@ -3,7 +3,6 @@ use std::{
     ffi::OsString,
     fmt::Write as _,
     path::Path,
-    process::Command,
 };
 
 use anyhow::{Context, Result};
@@ -1473,9 +1472,7 @@ pub(super) fn checkout_detached(workdir: &Path, id: ObjectId) -> Result<()> {
 }
 
 pub(super) fn checkout(workdir: &Path, args: impl IntoIterator<Item = OsString>) -> Result<()> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
+    let output = crate::git_command(workdir)
         .arg("checkout")
         .args(args)
         .output()
@@ -1515,7 +1512,7 @@ mod tests {
     use super::*;
 
     fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-        let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
+        let output = gix_testtools::git_command(path).args(args).output()?;
         if !output.status.success() {
             return Err(format!("git {} failed: {}", args.join(" "), output.stderr.trim().to_str_lossy()).into());
         }
@@ -1595,10 +1592,12 @@ mod tests {
         let middle = repository.rev_parse_single("HEAD~1")?.detach();
         std::fs::write(fixture.path().join("after"), "after\n")?;
         git(fixture.path(), &["add", "after"])?;
-        let commit = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let commit = gix_testtools::git_command(fixture.path())
             .args(["commit", "-q", "-m", "after"])
+            .env("GIT_AUTHOR_NAME", "author")
+            .env("GIT_AUTHOR_EMAIL", "author@example.com")
+            .env("GIT_COMMITTER_NAME", "author")
+            .env("GIT_COMMITTER_EMAIL", "author@example.com")
             .env("GIT_AUTHOR_DATE", "2000-01-04T00:00:00 +0000")
             .env("GIT_COMMITTER_DATE", "2000-01-04T00:00:00 +0000")
             .status()?;
@@ -1871,7 +1870,7 @@ mod tests {
         let graph = loaded_graph(&repository, &[])?;
         assert!(graph.is_ancestor(root, main), "the selected root is known ancestry");
         assert!(history::all_pins(&repository)?.is_empty());
-        assert_eq!(open_repository(&repository_path, false, false)?.head_id()?, main);
+        assert_eq!(crate::test_repository::open(&repository_path)?.head_id()?, main);
         assert!(!contains(&repository, main, root));
         drop(repository);
 
@@ -1963,9 +1962,7 @@ mod tests {
         );
         assert!(history::all_pins(&repository)?.is_empty(), "redo consumes the HEAD pin");
 
-        let detach = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let detach = gix_testtools::git_command(fixture.path())
             .args(["checkout", "--detach", &main.to_hex().to_string()])
             .status()?;
         assert!(detach.success());
@@ -2102,9 +2099,7 @@ mod tests {
 
         perform(&repository_path, false, middle, &graph, &[], &[], Default::default())?.complete()?;
         let linked = fixture.path().join("main-wt");
-        let worktree = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let worktree = gix_testtools::git_command(fixture.path())
             .args(["worktree", "add", "-q"])
             .arg(&linked)
             .arg("main")
@@ -2135,23 +2130,21 @@ mod tests {
     fn attach_accepts_the_branch_of_the_current_linked_worktree() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let linked = fixture.path().join("topic-wt");
-        let worktree = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let worktree = gix_testtools::git_command(fixture.path())
             .args(["worktree", "add", "-q"])
             .arg(&linked)
             .arg("topic")
             .status()?;
         assert!(worktree.success(), "the linked worktree checks out topic");
         let git_dir = crate::test_repository::open(&linked)?.git_dir().to_owned();
-        let repository = open_repository(&git_dir, false, false)?;
+        let repository = crate::test_repository::open(&git_dir)?;
         let branch = repository.find_reference("refs/heads/topic")?.name().to_owned();
         let root = repository.rev_parse_single("topic~1")?.detach();
         let graph = loaded_graph(&repository, &[])?;
         drop(repository);
 
         perform(&git_dir, false, root, &graph, &[], &[], Default::default())?.complete()?;
-        let repository = open_repository(&git_dir, false, false)?;
+        let repository = crate::test_repository::open(&git_dir)?;
         assert!(
             repository.head()?.is_detached(),
             "ordinary travel detaches the linked worktree"
@@ -2163,7 +2156,7 @@ mod tests {
         drop(repository);
 
         attach(&git_dir, false, &[], false)?;
-        let repository = open_repository(&git_dir, false, false)?;
+        let repository = crate::test_repository::open(&git_dir)?;
         assert_eq!(
             repository.head_name()?.expect("HEAD is attached"),
             branch,
@@ -2211,9 +2204,7 @@ mod tests {
 
         perform(&repository_path, false, root, &graph, &[], &[], Default::default())?.complete()?;
         let linked = fixture.path().join("main-wt");
-        let worktree = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let worktree = gix_testtools::git_command(fixture.path())
             .args(["worktree", "add", "-q"])
             .arg(&linked)
             .arg("main")
@@ -2682,17 +2673,13 @@ mod tests {
         let graph = loaded_graph(&repository, &[])?;
         drop(repository);
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["checkout", "--detach", &main.to_string()])
                 .status()?
                 .success()
         );
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["branch", "-D", "main"])
                 .status()?
                 .success()
@@ -2769,9 +2756,7 @@ mod tests {
         );
         assert!(pins[0].is_head());
 
-        let checkout = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        let checkout = gix_testtools::git_command(fixture.path())
             .args(["checkout", "--no-guess", "main"])
             .status()?;
         assert!(checkout.success());
@@ -2786,9 +2771,7 @@ mod tests {
             .into_owned();
         drop(repository);
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["update-ref", "refs/worktree/tix/pins/destination", &root.to_string(),])
                 .status()?
                 .success()

@@ -1,4 +1,4 @@
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use gix::{
@@ -340,9 +340,7 @@ pub(super) fn ensure_clean(workdir: &Path) -> Result<()> {
 }
 
 pub(super) fn is_dirty(workdir: &Path) -> Result<bool> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
+    let output = crate::git_command(workdir)
         .args(["status", "--porcelain=v1", "--untracked-files=all"])
         .output()
         .context("could not inspect worktree status")?;
@@ -378,7 +376,7 @@ fn return_pin_reference(review: &BStr) -> Result<gix::refs::FullName> {
 }
 
 fn git<const N: usize>(workdir: &Path, args: [&str; N]) -> Result<()> {
-    let output = Command::new("git").arg("-C").arg(workdir).args(args).output()?;
+    let output = crate::git_command(workdir).args(args).output()?;
     if output.status.success() {
         Ok(())
     } else {
@@ -398,10 +396,13 @@ mod tests {
     use super::*;
 
     fn run(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(path)
+        let output = gix_testtools::git_command(path)
             .args(args)
+            // These fixtures deliberately configure their identity in the local repository.
+            .env_remove("GIT_AUTHOR_NAME")
+            .env_remove("GIT_AUTHOR_EMAIL")
+            .env_remove("GIT_COMMITTER_NAME")
+            .env_remove("GIT_COMMITTER_EMAIL")
             .env("GIT_AUTHOR_DATE", "2001-01-01T00:00:00 +0000")
             .env("GIT_COMMITTER_DATE", "2001-01-01T00:00:00 +0000")
             .output()?;

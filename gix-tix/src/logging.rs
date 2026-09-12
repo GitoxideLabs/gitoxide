@@ -387,7 +387,7 @@ impl Drop for Guard {
 pub(crate) fn init(trace: u8) -> Result<Guard> {
     if trace == 0 {
         return Ok(Guard {
-            _default: try_init().ok(),
+            _default: if cfg!(test) { None } else { try_init().ok() },
             trace: None,
         });
     }

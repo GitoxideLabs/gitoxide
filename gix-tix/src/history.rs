@@ -2459,7 +2459,7 @@ pub(crate) fn decoration_kind(name: &[u8]) -> DecorationKind {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, process::Command};
+    use std::collections::HashSet;
 
     use super::*;
     use crate::app::AttributionKind;
@@ -2641,7 +2641,7 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let path = fixture.path();
         let git = |args: &[&str]| -> gix_testtools::Result {
-            let output = Command::new("git").current_dir(path).args(args).output()?;
+            let output = gix_testtools::git_command(path).args(args).output()?;
             assert!(
                 output.status.success(),
                 "git {args:?} prepares remote HEADs: {}",
@@ -2710,8 +2710,7 @@ mod tests {
                 _ => Vec::new(),
             })
             .collect();
-        let output = Command::new("git")
-            .current_dir(&fixture)
+        let output = gix_testtools::git_command(&fixture)
             .args(["rev-list", "main", "topic", "--"])
             .output()?;
         assert!(
@@ -2863,24 +2862,21 @@ mod tests {
             ["worktree", "add", "-q", "--detach", "detached-wt", "main~2"].as_slice(),
             ["worktree", "add", "-q", "--detach", "broken-wt", "main~2"].as_slice(),
         ] {
-            let status = Command::new("git").current_dir(fixture.path()).args(args).status()?;
+            let status = gix_testtools::git_command(fixture.path()).args(args).status()?;
             assert!(status.success(), "git creates the worktree fixture");
         }
-        let remembered_branch = Command::new("git")
-            .current_dir(fixture.path())
+        let remembered_branch = gix_testtools::git_command(fixture.path())
             .args(["branch", "remembered", "main~1"])
             .status()?;
         assert!(remembered_branch.success(), "git creates the remembered branch");
-        let remembered_worktree = Command::new("git")
-            .current_dir(fixture.path())
+        let remembered_worktree = gix_testtools::git_command(fixture.path())
             .args(["worktree", "add", "-q", "remembered-wt", "remembered"])
             .status()?;
         assert!(
             remembered_worktree.success(),
             "git checks out the branch remembered by another worktree"
         );
-        let remembered_pin = Command::new("git")
-            .current_dir(fixture.path().join("detached-wt"))
+        let remembered_pin = gix_testtools::git_command(fixture.path().join("detached-wt"))
             .args(["symbolic-ref", "refs/worktree/tix/pins/HEAD", "refs/heads/remembered"])
             .status()?;
         assert!(remembered_pin.success(), "the foreign worktree remembers its branch");
@@ -3008,8 +3004,7 @@ mod tests {
                 .any(|decoration| decoration.kind == DecorationKind::WorktreeBranch && decoration.name == "main")
         }));
 
-        let status = Command::new("git")
-            .current_dir(&linked_path)
+        let status = gix_testtools::git_command(&linked_path)
             .args(["checkout", "-q", "--detach", "main~1"])
             .status()?;
         assert!(status.success(), "git detaches the current linked worktree");
@@ -3033,8 +3028,7 @@ mod tests {
             })
         }));
 
-        let symbolic = Command::new("git")
-            .current_dir(&linked_path)
+        let symbolic = gix_testtools::git_command(&linked_path)
             .args(["symbolic-ref", "refs/worktree/tix/pins/HEAD", "refs/heads/topic"])
             .status()?;
         assert!(symbolic.success(), "git remembers the detached worktree's branch");
@@ -3072,20 +3066,15 @@ mod tests {
     fn decodes_commits_missing_from_a_stale_graph_and_defers_graph_commits() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let fixture_path = fixture.path();
-        let graph = Command::new("git")
-            .current_dir(fixture_path)
+        let graph = gix_testtools::git_command(fixture_path)
             .args(["commit-graph", "write", "--reachable"])
             .status()?;
         assert!(graph.success(), "git writes the initial commit-graph");
 
         std::fs::write(fixture_path.join("new"), "new\n")?;
-        let add = Command::new("git")
-            .current_dir(fixture_path)
-            .args(["add", "new"])
-            .status()?;
+        let add = gix_testtools::git_command(fixture_path).args(["add", "new"]).status()?;
         assert!(add.success(), "the new file is staged");
-        let commit = Command::new("git")
-            .current_dir(fixture_path)
+        let commit = gix_testtools::git_command(fixture_path)
             .env("GIT_AUTHOR_DATE", "2000-01-05T00:00:00 +0000")
             .env("GIT_COMMITTER_DATE", "2000-01-06T00:00:00 +0000")
             .args(["-c", "commit.gpgSign=false", "commit", "-q", "-m", "new"])
@@ -3139,8 +3128,7 @@ mod tests {
         let topic = repo.rev_parse_single("topic")?.detach();
         drop(repo);
         assert!(
-            Command::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["symbolic-ref", "HEAD", "refs/heads/unborn"])
                 .status()?
                 .success(),
@@ -3393,8 +3381,7 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let path = fixture.path();
         assert!(
-            Command::new("git")
-                .current_dir(path)
+            gix_testtools::git_command(path)
                 .args(["symbolic-ref", "HEAD", "refs/heads/unborn"])
                 .status()?
                 .success()
@@ -3420,7 +3407,7 @@ mod tests {
             ][..],
             &["symbolic-ref", "HEAD", "refs/heads/unborn"][..],
         ] {
-            assert!(Command::new("git").current_dir(path).args(args).status()?.success());
+            assert!(gix_testtools::git_command(path).args(args).status()?.success());
         }
         let repo = crate::test_repository::open(path)?;
         let new_tip = repo.rev_parse_single("main")?.detach();
@@ -3488,8 +3475,7 @@ mod tests {
             &["-c", "commit.gpgSign=false", "commit", "-q", "-m", "new"],
         ] {
             assert!(
-                Command::new("git")
-                    .current_dir(fixture.path())
+                gix_testtools::git_command(fixture.path())
                     .args(args)
                     .status()?
                     .success(),
@@ -3555,7 +3541,7 @@ mod tests {
             &["add", "new"][..],
             &["-c", "commit.gpgSign=false", "commit", "-q", "-m", "new"],
         ] {
-            let status = Command::new("git").current_dir(fixture.path()).args(args).status()?;
+            let status = gix_testtools::git_command(fixture.path()).args(args).status()?;
             assert!(status.success(), "git prepares one new commit");
         }
         let repo = crate::test_repository::open(fixture.path())?;
@@ -3638,8 +3624,7 @@ mod tests {
             .detach();
         drop(repo);
 
-        let amend = Command::new("git")
-            .current_dir(fixture.path())
+        let amend = gix_testtools::git_command(fixture.path())
             .args([
                 "-c",
                 "commit.gpgSign=false",
@@ -3681,7 +3666,7 @@ mod tests {
             &["config", "branch.topic.merge", "refs/heads/main"][..],
             &["update-ref", "refs/remotes/origin/main", &main.to_hex().to_string()][..],
         ] {
-            let status = Command::new("git").current_dir(fixture.path()).args(args).status()?;
+            let status = gix_testtools::git_command(fixture.path()).args(args).status()?;
             assert!(status.success(), "git configures a tracking branch");
         }
         let events = loaded(fixture.path(), &["topic"], &[])?;
@@ -3730,7 +3715,7 @@ mod tests {
             &["config", "branch.topic.merge", "refs/heads/main"][..],
             &["update-ref", "refs/remotes/origin/main", &main.to_hex().to_string()][..],
         ] {
-            let status = Command::new("git").current_dir(fixture.path()).args(args).status()?;
+            let status = gix_testtools::git_command(fixture.path()).args(args).status()?;
             assert!(status.success(), "git configures a tracking branch");
         }
         let events = loaded(fixture.path(), &["topic"], &[])?;
@@ -3749,8 +3734,7 @@ mod tests {
         );
 
         assert!(
-            Command::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["switch", "-q", "topic"])
                 .status()?
                 .success(),
@@ -3779,7 +3763,7 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let path = fixture.path();
         let git = |args: &[&str]| -> gix_testtools::Result {
-            let output = Command::new("git").current_dir(path).args(args).output()?;
+            let output = gix_testtools::git_command(path).args(args).output()?;
             assert!(
                 output.status.success(),
                 "git {args:?} prepares the hidden tracking fixture: {}",
@@ -3842,8 +3826,7 @@ mod tests {
         }
         let mut graph = graph.expect("history loading returns the persistent graph");
         let refs = graph.selection_refs(local, &decorations);
-        let counts = Command::new("git")
-            .current_dir(path)
+        let counts = gix_testtools::git_command(path)
             .args([
                 "rev-list",
                 "--left-right",
@@ -3897,8 +3880,7 @@ mod tests {
                 _ => Vec::new(),
             })
             .collect();
-        let output = Command::new("git")
-            .current_dir(&fixture)
+        let output = gix_testtools::git_command(&fixture)
             .args(["rev-list", "topic", "--not", "main", "--"])
             .output()?;
         assert!(
@@ -4077,8 +4059,7 @@ mod tests {
         );
         drop(repo);
 
-        let symbolic = Command::new("git")
-            .current_dir(fixture.path())
+        let symbolic = gix_testtools::git_command(fixture.path())
             .args(["symbolic-ref", "refs/worktree/tix/pins/HEAD", "refs/heads/topic"])
             .status()?;
         assert!(symbolic.success(), "git creates the symbolic HEAD pin");
@@ -4096,8 +4077,7 @@ mod tests {
         );
         drop(repo);
 
-        let detached = Command::new("git")
-            .current_dir(fixture.path())
+        let detached = gix_testtools::git_command(fixture.path())
             .args(["checkout", "-q", "--detach", "main~2"])
             .status()?;
         assert!(detached.success(), "git detaches HEAD below the remembered branch");
@@ -4242,9 +4222,7 @@ mod tests {
         let linked = gix_testtools::tempfile::tempdir()?;
         let linked_path = linked.path().join("linked");
         assert!(
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["worktree", "add", "-q", "--detach"])
                 .arg(&linked_path)
                 .arg("topic")

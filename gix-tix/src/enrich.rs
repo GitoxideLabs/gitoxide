@@ -370,8 +370,6 @@ fn update_tree(
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
-
     use super::*;
 
     fn with_patch_id(repo: &gix::Repository, commit_id: ObjectId) -> Result<ObjectId> {
@@ -674,8 +672,7 @@ mod tests {
     fn enrichments_are_private_to_each_worktree() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let linked_path = fixture.path().join("linked");
-        let status = Command::new("git")
-            .current_dir(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["worktree", "add", "-q", "--detach"])
             .arg(&linked_path)
             .arg("HEAD")

@@ -1029,7 +1029,7 @@ fn notice_with_change_id(repository: &gix::Repository, notice: &str, id: gix::Ob
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, process::Command as ProcessCommand};
+    use std::path::Path;
 
     use clap::{CommandFactory, error::ErrorKind};
 
@@ -1869,7 +1869,7 @@ mod tests {
     #[test]
     fn transplant_command_rewrites_the_target_stack_and_is_undoable() -> gix_testtools::Result {
         fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-            let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
+            let output = gix_testtools::git_command(path).args(args).output()?;
             if !output.status.success() {
                 return Err(format!(
                     "git {} failed: {}",
@@ -2005,7 +2005,7 @@ mod tests {
         use crate::edit::auto_merge::{Definition, Input, InputSource};
 
         fn git(path: &Path, args: &[&str]) -> Result<Vec<u8>> {
-            let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
+            let output = gix_testtools::git_command(path).args(args).output()?;
             anyhow::ensure!(
                 output.status.success(),
                 "git failed: {}",
@@ -2285,9 +2285,7 @@ mod tests {
             "materialize rebase conflict",
             "materialization is independently undoable"
         );
-        let unresolved = ProcessCommand::new("git")
-            .arg("-C")
-            .arg(path)
+        let unresolved = gix_testtools::git_command(path)
             .args(["diff", "--name-only", "--diff-filter=U"])
             .output()?;
         assert!(unresolved.status.success());
@@ -2298,9 +2296,7 @@ mod tests {
 
         std::fs::write(path.join("file"), b"base\n")?;
         assert!(
-            ProcessCommand::new("git")
-                .arg("-C")
-                .arg(path)
+            gix_testtools::git_command(path)
                 .args(["add", "file"])
                 .status()?
                 .success()
@@ -2312,9 +2308,7 @@ mod tests {
                 file: Some(continuation),
             }),
         )?;
-        let unresolved = ProcessCommand::new("git")
-            .arg("-C")
-            .arg(path)
+        let unresolved = gix_testtools::git_command(path)
             .args(["diff", "--name-only", "--diff-filter=U"])
             .output()?;
         assert!(unresolved.status.success());
@@ -2333,7 +2327,7 @@ mod tests {
         let source_root = repository.rev_parse_single("HEAD~1")?.detach();
         let original_head = repository.head_id()?.detach();
         let git = |args: &[&str]| -> gix_testtools::Result {
-            let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
+            let output = gix_testtools::git_command(path).args(args).output()?;
             assert!(
                 output.status.success(),
                 "git {args:?}: {}",
@@ -2433,10 +2427,10 @@ mod tests {
 
     #[test]
     fn transplant_rejects_a_bare_repository_before_rewriting_it() -> gix_testtools::Result {
-        let source = gix_testtools::scripted_fixture_read_only("rebase_edit.sh")?;
+        let source = gix_testtools::scripted_fixture_read_only("rebase_edit.sh")?.canonicalize()?;
         let fixture = gix_testtools::tempfile::tempdir()?;
         assert!(
-            ProcessCommand::new("git")
+            gix_testtools::git_command(fixture.path())
                 .args(["clone", "-q", "--bare"])
                 .arg(source)
                 .arg(fixture.path())
@@ -2508,10 +2502,7 @@ mod tests {
             ["update-ref", "refs/remotes/origin/main", "main"].as_slice(),
             ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"].as_slice(),
         ] {
-            let status = ProcessCommand::new("git")
-                .current_dir(fixture.path())
-                .args(git_args)
-                .status()?;
+            let status = gix_testtools::git_command(fixture.path()).args(git_args).status()?;
             assert!(status.success(), "git {git_args:?} prepares remote HEAD inference");
         }
         let repository = crate::test_repository::open(fixture.path())?;
@@ -2601,16 +2592,14 @@ mod tests {
         std::fs::write(fixture.path().join("second"), "second\n")?;
         std::fs::write(fixture.path().join("other"), "other\n")?;
         assert!(
-            ProcessCommand::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["add", "second", "other"])
                 .status()?
                 .success(),
             "git stages the additional tip paths"
         );
         assert!(
-            ProcessCommand::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["commit", "-q", "--amend", "--no-edit"])
                 .status()?
                 .success(),
@@ -2659,8 +2648,7 @@ mod tests {
             tree.lookup_entry(["second"])?.is_none(),
             "the second selected path is spilled"
         );
-        let status = ProcessCommand::new("git")
-            .current_dir(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["status", "--short"])
             .output()?;
         assert!(status.status.success(), "git reads the resulting status");
@@ -2686,9 +2674,7 @@ mod tests {
         let linked = gix_testtools::tempfile::tempdir()?;
         let linked_path = linked.path().join("linked");
         assert!(
-            ProcessCommand::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["worktree", "add", "-q", "--detach"])
                 .arg(&linked_path)
                 .arg("topic")
@@ -2773,9 +2759,7 @@ mod tests {
         }
 
         assert!(
-            ProcessCommand::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["symbolic-ref", "refs/worktree/tix/pins/follow", "refs/heads/main",])
                 .status()?
                 .success(),
@@ -3026,8 +3010,7 @@ mod tests {
             "the checked-out branch label remains: {attached_line:?}"
         );
 
-        let status = ProcessCommand::new("git")
-            .current_dir(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["checkout", "-q", "--detach", "HEAD"])
             .status()?;
         assert!(status.success(), "git detaches HEAD");
@@ -3059,7 +3042,7 @@ mod tests {
     #[test]
     fn split_command_uses_the_index_for_the_new_commit_and_worktree_for_its_parent() -> gix_testtools::Result {
         fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-            let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
+            let output = gix_testtools::git_command(path).args(args).output()?;
             if !output.status.success() {
                 return Err(format!(
                     "git {} failed: {}",

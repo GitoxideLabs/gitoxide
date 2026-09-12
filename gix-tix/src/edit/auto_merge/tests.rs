@@ -376,8 +376,7 @@ fn a_frozen_copy_and_its_live_original_survive_an_earlier_conflict_and_undo() ->
     let (_, _, _, mut changes) = super::super::time_travel::materialize_plan_conflict_reporting(conflict, &[], false)?;
     std::fs::write(fixture.path().join("shared"), b"resolved copy\n")?;
     assert!(
-        std::process::Command::new("git")
-            .current_dir(fixture.path())
+        gix_testtools::git_command(fixture.path())
             .args(["add", "shared"])
             .status()?
             .success(),
@@ -724,8 +723,7 @@ fn deleting_a_merge_above_head_preserves_the_checkout_and_reparents_descendants(
     let head_before = repo.head()?.referent_name().map(ToOwned::to_owned);
     std::fs::write(fixture.path().join("shared"), b"staged\n")?;
     assert!(
-        std::process::Command::new("git")
-            .current_dir(fixture.path())
+        gix_testtools::git_command(fixture.path())
             .args(["add", "shared"])
             .status()?
             .success(),
@@ -1488,9 +1486,7 @@ fn selections_are_revalidated_after_head_or_input_moves() -> gix_testtools::Resu
 fn creates_extends_refreshes_and_removes_inputs_without_moving_source_refs() -> gix_testtools::Result {
     let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
     assert!(
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
+        gix_testtools::git_command(fixture.path())
             .args(["pack-refs", "--all", "--prune"])
             .status()?
             .success(),
@@ -1694,9 +1690,7 @@ fn travel_after_merge_collapse_restores_the_departure_and_keeps_undo_consistent(
         // If A conflicts, that optional replay stays pending and a second, mandatory pass must report it.
         repo.find_reference(c.reference.as_ref())?.delete()?;
         assert!(
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(path)
+            gix_testtools::git_command(path)
                 .args(["checkout", "-q", "A"])
                 .status()?
                 .success(),
@@ -1704,9 +1698,7 @@ fn travel_after_merge_collapse_restores_the_departure_and_keeps_undo_consistent(
         );
         std::fs::write(path.join("shared"), b"staged\n")?;
         assert!(
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(path)
+            gix_testtools::git_command(path)
                 .args(["add", "shared"])
                 .status()?
                 .success(),
@@ -2030,8 +2022,7 @@ fn travel_refreshes_external_inputs_and_muted_replays_keep_their_original_patch(
     // commit. Choosing the other input's content also permits checkout there.
     std::fs::write(fixture.path().join("shared"), b"base\n")?;
     assert!(
-        std::process::Command::new("git")
-            .current_dir(fixture.path())
+        gix_testtools::git_command(fixture.path())
             .args(["add", "shared"])
             .status()?
             .success(),
@@ -2275,8 +2266,7 @@ fn a_todo_conflict_continuation_maintains_auto_merge_descendants() -> gix_testto
     )?;
     super::super::time_travel::materialize_plan_conflict_reporting(conflict, &[], false)?;
     std::fs::write(fixture.path().join("shared"), "resolved A and B\n")?;
-    let staged = std::process::Command::new("git")
-        .current_dir(fixture.path())
+    let staged = gix_testtools::git_command(fixture.path())
         .args(["add", "shared"])
         .status()?;
     assert!(staged.success(), "the resolved shared file is staged");
@@ -2416,8 +2406,7 @@ fn marking_a_legacy_input_keeps_optional_pending_inputs_and_worktree_content_unc
 
     std::fs::write(fixture.path().join("shared"), b"staged\n")?;
     assert!(
-        std::process::Command::new("git")
-            .current_dir(fixture.path())
+        gix_testtools::git_command(fixture.path())
             .args(["add", "shared"])
             .status()?
             .success(),
@@ -2684,8 +2673,7 @@ fn legends_distinguish_converged_pins_and_the_worktree_head_they_follow() -> gix
     let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
     let repo = crate::test_repository::open(fixture.path())?;
     assert!(
-        std::process::Command::new("git")
-            .current_dir(fixture.path())
+        gix_testtools::git_command(fixture.path())
             .args(["worktree", "add", "--quiet", "--detach"])
             .arg(fixture.path().join("linked"))
             .arg("C")
