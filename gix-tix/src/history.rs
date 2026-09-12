@@ -930,6 +930,7 @@ impl HistoryGraph {
                         title,
                         has_agent_marker,
                         is_review,
+                        has_merge_replay,
                         signature,
                     } = metadata.unwrap_or_else(|| Metadata {
                         committer_time: Default::default(),
@@ -939,6 +940,7 @@ impl HistoryGraph {
                         title: BString::default(),
                         has_agent_marker: false,
                         is_review: false,
+                        has_merge_replay: false,
                         signature: SignatureState::Unsigned,
                     });
                     rows.push(Commit {
@@ -952,6 +954,7 @@ impl HistoryGraph {
                         metadata_loaded,
                         has_agent_marker,
                         is_review,
+                        has_merge_replay,
                         signature,
                     });
                     newly_stored.push(index);
@@ -1383,6 +1386,7 @@ pub(crate) fn load(
                 title,
                 has_agent_marker,
                 is_review,
+                has_merge_replay,
                 signature,
             } = metadata.unwrap_or_else(|| Metadata {
                 committer_time: Default::default(),
@@ -1392,6 +1396,7 @@ pub(crate) fn load(
                 title: BString::default(),
                 has_agent_marker: false,
                 is_review: false,
+                has_merge_replay: false,
                 signature: SignatureState::Unsigned,
             });
             if !hidden_revisions.is_empty() {
@@ -1408,6 +1413,7 @@ pub(crate) fn load(
                 metadata_loaded,
                 has_agent_marker,
                 is_review,
+                has_merge_replay,
                 signature,
             });
             graph.commits[index.as_usize()].state |= NODE_STORED;
@@ -1935,6 +1941,7 @@ fn decode_commit(
         title,
         has_agent_marker,
         is_review,
+        has_merge_replay,
         signature,
     } = decode_metadata(object.iter(), authors, attributions)?;
     Ok(Commit {
@@ -1948,6 +1955,7 @@ fn decode_commit(
         metadata_loaded: true,
         has_agent_marker,
         is_review,
+        has_merge_replay,
         signature,
     })
 }
@@ -1964,6 +1972,7 @@ fn decode_metadata<'a>(
     let mut title = None;
     let mut has_agent_marker = false;
     let mut is_review = false;
+    let mut has_merge_replay = false;
     let mut signature = SignatureState::Unsigned;
     for token in tokens {
         match token? {
@@ -2004,6 +2013,7 @@ fn decode_metadata<'a>(
             }
             Token::ExtraHeader((name, _)) if name == "tix-rebase-parent" || name == "tix-rebase-merge" => {
                 signature = SignatureState::PendingRebase;
+                has_merge_replay |= name == "tix-rebase-merge";
             }
             Token::ExtraHeader((name, value))
                 if name == "tix-rebase" && value.as_ref().starts_with(b"onto refs/worktree/tix/review/") =>
@@ -2028,6 +2038,7 @@ fn decode_metadata<'a>(
         title: title.context("commit has no message")?,
         has_agent_marker,
         is_review,
+        has_merge_replay,
         signature,
     })
 }

@@ -428,6 +428,7 @@ mod tests {
             metadata_loaded: true,
             has_agent_marker: false,
             is_review: false,
+            has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }
     }
