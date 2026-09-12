@@ -76,9 +76,10 @@ run_fast_checks
 run env GIX_TEST_IGNORE_ARCHIVES=1 just ci-test
 run just doc-tests
 run env GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI=1 cargo nextest run --workspace --no-fail-fast --exclude gix-error
-# Archive-generating tests legitimately rewrite these tracked fixtures. Restore
-# only this known class so every other mutation stays visible.
+# Archive-generating tests legitimately rewrite tracked fixtures and create new ones.
+# Clean only this known class so every other mutation stays visible.
 git restore -- ':(glob)**/tests/fixtures/generated-archives/*.tar'
+git clean -f -- ':(glob)**/tests/fixtures/generated-archives/*.tar'
 run just ci-journey-tests
 require_clean
 run tix enrich tree checks-pass
