@@ -823,7 +823,8 @@ pub(crate) fn perform_reporting_rebased(
         let mut remerge_notice = None;
         let mut original_ids = HashMap::new();
         let mut ref_rewrites = Vec::new();
-        let mut pending = refresh_base(graph, selected).or(pending_base(&repository, selected)?);
+        let mut required = super::auto_merge::checkout_path(&repository, graph, Some(selected))?;
+        let mut pending = refresh_base(graph, selected, &required).or(pending_base(&repository, selected, &required)?);
         while let Some(base) = pending {
             let graph = completed_graph.as_ref().unwrap_or(graph);
             let mut rebased = Vec::new();
@@ -888,7 +889,12 @@ pub(crate) fn perform_reporting_rebased(
             }
             repository = open_repository(repository_path, bare, false)
                 .context("could not reopen repository after completing a pending rebase")?;
-            pending = pending_base(&repository, selected)?;
+            required = required
+                .into_iter()
+                .filter_map(|commit_id| outcome.map(commit_id))
+                .filter(|commit_id| !graph.is_read_only(*commit_id))
+                .collect();
+            pending = pending_base(&repository, selected, &required)?;
             if pending.is_some() {
                 let mut ids: Vec<_> = graph
                     .edit_commit_ids()
@@ -1062,38 +1068,53 @@ pub(super) fn append_notice(notice: &mut Option<String>, addition: String) {
     }
 }
 
-fn pending_base(repository: &gix::Repository, selected: ObjectId) -> Result<Option<ObjectId>> {
-    let mut current = selected;
-    let mut base = None;
-    loop {
+fn pending_base(
+    repository: &gix::Repository,
+    selected: ObjectId,
+    required: &HashSet<ObjectId>,
+) -> Result<Option<ObjectId>> {
+    let mut pending = vec![(selected, false)];
+    let mut seen = HashSet::new();
+    while let Some((commit_id, visited)) = pending.pop() {
+        if visited {
+            return Ok(Some(commit_id));
+        }
+        if !required.contains(&commit_id) || !seen.insert(commit_id) {
+            continue;
+        }
         let commit = repository
-            .find_commit(current)
+            .find_commit(commit_id)
             .context("could not inspect a time-travel destination for a pending rebase")?
             .decode()?
             .into_owned()?;
-        if super::auto_merge::is_auto_merge(&commit) || !super::rebase::is_pending(&commit) {
-            break;
+        if super::auto_merge::is_auto_merge(&commit) {
+            continue;
         }
-        base = Some(current);
-        let Some(parent) = commit.parents.first().copied() else {
-            break;
-        };
-        current = parent;
+        if super::rebase::is_pending(&commit) {
+            pending.push((commit_id, true));
+        }
+        // Final merges can retain an unchanged pending parent, even below final descendants.
+        pending.extend(commit.parents.iter().rev().map(|parent| (*parent, false)));
     }
-    Ok(base)
+    Ok(None)
 }
 
-fn refresh_base(graph: &history::HistoryGraph, selected: ObjectId) -> Option<ObjectId> {
-    let mut cursor = Some(selected);
+fn refresh_base(graph: &history::HistoryGraph, selected: ObjectId, required: &HashSet<ObjectId>) -> Option<ObjectId> {
+    if graph.auto_merges.is_empty() {
+        return None;
+    }
+    let mut pending = vec![selected];
     let mut seen = HashSet::new();
-    while let Some(commit_id) = cursor {
-        if !seen.insert(commit_id) {
-            break;
+    while let Some(commit_id) = pending.pop() {
+        if !required.contains(&commit_id) || !seen.insert(commit_id) {
+            continue;
         }
         if graph.auto_merges.contains_key(&commit_id) {
             return Some(commit_id);
         }
-        cursor = graph.parents_of(commit_id).and_then(|parents| parents.first().copied());
+        if let Some(parents) = graph.parents_of(commit_id) {
+            pending.extend(parents.iter().rev().copied());
+        }
     }
     None
 }
@@ -2933,6 +2954,85 @@ mod tests {
     }
 
     #[test]
+    fn travel_preserves_pending_ancestry_below_final_boundaries() -> gix_testtools::Result {
+        for boundary in ["review", "hidden", "shallow"] {
+            for with_descendant in [false, true] {
+                let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+                let repo = crate::test_repository::open(fixture.path())?;
+                let mut pending = repo
+                    .find_commit(repo.rev_parse_single("HEAD~1")?)?
+                    .decode()?
+                    .into_owned()?;
+                pending
+                    .extra_headers
+                    .push(("tix-rebase-parent".into(), pending.parents[0].to_string().into()));
+                let pending_commit_id = repo.write_object(&pending)?.detach();
+                let mut barrier = repo.head_commit()?.decode()?.into_owned()?;
+                barrier.parents = [pending_commit_id].into_iter().collect();
+                if boundary == "review" {
+                    barrier
+                        .extra_headers
+                        .push(("tix-rebase".into(), "onto refs/worktree/tix/review/1".into()));
+                    repo.reference(
+                        "refs/worktree/tix/review/1",
+                        repo.head_id()?,
+                        gix::refs::transaction::PreviousValue::MustNotExist,
+                        "prepare an active review",
+                    )?;
+                }
+                let barrier_commit_id = repo.write_object(&barrier)?.detach();
+                let destination_commit_id = if with_descendant {
+                    barrier.parents = [barrier_commit_id].into_iter().collect();
+                    barrier.extra_headers.clear();
+                    repo.write_object(&barrier)?.detach()
+                } else {
+                    barrier_commit_id
+                };
+                // Keep the pending raw parent visible even when the shallow graph cuts its edge.
+                for (name, commit_id) in [("pending", pending_commit_id), ("destination", destination_commit_id)] {
+                    repo.reference(
+                        format!("refs/heads/{name}"),
+                        commit_id,
+                        gix::refs::transaction::PreviousValue::MustNotExist,
+                        "prepare independent pending ancestry",
+                    )?;
+                }
+                if boundary == "shallow" {
+                    std::fs::write(repo.git_dir().join("shallow"), format!("{barrier_commit_id}\n"))?;
+                }
+                let mut graph = super::super::loaded_graph(&repo)?;
+                if boundary == "hidden" {
+                    graph.switch_view(&[destination_commit_id], &[pending_commit_id]);
+                }
+                let repository_path = repo.git_dir().to_owned();
+                drop(repo);
+                perform(
+                    &repository_path,
+                    false,
+                    destination_commit_id,
+                    &graph,
+                    &[],
+                    &[],
+                    Default::default(),
+                )?
+                .complete()?;
+                let repo = crate::test_repository::open(fixture.path())?;
+                assert_eq!(
+                    repo.head_id()?,
+                    destination_commit_id,
+                    "travel preserves the finalized checkout above the {boundary} boundary"
+                );
+                assert_eq!(
+                    repo.find_reference("refs/heads/pending")?.id(),
+                    pending_commit_id,
+                    "the pending ancestry below the {boundary} boundary stays untouched"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn pending_time_travel_does_not_load_unrelated_ref_history() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -2997,6 +3097,127 @@ mod tests {
             repository.find_reference("refs/heads/unrelated")?.id(),
             unrelated,
             "time-travel leaves the unrelated incomplete history untouched"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn time_travel_finishes_both_pending_sides_before_replaying_the_merge() -> gix_testtools::Result {
+        use super::super::rebase::{self, PlanCommit, PlanParent, PlanStep};
+
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let repository_path = repo.git_dir().to_owned();
+        let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+        let left_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+        let mut right = repo.head_commit()?.decode()?.into_owned()?;
+        right.parents = [base_commit_id].into_iter().collect();
+        let right_commit_id = repo.write_object(&right)?.detach();
+        let mut merge = right;
+        merge.parents = [left_commit_id, right_commit_id].into_iter().collect();
+        merge.message = "merge both branches".into();
+        let merge_commit_id = repo.write_object(&merge)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(merge_commit_id, "prepare a merge with two independent sides")?;
+        let mut new_base = repo.find_commit(base_commit_id)?.decode()?.into_owned()?;
+        let upstream_blob_id = repo.write_blob(b"upstream\n")?;
+        new_base.tree = repo
+            .find_tree(new_base.tree)?
+            .edit()?
+            .upsert("upstream", gix::objs::tree::EntryKind::Blob, upstream_blob_id)?
+            .write()?
+            .detach();
+        new_base.parents = [base_commit_id].into_iter().collect();
+        let new_base_commit_id = repo.write_object(&new_base)?.detach();
+        git(
+            fixture.path(),
+            &["checkout", "-q", "--detach", &base_commit_id.to_string()],
+        )?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let plan = rebase::Plan {
+            base: base_commit_id,
+            scope: vec![left_commit_id, right_commit_id, merge_commit_id],
+            steps: vec![
+                PlanStep {
+                    parents: vec![PlanParent::Existing(new_base_commit_id)],
+                    commit: PlanCommit::Pick(left_commit_id),
+                    squash: Vec::new(),
+                },
+                PlanStep {
+                    parents: vec![PlanParent::Existing(new_base_commit_id)],
+                    commit: PlanCommit::Pick(right_commit_id),
+                    squash: Vec::new(),
+                },
+                PlanStep {
+                    parents: vec![PlanParent::Step(0), PlanParent::Step(1)],
+                    commit: PlanCommit::Pick(merge_commit_id),
+                    squash: Vec::new(),
+                },
+            ],
+            checkout: None,
+            expected_refs: vec![rebase::PlanRef {
+                name: "refs/heads/main".try_into()?,
+                old: Some(merge_commit_id),
+                source: merge_commit_id,
+                destination: rebase::RefDestination::Step(2),
+                editable: true,
+            }],
+            eager: Vec::new(),
+            selection: Some(PlanParent::Step(2)),
+        };
+        let marked = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
+        let pending_merge_commit_id = marked.map(merge_commit_id).context("the pending merge is retained")?;
+        let pending_sides: Vec<_> = [left_commit_id, right_commit_id]
+            .into_iter()
+            .map(|commit_id| marked.map(commit_id).context("both selected branches are retained"))
+            .collect::<Result<_>>()?;
+        for &commit_id in &pending_sides {
+            assert!(
+                rebase::is_pending(&repo.find_commit(commit_id)?.decode()?.into_owned()?),
+                "both independent sides remain lazy before visiting the merge"
+            );
+        }
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+        let mut rebased = Vec::new();
+        let Perform::Complete { selected, .. } = perform_reporting_rebased(
+            &repository_path,
+            false,
+            pending_merge_commit_id,
+            &graph,
+            &[],
+            &[],
+            Default::default(),
+            |commit_id| rebased.push(commit_id),
+        )?
+        else {
+            return Err("the common upstream addition should replay cleanly on both sides".into());
+        };
+        assert!(
+            pending_sides.iter().all(|commit_id| rebased.contains(commit_id)),
+            "visiting the merge finishes both independent pending histories"
+        );
+        assert_eq!(
+            rebased.last(),
+            Some(&pending_merge_commit_id),
+            "both parents finish before the merge"
+        );
+        let repo = crate::test_repository::open(fixture.path())?;
+        let merge = repo.find_commit(selected)?.decode()?.into_owned()?;
+        assert!(!rebase::is_pending(&merge), "the visited merge is finalized");
+        for &parent_commit_id in &merge.parents {
+            let parent = repo.find_commit(parent_commit_id)?.decode()?.into_owned()?;
+            assert!(!rebase::is_pending(&parent), "every final merge parent is ready");
+            assert_eq!(
+                parent.parents.as_slice(),
+                [new_base_commit_id],
+                "each side keeps the new base"
+            );
+        }
+        assert_eq!(
+            git(fixture.path(), &["show", "HEAD:upstream"])?,
+            b"upstream\n",
+            "the common upstream change appears once"
         );
         Ok(())
     }

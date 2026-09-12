@@ -1536,6 +1536,7 @@ pub(crate) fn ref_tree_revisions(repo: &gix::Repository, include_tags: bool) -> 
             || matches!(kind, DecorationKind::Tag) && !include_tags
             || name.starts_with(STASH_PREFIX)
             || name.starts_with(REVIEW_STASH_PREFIX)
+            || crate::edit::replay_refs::is_ref(name.as_bstr())
         {
             continue;
         }
@@ -1803,6 +1804,12 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
             tracing::warn!(name = %name, %label, "ignoring tix reference into the undo queue");
             continue;
         }
+        if let Some(target_name) = target.try_name()
+            && crate::edit::replay_refs::ref_chain_reaches(repo, target_name)?
+        {
+            tracing::warn!(name = %name, %label, "ignoring tix reference into merge replay resources");
+            continue;
+        }
         if name.as_bstr() == HEAD_PIN_NAME
             && !target
                 .try_name()
@@ -1832,6 +1839,10 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
                 tracing::warn!(name = %name, error = %err, %label, "ignoring unreadable tix reference target");
                 continue;
             }
+        }
+        if crate::edit::replay_refs::is_checkpoint(repo, id)? {
+            tracing::warn!(name = %name, %label, "ignoring tix reference to a merge replay checkpoint");
+            continue;
         }
         out.push(Pin { name, target, id });
     }
@@ -1886,6 +1897,10 @@ pub(crate) fn referenced_refs(
             anyhow::ensure!(
                 !crate::edit::undo::ref_chain_reaches_queue(repo, reference.name.as_ref())?,
                 "the undo queue is not a selectable revision"
+            );
+            anyhow::ensure!(
+                !crate::edit::replay_refs::ref_chain_reaches(repo, reference.name.as_ref())?,
+                "merge replay resources are not selectable revisions"
             );
             insert_ref_chain(repo, reference.name.as_bstr(), &mut out)?;
         }
@@ -2010,7 +2025,7 @@ fn decode_metadata<'a>(
                     }
                 }
             }
-            Token::ExtraHeader((name, _)) if name == "tix-rebase-parent" => {
+            Token::ExtraHeader((name, _)) if name == "tix-rebase-parent" || name == "tix-rebase-merge" => {
                 signature = SignatureState::PendingRebase;
             }
             Token::ExtraHeader((name, value))
@@ -2167,6 +2182,10 @@ pub(crate) fn resolve_revision(
             !crate::edit::undo::ref_chain_reaches_queue(repo, reference.name.as_ref())?,
             "the undo queue is not a selectable revision"
         );
+        anyhow::ensure!(
+            !crate::edit::replay_refs::ref_chain_reaches(repo, reference.name.as_ref())?,
+            "merge replay resources are not selectable revisions"
+        );
     }
     let id = spec
         .single()
@@ -2179,6 +2198,10 @@ pub(crate) fn resolve_revision(
     anyhow::ensure!(
         !crate::edit::undo::is_queue_commit(repo, id)?,
         "the undo queue is not a selectable revision"
+    );
+    anyhow::ensure!(
+        !crate::edit::replay_refs::is_checkpoint(repo, id)?,
+        "merge replay checkpoints are not selectable revisions"
     );
     Ok((id, first_reference))
 }
@@ -2235,7 +2258,10 @@ pub(crate) fn decorations_excluding(
             Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
         };
         let full_name = reference.name().to_owned();
-        if excluded.contains(full_name.as_bstr()) || crate::edit::undo::is_queue_ref(full_name.as_bstr()) {
+        if excluded.contains(full_name.as_bstr())
+            || crate::edit::undo::is_queue_ref(full_name.as_bstr())
+            || crate::edit::replay_refs::is_ref(full_name.as_bstr())
+        {
             continue;
         }
         if full_name.as_bstr() == HEAD_PIN_NAME {

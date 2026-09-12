@@ -17,6 +17,7 @@ const HELP: &str = r#"
 
 - Read the editable plan from bottom to top. Each fork separator is the base of the stack above it. Blank lines are ignored.
 - `pick <id>` keeps a commit. Delete its line to drop it, or move the line to reorder it. Each listed commit may be picked only once.
+- `merge <id> <side-parent>...` keeps an ordinary merge. The command below supplies its first parent; the remaining IDs preserve the other parent slots in order. Side parents may refer to commits in any fork section, which must remain picked or folded, or to commits outside this todo. Keep the original number of parent slots. Merge commands use commit hashes only; text outside their backticks is display-only.
 - AutoMerge picks rebuild from their named inputs' final reference positions, including inputs in other fork sections. Conflicting inputs remain parents but their trees are muted. Delete the AutoMerge pick to drop it; its generated tree and title cannot be squashed or edited directly.
 - `squash <id>` folds a commit into the following command below it in the same fork. Its full message is retained with a source heading, and additional authors become `Co-authored-by` trailers.
 - `fixup <id>` folds the change while discarding its message and author attribution. `fixup -C <id>` replaces the combined message with the source message, omitting an `amend!` marker paragraph and retaining the original author's identity.
@@ -24,7 +25,7 @@ const HELP: &str = r#"
 - A centered `fork <id>` separator starts the stack above it at an existing commit or a commit picked below it. The selected hidden boundary is labelled `(base)` with its title; a newer hidden tip used by rebase-update is `(updated-base)`, and an explicit command-line target is `(onto)`. Other fork separators stay terse. Delete a separator to continue its commits on the stack below; add one to create a fork. A listed commit must be picked below before it can be a fork target.
 - `empty <title>` creates an empty commit with the text after the command as its title.
 - Commands may be plain text or enclosed in backticks. Text after a backticked command and text after a fork ID is display-only context.
-- Prefix `pick`, `squash`, `fixup`, or `empty` with `@` to choose the post-rebase checkout. Reference lines like `(main, topic)` point refs at the following separator or command below them; moving, adding, or removing names moves, creates, or deletes refs, including existing editable refs outside the generated todo. The current attached ref stays attached while it remains at the `@` command. Prefix one editable ref with `@` to attach HEAD to it explicitly; it must point to the `@` command.
+- Prefix `pick`, `merge`, `squash`, `fixup`, or `empty` with `@` to choose the post-rebase checkout. Reference lines like `(main, topic)` point refs at the following separator or command below them; moving, adding, or removing names moves, creates, or deletes refs, including existing editable refs outside the generated todo. The current attached ref stays attached while it remains at the `@` command. Prefix one editable ref with `@` to attach HEAD to it explicitly; it must point to the `@` command.
 - Saving an unchanged document in the history-view editor applies generated autosquash groups, a changed base, or a pending rebase on the ancestry ending at `@`; otherwise it is a no-op. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. Unchanged picks whose parent stays unchanged retain their IDs; replay starts at the first pending or structurally changed commit. Changed commits through `@` are cherry-picked and re-signed, while descendants and other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Tix pins, stashes, and review refs, tags, remote-tracking refs, and symbolic refs stay unchanged and hidden. A ref checked out by another worktree may be moved but not deleted. New unreferenced leaves are pinned.
 - A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts [CONTINUE]` and writes a continuation todo. Resolve the ordinary unmerged index, then apply that todo. Concurrent ref changes still abort the update.
@@ -32,7 +33,7 @@ const HELP: &str = r#"
 -->
 "#;
 
-const STATE_START: &str = "<!-- tix-rebase-state-v2\n";
+const STATE_START: &str = "<!-- tix-rebase-state-v3\n";
 const STATE_END: &str = "-->";
 const STATE_CLOSE: &str = "\n-->";
 
@@ -145,9 +146,13 @@ pub(crate) fn prepare(
     }
     let tip_set = tips;
     let tips = tip_set.iter().copied().collect::<Vec<_>>();
-    let mut cursor = marker_required.then_some(head);
+    let mut checkout_ancestry: Vec<_> = marker_required.then_some(head).into_iter().collect();
+    let mut visited = HashSet::new();
     let mut has_pending = false;
-    while let Some(id) = cursor {
+    while let Some(id) = checkout_ancestry.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
         let commit = by_id.get(&id).context("the checkout ancestry is incomplete")?;
         let decoded = repo.find_commit(id)?.decode()?.into_owned()?;
         if rebase::is_pending(&decoded) {
@@ -155,13 +160,15 @@ pub(crate) fn prepare(
             break;
         }
         if super::auto_merge::is_auto_merge(&decoded) {
-            break;
+            continue;
         }
-        cursor = commit
-            .parents
-            .first()
-            .copied()
-            .filter(|parent| scope_set.contains(parent));
+        checkout_ancestry.extend(
+            commit
+                .parents
+                .iter()
+                .copied()
+                .filter(|parent| scope_set.contains(parent)),
+        );
     }
     let mut children = HashMap::<ObjectId, Vec<ObjectId>>::new();
     for commit in commits {
@@ -255,7 +262,7 @@ pub(crate) fn prepare(
         existing_checkout: None,
     };
     let notice = if has_autosquash {
-        "<!-- Rebase help follows. Saving unchanged applies automatically grouped fixups and any pending rebase or base update; empty this file or remove the tix-rebase-state-v2 comment to cancel. -->"
+        "<!-- Rebase help follows. Saving unchanged applies automatically grouped fixups and any pending rebase or base update; empty this file or remove the tix-rebase-state-v3 comment to cancel. -->"
     } else {
         unchanged_notice(base != onto, has_pending)
     };
@@ -293,11 +300,22 @@ pub(crate) fn prepare(
         }
         for id in &section.commits {
             let commit = by_id[id];
-            let verb = if marker_required && *id == checkout_commit_id {
-                "@pick"
+            let decoded = repo.find_commit(*id)?.decode()?.into_owned()?;
+            let parents = rebase::replay_parents(&decoded)?.unwrap_or_else(|| decoded.parents.to_vec());
+            let ordinary_merge = parents.len() > 1 && !super::auto_merge::is_auto_merge(&decoded);
+            let marker = if marker_required && *id == checkout_commit_id {
+                "@"
             } else {
-                "pick"
+                ""
             };
+            let verb = if ordinary_merge { "merge" } else { "pick" };
+            let mut arguments = short(repo, *id, show_change_ids && !ordinary_merge)?;
+            if ordinary_merge {
+                for parent in parents.iter().skip(1) {
+                    arguments.push(' ');
+                    arguments.push_str(&short(repo, if *parent == base { onto } else { *parent }, false)?);
+                }
+            }
             let states = commit_states(
                 repo,
                 &mut enrichments,
@@ -305,14 +323,7 @@ pub(crate) fn prepare(
                 &mut patch_enrichments,
                 *id,
             )?;
-            body.extend_from_slice(
-                format!(
-                    "`{verb} {}` {states}{}\n",
-                    short(repo, *id, show_change_ids)?,
-                    commit.info
-                )
-                .as_bytes(),
-            );
+            body.extend_from_slice(format!("`{marker}{verb} {arguments}` {states}{}\n", commit.info).as_bytes());
             for fold in autosquash.groups.get(id).into_iter().flatten() {
                 let source_commit_id = fold.commit_id;
                 let states = commit_states(
@@ -417,7 +428,7 @@ pub(crate) fn prepare_continuation(
                     && !plan
                         .steps
                         .iter()
-                        .any(|step| step.parent == rebase::PlanParent::Existing(id))
+                        .any(|step| step.parents.contains(&rebase::PlanParent::Existing(id)))
                 {
                     reference.editable = false;
                 }
@@ -437,18 +448,19 @@ pub(crate) fn prepare_continuation(
             rebase::PlanParent::Step(_) => None,
         }),
     };
-    let mut document = b"<!-- Rebase help follows. Saving unchanged continues the materialized rebase; empty this file or remove the tix-rebase-state-v2 comment to cancel. -->\n# Continue materialized rebase\n\n".to_vec();
+    let mut document = b"<!-- Rebase help follows. Saving unchanged continues the materialized rebase; empty this file or remove the tix-rebase-state-v3 comment to cancel. -->\n# Continue materialized rebase\n\n".to_vec();
     let mut body = Vec::new();
     let mut enrichments = crate::enrich::open(repo)?;
     let mut tree_enrichments = crate::enrich::open_tree(repo)?;
     let mut patch_enrichments = crate::enrich::open_patch(repo)?;
     for (index, step) in plan.steps.iter().enumerate() {
-        let continues = matches!(step.parent, rebase::PlanParent::Step(parent) if parent + 1 == index);
+        let first_parent = *step.parents.first().context("a continuation step needs a parent")?;
+        let continues = matches!(first_parent, rebase::PlanParent::Step(parent) if parent + 1 == index);
         if !continues {
             if index > 0 {
                 body.push(b'\n');
             }
-            let parent = match step.parent {
+            let parent = match first_parent {
                 rebase::PlanParent::Existing(id) => id,
                 rebase::PlanParent::Step(parent) => match plan.steps[parent].commit {
                     rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Copy(id) | rebase::PlanCommit::Resolved(id) => {
@@ -470,8 +482,8 @@ pub(crate) fn prepare_continuation(
                 (parent == plan.base).then_some(("base", base_title.as_str())),
                 show_change_ids,
             )?;
-            if matches!(step.parent, rebase::PlanParent::Existing(_)) {
-                write_plan_refs_at(&mut body, &plan.expected_refs, step.parent)?;
+            if matches!(first_parent, rebase::PlanParent::Existing(_)) {
+                write_plan_refs_at(&mut body, &plan.expected_refs, first_parent)?;
             }
         }
         let marker = if plan
@@ -485,9 +497,12 @@ pub(crate) fn prepare_continuation(
         };
         match step.commit {
             rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Copy(id) | rebase::PlanCommit::Resolved(id) => {
-                let value = if matches!(step.commit, rebase::PlanCommit::Resolved(_)) {
+                let decoded = repo.find_commit(id)?.decode()?.into_owned()?;
+                let ordinary_merge = step.parents.len() > 1 && !super::auto_merge::is_auto_merge(&decoded);
+                let verb = if ordinary_merge { "merge" } else { "pick" };
+                let mut value = if matches!(step.commit, rebase::PlanCommit::Resolved(_)) {
                     let hash = ObjectId::null(id.kind()).to_string();
-                    if show_change_ids {
+                    if show_change_ids && !ordinary_merge {
                         format!(
                             "{hash} {}",
                             crate::change_id::for_commit(repo, id)?.to_reverse_hex_with_len(hash.len())
@@ -496,12 +511,18 @@ pub(crate) fn prepare_continuation(
                         hash
                     }
                 } else {
-                    short(repo, id, show_change_ids)?
+                    short(repo, id, show_change_ids && !ordinary_merge)?
                 };
+                if ordinary_merge {
+                    for parent in step.parents.iter().skip(1) {
+                        value.push(' ');
+                        value.push_str(&short(repo, commit_at(*parent)?, false)?);
+                    }
+                }
                 let title = anchor_title(repo, id)?;
                 body.extend_from_slice(
                     format!(
-                        "`{marker}pick {value}` {}{}\n",
+                        "`{marker}{verb} {value}` {}{}\n",
                         commit_states(
                             repo,
                             &mut enrichments,
@@ -552,16 +573,16 @@ pub(crate) fn prepare_continuation(
 fn unchanged_notice(base_updated: bool, has_pending: bool) -> &'static str {
     match (base_updated, has_pending) {
         (false, false) => {
-            "<!-- Rebase help follows. Saving unchanged is a no-op; empty this file or remove the tix-rebase-state-v2 comment to cancel. -->"
+            "<!-- Rebase help follows. Saving unchanged is a no-op; empty this file or remove the tix-rebase-state-v3 comment to cancel. -->"
         }
         (false, true) => {
-            "<!-- Rebase help follows. Pending commits on the @ ancestry make saving unchanged apply this todo: that ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v2 comment to cancel. -->"
+            "<!-- Rebase help follows. Pending commits on the @ ancestry make saving unchanged apply this todo: that ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v3 comment to cancel. -->"
         }
         (true, false) => {
-            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base; empty this file or remove the tix-rebase-state-v2 comment to cancel. -->"
+            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base; empty this file or remove the tix-rebase-state-v3 comment to cancel. -->"
         }
         (true, true) => {
-            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base and applies pending commits on the @ ancestry: that ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v2 comment to cancel. -->"
+            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base and applies pending commits on the @ ancestry: that ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v3 comment to cancel. -->"
         }
     }
 }
@@ -1321,9 +1342,11 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
             continue;
         }
         let parent = cursor.context("the first todo command must follow a fork heading")?;
+        let mut parents = vec![parent];
         let commit = match verb {
-            "pick" => {
-                let value = value.split_whitespace().next().context("a pick needs a commit ID")?;
+            "pick" | "merge" => {
+                let mut arguments = value.split_whitespace();
+                let value = arguments.next().context("a pick or merge needs a commit ID")?;
                 let resolved_id = state.resolved;
                 let full_null = resolved_id.is_some_and(|id| {
                     value.len() == id.kind().len_in_bytes() * 2 && value.bytes().all(|byte| byte == b'0')
@@ -1341,6 +1364,27 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
                 }
                 if picked.contains_key(&id) {
                     anyhow::bail!("a commit is picked more than once");
+                }
+                let source = repo.find_commit(id)?.decode()?.into_owned()?;
+                let source_parents = rebase::replay_parents(&source)?.unwrap_or_else(|| source.parents.to_vec());
+                let automatic = super::auto_merge::is_auto_merge(&source);
+                if verb == "merge" {
+                    anyhow::ensure!(
+                        !automatic && source_parents.len() > 1,
+                        "merge requires an ordinary merge commit"
+                    );
+                    for value in arguments {
+                        parents.push(rebase::PlanParent::Existing(resolve_commit(repo, value)?));
+                    }
+                    anyhow::ensure!(
+                        parents.len() == source_parents.len(),
+                        "merge must retain the source commit's number of parent slots"
+                    );
+                } else {
+                    anyhow::ensure!(
+                        automatic || source_parents.len() <= 1,
+                        "an ordinary merge commit requires the merge command"
+                    );
                 }
                 if resolved {
                     rebase::PlanCommit::Resolved(id)
@@ -1362,7 +1406,7 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
             picked.insert(id, index);
         }
         steps.push(rebase::PlanStep {
-            parent,
+            parents,
             commit,
             squash: Vec::new(),
         });
@@ -1376,6 +1420,21 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
             checkout_target = Some(target);
         }
         section_has_commit = true;
+    }
+    // Side parents can name results in later fork sections. Resolve after all picks and folds are known.
+    for step in &mut steps {
+        for parent in step.parents.iter_mut().skip(1) {
+            let rebase::PlanParent::Existing(commit_id) = *parent else {
+                continue;
+            };
+            if scope.contains(&commit_id) {
+                *parent = rebase::PlanParent::Step(
+                    *picked
+                        .get(&commit_id)
+                        .context("a merge side parent was dropped from the rebase todo")?,
+                );
+            }
+        }
     }
     if sections == 0 {
         anyhow::bail!("the rebase todo has no fork heading");
@@ -1528,6 +1587,7 @@ fn resolve_ref_name(
     if name.as_bstr().starts_with(crate::history::PIN_PREFIX)
         || name.as_bstr().starts_with(crate::history::STASH_PREFIX)
         || name.as_bstr().starts_with(crate::history::REVIEW_PREFIX)
+        || super::replay_refs::is_ref(name.as_bstr())
         || super::undo::is_queue_ref(name.as_bstr())
         || matches!(
             name.category(),
@@ -1592,7 +1652,7 @@ mod tests {
             let notice = unchanged_notice(updated, pending);
             assert!(notice.contains(expected), "the notice explains its execution mode");
             assert!(
-                notice.contains("remove the tix-rebase-state-v2 comment to cancel"),
+                notice.contains("remove the tix-rebase-state-v3 comment to cancel"),
                 "every notice explains explicit cancellation"
             );
         }
@@ -1658,6 +1718,192 @@ mod tests {
                 .to_str_lossy()
                 .into_owned(),
         })
+    }
+
+    #[test]
+    fn ordinary_merges_round_trip_ordered_parents_across_fork_sections() -> gix_testtools::Result {
+        let (_fixture, repo) = repo()?;
+        let (base, _middle, tip, mut commits) = commits(&repo)?;
+        let left = append(&repo, base, "left")?;
+        let right = append(&repo, base, "right")?;
+        let mut merge = repo.find_commit(tip)?.decode()?.into_owned()?;
+        merge.parents = [tip, left.id, right.id].into_iter().collect();
+        merge.message = "merge branches".into();
+        let merge_commit_id = repo.write_object(&merge)?.detach();
+        let ordered_parents = merge.parents.to_vec();
+        commits.extend([left, right]);
+        commits.push(Commit {
+            id: merge_commit_id,
+            parents: ordered_parents.clone(),
+            info: "merge branches".into(),
+        });
+        let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
+        let document = std::str::from_utf8(&prepared.document)?;
+        assert!(
+            document.contains(&format!("`merge {} ", short(&repo, merge_commit_id, false)?)),
+            "ordinary merges name their side-parent slots explicitly"
+        );
+        let mut plan = parse_plan(&repo, &prepared.document)?;
+        let merge_index = plan
+            .steps
+            .iter()
+            .position(|step| step.commit == rebase::PlanCommit::Pick(merge_commit_id))
+            .expect("the merge is picked");
+        assert!(
+            plan.steps[merge_index]
+                .parents
+                .iter()
+                .any(|parent| { matches!(parent, rebase::PlanParent::Step(index) if *index > merge_index) }),
+            "side parents may be specified in a later fork section"
+        );
+        super::super::auto_merge::order_plan(&repo, &mut plan, &mut Default::default())?;
+        let merge_index = plan
+            .steps
+            .iter()
+            .position(|step| step.commit == rebase::PlanCommit::Pick(merge_commit_id))
+            .expect("ordering retains the merge");
+        let actual: Vec<_> = plan.steps[merge_index]
+            .parents
+            .iter()
+            .map(|parent| match parent {
+                rebase::PlanParent::Existing(commit_id) => *commit_id,
+                rebase::PlanParent::Step(index) => {
+                    assert!(*index < merge_index, "each side is produced before its merge");
+                    match plan.steps[*index].commit {
+                        rebase::PlanCommit::Pick(commit_id) => commit_id,
+                        _ => panic!("the fixture has only picks"),
+                    }
+                }
+            })
+            .collect();
+        assert_eq!(
+            actual, ordered_parents,
+            "topological sorting preserves parent slot order"
+        );
+        let continued = prepare_continuation(&repo, &plan, vec![merge_commit_id], true)?;
+        assert_eq!(
+            parse_plan(&repo, &continued.document)?.steps,
+            plan.steps,
+            "continuations retain all ordered merge parents"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_merge_commands_validate_sources_slots_and_cycles() -> gix_testtools::Result {
+        let (_fixture, repo) = repo()?;
+        let (base, middle, tip, mut commits) = commits(&repo)?;
+        let side = append(&repo, base, "side")?;
+        let side_commit_id = side.id;
+        let mut merge = repo.find_commit(tip)?.decode()?.into_owned()?;
+        merge.parents = [tip, side_commit_id].into_iter().collect();
+        merge.message = "merge side".into();
+        let merge_commit_id = repo.write_object(&merge)?.detach();
+        commits.push(side);
+        commits.push(Commit {
+            id: merge_commit_id,
+            parents: merge.parents.to_vec(),
+            info: "merge side".into(),
+        });
+        let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
+        let prefix = format!("fork {base}\npick {middle}\n@pick {tip}\n");
+        for (command, expected) in [
+            (format!("pick {merge_commit_id}"), "requires the merge command"),
+            (format!("merge {merge_commit_id}"), "number of parent slots"),
+            (
+                format!("merge {merge_commit_id} {side_commit_id} {base}"),
+                "number of parent slots",
+            ),
+            (
+                format!("merge {merge_commit_id} {side_commit_id}"),
+                "side parent was dropped",
+            ),
+            (format!("merge {side_commit_id} {base}"), "requires an ordinary merge"),
+        ] {
+            let error = parse_plan(&repo, &with_state(&prepared, &format!("{prefix}{command}\n")))
+                .expect_err("invalid merge commands are rejected");
+            assert!(
+                format!("{error:#}").contains(expected),
+                "the rejection identifies the invalid merge"
+            );
+        }
+        let duplicate = with_state(
+            &prepared,
+            &format!("{}@merge {merge_commit_id} {tip}\n", prefix.replace("@pick", "pick")),
+        );
+        let mut plan = parse_plan(&repo, &duplicate)?;
+        super::super::auto_merge::order_plan(&repo, &mut plan, &mut Default::default())?;
+        assert_eq!(
+            plan.steps.last().expect("the merge is last").parents,
+            vec![rebase::PlanParent::Step(1), rebase::PlanParent::Step(1)],
+            "coincident resulting parents retain distinct slots until writing"
+        );
+        assert_eq!(
+            plan.checkout.as_ref().expect("the merge is the checkout").target,
+            rebase::PlanParent::Step(2),
+            "merge commands support the checkout marker"
+        );
+        let cycle = with_state(
+            &prepared,
+            &format!(
+                "{prefix}merge {merge_commit_id} {side_commit_id}\nfork {merge_commit_id}\npick {side_commit_id}\n"
+            ),
+        );
+        let mut plan = parse_plan(&repo, &cycle)?;
+        let error = super::super::auto_merge::order_plan(&repo, &mut plan, &mut Default::default())
+            .expect_err("a cycle through a side parent is rejected");
+        assert!(
+            format!("{error:#}").contains("cycle"),
+            "the dependency cycle is diagnosed"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_ordinary_merges_pending_side_makes_unchanged_todos_actionable() -> gix_testtools::Result {
+        let (fixture, repo) = repo()?;
+        let (base, _middle, tip, mut commits) = commits(&repo)?;
+        let mut side = repo.find_commit(base)?.decode()?.into_owned()?;
+        side.parents = [base].into_iter().collect();
+        side.message = "pending side".into();
+        side.extra_headers
+            .push(("tix-rebase-parent".into(), base.to_string().into()));
+        let side_commit_id = repo.write_object(&side)?.detach();
+        let mut merge = repo.find_commit(tip)?.decode()?.into_owned()?;
+        merge.parents = [tip, side_commit_id].into_iter().collect();
+        merge.message = "merge pending side".into();
+        let merge_commit_id = repo.write_object(&merge)?.detach();
+        commits.extend([
+            Commit {
+                id: side_commit_id,
+                parents: vec![base],
+                info: "pending side".into(),
+            },
+            Commit {
+                id: merge_commit_id,
+                parents: merge.parents.to_vec(),
+                info: "merge pending side".into(),
+            },
+        ]);
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "-q", "--detach", &merge_commit_id.to_string()])
+                .status()?
+                .success(),
+            "the ordinary merge is checked out"
+        );
+        let prepared = prepare_test(&repo, base, base, &commits, Some(merge_commit_id))?;
+        assert!(
+            prepared.apply_unchanged,
+            "pending ancestry through any ordinary merge parent requires replay"
+        );
+        assert!(
+            std::str::from_utf8(&prepared.document)?.contains("`@merge "),
+            "the merge is the generated checkout command"
+        );
+        Ok(())
     }
 
     #[test]
@@ -2058,7 +2304,7 @@ mod tests {
                 .find(|step| step.commit == rebase::PlanCommit::Pick(child_commit_id))
                 .context("the source descendant remains")?;
             assert_eq!(
-                child.parent,
+                child.parents[0],
                 rebase::PlanParent::Step(middle_step),
                 "descendant forks bypass the folded source without losing intermediate commits"
             );
@@ -2191,7 +2437,7 @@ mod tests {
                 base,
                 scope: vec![middle],
                 steps: vec![rebase::PlanStep {
-                    parent: rebase::PlanParent::Existing(base),
+                    parents: vec![rebase::PlanParent::Existing(base)],
                     commit: rebase::PlanCommit::Pick(middle),
                     squash: Vec::new(),
                 }],
@@ -2239,7 +2485,7 @@ mod tests {
                     base: parent,
                     scope: vec![variant_id],
                     steps: vec![rebase::PlanStep {
-                        parent: rebase::PlanParent::Existing(parent),
+                        parents: vec![rebase::PlanParent::Existing(parent)],
                         commit: rebase::PlanCommit::Pick(variant_id),
                         squash: Vec::new(),
                     }],
@@ -2337,12 +2583,17 @@ mod tests {
         );
         let parsed = parse_state(&repo, &document)?.context("state is present")?;
         assert_eq!(parsed.expected_refs[0].name, name, "quoted names round-trip losslessly");
-        let old = document.replacen("tix-rebase-state-v2", "tix-rebase-state-v1", 1);
-        let err = match parse_state(&repo, &old) {
-            Ok(_) => panic!("v1 order would be ambiguous under v2 semantics"),
-            Err(err) => err,
-        };
-        assert!(format!("{err:#}").contains("unsupported state version"));
+        for version in ["v1", "v2"] {
+            let old = document.replacen("tix-rebase-state-v3", &format!("tix-rebase-state-{version}"), 1);
+            let err = match parse_state(&repo, &old) {
+                Ok(_) => panic!("old todos cannot retain ordered merge parents"),
+                Err(err) => err,
+            };
+            assert!(
+                format!("{err:#}").contains("unsupported state version"),
+                "old todo versions are rejected explicitly"
+            );
+        }
         assert_eq!(
             parsed.head_ref,
             Some(name),
@@ -2352,7 +2603,7 @@ mod tests {
         assert!(parse(&repo, b"")?.is_none(), "empty input cancels");
         assert!(parse(&repo, b"pick deadbeef")?.is_none(), "removing the anchor cancels");
         assert!(
-            parse(&repo, b"<!-- tix-rebase-state-v2\n-->").is_err(),
+            parse(&repo, b"<!-- tix-rebase-state-v3\n-->").is_err(),
             "an unsupported present anchor is rejected"
         );
         Ok(())
@@ -2615,7 +2866,7 @@ mod tests {
 
         let plan = parse_plan(&repo, document.as_bytes())?;
         assert_eq!(plan.base, onto);
-        assert_eq!(plan.steps[0].parent, rebase::PlanParent::Existing(onto));
+        assert_eq!(plan.steps[0].parents[0], rebase::PlanParent::Existing(onto));
         let graph = super::super::loaded_graph(&repo)?;
         let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
         let rewritten_middle = outcome.map(middle).expect("the middle commit is retained");
@@ -2706,7 +2957,7 @@ mod tests {
             plan.checkout.as_ref().map(|checkout| checkout.target),
             Some(rebase::PlanParent::Step(2))
         );
-        assert_eq!(plan.steps[2].parent, rebase::PlanParent::Step(0));
+        assert_eq!(plan.steps[2].parents[0], rebase::PlanParent::Step(0));
         assert!(matches!(&plan.steps[1].commit, rebase::PlanCommit::Empty(title) if title == b"a new checkpoint"));
         Ok(())
     }
@@ -2735,7 +2986,7 @@ mod tests {
             "the squash marker selects the folded result"
         );
         assert_eq!(
-            plan.steps[1].parent,
+            plan.steps[1].parents[0],
             rebase::PlanParent::Step(0),
             "the squashed ID resolves to the folded result as a fork target"
         );
@@ -2771,12 +3022,12 @@ mod tests {
             scope: vec![middle, tip],
             steps: vec![
                 rebase::PlanStep {
-                    parent: rebase::PlanParent::Existing(base),
+                    parents: vec![rebase::PlanParent::Existing(base)],
                     commit: rebase::PlanCommit::Resolved(middle),
                     squash: Vec::new(),
                 },
                 rebase::PlanStep {
-                    parent: rebase::PlanParent::Step(0),
+                    parents: vec![rebase::PlanParent::Step(0)],
                     commit: rebase::PlanCommit::Pick(tip),
                     squash: Vec::new(),
                 },
@@ -2851,7 +3102,7 @@ mod tests {
                 base: middle,
                 scope: vec![tip],
                 steps: vec![rebase::PlanStep {
-                    parent: rebase::PlanParent::Existing(middle),
+                    parents: vec![rebase::PlanParent::Existing(middle)],
                     commit: rebase::PlanCommit::Resolved(tip),
                     squash: Vec::new(),
                 }],
@@ -2894,7 +3145,7 @@ mod tests {
                 base,
                 scope: vec![middle, tip],
                 steps: vec![rebase::PlanStep {
-                    parent: rebase::PlanParent::Existing(base),
+                    parents: vec![rebase::PlanParent::Existing(base)],
                     commit: rebase::PlanCommit::Resolved(middle),
                     squash: vec![tip.into()],
                 }],

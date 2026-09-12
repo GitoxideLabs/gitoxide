@@ -16,6 +16,7 @@ pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::His
                 .as_bstr()
                 .starts_with(crate::history::REVIEW_STASH_PREFIX)
             || undo::is_queue_ref(reference.name().as_bstr())
+            || replay_refs::is_ref(reference.name().as_bstr())
         {
             continue;
         }
@@ -89,6 +90,7 @@ pub(crate) mod discard;
 pub(crate) mod enrich;
 pub(crate) mod head;
 pub(crate) mod rebase;
+pub(crate) mod replay_refs;
 pub(crate) mod review;
 pub(crate) mod reword;
 pub(crate) mod split;
