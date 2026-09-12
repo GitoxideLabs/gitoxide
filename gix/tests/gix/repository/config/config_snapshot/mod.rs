@@ -325,6 +325,9 @@ fn reload_preserves_the_reduced_trust_allocation_limit() -> crate::Result {
 #[test]
 #[serial_test::serial]
 fn reload_reapplies_per_file_safe_directory_trust() -> crate::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let fixture = gix_testtools::scripted_fixture_writable("make_config_repo.sh")?;
     let included_path = fixture.path().join("a.config");
     let mut included = gix_config::File::from_path_no_includes(included_path.clone(), gix_config::Source::Local)?;

@@ -20,6 +20,9 @@ fn repository(overrides: impl IntoIterator<Item = impl Into<BString>>) -> gix_te
 #[test]
 #[serial]
 fn follows_git_editor_precedence() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let _env = Env::new()
         .set("TERM", "xterm")
         .set("GIT_EDITOR", ":")
@@ -82,6 +85,9 @@ fn follows_git_editor_precedence() -> gix_testtools::Result {
 #[test]
 #[serial]
 fn dumb_terminals_require_an_explicit_non_visual_editor() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let _env = Env::new()
         .set("TERM", "dumb")
         .unset("GIT_EDITOR")
@@ -102,6 +108,9 @@ fn dumb_terminals_require_an_explicit_non_visual_editor() -> gix_testtools::Resu
 #[test]
 #[serial]
 fn generic_editor_environment_is_available_as_gitoxide_configuration() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let _env = Env::new()
         .set("TERM", "dumb")
         .set("VISUAL", "visual-from-environment")

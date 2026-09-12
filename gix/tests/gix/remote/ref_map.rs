@@ -13,6 +13,10 @@ mod blocking_and_async_io {
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn all() -> crate::Result {
+        #[cfg(feature = "blocking-network-client")]
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let daemon = spawn_git_daemon_if_async(remote::repo_path("base"))?;
         for (fetch_tags, version, expected_remote_refs, expected_mappings) in [
             (gix::remote::fetch::Tags::None, None, 11, 11),

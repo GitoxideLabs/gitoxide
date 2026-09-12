@@ -14,10 +14,23 @@ fn open_permissions_is_isolated() {
 #[test]
 #[serial_test::serial]
 fn discover_with_git_dir_environment_override_uses_it_and_sets_trust() -> crate::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let fallback = gix_testtools::tempfile::TempDir::new()?;
-    gix::init(fallback.path())?;
+    gix::ThreadSafeRepository::init_opts(
+        fallback.path(),
+        gix::create::Kind::WithWorktree,
+        Default::default(),
+        gix::open::Options::isolated(),
+    )?;
     let overridden = gix_testtools::tempfile::TempDir::new()?;
-    let overridden = gix::init(overridden.path())?;
+    let overridden = gix::ThreadSafeRepository::init_opts(
+        overridden.path(),
+        gix::create::Kind::WithWorktree,
+        Default::default(),
+        gix::open::Options::isolated(),
+    )?;
     let _env = gix_testtools::Env::new()
         .unset("GIT_WORK_TREE")
         .set("GIT_DIR", overridden.git_dir().to_string_lossy().into_owned());
@@ -66,7 +79,13 @@ fn on_root_with_decomposed_unicode() -> crate::Result {
     let root = tmp.path().join(decomposed);
     std::fs::create_dir(&root)?;
 
-    let repo = gix::init(root)?;
+    let repo = gix::ThreadSafeRepository::init_opts(
+        root,
+        gix::create::Kind::WithWorktree,
+        Default::default(),
+        gix::open::Options::isolated(),
+    )?
+    .to_thread_local();
     let precompose_unicode = repo
         .config_snapshot()
         .boolean("core.precomposeUnicode")
