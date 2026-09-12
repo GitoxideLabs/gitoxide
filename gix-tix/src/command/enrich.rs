@@ -1,7 +1,7 @@
-use std::ffi::OsString;
+use std::{ffi::OsString, path::PathBuf};
 
 use anyhow::{Context, Result};
-use gix::bstr::ByteSlice;
+use gix::bstr::{BString, ByteSlice};
 
 #[derive(Debug, clap::Subcommand)]
 pub(super) enum Command {
@@ -20,10 +20,10 @@ pub(super) enum Command {
 pub(super) enum Commit {
     /// Mark the commit as todo, or clear the mark.
     Todo(BooleanTarget),
-    /// Edit the commit's Tix note with Git's editor.
-    Note(Target),
-    /// Edit the commit's ordinary Git note with Git's editor.
-    GitNote(Target),
+    /// Edit the commit's Tix note.
+    Note(NoteTarget),
+    /// Edit the commit's ordinary Git note.
+    GitNote(NoteTarget),
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -52,6 +52,18 @@ pub(super) struct Target {
     /// Commit whose enrichment should be changed.
     #[arg(default_value = "HEAD", value_name = "REVSPEC")]
     revision: OsString,
+}
+
+#[derive(Debug, clap::Args)]
+pub(super) struct NoteTarget {
+    #[command(flatten)]
+    target: Target,
+    /// Use this message instead of opening an editor; repeat to add paragraphs.
+    #[arg(short = 'm', long, value_name = "MESSAGE", conflicts_with = "file")]
+    message: Vec<OsString>,
+    /// Read the new message from this file, or from standard input with `-`.
+    #[arg(short = 'f', long, value_name = "FILE", conflicts_with = "message")]
+    file: Option<PathBuf>,
 }
 
 pub(super) fn run(repository: gix::Repository, command: Command) -> Result<()> {
@@ -191,23 +203,35 @@ fn tracked_ref_update<T>(
     Ok((value, changes))
 }
 
-fn edit_note(repository: &gix::Repository, args: &Target) -> Result<()> {
-    let target = resolve(repository, args)?;
+fn note_message(repository: &gix::Repository, args: &NoteTarget, document: &[u8], filename: &str) -> Result<BString> {
+    let edited = match super::reword::explicit_message(&args.message, args.file.as_deref(), std::io::stdin())? {
+        Some(message) => Some(message),
+        None => {
+            let editor = repository
+                .editor_command()
+                .context("could not prepare Git editor")?
+                .context("no Git editor is available")?;
+            crate::edit::edit_document_without_terminal(editor, document, filename)?
+        }
+    };
+    Ok(crate::edit::reword::cleanup_message(
+        edited.as_deref().unwrap_or(document),
+        None,
+    ))
+}
+
+fn edit_note(repository: &gix::Repository, args: &NoteTarget) -> Result<()> {
+    let target = resolve(repository, &args.target)?;
     let enrichment = crate::enrich::load(
         &mut crate::enrich::open(repository)?,
         crate::change_id::for_commit(repository, target)?,
     )?;
-    let document = enrichment.note.clone().unwrap_or_default();
-    let editor = repository
-        .editor_command()
-        .context("could not prepare Git editor")?
-        .context("no Git editor is available")?;
-    let edited = crate::edit::edit_document_without_terminal(
-        editor,
-        &document,
+    let cleaned = note_message(
+        repository,
+        args,
+        enrichment.note.as_ref().map(|note| note.as_slice()).unwrap_or_default(),
         &format!("tix-note-{}-{}.md", std::process::id(), target.to_hex_with_len(7)),
     )?;
-    let cleaned = crate::edit::reword::cleanup_message(edited.as_deref().unwrap_or(&document), None);
     let desired = (!cleaned.is_empty()).then_some(cleaned.as_bstr());
     let (status, changes) = if enrichment.note.as_ref().map(|note| note.as_bstr()) == desired {
         ("note unchanged", Ok(Vec::new()))
@@ -229,8 +253,8 @@ fn edit_note(repository: &gix::Repository, args: &Target) -> Result<()> {
     feedback(repository, target, status)
 }
 
-fn edit_git_note(repository: &gix::Repository, args: &Target) -> Result<()> {
-    let target = resolve(repository, args)?;
+fn edit_git_note(repository: &gix::Repository, args: &NoteTarget) -> Result<()> {
+    let target = resolve(repository, &args.target)?;
     let notes = repository.notes()?;
     let reference = notes
         .default_ref()
@@ -242,16 +266,12 @@ fn edit_git_note(repository: &gix::Repository, args: &Target) -> Result<()> {
         .first()
         .map(|note| note.blob.data.clone())
         .unwrap_or_default();
-    let editor = repository
-        .editor_command()
-        .context("could not prepare Git editor")?
-        .context("no Git editor is available")?;
-    let edited = crate::edit::edit_document_without_terminal(
-        editor,
+    let cleaned = note_message(
+        repository,
+        args,
         &document,
         &format!("tix-git-note-{}-{}.md", std::process::id(), target.to_hex_with_len(7)),
     )?;
-    let cleaned = crate::edit::reword::cleanup_message(edited.as_deref().unwrap_or(&document), None);
     let (status, changes) = if cleaned == document {
         ("Git note unchanged", Ok(Vec::new()))
     } else {
@@ -282,6 +302,202 @@ mod tests {
         Target {
             revision: revision.into(),
         }
+    }
+
+    fn note_target(revision: &str) -> NoteTarget {
+        NoteTarget {
+            target: target(revision),
+            message: Vec::new(),
+            file: None,
+        }
+    }
+
+    fn note_command(git_note: bool, args: NoteTarget) -> Command {
+        Command::Commit(if git_note {
+            Commit::GitNote(args)
+        } else {
+            Commit::Note(args)
+        })
+    }
+
+    fn saved_note(repository: &gix::Repository, commit_id: gix::ObjectId, git_note: bool) -> Result<Option<Vec<u8>>> {
+        if git_note {
+            let notes = repository.notes()?;
+            let reference = notes.default_ref().context("the fixture has a notes ref")?.to_owned();
+            Ok(notes
+                .with_refs([reference.as_bstr()])?
+                .get(commit_id)?
+                .first()
+                .map(|note| note.blob.data.clone()))
+        } else {
+            Ok(crate::enrich::load(
+                &mut crate::enrich::open(repository)?,
+                crate::change_id::for_commit(repository, commit_id)?,
+            )?
+            .note
+            .map(|note| note.to_vec()))
+        }
+    }
+
+    #[test]
+    fn note_message_options_match_reword() {
+        use clap::Parser;
+
+        for kind in ["note", "git-note"] {
+            let parse = |args: &[&str]| {
+                let command = super::super::Cli::try_parse_from(
+                    ["tix", "enrich", "commit", kind]
+                        .into_iter()
+                        .chain(args.iter().copied()),
+                )
+                .expect("note message options parse")
+                .platform
+                .command;
+                let Some(super::super::Command::Enrich(Command::Commit(Commit::Note(args) | Commit::GitNote(args)))) =
+                    command
+                else {
+                    panic!("a note command was expected")
+                };
+                args
+            };
+            let args = parse(&[]);
+            assert_eq!(args.target.revision, "HEAD", "notes still default to HEAD");
+            assert!(
+                args.message.is_empty() && args.file.is_none(),
+                "no source selects the editor"
+            );
+            let args = parse(&["topic", "-m", "title", "--message", "body"]);
+            assert_eq!(args.target.revision, "topic", "the target can precede message options");
+            assert_eq!(
+                args.message,
+                ["title", "body"],
+                "short and long message flags append paragraphs"
+            );
+            for (flag, file) in [("-f", "note.md"), ("--file", "-")] {
+                assert_eq!(
+                    parse(&[flag, file]).file,
+                    Some(file.into()),
+                    "files and stdin use reword's flags"
+                );
+            }
+            assert_eq!(
+                super::super::Cli::try_parse_from(["tix", "enrich", "commit", kind, "-m", "text", "-f", "note.md"])
+                    .expect_err("message and file inputs are mutually exclusive")
+                    .kind(),
+                clap::error::ErrorKind::ArgumentConflict
+            );
+            assert!(
+                super::super::Cli::try_parse_from([
+                    "tix",
+                    "enrich",
+                    "commit",
+                    kind,
+                    "--author",
+                    "Agent <agent@example.com>"
+                ])
+                .is_err(),
+                "note input does not expose commit-author options"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_note_messages_replace_and_clear_without_an_editor() -> gix_testtools::Result {
+        for git_note in [false, true] {
+            let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+            let repository = crate::test_repository::open_with(
+                fixture.path(),
+                ["core.editor=false", "core.notesRef=refs/notes/agents"],
+            )?;
+            let target_commit_id = repository.rev_parse_single("HEAD~1")?.detach();
+            let head_commit_id = repository.head_id()?.detach();
+            let change_id = crate::change_id::for_commit(&repository, target_commit_id)?
+                .to_reverse_hex_with_len(7)
+                .to_string();
+            crate::enrich::ensure_todo(&repository, target_commit_id, true)?;
+            crate::enrich::set_note(&repository, target_commit_id, Some(b"original\n"))?;
+            crate::set_git_note(
+                &repository,
+                "refs/notes/agents".try_into()?,
+                target_commit_id,
+                Some(b"original\n"),
+            )?;
+
+            for (paragraphs, expected) in [
+                (
+                    vec!["title", ";literal\n#literal"],
+                    Some(b"title\n\n;literal\n#literal\n".as_slice()),
+                ),
+                (vec!["replacement"], Some(b"replacement\n".as_slice())),
+                (vec![" \n\t"], None),
+            ] {
+                for repeated in [false, true] {
+                    let before = gix_testtools::repository::snapshot(fixture.path())?;
+                    let mut args = note_target(&change_id);
+                    args.message = paragraphs.iter().map(OsString::from).collect();
+                    run(repository.clone(), note_command(git_note, args))?;
+                    assert_eq!(
+                        saved_note(&repository, target_commit_id, git_note)?.as_deref(),
+                        expected,
+                        "explicit paragraphs replace the note, and empty input clears it"
+                    );
+                    assert_eq!(
+                        saved_note(&repository, target_commit_id, !git_note)?.as_deref(),
+                        Some(b"original\n".as_slice()),
+                        "the other note namespace remains untouched"
+                    );
+                    assert!(
+                        crate::enrich::load(
+                            &mut crate::enrich::open(&repository)?,
+                            crate::change_id::for_commit(&repository, target_commit_id)?,
+                        )?
+                        .todo,
+                        "changing a note preserves the todo marker"
+                    );
+                    assert_eq!(repository.head_id()?, head_commit_id, "notes never rewrite HEAD");
+                    if repeated {
+                        assert_eq!(
+                            gix_testtools::repository::snapshot(fixture.path())?,
+                            before,
+                            "an identical note leaves references and undo history unchanged"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn note_files_preserve_message_bytes_and_read_errors_leave_notes_unchanged() -> gix_testtools::Result {
+        for git_note in [false, true] {
+            let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+            let repository = crate::test_repository::open_with(fixture.path(), ["core.editor=false"])?;
+            let head_commit_id = repository.head_id()?.detach();
+            let path = fixture.path().join("note.md");
+            std::fs::write(&path, b"\r\n;literal \t\r\n\r\nbody \xff\r\n")?;
+            let mut args = note_target("HEAD");
+            args.file = Some(path.clone());
+            run(repository.clone(), note_command(git_note, args))?;
+            assert_eq!(
+                saved_note(&repository, head_commit_id, git_note)?.as_deref(),
+                Some(b";literal\n\nbody \xff\n".as_slice()),
+                "file input uses the existing note cleanup without stripping comments or non-UTF-8 bytes"
+            );
+            std::fs::remove_file(&path)?;
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let mut args = note_target("HEAD");
+            args.file = Some(path);
+            let err = run(repository.clone(), note_command(git_note, args))
+                .expect_err("a missing file must not replace the existing note");
+            assert!(format!("{err:#}").contains("could not read message"), "{err:#}");
+            assert_eq!(
+                gix_testtools::repository::snapshot(fixture.path())?,
+                before,
+                "failed input leaves notes, undo history, and worktree unchanged"
+            );
+        }
+        Ok(())
     }
 
     fn patch_command(revision: &str, clear: bool) -> Command {
@@ -425,8 +641,11 @@ mod tests {
         let reference = notes.default_ref().context("the fixture has a notes ref")?.to_owned();
         crate::set_git_note(&repository, reference.as_ref(), topic, Some(b"old\n"))?;
 
-        run(repository.clone(), Command::Commit(Commit::Note(target("topic"))))?;
-        run(repository.clone(), Command::Commit(Commit::GitNote(target("topic"))))?;
+        run(repository.clone(), Command::Commit(Commit::Note(note_target("topic"))))?;
+        run(
+            repository.clone(),
+            Command::Commit(Commit::GitNote(note_target("topic"))),
+        )?;
 
         let enrichment = crate::enrich::load(
             &mut crate::enrich::open(&repository)?,
