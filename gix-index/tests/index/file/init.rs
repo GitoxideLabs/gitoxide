@@ -1,3 +1,33 @@
+mod at {
+    #[test]
+    fn shorter_than_checksum() -> gix_testtools::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let path = tmp.path().join("index");
+        for object_hash in [gix_hash::Kind::Sha1, gix_hash::Kind::Sha256] {
+            for len in [0, object_hash.len_in_bytes() - 1] {
+                std::fs::write(&path, vec![0xff; len])?;
+                for skip_hash in [false, true] {
+                    let err = gix_index::File::at(&path, object_hash, skip_hash, Default::default())
+                        .expect_err("an index shorter than its checksum must be rejected without panicking");
+                    // Some platforms cannot memory-map an empty file and return an IO error instead.
+                    if len != 0 {
+                        assert!(
+                            matches!(
+                                err,
+                                gix_index::file::init::Error::Decode(gix_index::decode::Error::Header(
+                                    gix_index::decode::header::Error::Corrupt(_)
+                                ))
+                            ),
+                            "expected a corrupt header for {object_hash:?}, {len} bytes, skip_hash={skip_hash}: {err}"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 mod at_or_new {
     use crate::Fixture::Generated;
 

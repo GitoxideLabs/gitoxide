@@ -64,7 +64,8 @@ impl File {
             #[expect(unsafe_code)]
             let data = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&file)? };
 
-            if !skip_hash {
+            // Let the decoder report truncated files before trying to read their checksum.
+            if !skip_hash && data.len() >= object_hash.len_in_bytes() {
                 // Note that even though it's trivial to offload this into a thread, which is worth it for all but the smallest
                 // index files, we choose more safety here just like git does and don't even try to decode the index if the hashes
                 // don't match.
