@@ -1152,6 +1152,11 @@ views.
 - `a Shift-N` creates an explicit empty commit which reuses the selected parent's
   tree, or the empty tree for an unborn history. Existing index and worktree
   state is preserved exactly. Both forms reject unresolved index conflicts.
+- Both forms and `tix new` reject a pending selected parent, including when it
+  differs from `HEAD`. This check uses only the parent's own state: older pending
+  ancestry does not block creation or require replay, whether hidden tips are
+  available or not. AutoMerge parents remain eligible and use normal AutoMerge
+  dependency maintenance. Unborn root creation has no parent to validate.
 - A current worktree-changes cache controls which actions are advertised without
   opening a repository: tracked changes offer both `new` and `new-empty`, while a
   clean or untracked-only worktree offers only `new-empty`. If no current cache is

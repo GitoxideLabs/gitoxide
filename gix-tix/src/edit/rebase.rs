@@ -995,6 +995,14 @@ fn perform_inner(
         Edit::Repeat { base, .. } => (Some(base), None, false, false, false, true, None),
     };
 
+    if inserted && let Some(parent_commit_id) = root {
+        let parent = repo.find_commit(parent_commit_id)?.decode()?.into_owned()?;
+        anyhow::ensure!(
+            auto_merge::is_auto_merge(&parent) || !is_pending(&parent),
+            "the selected parent has a pending rebase; finish it before creating a commit"
+        );
+    }
+
     let mut affected = match root {
         Some(root) => graph
             .descendants_in_parent_order(root)
@@ -1052,7 +1060,7 @@ fn perform_inner(
         )?
     };
     progress.total = affected.len() + usize::from(split_upper.is_some()) + usize::from(inserted && affected.is_empty());
-    if !repeat && !checkout_path.is_empty() {
+    if !inserted && !repeat && !checkout_path.is_empty() {
         let checkout = checkout.expect("a non-empty checkout path has a checkout");
         let review_boundary =
             (root == Some(checkout) && replacement.as_ref().is_some_and(super::review::is_review)).then_some(checkout);

@@ -390,6 +390,164 @@ mod tests {
         Ok(output.stdout)
     }
 
+    fn pending_child(repo: &gix::Repository) -> gix_testtools::Result<ObjectId> {
+        let base_commit_id = repo.head_id()?.detach();
+        let mut commit = repo.find_commit(base_commit_id)?.decode()?.into_owned()?;
+        commit.parents = [base_commit_id].into_iter().collect();
+        commit.message = "pending child\n".into();
+        commit
+            .extra_headers
+            .push(("tix-rebase-parent".into(), base_commit_id.to_string().into()));
+        let pending_commit_id = repo.write_object(&commit)?.detach();
+        repo.reference(
+            "refs/heads/pending",
+            pending_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "retain the pending ancestor",
+        )?;
+        Ok(pending_commit_id)
+    }
+
+    #[test]
+    fn new_and_empty_commits_preserve_older_pending_ancestry() -> gix_testtools::Result {
+        for empty in [false, true] {
+            for pending_parent_index in [None, Some(0), Some(1)] {
+                let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+                let repository = open(fixture.path())?;
+                let base_commit_id = repository.head_id()?.detach();
+                let pending_commit_id = pending_child(&repository)?;
+                let mut parent = repository.find_commit(base_commit_id)?.decode()?.into_owned()?;
+                parent.parents = [pending_commit_id].into_iter().collect();
+                parent.message = "finalized parent\n".into();
+                if let Some(index) = pending_parent_index {
+                    let mut side = repository.find_commit(base_commit_id)?.decode()?.into_owned()?;
+                    side.parents = [base_commit_id].into_iter().collect();
+                    side.message = "finalized side\n".into();
+                    let side_commit_id = repository.write_object(&side)?.detach();
+                    parent.parents = [side_commit_id].into_iter().collect();
+                    parent.parents.insert(index, pending_commit_id);
+                }
+                let parent_commit_id = repository.write_object(&parent)?.detach();
+                repository
+                    .find_reference("refs/heads/main")?
+                    .set_target_id(parent_commit_id, "check out finalized ancestry")?;
+                let graph = super::super::loaded_graph(&repository)?;
+                let before = gix_testtools::repository::snapshot(fixture.path())?;
+                let index_before = std::fs::read(repository.index_path())?;
+                let prepared = if empty {
+                    prepare_empty(open(fixture.path())?, Some(parent_commit_id))?
+                } else {
+                    prepare(open(fixture.path())?, Some(parent_commit_id))?
+                };
+                let edited = prepared.document.replacen(b"what\n\nwhy", b"new child\n\nreason", 1);
+                let outcome = apply_reporting(open(fixture.path())?, &graph, prepared, &edited)?;
+                let new_commit_id = outcome.selected.context("creation selects the new child")?;
+                let repository = open(fixture.path())?;
+                let commit = repository.find_commit(new_commit_id)?;
+                assert_eq!(
+                    commit.parent_ids().map(gix::Id::detach).collect::<Vec<_>>(),
+                    [parent_commit_id],
+                    "creation retains the exact selected parent above pending ancestry"
+                );
+                assert_eq!(
+                    repository.find_reference("refs/heads/pending")?.id(),
+                    pending_commit_id,
+                    "creating a child never moves an older pending ancestor's ref"
+                );
+                assert!(
+                    rebase::is_pending(&repository.find_commit(pending_commit_id)?.decode()?.into_owned()?),
+                    "older pending state is preserved instead of finalized"
+                );
+                let after = gix_testtools::repository::snapshot(fixture.path())?;
+                assert_eq!(
+                    after.commits.len(),
+                    before.commits.len() + 1,
+                    "only the new child is added"
+                );
+                for original in &before.commits {
+                    assert!(
+                        after.commits.contains(original),
+                        "every original ancestor remains reachable with its exact object bytes"
+                    );
+                }
+                assert_eq!(after.index, before.index, "staged content remains intact");
+                assert_eq!(
+                    after.worktree, before.worktree,
+                    "worktree contents remain byte-identical"
+                );
+                if empty {
+                    assert_eq!(
+                        commit.tree_id()?,
+                        parent.tree,
+                        "the empty child keeps its parent's tree"
+                    );
+                    assert_eq!(
+                        std::fs::read(repository.index_path())?,
+                        index_before,
+                        "empty creation preserves the complete index file"
+                    );
+                } else {
+                    assert_eq!(
+                        Some(commit.tree_id()?.detach()),
+                        before.index_tree,
+                        "normal creation commits the staged tree"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn new_and_empty_commits_reject_the_selected_pending_parent_without_changes() -> gix_testtools::Result {
+        for empty in [false, true] {
+            for parent_is_head in [false, true] {
+                let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+                let repository = open(fixture.path())?;
+                let parent_commit_id = pending_child(&repository)?;
+                if parent_is_head {
+                    repository
+                        .find_reference("refs/heads/main")?
+                        .set_target_id(parent_commit_id, "check out the pending parent")?;
+                }
+                let graph = super::super::loaded_graph(&repository)?;
+                let before = gix_testtools::repository::snapshot(fixture.path())?;
+                let objects_before = object_count(fixture.path())?;
+                let index_before = std::fs::read(repository.index_path())?;
+                let prepared = if empty {
+                    prepare_empty(open(fixture.path())?, Some(parent_commit_id))?
+                } else {
+                    prepare(open(fixture.path())?, Some(parent_commit_id))?
+                };
+                let edited = prepared
+                    .document
+                    .replacen(b"what\n\nwhy", b"rejected child\n\nreason", 1);
+                let err = apply(open(fixture.path())?, &graph, prepared, &edited)
+                    .expect_err("a pending selected parent cannot gain a new child");
+                assert!(
+                    format!("{err:#}").contains("the selected parent has a pending rebase"),
+                    "the selected parent is checked even when another commit is checked out: {err:#}"
+                );
+                assert_eq!(
+                    gix_testtools::repository::snapshot(fixture.path())?,
+                    before,
+                    "rejected creation leaves every ref, reachable commit, index entry, and worktree file unchanged"
+                );
+                assert_eq!(
+                    object_count(fixture.path())?,
+                    objects_before,
+                    "rejection writes no loose objects"
+                );
+                assert_eq!(
+                    std::fs::read(repository.index_path())?,
+                    index_before,
+                    "rejection preserves the complete index file"
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn preparation_is_unobservable_and_staged_changes_win() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
