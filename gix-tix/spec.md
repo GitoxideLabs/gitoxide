@@ -1979,9 +1979,11 @@ views.
 - Push, fetch, and picker worktree removal share one user background-task slot.
   Ordinary foreground actions remain available during push and fetch; worktree
   removal blocks exit and worktree switching until deletion finishes. Every task
-  uses the background row directly above the footer, with completed work in dark
-  gray and the remaining status background unchanged; notices and prefix popups
-  stay above it. Fetch's monotonic phases
+  uses the existing message area, with completed work in dark gray and the
+  remaining background unchanged. Held-command help takes precedence, followed
+  by prompts, errors, and other notices; background progress resumes when those
+  messages clear, without reserving a separate row. Progress wraps and moves
+  above prefix popups like other messages. Fetch's monotonic phases
   allocate 0–5% to setup, 5–10% to connection and authentication, 10–15% to refs
   and negotiation, 15–30% to remote enumeration, counting, and compression,
   30–75% to pack receipt and indexing, 75–90% to delta resolution, and 90–95%
