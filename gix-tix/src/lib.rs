@@ -12,6 +12,7 @@ mod history;
 mod logging;
 mod menu;
 mod patch_id;
+mod prefix_input;
 mod ref_tree;
 #[cfg(test)]
 mod test_repository;
@@ -1171,6 +1172,20 @@ fn is_key_press(event: &TerminalEvent) -> bool {
     matches!(event, TerminalEvent::Key(key) if key.kind != KeyEventKind::Release)
 }
 
+fn prefix_input_available(app: &App, focused: bool, other_input_owner: bool) -> bool {
+    focused
+        && !other_input_owner
+        && app.state == State::Complete
+        && !app.entry_selection_active()
+        && !app.topological_navigation_active()
+        && !app.tree_selection_active()
+        && !app.review_selection_active()
+        && !app.squash_selection_active()
+        && !app.review_return_selection_active()
+        && !app.auto_merge_picker.is_open()
+        && !app.has_rebase_conflict()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum WorktrunkInput {
     Cancel { force: bool },
@@ -1492,6 +1507,7 @@ fn event_loop(
     let mut ref_tree = ref_tree::Tree::default();
     let mut command_picker = Menu::default();
     let mut command_picker_key = None;
+    let mut prefix_input = prefix_input::State::default();
     let mut filesystem_responses = logging::FilesystemResponses::default();
     let mut focused = true;
     draw(
@@ -2640,6 +2656,33 @@ fn event_loop(
             last_draw = Instant::now();
             dirty = false;
         }
+        let prefix_enabled = (enhanced_keyboard || cfg!(windows))
+            && prefix_input_available(
+                &app,
+                focused,
+                command_picker.is_open()
+                    || ref_tree.is_active()
+                    || picker.is_some() && worktrunk_owns_input(&app, *picker_focused, focused)
+                    || pending_force_push.is_some()
+                    || pending_rebase_conflict.is_some()
+                    || pending_todo_rebase_conflict.is_some()
+                    || pending_todo_rebase_plan.is_some()
+                    || pending_conflict_resolution.is_some(),
+            );
+        let prefix_changed = if prefix_enabled {
+            // Read queued releases and shortcuts before promoting: drawing may have crossed the deadline.
+            prefix_input.timeout(Instant::now()) == Some(Duration::ZERO)
+                && pending_terminal_event.is_none()
+                && !event::poll(Duration::ZERO)?
+                && prefix_input.promote(&mut app, Instant::now())
+        } else {
+            prefix_input.cancel(&mut app)
+        };
+        if prefix_changed {
+            dirty = true;
+            urgent = true;
+            continue;
+        }
         let repeat_timeout = repeat_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
         let watcher_timeout = ref_watcher.as_ref().map(|_| REF_EVENT_INTERVAL);
         let ref_refresh_timeout =
@@ -2659,6 +2702,7 @@ fn event_loop(
             .is_some_and(|picker| picker.is_loading())
             .then_some(FRAME_INTERVAL);
         let wake_after = [
+            prefix_input.timeout(Instant::now()),
             repeat_timeout,
             watcher_timeout,
             ref_refresh_timeout,
@@ -2695,6 +2739,35 @@ fn event_loop(
         };
         let Some(terminal_event) = terminal_event else {
             continue;
+        };
+        let held_prefix = app.held_prefix_group();
+        let prefix_outcome = prefix_input.handle(
+            &terminal_event,
+            &mut app,
+            Instant::now(),
+            prefix_enabled && !diagnostic_input,
+        );
+        if held_prefix != app.held_prefix_group() {
+            dirty = true;
+            urgent = true;
+        }
+        let prefix_action = match prefix_outcome {
+            prefix_input::Outcome::Pass => None,
+            prefix_input::Outcome::Handled => {
+                dirty = true;
+                urgent = true;
+                continue;
+            }
+            prefix_input::Outcome::Submit(command_id) => {
+                let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
+                let Some(command) = commands.into_iter().find(|command| command.id == command_id) else {
+                    dirty = true;
+                    urgent = true;
+                    continue;
+                };
+                Some(command.action)
+            }
+            prefix_input::Outcome::Action(action) => Some(action),
         };
         if cancel_undo_redo_on_input(&terminal_event, &mut app) {
             dirty = true;
@@ -3149,6 +3222,7 @@ fn event_loop(
                         continue;
                     }
                     ref_tree::Input::DeleteRemoteReferences { groups, fallback } => {
+                        prefix_input = prefix_input::State::default();
                         match with_suspended_terminal(terminal, enhanced_keyboard, || {
                             Ok(push_remote_deletions(&repository_path, &groups))
                         }) {
@@ -3231,7 +3305,10 @@ fn event_loop(
             urgent = true;
             continue;
         }
-        let command_action = if focused && app.auto_merge_picker.is_open() && !diagnostic_input {
+        let deliberate_prefix_action = prefix_action.is_some();
+        let command_action = if let Some(action) = prefix_action {
+            Some(action)
+        } else if focused && app.auto_merge_picker.is_open() && !diagnostic_input {
             let items: Vec<_> = app
                 .auto_merge_options
                 .iter()
@@ -3272,7 +3349,7 @@ fn event_loop(
         } else {
             None
         };
-        let key_pressed = is_key_press(&terminal_event);
+        let key_pressed = deliberate_prefix_action || is_key_press(&terminal_event);
         let (mut action, repeats_history, is_repeat, throttles_draw) = if let Some(action) = command_action {
             (Some(action), false, false, false)
         } else {
@@ -3845,6 +3922,21 @@ fn event_loop(
             }
         }
         for effect in effects {
+            if matches!(
+                effect,
+                Effect::OpenDiff(..)
+                    | Effect::OpenCommitDiff(_)
+                    | Effect::Reword(_)
+                    | Effect::NewCommit { .. }
+                    | Effect::Split(_)
+                    | Effect::Rebase { .. }
+                    | Effect::EditNote(_)
+                    | Effect::EditGitNote(_)
+            ) {
+                // Nested input loops and external tools may consume releases while history is suspended.
+                prefix_input = prefix_input::State::default();
+                app.cancel_held_prefix();
+            }
             match effect {
                 Effect::Cancel => cancelled.store(true, Ordering::Relaxed),
                 direction @ (Effect::Undo | Effect::Redo) => {

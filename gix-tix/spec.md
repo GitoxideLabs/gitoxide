@@ -773,8 +773,8 @@ while conflict selection continues to show the full history. Leaving and
 re-entering compressed mode through the `[` cycle, or performing a full history
 reload, discards accumulated expansions.
 
-The display group remains open for consecutive display changes and closes on
-navigation or another recognized command. The `?` group similarly remains open
+After a tap, the display group remains open for consecutive display changes and
+closes on navigation or another recognized command. The `?` group similarly remains open
 for signature verification, alignment, message, and changes actions. The
 footer keeps every prefix compact. Opening one reverses its label and shows its available
 items in a reversed popout immediately above and connected to that label. The
@@ -788,10 +788,10 @@ individual item wider than the terminal is clipped. The whole popout is omitted
 when its label, the required rows above the footer, or space needed to preserve
 a protected message is not visible. It does not reserve history rows and may
 cover history, but message and changes panes, their status lines, and transient
-notices shift upward to reserve all of its rows and are never occluded. Closing
-behavior and shortcut availability are unchanged, and direct status actions and quit remain in the
-footer. The history status starts with the history position, then the `p`
-command entry and the `v` and `a` prefixes when they are addressable. Remaining history-level
+notices shift upward to reserve all of its rows and are never occluded.
+Direct status actions and quit remain in the footer. The history status starts
+with the history position, then the `p` command entry and the `v` and `a`
+prefixes when they are addressable. Remaining history-level
 actions end at the information prefix while it is closed. An available direct
 time-travel action follows the shortcut groups as `2 stash & travel · @ with worktree`,
 substituting `return` for `travel` at a pinned destination. Duplicate cycling follows it when
@@ -804,6 +804,32 @@ Grouped shortcut keys and actions are declared once in the command catalog and
 shared by menus, footer hints, and keyboard dispatch. A base letter with Shift
 and its uppercase key event have the same meaning in every group. Control-key
 paging retains priority, and undo/redo still ignore key-repeat events.
+
+On terminals that report key releases through the enhanced keyboard protocol,
+and with native Windows keyboard events, holding any of `a`, `v`, `n`, or `?`
+for 300 ms enters command browsing. The initial press still toggles its group
+immediately; releasing before the hold threshold preserves the ordinary tap
+behavior. Terminals without release events retain the tap behavior. Prefix-key
+repeats neither toggle the group again nor execute a command.
+
+Holding selects the first displayed, available command in the open group and
+shows its short help. The highlight identifies the browsing selection separately
+from each command's active toggle state. Help follows the exact command identity
+and current focus: Amend describes the selected Worktree path when focused,
+Spill describes the selected Tree path and displayed parent, and Discard
+describes the selected Worktree path. All catalog commands provide help.
+
+While browsing, `h`/Left and `l`/Right select the adjacent command in the same
+rendered row. `j`/Down and `k`/Up move to the nearest horizontal-center command in
+the next selectable rendered row, including rows created by wrapping. Movement
+clamps at the edges without wrapping. Shifted `H`, `J`, `K`, and `L` also navigate
+while holding `?`. Releasing the held prefix or pressing `<enter>` executes the
+selected command once and closes the group. Escape cancels without execution.
+Other existing shortcuts still execute normally and end the gesture, so a later
+prefix release cannot execute a second command. Losing terminal focus, opening
+a competing overlay, or losing the displayed selection through availability or
+layout changes cancels browsing. The command palette retains its own navigation,
+selection, and submission behavior.
 
 ### Command menu
 
@@ -1984,8 +2010,8 @@ views.
   undo handling, and is blocked while a tree selection is active.
 - `2` and `@` invoke their time-travel modes directly, outside the group.
   Invoking either leaves an already expanded actions group open.
-- Commit and action shortcuts keep the actions group open. Navigation or
-  another recognized command closes it, matching the `v` display shortcut group.
+- After a tap, commit and action shortcuts keep the actions group open.
+  Navigation or another recognized command closes it, matching the `v` display shortcut group.
   Plain `r` does not mutate the repository, and plain `t` has no action.
 - The footer underlines `a` in `actions`; its expanded commit and action lines
   contain only the operations available for the current selection. An empty
@@ -2004,7 +2030,7 @@ views.
   the todo flag, and toggling todo preserves the note. `n e` toggles
   `[tree] checks-pass` for any selected commit, including immutable boundaries.
   `n r` toggles `refackiewed` for the selected patch under the patch-identity
-  eligibility rules above, leaving the enrichment group open.
+  eligibility rules above, leaving the enrichment group open after a tap.
   `n g` edits the real Git note and remains available when the commit-specific
   Tix actions are not. The group is mutually
   exclusive with the view, commit, actions, and information groups and otherwise follows

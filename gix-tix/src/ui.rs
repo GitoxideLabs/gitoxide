@@ -488,27 +488,6 @@ pub(crate) fn draw_with_worktree(
             )
         }),
     );
-    let notice = app.notice();
-    let worktree_pane = changes_panes.iter().find(|pane| pane.pane == ChangePane::Worktree);
-    let notice_horizontal = worktree_pane.map_or(body, |pane| pane.outer);
-    let notice_bottom = worktree_pane.map_or_else(
-        || {
-            changes_panes
-                .iter()
-                .map(|pane| pane.outer.y)
-                .min()
-                .unwrap_or(body.bottom())
-        },
-        |pane| pane.outer.y,
-    );
-    let mut notice_area = notice
-        .as_ref()
-        .and_then(|notice| notice_area(notice, notice_horizontal, body.y, notice_bottom));
-    if let Some(notice_area) = notice_area {
-        body.height = notice_area.y.saturating_sub(body.y);
-    }
-    let history_changes_panes = changes_panes.clone();
-    let history_notice_area = notice_area;
     if let Some(changes) = worktree_changes {
         app.set_worktree_conflicted(changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
     }
@@ -563,15 +542,6 @@ pub(crate) fn draw_with_worktree(
                 && worktree_changes.is_some_and(Changes::is_visible),
         );
     }
-    let visible_history_rows = history_changes_panes
-        .iter()
-        .map(|pane| pane.outer.y.saturating_sub(body.y))
-        .chain(history_notice_area.map(|area| area.y.saturating_sub(body.y)))
-        .min()
-        .unwrap_or(body.height) as usize;
-    app.viewport_rows = visible_history_rows.max(1);
-    app.center_initial_selection();
-    app.prepare_history_viewport();
     let commands =
         if app.history_display_expanded || app.actions_expanded || app.enrich_expanded || app.information_expanded {
             command_menu::commands(app, decorations, app.has_verifiable_signatures())
@@ -586,32 +556,96 @@ pub(crate) fn draw_with_worktree(
         focus_feedback,
         footer.width.saturating_sub(2) as usize,
     );
-    let popup_rows = prefix_popup.as_ref().map_or(0, |(_, rows)| rows.len());
+    if app.held_prefix_group().is_some() {
+        let items = prefix_popup
+            .as_ref()
+            .map(|(_, popup)| popup.items.clone())
+            .unwrap_or_default();
+        if app.set_held_prefix_layout(items).is_none() {
+            prefix_popup = None;
+        }
+    }
+    let mut notice = app
+        .held_prefix_selection()
+        .and_then(|selected| {
+            let command = commands.iter().find(|command| command.id == selected)?;
+            Some(Notice {
+                kind: NoticeKind::Attention,
+                text: format!(
+                    "{} · release {} to run · Esc cancel",
+                    command.help(app),
+                    command.group.prefix()
+                ),
+            })
+        })
+        .or_else(|| app.notice());
+    let worktree_pane = changes_panes.iter().find(|pane| pane.pane == ChangePane::Worktree);
+    let notice_horizontal = worktree_pane.map_or(body, |pane| pane.outer);
+    let notice_bottom = worktree_pane.map_or_else(
+        || {
+            changes_panes
+                .iter()
+                .map(|pane| pane.outer.y)
+                .min()
+                .unwrap_or(body.bottom())
+        },
+        |pane| pane.outer.y,
+    );
+    let mut notice_area = notice
+        .as_ref()
+        .and_then(|notice| notice_area(notice, notice_horizontal, body.y, notice_bottom));
+    let popup_anchor = background_progress.as_ref().map_or(footer, |_| progress_area);
+    let popup_rows = prefix_popup.as_ref().map_or(0, |(_, popup)| popup.rows.len());
     let mut prefix_popup_allowed = prefix_popup
         .as_ref()
-        .is_some_and(|(anchor, _)| prefix_popup_can_render(area, footer, *anchor, popup_rows));
+        .is_some_and(|(anchor, _)| prefix_popup_can_render(area, popup_anchor, *anchor, popup_rows));
     if prefix_popup_allowed {
-        let popup_y = footer.y - popup_rows as u16;
+        let popup_y = popup_anchor.y - popup_rows as u16;
         let shifted_y = |area: Rect| area.y.saturating_sub(popup_rows as u16).max(full_body.y);
         prefix_popup_allowed = changes_panes.iter().all(|pane| popup_y > shifted_y(pane.outer))
             && commit_pane.as_ref().is_none_or(|(outer, _)| popup_y > outer.y)
             && notice_area.is_none_or(|area| popup_y.saturating_sub(shifted_y(area)) >= area.height);
-        if prefix_popup_allowed {
-            for pane in &mut changes_panes {
-                pane.outer.y = shifted_y(pane.outer);
-                pane.outer.height = pane.outer.height.min(popup_y.saturating_sub(pane.outer.y));
-            }
-            if let Some(area) = notice_area.as_mut() {
-                area.y = shifted_y(*area);
-                area.height = area.height.min(popup_y.saturating_sub(area.y));
-            }
-            if let Some((outer, content)) = commit_pane.as_mut() {
-                outer.height = outer.height.min(popup_y.saturating_sub(outer.y));
-                *content = outer.inner(Margin {
-                    horizontal: 2,
-                    vertical: 1,
-                });
-            }
+    }
+    if app.held_prefix_group().is_some() && (!prefix_popup_allowed || notice_area.is_none()) {
+        app.cancel_held_prefix();
+        prefix_popup = None;
+        prefix_popup_allowed = false;
+        notice = app.notice();
+        notice_area = notice
+            .as_ref()
+            .and_then(|notice| self::notice_area(notice, notice_horizontal, body.y, notice_bottom));
+    }
+    if let Some(notice_area) = notice_area {
+        body.height = notice_area.y.saturating_sub(body.y);
+    }
+    let history_changes_panes = changes_panes.clone();
+    let history_notice_area = notice_area;
+    let visible_history_rows = history_changes_panes
+        .iter()
+        .map(|pane| pane.outer.y.saturating_sub(body.y))
+        .chain(history_notice_area.map(|area| area.y.saturating_sub(body.y)))
+        .min()
+        .unwrap_or(body.height) as usize;
+    app.viewport_rows = visible_history_rows.max(1);
+    app.center_initial_selection();
+    app.prepare_history_viewport();
+    if prefix_popup_allowed {
+        let popup_y = popup_anchor.y - popup_rows as u16;
+        let shifted_y = |area: Rect| area.y.saturating_sub(popup_rows as u16).max(full_body.y);
+        for pane in &mut changes_panes {
+            pane.outer.y = shifted_y(pane.outer);
+            pane.outer.height = pane.outer.height.min(popup_y.saturating_sub(pane.outer.y));
+        }
+        if let Some(area) = notice_area.as_mut() {
+            area.y = shifted_y(*area);
+            area.height = area.height.min(popup_y.saturating_sub(area.y));
+        }
+        if let Some((outer, content)) = commit_pane.as_mut() {
+            outer.height = outer.height.min(popup_y.saturating_sub(outer.y));
+            *content = outer.inner(Margin {
+                horizontal: 2,
+                vertical: 1,
+            });
         }
     }
     // Keep pane content above the popup while its underlay still covers the history row beneath it.
@@ -1426,8 +1460,8 @@ pub(crate) fn draw_with_worktree(
     }
     if app.unseen_filesystem_redraw {
         footer_spans = notification_discs(footer_spans);
-        if let Some((_, rows)) = prefix_popup.as_mut() {
-            for items in rows {
+        if let Some((_, popup)) = prefix_popup.as_mut() {
+            for items in &mut popup.rows {
                 *items = notification_discs(std::mem::take(items));
             }
         }
@@ -1435,17 +1469,20 @@ pub(crate) fn draw_with_worktree(
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
     if let (Some(area), Some(notice)) = (notice_area, notice.as_ref()) {
         render_notice(frame, area, notice);
-        if let Some((applied, total, _)) = app.undo_position() {
+        if app.held_prefix_group().is_none()
+            && let Some((applied, total, _)) = app.undo_position()
+        {
             render_undo_progress(frame, area, notice.kind, applied, total);
         }
     }
     if let Some(progress) = &background_progress {
         render_background_progress(frame, progress_area, progress);
     }
-    let popup_anchor = background_progress.as_ref().map_or(footer, |_| progress_area);
     let _ = prefix_popup
         .filter(|_| prefix_popup_allowed)
-        .and_then(|(anchor, items)| render_prefix_popup(frame, area, popup_anchor, anchor, items));
+        .and_then(|(anchor, popup)| {
+            render_prefix_popup(frame, area, popup_anchor, anchor, popup, app.held_prefix_selection())
+        });
 }
 
 fn render_background_progress(frame: &mut Frame<'_>, area: Rect, progress: &crate::app::BackgroundProgress) {
@@ -2404,7 +2441,23 @@ fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>>
     ]
 }
 
-fn command_items(commands: &[Command], group: CommandGroup, row: usize) -> Vec<Vec<Span<'static>>> {
+struct PrefixItem {
+    id: Option<CommandId>,
+    spans: Vec<Span<'static>>,
+}
+
+impl From<Vec<Span<'static>>> for PrefixItem {
+    fn from(spans: Vec<Span<'static>>) -> Self {
+        Self { id: None, spans }
+    }
+}
+
+struct PrefixPopupRows {
+    rows: Vec<Vec<Span<'static>>>,
+    items: Vec<crate::app::prefix::Item>,
+}
+
+fn command_items(commands: &[Command], group: CommandGroup, row: usize) -> Vec<PrefixItem> {
     let mut items = Vec::new();
     for command in commands
         .iter()
@@ -2414,10 +2467,13 @@ fn command_items(commands: &[Command], group: CommandGroup, row: usize) -> Vec<V
             || vec![Span::raw(command.label)],
             |key| shortcut(command.label, key, command.active),
         );
-        items.push(item);
+        items.push(PrefixItem {
+            id: Some(command.id),
+            spans: item,
+        });
     }
     if items.is_empty() {
-        items.push(vec![Span::raw("no actions")]);
+        items.push(vec![Span::raw("no actions")].into());
     }
     items
 }
@@ -2428,7 +2484,7 @@ fn active_prefix_popup(
     commands: &[Command],
     focus_feedback: Option<&'static str>,
     content_width: usize,
-) -> Option<(usize, Vec<Vec<Span<'static>>>)> {
+) -> Option<(usize, PrefixPopupRows)> {
     let selected_segment = app.selected_is_segment();
     let mut logical_rows = app
         .history_display_expanded
@@ -2447,7 +2503,7 @@ fn active_prefix_popup(
             .iter()
             .filter(|command| command.group == CommandGroup::Information)
             .map(|command| {
-                if command.id == CommandId::VerifySignatures {
+                let spans = if command.id == CommandId::VerifySignatures {
                     if app.signature_failures > 0 {
                         vec![
                             Span::raw(format!("s {} ", app.signature_failures)),
@@ -2466,22 +2522,29 @@ fn active_prefix_popup(
                         || vec![Span::raw(command.label)],
                         |key| shortcut(command.label, key, command.active),
                     )
+                };
+                PrefixItem {
+                    id: Some(command.id),
+                    spans,
                 }
             })
             .collect();
         if app.has_hidden_filter {
-            information.push(shortcut(
-                if app.show_hidden {
-                    "Hide unrelated history"
-                } else {
-                    "sHow related history"
-                },
-                'H',
-                app.show_hidden,
-            ));
+            information.push(
+                shortcut(
+                    if app.show_hidden {
+                        "Hide unrelated history"
+                    } else {
+                        "sHow related history"
+                    },
+                    'H',
+                    app.show_hidden,
+                )
+                .into(),
+            );
         }
         if app.changes_focus != Some(ChangePane::Tree) && app.can_push() {
-            information.push(shortcut("Push", 'P', true));
+            information.push(shortcut("Push", 'P', true).into());
         }
         let mut navigation = vec![shortcut("p command", 'p', true)];
         if !selected_segment && (app.tree_changes_visible || app.worktree_changes_visible) {
@@ -2504,7 +2567,10 @@ fn active_prefix_popup(
                 "<enter> diff"
             })]);
         }
-        logical_rows = Some(vec![information, navigation]);
+        logical_rows = Some(vec![
+            information,
+            navigation.into_iter().map(PrefixItem::from).collect(),
+        ]);
     }
     Some((
         active_prefix_popup_anchor(app, decorations)?,
@@ -2512,13 +2578,14 @@ fn active_prefix_popup(
     ))
 }
 
-fn wrap_prefix_popup_rows(logical_rows: Vec<Vec<Vec<Span<'static>>>>, content_width: usize) -> Vec<Vec<Span<'static>>> {
+fn wrap_prefix_popup_rows(logical_rows: Vec<Vec<PrefixItem>>, content_width: usize) -> PrefixPopupRows {
     let mut rows = Vec::new();
+    let mut positions = Vec::new();
     for items in logical_rows {
         let mut row = Vec::new();
         let mut row_width = 0usize;
         for mut item in items {
-            let item_width = spans_width(&item);
+            let item_width = spans_width(&item.spans);
             if !row.is_empty() && row_width.saturating_add(3).saturating_add(item_width) > content_width {
                 rows.push(row);
                 row = Vec::new();
@@ -2528,8 +2595,17 @@ fn wrap_prefix_popup_rows(logical_rows: Vec<Vec<Vec<Span<'static>>>>, content_wi
                 row.push(Span::raw(" · "));
                 row_width += 3;
             }
+            let start = row_width;
             row_width = row_width.saturating_add(item_width);
-            row.append(&mut item);
+            if let Some(id) = item.id.filter(|_| row_width <= content_width) {
+                positions.push(crate::app::prefix::Item {
+                    id,
+                    row: rows.len(),
+                    start,
+                    end: row_width,
+                });
+            }
+            row.append(&mut item.spans);
         }
         if row.is_empty() {
             rows.push(Vec::new());
@@ -2537,7 +2613,7 @@ fn wrap_prefix_popup_rows(logical_rows: Vec<Vec<Vec<Span<'static>>>>, content_wi
             rows.push(row);
         }
     }
-    rows
+    PrefixPopupRows { rows, items: positions }
 }
 
 fn emphasize_prefix(spans: &mut [Span<'_>]) {
@@ -2555,8 +2631,10 @@ fn render_prefix_popup(
     bounds: Rect,
     footer: Rect,
     anchor: usize,
-    mut rows: Vec<Vec<Span<'static>>>,
+    popup: PrefixPopupRows,
+    selected: Option<CommandId>,
 ) -> Option<Rect> {
+    let PrefixPopupRows { mut rows, items } = popup;
     let height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
     if !prefix_popup_can_render(bounds, footer, anchor, rows.len()) {
         return None;
@@ -2581,6 +2659,19 @@ fn render_prefix_popup(
             .style(Style::default().add_modifier(Modifier::REVERSED)),
         area,
     );
+    if let Some(item) = items.iter().find(|item| Some(item.id) == selected) {
+        frame.buffer_mut().set_style(
+            Rect::new(
+                area.x + 1 + item.start as u16,
+                area.y + item.row as u16,
+                (item.end - item.start) as u16,
+                1,
+            ),
+            Style::default()
+                .remove_modifier(Modifier::DIM | Modifier::REVERSED)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
     Some(area)
 }
 
@@ -3240,7 +3331,8 @@ mod tests {
                 Rect::new(0, 0, 20, 2),
                 Rect::new(0, 1, 20, 1),
                 12,
-                vec![vec![Span::raw("abcdefghijklmnopqrstuvwxyz")]],
+                wrap_prefix_popup_rows(vec![vec![vec![Span::raw("abcdefghijklmnopqrstuvwxyz")].into()]], 18),
+                None,
             );
         })?;
 
@@ -3260,16 +3352,17 @@ mod tests {
         let rows = wrap_prefix_popup_rows(
             vec![
                 vec![
-                    shortcut("one", 'o', true),
-                    shortcut("two", 't', false),
-                    shortcut("three", 't', true),
+                    shortcut("one", 'o', true).into(),
+                    shortcut("two", 't', false).into(),
+                    shortcut("three", 't', true).into(),
                 ],
-                vec![shortcut("four", 'f', true)],
+                vec![shortcut("four", 'f', true).into()],
             ],
             9,
         );
         assert_eq!(
-            rows.iter()
+            rows.rows
+                .iter()
                 .cloned()
                 .map(Line::from)
                 .map(|line| line.to_string())
@@ -3281,7 +3374,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(11, 4))?;
         let mut popup = None;
         terminal.draw(|frame| {
-            popup = render_prefix_popup(frame, Rect::new(0, 0, 11, 4), Rect::new(0, 3, 11, 1), 0, rows);
+            popup = render_prefix_popup(frame, Rect::new(0, 0, 11, 4), Rect::new(0, 3, 11, 1), 0, rows, None);
         })?;
 
         assert_eq!(popup, Some(Rect::new(0, 0, 11, 3)));
@@ -3324,6 +3417,307 @@ mod tests {
                 line.contains("author date") || line.contains("names") || line.contains("show related history")
             }),
             "a popup that does not fit is not partially rendered"
+        );
+        Ok(())
+    }
+
+    fn held_prefix_app() -> App {
+        let mut app = App::new(1);
+        app.changes_mode = None;
+        app.extend_commits(vec![Commit {
+            id: gix::ObjectId::Sha1([1; 20]),
+            parent_ids: Default::default(),
+            committer_time: gix::date::Time::default(),
+            author_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            has_merge_replay: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        complete(&mut app);
+        app
+    }
+
+    #[test]
+    fn held_prefixes_select_displayed_commands_and_temporarily_show_their_help() -> gix_testtools::Result {
+        for group in [
+            CommandGroup::View,
+            CommandGroup::Actions,
+            CommandGroup::Enrich,
+            CommandGroup::Information,
+        ] {
+            let mut app = held_prefix_app();
+            app.date_mode = DateMode::None;
+            app.leave_success("existing notice");
+            app.start_held_prefix(group);
+            assert_eq!(
+                app.held_prefix_selection(),
+                None,
+                "a command must be displayed before release can execute it"
+            );
+            let mut terminal = Terminal::new(TestBackend::new(180, 14))?;
+            terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+            let commands = command_menu::commands(&app, &Decorations::new(), false);
+            let first = commands
+                .iter()
+                .find(|command| command.group == group)
+                .expect("every prefix has commands");
+            assert_eq!(
+                app.held_prefix_selection(),
+                Some(first.id),
+                "the first displayed command is selected for {group:?}"
+            );
+            let rendered = (0..14)
+                .map(|y| rendered_line(&terminal, y))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                rendered.contains(first.help(&app)),
+                "the selected verb's help is shown for {group:?}"
+            );
+            assert!(
+                rendered.contains(&format!("release {} to run", group.prefix())),
+                "help explains the release gesture"
+            );
+            assert!(rendered.contains("Esc cancel"), "help explains cancellation");
+            assert!(
+                !rendered.contains("existing notice"),
+                "held help occupies the message line without combining notices"
+            );
+            assert_eq!(app.notice().expect("the stored notice remains").text, "existing notice");
+
+            let (anchor, popup) = active_prefix_popup(&app, &Decorations::new(), &commands, None, 178)
+                .expect("the held popup remains available");
+            let item = popup.items.first().expect("the selected command has a position");
+            let width = popup
+                .rows
+                .iter()
+                .map(|row| spans_width(row) + 2)
+                .max()
+                .expect("the popup has rows");
+            let x = anchor.min(180 - width) as u16;
+            let y = 13 - popup.rows.len() as u16 + item.row as u16;
+            let buffer = terminal.backend().buffer();
+            let selected = &buffer[(x + 1 + item.start as u16, y)];
+            assert!(
+                selected.modifier.contains(Modifier::BOLD),
+                "the selected item has emphasis"
+            );
+            assert!(
+                !selected.modifier.intersects(Modifier::DIM | Modifier::REVERSED),
+                "selection stays distinct even for toggles that are off"
+            );
+            assert!(
+                buffer[(x, y)].modifier.contains(Modifier::REVERSED),
+                "the popup retains its existing floating style"
+            );
+
+            assert!(app.cancel_held_prefix(), "cancellation closes a held prefix");
+            terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+            assert!(
+                (0..14).any(|y| rendered_line(&terminal, y).contains("existing notice")),
+                "the stored notice returns after cancellation"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn held_prefix_navigation_uses_wrapped_rows_and_preserves_the_selected_id_on_resize() -> gix_testtools::Result {
+        use crate::app::prefix::Direction;
+
+        let mut app = held_prefix_app();
+        app.start_held_prefix(CommandGroup::View);
+        let mut wide = Terminal::new(TestBackend::new(180, 16))?;
+        wide.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        app.move_held_prefix(Direction::Right);
+        app.move_held_prefix(Direction::Right);
+        assert_eq!(
+            app.held_prefix_selection(),
+            Some(CommandId::Emails),
+            "inactive toggles remain selectable"
+        );
+
+        let mut narrow = Terminal::new(TestBackend::new(25, 16))?;
+        narrow.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            app.held_prefix_selection(),
+            Some(CommandId::Emails),
+            "resize preserves the selected command"
+        );
+        app.move_held_prefix(Direction::Left);
+        assert_eq!(
+            app.held_prefix_selection(),
+            Some(CommandId::Emails),
+            "left does not cross a wrapped row boundary"
+        );
+        app.move_held_prefix(Direction::Up);
+        assert_eq!(
+            app.held_prefix_selection(),
+            Some(CommandId::Date),
+            "up chooses the nearest horizontal center in the prior row"
+        );
+        app.move_held_prefix(Direction::Down);
+        assert_eq!(
+            app.held_prefix_selection(),
+            Some(CommandId::Emails),
+            "down uses the current wrapped geometry"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn held_information_navigation_skips_navigation_hints_and_direct_shortcut_duplicates() -> gix_testtools::Result {
+        use crate::app::prefix::Direction;
+
+        let mut app = held_prefix_app();
+        app.configure_hidden_filter(true);
+        app.start_held_prefix(CommandGroup::Information);
+        let mut terminal = Terminal::new(TestBackend::new(180, 14))?;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let commands = command_menu::commands(&app, &Decorations::new(), false);
+        let information: Vec<_> = commands
+            .iter()
+            .filter(|command| command.group == CommandGroup::Information)
+            .collect();
+        for command in &information {
+            assert_eq!(
+                app.held_prefix_selection(),
+                Some(command.id),
+                "only catalog commands participate in horizontal navigation"
+            );
+            app.move_held_prefix(Direction::Right);
+        }
+        let last = information.last().expect("Information has commands").id;
+        assert_eq!(
+            app.held_prefix_selection(),
+            Some(last),
+            "horizontal navigation stops before direct shortcut hints"
+        );
+        app.move_held_prefix(Direction::Down);
+        assert_eq!(
+            app.held_prefix_selection(),
+            Some(last),
+            "keyboard-help rows contain no selectable commands"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn held_prefix_cancels_when_the_selected_command_or_popup_disappears() -> gix_testtools::Result {
+        use crate::app::prefix::Direction;
+
+        let mut app = held_prefix_app();
+        app.configure_hidden_filter(true);
+        app.leave_success("existing notice");
+        app.start_held_prefix(CommandGroup::View);
+        let mut terminal = Terminal::new(TestBackend::new(180, 16))?;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        for _ in 0..7 {
+            app.move_held_prefix(Direction::Right);
+        }
+        assert_eq!(
+            app.held_prefix_selection(),
+            Some(CommandId::Hidden),
+            "the optional history toggle was selected"
+        );
+        app.configure_hidden_filter(false);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            app.held_prefix_group(),
+            None,
+            "a vanished selection cancels instead of selecting a different action"
+        );
+        assert!(
+            (0..16).any(|y| rendered_line(&terminal, y).contains("existing notice")),
+            "cancellation immediately restores the notice"
+        );
+
+        for (width, height) in [(35, 3), (4, 16)] {
+            app.start_held_prefix(CommandGroup::View);
+            terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+            let mut small = Terminal::new(TestBackend::new(width, height))?;
+            small.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+            assert_eq!(
+                app.held_prefix_group(),
+                None,
+                "a popup without enough screen space cannot remain executable"
+            );
+            assert_eq!(
+                app.held_prefix_selection(),
+                None,
+                "no invisible selection survives a resize"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn held_prefix_rechecks_worktree_availability_before_showing_help() -> gix_testtools::Result {
+        use crate::app::prefix::Direction;
+
+        let mut app = held_prefix_app();
+        app.changes_mode = Some(ChangesMode::Both);
+        let commit_id = app.rows[0].id;
+        app.set_worktree_head(Some(commit_id), false);
+        let decorations = Decorations::from([(
+            commit_id,
+            vec![Decoration {
+                name: "HEAD".into(),
+                kind: DecorationKind::Head,
+            }],
+        )]);
+        let mut changes = Changes {
+            paths: vec![crate::app::PathChange {
+                kind: ChangeKind::Modified,
+                group: ChangeGroup::Unstaged,
+                source: None,
+                path: "file".into(),
+                lines: None,
+            }],
+            has_tracked_changes: true,
+            ..Changes::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(180, 16))?;
+        app.start_held_prefix(CommandGroup::Actions);
+        for clean in [false, true] {
+            if clean {
+                changes = Changes::default();
+            }
+            terminal.draw(|frame| {
+                super::draw_with_worktree(
+                    frame,
+                    frame.area(),
+                    &mut app,
+                    &decorations,
+                    &gix::mailmap::Snapshot::default(),
+                    None,
+                    None,
+                    Some(&changes),
+                );
+            })?;
+            if !clean {
+                app.move_held_prefix(Direction::Right);
+                assert_eq!(
+                    app.held_prefix_selection(),
+                    Some(CommandId::NewCommit),
+                    "tracked changes make the new-commit command available"
+                );
+            }
+        }
+        assert_eq!(
+            app.held_prefix_group(),
+            None,
+            "a fresh clean worktree removes the selected new-commit command before help is drawn"
+        );
+        assert!(
+            !(0..16).any(|y| rendered_line(&terminal, y).contains("release a to run")),
+            "stale help disappears in the same frame"
         );
         Ok(())
     }
