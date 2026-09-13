@@ -12,6 +12,7 @@ use gix::{
     traverse::commit::ParentIds,
 };
 
+pub(crate) mod prefix;
 mod tree_selection;
 pub(crate) use tree_selection::Role as TreeSelectionRole;
 
@@ -648,6 +649,7 @@ pub(crate) struct App {
     pub(crate) actions_expanded: bool,
     pub(crate) enrich_expanded: bool,
     pub(crate) information_expanded: bool,
+    held_prefix: Option<prefix::Held>,
     topological_navigation: Option<TopologicalNavigation>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
@@ -773,6 +775,7 @@ impl App {
             actions_expanded: false,
             enrich_expanded: false,
             information_expanded: false,
+            held_prefix: None,
             topological_navigation: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
@@ -900,6 +903,7 @@ impl App {
     }
 
     pub(crate) fn close_shortcut_groups(&mut self) {
+        self.held_prefix = None;
         self.history_display_expanded = false;
         self.actions_expanded = false;
         self.enrich_expanded = false;
