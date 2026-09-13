@@ -794,7 +794,11 @@ with the history position, then the `p` command entry and the `v` and `a`
 prefixes when they are addressable. Remaining history-level
 actions end at the information prefix while it is closed. An available direct
 time-travel action follows the shortcut groups as `2 stash & travel · @ with worktree`,
-substituting `return` for `travel` at a pinned destination. Duplicate cycling follows it when
+substituting `return` for `travel` at a pinned destination. When current worktree
+status confirms there are no staged, unstaged, or untracked changes, omit the
+`2` hint and show just `@ travel` (or `@ return`). Missing, failed, or unwatched
+status retains both hints. The shortcuts themselves remain available.
+Duplicate cycling follows it when
 the selected commit has duplicates, and copy follows these actions; the reference toggle immediately precedes
 the `?` group; quit is always last.
 All status lines embed and underline a shortcut character in its action label when
