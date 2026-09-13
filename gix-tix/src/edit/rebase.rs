@@ -66,6 +66,11 @@ pub(crate) enum Edit {
         commit: gix::objs::Commit,
         reset_index: bool,
     },
+    InsertBelow {
+        target: ObjectId,
+        lower: gix::objs::Commit,
+        upper: gix::objs::Commit,
+    },
     Remove {
         target: ObjectId,
     },
@@ -511,6 +516,7 @@ fn materialize_conflict(
 struct Prepared {
     repo: gix::Repository,
     reset_indices: HashSet<ObjectId>,
+    current_index_only: bool,
     reset_index_paths: Option<Vec<BString>>,
     skip_worktree_transitions: bool,
     selected: Option<ObjectId>,
@@ -523,7 +529,7 @@ struct Prepared {
     committer: gix::actor::Signature,
     expected_refs: Option<Vec<PlanRef>>,
     checkout_reference: Option<gix::refs::FullName>,
-    /// The staged resolution is the current worktree's baseline before its final checkout.
+    /// Already-consumed local changes are the current worktree's baseline before any checkout.
     checkout_tree: Option<ObjectId>,
     departure: Option<(ObjectId, Option<ObjectId>)>,
     pins: Vec<ObjectId>,
@@ -976,6 +982,7 @@ fn perform_inner(
         } => (Some(*checkout), stash_before_persist.clone()),
         _ => (None, None),
     };
+    let mut insert_lower = None;
     let (root, replacement, inserted, reset_index, removed, repeat, mut split_upper) = match edit {
         Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false, false, None),
         Edit::Insert {
@@ -983,10 +990,21 @@ fn perform_inner(
             commit,
             reset_index,
         } => (anchor, Some(commit), true, reset_index, false, false, None),
+        Edit::InsertBelow { target, lower, upper } => {
+            super::create::below_head(&repo, target)?;
+            anyhow::ensure!(
+                graph.is_in_edit_scope(target) && !graph.is_read_only(target),
+                "cannot create below a commit outside editable history"
+            );
+            insert_lower = Some(lower);
+            (Some(target), Some(upper), false, false, false, false, None)
+        }
         Edit::Remove { target } => (Some(target), None, false, false, true, false, None),
         Edit::Split { target, source, upper } => (Some(target), Some(source), false, false, false, false, Some(upper)),
         Edit::Repeat { base, .. } => (Some(base), None, false, false, false, true, None),
     };
+    let below = insert_lower.is_some();
+    let extra_commits = usize::from(split_upper.is_some() || below);
 
     if inserted && let Some(parent_commit_id) = root {
         let parent = repo.find_commit(parent_commit_id)?.decode()?.into_owned()?;
@@ -1003,7 +1021,7 @@ fn perform_inner(
         None => Vec::new(),
     };
     let mut progress = Progress {
-        total: affected.len() + usize::from(split_upper.is_some()) + usize::from(inserted && affected.is_empty()),
+        total: affected.len() + extra_commits + usize::from(inserted && affected.is_empty()),
         ..Progress::default()
     };
     report(None, progress);
@@ -1043,17 +1061,18 @@ fn perform_inner(
             eager: HashSet::new(),
         }
     } else {
-        checkout_path = auto_merge::checkout_path(&repo, graph, repeat_checkout.or(checkout))?;
+        let auto_checkout = repeat_checkout.or(checkout).filter(|_| !below);
+        checkout_path = auto_merge::checkout_path(&repo, graph, auto_checkout)?;
         auto_merge::prepare(
             &repo,
             graph,
             &mut affected,
-            repeat_checkout.or(checkout),
+            auto_checkout,
             root.filter(|id| tree_mode == Tree::CherryPick && graph.auto_merges.contains_key(id)),
         )?
     };
-    progress.total = affected.len() + usize::from(split_upper.is_some()) + usize::from(inserted && affected.is_empty());
-    if !inserted && !repeat && !checkout_path.is_empty() {
+    progress.total = affected.len() + extra_commits + usize::from(inserted && affected.is_empty());
+    if !inserted && !below && !repeat && !checkout_path.is_empty() {
         let checkout = checkout.expect("a non-empty checkout path has a checkout");
         let review_boundary =
             (root == Some(checkout) && replacement.as_ref().is_some_and(super::review::is_review)).then_some(checkout);
@@ -1087,6 +1106,16 @@ fn perform_inner(
     let mut conflict = None;
     let mut eager_checkout_rewrite = false;
     let mut finalized_empty = HashSet::new();
+    let lower_commit_id = insert_lower
+        .take()
+        .map(|commit| {
+            let commit_id = replay.write(commit, None, CommitState::Unmarked(signature), false, &mut progress)?;
+            progress.processed += 1;
+            report(None, progress);
+            selected = Some(commit_id);
+            Ok::<_, anyhow::Error>(commit_id)
+        })
+        .transpose()?;
     if inserted {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
@@ -1125,10 +1154,13 @@ fn perform_inner(
             Some(commit) => commit.clone(),
             None => repo.find_commit(old_id)?.decode()?.into_owned()?,
         };
-        let new_parents: Vec<_> = old_parents
-            .iter()
-            .filter_map(|parent| auto_merge::mapped(*parent, &rewritten))
-            .collect();
+        let new_parents: Vec<_> = match lower_commit_id.filter(|_| Some(old_id) == root) {
+            Some(commit_id) => vec![commit_id],
+            None => old_parents
+                .iter()
+                .filter_map(|parent| auto_merge::mapped(*parent, &rewritten))
+                .collect(),
+        };
         if auto_merge::is_auto_merge(&commit) {
             let eager = !header_only && conflict.is_none() && auto.eager.contains(&old_id);
             let (new_id, _, _) = replay.auto_merge(
@@ -1288,7 +1320,7 @@ fn perform_inner(
                 report(None, progress);
                 rewritten.insert(old_id, Some(upper_id));
                 selected = Some(upper_id);
-            } else {
+            } else if !below {
                 selected = Some(new_id);
             }
         }
@@ -1296,7 +1328,8 @@ fn perform_inner(
 
     let marked = matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) || conflict.is_some();
     let skip_worktree_transitions = header_only
-        || !eager_checkout_rewrite
+        || !below
+            && !eager_checkout_rewrite
             && (inserted
                 || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed));
     let mut reset_indices: HashSet<_> = (!header_only && ((inserted && reset_index) || (!inserted && marked)))
@@ -1322,6 +1355,7 @@ fn perform_inner(
     let mut prepared = Prepared {
         repo,
         reset_indices,
+        current_index_only: below,
         reset_index_paths,
         skip_worktree_transitions,
         selected,
@@ -1338,7 +1372,7 @@ fn perform_inner(
         committer,
         expected_refs: None,
         checkout_reference: None,
-        checkout_tree: (pending_checkout == PendingCheckout::FinalizeEditedHead)
+        checkout_tree: (below || pending_checkout == PendingCheckout::FinalizeEditedHead)
             .then(|| replacement.as_ref().map(|commit| commit.tree))
             .flatten(),
         departure: None,
@@ -1604,6 +1638,7 @@ pub(super) fn finish_review_with_progress(
     let mut prepared = Prepared {
         repo,
         reset_indices: HashSet::new(),
+        current_index_only: false,
         reset_index_paths: None,
         skip_worktree_transitions: false,
         selected: Some(selected),
@@ -2115,6 +2150,7 @@ pub(crate) fn perform_plan_with_progress(
     let mut prepared = Prepared {
         repo,
         reset_indices: marked.then_some(plan.base).into_iter().collect(),
+        current_index_only: false,
         reset_index_paths: None,
         skip_worktree_transitions: false,
         selected,
@@ -2364,7 +2400,14 @@ impl Prepared {
             self.checkout_tree,
         )?;
         let index_resets = (!self.reset_indices.is_empty())
-            .then(|| index_resets(&self.repo, &self.rewritten, &self.reset_indices))
+            .then(|| {
+                index_resets(
+                    &self.repo,
+                    &self.rewritten,
+                    &self.reset_indices,
+                    self.current_index_only,
+                )
+            })
             .transpose()?;
         for transition in &transitions {
             super::delete::preflight_tree_transition(
@@ -2673,14 +2716,19 @@ fn index_resets(
     repo: &gix::Repository,
     rewritten: &HashMap<ObjectId, Option<ObjectId>>,
     reset_from: &HashSet<ObjectId>,
+    current_only: bool,
 ) -> Result<Vec<IndexReset>> {
-    let mut repos = vec![
+    let mut repos = vec![if current_only {
+        repo.clone()
+    } else {
         repo.main_repo()
-            .context("could not open the main worktree repository")?,
-    ];
-    for proxy in repo.worktrees().context("could not enumerate linked worktrees")? {
-        if let Ok(worktree_repo) = proxy.into_repo_with_possibly_inaccessible_worktree() {
-            repos.push(worktree_repo);
+            .context("could not open the main worktree repository")?
+    }];
+    if !current_only {
+        for proxy in repo.worktrees().context("could not enumerate linked worktrees")? {
+            if let Ok(worktree_repo) = proxy.into_repo_with_possibly_inaccessible_worktree() {
+                repos.push(worktree_repo);
+            }
         }
     }
     let mut seen = HashSet::new();
