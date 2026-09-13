@@ -549,9 +549,10 @@ pub(crate) fn draw_with_worktree(
             Vec::new()
         };
     let focus_feedback = app.focus_feedback.take();
+    let time_travel = time_travel_shortcuts(app, decorations, worktree_changes);
     let mut prefix_popup = active_prefix_popup(
         app,
-        decorations,
+        &time_travel,
         &commands,
         focus_feedback,
         footer.width.saturating_sub(2) as usize,
@@ -1392,10 +1393,8 @@ pub(crate) fn draw_with_worktree(
         State::Cancelled => " · cancelled",
     };
     let mut footer_spans = vec![Span::raw(status)];
-    let mut time_travel = None;
     let mut actions_prefix_spans = Vec::new();
     if app.actions_visible() {
-        time_travel = time_travel_label(app, decorations);
         actions_prefix_spans.push(Span::raw(" · "));
         actions_prefix_spans.push(Span::styled("a", Style::default().add_modifier(Modifier::UNDERLINED)));
         actions_prefix_spans.push(Span::raw("ctions"));
@@ -1427,12 +1426,7 @@ pub(crate) fn draw_with_worktree(
             emphasize_prefix(&mut ordered[enrich_prefix_start..]);
         }
     }
-    if let Some(label) = time_travel {
-        ordered.push(Span::raw(" · "));
-        ordered.extend(shortcut(label, '2', true));
-        ordered.push(Span::raw(" · "));
-        ordered.extend(shortcut("@ with worktree", '@', true));
-    }
+    ordered.extend(time_travel);
     if app.can_cycle_duplicate() {
         ordered.push(Span::raw(" · "));
         ordered.extend(shortcut("next duplicate", 'x', true));
@@ -1537,33 +1531,62 @@ fn history_position(app: &App) -> String {
     }
 }
 
-fn time_travel_label(app: &App, decorations: &Decorations) -> Option<&'static str> {
-    if !app.time_travel_shortcut_visible()
+fn time_travel_shortcuts(
+    app: &App,
+    decorations: &Decorations,
+    worktree_changes: Option<&Changes>,
+) -> Vec<Span<'static>> {
+    if !app.actions_visible()
+        || !app.time_travel_shortcut_visible()
         || !decorations
             .values()
             .flatten()
             .any(|decoration| decoration.kind == DecorationKind::Head)
     {
-        return None;
+        return Vec::new();
     }
-    let selected = app.selected.and_then(|index| app.rows.get(index))?;
+    let Some(selected) = app.selected.and_then(|index| app.rows.get(index)) else {
+        return Vec::new();
+    };
     let selected_refs = decorations.get(&selected.id).map(Vec::as_slice).unwrap_or_default();
     if selected_refs
         .iter()
         .any(|decoration| decoration.kind == DecorationKind::Head)
     {
-        None
-    } else if selected_refs
-        .iter()
-        .any(|decoration| decoration.kind == DecorationKind::Pin)
-    {
-        Some("2 stash & return")
-    } else {
-        Some("2 stash & travel")
+        return Vec::new();
     }
+    let returning = selected_refs
+        .iter()
+        .any(|decoration| decoration.kind == DecorationKind::Pin);
+    let clean = app.changes_mode == Some(ChangesMode::Both)
+        && app.worktree_changes.error.is_none()
+        && worktree_changes.is_some_and(|changes| changes.paths.is_empty());
+    let mut spans = Vec::new();
+    if !clean {
+        spans.push(Span::raw(" · "));
+        spans.extend(shortcut(
+            if returning {
+                "2 stash & return"
+            } else {
+                "2 stash & travel"
+            },
+            '2',
+            true,
+        ));
+    }
+    let label = if !clean {
+        "@ with worktree"
+    } else if returning {
+        "@ return"
+    } else {
+        "@ travel"
+    };
+    spans.push(Span::raw(" · "));
+    spans.extend(shortcut(label, '@', true));
+    spans
 }
 
-fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<usize> {
+fn active_prefix_popup_anchor(app: &App, time_travel: &[Span<'_>]) -> Option<usize> {
     let mut width = history_position(app).chars().count();
     let selected_segment = app.selected_is_segment();
     if selected_segment {
@@ -1591,9 +1614,7 @@ fn active_prefix_popup_anchor(app: &App, decorations: &Decorations) -> Option<us
             active = Some(enrich);
         }
     }
-    if actions_visible && let Some(label) = time_travel_label(app, decorations) {
-        width += 3 + label.len() + " · @ with worktree".chars().count();
-    }
+    width += spans_width(time_travel);
     if app.can_cycle_duplicate() {
         width += 3 + "next duplicate".len();
     }
@@ -2480,7 +2501,7 @@ fn command_items(commands: &[Command], group: CommandGroup, row: usize) -> Vec<P
 
 fn active_prefix_popup(
     app: &App,
-    decorations: &Decorations,
+    time_travel: &[Span<'_>],
     commands: &[Command],
     focus_feedback: Option<&'static str>,
     content_width: usize,
@@ -2573,7 +2594,7 @@ fn active_prefix_popup(
         ]);
     }
     Some((
-        active_prefix_popup_anchor(app, decorations)?,
+        active_prefix_popup_anchor(app, time_travel)?,
         wrap_prefix_popup_rows(logical_rows?, content_width),
     ))
 }
@@ -3491,8 +3512,8 @@ mod tests {
             );
             assert_eq!(app.notice().expect("the stored notice remains").text, "existing notice");
 
-            let (anchor, popup) = active_prefix_popup(&app, &Decorations::new(), &commands, None, 178)
-                .expect("the held popup remains available");
+            let (anchor, popup) =
+                active_prefix_popup(&app, &[], &commands, None, 178).expect("the held popup remains available");
             let item = popup.items.first().expect("the selected command has a position");
             let width = popup
                 .rows
@@ -5395,6 +5416,93 @@ mod tests {
         assert!(!row.contains("📌"), "the HEAD pin is not an ordinary pin: {row:?}");
         assert!(rendered_line(&terminal, 3).contains(" · 2 stash & travel · @ with worktree · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
+
+        let clean = Changes::default();
+        app.changes_mode = Some(ChangesMode::Both);
+        app.actions_expanded = false;
+        app.information_expanded = true;
+        for (kind, label) in [
+            (DecorationKind::HeadPinBranch, "@ travel"),
+            (DecorationKind::Pin, "@ return"),
+        ] {
+            decorations.insert(
+                selected,
+                vec![Decoration {
+                    name: "main".into(),
+                    kind,
+                }],
+            );
+            terminal.draw(|frame| {
+                super::draw_with_worktree(
+                    frame,
+                    frame.area(),
+                    &mut app,
+                    &decorations,
+                    &gix::mailmap::Snapshot::default(),
+                    None,
+                    None,
+                    Some(&clean),
+                );
+            })?;
+            let footer = rendered_line(&terminal, 3);
+            assert!(
+                footer.contains(label),
+                "clean worktrees advertise plain travel or return: {footer}"
+            );
+            assert!(
+                !footer.contains("2 stash") && !footer.contains("with worktree"),
+                "clean worktrees need no stash distinction"
+            );
+            let column = footer[..footer.find('@').expect("plain travel is visible")]
+                .chars()
+                .count() as u16;
+            assert!(
+                terminal.backend().buffer()[(column, 3)]
+                    .modifier
+                    .contains(Modifier::UNDERLINED),
+                "plain travel underlines @"
+            );
+            assert_eq!(
+                active_prefix_popup_anchor(&app, &time_travel_shortcuts(&app, &decorations, Some(&clean))),
+                footer.find('?').map(|offset| footer[..offset].chars().count()),
+                "the Information popup stays attached to its prefix after the hints shrink"
+            );
+        }
+        for group in [ChangeGroup::Staged, ChangeGroup::Unstaged] {
+            let dirty = Changes {
+                paths: vec![crate::app::PathChange {
+                    kind: ChangeKind::Added,
+                    group,
+                    source: None,
+                    path: "new-file".into(),
+                    lines: None,
+                }],
+                ..Changes::default()
+            };
+            let hints = Line::from(time_travel_shortcuts(&app, &decorations, Some(&dirty))).to_string();
+            assert!(
+                hints.contains("2 stash & return · @ with worktree"),
+                "staged and untracked-only changes retain both choices"
+            );
+        }
+        for mode in [None, Some(ChangesMode::Tree)] {
+            app.changes_mode = mode;
+            let hints = Line::from(time_travel_shortcuts(&app, &decorations, Some(&clean))).to_string();
+            assert!(
+                hints.contains("2 stash"),
+                "an unwatched worktree cache does not establish clean status"
+            );
+        }
+        app.changes_mode = Some(ChangesMode::Both);
+        app.worktree_changes.error = Some("status failed".into());
+        assert!(
+            Line::from(time_travel_shortcuts(&app, &decorations, Some(&clean)))
+                .to_string()
+                .contains("2 stash"),
+            "a failed status refresh does not establish clean status"
+        );
+        app.worktree_changes.error = None;
+        app.information_expanded = false;
 
         decorations.remove(&head);
         decorations.insert(
