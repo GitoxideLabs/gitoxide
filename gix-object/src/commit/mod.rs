@@ -29,6 +29,7 @@ pub mod message;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageRef<'a> {
     /// The title of the commit, as separated from the body with two consecutive newlines. The newlines are not included.
+    /// Without a body separator, a final LF or CRLF is also excluded. All other whitespace is preserved.
     #[cfg_attr(feature = "serde", serde(borrow))]
     pub title: &'a BStr,
     /// All bytes not consumed by the title, excluding the separating newlines.

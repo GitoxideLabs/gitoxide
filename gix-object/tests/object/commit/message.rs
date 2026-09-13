@@ -41,29 +41,57 @@ fn title_and_body_inconsistent_newlines() {
 }
 
 #[test]
-fn only_title_trailing_newline_is_retained() {
+fn only_title_trailing_newline_is_removed() {
     let msg = MessageRef::from_bytes(b"hello there\n");
     assert_eq!(
         msg,
         MessageRef {
-            title: b"hello there\n".as_bstr(),
+            title: b"hello there".as_bstr(),
             body: None
-        }
+        },
+        "a bodyless title excludes its final LF"
     );
     assert_eq!(msg.summary().as_ref(), "hello there");
 }
 
 #[test]
-fn only_title_trailing_windows_newline_is_retained() {
+fn only_title_trailing_windows_newline_is_removed() {
     let msg = MessageRef::from_bytes(b"hello there\r\n");
     assert_eq!(
         msg,
         MessageRef {
-            title: b"hello there\r\n".as_bstr(),
+            title: b"hello there".as_bstr(),
             body: None
-        }
+        },
+        "a bodyless title excludes its final CRLF"
     );
     assert_eq!(msg.summary().as_ref(), "hello there");
+}
+
+#[test]
+fn only_title_preserves_bytes_other_than_the_final_newline() {
+    for (input, title) in [
+        (b"".as_slice(), b"".as_slice()),
+        (b"\n", b""),
+        (b"\r\n", b""),
+        (b"hello\nthere\n", b"hello\nthere"),
+        (b"hello\r\nthere\r\n", b"hello\r\nthere"),
+        (b" \thello \t\n", b" \thello \t"),
+        (b" \thello \t\r\n", b" \thello \t"),
+        (b"hello\r", b"hello\r"),
+        (b"hello\r\r\n", b"hello\r"),
+        (b"hello\xff\n", b"hello\xff"),
+    ] {
+        assert_eq!(
+            MessageRef::from_bytes(input),
+            MessageRef {
+                title: title.as_bstr(),
+                body: None,
+            },
+            "only the final LF or CRLF is removed from {:?}",
+            input.as_bstr()
+        );
+    }
 }
 
 #[test]
