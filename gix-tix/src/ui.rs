@@ -434,12 +434,11 @@ pub(crate) fn draw_with_worktree(
     worktree_changes: Option<&Changes>,
 ) {
     let background_progress = app.background_progress().cloned();
-    let [mut body, progress_area, footer] = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(u16::from(background_progress.is_some())),
-        Constraint::Length(1),
-    ])
-    .areas(area);
+    let background_notice = background_progress.as_ref().map(|progress| Notice {
+        kind: NoticeKind::Success,
+        text: progress.text.clone(),
+    });
+    let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
     let full_body = body;
     let selected_segment = app.selected_is_segment();
     let time_travel_animation = app.time_travel_animation_origin().is_some();
@@ -594,14 +593,14 @@ pub(crate) fn draw_with_worktree(
     );
     let mut notice_area = notice
         .as_ref()
+        .or(background_notice.as_ref())
         .and_then(|notice| notice_area(notice, notice_horizontal, body.y, notice_bottom));
-    let popup_anchor = background_progress.as_ref().map_or(footer, |_| progress_area);
     let popup_rows = prefix_popup.as_ref().map_or(0, |(_, popup)| popup.rows.len());
     let mut prefix_popup_allowed = prefix_popup
         .as_ref()
-        .is_some_and(|(anchor, _)| prefix_popup_can_render(area, popup_anchor, *anchor, popup_rows));
+        .is_some_and(|(anchor, _)| prefix_popup_can_render(area, footer, *anchor, popup_rows));
     if prefix_popup_allowed {
-        let popup_y = popup_anchor.y - popup_rows as u16;
+        let popup_y = footer.y - popup_rows as u16;
         let shifted_y = |area: Rect| area.y.saturating_sub(popup_rows as u16).max(full_body.y);
         prefix_popup_allowed = changes_panes.iter().all(|pane| popup_y > shifted_y(pane.outer))
             && commit_pane.as_ref().is_none_or(|(outer, _)| popup_y > outer.y)
@@ -614,6 +613,7 @@ pub(crate) fn draw_with_worktree(
         notice = app.notice();
         notice_area = notice
             .as_ref()
+            .or(background_notice.as_ref())
             .and_then(|notice| self::notice_area(notice, notice_horizontal, body.y, notice_bottom));
     }
     if let Some(notice_area) = notice_area {
@@ -631,7 +631,7 @@ pub(crate) fn draw_with_worktree(
     app.center_initial_selection();
     app.prepare_history_viewport();
     if prefix_popup_allowed {
-        let popup_y = popup_anchor.y - popup_rows as u16;
+        let popup_y = footer.y - popup_rows as u16;
         let shifted_y = |area: Rect| area.y.saturating_sub(popup_rows as u16).max(full_body.y);
         for pane in &mut changes_panes {
             pane.outer.y = shifted_y(pane.outer);
@@ -1461,27 +1461,30 @@ pub(crate) fn draw_with_worktree(
         }
     }
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
-    if let (Some(area), Some(notice)) = (notice_area, notice.as_ref()) {
-        render_notice(frame, area, notice);
-        if app.held_prefix_group().is_none()
-            && let Some((applied, total, _)) = app.undo_position()
-        {
-            render_undo_progress(frame, area, notice.kind, applied, total);
+    if let Some(area) = notice_area {
+        if let Some(notice) = &notice {
+            render_notice(frame, area, notice);
+            if app.held_prefix_group().is_none()
+                && let Some((applied, total, _)) = app.undo_position()
+            {
+                render_undo_progress(frame, area, notice.kind, applied, total);
+            }
+        } else if let Some(progress) = &background_progress {
+            render_background_progress(frame, area, progress);
         }
-    }
-    if let Some(progress) = &background_progress {
-        render_background_progress(frame, progress_area, progress);
     }
     let _ = prefix_popup
         .filter(|_| prefix_popup_allowed)
         .and_then(|(anchor, popup)| {
-            render_prefix_popup(frame, area, popup_anchor, anchor, popup, app.held_prefix_selection())
+            render_prefix_popup(frame, area, footer, anchor, popup, app.held_prefix_selection())
         });
 }
 
 fn render_background_progress(frame: &mut Frame<'_>, area: Rect, progress: &crate::app::BackgroundProgress) {
     frame.render_widget(
-        Paragraph::new(progress.text.as_str()).style(Style::default().bg(Color::Reset)),
+        Paragraph::new(progress.text.as_str())
+            .wrap(Wrap { trim: false })
+            .style(Style::default().bg(Color::Reset)),
         area,
     );
     let completed_width = if progress.total == 0 {
@@ -4346,23 +4349,33 @@ mod tests {
     }
 
     #[test]
-    fn background_tasks_reserve_a_row_above_the_footer() -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = App::new(1);
-        app.start_background_task("pushing topic to origin…");
-        let mut terminal = Terminal::new(TestBackend::new(120, 3))?;
+    fn background_tasks_use_the_existing_message_area() -> gix_testtools::Result {
+        for label in ["pushing topic to origin…", "removing topic: deleting checkout 40/100"] {
+            let mut app = App::new(1);
+            app.start_background_task(label);
+            let mut terminal = Terminal::new(TestBackend::new(120, 3))?;
 
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+            terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
-        let label = "pushing topic to origin…";
-        assert!(rendered_line(&terminal, 1).contains(label));
-        assert!(!rendered_line(&terminal, 2).contains(label));
+            assert_eq!(
+                rendered_line(&terminal, 1).trim_end(),
+                format!("  {label}"),
+                "background tasks use the message area's margins"
+            );
+            assert!(
+                !rendered_line(&terminal, 2).contains(label),
+                "progress does not overwrite the footer"
+            );
+            assert!(
+                app.notice().is_none(),
+                "progress remains independent of transient notices"
+            );
+        }
         Ok(())
     }
 
-    #[cfg(feature = "blocking-network-client")]
     #[test]
-    fn fetch_progress_reserves_a_row_above_the_footer_and_below_notices_and_popups()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn background_progress_yields_to_messages_and_resumes_above_prefix_popups() -> gix_testtools::Result {
         let mut app = App::new(1);
         complete(&mut app);
         app.set_active_branch(Some("topic".into()));
@@ -4370,12 +4383,35 @@ mod tests {
         assert!(app.update_background_progress("fetching origin: indexing 40/100".into(), 40, 100));
         app.leave_attention("working tree notice");
         let mut terminal = Terminal::new(TestBackend::new(100, 5))?;
+        let shows = |terminal: &Terminal<TestBackend>, text: &str| {
+            (0..5).any(|row| rendered_line(terminal, row).contains(text))
+        };
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
-        assert!(rendered_line(&terminal, 2).contains("working tree notice"));
+        assert!(
+            rendered_line(&terminal, 3).contains("working tree notice"),
+            "background progress reserves no extra row below a notice"
+        );
+        assert!(
+            !shows(&terminal, "fetching origin"),
+            "ordinary notices take precedence over background progress"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(2, 3)].bg,
+            Color::Yellow,
+            "progress never paints over the notice's emphasis"
+        );
+
+        app.clear_notice();
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(rendered_line(&terminal, 3).contains("fetching origin: indexing 40/100"));
         assert!(!rendered_line(&terminal, 4).contains("fetching origin"));
+        assert_eq!(
+            terminal.backend().buffer()[(1, 3)].bg,
+            Color::Reset,
+            "the progress fill respects the message margin"
+        );
         assert_eq!(terminal.backend().buffer()[(39, 3)].bg, Color::DarkGray);
         assert_eq!(
             terminal.backend().buffer()[(40, 3)].bg,
@@ -4386,10 +4422,62 @@ mod tests {
         app.update(Action::ToggleActions);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            (0..3).any(|row| rendered_line(&terminal, row).contains(" no actions ")),
-            "the prefix popup is rendered above progress"
+            (2..4).any(|row| rendered_line(&terminal, row).contains(" no actions ")),
+            "prefix popups stay connected to the footer"
         );
-        assert!(rendered_line(&terminal, 3).contains("fetching origin"));
+        assert!(
+            rendered_line(&terminal, 1).contains("fetching origin"),
+            "progress moves above the popup with other messages"
+        );
+
+        app.close_shortcut_groups();
+        app.leave_error("command failed");
+        app.start_held_prefix(CommandGroup::View);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            shows(&terminal, "release v to run"),
+            "held-command help takes precedence over ordinary notices"
+        );
+        assert!(
+            !shows(&terminal, "command failed") && !shows(&terminal, "fetching origin"),
+            "only the highest-priority message is displayed"
+        );
+        assert!(app.update_background_progress("fetching origin: indexing 60/100".into(), 60, 100));
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            shows(&terminal, "release v to run"),
+            "background updates never replace held help"
+        );
+
+        app.cancel_held_prefix();
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 3).contains("command failed"),
+            "the preserved error returns after held help closes"
+        );
+        assert_eq!(terminal.backend().buffer()[(2, 3)].bg, Color::LightRed);
+        app.clear_notice();
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 3).contains("fetching origin: indexing 60/100"),
+            "clearing a transient message restores the latest progress"
+        );
+
+        app.start_held_prefix(CommandGroup::View);
+        let mut small = Terminal::new(TestBackend::new(100, 2))?;
+        small.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(app.held_prefix_group(), None, "a held popup without room still cancels");
+        assert!(
+            rendered_line(&small, 0).contains("fetching origin: indexing 60/100"),
+            "popup cancellation restores progress in the same frame"
+        );
+
+        app.finish_background_task();
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            !shows(&terminal, "fetching origin"),
+            "a finished task releases the message area"
+        );
         Ok(())
     }
 
@@ -4399,6 +4487,7 @@ mod tests {
         let mut app = App::new(1);
         complete(&mut app);
         app.arm_rebase_continuation();
+        app.start_background_task("pushing topic to origin…");
         app.set_worktree_conflicted(true);
         app.leave_attention("materialized conflict");
         let mut terminal = Terminal::new(TestBackend::new(120, 4))?;
@@ -4416,6 +4505,10 @@ mod tests {
             "operation context is retained beside the persistent prompt"
         );
         assert_eq!(terminal.backend().buffer()[(2, 2)].bg, Color::Yellow);
+        assert!(
+            !(0..4).any(|row| rendered_line(&terminal, row).contains("pushing topic")),
+            "persistent prompts take precedence over background progress"
+        );
         assert!(
             rendered_line(&terminal, 3).contains("view"),
             "the ordinary footer remains visible"
