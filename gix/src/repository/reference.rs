@@ -302,7 +302,7 @@ impl crate::Repository {
     /// let mut reference = repo.find_reference("main")?;
     ///
     /// assert_eq!(reference, "refs/heads/main");
-    /// assert_eq!(reference.peel_to_commit()?.message()?.title, "c2\n");
+    /// assert_eq!(reference.peel_to_commit()?.message()?.title, "c2");
     /// # Ok(()) }
     /// ```
     pub fn find_reference<'a, Name, E>(&self, name: Name) -> Result<Reference<'_>, reference::find::existing::Error>

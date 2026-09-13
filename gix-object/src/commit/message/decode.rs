@@ -12,7 +12,11 @@ pub fn message_title_and_body(input: &[u8]) -> (&BStr, Option<&BStr>) {
         }
         pos += 1;
     }
-    (input.as_bstr(), None)
+    let title = input
+        .strip_suffix(b"\r\n")
+        .or_else(|| input.strip_suffix(b"\n"))
+        .unwrap_or(input);
+    (title.as_bstr(), None)
 }
 
 fn newline_len(input: &[u8]) -> Option<usize> {
