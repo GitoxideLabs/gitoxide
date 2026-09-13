@@ -936,6 +936,13 @@ struct HistoryRefresh {
     worktree: Option<Result<worktrunk::GraphMetadata, String>>,
 }
 
+struct HistoryRefreshResult {
+    bare: bool,
+    kind: RefreshKind,
+    graph: HistoryGraph,
+    result: Result<HistoryRefresh>,
+}
+
 type WorktreeMetadata = Vec<(usize, Result<worktrunk::GraphMetadata, String>)>;
 
 #[derive(Clone)]
@@ -1422,6 +1429,7 @@ fn event_loop(
     };
     let mut ref_watch_set_changed = false;
     let mut ref_status_config_changed = false;
+    let initial_history_is_bare = repository_is_bare;
     let (cancelled, receiver) = start_history(
         repository,
         &revisions,
@@ -1454,7 +1462,7 @@ fn event_loop(
         );
     }
     let mut lane_receiver: Option<mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)>> = None;
-    let mut refresh_receiver: Option<mpsc::Receiver<(RefreshKind, HistoryGraph, Result<HistoryRefresh>)>> = None;
+    let mut refresh_receiver: Option<mpsc::Receiver<HistoryRefreshResult>> = None;
     let mut refresh_pending = false;
     let mut ref_tree_refresh_pending = false;
     let mut return_to_history_after_refresh = None;
@@ -1510,7 +1518,7 @@ fn event_loop(
     let mut prefix_input = prefix_input::State::default();
     let mut filesystem_responses = logging::FilesystemResponses::default();
     let mut focused = true;
-    draw(
+    let drawn = draw(
         terminal,
         &mut app,
         &mut command_picker,
@@ -1531,6 +1539,13 @@ fn event_loop(
         &mut filesystem_responses,
         picker.as_deref_mut(),
         *picker_focused,
+    );
+    retry_after_worktree_removal(
+        drawn,
+        &repository_path,
+        &common_dir,
+        repository_is_bare,
+        repository_is_bare,
     )?;
     let mut last_draw = Instant::now();
     let mut dirty = false;
@@ -1609,9 +1624,7 @@ fn event_loop(
             ref_watch_set_changed = false;
             ref_status_config_changed = false;
             app.leave_attention("worktree removed; using the common repository without worktree changes");
-            if history_graph.is_some() {
-                refresh_pending = true;
-            }
+            refresh_pending = true;
             dirty = true;
             urgent = true;
         }
@@ -1999,17 +2012,34 @@ fn event_loop(
                             .get(index)
                             .and_then(Clone::clone)
                             .context("completed worktree preview disappeared")?;
-                        let mut next_repository = open_repository(&preview.path, false, false)
-                            .with_context(|| format!("could not open worktree {}", preview.path.display()))?;
+                        let next_repository = open_repository(&preview.path, false, false)
+                            .with_context(|| format!("could not open worktree {}", preview.path.display()))
+                            .and_then(|repository| {
+                                let unborn = repository.workdir().is_some() && repository.head()?.is_unborn();
+                                std::env::set_current_dir(&preview.path)
+                                    .with_context(|| format!("could not enter worktree {}", preview.path.display()))?;
+                                Ok((repository, unborn))
+                            });
+                        let (mut next_repository, next_head_unborn) = match next_repository {
+                            Ok(next) => next,
+                            Err(err) => {
+                                app.cancel_preview_refresh(previous_state);
+                                picker.cancel_preview();
+                                picker.set_graph_metadata(index, Err(format!("{err:#}")));
+                                worktree_previews[index] = None;
+                                requested_worktree_preview = None;
+                                lane_receiver = None;
+                                dirty = true;
+                                urgent = true;
+                                continue;
+                            }
+                        };
                         next_repository.object_cache_size(None);
                         let next_repository_path = next_repository.git_dir().to_owned();
                         let next_repository_is_bare = next_repository.workdir().is_none();
                         let next_mailmap = next_repository.open_mailmap();
                         let next_configured_author = configured_author_identity(&next_repository);
-                        let next_head_unborn = !next_repository_is_bare && next_repository.head()?.is_unborn();
                         drop(next_repository);
-                        std::env::set_current_dir(&preview.path)
-                            .with_context(|| format!("could not enter worktree {}", preview.path.display()))?;
 
                         repository_path = next_repository_path;
                         repository_is_bare = next_repository_is_bare;
@@ -2162,7 +2192,12 @@ fn event_loop(
         }
         if let Some(result) = refresh_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
-                Ok((kind, mut graph, result)) => {
+                Ok(HistoryRefreshResult {
+                    bare,
+                    kind,
+                    mut graph,
+                    result,
+                }) => {
                     let HistoryRefresh {
                         history: result,
                         worktree,
@@ -2190,7 +2225,20 @@ fn event_loop(
                                 urgent = true;
                                 continue;
                             }
-                            return Err(err);
+                            retry_after_worktree_removal(
+                                Err::<(), _>(err),
+                                &repository_path,
+                                &common_dir,
+                                bare,
+                                repository_is_bare,
+                            )?;
+                            history_graph = Some(graph);
+                            refresh_receiver = None;
+                            history_status_deadline = None;
+                            app.state = app.deferred_history_state.take().unwrap_or(State::Complete);
+                            ref_tree_refresh_pending |= matches!(kind, RefreshKind::RefTree { .. });
+                            refresh_pending = true;
+                            continue;
                         }
                     };
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
@@ -2481,7 +2529,9 @@ fn event_loop(
             let response_ids = filesystem_responses.begin_reference_refresh();
             let repository = match open_repository(&repository_path, repository_is_bare, true) {
                 Ok(repository) => repository,
-                Err(_err) if worktree_repository_is_gone(&repository_path) => continue,
+                Err(_err) if !repository_is_bare && worktree_repository_is_gone(&repository_path, &common_dir) => {
+                    continue;
+                }
                 Err(err) => return Err(err).context("could not inspect changed references"),
             };
             match open_repository(&repository_path, repository_is_bare, false) {
@@ -2493,7 +2543,16 @@ fn event_loop(
                     app.set_configured_author(None);
                 }
             }
-            let next = history::snapshot(&repository, &revisions, &hide, false)?;
+            let Some(next) = retry_after_worktree_removal(
+                history::snapshot(&repository, &revisions, &hide, false),
+                &repository_path,
+                &common_dir,
+                repository_is_bare,
+                repository_is_bare,
+            )?
+            else {
+                continue;
+            };
             let hidden_changed = next.hidden != ref_snapshot.hidden;
             let worktree_tips_changed = ref_tree.is_active() && next.worktrees != ref_snapshot.worktrees;
             let tips_changed = next.view != ref_snapshot.view || hidden_changed || worktree_tips_changed;
@@ -2541,7 +2600,7 @@ fn event_loop(
             tracing::info!(?response_ids, "started history refresh");
         }
         if urgent {
-            draw(
+            let drawn = draw(
                 terminal,
                 &mut app,
                 &mut command_picker,
@@ -2562,7 +2621,18 @@ fn event_loop(
                 &mut filesystem_responses,
                 picker.as_deref_mut(),
                 *picker_focused,
-            )?;
+            );
+            if retry_after_worktree_removal(
+                drawn,
+                &repository_path,
+                &common_dir,
+                repository_is_bare,
+                repository_is_bare,
+            )?
+            .is_none()
+            {
+                continue;
+            }
             last_draw = Instant::now();
             dirty = false;
             urgent = false;
@@ -2595,7 +2665,23 @@ fn event_loop(
             };
             events += 1;
             dirty = true;
-            match message? {
+            let Some(message) = retry_after_worktree_removal(
+                message,
+                &repository_path,
+                &common_dir,
+                initial_history_is_bare,
+                repository_is_bare,
+            )?
+            else {
+                history_finished = true;
+                lane_receiver = None;
+                history_graph = Some(HistoryGraph::default());
+                app.deferred_history_state = None;
+                app.state = State::Complete;
+                refresh_pending = true;
+                break;
+            };
+            match message {
                 Event::Decorations(value) => {
                     app.set_worktree_head((!repository_is_bare).then(|| decoration_head(&value)).flatten(), true);
                     app.set_review_roots(decoration_review_roots(&value));
@@ -2631,7 +2717,7 @@ fn event_loop(
             || verification_receiver.is_some()
             || repeat_deadline.is_some();
         if should_draw(dirty, streaming, last_draw.elapsed()) {
-            draw(
+            let drawn = draw(
                 terminal,
                 &mut app,
                 &mut command_picker,
@@ -2652,7 +2738,18 @@ fn event_loop(
                 &mut filesystem_responses,
                 picker.as_deref_mut(),
                 *picker_focused,
-            )?;
+            );
+            if retry_after_worktree_removal(
+                drawn,
+                &repository_path,
+                &common_dir,
+                repository_is_bare,
+                repository_is_bare,
+            )?
+            .is_none()
+            {
+                continue;
+            }
             last_draw = Instant::now();
             dirty = false;
         }
@@ -5714,7 +5811,7 @@ fn start_history_refresh(
     authors: SharedAuthors,
     mut graph: HistoryGraph,
     kind: RefreshKind,
-) -> mpsc::Receiver<(RefreshKind, HistoryGraph, Result<HistoryRefresh>)> {
+) -> mpsc::Receiver<HistoryRefreshResult> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let result = open_repository(&repository_path, bare, true)
@@ -5741,7 +5838,12 @@ fn start_history_refresh(
                 });
                 Ok(HistoryRefresh { history, worktree })
             });
-        let _ = sender.send((kind, graph, result));
+        let _ = sender.send(HistoryRefreshResult {
+            bare,
+            kind,
+            graph,
+            result,
+        });
     });
     receiver
 }
@@ -7059,7 +7161,10 @@ fn open_repository(repository_path: &Path, bare: bool, isolated: bool) -> Result
     } else {
         options
     };
-    let repository = gix::open_opts(repository_path, options)?;
+    let mut repository = gix::open_opts(repository_path, options)?;
+    if bare {
+        repository.set_workdir(None)?;
+    }
     #[cfg(test)]
     let repository = test_repository::with_defaults(repository)?;
     Ok(repository)
@@ -7079,7 +7184,7 @@ fn configured_author_identity(repository: &gix::Repository) -> Option<gix::actor
 fn open_history_repository(repository_path: &mut PathBuf, common_dir: &Path) -> Result<(gix::Repository, bool)> {
     match open_repository(repository_path, false, false) {
         Ok(repository) => Ok((repository, false)),
-        Err(_err) if worktree_repository_is_gone(repository_path) => {
+        Err(_err) if worktree_repository_is_gone(repository_path, common_dir) => {
             let repository = recover_common_repository(common_dir)
                 .context("could not recover before history traversal after the worktree repository disappeared")?;
             common_dir.clone_into(repository_path);
@@ -7105,7 +7210,7 @@ fn recover_event_loop_repository(
     common_dir: &Path,
     bare: &mut bool,
 ) -> Result<Option<gix::Repository>> {
-    if *bare || !worktree_repository_is_gone(repository_path) {
+    if *bare || !worktree_repository_is_gone(repository_path, common_dir) {
         return Ok(None);
     }
     let repository =
@@ -7122,8 +7227,34 @@ fn normalize_common_dir(common_dir: PathBuf) -> Result<PathBuf> {
         .context("common repository path could not be normalized")
 }
 
-fn worktree_repository_is_gone(repository_path: &Path) -> bool {
-    !repository_path.is_dir() || std::env::current_dir().is_err()
+fn worktree_repository_is_gone(repository_path: &Path, common_dir: &Path) -> bool {
+    let Ok(current_dir) = std::env::current_dir() else {
+        return true;
+    };
+    let missing = |name| {
+        std::fs::symlink_metadata(repository_path.join(name))
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+    };
+    let linked = gix::path::normalize(repository_path.into(), &current_dir).as_deref() != Some(common_dir);
+    missing("HEAD") || linked && (missing("commondir") || missing("gitdir"))
+}
+
+/// Workers can report an error after the loop has already switched to the common repository.
+fn retry_after_worktree_removal<T>(
+    result: Result<T>,
+    repository_path: &Path,
+    common_dir: &Path,
+    requested_bare: bool,
+    current_bare: bool,
+) -> Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(err) if !requested_bare && (current_bare || worktree_repository_is_gone(repository_path, common_dir)) => {
+            tracing::warn!(error = %err, "retrying interrupted view load after worktree removal");
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn open_fill_repository(repository_path: &Path, bare: bool) -> Result<gix::Repository> {
@@ -11927,7 +12058,7 @@ mod tests {
             "the process directory remains available"
         );
         let missing = fixture.join("missing-worktree-git-dir");
-        assert!(worktree_repository_is_gone(&missing));
+        assert!(worktree_repository_is_gone(&missing, &fixture));
         let Err(err) = recover_common_repository(&missing) else {
             panic!("a missing common repository cannot be recovered")
         };
@@ -11991,6 +12122,204 @@ mod tests {
             validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("missing")]).is_err(),
             "inference does not mask an invalid explicit filter"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_from_partially_removed_worktree_administration() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let previous_dir = std::env::current_dir()?;
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let common_dir = test_repository::open(fixture.path())?.git_dir().canonicalize()?;
+        let common_head = std::fs::read(common_dir.join("HEAD"))?;
+        let common_index = std::fs::read(common_dir.join("index"))?;
+        for removed in ["HEAD", "commondir", "gitdir"] {
+            let worktree = fixture.path().join(format!("removed-{removed}"));
+            let output = gix_testtools::git_command(fixture.path())
+                .args(["worktree", "add", "--detach"])
+                .arg(&worktree)
+                .output()?;
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let mut repository_path = test_repository::open(&worktree)?.git_dir().to_owned();
+            std::env::set_current_dir(&worktree)?;
+            let mut bare = false;
+            assert!(
+                recover_event_loop_repository(&mut repository_path, &common_dir, &mut bare)?.is_none(),
+                "an intact linked worktree stays active"
+            );
+
+            std::fs::remove_file(repository_path.join(removed))?;
+            assert!(repository_path.is_dir(), "the administration directory still exists");
+            assert!(std::env::current_dir().is_ok(), "the checkout still exists");
+            assert!(
+                open_fill_repository(&repository_path, false).is_err(),
+                "{removed} is needed to reopen the repository"
+            );
+
+            let recovered = recover_event_loop_repository(&mut repository_path, &common_dir, &mut bare)?
+                .expect("partial removal must recover before the next view load");
+            assert!(
+                bare && recovered.workdir().is_none(),
+                "recovery after removing {removed} never adopts the main worktree: bare={bare}, workdir={:?}, core.bare={:?}",
+                recovered.workdir(),
+                recovered.config_snapshot().boolean("core.bare")
+            );
+            assert_eq!(
+                repository_path, common_dir,
+                "later opens use the surviving common repository"
+            );
+            assert_eq!(
+                std::env::current_dir()?,
+                common_dir,
+                "CWD leaves the disappearing checkout"
+            );
+            assert!(
+                !history::snapshot(&recovered, &[], &[], false)?.view_tips.is_empty(),
+                "history remains available"
+            );
+        }
+        assert_eq!(
+            std::fs::read(common_dir.join("HEAD"))?,
+            common_head,
+            "recovery preserves the main worktree HEAD"
+        );
+        assert_eq!(
+            std::fs::read(common_dir.join("index"))?,
+            common_index,
+            "recovery preserves the main worktree index"
+        );
+        std::env::set_current_dir(previous_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn retries_view_and_worker_errors_after_worktree_removal() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let previous_dir = std::env::current_dir()?;
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let common_dir = test_repository::open(fixture.path())?.git_dir().canonicalize()?;
+        let worktree = fixture.path().join("removed");
+        let output = gix_testtools::git_command(fixture.path())
+            .args(["worktree", "add", "--detach"])
+            .arg(&worktree)
+            .output()?;
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let repository = test_repository::open(&worktree)?;
+        let mut repository_path = repository.git_dir().to_owned();
+        std::env::set_current_dir(&worktree)?;
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        let mut graph = HistoryGraph::default();
+        let expected = graph
+            .refresh(&repository, &[], &[], false, &Default::default(), &authors)?
+            .refs
+            .view_tips;
+        let invalid_revision = [OsString::from("does-not-exist")];
+        assert!(
+            retry_after_worktree_removal(
+                history::snapshot(&repository, &invalid_revision, &[], false),
+                &repository_path,
+                &common_dir,
+                false,
+                false
+            )
+            .is_err(),
+            "ordinary repository errors still propagate"
+        );
+
+        std::fs::remove_file(repository_path.join("HEAD"))?;
+        assert!(
+            retry_after_worktree_removal(
+                open_fill_repository(&repository_path, false),
+                &repository_path,
+                &common_dir,
+                false,
+                false
+            )?
+            .is_none(),
+            "a render interrupted after the boundary retries"
+        );
+        assert!(
+            retry_after_worktree_removal(
+                history::snapshot(&repository, &[], &[], false),
+                &repository_path,
+                &common_dir,
+                false,
+                false
+            )?
+            .is_none(),
+            "a snapshot interrupted after opening retries"
+        );
+        let (_, initial) = start_history(repository.into_sync(), &[], &[], false, authors.clone());
+        let refresh = start_history_refresh(
+            repository_path.clone(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+            Default::default(),
+            authors.clone(),
+            graph,
+            RefreshKind::History,
+        );
+        let initial_result = initial.recv_timeout(Duration::from_secs(5))?;
+        let HistoryRefreshResult {
+            bare: requested_bare,
+            graph,
+            result,
+            ..
+        } = refresh.recv_timeout(Duration::from_secs(5))?;
+        assert!(
+            initial_result.is_err() && result.is_err(),
+            "both workers observed the incomplete repository"
+        );
+
+        let mut bare = false;
+        let recovered = recover_event_loop_repository(&mut repository_path, &common_dir, &mut bare)?
+            .expect("the boundary recovers before queued results are consumed");
+        assert!(
+            retry_after_worktree_removal(initial_result, &repository_path, &common_dir, false, bare)?.is_none(),
+            "late initial-history errors also retry"
+        );
+        assert!(
+            retry_after_worktree_removal(result, &repository_path, &common_dir, requested_bare, bare)?.is_none(),
+            "late refresh errors retry even though the current repository is intact"
+        );
+        assert!(
+            retry_after_worktree_removal(
+                history::snapshot(&recovered, &invalid_revision, &[], false),
+                &repository_path,
+                &common_dir,
+                true,
+                true
+            )
+            .is_err(),
+            "errors from the surviving repository are never swallowed"
+        );
+        drop(recovered);
+
+        let refreshed = start_history_refresh(
+            repository_path,
+            bare,
+            Vec::new(),
+            Vec::new(),
+            false,
+            Default::default(),
+            authors,
+            graph,
+            RefreshKind::History,
+        )
+        .recv_timeout(Duration::from_secs(5))?
+        .result?;
+        assert_eq!(
+            refreshed.history.refs.view_tips, expected,
+            "the returned graph can refresh the surviving history"
+        );
+        std::env::set_current_dir(previous_dir)?;
         Ok(())
     }
 
