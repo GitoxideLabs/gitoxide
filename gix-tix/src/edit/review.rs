@@ -563,6 +563,10 @@ mod tests {
             repo.try_find_reference(started.reference.as_ref())?.is_some(),
             "asking for a replacement leaves the review untouched"
         );
+        assert!(
+            repo.try_find_reference(crate::enrich::PATCH_REF_NAME)?.is_none(),
+            "choosing a return target does not approve an unfinished review"
+        );
         let Finish::Complete(finished) = finish(repo, &graph, amended, Some(tip))? else {
             panic!("the selected descendant completes the review")
         };
@@ -571,9 +575,22 @@ mod tests {
             Some(finished.commit),
             "the reviewed tip maps to the newly finished review commit"
         );
+        assert!(
+            finished
+                .outcome
+                .ref_changes
+                .iter()
+                .any(|change| change.name == crate::enrich::PATCH_REF_NAME),
+            "finishing and approval belong to the same reference transaction"
+        );
 
         let finished = finished.commit;
         let repo = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            crate::load_patch_enrichment_state(&repo, &mut crate::enrich::open_patch(&repo)?, finished)?,
+            crate::app::PatchEnrichmentState::Fresh { refackiewed: true },
+            "an unchanged review approves its resulting empty patch"
+        );
         assert_eq!(repo.head_id()?, finished);
         assert_eq!(
             repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
@@ -775,6 +792,17 @@ mod tests {
             "A remains the branch tip and follows the review-side history"
         );
         let review_successor = repo.find_reference("refs/heads/review-successor")?.id().detach();
+        let mut approvals = crate::enrich::open_patch(&repo)?;
+        for commit_id in [finished, successor, review_successor] {
+            assert_eq!(
+                matches!(
+                    crate::load_patch_enrichment_state(&repo, &mut approvals, commit_id)?,
+                    crate::app::PatchEnrichmentState::Fresh { refackiewed: true }
+                ),
+                commit_id == finished,
+                "finishing approves the resulting review patch, leaving descendants unmarked"
+            );
+        }
         assert_eq!(
             repo.find_commit(review_successor)?
                 .parent_ids()
@@ -796,6 +824,73 @@ mod tests {
         insta::assert_snapshot!(
             "changed-review-with-successors",
             gix_testtools::repository::snapshot_portable(fixture.path())?.to_string()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn finish_approval_is_atomic_when_the_return_checkout_conflicts() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let tip = repo.rev_parse_single("HEAD~1")?.detach();
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+        let mut started = start(fixture.path(), false, &graph, tip, base)?;
+        assert!(started.checkout_error.is_none(), "the review starts successfully");
+        // Revert the reviewed edit so the return tip's same-line change conflicts.
+        run(fixture.path(), &["restore", "--worktree", "."])?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let mut review = repo.find_commit(started.commit)?.decode()?.into_owned()?;
+        review
+            .extra_headers
+            .push(("tix-rebase-parent".into(), base.to_string().into()));
+        started.commit = repo.write_object(&review)?.detach();
+        run(
+            fixture.path(),
+            &["update-ref", "--no-deref", "HEAD", &started.commit.to_string()],
+        )?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let Finish::Conflict(conflict) = finish(repo, &graph, started.commit, None)? else {
+            panic!("the return checkout conflicts with the reviewed change")
+        };
+        drop(conflict);
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "cancelling leaves the review, approval, index, and worktree untouched"
+        );
+
+        let repo = crate::test_repository::open(fixture.path())?;
+        let Finish::Conflict(conflict) = finish(repo, &graph, started.commit, None)? else {
+            panic!("the unchanged review still conflicts with its return checkout")
+        };
+        let outcome = conflict.persist(super::super::rebase::CheckoutOptions::default())?;
+        let finished = outcome
+            .map(started.commit)
+            .expect("accepting publishes the finished review");
+        assert_ne!(
+            outcome.selected,
+            Some(finished),
+            "checkout selects the conflicting descendant"
+        );
+        assert!(
+            outcome
+                .ref_changes
+                .iter()
+                .any(|change| change.name == crate::enrich::PATCH_REF_NAME),
+            "approval is published in the same transaction as accepting the conflict"
+        );
+        let repo = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            crate::load_patch_enrichment_state(&repo, &mut crate::enrich::open_patch(&repo)?, finished)?,
+            crate::app::PatchEnrichmentState::Fresh { refackiewed: true },
+            "finishing finalizes and approves the pending review instead of its conflicted checkout"
+        );
+        assert!(
+            repo.try_find_reference(started.reference.as_ref())?.is_none(),
+            "the review resource is consumed"
         );
         Ok(())
     }
