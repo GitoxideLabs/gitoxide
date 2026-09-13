@@ -4305,7 +4305,7 @@ fn event_loop(
                         Err(err) => app.leave_error(format!("reword: {err:#}")),
                     }
                 }
-                Effect::NewCommit { parent, empty } => {
+                Effect::NewCommit { parent, kind } => {
                     let result = history_graph
                         .as_ref()
                         .context("creating a commit requires a completed history graph")
@@ -4316,7 +4316,7 @@ fn event_loop(
                                 repository_is_bare,
                                 graph,
                                 parent,
-                                empty,
+                                kind,
                                 enhanced_keyboard,
                             )
                         });
@@ -4327,7 +4327,11 @@ fn event_loop(
                                 &mut app,
                                 &repository_path,
                                 repository_is_bare,
-                                if empty { "create empty commit" } else { "create commit" },
+                                match kind {
+                                    edit::create::Kind::Normal => "create commit",
+                                    edit::create::Kind::Empty => "create empty commit",
+                                    edit::create::Kind::Below => "create commit below HEAD",
+                                },
                                 &outcome.ref_changes,
                                 outcome
                                     .notice
@@ -8159,25 +8163,28 @@ fn todo_progress_visible(elapsed: Duration) -> bool {
     elapsed >= TODO_PROGRESS_DELAY
 }
 
-#[tracing::instrument(skip_all, fields(parent = ?parent, empty))]
+#[tracing::instrument(skip_all, fields(parent = ?parent, ?kind))]
 fn create_commit(
     terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
     parent: Option<gix::ObjectId>,
-    empty: bool,
+    kind: edit::create::Kind,
     enhanced_keyboard: bool,
 ) -> Result<Option<edit::rebase::Perform>> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before creating commit")?;
     repository.object_cache_size(None);
-    let mut prepared = if empty {
-        edit::create::prepare_empty(repository, parent)?
-    } else {
-        edit::create::prepare(repository, parent)?
+    let mut prepared = match kind {
+        edit::create::Kind::Normal => edit::create::prepare(repository, parent)?,
+        edit::create::Kind::Empty => edit::create::prepare_empty(repository, parent)?,
+        edit::create::Kind::Below => edit::create::prepare_below(
+            repository,
+            parent.context("creating a commit below HEAD requires an existing commit")?,
+        )?,
     };
-    if !empty && prepared.is_empty {
+    if kind != edit::create::Kind::Empty && prepared.is_empty {
         anyhow::bail!("the new commit would be empty; use new-empty instead");
     }
     let editor = prepared.editor.take().expect("prepared commits have an editor");
@@ -12952,6 +12959,14 @@ mod tests {
             );
         }
         for (key, expected) in [
+            (
+                KeyEvent::new(KeyCode::Char('W'), KeyModifiers::NONE),
+                Action::NewBelowCommit,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::SHIFT),
+                Action::NewBelowCommit,
+            ),
             (
                 KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE),
                 Action::NewEmptyCommit,

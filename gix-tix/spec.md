@@ -1182,15 +1182,35 @@ views.
 - `a Shift-N` creates an explicit empty commit which reuses the selected parent's
   tree, or the empty tree for an unborn history. Existing index and worktree
   state is preserved exactly. Both forms reject unresolved index conflicts.
-- Both forms and `tix new` reject a pending selected parent, including when it
-  differs from `HEAD`. This check uses only the parent's own state: older pending
+- `a Shift-W` (`neW-below`) commits staged changes, or tracked worktree changes
+  when the index matches `HEAD`, immediately below the selected `HEAD` commit.
+  It requires an editable ordinary commit, including a root; reviews, AutoMerges,
+  merge commits, pending commits, hidden boundaries, and unresolved conflicts
+  are ineligible. The worktree-changes cache advertises it alongside `new` only
+  at an eligible `HEAD`.
+- Insertion below applies the selected delta onto HEAD's parent tree in memory,
+  then replays HEAD onto the new commit. Both steps must merge cleanly and their
+  final tree must match the selected candidate tree. Conflicts abort before the
+  editor opens without materializing a conflict or changing repository state.
+  Editor cancellation likewise leaves objects, refs, the index, and worktree
+  unchanged. A successful insertion keeps HEAD on the rewritten upper commit,
+  selects the new lower commit, and leaves sibling commits untouched. Descendants
+  follow normal lazy-rebase rules. The active worktree files are never checked out;
+  resetting its index to the rewritten HEAD leaves exactly the uncommitted remainder.
+  Other affected worktrees use normal checkout preflight and preserve their local
+  staging; conflicting local changes abort the operation.
+- Ordinary creation, empty creation, and `tix new` reject a pending selected parent,
+  including when it differs from `HEAD`. Insertion below checks both `HEAD` and
+  the new commit's immediate parent. These checks use only those commits' own
+  states: older pending
   ancestry does not block creation or require replay, whether hidden tips are
   available or not. AutoMerge parents remain eligible and use normal AutoMerge
   dependency maintenance. Unborn root creation has no parent to validate.
 - A current worktree-changes cache controls which actions are advertised without
-  opening a repository: tracked changes offer both `new` and `new-empty`, while a
+  opening a repository: tracked changes offer `new` and `new-empty`, plus
+  `neW-below` at an eligible `HEAD`, while a
   clean or untracked-only worktree offers only `new-empty`. If no current cache is
-  available, both are shown and `new` validates its candidate before opening the
+  available, eligible creation actions are shown and validate their candidate before opening the
   editor, directing an empty candidate to `new-empty`.
 - Before launching the editor, tix resolves identities, signing configuration,
   index conflicts, filters,
@@ -1930,12 +1950,12 @@ views.
 
 - `a` toggles a two-line shortcut group with commit operations above general
   actions. Each action underlines its shortcut letter within its verb, capitalizing
-  that letter for Shift bindings, as in `New-empty`, `Split`, `Fetch`, `Push`,
+  that letter for Shift bindings, as in `neW-below`, `New-empty`, `Split`, `Fetch`, `Push`,
   `AutoMerge`, `Remerge`, `sTash`, `unsTash`, and `eXclude`. No action label has a
   separate shortcut-letter prefix. The command picker uses the same labels and
   matches them without case sensitivity.
-- `a o` rewords, `a w` creates a rebased child, `a Shift-N` creates an
-  empty child, `a e` amends `@`, `a l` spills `@`, `a Shift-S` splits staged from
+- `a o` rewords, `a w` creates a rebased child, `a Shift-W` inserts below `@`,
+  `a Shift-N` creates an empty child, `a e` amends `@`, `a l` spills `@`, `a Shift-S` splits staged from
   unstaged changes, and `a d` deletes a commit when each action is available.
   With a Worktree path selected, `a d` discards that path's changes instead.
   `a b` rebases an eligible hidden base,

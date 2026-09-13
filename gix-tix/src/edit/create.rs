@@ -15,6 +15,14 @@ pub(crate) struct Prepared {
     pub(super) objects: gix::odb::memory::Storage,
     pub(crate) is_empty: bool,
     pub(super) reset_index: bool,
+    below: Option<gix::objs::Commit>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Kind {
+    Normal,
+    Empty,
+    Below,
 }
 
 #[derive(Clone, Copy)]
@@ -33,6 +41,55 @@ pub(crate) fn prepare(repo: gix::Repository, parent: Option<ObjectId>) -> Result
 #[tracing::instrument(skip_all, fields(parent = ?parent))]
 pub(crate) fn prepare_empty(repo: gix::Repository, parent: Option<ObjectId>) -> Result<Prepared> {
     prepare_inner(repo, parent, true, Source::Default, None, false)
+}
+
+pub(crate) fn prepare_below(mut repo: gix::Repository, target: ObjectId) -> Result<Prepared> {
+    let mut upper = below_head(&repo, target)?;
+    let mut prepared = prepare(repo.clone(), Some(target))?;
+    repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
+    let parent_tree_id = match upper.parents.first() {
+        Some(parent_commit_id) => repo.find_commit(*parent_commit_id)?.tree_id()?.detach(),
+        None => repo.empty_tree().id,
+    };
+    // Move only the local delta, then prove that replaying HEAD preserves the combined tree.
+    let lower_tree_id = rebase::cherry_pick_tree(&repo, upper.tree, parent_tree_id, prepared.tree)
+        .context("the new changes conflict when moved below HEAD")?;
+    let upper_tree_id = rebase::cherry_pick_tree(&repo, parent_tree_id, lower_tree_id, upper.tree)
+        .context("HEAD conflicts when replayed above the new commit")?;
+    anyhow::ensure!(
+        upper_tree_id == prepared.tree,
+        "inserting below HEAD would change the combined tree"
+    );
+    upper.tree = upper_tree_id;
+    prepared.tree = lower_tree_id;
+    prepared.below = Some(upper);
+    prepared.objects = repo
+        .objects
+        .take_object_memory()
+        .context("candidate object memory was unavailable")?;
+    Ok(prepared)
+}
+
+pub(super) fn below_head(repo: &gix::Repository, target: ObjectId) -> Result<gix::objs::Commit> {
+    anyhow::ensure!(repo.head_id()? == target, "new-below requires the current HEAD");
+    let commit = repo.find_commit(target)?.decode()?.into_owned()?;
+    super::auto_merge::ensure_editable(&commit)?;
+    anyhow::ensure!(
+        commit.parents.len() <= 1 && !super::review::is_review(&commit),
+        "new-below requires an ordinary root or single-parent commit"
+    );
+    anyhow::ensure!(
+        !rebase::is_pending(&commit),
+        "finish the pending or conflicting HEAD before creating a commit below it"
+    );
+    if let Some(parent_commit_id) = commit.parents.first() {
+        let parent = repo.find_commit(*parent_commit_id)?.decode()?.into_owned()?;
+        anyhow::ensure!(
+            super::auto_merge::is_auto_merge(&parent) || !rebase::is_pending(&parent),
+            "the new commit's parent has a pending rebase; finish it before creating a commit"
+        );
+    }
+    Ok(commit)
 }
 
 pub(crate) fn prepare_from(
@@ -162,6 +219,7 @@ fn prepare_inner(
         objects,
         is_empty: tree == baseline_id,
         reset_index: !empty,
+        below: None,
     })
 }
 
@@ -321,18 +379,29 @@ fn apply_commit_conflict(
     mut repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     mut prepared: Prepared,
-    (commit, enrichment): (gix::objs::Commit, crate::enrich::Headers),
+    (mut commit, enrichment): (gix::objs::Commit, crate::enrich::Headers),
     report: impl FnMut(rebase::Progress),
 ) -> Result<rebase::Perform> {
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
-    let (performed, _) = rebase::perform_with_enrichment_and_progress(
-        &repo,
-        graph,
-        rebase::Edit::Insert {
+    let edit = match prepared.below {
+        Some(upper) => {
+            commit.parents.clone_from(&upper.parents);
+            rebase::Edit::InsertBelow {
+                target: prepared.parent.context("new-below requires a HEAD commit")?,
+                lower: commit,
+                upper,
+            }
+        }
+        None => rebase::Edit::Insert {
             anchor: prepared.parent,
             commit,
             reset_index: prepared.reset_index,
         },
+    };
+    let (performed, _) = rebase::perform_with_enrichment_and_progress(
+        &repo,
+        graph,
+        edit,
         rebase::Signature::RedoIfNeeded,
         rebase::Tree::LeaveAsIsAndMark,
         &enrichment,
@@ -859,6 +928,493 @@ mod tests {
             new_id,
             "the selected parent branch advances independently"
         );
+        Ok(())
+    }
+
+    fn below_git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
+        let output = gix_testtools::git_command(path).args(args).output()?;
+        if !output.status.success() {
+            return Err(format!("git {} failed: {}", args.join(" "), output.stderr.to_str_lossy()).into());
+        }
+        Ok(output.stdout)
+    }
+
+    fn below_child(repository: &gix::Repository, parent_commit_id: ObjectId, path: &str) -> Result<ObjectId> {
+        let parent = repository.find_commit(parent_commit_id)?;
+        let mut tree = parent.tree()?.edit()?;
+        tree.upsert(path, gix::objs::tree::EntryKind::Blob, repository.write_blob(path)?)?;
+        Ok(repository.new_commit(path, tree.write()?, [parent_commit_id])?.id)
+    }
+
+    #[test]
+    fn new_below_preserves_head_identity_and_uncommitted_remainder() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_below.sh")?;
+        let repository = open(fixture.path())?;
+        let head_commit_id = repository.head_id()?.detach();
+        let parent_commit_id = repository
+            .find_commit(head_commit_id)?
+            .parent_ids()
+            .next()
+            .context("HEAD has a parent")?
+            .detach();
+        let sibling_commit_id = below_child(&repository, parent_commit_id, "sibling")?;
+        let descendant_commit_id = below_child(&repository, head_commit_id, "descendant")?;
+        for (name, commit_id) in [("sibling", sibling_commit_id), ("descendant", descendant_commit_id)] {
+            repository.reference(
+                format!("refs/heads/{name}"),
+                commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "retain fixture fork",
+            )?;
+        }
+        let head_change_id = crate::change_id::for_commit(&repository, head_commit_id)?;
+        let mut notes = repository.notes()?;
+        let notes_ref = notes
+            .default_ref()
+            .context("the fixture has a default notes ref")?
+            .to_owned();
+        notes.replace_at_ref(notes_ref.as_ref(), head_commit_id, b"HEAD note")?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let objects_before = object_count(fixture.path())?;
+        let modified_before = ["shared", "keep", "head", "untracked"]
+            .map(|path| std::fs::metadata(fixture.path().join(path))?.modified())
+            .into_iter()
+            .collect::<std::io::Result<Vec<_>>>()?;
+        let prepared = prepare_below(open(fixture.path())?, head_commit_id)?;
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "preparation leaves repository state intact"
+        );
+        assert_eq!(
+            object_count(fixture.path())?,
+            objects_before,
+            "preparation writes no objects"
+        );
+        let edited = prepared
+            .document
+            .replacen(b"what\n\nwhy", b"lower\n\nreason", 1)
+            .replacen(b";Todo\n;Message:", b"Todo\nMessage: lower enrichment", 1);
+        let graph = super::super::loaded_graph(&repository)?;
+        let outcome = apply_reporting(open(fixture.path())?, &graph, prepared, &edited)?;
+        let lower_commit_id = outcome.selected.context("new-below selects its new commit")?;
+        let upper_commit_id = outcome
+            .map(head_commit_id)
+            .context("HEAD survives above the new commit")?;
+        let repository = open(fixture.path())?;
+        assert_eq!(
+            repository.head_id()?,
+            upper_commit_id,
+            "HEAD follows its rewritten occurrence"
+        );
+        assert_eq!(
+            repository
+                .find_commit(upper_commit_id)?
+                .parent_ids()
+                .map(gix::Id::detach)
+                .collect::<Vec<_>>(),
+            [lower_commit_id],
+            "HEAD sits immediately above the new commit"
+        );
+        assert_eq!(
+            repository
+                .find_commit(lower_commit_id)?
+                .parent_ids()
+                .map(gix::Id::detach)
+                .collect::<Vec<_>>(),
+            [parent_commit_id],
+            "the new commit keeps the old parent"
+        );
+        assert_eq!(
+            below_git(fixture.path(), &["show", &format!("{lower_commit_id}:shared")])?,
+            b"staged\none\ntwo\nthree\nbase unstaged\n",
+            "only staged hunks enter the new commit"
+        );
+        assert!(
+            repository
+                .find_commit(lower_commit_id)?
+                .tree()?
+                .find_entry("head")
+                .is_none(),
+            "HEAD's original addition stays in HEAD"
+        );
+        assert_eq!(
+            crate::change_id::for_commit(&repository, upper_commit_id)?,
+            head_change_id,
+            "HEAD keeps its change identity"
+        );
+        let lower_change_id = crate::change_id::for_commit(&repository, lower_commit_id)?;
+        assert_ne!(
+            lower_change_id, head_change_id,
+            "the new commit receives its own change identity"
+        );
+        assert_eq!(
+            repository.find_commit(upper_commit_id)?.message_raw()?,
+            b"head\n".as_bstr(),
+            "HEAD keeps its original message"
+        );
+        assert_eq!(
+            crate::enrich::load(&mut crate::enrich::open(&repository)?, lower_change_id)?,
+            crate::enrich::Enrichment {
+                todo: true,
+                note: Some("lower enrichment".into())
+            },
+            "editor enrichment belongs to the new lower commit"
+        );
+        let mut notes = repository.notes()?.with_refs([notes_ref.as_bstr()])?;
+        assert_eq!(
+            notes
+                .get(upper_commit_id)?
+                .first()
+                .map(|note| note.blob.data.as_slice()),
+            Some(b"HEAD note".as_slice()),
+            "HEAD's note follows its rewrite"
+        );
+        assert!(
+            notes.get(lower_commit_id)?.is_empty(),
+            "HEAD's note is not copied onto the new commit"
+        );
+        assert_eq!(
+            repository.find_reference("refs/heads/sibling")?.id(),
+            sibling_commit_id,
+            "the parent's other children stay untouched"
+        );
+        let descendant_commit_id = outcome
+            .map(descendant_commit_id)
+            .context("the descendant is retained")?;
+        let descendant = repository.find_commit(descendant_commit_id)?.decode()?.into_owned()?;
+        assert_eq!(
+            descendant.parents.as_slice(),
+            [upper_commit_id],
+            "descendants follow the rewritten HEAD"
+        );
+        assert!(
+            rebase::is_pending(&descendant),
+            "content-changing descendants remain lazy"
+        );
+        let after = gix_testtools::repository::snapshot(fixture.path())?;
+        assert_eq!(
+            after.index_tree, before.index_tree,
+            "the committed staged tree remains the index tree"
+        );
+        assert_eq!(
+            after.worktree, before.worktree,
+            "unstaged and untracked bytes remain untouched"
+        );
+        let modified_after = ["shared", "keep", "head", "untracked"]
+            .map(|path| std::fs::metadata(fixture.path().join(path))?.modified())
+            .into_iter()
+            .collect::<std::io::Result<Vec<_>>>()?;
+        assert_eq!(
+            modified_after, modified_before,
+            "successful insertion never rewrites worktree files"
+        );
+        assert_eq!(
+            below_git(fixture.path(), &["diff", "--cached", "--name-only"])?,
+            b"",
+            "the selected staged hunks are consumed"
+        );
+        assert_eq!(
+            below_git(fixture.path(), &["diff", "--name-only"])?,
+            b"shared\n",
+            "the same-file unstaged remainder survives"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn new_below_uses_tracked_worktree_changes_and_can_insert_a_root() -> gix_testtools::Result {
+        for root in [false, true] {
+            let fixture =
+                gix_testtools::scripted_fixture_writable(if root { "create_commit.sh" } else { "create_below.sh" })?;
+            if root {
+                below_git(fixture.path(), &["reset", "--hard", "-q", "HEAD", "--"])?;
+                std::fs::write(fixture.path().join("new-root"), "new root\n")?;
+                below_git(fixture.path(), &["add", "new-root"])?;
+            } else {
+                below_git(fixture.path(), &["reset", "-q", "HEAD", "--"])?;
+            }
+            let repository = open(fixture.path())?;
+            let head_commit_id = repository.head_id()?.detach();
+            let original_parents = repository
+                .find_commit(head_commit_id)?
+                .parent_ids()
+                .map(gix::Id::detach)
+                .collect::<Vec<_>>();
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let prepared = prepare_below(open(fixture.path())?, head_commit_id)?;
+            let edited = prepared.document.replacen(b"what\n\nwhy", b"below\n\nreason", 1);
+            let graph = super::super::loaded_graph(&repository)?;
+            let lower_commit_id = apply(open(fixture.path())?, &graph, prepared, &edited)?;
+            let repository = open(fixture.path())?;
+            assert_eq!(
+                repository
+                    .find_commit(lower_commit_id)?
+                    .parent_ids()
+                    .map(gix::Id::detach)
+                    .collect::<Vec<_>>(),
+                original_parents,
+                "the lower commit inherits all original ancestry, including no parent"
+            );
+            assert!(
+                repository
+                    .find_commit(lower_commit_id)?
+                    .tree()?
+                    .find_entry("untracked")
+                    .is_none(),
+                "implicit creation excludes untracked files"
+            );
+            if root {
+                assert_eq!(
+                    below_git(
+                        fixture.path(),
+                        &["ls-tree", "--name-only", &lower_commit_id.to_string()]
+                    )?,
+                    b"new-root\n",
+                    "the new root contains only the selected addition"
+                );
+            } else {
+                assert_eq!(
+                    below_git(fixture.path(), &["show", &format!("{lower_commit_id}:shared")])?,
+                    b"staged\none\ntwo\nthree\nunstaged\n",
+                    "an unchanged index selects all tracked worktree hunks"
+                );
+            }
+            assert_eq!(
+                gix_testtools::repository::snapshot(fixture.path())?.worktree,
+                before.worktree,
+                "creation leaves all worktree bytes in place"
+            );
+            assert_eq!(
+                below_git(fixture.path(), &["status", "--short"])?,
+                b"?? untracked\n",
+                "committed changes leave only untracked files"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn new_below_refuses_conflicting_or_lossy_reordering_without_writes() -> gix_testtools::Result {
+        for lossy in [false, true] {
+            let fixture = gix_testtools::scripted_fixture_writable("create_below.sh")?;
+            below_git(fixture.path(), &["reset", "--hard", "-q", "HEAD", "--"])?;
+            if lossy {
+                below_git(fixture.path(), &["rm", "-q", "head"])?;
+            } else {
+                std::fs::write(fixture.path().join("shared"), "HEAD content\n")?;
+                below_git(fixture.path(), &["add", "shared"])?;
+                below_git(fixture.path(), &["commit", "--amend", "--no-edit", "-q"])?;
+                std::fs::write(fixture.path().join("shared"), "selected content\n")?;
+                below_git(fixture.path(), &["add", "shared"])?;
+            }
+            let repository = open(fixture.path())?;
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let objects_before = object_count(fixture.path())?;
+            let index_before = std::fs::read(repository.index_path())?;
+            let err = prepare_below(open(fixture.path())?, repository.head_id()?.detach())
+                .err()
+                .context("dependent changes cannot be moved below HEAD")?;
+            assert!(
+                format!("{err:#}").contains(if lossy { "combined tree" } else { "conflict" }),
+                "the failure explains the unsafe reorder: {err:#}"
+            );
+            assert_eq!(
+                gix_testtools::repository::snapshot(fixture.path())?,
+                before,
+                "failed preparation preserves refs, history, index entries, and files"
+            );
+            assert_eq!(
+                object_count(fixture.path())?,
+                objects_before,
+                "failed preparation publishes no objects"
+            );
+            assert_eq!(
+                std::fs::read(repository.index_path())?,
+                index_before,
+                "failed preparation preserves the complete index file"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn new_below_checks_only_head_and_its_immediate_parent_for_pending_rebases() -> gix_testtools::Result {
+        for depth in 0..3 {
+            let fixture = gix_testtools::scripted_fixture_writable("create_below.sh")?;
+            let repository = open(fixture.path())?;
+            let old_head_commit_id = repository.head_id()?.detach();
+            let mut head = repository.find_commit(old_head_commit_id)?.decode()?.into_owned()?;
+            let parent_commit_id = head.parents[0];
+            let mut pending = repository.find_commit(parent_commit_id)?.decode()?.into_owned()?;
+            pending.parents = [parent_commit_id].into_iter().collect();
+            pending.message = "pending ancestor\n".into();
+            pending
+                .extra_headers
+                .push(("tix-rebase-parent".into(), parent_commit_id.to_string().into()));
+            let pending_commit_id = repository.write_object(&pending)?.detach();
+            if depth == 0 {
+                head.extra_headers
+                    .push(("tix-rebase-parent".into(), parent_commit_id.to_string().into()));
+            } else if depth == 1 {
+                head.parents = [pending_commit_id].into_iter().collect();
+            } else {
+                let mut finalized = pending.clone();
+                finalized.parents = [pending_commit_id].into_iter().collect();
+                finalized.extra_headers.clear();
+                finalized.message = "finalized parent\n".into();
+                head.parents = [repository.write_object(&finalized)?.detach()].into_iter().collect();
+            }
+            let head_commit_id = repository.write_object(&head)?.detach();
+            repository
+                .find_reference("refs/heads/main")?
+                .set_target_id(head_commit_id, "prepare pending ancestry")?;
+            repository.reference(
+                "refs/heads/pending",
+                pending_commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "retain pending ancestor",
+            )?;
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let objects_before = object_count(fixture.path())?;
+            if depth < 2 {
+                let err = prepare_below(open(fixture.path())?, head_commit_id)
+                    .err()
+                    .context("pending HEAD and direct parent must be refused")?;
+                assert!(
+                    format!("{err:#}").contains("pending"),
+                    "the rejection identifies pending history: {err:#}"
+                );
+                assert_eq!(
+                    gix_testtools::repository::snapshot(fixture.path())?,
+                    before,
+                    "pending rejection leaves the repository intact"
+                );
+                assert_eq!(
+                    object_count(fixture.path())?,
+                    objects_before,
+                    "pending rejection writes no objects"
+                );
+            } else {
+                let prepared = prepare_below(open(fixture.path())?, head_commit_id)?;
+                let edited = prepared.document.replacen(b"what\n\nwhy", b"below\n\nreason", 1);
+                let graph = super::super::loaded_graph(&repository)?;
+                let outcome = apply_reporting(open(fixture.path())?, &graph, prepared, &edited)?;
+                assert_eq!(
+                    outcome.map(pending_commit_id),
+                    Some(pending_commit_id),
+                    "older pending ancestry is never rewritten"
+                );
+                assert_eq!(
+                    repository.find_reference("refs/heads/pending")?.id(),
+                    pending_commit_id,
+                    "older pending references stay fixed"
+                );
+                assert!(
+                    rebase::is_pending(&repository.find_commit(pending_commit_id)?.decode()?.into_owned()?),
+                    "older pending commits remain pending"
+                );
+                let lower_commit_id = outcome.selected.context("creation selects the lower commit")?;
+                assert_eq!(
+                    repository
+                        .find_commit(lower_commit_id)?
+                        .parent_ids()
+                        .map(gix::Id::detach)
+                        .collect::<Vec<_>>(),
+                    head.parents.as_slice(),
+                    "the lower commit retains the exact finalized parent"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn new_below_preserves_linked_worktree_staging_and_refuses_conflicting_changes() -> gix_testtools::Result {
+        for conflict in [false, true] {
+            let fixture = gix_testtools::scripted_fixture_writable("create_below.sh")?;
+            let linked_root = gix_testtools::tempfile::tempdir()?;
+            let linked = linked_root.path().join("linked");
+            let output = gix_testtools::git_command(fixture.path())
+                .args(["worktree", "add", "-q", "-b", "linked"])
+                .arg(&linked)
+                .arg("HEAD")
+                .output()?;
+            assert!(
+                output.status.success(),
+                "the disposable linked worktree is created: {}",
+                output.stderr.to_str_lossy()
+            );
+            let path = if conflict { "shared" } else { "keep" };
+            std::fs::write(linked.join(path), "linked staged\n")?;
+            below_git(&linked, &["add", path])?;
+            std::fs::write(linked.join(path), "linked unstaged\n")?;
+            let repository = open(fixture.path())?;
+            let head_commit_id = repository.head_id()?.detach();
+            let graph = super::super::loaded_graph(&repository)?;
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let linked_before = gix_testtools::repository::snapshot(&linked)?;
+            let index_before = std::fs::read(repository.index_path())?;
+            let linked_index_path = open(&linked)?.index_path();
+            let linked_index_before = std::fs::read(&linked_index_path)?;
+            let prepared = prepare_below(open(fixture.path())?, head_commit_id)?;
+            let edited = prepared.document.replacen(b"what\n\nwhy", b"below\n\nreason", 1);
+            let result = apply_reporting(open(fixture.path())?, &graph, prepared, &edited);
+            if conflict {
+                assert!(
+                    result.is_err(),
+                    "conflicting linked staging refuses the whole insertion"
+                );
+                assert_eq!(
+                    gix_testtools::repository::snapshot(fixture.path())?,
+                    before,
+                    "linked conflict leaves active refs, index, and worktree unchanged"
+                );
+                assert_eq!(
+                    gix_testtools::repository::snapshot(&linked)?,
+                    linked_before,
+                    "linked conflict leaves the other worktree unchanged"
+                );
+                assert_eq!(
+                    std::fs::read(repository.index_path())?,
+                    index_before,
+                    "active index bytes survive linked conflict"
+                );
+                assert_eq!(
+                    std::fs::read(linked_index_path)?,
+                    linked_index_before,
+                    "linked index bytes survive conflict preflight"
+                );
+            } else {
+                let outcome = result?;
+                let upper_commit_id = outcome.map(head_commit_id).context("HEAD is rewritten")?;
+                assert_eq!(
+                    open(&linked)?.head_id()?,
+                    upper_commit_id,
+                    "the linked branch follows the rewritten HEAD"
+                );
+                assert_eq!(
+                    below_git(&linked, &["show", ":keep"])?,
+                    b"linked staged\n",
+                    "unrelated linked staging survives the tree transition"
+                );
+                assert_eq!(
+                    std::fs::read(linked.join("keep"))?,
+                    b"linked unstaged\n",
+                    "the linked worktree keeps its unstaged remainder"
+                );
+                assert_eq!(
+                    std::fs::read(linked.join("shared"))?,
+                    b"staged\none\ntwo\nthree\nbase unstaged\n",
+                    "the linked checkout receives the newly committed changes"
+                );
+                assert_eq!(
+                    gix_testtools::repository::snapshot(fixture.path())?.worktree,
+                    before.worktree,
+                    "updating another checkout never touches active worktree bytes"
+                );
+            }
+        }
         Ok(())
     }
 }
