@@ -2091,8 +2091,14 @@ views.
   working directory may have disappeared. Before processing filesystem events or
   redrawing, it lexically normalizes and enters the common repository, reopens it
   as bare, drops worktree state, keeps tree/history views live, and reports recovery
-  in the attention notice. If recovery fails, terminal state is restored and the
-  contextual error is returned.
+  in the attention notice. Missing administrative `HEAD`, `commondir`, or `gitdir`
+  files count as removal even while the checkout and administration directories
+  still exist. View loads interrupted between boundary checks retry after recovery;
+  late history-worker failures return their graph for a refresh from the common
+  repository. A worktree that disappears during picker activation is marked
+  unavailable instead of closing the application. Errors unrelated to removal,
+  including failures from the surviving common repository, still propagate after
+  terminal state is restored.
 
 ## Resource and responsiveness invariants
 
