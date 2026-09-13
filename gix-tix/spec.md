@@ -516,8 +516,8 @@ without trading responsiveness for metadata that is not visible.
 - Patch enrichments are human-readable Git config notes at the worktree-local
   `refs/worktree/tix/enrich-patch` ref, keyed by the effective Tix change ID.
   Each `[patch "v1:<ghij>"]` section stores `refackiewed = true` for that patch
-  version. Only an explicit mark creates approval. The same change and patch
-  share it across rewrites, but an unrelated change with the same patch does
+  version. Explicit marking or finishing a review creates approval. The same
+  change and patch share it across rewrites, but an unrelated change with the same patch does
   not. Editing a patch hides its old approval; returning to that approved patch
   restores the marker. Updating or clearing one version preserves other
   versions and unknown fields. Malformed notes are diagnosed and ignored for
@@ -1483,7 +1483,11 @@ views.
   after it; with multiple leaves they branch directly after the finished review.
   AutoMerge boundaries and their descendants rebuild after the input refs settle;
   they do not become insertion points for the reviewed history.
-  The review ref is deleted in the same atomic ref/worktree transaction.
+  The resulting review commit's current patch is automatically marked
+  `refackiewed` (`✨`), including an empty patch. This marks the finished review
+  commit even when checkout returns to a descendant. The approval and review-ref
+  deletion share the same atomic ref/worktree transaction; cancelling a suspended
+  finish publishes neither.
 - If the recorded review return ref is missing, finishing leaves the repository
   untouched and limits navigation to visible non-review commits descended from
   the reviewed tip. The reviewed tip is selected initially when visible;

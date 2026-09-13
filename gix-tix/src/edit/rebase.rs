@@ -1473,6 +1473,9 @@ pub(super) fn finish_review_with_progress(
         commit.parents = new_parents.into_iter().collect();
         if *old == review {
             super::review::remove_identity(&mut commit, review_ref.as_bstr());
+            marker(&mut commit, false, None);
+            merge::clear(&mut commit);
+            crate::patch_id::refresh(&repo, &mut commit)?;
         }
         let new = replay.write(
             commit,
@@ -1608,6 +1611,8 @@ pub(super) fn finish_review_with_progress(
     let (selected, checkout_reference) = checkout.map_or((finished_review, None), |(old, reference)| {
         (rewritten.get(&old).copied().flatten().unwrap_or(old), reference)
     });
+    let enrichment = crate::enrich::prepare_refackiewed(&repo, finished_review, true)?
+        .map(|(object, data, _)| (crate::enrich::PATCH_REF_NAME, object, data));
     let committer = replay.committer;
     let mut prepared = Prepared {
         repo,
@@ -1628,7 +1633,7 @@ pub(super) fn finish_review_with_progress(
         departure: None,
         pins: Vec::new(),
         delete_refs,
-        enrichment: None,
+        enrichment,
         continuation: None,
         release_continuation: None,
     };
