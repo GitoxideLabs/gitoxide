@@ -421,6 +421,7 @@ pub(crate) enum Action {
     OpenDiff,
     Reword,
     NewCommit,
+    NewBelowCommit,
     NewEmptyCommit,
     Amend,
     Stash,
@@ -477,7 +478,7 @@ pub(crate) enum Effect {
     AutoMerge(crate::edit::auto_merge::Selection),
     NewCommit {
         parent: Option<ObjectId>,
-        empty: bool,
+        kind: crate::edit::create::Kind,
     },
     Amend(ObjectId),
     Discard(usize),
@@ -1940,6 +1941,7 @@ impl App {
             Action::ToggleActions
                 | Action::Reword
                 | Action::NewCommit
+                | Action::NewBelowCommit
                 | Action::NewEmptyCommit
                 | Action::Amend
                 | Action::Spill
@@ -2313,13 +2315,19 @@ impl App {
             Action::NewCommit if self.can_create_commit() => {
                 return vec![Effect::NewCommit {
                     parent: self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id),
-                    empty: false,
+                    kind: crate::edit::create::Kind::Normal,
+                }];
+            }
+            Action::NewBelowCommit if self.can_create_below_commit() => {
+                return vec![Effect::NewCommit {
+                    parent: self.worktree_head,
+                    kind: crate::edit::create::Kind::Below,
                 }];
             }
             Action::NewEmptyCommit if self.can_create_empty_commit() => {
                 return vec![Effect::NewCommit {
                     parent: self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id),
-                    empty: true,
+                    kind: crate::edit::create::Kind::Empty,
                 }];
             }
             Action::Amend if self.can_amend() => {
@@ -3342,6 +3350,17 @@ impl App {
 
     pub(crate) fn can_create_empty_commit(&self) -> bool {
         self.new_empty_commit_available && self.can_create_any_commit()
+    }
+
+    pub(crate) fn can_create_below_commit(&self) -> bool {
+        self.can_create_commit()
+            && self.can_edit_head()
+            && !self.has_conflict_marker()
+            && !self.rebase_continuation_pending
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| row.parent_ids.len() <= 1 && !row.is_review && !row.has_merge_replay)
     }
 
     fn can_create_any_commit(&self) -> bool {
@@ -4837,7 +4856,7 @@ mod tests {
             app.update(Action::NewCommit),
             vec![Effect::NewCommit {
                 parent: Some(id(1)),
-                empty: false,
+                kind: crate::edit::create::Kind::Normal,
             }],
             "the checked-out base accepts a first stack commit"
         );
@@ -4845,7 +4864,7 @@ mod tests {
             app.update(Action::NewEmptyCommit),
             vec![Effect::NewCommit {
                 parent: Some(id(1)),
-                empty: true,
+                kind: crate::edit::create::Kind::Empty,
             }],
             "the checked-out base accepts a first empty commit"
         );
@@ -5431,7 +5450,7 @@ mod tests {
             unborn.update(Action::NewCommit),
             vec![Effect::NewCommit {
                 parent: None,
-                empty: false,
+                kind: crate::edit::create::Kind::Normal,
             }]
         );
 
@@ -5447,7 +5466,7 @@ mod tests {
             unborn_with_history.update(Action::NewCommit),
             vec![Effect::NewCommit {
                 parent: Some(id(1)),
-                empty: false,
+                kind: crate::edit::create::Kind::Normal,
             }],
             "the hidden tip can parent the unborn branch's first commit"
         );
@@ -5497,6 +5516,78 @@ mod tests {
         app.set_new_commit_availability(None);
         assert!(app.can_create_commit(), "an absent cache leaves both choices available");
         assert!(app.can_create_empty_commit());
+    }
+
+    #[test]
+    fn new_below_requires_an_editable_non_merge_head_and_tracked_changes() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        app.set_worktree_head(Some(id(2)), false);
+        complete(&mut app);
+        app.select_commit(id(2));
+        app.set_new_commit_availability(Some(&Changes {
+            has_tracked_changes: true,
+            ..Changes::default()
+        }));
+        assert_eq!(
+            app.update(Action::NewBelowCommit),
+            vec![Effect::NewCommit {
+                parent: Some(id(2)),
+                kind: crate::edit::create::Kind::Below,
+            }],
+            "HEAD accepts insertion below it even with descendants"
+        );
+        app.select_commit(id(3));
+        assert!(
+            app.update(Action::NewBelowCommit).is_empty(),
+            "only HEAD can insert below"
+        );
+        app.select_commit(id(2));
+        app.hidden_rows.insert(id(2));
+        assert!(!app.can_create_below_commit(), "a hidden boundary cannot be rewritten");
+        app.hidden_rows.clear();
+        for (is_review, has_merge_replay, parents) in [
+            (true, false, vec![id(1)]),
+            (false, true, vec![id(1)]),
+            (false, false, vec![id(1), id(3)]),
+        ] {
+            let row = Arc::make_mut(&mut app.rows[1]);
+            row.is_review = is_review;
+            row.has_merge_replay = has_merge_replay;
+            row.parent_ids = parents.into_iter().collect();
+            assert!(
+                !app.can_create_below_commit(),
+                "review and merge commits cannot insert below"
+            );
+        }
+        let row = Arc::make_mut(&mut app.rows[1]);
+        row.parent_ids.clear();
+        assert!(app.can_create_below_commit(), "root HEAD can insert a new root below");
+        app.auto_merges
+            .insert(id(2), crate::edit::auto_merge::Definition { inputs: Vec::new() });
+        assert!(
+            !app.can_create_below_commit(),
+            "AutoMerge HEAD remains generated content"
+        );
+        app.auto_merges.clear();
+        app.set_worktree_conflicted(true);
+        assert!(
+            !app.can_create_below_commit(),
+            "unresolved worktree conflicts block insertion"
+        );
+        app.set_worktree_conflicted(false);
+        app.set_new_commit_availability(Some(&Changes::default()));
+        assert!(
+            !app.can_create_below_commit(),
+            "a clean worktree has no changes to insert"
+        );
+        app.set_worktree_head(None, false);
+        app.set_worktree_head_unborn(true);
+        app.set_new_commit_availability(None);
+        assert!(
+            app.update(Action::NewBelowCommit).is_empty(),
+            "an unborn HEAD has no commit to place above the result"
+        );
     }
 
     #[test]
@@ -6553,6 +6644,7 @@ mod tests {
             for action in [
                 Action::Delete,
                 Action::NewEmptyCommit,
+                Action::NewBelowCommit,
                 Action::TogglePin,
                 Action::Undo,
                 Action::ToggleChangesFocus,
