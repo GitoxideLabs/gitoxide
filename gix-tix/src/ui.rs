@@ -3732,6 +3732,12 @@ mod tests {
                     Some(CommandId::NewCommit),
                     "tracked changes make the new-commit command available"
                 );
+                app.move_held_prefix(Direction::Right);
+                assert_eq!(
+                    app.held_prefix_selection(),
+                    Some(CommandId::NewBelowCommit),
+                    "insertion below HEAD is displayed beside ordinary new"
+                );
             }
         }
         assert_eq!(

@@ -16,6 +16,7 @@ pub(crate) enum CommandId {
     Select,
     Reword,
     NewCommit,
+    NewBelowCommit,
     NewEmptyCommit,
     Amend,
     Spill,
@@ -76,6 +77,7 @@ const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
         (Id::Select, View, "vc", Action::SelectEntry),
         (Id::Reword, Actions, "ao", Action::Reword),
         (Id::NewCommit, Actions, "aw", Action::NewCommit),
+        (Id::NewBelowCommit, Actions, "aW", Action::NewBelowCommit),
         (Id::NewEmptyCommit, Actions, "aN", Action::NewEmptyCommit),
         (Id::Amend, Actions, "ae", Action::Amend),
         (Id::Spill, Actions, "al", Action::Spill),
@@ -179,6 +181,9 @@ impl Command {
             CommandId::Select => "Select a displayed entry number in the current tree.",
             CommandId::Reword => "Edit the selected commit's message and metadata.",
             CommandId::NewCommit => "Create a child commit from staged or tracked worktree changes.",
+            CommandId::NewBelowCommit => {
+                "Commit staged or tracked worktree changes below HEAD, preserving worktree files."
+            }
             CommandId::NewEmptyCommit => "Create an empty child commit, preserving local changes.",
             CommandId::Amend if app.changes_focus == Some(ChangePane::Worktree) => {
                 "Amend HEAD with only the selected worktree path's version."
@@ -342,6 +347,9 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
         }
         if app.changes_focus.is_none() && app.can_create_commit() {
             push(CommandId::NewCommit, 0, "new", true);
+        }
+        if app.can_create_below_commit() {
+            push(CommandId::NewBelowCommit, 0, "neW-below", true);
         }
         if app.changes_focus.is_none() && app.can_create_empty_commit() {
             push(CommandId::NewEmptyCommit, 0, "New-empty", true);
@@ -514,6 +522,46 @@ mod tests {
     }
 
     #[test]
+    fn new_below_is_searchable_and_uses_shift_w_at_head() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row(2, &[1]), row(1, &[])]);
+        app.state = State::Complete;
+        app.set_worktree_head(Some(id(2)), false);
+        app.select_commit(id(2));
+        app.set_new_commit_availability(Some(&crate::Changes {
+            has_tracked_changes: true,
+            ..crate::Changes::default()
+        }));
+        let catalog = commands(&app, &Decorations::default(), false);
+        let command = catalog
+            .iter()
+            .find(|command| command.id == CommandId::NewBelowCommit)
+            .expect("tracked changes at HEAD expose insertion below");
+        assert_eq!(command.shortcut, "aW", "Shift-W complements ordinary new");
+        assert_eq!(
+            command.label, "neW-below",
+            "the label identifies the uppercase shortcut"
+        );
+        assert_eq!(
+            shortcut_action(CommandGroup::Actions, 'W'),
+            Some(command.action.clone())
+        );
+        let items = crate::command_picker_items(&catalog);
+        let mut menu = Menu::default();
+        menu.open(&items);
+        menu.paste("new-below", &items);
+        assert_eq!(menu.submit_selected(&items), Some(CommandId::NewBelowCommit));
+        app.set_new_commit_availability(Some(&crate::Changes::default()));
+        assert!(
+            !has(
+                &commands(&app, &Decorations::default(), false),
+                CommandId::NewBelowCommit
+            ),
+            "clean worktrees hide insertion below"
+        );
+    }
+
+    #[test]
     fn contextual_command_help_describes_paths_and_whole_commits() {
         use crate::app::ChangesLayout;
 
@@ -594,6 +642,7 @@ mod tests {
             CommandId::SelectTree,
             CommandId::Select,
             CommandId::NewCommit,
+            CommandId::NewBelowCommit,
             CommandId::NewEmptyCommit,
             CommandId::Reword,
             CommandId::Delete,
@@ -809,6 +858,7 @@ mod tests {
         }
         for unavailable in [
             CommandId::Reword,
+            CommandId::NewBelowCommit,
             CommandId::Amend,
             CommandId::Spill,
             CommandId::Split,
