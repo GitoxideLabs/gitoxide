@@ -1,5 +1,5 @@
 use crate::{
-    app::{Action, Alignment, App, DateMode, IdMode, NameMode, RefMode},
+    app::{Action, Alignment, App, ChangePane, DateMode, IdMode, NameMode, RefMode},
     history::{DecorationKind, Decorations},
 };
 
@@ -164,6 +164,63 @@ pub(crate) struct Command {
 impl Command {
     pub(crate) fn key(&self) -> Option<char> {
         self.shortcut.chars().next_back()
+    }
+
+    pub(crate) fn help(&self, app: &App) -> &'static str {
+        match self.id {
+            CommandId::Date => "Cycle author dates, committer dates, and no dates.",
+            CommandId::Ids => "Cycle commit IDs, change IDs, and automatic IDs.",
+            CommandId::Emails => "Show or hide full actor names and email addresses.",
+            CommandId::Names => "Cycle all attribution, author only, and no names.",
+            CommandId::Mailmap => "Toggle mailmap resolution of names and email addresses.",
+            CommandId::Trailers => "Show or hide attribution trailers.",
+            CommandId::Refs => "Cycle all, normal, and no reference labels.",
+            CommandId::Hidden => "Show or hide ancestry excluded by the history filter.",
+            CommandId::Select => "Select a displayed entry number in the current tree.",
+            CommandId::Reword => "Edit the selected commit's message and metadata.",
+            CommandId::NewCommit => "Create a child commit from staged or tracked worktree changes.",
+            CommandId::NewEmptyCommit => "Create an empty child commit, preserving local changes.",
+            CommandId::Amend if app.changes_focus == Some(ChangePane::Worktree) => {
+                "Amend HEAD with only the selected worktree path's version."
+            }
+            CommandId::Amend => "Amend HEAD with staged changes, or tracked worktree changes if none are staged.",
+            CommandId::Spill if app.changes_focus == Some(ChangePane::Tree) => {
+                "Spill only the selected path into the worktree against the displayed parent."
+            }
+            CommandId::Spill => "Spill HEAD's changes into the worktree, leaving an empty commit.",
+            CommandId::Split => "Amend unstaged changes into HEAD and create a child from staged changes.",
+            CommandId::Delete => "Delete the selected commit and reparent its descendants.",
+            CommandId::Discard => "Discard the selected worktree path's changes; staged paths also reset the index.",
+            CommandId::Pin => "Pin the selected commit to keep it in this worktree's history view.",
+            CommandId::Unpin => "Remove the selected commit's history pin.",
+            CommandId::Stash => "Save local changes at HEAD and clear them from the worktree.",
+            CommandId::Unstash => "Restore the local changes saved at HEAD.",
+            CommandId::Rebase => "Edit the commit order and actions above the selected base.",
+            CommandId::RebaseUpdate => "Rebase onto the newer tip of the selected hidden branch.",
+            #[cfg(feature = "blocking-network-client")]
+            CommandId::Fetch => "Fetch the configured remote in the background.",
+            CommandId::Push => "Push the active branch in the background.",
+            CommandId::StartReview => "Choose a base and review the selected history as worktree changes.",
+            CommandId::FinishReview => "Finish the review and return to its recorded checkout.",
+            CommandId::Squash => "Fold the selected commit into an eligible ancestor.",
+            CommandId::SelectTree => "Start or adjust a tree selection for copying or moving commits.",
+            CommandId::SelectSubtree => "Select the eligible subtree for copying or moving commits.",
+            CommandId::Attach => "Attach the remembered branch at the current detached HEAD.",
+            CommandId::AutoMerge => "Create or extend an AutoMerge at HEAD with live input subscriptions.",
+            CommandId::Remerge => "Rebuild the selected AutoMerge from its current inputs.",
+            CommandId::RemoveFromAutoMerge => "Exclude the selected commit from an AutoMerge that uses it.",
+            CommandId::RemoveAutoMergeInput => "Choose an input to exclude from the selected AutoMerge.",
+            CommandId::Todo => "Set or clear the selected change's todo mark.",
+            CommandId::Note => "Edit the selected change's Tix note in Git's editor.",
+            CommandId::ChecksPass => "Set or clear the checks-pass mark for the selected tree.",
+            CommandId::Refackiewed => "Set or clear review and refactoring approval for the selected patch.",
+            CommandId::GitNote => "Edit the selected commit's ordinary Git note.",
+            CommandId::VerifySignatures => "Verify unverified signatures on visible commits.",
+            CommandId::Alignment => "Cycle title alignment, columns, no alignment, and compressed history.",
+            CommandId::RefTree => "Toggle the reference-tree overview.",
+            CommandId::CommitMessage => "Show or hide the selected commit's full message.",
+            CommandId::Changes => "Cycle tree and worktree changes, tree changes only, and hidden changes.",
+        }
     }
 
     pub(crate) fn search_prefix(&self) -> &'static str {
@@ -435,6 +492,72 @@ mod tests {
 
     fn has(commands: &[Command], id: CommandId) -> bool {
         commands.iter().any(|command| command.id == id)
+    }
+
+    #[test]
+    fn every_catalog_command_has_single_line_help() {
+        let app = App::new(0);
+        for (id, group, shortcut, action) in BINDINGS {
+            let command = Command {
+                id: *id,
+                group: *group,
+                row: 0,
+                label: "",
+                shortcut,
+                active: false,
+                action: action.clone(),
+            };
+            let help = command.help(&app);
+            assert!(!help.trim().is_empty(), "{id:?} has help even when unavailable");
+            assert_eq!(help.lines().count(), 1, "{id:?} has one short description");
+        }
+    }
+
+    #[test]
+    fn contextual_command_help_describes_paths_and_whole_commits() {
+        use crate::app::ChangesLayout;
+
+        let mut app = App::new(2);
+        app.extend_commits(vec![row(2, &[1]), row(1, &[])]);
+        app.state = State::Complete;
+        app.set_worktree_head(Some(id(2)), false);
+        app.set_head_edit_availability(true, false, false, true, false, true, false);
+        app.set_changes_layout(ChangesLayout::SideBySide, true, true);
+        let help = |app: &App, id| {
+            commands(app, &Decorations::default(), false)
+                .iter()
+                .find(|command| command.id == id)
+                .expect("the command is available in this context")
+                .help(app)
+        };
+
+        let amend = help(&app, CommandId::Amend);
+        let spill = help(&app, CommandId::Spill);
+        let delete = help(&app, CommandId::Delete);
+        assert!(amend.contains("HEAD"), "history amend describes the whole HEAD commit");
+        assert!(spill.contains("HEAD"), "history spill describes the whole HEAD commit");
+
+        app.changes_focus = Some(ChangePane::Tree);
+        let spill_path = help(&app, CommandId::Spill);
+        assert_ne!(spill_path, spill, "tree focus changes the spill scope");
+        assert!(
+            spill_path.contains("selected path") && spill_path.contains("displayed parent"),
+            "tree spill identifies both its path and comparison parent"
+        );
+
+        app.changes_focus = Some(ChangePane::Worktree);
+        let amend_path = help(&app, CommandId::Amend);
+        assert_ne!(amend_path, amend, "worktree focus changes the amend scope");
+        assert!(
+            amend_path.contains("selected worktree path"),
+            "worktree amend describes only the selected path"
+        );
+        let discard = help(&app, CommandId::Discard);
+        assert_ne!(discard, delete, "discard and delete describe different operations");
+        assert!(
+            discard.contains("selected worktree path") && discard.contains("index"),
+            "discard describes its path scope and staged-index effect"
+        );
     }
 
     #[test]
