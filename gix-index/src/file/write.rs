@@ -41,6 +41,10 @@ impl File {
 
     /// Write ourselves to the path we were read from after acquiring a lock, using `options`.
     ///
+    /// Apply the parsed `core.sharedRepository` policy to the lock file before publishing the index.
+    /// See [`gix_fs::adjust_shared_repository_permissions()`] for the signed mode encoding.
+    /// Pass `0` to leave permissions to the process umask.
+    ///
     /// Note that the hash produced will be stored which is why we need to be mutable.
     ///
     /// ### The `tree` (tree-cache) extension is written as-is
@@ -60,15 +64,21 @@ impl File {
     ///
     /// ```ignore
     /// index.remove_tree();
-    /// index.write(gix_index::write::Options::default())?;
+    /// index.write(gix_index::write::Options::default(), 0)?;
     /// ```
     ///
     /// [issue #2421]: https://github.com/GitoxideLabs/gitoxide/issues/2421
-    pub fn write(&mut self, options: write::Options) -> Result<(), Error> {
+    pub fn write(&mut self, options: write::Options, shared_repository_permissions: i32) -> Result<(), Error> {
         let _span = gix_features::trace::detail!("gix_index::File::write()", path = ?self.path);
         let mut lock = std::io::BufWriter::with_capacity(
             64 * 1024,
-            gix_lock::File::acquire_to_update_resource(&self.path, gix_lock::acquire::Fail::Immediately, None)?,
+            gix_lock::File::acquire(
+                &self.path,
+                gix_lock::acquire::Fail::Immediately,
+                None,
+                shared_repository_permissions,
+                None,
+            )?,
         );
         let (version, digest) = self.write_to(&mut lock, options)?;
         match lock.into_inner() {

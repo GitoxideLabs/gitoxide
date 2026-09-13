@@ -115,7 +115,7 @@ pub(super) mod function {
             let commit_id = if update_head {
                 let commit_id = repo.commit("HEAD", message, tree_id, Some(head_id))?;
                 let mut index = repo.index_from_tree(&tree_id)?;
-                index.write(Default::default())?;
+                index.write(Default::default(), repo.refs.shared_repository_permissions)?;
                 commit_id
             } else {
                 repo.new_commit(message, tree_id, Some(head_id))?.id()

@@ -2,10 +2,44 @@ mod all {
     use gix_fs::dir::create;
 
     #[test]
+    #[cfg(unix)]
+    fn shared_permissions_apply_only_to_new_directories() -> crate::Result {
+        use std::{fs, os::unix::fs::PermissionsExt};
+
+        let dir = tempfile::tempdir()?;
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))?;
+        let target = dir.path().join("one/two");
+        create::all(&target, Default::default(), -0o640)?;
+        assert_eq!(
+            fs::metadata(dir.path())?.permissions().mode() & 0o7777,
+            0o700,
+            "existing ancestors retain their mode"
+        );
+        for path in [dir.path().join("one"), target.clone()] {
+            let mode = fs::metadata(&path)?.permissions().mode();
+            assert_eq!(
+                mode & 0o777,
+                0o750,
+                "directories gain search access wherever the sharing policy grants read access"
+            );
+            if cfg!(target_os = "linux") {
+                assert_ne!(mode & 0o2000, 0, "shared directories inherit their group on Linux");
+            }
+        }
+        create::all(&target, Default::default(), 0o660)?;
+        assert_eq!(
+            fs::metadata(target)?.permissions().mode() & 0o777,
+            0o750,
+            "an existing destination is not chmodded by directory creation"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn a_deeply_nested_directory() -> crate::Result {
         let dir = tempfile::tempdir()?;
         let target = &dir.path().join("1").join("2").join("3").join("4").join("5").join("6");
-        let dir = create::all(target, Default::default())?;
+        let dir = create::all(target, Default::default(), 0)?;
         assert_eq!(dir, target, "all subdirectories can be created");
         Ok(())
     }
@@ -21,7 +55,7 @@ mod iter {
     #[test]
     fn an_existing_directory_causes_immediate_success() -> crate::Result {
         let dir = tempfile::tempdir()?;
-        let mut it = create::Iter::new(dir.path());
+        let mut it = create::Iter::new(dir.path(), 0);
         assert_eq!(
             it.next().expect("item").expect("success"),
             dir.path(),
@@ -35,7 +69,7 @@ mod iter {
     fn a_single_directory_can_be_created_too() -> crate::Result {
         let dir = tempfile::tempdir()?;
         let new_dir = dir.path().join("new");
-        let mut it = create::Iter::new(&new_dir);
+        let mut it = create::Iter::new(&new_dir, 0);
         assert_eq!(
             it.next().expect("item").expect("success"),
             &new_dir,
@@ -50,7 +84,7 @@ mod iter {
     fn multiple_intermediate_directories_are_created_automatically() -> crate::Result {
         let dir = tempfile::tempdir()?;
         let new_dir = dir.path().join("s1").join("s2").join("new");
-        let mut it = create::Iter::new(&new_dir);
+        let mut it = create::Iter::new(&new_dir, 0);
         assert!(
             matches!(it.next(), Some(Err(Intermediate{dir, kind: k})) if k == NotFound && dir == new_dir),
             "dir is not present"
@@ -83,18 +117,17 @@ mod iter {
     fn multiple_intermediate_directories_are_created_up_to_retries_limit() -> crate::Result {
         let dir = tempfile::tempdir()?;
         let new_dir = dir.path().join("s1").join("s2").join("new");
-        let mut it = create::Iter::new_with_retries(
-            &new_dir,
-            Retries {
-                on_create_directory_failure: 1,
-                ..Default::default()
-            },
-        );
+        let limits = Retries {
+            on_create_directory_failure: 1,
+            ..Default::default()
+        };
+        let mut it = create::Iter::new(&new_dir, 0).retries(limits);
         assert!(
-            matches!(it.next(), Some(Err(Permanent{ retries_left, dir, err, ..})) if retries_left.on_create_directory_failure == 0
+            matches!(it.next(), Some(Err(Permanent{ retries_left, retries, dir, err })) if retries_left.on_create_directory_failure == 0
+                                                                    && retries == limits
                                                                     && err.kind() == NotFound
                                                                     && dir == new_dir),
-            "parent dir is not present and we run out of attempts"
+            "the configured retries are exhausted and retained in the error"
         );
         assert!(it.next().is_none(), "iterator depleted");
         assert!(!new_dir.is_dir(), "the wasn't created");
@@ -108,7 +141,7 @@ mod iter {
         std::fs::write(&new_dir, [42])?;
         assert!(new_dir.is_file());
 
-        let mut it = create::Iter::new(&new_dir);
+        let mut it = create::Iter::new(&new_dir, 0);
         assert!(
             matches!(it.next(), Some(Err(Permanent{ dir, err, .. })) if err.kind() == NotADirectory
                                                                     && dir == new_dir),
@@ -123,14 +156,11 @@ mod iter {
         let dir = tempfile::tempdir()?;
         let new_dir = dir.path().join("a").join("new");
         let parent_dir = new_dir.parent().unwrap();
-        let mut it = create::Iter::new_with_retries(
-            &new_dir,
-            Retries {
-                to_create_entire_directory: 2,
-                on_create_directory_failure: 2,
-                ..Default::default()
-            },
-        );
+        let mut it = create::Iter::new(&new_dir, 0).retries(Retries {
+            to_create_entire_directory: 2,
+            on_create_directory_failure: 2,
+            ..Default::default()
+        });
 
         assert!(
             matches!(it.nth(1), Some(Ok(dir)) if dir == parent_dir),
@@ -161,7 +191,7 @@ mod iter {
         let dir = tempfile::tempdir()?;
         let new_dir = dir.path().join("a").join("new");
         let parent_dir = new_dir.parent().unwrap();
-        let mut it = create::Iter::new(&new_dir);
+        let mut it = create::Iter::new(&new_dir, 0);
 
         assert!(
             matches!(it.next(), Some(Err(Intermediate{dir, kind:k})) if k == NotFound && dir == new_dir),

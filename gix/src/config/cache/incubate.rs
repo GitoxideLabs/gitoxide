@@ -51,6 +51,12 @@ impl StageOne {
             (version, _) => return Err(Error::UnsupportedRepositoryFormatVersion { version }),
         };
 
+        // Relative links are resolved by discovery regardless of this compatibility marker.
+        let relative_worktrees =
+            Extensions::RELATIVE_WORKTREES.enrich_error(config.boolean(Extensions::RELATIVE_WORKTREES))?;
+        if repo_format_version == 0 && relative_worktrees.is_some() {
+            return Err(Error::RelativeWorktreesRequiresV1);
+        }
         let extension_worktree = util::config_bool(
             &config,
             &Extensions::WORKTREE_CONFIG,

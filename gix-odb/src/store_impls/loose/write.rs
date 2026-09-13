@@ -40,7 +40,9 @@ impl gix_object::Write for Store {
             path: self.path.to_owned(),
         })?;
         to.flush().map_err(Box::new)?;
-        Ok(self.finalize_object(to).map_err(Box::new)?)
+        Ok(self
+            .finalize_object(to, self.shared_repository_permissions)
+            .map_err(Box::new)?)
     }
 
     /// Write the given buffer in `from` to disk in one syscall at best.
@@ -61,7 +63,7 @@ impl gix_object::Write for Store {
             path: self.path.to_owned(),
         })?;
         to.flush()?;
-        Ok(self.finalize_object(to)?)
+        Ok(self.finalize_object(to, self.shared_repository_permissions)?)
     }
 
     fn write_buf_with_known_id(
@@ -69,6 +71,37 @@ impl gix_object::Write for Store {
         kind: gix_object::Kind,
         from: &[u8],
         id: gix_hash::ObjectId,
+    ) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
+        self.write_buf_with_known_id_and_permissions(kind, from, id, self.shared_repository_permissions)
+    }
+
+    fn write_stream(
+        &self,
+        kind: gix_object::Kind,
+        size: u64,
+        from: &mut dyn io::Read,
+    ) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
+        self.write_stream_with_permissions(kind, size, from, self.shared_repository_permissions)
+    }
+
+    fn write_stream_with_known_id(
+        &self,
+        kind: gix_object::Kind,
+        size: u64,
+        from: &mut dyn io::Read,
+        id: gix_hash::ObjectId,
+    ) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
+        self.write_stream_with_known_id_and_permissions(kind, size, from, id, self.shared_repository_permissions)
+    }
+}
+
+impl Store {
+    pub(crate) fn write_buf_with_known_id_and_permissions(
+        &self,
+        kind: gix_object::Kind,
+        from: &[u8],
+        id: gix_hash::ObjectId,
+        shared_repository_permissions: i32,
     ) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
         let mut to = self.compressed_tempfile().map_err(Box::new)?;
         to.write_all(&gix_object::encode::loose_header(kind, from.len() as u64))
@@ -84,17 +117,18 @@ impl gix_object::Write for Store {
             path: self.path.to_owned(),
         })?;
         to.flush()?;
-        Ok(self.finalize_object_at(id, to)?)
+        Ok(self.finalize_object_at(id, to, shared_repository_permissions)?)
     }
 
     /// Write the given stream in `from` to disk with at least one syscall.
     ///
     /// This will cost at least 4 IO operations.
-    fn write_stream(
+    pub(crate) fn write_stream_with_permissions(
         &self,
         kind: gix_object::Kind,
         size: u64,
         mut from: &mut dyn io::Read,
+        shared_repository_permissions: i32,
     ) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
         let mut to = self.dest().map_err(Box::new)?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
@@ -112,15 +146,16 @@ impl gix_object::Write for Store {
             })
             .map_err(Box::new)?;
         to.flush().map_err(Box::new)?;
-        Ok(self.finalize_object(to)?)
+        Ok(self.finalize_object(to, shared_repository_permissions)?)
     }
 
-    fn write_stream_with_known_id(
+    pub(crate) fn write_stream_with_known_id_and_permissions(
         &self,
         kind: gix_object::Kind,
         size: u64,
         mut from: &mut dyn io::Read,
         id: gix_hash::ObjectId,
+        shared_repository_permissions: i32,
     ) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
         let mut to = self.compressed_tempfile().map_err(Box::new)?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
@@ -138,7 +173,7 @@ impl gix_object::Write for Store {
             })
             .map_err(Box::new)?;
         to.flush().map_err(Box::new)?;
-        Ok(self.finalize_object_at(id, to)?)
+        Ok(self.finalize_object_at(id, to, shared_repository_permissions)?)
     }
 }
 
@@ -183,31 +218,33 @@ impl Store {
     fn finalize_object(
         &self,
         gix_hash::io::Write { hash, inner: file }: gix_hash::io::Write<CompressedTempfile>,
+        shared_repository_permissions: i32,
     ) -> Result<gix_hash::ObjectId, Error> {
         let id = hash.try_finalize().map_err(|err| Error::Io {
             source: err.into(),
             message: "hash tempfile in",
             path: self.path.to_owned(),
         })?;
-        self.finalize_object_at(id, file)
+        self.finalize_object_at(id, file, shared_repository_permissions)
     }
 
     fn finalize_object_at(
         &self,
         id: gix_hash::ObjectId,
         file: CompressedTempfile,
+        shared_repository_permissions: i32,
     ) -> Result<gix_hash::ObjectId, Error> {
         let object_path = loose::hash_path(&id, self.path.clone());
         let object_dir = object_path
             .parent()
             .expect("each object path has a 1 hex-bytes directory");
-        if let Err(err) = fs::create_dir(object_dir) {
-            match err.kind() {
-                io::ErrorKind::AlreadyExists => {}
-                _ => return Err(err.into()),
-            }
+        match fs::create_dir(object_dir) {
+            Ok(()) => gix_fs::set_shared_repository_permissions(object_dir, shared_repository_permissions)?,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err.into()),
         }
         let file = file.into_inner();
+        gix_fs::set_shared_repository_permissions(file.path(), shared_repository_permissions)?;
         let res = file.persist(&object_path);
         // On windows, we assume that such errors are due to its special filesystem semantics,
         // on any other platform that would be a legitimate error though.

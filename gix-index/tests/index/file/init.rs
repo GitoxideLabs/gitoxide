@@ -67,7 +67,7 @@ mod from_state {
             assert!(index.checksum().is_none());
             assert_eq!(index.path(), new_index_path);
 
-            index.write(gix_index::write::Options::default())?;
+            index.write(gix_index::write::Options::default(), 0)?;
             assert!(index.checksum().is_some(), "checksum is adjusted after writing");
             assert!(index.path().is_file());
             assert_eq!(index.version(), expected_version);

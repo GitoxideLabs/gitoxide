@@ -38,10 +38,8 @@ pub enum Error {
     SaveConfig(#[from] crate::remote::save::AsError),
     #[error("Failed to write repository configuration to disk")]
     SaveConfigIo(#[from] std::io::Error),
-    #[error("Failed to acquire lock to write repository configuration to disk")]
-    SaveConfigLockAcquire(#[from] gix_lock::acquire::Error),
-    #[error("Failed to commit lock after writing repository configuration to disk")]
-    SaveConfigLockCommit(#[from] gix_lock::commit::Error<gix_lock::File>),
+    #[error("Failed to update repository configuration")]
+    ConfigFile(#[from] crate::config::file_mut::Error),
     #[error("The remote HEAD points to a reference named {head_ref_name:?} which is invalid.")]
     InvalidHeadRef {
         source: gix_validate::reference::name::Error,

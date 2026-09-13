@@ -451,6 +451,46 @@ fn reload_keeps_opening_overrides_and_discards_runtime_edits() -> crate::Result 
     Ok(())
 }
 
+#[test]
+#[cfg(unix)]
+fn shared_object_permissions_follow_configuration_and_repository_handles() -> crate::Result {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (mut repo, _tmp) = repo_rw("make_config_repo.sh")?;
+    let write = |repo: &gix::Repository, contents: &str, expected| -> crate::Result {
+        let blob_id = repo.write_blob(contents)?.to_string();
+        let path = repo.objects.store_ref().path().join(&blob_id[..2]).join(&blob_id[2..]);
+        assert_eq!(
+            path.metadata()?.permissions().mode() & 0o777,
+            expected,
+            "{contents}: object writes use this repository handle's current sharing policy"
+        );
+        Ok(())
+    };
+    repo.config_snapshot_mut()
+        .set_raw_value("core.sharedRepository", "0640")?;
+    write(&repo, "original policy", 0o440)?;
+
+    let mut cloned = repo.clone();
+    cloned
+        .config_snapshot_mut()
+        .set_raw_value("core.sharedRepository", "0600")?;
+    write(&cloned, "clone with private policy", 0o400)?;
+    write(&repo, "original retains shared policy", 0o440)?;
+    write(
+        &repo.clone().into_sync().to_thread_local(),
+        "thread-safe roundtrip",
+        0o440,
+    )?;
+
+    let mut config = repo.config_file_mut(repo.common_dir().join("config"))?;
+    config.set_raw_value("core.sharedRepository", "0600")?;
+    config.commit()?;
+    repo.reload()?;
+    write(&repo, "reloaded disk policy", 0o400)?;
+    Ok(())
+}
+
 pub(crate) fn options_with_includes() -> gix::open::Options {
     let mut permissions = gix::open::Permissions::isolated();
     permissions.config.includes = true;

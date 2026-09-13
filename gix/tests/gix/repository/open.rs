@@ -212,7 +212,7 @@ fn git_index_file_overrides_the_index_in_the_git_dir() -> crate::Result {
     #[cfg(feature = "index")]
     {
         gix::index::File::from_state(gix::index::State::new(repo.object_hash()), index_file)
-            .write(Default::default())?;
+            .write(Default::default(), repo.refs.shared_repository_permissions)?;
         assert!(
             repo.index()?.entries().is_empty(),
             "the configured index is read, and it's initially empty"
@@ -282,7 +282,7 @@ fn git_index_file_receives_writes_while_the_git_dir_index_is_locked() -> crate::
     assert!(!index_file.exists());
     std::fs::write(repo.git_dir().join("index.lock"), [])?;
     let mut index = (**repo.index_or_empty()?).clone();
-    index.write(Default::default())?;
+    index.write(Default::default(), repo.refs.shared_repository_permissions)?;
 
     assert!(index_file.is_file(), "the write lands on the configured index");
     assert_eq!(
@@ -602,6 +602,41 @@ mod not_a_repository {
             let repo_path = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?.join(name);
             let err = gix::open_opts(&repo_path, gix::open::Options::isolated()).unwrap_err();
             assert!(matches!(err, gix::open::Error::NotARepository { path, .. } if path == repo_path));
+        }
+        Ok(())
+    }
+}
+
+mod relative_worktrees_extension {
+    #[test]
+    fn requires_v1_and_a_valid_boolean() -> crate::Result {
+        for (version, value) in [("0", "false"), ("0", "true"), ("1", "invalid")] {
+            let fixture = gix_testtools::tempfile::TempDir::new()?;
+            // Format 0 requires SHA-1; the v1 case still covers the selected fixture hash.
+            gix_testtools::git(
+                fixture.path(),
+                if version == "0" {
+                    "init --object-format=sha1"
+                } else {
+                    "init"
+                },
+            )?;
+            let repo = gix::open_opts(fixture.path(), crate::restricted())?;
+            let mut config = repo.config_file_mut(repo.common_dir().join("config"))?;
+            config.set_raw_value("core.repositoryFormatVersion", version)?;
+            config.set_raw_value("extensions.relativeWorktrees", value)?;
+            config.commit()?;
+            let err = gix::open_opts(repo.git_dir(), crate::restricted())
+                .expect_err("relativeWorktrees is a v1-only boolean extension");
+            assert!(
+                matches!(
+                    err,
+                    gix::open::Error::Config(
+                        gix::config::Error::RelativeWorktreesRequiresV1 | gix::config::Error::ConfigBoolean(_)
+                    )
+                ),
+                "the invalid extension is reported: {err:?}"
+            );
         }
         Ok(())
     }

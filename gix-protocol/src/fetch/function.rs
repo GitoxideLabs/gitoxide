@@ -49,6 +49,7 @@ pub async fn fetch<P, T, E>(
     }: Context<'_, T>,
     Options {
         shallow_file,
+        shared_repository_permissions,
         shallow,
         tags,
         reject_shallow_remote,
@@ -85,7 +86,8 @@ where
         }
         arguments.use_include_tag();
     }
-    let (shallow_commits, mut shallow_lock) = add_shallow_args(&mut arguments, shallow, &shallow_file)?;
+    let (shallow_commits, mut shallow_lock) =
+        add_shallow_args(&mut arguments, shallow, &shallow_file, shared_repository_permissions)?;
 
     let negotiate_span = gix_trace::detail!(
         "negotiate",
@@ -149,7 +151,7 @@ where
                 if reject_shallow_remote {
                     return Err(Error::RejectShallowRemote);
                 }
-                shallow_lock = acquire_shallow_lock(&shallow_file).map(Some)?;
+                shallow_lock = acquire_shallow_lock(&shallow_file, shared_repository_permissions).map(Some)?;
             }
 
             let (mut reader, may_read_to_end) =
@@ -222,18 +224,26 @@ fn read_remaining(reader: &mut impl std::io::Read) -> std::io::Result<()> {
     std::io::copy(reader, &mut std::io::sink()).map(|_| ())
 }
 
-fn acquire_shallow_lock(shallow_file: &Path) -> Result<gix_lock::File, Error> {
-    gix_lock::File::acquire_to_update_resource(shallow_file, gix_lock::acquire::Fail::Immediately, None)
-        .map_err(Into::into)
+fn acquire_shallow_lock(shallow_file: &Path, shared_repository_permissions: i32) -> Result<gix_lock::File, Error> {
+    gix_lock::File::acquire_to_update_resource(
+        shallow_file,
+        gix_lock::acquire::Fail::Immediately,
+        None,
+        shared_repository_permissions,
+    )
+    .map_err(Into::into)
 }
 
 fn add_shallow_args(
     args: &mut Arguments,
     shallow: &Shallow,
     shallow_file: &std::path::Path,
+    shared_repository_permissions: i32,
 ) -> Result<(Option<nonempty::NonEmpty<gix_hash::ObjectId>>, Option<gix_lock::File>), Error> {
     let expect_change = *shallow != Shallow::NoChange;
-    let shallow_lock = expect_change.then(|| acquire_shallow_lock(shallow_file)).transpose()?;
+    let shallow_lock = expect_change
+        .then(|| acquire_shallow_lock(shallow_file, shared_repository_permissions))
+        .transpose()?;
 
     let shallow_commits = gix_shallow::read(shallow_file)?;
     if (shallow_commits.is_some() || expect_change) && !args.can_use_shallow() {

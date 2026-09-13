@@ -58,13 +58,18 @@ impl Handle<()> {
         directory: ContainingDirectory,
         cleanup: AutoRemove,
         mode: Mode,
+        permissions: Option<std::fs::Permissions>,
     ) -> io::Result<usize> {
         let containing_directory = directory.resolve(containing_directory)?;
+        let mut builder = tempfile::Builder::new();
+        if let Some(permissions) = permissions {
+            builder.permissions(permissions);
+        }
         let id = NEXT_MAP_INDEX.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         expect_none(REGISTRY.insert(
             id,
             Some(ForksafeTempfile::new(
-                NamedTempFile::new_in(containing_directory)?,
+                builder.tempfile_in(containing_directory)?,
                 cleanup,
                 mode,
             )),
@@ -159,7 +164,34 @@ impl Handle<Writable> {
         cleanup: AutoRemove,
     ) -> io::Result<Self> {
         Ok(Handle {
-            id: Handle::<()>::new_writable_inner(containing_directory.as_ref(), directory, cleanup, Mode::Writable)?,
+            id: Handle::<()>::new_writable_inner(
+                containing_directory.as_ref(),
+                directory,
+                cleanup,
+                Mode::Writable,
+                None,
+            )?,
+            _marker: Default::default(),
+        })
+    }
+
+    /// Like [`new`](Self::new()), but request `permissions` when creating the file.
+    ///
+    /// The operating system applies the process umask to the requested permissions.
+    pub fn new_with_permissions(
+        containing_directory: impl AsRef<Path>,
+        directory: ContainingDirectory,
+        cleanup: AutoRemove,
+        permissions: std::fs::Permissions,
+    ) -> io::Result<Self> {
+        Ok(Handle {
+            id: Handle::<()>::new_writable_inner(
+                containing_directory.as_ref(),
+                directory,
+                cleanup,
+                Mode::Writable,
+                Some(permissions),
+            )?,
             _marker: Default::default(),
         })
     }
@@ -343,7 +375,10 @@ impl ContainingDirectory {
     fn resolve(self, dir: &Path) -> std::io::Result<&Path> {
         match self {
             ContainingDirectory::Exists => Ok(dir),
-            ContainingDirectory::CreateAllRaceProof(retries) => crate::create_dir::all(dir, retries),
+            ContainingDirectory::CreateAllRaceProof {
+                retries,
+                shared_repository_permissions,
+            } => crate::create_dir::all(dir, retries, shared_repository_permissions),
         }
     }
 }

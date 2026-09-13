@@ -117,6 +117,7 @@ where
         }
 
         let fetch_options = gix_protocol::fetch::Options {
+            shared_repository_permissions: repo.config.shared_repository_permissions,
             shallow_file: repo.shallow_file(),
             shallow: &self.shallow,
             tags: con.remote.fetch_tags,
@@ -173,6 +174,7 @@ where
             iteration_mode: gix_pack::data::input::Mode::Verify,
             alloc_limit_bytes: repo.config.alloc_limit_bytes,
             compression: repo.config.loose_compression,
+            shared_repository_permissions: repo.config.shared_repository_permissions,
         };
         let mut write_pack_bundle = None;
 

@@ -105,14 +105,19 @@ pub fn name_partial(path: &BStr) -> Result<&BStr, name::Error> {
     }
 }
 
-/// The infallible version of [`name_partial()`] which instead of failing, alters `path` and returns it to be a valid
-/// partial name, which would also pass [`name_partial()`].
+/// Sanitize `path` into a nonempty partial reference name which would also pass [`name_partial()`].
 ///
-/// Note that an empty `path` is replaced with a `-` in order to be valid.
+/// Return `-` if `path` is empty or sanitization leaves no name, as with input consisting only of `/` separators.
+/// This fallback is specific to Gitoxide: Git's sanitizer does not replace empty results. It ensures callers
+/// always receive a nonempty valid name without needing to handle an empty result themselves.
 pub fn name_partial_or_sanitize(path: &BStr) -> BString {
-    validate(path, Mode::PartialSanitize)
-        .expect("BUG: errors cannot happen as any issue is fixed instantly")
-        .expect("we always rebuild the path")
+    let mut name = validate(path, Mode::PartialSanitize)
+        .expect("sanitization mode never returns validation errors")
+        .expect("sanitization mode always rebuilds the name");
+    if name.is_empty() {
+        name.push(b'-');
+    }
+    name
 }
 
 enum Mode {

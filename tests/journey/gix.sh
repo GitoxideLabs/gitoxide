@@ -670,6 +670,47 @@ title "gix commit-graph"
                 }
               )
             )
+            case "$(uname -s)" in
+              MINGW*|MSYS*|CYGWIN*) ;;
+              *)
+                (with 'shared repository metadata and standalone exports'
+                  mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+                  for mask in 022 077; do
+                    (sandbox
+                      umask "$mask"
+                      git init -q
+                      cp "$fixtures"/packs/pack-*.idx "$fixtures"/packs/pack-*.pack .git/objects/pack/
+                      midx=.git/objects/pack/multi-pack-index
+                      for shared in group 0640 false; do
+                        # Force both implementations to publish a new file with the same umask.
+                        rm -f "$midx"
+                        git -c "core.sharedRepository=$shared" multi-pack-index write
+                        git_mode="$(mode "$midx")"
+                        rm "$midx"
+                        it "matches Git for the default MIDX with sharing=$shared and umask=$mask" && {
+                          expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose -c "core.sharedRepository=$shared" \
+                            free pack multi-index create .git/objects/pack/pack-*.idx
+                          expect_equals "$(mode "$midx")" "$git_mode"
+                        }
+                      done
+                      : >umask-only
+                      it "exports an explicit output without discovering the selected repository" && {
+                        expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose -r does-not-exist -c core.sharedRepository=group \
+                          free pack multi-index -i exported-midx create .git/objects/pack/pack-*.idx
+                        expect_equals "$(mode exported-midx)" "$(mode umask-only)"
+                      }
+                      git init -q unrelated
+                      rm "$midx"
+                      it "only uses sharing from the repository that owns the default output" && {
+                        expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose -r unrelated -c core.sharedRepository=group \
+                          free pack multi-index create .git/objects/pack/pack-*.idx
+                        expect_equals "$(mode "$midx")" "$(mode umask-only)"
+                      }
+                    )
+                  done
+                )
+                ;;
+            esac
         )
     )
 

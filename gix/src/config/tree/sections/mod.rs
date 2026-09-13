@@ -142,3 +142,8 @@ mod user;
 #[derive(Copy, Clone, Default)]
 pub struct Url;
 mod url;
+
+/// The `worktree` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct Worktree;
+mod worktree;

@@ -21,8 +21,27 @@ fn shared_repository_permissions_are_applied_after_the_umask() {
     assert_eq!(adjust(0o640, 0), 0o640, "zero retains the post-umask mode");
     assert_eq!(adjust(0o600, 0o660), 0o660, "a positive mode adds permissions");
     assert_eq!(
+        adjust(0o444, 0o660),
+        0o444,
+        "sharing does not make read-only files writable"
+    );
+    assert_eq!(
+        adjust(0o700, 0o664),
+        0o775,
+        "executable files gain execute bits alongside read bits"
+    );
+    assert_eq!(
         adjust(0o1755, -0o640),
-        0o1640,
-        "a negative mode replaces permission bits but retains unrelated mode bits"
+        0o1750,
+        "a negative mode replaces permission bits, preserves executability and retains unrelated mode bits"
+    );
+    assert_eq!(
+        adjust(0o040700, 0o660),
+        if cfg!(any(target_os = "freebsd", target_os = "openbsd")) {
+            0o040770
+        } else {
+            0o042770
+        },
+        "shared directories gain search access and setgid according to Git's platform defaults, including on macOS"
     );
 }

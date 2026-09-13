@@ -178,10 +178,11 @@ fn size_in_memory() {
     // The selected index path adds one `PathBuf` to the repository.
     // Network-client features add protocol permission caching to `Repository::config`,
     // which grows the type by one more cached cell.
-    let limit = 1500;
+    // The ODB handle's sharing policy brings the Windows workspace layout to 1504 bytes.
+    let limit = 1504;
     assert!(
         actual_size <= limit,
-        "size of Repository shouldn't change without us noticing, it's meant to be cloned: should have been below {limit:?}, was {actual_size}"
+        "size of Repository shouldn't change without us noticing, it's meant to be cloned: should have been at most {limit:?}, was {actual_size}"
     );
 }
 

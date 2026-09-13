@@ -1,5 +1,5 @@
 use gix_ref::{
-    Category, FullName,
+    Category, FullName, Target,
     transaction::{PreviousValue, RefEdit},
 };
 
@@ -12,12 +12,9 @@ pub mod delete {
     /// A configuration-cleanup failure after all requested references were made absent.
     #[derive(Debug, thiserror::Error)]
     pub enum CleanupError {
-        /// The updated configuration could not be written to its lock file; the existing config file is unchanged.
-        #[error("Could not write the updated local configuration")]
-        Write(#[source] std::io::Error),
-        /// The lock file containing the updated configuration could not replace the existing config file.
-        #[error("Could not commit the updated local configuration")]
-        Commit(#[source] std::io::Error),
+        /// The updated configuration could not be written or committed; the existing config file is unchanged.
+        #[error("Could not update the local configuration")]
+        Config(#[source] crate::config::file_mut::Error),
     }
 
     /// The error returned by [`Repository::delete_local_branches()`][crate::Repository::delete_local_branches()].
@@ -38,10 +35,8 @@ pub mod delete {
         OpenWorktreeRepo(#[source] crate::open::Error),
         #[error("Failed to follow a symbolic reference while inspecting worktrees")]
         FollowSymref(#[source] gix_ref::file::find::existing::Error),
-        #[error("Could not acquire the local configuration lock")]
-        ConfigLock(#[source] gix_lock::acquire::Error),
-        #[error("Could not read the local configuration")]
-        ConfigRead(#[source] gix_config::file::init::from_paths::Error),
+        #[error("Could not open the local configuration transaction")]
+        ConfigFile(#[source] crate::config::file_mut::Error),
         #[error("Could not delete local branches")]
         EditReferences(#[from] crate::reference::edit::Error),
         /// Reference deletion succeeded, but configuration cleanup failed.
@@ -67,8 +62,9 @@ impl crate::Repository {
     /// Delete all local branches in `names` and remove their `branch.<name>` sections from the local configuration.
     ///
     /// All names must be local branch references such as `refs/heads/topic`. The operation fails before making changes if
-    /// any name belongs to another reference category or is checked out in any worktree. Missing branches are accepted so any
-    /// associated local configuration is still removed. **It deliberately performs no merged-state check**.
+    /// any name belongs to another reference category or is checked out or reserved by bisect or rebase in any worktree.
+    /// Missing branches are accepted so any associated local configuration is still removed.
+    /// **It deliberately performs no merged-state check**.
     ///
     /// On success, every requested reference and its reflog is absent, and every matching `branch.<name>` section has been
     /// removed from the local configuration. Return the sorted, deduplicated names of branches that existed when locked for
@@ -83,9 +79,34 @@ impl crate::Repository {
         &mut self,
         names: impl IntoIterator<Item = FullName>,
     ) -> Result<Vec<FullName>, delete::Error> {
-        let mut names: Vec<_> = names.into_iter().collect();
-        names.sort();
-        names.dedup();
+        self.delete_local_branches_inner(names.into_iter().map(|name| (name, PreviousValue::Any)).collect())
+    }
+
+    /// Delete local branches only if they still have the observed `target`, and remove their local configuration.
+    ///
+    /// This performs the same reference and configuration cleanup as
+    /// [`Repository::delete_local_branches()`][crate::Repository::delete_local_branches()],
+    /// but protects a branch which was moved or replaced after the caller inspected it.
+    pub fn delete_local_branches_if_unchanged(
+        &mut self,
+        branches: impl IntoIterator<Item = (FullName, Target)>,
+    ) -> Result<(), delete::Error> {
+        self.delete_local_branches_inner(
+            branches
+                .into_iter()
+                .map(|(name, target)| (name, PreviousValue::MustExistAndMatch(target)))
+                .collect(),
+        )
+        .map(|_| ())
+    }
+
+    fn delete_local_branches_inner(
+        &mut self,
+        mut branches: Vec<(FullName, PreviousValue)>,
+    ) -> Result<Vec<FullName>, delete::Error> {
+        branches.sort_by(|a, b| a.0.cmp(&b.0));
+        branches.dedup_by(|a, b| a.0 == b.0);
+        let names = branches.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
         if names.is_empty() {
             return Ok(names);
         }
@@ -96,7 +117,7 @@ impl crate::Repository {
             }
         }
 
-        let checked_out = self.checked_out_branches().map_err(|err| match err {
+        let checked_out = self.checked_out_branches(self.namespace()).map_err(|err| match err {
             super::worktree::CheckedOutBranchesError::WorktreeListing(err) => delete::Error::WorktreeListing(err),
             super::worktree::CheckedOutBranchesError::OpenWorktreeRepo(err) => delete::Error::OpenWorktreeRepo(err),
             super::worktree::CheckedOutBranchesError::FollowSymref(err) => delete::Error::FollowSymref(err),
@@ -110,28 +131,14 @@ impl crate::Repository {
             }
         }
 
-        let edits: Vec<_> = names
-            .iter()
-            .map(|name| RefEdit::delete(name.clone(), PreviousValue::Any))
+        let edits: Vec<_> = branches
+            .into_iter()
+            .map(|(name, expected)| RefEdit::delete(name, expected))
             .collect();
 
         let config_path = self.common_dir().join("config");
-        let mut config_lock =
-            gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)
-                .map_err(delete::Error::ConfigLock)?;
-        let mut config = match gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local) {
-            Ok(config) => Some(config),
-            // TODO(gix-error): this is what should just be `err.not_found()` in future, anywhere.
-            Err(gix_config::file::init::from_paths::Error::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound =>
-            {
-                None
-            }
-            Err(err) => return Err(delete::Error::ConfigRead(err)),
-        };
-        let removed_config = config
-            .as_mut()
-            .is_some_and(|config| remove_branch_config(config, &names, |_| true));
+        let mut config = self.config_file_mut(&config_path).map_err(delete::Error::ConfigFile)?;
+        let removed_config = remove_branch_config(&mut config, &names, |_| true);
 
         let deleted: Vec<_> = self
             .edit_references(edits)?
@@ -140,18 +147,10 @@ impl crate::Repository {
             .collect();
 
         if removed_config {
-            let config = config.expect("configuration was present when sections were removed");
-            config
-                .write_to(&mut config_lock)
-                .map_err(|source| delete::Error::Cleanup {
-                    references: names.clone(),
-                    deleted: deleted.clone(),
-                    source: delete::CleanupError::Write(source),
-                })?;
-            config_lock.commit().map_err(|err| delete::Error::Cleanup {
+            config.commit().map_err(|err| delete::Error::Cleanup {
                 references: names.clone(),
                 deleted: deleted.clone(),
-                source: delete::CleanupError::Commit(err.error),
+                source: delete::CleanupError::Config(err),
             })?;
             remove_branch_config(
                 gix_features::threading::OwnShared::make_mut(&mut self.config.resolved),

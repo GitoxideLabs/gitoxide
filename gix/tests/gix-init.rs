@@ -7,6 +7,102 @@ use gix::{Repository, ThreadSafeRepository};
 use gix_sec::Permission;
 use serial_test::serial;
 
+#[test]
+#[cfg(unix)]
+fn initialization_permissions_match_git() -> gix_testtools::Result {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let mode = |path: &Path| -> std::io::Result<u32> { Ok(path.metadata()?.permissions().mode() & 0o7777) };
+    for umask in [0o022, 0o077] {
+        if !gix_testtools::run_with_umask(umask)? {
+            continue;
+        }
+        for shared in ["group", "0640", "false"] {
+            for bare in [false, true] {
+                let temp = gix_testtools::tempfile::tempdir()?;
+                for directory in ["template/info", "template/hooks", "git-parent", "gix-parent"] {
+                    fs::create_dir_all(temp.path().join(directory))?;
+                }
+                for name in ["info/exclude", "hooks/docs.url", "description"] {
+                    fs::write(temp.path().join("template").join(name), b"template\n")?;
+                }
+                let destination = temp.path().join("gix-parent/repo");
+                let git_destination = temp.path().join("git-parent/repo");
+                if bare {
+                    // A pre-existing empty directory becomes the Git root, so it must be shared too.
+                    fs::create_dir(&destination)?;
+                    fs::create_dir(&git_destination)?;
+                }
+                gix_testtools::git(
+                    temp.path(),
+                    &format!(
+                        "-c core.sharedRepository={shared} init {} --template=template git-parent/repo",
+                        if bare { "--bare" } else { "" }
+                    ),
+                )?;
+                let repo = ThreadSafeRepository::init_opts(
+                    &destination,
+                    if bare {
+                        gix::create::Kind::Bare
+                    } else {
+                        gix::create::Kind::WithWorktree
+                    },
+                    Default::default(),
+                    gix::open::Options::isolated().config_overrides([format!("core.sharedRepository={shared}")]),
+                )?
+                .to_thread_local();
+                let git_dir = if bare {
+                    git_destination.clone()
+                } else {
+                    git_destination.join(".git")
+                };
+                for name in [
+                    "",
+                    "objects",
+                    "objects/info",
+                    "objects/pack",
+                    "refs",
+                    "refs/heads",
+                    "refs/tags",
+                    "hooks",
+                    "info",
+                    "HEAD",
+                    "config",
+                    "description",
+                    "info/exclude",
+                    "hooks/docs.url",
+                ] {
+                    assert_eq!(
+                        mode(&repo.git_dir().join(name))?,
+                        mode(&git_dir.join(name))?,
+                        "shared={shared}, bare={bare}, umask={umask:o}: {name} follows Git's initialization policy"
+                    );
+                }
+                assert_eq!(
+                    mode(destination.parent().expect("fixture parent"))?,
+                    mode(git_destination.parent().expect("fixture parent"))?,
+                    "initialization leaves destination parents at their ordinary umask permissions"
+                );
+                if !bare {
+                    assert_eq!(
+                        mode(&destination)?,
+                        mode(&git_destination)?,
+                        "the checkout root is not shared"
+                    );
+                }
+                let reopened = gix::open_opts(repo.git_dir(), gix::open::Options::isolated())?;
+                let git_repo = gix::open_opts(git_dir, gix::open::Options::isolated())?;
+                assert_eq!(
+                    reopened.config_snapshot().string("core.sharedRepository"),
+                    git_repo.config_snapshot().string("core.sharedRepository"),
+                    "active sharing is persisted independently of the initialization overrides"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn named_subrepo_opts(
     fixture: &str,
     name: &str,
@@ -49,7 +145,9 @@ mod config {
         std::fs::write(
             &included,
             "[marker]
-            included = true",
+            included = true
+            [core]
+            sharedRepository = 0640",
         )?;
         std::fs::write(
             &global,
@@ -107,6 +205,19 @@ mod config {
             options,
         )?
         .to_thread_local();
+        assert_eq!(
+            repo.refs.shared_repository_permissions, -0o640,
+            "conditional includes supply the policy used by the opened repository"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                repo.git_dir().join("HEAD").metadata()?.permissions().mode() & 0o777,
+                0o640,
+                "conditional sharing applies while creating the initial default HEAD"
+            );
+        }
         let repo = repo.config_snapshot();
 
         for key in ["marker.global", "marker.included"] {
