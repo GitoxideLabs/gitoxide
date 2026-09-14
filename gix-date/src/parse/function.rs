@@ -129,8 +129,8 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
     } else if let Some(val) = parse_git_date_format(input) {
         val
     } else if let Some(val) = relative::parse(input, now).transpose()? {
-        // The offset is `now`'s, not something the input asked for, so it is returned
-        // as-is rather than measured against what git would read from text.
+        // The offset is inherited from `now`, not parsed from the input, so Git's
+        // textual offset limit does not apply.
         return Ok(Time::new(val.timestamp().as_second(), val.offset().seconds()));
     } else if let Some(val) = parse_raw(input) {
         // Format::Raw
@@ -139,8 +139,7 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
         return Err(Error::new_with_input("Unknown date format", input))?;
     };
 
-    // Jiff reads offsets up to 25:59:59, which git would not take for a timezone.
-    // Only offsets that came from the input are measured; see the relative branch above.
+    // Jiff parses textual offsets up to 25:59:59, beyond Git's accepted range.
     if time.offset.abs() > MAX_OFFSET_IN_SECONDS {
         Err(Error::new_with_input("Unknown date format", input))?;
     }

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -eu -o pipefail
 
+# Keep local-timezone fallbacks reproducible on every machine.
+export TZ=UTC
+
 git init
 
 function baseline() {
@@ -107,6 +110,15 @@ baseline '2008-02-14 20:30:45 -0015' ''  # 15-minute offset
 baseline '2008-02-14 20:30:45 -05' ''    # 2-digit hour offset
 baseline '2008-02-14 20:30:45 -05:00' '' # colon-separated offset
 baseline '2008-02-14 20:30:45 +00' ''    # 2-digit +00
+
+# Git accepts offsets through ±23:59. Wider offsets fall back to the local timezone;
+# GIT_ONLY records that Git accepts the date while gix-date deliberately rejects it.
+baseline '2022-01-01 12:00:00 +2359' 'ISO8601'
+baseline '2022-01-01 12:00:00 -2359' 'ISO8601'
+baseline '2022-01-01 12:00:00 +2400' 'GIT_ONLY'
+baseline '2022-01-01 12:00:00 -2400' 'GIT_ONLY'
+baseline '2022-01-01T12:00:00+24:00' 'GIT_ONLY'
+baseline '2022-01-01 12:00:00 +2559' 'GIT_ONLY'
 
 # Timezone edge cases from git t0006
 baseline '1970-01-01 00:00:00 +0000' ''

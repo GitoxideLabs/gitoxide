@@ -59,6 +59,14 @@ fn parse_compare_format() {
     ) in BASELINE.iter()
     {
         let res = gix_date::parse(pattern.as_str(), now.clone());
+        if format_name.as_deref() == Some("GIT_ONLY") {
+            assert_eq!(*exit_code, 0, "Git accepts {pattern:?} with a local timezone fallback");
+            assert!(
+                res.is_err(),
+                "gix-date rejects the out-of-range offset in {pattern:?}: {res:?}"
+            );
+            continue;
+        }
         assert_eq!(
             res.is_ok(),
             *exit_code == 0,
