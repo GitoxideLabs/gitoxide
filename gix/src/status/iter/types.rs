@@ -71,6 +71,7 @@ pub struct Outcome {
     /// The worktree index that was used for the operation.
     pub worktree_index: IndexPersistedOrInMemory,
     pub(super) skip_hash: bool,
+    pub(super) shared_repository_permissions: i32,
     pub(super) changes: Option<Vec<(usize, ApplyChange)>>,
 }
 
@@ -108,10 +109,13 @@ impl Outcome {
 
         Some(
             index
-                .write(crate::index::write::Options {
-                    extensions: Default::default(),
-                    skip_hash: self.skip_hash,
-                })
+                .write(
+                    crate::index::write::Options {
+                        extensions: Default::default(),
+                        skip_hash: self.skip_hash,
+                    },
+                    self.shared_repository_permissions,
+                )
                 .map_err(gix_error::Exn::into_error),
         )
     }

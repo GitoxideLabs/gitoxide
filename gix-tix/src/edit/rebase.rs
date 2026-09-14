@@ -369,7 +369,10 @@ impl PersistedConflict {
         super::forget::apply_tree_transition(workdir, ours_tree, self.merged_tree)
             .context("could not check out the conflicting merge result")?;
         if let Err(err) = index
-            .write(gix::index::write::Options::default())
+            .write(
+                gix::index::write::Options::default(),
+                self.repo.refs.shared_repository_permissions,
+            )
             .map_err(gix::Exn::into_error)
             .context("could not write the conflicting index")
         {
@@ -2547,7 +2550,10 @@ fn reset_index_paths(repo: &gix::Repository, id: ObjectId, paths: &[BString]) ->
     index.sort_entries();
     index.remove_tree();
     index
-        .write(gix::index::write::Options::default())
+        .write(
+            gix::index::write::Options::default(),
+            repo.refs.shared_repository_permissions,
+        )
         .map_err(gix::Exn::into_error)
         .context("could not update selected index paths")
 }

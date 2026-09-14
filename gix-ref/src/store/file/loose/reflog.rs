@@ -155,9 +155,10 @@ pub mod create_or_update {
 
                     if force_create_reflog || self.should_autocreate_reflog(&full_name) {
                         let parent_dir = log_path.parent().expect("always with parent directory");
-                        gix_tempfile::create_dir::all(parent_dir, Default::default(), 0).or_raise_erased(|| {
-                            Message::new("Could not create reflog directory").with("path", parent_dir)
-                        })?;
+                        gix_fs::dir::create::all(parent_dir, Default::default(), self.shared_repository_permissions)
+                            .or_raise_erased(|| {
+                                Message::new("Could not create reflog directory").with("path", parent_dir)
+                            })?;
                         options.create(true);
                     }
 
@@ -179,6 +180,23 @@ pub mod create_or_update {
 
                     if let Some(mut file) = file_for_appending {
                         let committer = committer.ok_or_else(|| MissingCommitter.raise_erased())?;
+                        if cfg!(unix) && self.shared_repository_permissions != 0 {
+                            file.metadata()
+                                .and_then(|metadata| {
+                                    let current = metadata.permissions();
+                                    let adjusted = gix_fs::adjust_shared_repository_permissions(
+                                        current.clone(),
+                                        self.shared_repository_permissions,
+                                    );
+                                    if current != adjusted {
+                                        file.set_permissions(adjusted)?;
+                                    }
+                                    Ok(())
+                                })
+                                .or_raise_erased(|| {
+                                    Message::new("Could not append reflog entry").with("path", log_path.as_path())
+                                })?;
+                        }
                         write!(file, "{} {} ", previous_oid.unwrap_or_else(|| new.kind().null()), new)
                             .and_then(|_| committer.trim().write_to(&mut file))
                             .and_then(|_| {

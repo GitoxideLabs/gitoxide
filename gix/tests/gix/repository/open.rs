@@ -214,7 +214,7 @@ fn git_index_file_overrides_the_index_in_the_git_dir() -> Result {
     #[cfg(feature = "index")]
     {
         gix::index::File::from_state(gix::index::State::new(repo.object_hash()), index_file)
-            .write(Default::default())
+            .write(Default::default(), repo.refs.shared_repository_permissions)
             .map_err(gix::Exn::into_error)?;
         assert!(
             repo.index()?.entries().is_empty(),
@@ -285,7 +285,9 @@ fn git_index_file_receives_writes_while_the_git_dir_index_is_locked() -> Result 
     assert!(!index_file.exists());
     std::fs::write(repo.git_dir().join("index.lock"), [])?;
     let mut index = (**repo.index_or_empty()?).clone();
-    index.write(Default::default()).map_err(gix::Exn::into_error)?;
+    index
+        .write(Default::default(), repo.refs.shared_repository_permissions)
+        .map_err(gix::Exn::into_error)?;
 
     assert!(index_file.is_file(), "the write lands on the configured index");
     assert_eq!(

@@ -141,6 +141,7 @@ where
                             worktree_index: index,
                             changes: None,
                             skip_hash,
+                            shared_repository_permissions: repo.config.shared_repository_permissions,
                         })
                     }
                 })
@@ -209,6 +210,7 @@ where
                 tree_index,
                 changes: None,
                 skip_hash,
+                shared_repository_permissions: self.repo.config.shared_repository_permissions,
             };
             items.extend(
                 collect
