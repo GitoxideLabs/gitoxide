@@ -360,3 +360,25 @@ baseline_relative '2 tuesdays 1 month last Thursday' '' 1251660000
 baseline_relative '1 year last Thursday' '' 1251660000
 baseline_relative '1 month last Sunday' '' 1774958400 # Month-end rollover before subtraction
 baseline_relative '1 year last Thursday' '' 1709208000 # Leap-day rollover before subtraction
+
+# Named clock times select the most recent named hour while the day is still
+# unspecified. Applying a relative unit or `now` first fixes the day instead.
+# Morning and evening references exercise both sides of noon and tea (17:00).
+for date in noon midnight tea NOON Midnight TEA \
+            'noon yesterday' 'yesterday noon' 'midnight yesterday' 'yesterday tea' \
+            'last Friday at noon' 'tea last saturday' \
+            'noon 1 day ago' '1 day ago noon' 'noon 0 days' \
+            '1 month noon' 'noon 1 month' '1 month noon last Friday' \
+            'noon midnight tea' 'now noon' 'noon now'; do
+    baseline_relative "$date" '' 1251660000
+done
+# Git 2.55 fixed the day selection of composite named clocks before noon.
+# Keep cross-version morning cases here; tests/time/parse/relative.rs pins the
+# changed cases to the corrected results from Git's date.c and t0006-date.sh.
+for date in noon midnight tea NOON Midnight TEA \
+            'midnight yesterday' 'noon 0 days' 'noon 1 month' 'noon now'; do
+    baseline_relative "$date" '' 1251616800
+done
+baseline_relative 'noon' '' 1251633600 # Exactly noon does not go back a day
+baseline_relative 'tea' '' 1251651600  # Exactly tea time does not go back a day
+baseline_relative 'midnight' '' 1251590400 # Midnight is the beginning of the current day

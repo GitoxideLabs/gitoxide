@@ -83,7 +83,12 @@ use gix_error::{Exn, ResultExt};
 ///     *   `2 minutes ago` (October 27, 2023 at 09:58:00 UTC)
 ///     *   `3 hours ago` (October 27, 2023 at 07:00:00 UTC)
 ///
-/// The forms understood are `now`, `today`, `yesterday`, and one or more `<count> <unit>` pairs,
+/// Named clock times are `midnight` (00:00), `noon` (12:00), and `tea` (17:00), and combine
+/// with relative dates, as in `noon yesterday` or `last Friday at noon`. With no day specified,
+/// a named clock selects its most recent occurrence; `now noon` fixes the day first and can
+/// therefore select noon later today.
+///
+/// Other forms are `now`, `today`, `yesterday`, and one or more `<count> <unit>` pairs,
 /// as in `2 days 3 hours ago`. A count may be spelled out from `one` to `ten`, or be `last`, and
 /// any byte that is neither a digit nor a letter separates the parts, so `1.hour.ago` is the same
 /// as `1 hour ago`. The trailing `ago` is optional.

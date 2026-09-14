@@ -10,8 +10,7 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Option<Result<Zoned, Exn<Error>
         return Some(result);
     }
 
-    // Then try numeric relative dates
-    Some(subtract_pairs(now, &parse_ago(input)?))
+    Some(apply_operations(now, &parse_operations(input)?))
 }
 
 /// Parse named relative dates like "now", "today", "yesterday".
@@ -31,42 +30,35 @@ fn parse_named(input: &str, now: Option<&Zoned>) -> Option<Result<Zoned, Exn<Err
     Some(subtract_duration(now, duration))
 }
 
-/// Parse Git-style relative count-unit pairs, in input order.
-///
-/// Returns `None` if no pair is recognized.
-fn parse_ago(input: &str) -> Option<Vec<Pair<'_>>> {
+/// Parse relative units and clock adjustments in input order.
+fn parse_operations(input: &str) -> Option<Vec<Operation<'_>>> {
     let mut words = input
         .as_bytes()
         .chunk_by(|a, b| a.is_ascii_digit() == b.is_ascii_digit() && a.is_ascii_alphabetic() == b.is_ascii_alphabetic())
         .filter(|word| word[0].is_ascii_alphanumeric())
-        .map(|word| std::str::from_utf8(word).expect("each retained chunk contains only ASCII letters or digits"))
-        .peekable();
-
-    // Git applies a unit the moment it sees one and keeps going, so `2 days 3 hours ago` is both
-    // of them. Stopping after the first pair would turn that into a plausible-looking two days.
-    let mut pairs = Vec::new();
-    let mut ago = false;
-    while let Some(word) = words.peek() {
-        if word.eq_ignore_ascii_case("ago") {
-            ago = true;
-            words.next();
-            continue;
-        }
-        let Some(units) = count(word) else {
-            words.next();
-            continue;
+        .map(|word| std::str::from_utf8(word).expect("each retained chunk contains only ASCII letters or digits"));
+    let ago = words.clone().any(|word| word.eq_ignore_ascii_case("ago"));
+    let mut operations = Vec::new();
+    while let Some(word) = words.next() {
+        let operation = if word.eq_ignore_ascii_case("noon") {
+            Operation::NamedTime(12)
+        } else if word.eq_ignore_ascii_case("midnight") {
+            Operation::NamedTime(0)
+        } else if word.eq_ignore_ascii_case("tea") {
+            Operation::NamedTime(17)
+        } else if word.eq_ignore_ascii_case("yesterday") {
+            Operation::Yesterday
+        } else if word.eq_ignore_ascii_case("now") {
+            Operation::Now
+        } else {
+            let Some(count) = count(word) else { continue };
+            let Some(period) = words.next() else { break };
+            let (period, unit) = unit(period, ago)?;
+            Operation::Pair(Pair { period, count, unit })
         };
-        words.next();
-        let Some(period) = words.next() else { break };
-        pairs.push((period, units));
+        operations.push(operation);
     }
-    if pairs.is_empty() {
-        return None;
-    }
-    pairs
-        .into_iter()
-        .map(|(period, count)| unit(period, ago).map(|(period, unit)| Pair { period, count, unit }))
-        .collect()
+    (!operations.is_empty()).then_some(operations)
 }
 
 /// The count in front of the unit, either written out in digits or spelled with one of one-ten.
@@ -94,6 +86,13 @@ struct Pair<'a> {
     count: i64,
     /// How the pair is subtracted.
     unit: Unit,
+}
+
+enum Operation<'a> {
+    Pair(Pair<'a>),
+    NamedTime(i8),
+    Yesterday,
+    Now,
 }
 
 /// How a unit is subtracted: Git's `date.c` counts `second` through `week` as fixed numbers of
@@ -156,16 +155,19 @@ fn unit(period: &str, ago: bool) -> Option<(&str, Unit)> {
     Some((period, unit))
 }
 
-/// Subtract all `pairs` from `now`, in input order, like Git's `approxidate()` applies them.
+/// Apply `operations` to `now` in input order, like Git's `approxidate()`.
 ///
 /// Seconds-based units subtract from the timestamp, while months and years only step down the
 /// respective fields and normalize later, so that repeated units accumulate and a day beyond
 /// the end of the target month rolls over.
-fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> Result<Zoned, Exn<Error>> {
+fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<Zoned, Exn<Error>> {
     /// The calendar and clock fields for subtraction.
     struct Fields {
         year: i16,
         month: i8,
+        // Negative values are Git's unspecified day (-1) and pending previous day (-2).
+        day: i8,
+        time: civil::Time,
         // Retain the last normalized instant, including its choice of offset at ambiguous local
         // times. Like Git's tm_wday, its weekday stays unchanged when month/year fields change.
         zoned: Zoned,
@@ -176,6 +178,8 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> Result<Zoned, Exn<E
             Fields {
                 year: zdt.year(),
                 month: zdt.month(),
+                day: zdt.day(),
+                time: zdt.time(),
                 zoned: zdt,
             }
         }
@@ -184,26 +188,70 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> Result<Zoned, Exn<E
     impl Fields {
         /// Turn the fields back into a point in time: a day beyond the end of the month rolls over into the
         /// following month. One month before May 31st is thus May 1st, a day after April 30th.
-        fn normalize(&self) -> Result<Zoned, Exn<Error>> {
-            if self.year == self.zoned.year() && self.month == self.zoned.month() {
+        fn normalize(&self, day: i8) -> Result<Zoned, Exn<Error>> {
+            if self.year == self.zoned.year()
+                && self.month == self.zoned.month()
+                && day == self.zoned.day()
+                && self.time == self.zoned.time()
+            {
                 return Ok(self.zoned.clone());
             }
             let first_of_month = civil::Date::new(self.year, self.month, 1)
                 .or_raise(|| Error::new(format!("Date lies out of range: {}-{:02}", self.year, self.month)))?;
-            let days_beyond_first = SignedDuration::from_secs((i64::from(self.zoned.day()) - 1) * 24 * 60 * 60);
+            let days_beyond_first = SignedDuration::from_secs((i64::from(day) - 1) * 24 * 60 * 60);
             // TODO: Match Git's retained tm_isdst when changed calendar fields cross DST boundaries.
             first_of_month
                 .checked_add(days_beyond_first)
-                .or_raise(|| Error::new(format!("Day {} lies out of range", self.zoned.day())))?
-                .to_datetime(self.zoned.time())
+                .or_raise(|| Error::new(format!("Day {day} lies out of range")))?
+                .to_datetime(self.time)
                 .to_zoned(self.zoned.time_zone().clone())
                 .or_raise(|| Error::new("Could not convert date to a point in time"))
+        }
+
+        /// Git defers a named clock's previous-day hint until normalization. A nonzero
+        /// duration overrides that hint, so `noon 1 day ago` only goes back one day.
+        fn update(&self, reference_day: i8, mut seconds: i64) -> Result<Zoned, Exn<Error>> {
+            let day = if self.day < 0 {
+                if seconds == 0 && self.day < -1 {
+                    seconds = 24 * 60 * 60;
+                }
+                reference_day
+            } else {
+                self.day
+            };
+            let normalized = self.normalize(day)?;
+            let timestamp = normalized
+                .timestamp()
+                .checked_sub(SignedDuration::from_secs(seconds))
+                .or_raise(|| Error::new("Relative date is out of range"))?;
+            Ok(timestamp.to_zoned(normalized.time_zone().clone()))
         }
     }
 
     let now = now.ok_or(ValidationError::new("Missing current time"))?;
+    let reference_day = now.day();
     let mut fields = Fields::from(now);
-    for Pair { period, count, unit } in pairs {
+    fields.day = -1;
+    for operation in operations {
+        let Pair { period, count, unit } = match operation {
+            Operation::NamedTime(hour) => {
+                if fields.day < 0 && fields.time.hour() < *hour {
+                    fields.day = -2;
+                }
+                fields.time = civil::Time::new(*hour, 0, 0, 0).expect("named hours are valid");
+                continue;
+            }
+            Operation::Yesterday => {
+                fields.day = -1;
+                fields = fields.update(reference_day, 24 * 60 * 60)?.into();
+                continue;
+            }
+            Operation::Now => {
+                fields = fields.update(reference_day, 0)?.into();
+                continue;
+            }
+            Operation::Pair(pair) => pair,
+        };
         // Git's zero pending count never applies a unit or normalizes calendar fields.
         if *count == 0 {
             continue;
@@ -224,7 +272,7 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> Result<Zoned, Exn<E
             }
             Unit::Months(factor) => {
                 let months = count.checked_mul(*factor).ok_or_else(err)?;
-                fields = fields.normalize()?.into();
+                fields = fields.update(reference_day, 0)?.into();
                 let total = (i64::from(fields.year) * 12 + i64::from(fields.month) - 1)
                     .checked_sub(months)
                     .ok_or_else(err)?;
@@ -233,14 +281,9 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> Result<Zoned, Exn<E
                 continue;
             }
         };
-        let ts = fields
-            .normalize()?
-            .timestamp()
-            .checked_sub(SignedDuration::from_secs(seconds))
-            .or_raise(err)?;
-        fields = ts.to_zoned(fields.zoned.time_zone().clone()).into();
+        fields = fields.update(reference_day, seconds).or_raise(err)?.into();
     }
-    fields.normalize()
+    fields.update(reference_day, 0)
 }
 
 fn subtract_duration(now: Option<&Zoned>, duration: SignedDuration) -> Result<Zoned, Exn<ValidationError>> {

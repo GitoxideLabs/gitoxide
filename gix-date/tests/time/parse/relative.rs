@@ -122,6 +122,58 @@ fn counted_weekdays_require_now_and_check_overflow() {
 }
 
 #[test]
+fn named_clocks_follow_gits_fixed_day_and_deferred_adjustment_rules() -> gix_testtools::Result {
+    // Git 2.55's bbe9b46ac8 and b809304101 fixed these morning cases. Older Git
+    // produces different dates, so the host-generated baseline can't cover them.
+    // Expected seconds come from Git's test-tool at 2009-08-30 07:20:00 UTC.
+    let now = jiff::Timestamp::from_second(1_251_616_800)?.to_zoned(TimeZone::UTC);
+    for (input, seconds) in [
+        ("noon yesterday", 1251547200),
+        ("yesterday noon", 1251547200),
+        ("yesterday tea", 1251565200),
+        ("last Friday at noon", 1251460800),
+        ("tea last saturday", 1251565200),
+        ("noon 1 day ago", 1251547200),
+        ("1 day ago noon", 1251547200),
+        ("1 month noon", 1248955200),
+        ("1 month noon last Friday", 1248782400),
+        ("noon midnight tea", 1251565200),
+        ("now noon", 1251633600),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(seconds, 0),
+            "{input:?}: agree with Git 2.55's corrected named-clock evaluation"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn named_clocks_use_the_reference_timezone() -> gix_testtools::Result {
+    // This instant is Monday morning locally, but still Sunday evening in UTC.
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    for (input, expected) in [
+        ("noon", "2009-08-30 12:00:00 +0800"),
+        ("midnight", "2009-08-31 00:00:00 +0800"),
+        ("tea", "2009-08-30 17:00:00 +0800"),
+        ("now noon", "2009-08-31 12:00:00 +0800"),
+        ("tea last saturday", "2009-08-29 17:00:00 +0800"),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::parse(expected, None).map_err(gix_error::Exn::into_error)?,
+            "{input:?}: clock and weekday adjustments use the supplied timezone"
+        );
+        assert!(
+            gix_date::parse(input, None).is_err(),
+            "{input:?} needs a reference date"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn various() {
     // A fixed timestamp (2001-09-09T01:46:40Z, like the baseline) keeps the expected values
     // reproducible: with the real current time, the month- and year-based cases would disagree
