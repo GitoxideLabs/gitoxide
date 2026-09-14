@@ -220,7 +220,7 @@ baseline '@99999999 +0000' ''
 # These tests use GIT_TEST_DATE_NOW=1000000000 (Sun Sep 9 01:46:40 UTC 2001)
 
 # Named
-# 'now' and 'today' don't seem to work.
+# Expiry-date treats `now` as a sentinel. `today` requires Git 2.55 (covered below).
 baseline_relative 'yesterday' ''
  
 # Seconds - from git t0006 check_relative
@@ -370,3 +370,69 @@ baseline_relative '2 tuesdays 1 month last Thursday' '' 1251660000
 baseline_relative '1 year last Thursday' '' 1251660000
 baseline_relative '1 month last Sunday' '' 1774958400 # Month-end rollover before subtraction
 baseline_relative '1 year last Thursday' '' 1709208000 # Leap-day rollover before subtraction
+
+# Named clock times select the most recent named hour while the day is still
+# unspecified. Applying a relative unit or `now` first fixes the day instead.
+# Morning and evening references exercise both sides of noon and tea (17:00).
+for date in noon midnight tea NOON Midnight TEA \
+            'noon yesterday' 'yesterday noon' 'midnight yesterday' 'yesterday tea' \
+            'last Friday at noon' 'tea last saturday' \
+            'noon 1 day ago' '1 day ago noon' 'noon 0 days' \
+            '1 month noon' 'noon 1 month' '1 month noon last Friday' \
+            'noon midnight tea' 'now noon' 'noon now'; do
+    baseline_relative "$date" '' 1251660000
+done
+# Git 2.55 fixed the day selection of composite named clocks before noon.
+# Keep cross-version morning cases here; tests/time/parse/relative.rs pins the
+# changed cases to the corrected results from Git's date.c and t0006-date.sh.
+for date in noon midnight tea NOON Midnight TEA \
+            'midnight yesterday' 'noon 0 days' 'noon 1 month' 'noon now'; do
+    baseline_relative "$date" '' 1251616800
+done
+baseline_relative 'noon' '' 1251633600 # Exactly noon does not go back a day
+baseline_relative 'tea' '' 1251651600  # Exactly tea time does not go back a day
+baseline_relative 'midnight' '' 1251590400 # Midnight is the beginning of the current day
+
+# Explicit clocks keep today's date even when the clock is later than now.
+# A dot following a relative clock starts the next count, not fractional seconds.
+for now in 1251616800 1251660000; do
+    for date in '3:00' '15:00' '23:59:59' '1:2:3' '12:34:56.3.days.ago' \
+                '03:04:05 yesterday' 'last Friday 12:34:56' '12:34:56 last Friday' \
+                '1 month 12:34:56 last Friday' '12:34:56 1 month' \
+                '15:00 06:30' '24:00' '23:59:60' '24:59:60' \
+                '11:59:60 noon' '24:00 1 day ago'; do
+        baseline_relative "$date" '' "$now"
+    done
+done
+baseline_relative '24:00' '' 1251750000 # Crossing the end of August
+# Once an operation establishes the date, Git instead discards the clock's
+# dot-suffix as fractional seconds. A zero-count unit does not establish a date.
+for date in 'now 12:34:56.3.days.ago' 'yesterday 12:34:56.3.days.ago' \
+            '1 month 12:34:56.3.days.ago' '0 days 12:34:56.3.days.ago' \
+            'now 12:34:56.123' '12:34:56.3.days.ago 1 hour'; do
+    baseline_relative "$date" '' 1251616800
+done
+
+# AM/PM can follow an hour or a full clock, or adjust the current clock by itself.
+# A zero hour acts like no hour: it retains the current minutes and seconds.
+for now in 1251616800 1251660000; do
+    for date in '6am yesterday' '6pm yesterday' 'yesterday 6PM' \
+                '6:30pm' '06:30:45 PM' '12am' '12pm' '12:30am' '12:30pm' \
+                '0am' '0pm' am PM 'two pm' 'last am' '24am' '25pm' \
+                '11:59:60 pm' 'last Friday 6pm' '6pm last Friday' \
+                '1 month 6pm' '6am noon' '6pm am' '1 hour pm' '6pm 1 hour ago'; do
+        baseline_relative "$date" '' "$now"
+    done
+done
+
+# Git 2.55 introduced `today` with a midnight default. Probe the behavior rather
+# than the version to accommodate backports; pinned unit tests cover older hosts.
+if GIT_TEST_DATE_NOW=1251660000 git -c section.key=today config --type=expiry-date section.key 2>/dev/null | grep -qx '1251590400'; then
+    for now in 1251616800 1251660000; do
+        for date in today TODAY 'noon today' 'today at noon' '6pm today' 'today 6pm' \
+                    '6am today' 'today now' 'now today' '1 day today' 'today 1 day' \
+                    '1 month today' 'today 1 month' 'now today 12:34:56.3.days.ago' '07:20 today'; do
+            baseline_relative "$date" '' "$now"
+        done
+    done
+fi
