@@ -67,6 +67,46 @@ baseline 'Fri, 13 Feb 2009 23:31:30 +0000' 'RFC2822'  # Unix timestamp 123456789
 baseline 'Wed, 15 Jun 2016 16:13:20 +0200' 'RFC2822'  # from git t0006
 baseline 'Thu, 7 Apr 2005 15:14:13 -0700' ''  # from git t0006
 
+# Complete textual dates exercise Git's month-name matching independently of RFC 2822.
+# Weekdays are ignored, and ordinal suffixes need not agree with the day number.
+for date in 'February 14, 2008' 'February 14th, 2008' '14th February 2008' \
+            'Monday, fEbRu 14st, 2008' 'Feb 29 2009' 'Feb 31 2008'; do
+    baseline "$date 20:30:45 -0500" ''
+done
+baseline 'Feb 14 20:30:45 2008 -0500' ''
+baseline 'February 14 2008 20:30 -05' ''
+baseline 'February 14 2008 20:30:45 -05:00' ''
+baseline 'February 14 2008 20:30:45 CET' ''
+baseline 'February 14 2008 20:30:45 Z' ''
+baseline 'February 14 2008 20:30:45 +2359' ''
+baseline 'February 14 2008 20:30:45 -2359' ''
+# Git's -1-minute sentinel loses this explicit offset; retain it like other numeric offsets.
+baseline 'February 14 2008 20:30:45 -0001' 'GIX_DIFF:60'
+baseline 'Feb 14 2008 24:00:00 +0000' ''
+baseline 'Feb 14 2008 23:59:60 +0000' ''
+for month in January February March April May June July August September October November December; do
+    for ((length=3; length<=${#month}; length++)); do
+        baseline "${month:0:length} 14th, 2008 20:30:45 +0000" ''
+    done
+done
+
+# Standalone years in textual dates use match_digit(), not set_date()'s wider
+# numeric-date pivot. Exactly two digits and an already parsed day are significant.
+for year in 00 01 02 03 04 05 06 07 08 09 {70..99}; do
+    baseline "February 14 $year 20:30:45 -0500" ''
+    baseline "14th February $year 20:30:45 -0500" ''
+    baseline "Feb 14 20:30:45 $year -0500" ''
+done
+
+# Absolute textual parsing precedes approxidate, even without a trailing zone.
+# Thus year 00 means 2000, and an absent day remains -1 before normalization.
+for date in 'June 7 00 12:34:56' 'June 7 12:34:56 00' 'June 7 2009 12:34:56' \
+            '7th June 12:34:56 2009' 'June 2008 12:34:56' \
+            'June 7 2009 +0200 12:34:56' 'June 7 2009 CET 12:34:56' \
+            'June 2008 +0200 12:34:56'; do
+    baseline "$date" ''
+done
+
 # GIT_RFC2822 format: like RFC2822 but with non-padded day
 baseline 'Thu, 1 Aug 2022 12:45:06 +0800' ''
 baseline 'Sat, 1 Jan 2000 00:00:00 +0000' ''
@@ -355,6 +395,24 @@ for date in '2 long days ago' 'one or two days ago' '2 hours 3' \
     baseline_relative "$date" '' 1251660000
 done
 
+# Incomplete textual dates infer missing fields from the reference time. A later
+# month selects the previous year, but a later day in the same month can stay future.
+# Month names do not flush pending numbers, and attached digits prevent name matching.
+for date in 'July 5th' '5 July' July December 'December 31' 'August 31' \
+            'January 5th noon pm' '6AM, June 7, 2009' 'June 7 6am 2009' \
+            'Dec 6, 1992' 'Dec 02' 'Dec 0002' 'Feb 31' 'Feb 29 2009' 'June 2008' \
+            'June 7 10' 'June 7 38' 'June 7 70' 'June 7 00' 'June 7 0008' \
+            'June 7 2008 12:34:56.3.days.ago' 'July 5 2 days ago' '2 days July 5' \
+            'June July 5' 'now December' 'December now' 'Sept 5' 'Septe 5' JUNE7 \
+            '6AM, June7, 2009' 'July 5th noon' 'June 7 2009 12:34:56'; do
+    baseline_relative "$date" '' 1251660000
+done
+for month in January February March April May June July August September October November December; do
+    for ((length=3; length<=${#month}; length++)); do
+        baseline_relative "${month:0:length} 5th" '' 1251660000
+    done
+done
+
 # Counted weekdays select the nth strictly previous occurrence, keeping the clock.
 # Use Git's t0006 reference Sunday so requesting Sunday must go back a full week.
 # Git accepts case-insensitive prefixes of at least three letters, including plurals.
@@ -451,7 +509,7 @@ if GIT_TEST_DATE_NOW=1251660000 git -c section.key=today config --type=expiry-da
         for date in today TODAY 'noon today' 'today at noon' '6pm today' 'today 6pm' \
                     '6am today' 'today now' 'now today' '1 day today' 'today 1 day' \
                     '1 month today' 'today 1 month' 'now today 12:34:56.3.days.ago' '07:20 today' \
-                    'today never' 'never today' 'never noon'; do
+                    'today never' 'never today' 'never noon' 'December 37 noon 12:34:56.3'; do
             baseline_relative "$date" '' "$now"
         done
     done

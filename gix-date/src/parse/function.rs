@@ -28,6 +28,19 @@ use gix_error::{ExnMessageResult, ResultExt};
 /// *   `Thu, 18 Aug 2022 12:45:06 +0800`
 /// *   `Mon Oct 27 10:30:00 2023 -0800`
 ///
+/// Complete textual dates also accept month-first or day-first layouts, such as
+/// `February 14th, 2008 20:30:45 -0500` and `14 February 2008 20:30:45 CET`.
+/// They require a year and a colon-separated clock. A timezone can appear before or after
+/// the clock/year; when omitted, the timezone of `now` is used, or UTC without a reference.
+/// Years can have four digits (`1970..=2099`), or exactly two digits: `00..=09` means
+/// `2000..=2009`, and `70..=99` means `1970..=1999`, following Git's textual-date rules.
+/// The year can precede or follow the clock. Git's absolute parser also normalizes an absent
+/// day as day -1: `June 2008 12:34:56` means May 30, not June's current day.
+/// Month names accept case-insensitive prefixes
+/// of at least three letters, and an optional weekday does not have to match the date.
+/// Like Git, these forms normalize day overflow (February 31), hour 24, and second 60.
+/// Explicit offsets are retained, including `-0001`, which Git treats as an unspecified timezone.
+///
 /// ### 3. GIT_RFC2822 Format
 ///
 /// *   `Thu, 8 Aug 2022 12:45:06 +0800`
@@ -116,6 +129,12 @@ use gix_error::{ExnMessageResult, ResultExt};
 /// field, following Git's guessing rules (`5 6 2008 noon` is June 5 at noon).
 /// Unknown words, including `ago`, are ignored rather than treated as seconds.
 /// Standalone numeric inputs retain their Unix-timestamp interpretation.
+/// Incomplete textual dates such as `July 5th`, `December`, and `6AM, June 7, 2009`
+/// use the timezone and missing clock/date fields from `now`. An unspecified year is the
+/// current year unless the specified month is later than the reference month, in which case
+/// it is the previous year. A later day in the same month can therefore remain in the future.
+/// Month names can be case-insensitive prefixes of at least three letters; an immediately
+/// following digit prevents month recognition, as in Git.
 /// Counts and units may also touch, as in `2days`. Unlike Git, `2days3hours` applies both pairs
 /// instead of mistaking the counts for calendar fields.
 /// A unit can also be a weekday, as in `last Tuesday` or `2 Fridays ago`, to select its nth
@@ -170,7 +189,7 @@ pub fn parse(input: &str, now: Option<Zoned>) -> ExnMessageResult<Time> {
         && val >= 100_000_000
     {
         Time::new(val, 0)
-    } else if let Some(val) = parse_git_date_format(input) {
+    } else if let Some(val) = parse_git_date_format(input, now.as_ref()) {
         val
     } else if let Some(val) = parse_raw(input) {
         // Complete raw dates take precedence over relative calendar-field guessing.
