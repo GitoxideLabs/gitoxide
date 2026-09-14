@@ -247,6 +247,41 @@ mod textual_dates {
     }
 
     #[test]
+    fn absolute_textual_dates_allow_missing_or_reordered_timezones() -> gix_testtools::Result {
+        let local_now = jiff::Timestamp::from_second(1_251_660_000)?
+            .to_zoned(jiff::tz::TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+        for (input, expected, explicit_zone) in [
+            ("June 7 00 12:34:56", "2000-06-07 12:34:56", None),
+            ("June 7 12:34:56 00", "2000-06-07 12:34:56", None),
+            ("June 7 2009 12:34:56", "2009-06-07 12:34:56", None),
+            ("7th June 12:34:56 2009", "2009-06-07 12:34:56", None),
+            ("June 2008 12:34:56", "2008-05-30 12:34:56", None),
+            ("June 7 2009 +0200 12:34:56", "2009-06-07 12:34:56", Some("+0200")),
+            ("June 7 2009 CET 12:34:56", "2009-06-07 12:34:56", Some("+0100")),
+            ("June 2008 +0200 12:34:56", "2008-05-30 12:34:56", Some("+0200")),
+        ] {
+            for reference in [None, Some(local_now.clone())] {
+                let zone = explicit_zone.unwrap_or(if reference.is_some() { "+0800" } else { "+0000" });
+                let expected =
+                    gix_date::parse(&format!("{expected} {zone}"), None).map_err(gix_error::Exn::into_error)?;
+                assert_eq!(
+                    gix_date::parse(input, reference).map_err(gix_error::Exn::into_error)?,
+                    expected,
+                    "{input}: absolute year rules and explicit zones take precedence over relative inference"
+                );
+            }
+        }
+        let summer =
+            jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(jiff::tz::TimeZone::get("America/New_York")?);
+        assert_eq!(
+            gix_date::parse("January 7 2009 12:34:56", Some(summer)).map_err(gix_error::Exn::into_error)?,
+            gix_date::parse("2009-01-07 12:34:56 -0500", None).map_err(gix_error::Exn::into_error)?,
+            "an omitted absolute timezone uses the target date's offset, not the reference date's offset"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn month_names_accept_case_insensitive_prefixes() -> gix_testtools::Result {
         for (index, month) in [
             "January",

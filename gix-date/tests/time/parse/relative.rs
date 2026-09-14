@@ -142,7 +142,6 @@ fn textual_month_fragments_infer_missing_calendar_fields_like_git() -> gix_testt
         ("JUNE7", 1249672800),
         ("6AM, June7, 2009", 1249624800),
         ("July 5th noon", 1246795200),
-        ("June 7 2009 12:34:56", 1244378096),
     ] {
         assert_eq!(
             gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,

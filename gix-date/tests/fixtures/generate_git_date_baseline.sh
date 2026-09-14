@@ -96,6 +96,15 @@ for year in 00 01 02 03 04 05 06 07 08 09 {70..99}; do
     baseline "Feb 14 20:30:45 $year -0500" ''
 done
 
+# Absolute textual parsing precedes approxidate, even without a trailing zone.
+# Thus year 00 means 2000, and an absent day remains -1 before normalization.
+for date in 'June 7 00 12:34:56' 'June 7 12:34:56 00' 'June 7 2009 12:34:56' \
+            '7th June 12:34:56 2009' 'June 2008 12:34:56' \
+            'June 7 2009 +0200 12:34:56' 'June 7 2009 CET 12:34:56' \
+            'June 2008 +0200 12:34:56'; do
+    baseline "$date" ''
+done
+
 # GIT_RFC2822 format: like RFC2822 but with non-padded day
 baseline 'Thu, 1 Aug 2022 12:45:06 +0800' ''
 baseline 'Sat, 1 Jan 2000 00:00:00 +0000' ''
