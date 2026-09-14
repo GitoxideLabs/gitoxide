@@ -87,6 +87,13 @@ use gix_error::{Exn, ResultExt};
 /// as `1 hour ago`. The trailing `ago` is optional.
 /// Counts and units may also touch, as in `2days`. Unlike Git, `2days3hours` applies both pairs
 /// instead of mistaking the counts for calendar fields.
+/// A unit can also be a weekday, as in `last Tuesday` or `2 Fridays ago`, to select its nth
+/// strictly previous occurrence. Weekday names accept case-insensitive prefixes of at least
+/// three letters. `last Sunday` on a Sunday goes back a full week; weekday adjustments subtract
+/// fixed 24-hour days, so crossing a daylight-saving transition can change the local clock time.
+/// After a month/year adjustment, Git computes the weekday distance using the weekday from before
+/// that adjustment, then normalizes the changed calendar fields before subtracting the distance.
+/// This function follows that rule too, even when the result is not on the requested weekday.
 ///
 /// `<count> <unit>` pairs are applied in input order, the way Git applies them: `second` through `week` each
 /// subtract a fixed number of seconds, while `month` and `year` step down the respective calendar fields,

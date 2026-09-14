@@ -314,3 +314,38 @@ baseline_relative '1year' ''
 # the numbers as calendar fields. Honor both count/unit pairs instead.
 baseline_relative '2days3hours' 'GIX_DIFF:2246400' 1251660000
 baseline_relative '2 days3 hours ago' 'GIX_DIFF:2246400' 1251660000
+
+# Counted weekdays select the nth strictly previous occurrence, keeping the clock.
+# Use Git's t0006 reference Sunday so requesting Sunday must go back a full week.
+# Git accepts case-insensitive prefixes of at least three letters, including plurals.
+for weekday in Sunday Monday Tuesday Wednesday Thursday Friday Saturday \
+               Sundays Mondays Tuesdays Wednesdays Thursdays Fridays Saturdays \
+               sun mon tue tues wed wednes thu thur thurs fri sat; do
+    baseline_relative "last $weekday" '' 1251660000
+    baseline_relative "2 $weekday ago" '' 1251660000
+done
+baseline_relative 'last WEDNESDAY' '' 1251660000
+baseline_relative 'two fridays' '' 1251660000
+baseline_relative 'ten mondays ago' '' 1251660000
+baseline_relative '2Fridays' '' 1251660000
+baseline_relative 'last.tuesday' '' 1251660000
+baseline_relative '0 tuesday' '' 1251660000
+baseline_relative '0 tuesday ago' '' 1251660000
+
+# Weekdays compose with duration and calendar pairs in input order. Git retains
+# the cached weekday after changing month/year fields until the next nonzero
+# duration or calendar pair is applied; zero-count units do not normalize it.
+baseline_relative '2 days last Tuesday' '' 1251660000
+baseline_relative 'last Tuesday 2 days' '' 1251660000
+baseline_relative 'last Tuesday last Friday' '' 1251660000
+baseline_relative '1 month last Thursday' '' 1251660000
+baseline_relative 'last Thursday 1 month' '' 1251660000
+baseline_relative '1 month 1 second last Thursday' '' 1251660000
+baseline_relative '1 month 0 days last Thursday' '' 1251660000
+baseline_relative '1 month 1 month last Thursday' '' 1251660000
+baseline_relative '1 month 0 months last Thursday' '' 1251660000
+baseline_relative '1 month 0 tuesday last Thursday' '' 1251660000
+baseline_relative '2 tuesdays 1 month last Thursday' '' 1251660000
+baseline_relative '1 year last Thursday' '' 1251660000
+baseline_relative '1 month last Sunday' '' 1774958400 # Month-end rollover before subtraction
+baseline_relative '1 year last Thursday' '' 1709208000 # Leap-day rollover before subtraction
