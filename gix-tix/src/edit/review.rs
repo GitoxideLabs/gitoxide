@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use anyhow::{Context, Result};
 use gix::{
@@ -106,6 +106,48 @@ pub(super) fn stash_reference(review: &BStr) -> Result<gix::refs::FullName> {
     )
     .try_into()
     .context("generated an invalid review stash reference")
+}
+
+/// Ordinary additions between the reviewed history and the review, oldest first.
+pub(super) fn inserted_parents(
+    repo: &gix::Repository,
+    graph: &history::HistoryGraph,
+    review_commit_id: ObjectId,
+    tip_commit_id: ObjectId,
+) -> Result<Vec<ObjectId>> {
+    let mut reviewed_ancestors = HashSet::new();
+    let mut pending = vec![tip_commit_id];
+    while let Some(commit_id) = pending.pop() {
+        if reviewed_ancestors.insert(commit_id) {
+            pending.extend(graph.parents_of(commit_id).unwrap_or_default());
+        }
+    }
+    let mut commit_id = repo
+        .find_commit(review_commit_id)?
+        .parent_ids()
+        .next()
+        .context("a review commit must have a base")?
+        .detach();
+    let mut prefix = Vec::new();
+    while !reviewed_ancestors.contains(&commit_id) {
+        anyhow::ensure!(
+            graph.is_in_edit_scope(commit_id) && !graph.is_read_only(commit_id),
+            "added review ancestor {commit_id} is outside editable history"
+        );
+        let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
+        anyhow::ensure!(
+            !super::rebase::is_pending(&commit),
+            "added review ancestor {commit_id} has a pending rebase"
+        );
+        anyhow::ensure!(
+            commit.parents.len() == 1 && !is_review(&commit) && !super::auto_merge::is_auto_merge(&commit),
+            "added review ancestor {commit_id} must be an ordinary single-parent commit"
+        );
+        prefix.push(commit_id);
+        commit_id = commit.parents[0];
+    }
+    prefix.reverse();
+    Ok(prefix)
 }
 
 #[tracing::instrument(skip_all, fields(%tip, %base))]
@@ -395,6 +437,72 @@ fn remove_new_departure_pin(repository_path: &Path, bare: bool, pin: Option<&his
 mod tests {
     use super::*;
 
+    fn child(repo: &gix::Repository, parent_commit_id: ObjectId, path: &str) -> Result<ObjectId> {
+        let mut commit = repo.find_commit(parent_commit_id)?.decode()?.into_owned()?;
+        let mut tree = repo.find_tree(commit.tree)?.edit()?;
+        tree.upsert(
+            path,
+            gix::objs::tree::EntryKind::Blob,
+            repo.write_blob(format!("{path}\n"))?,
+        )?;
+        commit.tree = tree.write()?.detach();
+        commit.parents = [parent_commit_id].into_iter().collect();
+        commit.message = format!("add {path}\n").into();
+        commit.extra_headers.clear();
+        Ok(repo.write_object(&commit)?.detach())
+    }
+
+    fn review_with_prefix(
+        count: usize,
+    ) -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, Started, Vec<ObjectId>)> {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let tip_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+        let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+        let mut started = start(fixture.path(), false, &graph, tip_commit_id, base_commit_id)?;
+        assert!(started.checkout_error.is_none(), "the review starts successfully");
+
+        let repo = crate::test_repository::open(fixture.path())?;
+        let mut review = repo.find_commit(started.commit)?.decode()?.into_owned()?;
+        let mut tree = repo.find_commit(tip_commit_id)?.tree()?.edit()?;
+        let mut parent_commit_id = base_commit_id;
+        let mut prefix = Vec::new();
+        // Independent additions below the review must remain distinct when it is finished.
+        for number in 0..count {
+            let path = format!("extra-{number}");
+            parent_commit_id = child(&repo, parent_commit_id, &path)?;
+            prefix.push(parent_commit_id);
+            repo.reference(
+                format!("refs/heads/{path}"),
+                parent_commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "retain an inserted review parent",
+            )?;
+            tree.upsert(
+                &path,
+                gix::objs::tree::EntryKind::Blob,
+                repo.write_blob(format!("{path}\n"))?,
+            )?;
+        }
+        tree.upsert(
+            "review-fix",
+            gix::objs::tree::EntryKind::Blob,
+            repo.write_blob("review fix\n")?,
+        )?;
+        review.tree = tree.write()?.detach();
+        review.parents = [parent_commit_id].into_iter().collect();
+        crate::change_id::inherit(&repo, &mut review, started.commit)?;
+        crate::patch_id::refresh(&repo, &mut review)?;
+        started.commit = repo.write_object(&review)?.detach();
+        run(
+            fixture.path(),
+            &["checkout", "-q", "--detach", "--force", &started.commit.to_string()],
+        )?;
+        Ok((fixture, started, prefix))
+    }
+
     fn run(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
         let output = gix_testtools::git_command(path)
             .args(args)
@@ -415,6 +523,279 @@ mod tests {
             .into());
         }
         Ok(output.stdout)
+    }
+
+    #[test]
+    fn finishing_preserves_inserted_parents_and_their_distinct_patches() -> gix_testtools::Result {
+        for count in [1, 2] {
+            let (fixture, started, prefix) = review_with_prefix(count)?;
+            let repo = crate::test_repository::open(fixture.path())?;
+            let tip_commit_id = repo.rev_parse_single("refs/patches/middle")?.detach();
+            let old_return_commit_id = repo.find_reference("refs/heads/main")?.id().detach();
+            let review_tree_id = repo.find_commit(started.commit)?.tree_id()?.detach();
+            let side_commit_id = child(&repo, prefix[0], "side")?;
+            repo.reference(
+                "refs/heads/side",
+                side_commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "fixture",
+            )?;
+            let successor_commit_id = (count == 2)
+                .then(|| child(&repo, started.commit, "successor"))
+                .transpose()?;
+            if let Some(commit_id) = successor_commit_id {
+                repo.reference(
+                    "refs/heads/successor",
+                    commit_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "fixture",
+                )?;
+            }
+            let mut notes = repo.notes()?;
+            notes.replace_at_ref("refs/notes/commits".try_into()?, prefix[0], b"independent change")?;
+            drop(notes);
+            let graph = super::super::loaded_graph(&repo)?;
+            let Finish::Complete(finished) = finish(repo, &graph, started.commit, None)? else {
+                panic!("independent changes finish without conflicts")
+            };
+
+            let repo = crate::test_repository::open(fixture.path())?;
+            let mut parent_commit_id = tip_commit_id;
+            for (number, old_commit_id) in prefix.iter().copied().enumerate() {
+                let new_commit_id = finished
+                    .outcome
+                    .map(old_commit_id)
+                    .context("the inserted commit survives")?;
+                let commit = repo.find_commit(new_commit_id)?.decode()?.into_owned()?;
+                let original = repo.find_commit(old_commit_id)?.decode()?.into_owned()?;
+                assert_eq!(
+                    commit.parents.as_slice(),
+                    &[parent_commit_id],
+                    "each inserted commit follows the transplanted prefix"
+                );
+                assert_eq!(
+                    commit.message, original.message,
+                    "the independent commit keeps its message"
+                );
+                assert_eq!(
+                    commit.author, original.author,
+                    "the independent commit keeps its author"
+                );
+                assert_eq!(
+                    crate::change_id::for_commit(&repo, new_commit_id)?,
+                    crate::change_id::for_commit(&repo, old_commit_id)?,
+                    "transplanting preserves the change ID"
+                );
+                assert_eq!(
+                    repo.find_reference(format!("refs/heads/extra-{number}").as_str())?.id(),
+                    new_commit_id,
+                    "mutable references follow the inserted commit"
+                );
+                assert_eq!(
+                    run(
+                        fixture.path(),
+                        &[
+                            "diff",
+                            "--name-only",
+                            &parent_commit_id.to_string(),
+                            &new_commit_id.to_string()
+                        ]
+                    )?,
+                    format!("extra-{number}\n").as_bytes(),
+                    "the commit contains only its independent patch"
+                );
+                parent_commit_id = new_commit_id;
+            }
+            let review = repo.find_commit(finished.commit)?.decode()?.into_owned()?;
+            assert_eq!(
+                review.parents.as_slice(),
+                &[parent_commit_id],
+                "the finished review follows every inserted parent"
+            );
+            assert_eq!(
+                review.tree, review_tree_id,
+                "finishing preserves the reviewed tree exactly"
+            );
+            assert_eq!(
+                run(
+                    fixture.path(),
+                    &[
+                        "diff",
+                        "--name-only",
+                        &parent_commit_id.to_string(),
+                        &finished.commit.to_string()
+                    ]
+                )?,
+                b"review-fix\n",
+                "the review contains only its own remaining correction"
+            );
+            let rewritten_side_commit_id = repo.find_reference("refs/heads/side")?.id().detach();
+            assert_eq!(
+                repo.find_commit(rewritten_side_commit_id)?
+                    .parent_ids()
+                    .next()
+                    .map(gix::Id::detach),
+                finished.outcome.map(prefix[0]),
+                "side descendants follow the rewritten parent"
+            );
+            let insertion_commit_id = successor_commit_id.map_or(finished.commit, |commit_id| {
+                finished.outcome.map(commit_id).expect("the review successor survives")
+            });
+            let return_commit_id = repo.find_reference("refs/heads/main")?.id().detach();
+            assert_eq!(
+                repo.find_commit(return_commit_id)?
+                    .parent_ids()
+                    .next()
+                    .map(gix::Id::detach),
+                Some(insertion_commit_id),
+                "the original descendants follow the review additions"
+            );
+            assert_eq!(
+                repo.head()?.referent_name().expect("the return is attached"),
+                "refs/heads/main"
+            );
+            assert_ne!(
+                repo.head_id()?,
+                old_return_commit_id,
+                "finishing returns to the rewritten branch"
+            );
+            let mut notes = repo.notes()?.with_refs(["refs/notes/commits"])?;
+            assert_eq!(
+                notes
+                    .get(finished.outcome.map(prefix[0]).expect("the noted commit survives"))?
+                    .first()
+                    .map(|note| note.blob.data.as_slice()),
+                Some(b"independent change".as_slice()),
+                "Git notes follow the transplanted identity"
+            );
+            let mut approvals = crate::enrich::open_patch(&repo)?;
+            for commit_id in prefix
+                .iter()
+                .map(|commit_id| finished.outcome.map(*commit_id).expect("the prefix survives"))
+                .chain([finished.commit])
+            {
+                assert_eq!(
+                    crate::enrich::load_patch_for_commit(&repo, &mut approvals, commit_id)?.refackiewed,
+                    commit_id == finished.commit,
+                    "finishing approves only the review patch"
+                );
+            }
+            assert!(
+                run(fixture.path(), &["status", "--porcelain=v1"])?.is_empty(),
+                "the return checkout is clean"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn conflicting_or_unsupported_inserted_parents_leave_the_review_untouched() -> gix_testtools::Result {
+        for case in ["conflict", "pending", "merge", "hidden"] {
+            let (fixture, mut started, mut prefix) = review_with_prefix(2)?;
+            let repo = crate::test_repository::open(fixture.path())?;
+            let tip_commit_id = repo.rev_parse_single("refs/patches/middle")?.detach();
+            let mut oldest = repo.find_commit(prefix[0])?.decode()?.into_owned()?;
+            match case {
+                "conflict" => {
+                    // Both histories add `middle` with different content. The remaining
+                    // review tree is already resolved, but this distinct patch isn't.
+                    let mut tree = repo.find_tree(oldest.tree)?.edit()?;
+                    tree.upsert(
+                        "middle",
+                        gix::objs::tree::EntryKind::Blob,
+                        repo.write_blob("conflicting\n")?,
+                    )?;
+                    oldest.tree = tree.write()?.detach();
+                }
+                "pending" => oldest
+                    .extra_headers
+                    .push(("tix-rebase-parent".into(), oldest.parents[0].to_string().into())),
+                "merge" => oldest.parents.push(tip_commit_id),
+                "hidden" => {}
+                _ => unreachable!("all test cases are listed above"),
+            }
+            prefix[0] = repo.write_object(&oldest)?.detach();
+            let mut upper = repo.find_commit(prefix[1])?.decode()?.into_owned()?;
+            upper.parents = [prefix[0]].into_iter().collect();
+            prefix[1] = repo.write_object(&upper)?.detach();
+            let mut review = repo.find_commit(started.commit)?.decode()?.into_owned()?;
+            review.parents = [prefix[1]].into_iter().collect();
+            started.commit = repo.write_object(&review)?.detach();
+            for (number, commit_id) in prefix.iter().enumerate() {
+                repo.reference(
+                    format!("refs/heads/extra-{number}"),
+                    *commit_id,
+                    gix::refs::transaction::PreviousValue::Any,
+                    "fixture",
+                )?;
+            }
+            run(
+                fixture.path(),
+                &["checkout", "-q", "--detach", "--force", &started.commit.to_string()],
+            )?;
+            let graph = if case == "hidden" {
+                super::super::loaded_explicit_view_graph(
+                    &repo,
+                    &["HEAD".into(), "refs/heads/main".into()],
+                    &[prefix[0].to_string().into()],
+                )?
+            } else {
+                super::super::loaded_graph(&repo)?
+            };
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let err = finish(repo, &graph, started.commit, None)
+                .err()
+                .context("unsafe ancestry must be rejected before finishing")?;
+            let message = format!("{err:#}");
+            assert!(
+                message.contains(&prefix[0].to_string()),
+                "the error identifies the problematic ancestor: {message}"
+            );
+            assert!(
+                message.contains(match case {
+                    "conflict" => "conflicts with the reviewed history",
+                    "pending" => "has a pending rebase",
+                    "merge" => "must be an ordinary single-parent commit",
+                    "hidden" => "is outside editable history",
+                    _ => unreachable!("all test cases are listed above"),
+                }),
+                "the error explains the rejected {case}: {message}"
+            );
+            assert_eq!(
+                gix_testtools::repository::snapshot(fixture.path())?,
+                before,
+                "rejecting {case} preserves refs, undo, index, and worktree"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn inserted_parents_stop_at_a_shared_merge_base() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_merge.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let base_commit_id = repo.rev_parse_single("diamond")?.detach();
+        let tip_commit_id = child(&repo, base_commit_id, "tip")?;
+        let extra_commit_id = child(&repo, base_commit_id, "extra")?;
+        let review_commit_id = child(&repo, extra_commit_id, "review")?;
+        for (name, commit_id) in [
+            ("refs/heads/tip", tip_commit_id),
+            ("refs/heads/review", review_commit_id),
+        ] {
+            repo.reference(
+                name,
+                commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "fixture",
+            )?;
+        }
+        let graph = super::super::loaded_graph(&repo)?;
+        assert_eq!(
+            inserted_parents(&repo, &graph, review_commit_id, tip_commit_id)?,
+            [extra_commit_id],
+            "the shared merge and its inputs are not part of the inserted ancestry"
+        );
+        Ok(())
     }
 
     #[test]
