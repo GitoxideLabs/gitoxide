@@ -344,7 +344,8 @@ without trading responsiveness for metadata that is not visible.
   Ordinary lazy replay, travel conflicts, and native Git rebases do not create
   these shared sessions.
 - Editor-launching commands honor Git's normal editor selection and
-  `GIT_EDITOR` overrides it.
+  `GIT_EDITOR` overrides it. Editors inherit the standard streams and, on
+  Windows, share Tix's console, including when invoked through a shell.
 - Revisions must resolve and peel to commits. Invalid or non-commit visible
   revisions are errors. An unavailable hidden revision emits a warning and is
   ignored when another hidden revision resolves; if none resolve, startup fails.
