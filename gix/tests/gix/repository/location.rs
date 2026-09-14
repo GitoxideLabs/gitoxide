@@ -97,6 +97,10 @@ fn relative_paths_retain_runtime_state_and_the_selected_index_after_changing_cwd
         "anchoring retains the reference store's sharing policy"
     );
     assert_eq!(
+        repo.objects.shared_repository_permissions, -0o640,
+        "anchoring retains the object handle's sharing policy"
+    );
+    assert_eq!(
         repo.config_snapshot().to_bstring(),
         config,
         "anchoring retains the complete configuration snapshot, including runtime edits"
