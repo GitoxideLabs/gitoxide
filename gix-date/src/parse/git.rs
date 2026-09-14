@@ -119,13 +119,17 @@ fn parse_textual_date(input: &str) -> Option<Time> {
     } else {
         (third, fourth)
     };
-    if year.len() != 4 || !year.bytes().all(|byte| byte.is_ascii_digit()) || !(1..=31).contains(&day) {
+    if !year.bytes().all(|byte| byte.is_ascii_digit()) || !(1..=31).contains(&day) {
         return None;
     }
-    let year: i16 = year.parse().ok()?;
-    if !(1970..=2099).contains(&year) {
-        return None;
-    }
+    // Unlike grouped numeric dates, match_digit() requires exactly two digits
+    // and a known day for 00..09; 10..69 never establish an absolute textual year.
+    let year = match (year.len(), year.parse::<i16>().ok()?) {
+        (4, year @ 1970..=2099) => year,
+        (2, year @ 0..=9) => year + 2000,
+        (2, year @ 70..=99) => year + 1900,
+        _ => return None,
+    };
     // Require a colon clock. Bare numbers follow different guessing rules in Git.
     let mut components = clock.split(':').map(|part| {
         (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))

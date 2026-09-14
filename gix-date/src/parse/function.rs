@@ -29,7 +29,9 @@ use gix_error::{Exn, ResultExt};
 ///
 /// Complete textual dates also accept month-first or day-first layouts, such as
 /// `February 14th, 2008 20:30:45 -0500` and `14 February 2008 20:30:45 CET`.
-/// They require a four-digit year, a colon-separated clock, and an explicit timezone.
+/// They require a year, a colon-separated clock, and an explicit timezone.
+/// Years can have four digits (`1970..=2099`), or exactly two digits: `00..=09` means
+/// `2000..=2009`, and `70..=99` means `1970..=1999`, following Git's textual-date rules.
 /// The year can precede or follow the clock. Month names accept case-insensitive prefixes
 /// of at least three letters, and an optional weekday does not have to match the date.
 /// Like Git, these forms normalize day overflow (February 31), hour 24, and second 60.

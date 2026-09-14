@@ -280,6 +280,34 @@ mod textual_dates {
     }
 
     #[test]
+    fn two_digit_years_follow_textual_date_rules() -> gix_testtools::Result {
+        for year in (0..=9).chain(70..=99) {
+            let full_year = if year < 10 { 2000 + year } else { 1900 + year };
+            let expected = gix_date::parse(&format!("{full_year}-02-14 20:30:45 -0500"), None)
+                .map_err(gix_error::Exn::into_error)?;
+            for input in [
+                format!("February 14 {year:02} 20:30:45 -0500"),
+                format!("14th February {year:02} 20:30:45 -0500"),
+                format!("Feb 14 20:30:45 {year:02} -0500"),
+            ] {
+                assert_eq!(
+                    gix_date::parse(&input, None).map_err(gix_error::Exn::into_error)?,
+                    expected,
+                    "{input}: standalone textual years use 00..09 and 70..99, not the numeric-date pivot"
+                );
+            }
+        }
+        for year in ["0", "8", "000", "008", "070", "10", "37", "38", "69"] {
+            let input = format!("February 14 {year} 20:30:45 +0000");
+            assert!(
+                gix_date::parse(&input, None).is_err(),
+                "{input}: Git's absolute parser does not infer a year from this token"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn calendar_and_clock_overflow_matches_git() -> gix_testtools::Result {
         for (input, seconds) in [
             ("Feb 29 2009 20:30:45 +0000", 1235939445),

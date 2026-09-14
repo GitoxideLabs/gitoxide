@@ -88,6 +88,14 @@ for month in January February March April May June July August September October
     done
 done
 
+# Standalone years in textual dates use match_digit(), not set_date()'s wider
+# numeric-date pivot. Exactly two digits and an already parsed day are significant.
+for year in 00 01 02 03 04 05 06 07 08 09 {70..99}; do
+    baseline "February 14 $year 20:30:45 -0500" ''
+    baseline "14th February $year 20:30:45 -0500" ''
+    baseline "Feb 14 20:30:45 $year -0500" ''
+done
+
 # GIT_RFC2822 format: like RFC2822 but with non-padded day
 baseline 'Thu, 1 Aug 2022 12:45:06 +0800' ''
 baseline 'Sat, 1 Jan 2000 00:00:00 +0000' ''
