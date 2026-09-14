@@ -858,6 +858,11 @@ selection, and submission behavior.
   and changes information. Up and Down move the selection,
   `<enter>` executes it, Escape closes the menu, and pasted text edits the query
   instead of invoking history paste behavior.
+- Query edits and menu navigation redraw the overlay from the last rendered
+  background, without repeating worktree status, diff, or changed-path rendering.
+  Background changes and terminal resizing still refresh the complete view;
+  closing or submitting the menu returns to ordinary view drawing. The same
+  behavior applies to the AutoMerge input menu.
 - A displayed prefix key followed by an ASCII space scopes the menu to that
   group: `v ` selects View, `a ` Actions, `n ` Enrich, and `? ` Information.
   With no suffix every available entry in the group matches; further text
@@ -2160,6 +2165,10 @@ views.
 - Redraw is reactive and capped at approximately 60 frames per second while
   streaming. Mouse events are drained and coalesced in bounded batches so input
   storms cannot starve the main loop.
+- An open menu retains one terminal-sized background buffer of detached display
+  cells. Full redraws replace it, resizing invalidates it, and closing the menu
+  releases it. Menu redraws still pass through the event-loop lifecycle boundary
+  and do not postpone background redraws or repository idle deadlines.
 - Main status remains readable regardless of pane focus. Errors are surfaced in
   the nearest relevant status line; diagnostics never replace user-visible
   errors.
