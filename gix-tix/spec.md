@@ -635,12 +635,15 @@ without trading responsiveness for metadata that is not visible.
   “Tree” without the `ref-` prefix refers to Git tree objects and tree diffs.
 - Entering the overview expands its completed graph with every successfully
   resolved main and linked worktree `HEAD` plus every valid symbolic
-  `refs/worktree/tix/pins/HEAD` target. This does not add those commits to the
-  history view. Special refs are excluded. First-parent paths form a
-  forest whose referenced commits, forks, roots, shallow boundaries, and raw
-  tips remain as nodes while linear runs are contracted. `Shift-T` toggles
-  tags; when hidden, tag labels and tag-only anchors are removed before this
-  projection.
+  `refs/worktree/tix/pins/HEAD` target and every remote-tracking branch tip under
+  `refs/remotes/`, including branches outside the current history. Remote tips
+  are resolved again on reference refreshes while the overview is open; stale
+  symbolic refs and non-commit targets are ignored. This does not add those
+  commits to the history view or change its hidden filters. Special refs are
+  excluded. First-parent paths form a forest whose referenced commits, forks,
+  roots, shallow boundaries, and raw tips remain as nodes while linear runs
+  are contracted. `Shift-T` toggles tags; when hidden, tag labels and tag-only
+  anchors are removed before this projection.
 - The component containing `HEAD` sorts first. Children sort by their smallest
   reference label and then object ID. Initial selection is `HEAD`, then a raw
   tip, then the first node; refresh and re-entry preserve the ref-tree cursor when
@@ -658,7 +661,7 @@ without trading responsiveness for metadata that is not visible.
   node per row. Rounded ancestry lanes precede aligned counts and labels; their
   `●` disk is the node marker, while the smaller `•` is the commit-count unit.
   Referenced or raw-tip nodes whose commits are present in history use the
-  current-history cyan; other linked-worktree nodes use dark green.
+  current-history cyan; nodes outside that history use dark green.
   Selection inverts both the node disk and its label, including synthetic nodes
   whose disk is otherwise unlabelled.
 - Rendering clips lanes and node labels to the viewport.

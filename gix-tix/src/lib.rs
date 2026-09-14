@@ -2604,7 +2604,7 @@ fn event_loop(
                 repository_is_bare,
                 revisions.clone(),
                 hidden,
-                false,
+                ref_tree.is_active(),
                 expand,
                 gix::features::threading::OwnShared::clone(&authors),
                 history_graph
@@ -5830,8 +5830,8 @@ fn start_history_refresh(
     bare: bool,
     revisions: Vec<OsString>,
     hidden_revisions: Vec<OsString>,
-    include_worktrees: bool,
-    expand: std::collections::HashSet<gix::ObjectId>,
+    include_remote_refs: bool,
+    mut expand: std::collections::HashSet<gix::ObjectId>,
     authors: SharedAuthors,
     mut graph: HistoryGraph,
     kind: RefreshKind,
@@ -5842,11 +5842,36 @@ fn start_history_refresh(
             .context("could not reopen repository for history refresh")
             .and_then(|mut repository| {
                 repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
+                if include_remote_refs {
+                    for reference in repository
+                        .references()
+                        .context("could not open references")?
+                        .remote_branches()
+                        .context("could not iterate remote-tracking references")?
+                    {
+                        let mut reference = match reference {
+                            Ok(reference) => reference,
+                            Err(err) if history::is_missing_ref(&*err) => continue,
+                            Err(err) => return Err(anyhow::anyhow!("could not read remote-tracking reference: {err}")),
+                        };
+                        let Ok(commit_id) = reference.peel_to_id() else {
+                            continue;
+                        };
+                        if commit_id
+                            .header()
+                            .context("could not inspect remote-tracking reference")?
+                            .kind()
+                            == gix::object::Kind::Commit
+                        {
+                            expand.insert(commit_id.detach());
+                        }
+                    }
+                }
                 let history = graph.refresh(
                     &repository,
                     &revisions,
                     &hidden_revisions,
-                    include_worktrees,
+                    matches!(&kind, RefreshKind::RefTree { .. }),
                     &expand,
                     &authors,
                 )?;
@@ -12284,6 +12309,126 @@ mod tests {
             OsString::from("missing"),
             "the warning identifies the invalid explicit exclusion"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ref_tree_refresh_loads_remote_branches_without_expanding_history() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let topic_commit_id = repository.rev_parse_single("topic")?.detach();
+        let blob_id = repository.write_blob(b"not a commit")?.detach();
+        repository.reference(
+            "refs/remotes/origin/non-commit",
+            blob_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test optional non-commit remote reference",
+        )?;
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        let hidden = vec![OsString::from("merged")];
+        let mut graph = HistoryGraph::default();
+        let history = graph.refresh(&repository, &[], &hidden, false, &HashSet::new(), &authors)?;
+        let expected_refs = history.refs;
+        let expected_scope: HashSet<_> = graph.edit_commit_ids().into_iter().collect();
+        let mut app = App::new(20);
+        let rows = app
+            .start_refresh(
+                history.commits,
+                &expected_refs.view_tips,
+                &expected_refs.hidden_tips,
+                false,
+            )
+            .context("initial history needs lanes")?;
+        let (rows, lanes, elapsed) = app::compute_lanes(rows);
+        app.finish_lane_computation(rows, lanes, elapsed);
+        let expected_rows: Vec<_> = app.rows.iter().map(|row| row.id).collect();
+        let mut tree = ref_tree::Tree::default();
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20))?;
+
+        for (step, (kind, include_remote_refs)) in [
+            (RefreshKind::History, false),
+            (RefreshKind::RefTree { enter: true }, true),
+            (RefreshKind::History, true),
+            (RefreshKind::History, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut commit = repository.find_commit(topic_commit_id)?.decode()?.into_owned()?;
+            commit.parents = vec![topic_commit_id].into();
+            commit.message = format!("remote commit {step}").into();
+            let remote_commit_id = repository.write_object(&commit)?.detach();
+            for name in ["refs/remotes/origin/topic", "refs/remotes/upstream/topic"] {
+                repository.reference(
+                    name,
+                    remote_commit_id,
+                    gix::refs::transaction::PreviousValue::Any,
+                    "test remote reference refresh",
+                )?;
+            }
+            let HistoryRefreshResult {
+                graph: refreshed_graph,
+                result,
+                ..
+            } = start_history_refresh(
+                repository.git_dir().to_owned(),
+                false,
+                Vec::new(),
+                hidden.clone(),
+                include_remote_refs,
+                HashSet::new(),
+                authors.clone(),
+                graph,
+                kind,
+            )
+            .recv_timeout(Duration::from_secs(5))?;
+            graph = refreshed_graph;
+            let history = result?.history;
+            assert_eq!(
+                graph.index(remote_commit_id).is_some(),
+                include_remote_refs,
+                "only ref-tree entry and active ref-tree refreshes load remote-only history"
+            );
+            assert!(graph.index(blob_id).is_none(), "non-commit remote targets are ignored");
+            assert_eq!(history.refs, expected_refs, "remote refs do not become history tips");
+            assert_eq!(
+                graph.edit_commit_ids().into_iter().collect::<HashSet<_>>(),
+                expected_scope,
+                "remote-only commits never expand the edit scope"
+            );
+            tree.rebuild(&graph, &history.refs, &history.decorations);
+            terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph)))?;
+            let screen: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect();
+            for label in ["origin/topic", "upstream/topic"] {
+                assert_eq!(
+                    screen.contains(label),
+                    include_remote_refs,
+                    "the ref-tree renders each remote label at its freshly loaded tip"
+                );
+            }
+            let rows = app
+                .start_refresh(
+                    history.commits,
+                    &history.refs.view_tips,
+                    &history.refs.hidden_tips,
+                    false,
+                )
+                .context("refreshed history needs lanes")?;
+            let (rows, lanes, elapsed) = app::compute_lanes(rows);
+            app.finish_lane_computation(rows, lanes, elapsed);
+            assert_eq!(
+                app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+                expected_rows,
+                "returning to history preserves its rows and hidden boundaries"
+            );
+        }
         Ok(())
     }
 
