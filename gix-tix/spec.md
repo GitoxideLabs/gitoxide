@@ -1528,6 +1528,16 @@ views.
   commit even when checkout returns to a descendant. The approval and review-ref
   deletion share the same atomic ref/worktree transaction; cancelling a suspended
   finish publishes neither.
+- Finishing records one undo operation, including the full transplanted history,
+  checkout attachment, review and saved-worktree refs, return pin, and patch
+  approval. Undo restores the clean review state immediately before finishing;
+  redo restores the completed state, including after restarting tix. These
+  review-ending operations remain available while another review is active and
+  after undo restores the finished review. An accepted return-checkout conflict
+  and its resolution share the same undo operation. Cancelling an unpublished
+  preview creates no entry and preserves redo. Starting or cancelling a review
+  still clears undo history; ordinary edits during active reviews remain
+  unrecorded and clear any previous finish's redo history.
 - If the recorded review return ref is missing, finishing leaves the repository
   untouched and limits navigation to visible non-review commits descended from
   the reviewed tip. The reviewed tip is selected initially when visible;

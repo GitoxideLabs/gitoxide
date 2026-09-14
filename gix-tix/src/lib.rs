@@ -159,7 +159,6 @@ struct PendingConflictResolution {
     commit: gix::ObjectId,
     head: Option<ConflictHead>,
     ref_changes: Vec<edit::undo::RefChange>,
-    record_undo: bool,
 }
 
 struct ConflictHead {
@@ -184,7 +183,7 @@ enum ExternalConflictResolution {
     Current,
     Changed,
     Advanced(gix::ObjectId),
-    Complete(gix::ObjectId, Vec<edit::undo::RefChange>, bool),
+    Complete(gix::ObjectId, Vec<edit::undo::RefChange>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1567,7 +1566,6 @@ fn event_loop(
     let mut pending_worktree_activation = None;
     let mut armed_worktree_removal = None;
     let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
-    let mut pending_conflict_clear_undo_on_accept = false;
     let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
     let mut pending_todo_rebase_plan: Option<edit::rebase::Plan> = None;
     let mut pending_todo_ref_changes = Vec::new();
@@ -3630,15 +3628,13 @@ fn event_loop(
             && pending_todo_rebase_conflict.is_none()
             && app.has_rebase_conflict()
         {
-            let recorded = pending_conflict_resolution.as_mut().and_then(|pending| {
-                pending.record_undo.then(|| {
-                    record_and_clear_pending_undo(
-                        &repository_path,
-                        repository_is_bare,
-                        "materialize time-travel conflict",
-                        &mut pending.ref_changes,
-                    )
-                })
+            let recorded = pending_conflict_resolution.as_mut().map(|pending| {
+                record_and_clear_pending_undo(
+                    &repository_path,
+                    repository_is_bare,
+                    "materialize time-travel conflict",
+                    &mut pending.ref_changes,
+                )
             });
             pending_conflict_resolution = None;
             app.clear_rebase_conflict();
@@ -3651,19 +3647,12 @@ fn event_loop(
         }
         if key_pressed && pending_rebase_conflict.is_some() {
             if action == Some(Action::OpenDiff) && app.changes_focus.is_none() {
-                let clear_undo_on_accept = std::mem::take(&mut pending_conflict_clear_undo_on_accept);
-                let record_undo = !clear_undo_on_accept;
                 let conflict = pending_rebase_conflict
                     .take()
                     .expect("a pending conflict was checked before accepting it");
                 let original = conflict.original();
                 match conflict.accept() {
                     Ok((mut notice, id, _, ref_changes)) => {
-                        if clear_undo_on_accept
-                            && let Err(err) = clear_undo_history(&repository_path, repository_is_bare)
-                        {
-                            notice = format!("{notice}; undo history: {err:#}");
-                        }
                         let head = match conflict_head(&repository_path, repository_is_bare, id) {
                             Ok(head) => Some(head),
                             Err(err) => {
@@ -3675,7 +3664,6 @@ fn event_loop(
                             commit: id,
                             head,
                             ref_changes,
-                            record_undo,
                         });
                         tracing::info!(commit_id = %original, rewritten_id = %id, "accepted suspended rebase conflict");
                         app.begin_conflict_resolution();
@@ -3713,22 +3701,19 @@ fn event_loop(
                 continue;
             }
             if action == Some(Action::Cancel) && app.changes_focus.is_none() {
-                let record_undo = !std::mem::take(&mut pending_conflict_clear_undo_on_accept);
                 let conflict = pending_rebase_conflict
                     .take()
                     .expect("a pending conflict was checked before discarding it");
                 tracing::info!(commit_id = %conflict.original(), "discarded suspended rebase conflict");
                 let mut changes = conflict.into_ref_changes();
-                let recorded = record_undo.then(|| {
-                    record_and_clear_pending_undo(
-                        &repository_path,
-                        repository_is_bare,
-                        "time travel before conflict",
-                        &mut changes,
-                    )
-                });
+                let recorded = record_and_clear_pending_undo(
+                    &repository_path,
+                    repository_is_bare,
+                    "time travel before conflict",
+                    &mut changes,
+                );
                 app.clear_rebase_conflict();
-                if let Some(Err(err)) = recorded {
+                if let Err(err) = recorded {
                     app.leave_attention(format!("cancelled conflict; undo history: {err:#}"));
                 }
                 dirty = true;
@@ -4061,19 +4046,6 @@ fn event_loop(
                     fill_repository.retained = None;
                     let repository = open_repository(&repository_path, repository_is_bare, false)
                         .context("could not open repository for undo")?;
-                    match edit::undo::review_blocks_undo(&repository) {
-                        Ok(true) => {
-                            app.dismiss_undo_position();
-                            app.leave_attention("undo and redo are unavailable during a review");
-                            continue;
-                        }
-                        Ok(false) => {}
-                        Err(err) => {
-                            app.dismiss_undo_position();
-                            app.leave_error(format!("undo: {err:#}"));
-                            continue;
-                        }
-                    }
                     let current = edit::undo::position(&repository);
                     let planned = if undoing {
                         edit::undo::plan_undo(&repository)
@@ -4311,7 +4283,6 @@ fn event_loop(
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
-                            pending_conflict_clear_undo_on_accept = false;
                             pending_rebase_conflict = Some(conflict);
                         }
                         Ok(None) => {}
@@ -4364,7 +4335,6 @@ fn event_loop(
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
-                            pending_conflict_clear_undo_on_accept = false;
                             pending_rebase_conflict = Some(conflict);
                         }
                         Ok(None) => app.leave_attention("no commit created: no input was provided"),
@@ -4503,27 +4473,22 @@ fn event_loop(
                                 app.leave_attention(message);
                             } else {
                                 let resolved_conflict = pending.is_some();
-                                let record_undo = pending.as_ref().is_none_or(|pending| pending.record_undo);
                                 let changes = pending.map_or(outcome.ref_changes, |pending| pending.ref_changes);
                                 if resolved_conflict {
                                     app.set_worktree_conflicted(false);
                                 }
-                                if record_undo {
-                                    leave_recorded_success(
-                                        &mut app,
-                                        &repository_path,
-                                        repository_is_bare,
-                                        if resolved_conflict {
-                                            "resolve rebase conflict"
-                                        } else {
-                                            verb
-                                        },
-                                        &changes,
-                                        message,
-                                    );
-                                } else {
-                                    app.leave_success(message);
-                                }
+                                leave_recorded_success(
+                                    &mut app,
+                                    &repository_path,
+                                    repository_is_bare,
+                                    if resolved_conflict {
+                                        "resolve rebase conflict"
+                                    } else {
+                                        verb
+                                    },
+                                    &changes,
+                                    message,
+                                );
                             }
                             invalidate_worktree_changes(&mut worktree_changes);
                             app.select_commit_after_refresh(new_id);
@@ -4670,7 +4635,6 @@ fn event_loop(
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
-                            pending_conflict_clear_undo_on_accept = false;
                             pending_rebase_conflict = Some(conflict);
                         }
                         Err(err) => app.leave_error(format!("delete: {err:#}")),
@@ -4961,16 +4925,18 @@ fn event_loop(
                         });
                     match result {
                         Ok(edit::review::Finish::Complete(finished)) => {
-                            let undo_cleared = clear_undo_history(&repository_path, repository_is_bare);
                             let mut message = format!("finished review as {}", finished.commit.to_hex_with_len(7));
                             if let Some(notice) = finished.outcome.notice {
                                 message = format!("{message}; {notice}");
                             }
-                            if let Err(err) = undo_cleared {
-                                message = format!("{message}; undo history: {err:#}");
-                            }
-                            app.dismiss_undo_position();
-                            app.leave_success(message);
+                            leave_recorded_success(
+                                &mut app,
+                                &repository_path,
+                                repository_is_bare,
+                                "finish review",
+                                &finished.outcome.ref_changes,
+                                message,
+                            );
                             app.select_commit_after_refresh(finished.outcome.selected.unwrap_or(finished.commit));
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
@@ -4987,7 +4953,6 @@ fn event_loop(
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
-                            pending_conflict_clear_undo_on_accept = true;
                             pending_rebase_conflict = Some(conflict);
                         }
                         Err(err) => app.leave_error(format!("finish review: {err:#}")),
@@ -5127,7 +5092,6 @@ fn event_loop(
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
                             app.select_commit(original);
-                            pending_conflict_clear_undo_on_accept = false;
                             pending_rebase_conflict = Some(conflict);
                         }
                         Err(err) => {
@@ -5357,19 +5321,16 @@ fn event_loop(
                 Effect::Quit => {
                     if let Some(conflict) = pending_rebase_conflict.take() {
                         let mut changes = conflict.into_ref_changes();
-                        if !std::mem::take(&mut pending_conflict_clear_undo_on_accept)
-                            && let Err(err) = record_and_clear_pending_undo(
-                                &repository_path,
-                                repository_is_bare,
-                                "time travel before conflict",
-                                &mut changes,
-                            )
-                        {
+                        if let Err(err) = record_and_clear_pending_undo(
+                            &repository_path,
+                            repository_is_bare,
+                            "time travel before conflict",
+                            &mut changes,
+                        ) {
                             tracing::warn!(error = %err, "could not record suspended conflict before exit");
                         }
                     }
                     if let Some(mut pending) = pending_conflict_resolution.take()
-                        && pending.record_undo
                         && let Err(err) = record_and_clear_pending_undo(
                             &repository_path,
                             repository_is_bare,
@@ -6290,7 +6251,6 @@ fn restore_merge_conflict_resolution(
             commit: commit_id,
             head: Some(conflict_head(repository_path, bare, commit_id)?),
             ref_changes: Vec::new(),
-            record_undo: true,
         }))
     })();
     match restored {
@@ -6442,11 +6402,7 @@ fn reconcile_external_conflict(
     let state = pending
         .take()
         .expect("the completed conflict state was retained while checking for another stage");
-    Ok(ExternalConflictResolution::Complete(
-        replacement,
-        state.ref_changes,
-        state.record_undo,
-    ))
+    Ok(ExternalConflictResolution::Complete(replacement, state.ref_changes))
 }
 
 fn reconcile_external_conflict_reporting(
@@ -6465,13 +6421,9 @@ fn reconcile_external_conflict_reporting(
             app.select_commit_after_refresh(replacement);
             ConflictReconcileStatus::Advanced
         }
-        Ok(ExternalConflictResolution::Complete(replacement, changes, record_undo)) => {
+        Ok(ExternalConflictResolution::Complete(replacement, changes)) => {
             let message = format!("resolved rebase conflict as {}", replacement.to_hex_with_len(7));
-            if record_undo {
-                leave_recorded_success(app, repository_path, bare, "resolve rebase conflict", &changes, message);
-            } else {
-                app.leave_success(message);
-            }
+            leave_recorded_success(app, repository_path, bare, "resolve rebase conflict", &changes, message);
             app.clear_rebase_conflict();
             app.set_worktree_conflicted(false);
             app.select_commit_after_refresh(replacement);
@@ -10427,7 +10379,6 @@ mod tests {
             commit: accepted,
             head: Some(head),
             ref_changes: Vec::new(),
-            record_undo: true,
         });
         let status = gix_testtools::git_command(fixture.path())
             .args(["commit", "--amend", "-qm", "externally resolved"])
@@ -10478,7 +10429,6 @@ mod tests {
             commit: accepted_commit_id,
             head: Some(conflict_head(fixture.path(), false, accepted_commit_id)?),
             ref_changes: Vec::new(),
-            record_undo: true,
         });
         let mut app = App::new(1);
         for (contents, message, expected) in [
@@ -10599,7 +10549,6 @@ mod tests {
             commit: accepted,
             head: Some(head),
             ref_changes: Vec::new(),
-            record_undo: true,
         });
         std::fs::write(fixture.path().join("file"), "resolved but not committed\n")?;
         let status = gix_testtools::git_command(fixture.path())

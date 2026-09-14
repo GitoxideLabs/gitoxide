@@ -798,6 +798,178 @@ mod tests {
         Ok(())
     }
 
+    fn state_without_undo(path: &Path) -> gix_testtools::Result<gix_testtools::repository::State> {
+        let mut state = gix_testtools::repository::snapshot(path)?;
+        state
+            .references
+            .retain(|reference| !super::super::undo::is_queue_ref(reference.name.as_bstr()));
+        // Undo intentionally retains otherwise unreachable objects. HEAD and ref IDs
+        // still identify the exact commit contents and topology being restored.
+        state.commits.clear();
+        Ok(state)
+    }
+
+    #[test]
+    fn finishing_can_be_undone_and_redone_across_active_reviews_and_reopens() -> gix_testtools::Result {
+        use super::super::undo;
+
+        for (attached_return, another_review) in [(true, false), (false, false), (true, true), (false, true)] {
+            let (fixture, started, _) = review_with_prefix(2)?;
+            let repo = crate::test_repository::open(fixture.path())?;
+            let return_commit_id = repo.find_reference("refs/heads/main")?.id().detach();
+            let tip_commit_id = repo.rev_parse_single("refs/patches/middle")?.detach();
+            let stash_ref = stash_reference(started.reference.as_bstr())?;
+            repo.reference(
+                stash_ref,
+                tip_commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "saved review state",
+            )?;
+            if another_review {
+                let base_commit_id = repo
+                    .find_commit(tip_commit_id)?
+                    .parent_ids()
+                    .next()
+                    .context("the tip has a base")?
+                    .detach();
+                repo.reference(
+                    "refs/worktree/tix/review/2",
+                    base_commit_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "another active review",
+                )?;
+            }
+            if !attached_return {
+                let return_ref = return_to(&repo.find_commit(started.commit)?.decode()?.into_owned()?)?
+                    .context("the review has a return pin")?;
+                run(
+                    fixture.path(),
+                    &[
+                        "update-ref",
+                        "--no-deref",
+                        return_ref.as_bstr().to_str()?,
+                        &return_commit_id.to_string(),
+                    ],
+                )?;
+            }
+            let before = state_without_undo(fixture.path())?;
+            let graph = super::super::loaded_graph(&repo)?;
+            let Finish::Complete(finished) = finish(repo, &graph, started.commit, None)? else {
+                panic!("the review finishes without conflicts")
+            };
+            let repo = crate::test_repository::open(fixture.path())?;
+            undo::record(&repo, "finish review", &finished.outcome.ref_changes)?
+                .context("completion creates an undo entry even with another active review")?;
+            let after = state_without_undo(fixture.path())?;
+            assert_eq!(
+                repo.head()?.referent_name().is_some(),
+                attached_return,
+                "completion restores the recorded attachment"
+            );
+            assert_eq!(
+                (undo::position(&repo)?.undo, undo::position(&repo)?.redo),
+                (1, 0),
+                "completion is presented as one undoable operation"
+            );
+            drop(repo);
+
+            let repo = crate::test_repository::open(fixture.path())?;
+            undo::plan_undo(&repo)?
+                .context("the persisted finish can be undone")?
+                .apply(&repo)?;
+            assert_eq!(
+                state_without_undo(fixture.path())?,
+                before,
+                "undo restores commits, resources, approval, attachment, index, and worktree"
+            );
+            assert_eq!(
+                (undo::position(&repo)?.undo, undo::position(&repo)?.redo),
+                (0, 1),
+                "the restored review still presents its finish for redo"
+            );
+            assert!(
+                undo::record(&repo, "cancel unpublished preview", &[])?.is_none(),
+                "an unpublished operation creates no undo entry"
+            );
+            drop(repo);
+
+            let repo = crate::test_repository::open(fixture.path())?;
+            undo::plan_redo(&repo)?
+                .context("the restored active review can redo its completion after reopening")?
+                .apply(&repo)?;
+            assert_eq!(
+                state_without_undo(fixture.path())?,
+                after,
+                "redo restores the exact completed state"
+            );
+            assert_eq!(
+                (undo::position(&repo)?.undo, undo::position(&repo)?.redo),
+                (1, 0),
+                "redo returns to the single completed operation"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn editing_an_undone_review_discards_redo_and_finishing_can_be_retried() -> gix_testtools::Result {
+        use super::super::{head, undo};
+
+        let (fixture, started, _) = review_with_prefix(1)?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let Finish::Complete(finished) = finish(repo, &graph, started.commit, None)? else {
+            panic!("the review finishes without conflicts")
+        };
+        let repo = crate::test_repository::open(fixture.path())?;
+        undo::record(&repo, "finish review", &finished.outcome.ref_changes)?;
+        undo::plan_undo(&repo)?
+            .context("completion is undoable")?
+            .apply(&repo)?;
+
+        std::fs::write(fixture.path().join("review-fix"), "revised review fix\n")?;
+        run(fixture.path(), &["add", "review-fix"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let amended = head::amend_index_reporting(repo, &graph)?.context("the reviewed correction is amended")?;
+        let review_commit_id = amended.selected.context("amending selects the revised review")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        assert!(
+            undo::record(&repo, "amend", &amended.ref_changes)?.is_none(),
+            "edits within active reviews remain unrecorded"
+        );
+        assert!(
+            undo::plan_redo(&repo)?.is_none(),
+            "an edit invalidates the previous completion's redo"
+        );
+        assert!(
+            repo.try_find_reference(undo::TIP_REF)?.is_none(),
+            "the stale queue is discarded"
+        );
+
+        let before = state_without_undo(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let Finish::Complete(finished) = finish(repo, &graph, review_commit_id, None)? else {
+            panic!("the revised review finishes without conflicts")
+        };
+        let repo = crate::test_repository::open(fixture.path())?;
+        undo::record(&repo, "finish review", &finished.outcome.ref_changes)?
+            .context("retrying creates a new undo entry")?;
+        assert_eq!(
+            (undo::position(&repo)?.undo, undo::position(&repo)?.redo),
+            (1, 0),
+            "retrying starts a new completion history"
+        );
+        undo::plan_undo(&repo)?
+            .context("the retried completion is undoable")?
+            .apply(&repo)?;
+        assert_eq!(
+            state_without_undo(fixture.path())?,
+            before,
+            "undo restores the revised review rather than its discarded version"
+        );
+        Ok(())
+    }
+
     #[test]
     fn starts_review_with_base_index_and_tip_worktree() -> gix_testtools::Result {
         let fixture = gix_testtools::tempfile::tempdir()?;
@@ -1211,6 +1383,8 @@ mod tests {
 
     #[test]
     fn finish_approval_is_atomic_when_the_return_checkout_conflicts() -> gix_testtools::Result {
+        use super::super::{head, undo};
+
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
         let tip = repo.rev_parse_single("HEAD~1")?.detach();
@@ -1233,6 +1407,7 @@ mod tests {
         )?;
         let graph = super::super::loaded_graph(&repo)?;
         let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let before_undo = state_without_undo(fixture.path())?;
         let Finish::Conflict(conflict) = finish(repo, &graph, started.commit, None)? else {
             panic!("the return checkout conflicts with the reviewed change")
         };
@@ -1272,6 +1447,36 @@ mod tests {
         assert!(
             repo.try_find_reference(started.reference.as_ref())?.is_none(),
             "the review resource is consumed"
+        );
+        std::fs::write(fixture.path().join("file"), "resolved return checkout\n")?;
+        run(fixture.path(), &["add", "file"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let resolved = head::amend_index_reporting(repo, &graph)?.context("the conflicting return is resolved")?;
+        let mut changes = outcome.ref_changes;
+        changes.extend(resolved.ref_changes);
+        let repo = crate::test_repository::open(fixture.path())?;
+        undo::record(&repo, "resolve review return conflict", &changes)?.context("the resolved finish is undoable")?;
+        assert_eq!(
+            undo::position(&repo)?.undo,
+            1,
+            "accepting and resolving a review finish share one undo step"
+        );
+        let after = state_without_undo(fixture.path())?;
+        undo::plan_undo(&repo)?
+            .context("the complete finish is undoable")?
+            .apply(&repo)?;
+        assert_eq!(
+            state_without_undo(fixture.path())?,
+            before_undo,
+            "undo restores the pre-finish review, including its approval state"
+        );
+        undo::plan_redo(&repo)?
+            .context("the resolved finish can be redone from the restored review")?
+            .apply(&repo)?;
+        assert_eq!(
+            state_without_undo(fixture.path())?,
+            after,
+            "redo restores the resolved checkout and approval"
         );
         Ok(())
     }

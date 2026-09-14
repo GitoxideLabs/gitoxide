@@ -155,7 +155,7 @@ pub(crate) fn is_queue_commit(repo: &gix::Repository, needle: ObjectId) -> Resul
     }
 }
 
-pub(crate) fn review_blocks_undo(repo: &gix::Repository) -> Result<bool> {
+fn has_active_review(repo: &gix::Repository) -> Result<bool> {
     let references = repo.references().context("could not open review references")?;
     for reference in references
         .prefixed(crate::history::REVIEW_PREFIX.as_bstr())
@@ -171,6 +171,16 @@ pub(crate) fn review_blocks_undo(repo: &gix::Repository) -> Result<bool> {
         }
     }
     Ok(false)
+}
+
+fn ends_review(changes: &[RefChange]) -> bool {
+    // Completion starts from a clean checkout and records the review resource's
+    // deletion with all checkout changes. That boundary is reversible on either side.
+    changes.iter().any(|change| {
+        crate::history::review_number(change.name.as_bstr()).is_some()
+            && change.before != State::Missing
+            && change.after == State::Missing
+    })
 }
 
 pub(crate) fn clear(repo: &gix::Repository) -> Result<()> {
@@ -245,12 +255,12 @@ pub(crate) fn changes_from_edits(edits: impl IntoIterator<Item = RefEdit>) -> Re
 /// Returns `None` when all supplied changes cancel each other out.
 pub(crate) fn record(repo: &gix::Repository, title: &str, changes: &[RefChange]) -> Result<Option<ObjectId>> {
     validate_title(title)?;
-    if review_blocks_undo(repo)? {
-        clear(repo)?;
-        return Ok(None);
-    }
     let changes = normalize_changes(changes.iter().cloned())?;
     if changes.is_empty() {
+        return Ok(None);
+    }
+    if !ends_review(&changes) && has_active_review(repo)? {
+        clear(repo)?;
         return Ok(None);
     }
 
@@ -276,21 +286,31 @@ pub(crate) fn record(repo: &gix::Repository, title: &str, changes: &[RefChange])
 }
 
 pub(crate) fn position(repo: &gix::Repository) -> Result<Position> {
-    if review_blocks_undo(repo)? {
+    let Some(queue) = load(repo)? else {
+        return Ok(empty_position());
+    };
+    let adjacent = [
+        queue
+            .cursor_index
+            .checked_sub(1)
+            .and_then(|index| queue.entries.get(index)),
+        queue.entries.get(queue.cursor_index),
+    ];
+    if !adjacent.into_iter().flatten().any(|entry| ends_review(&entry.changes)) && has_active_review(repo)? {
         return Ok(empty_position());
     }
-    Ok(load(repo)?.map_or_else(empty_position, |queue| queue.position(queue.cursor_index)))
+    Ok(queue.position(queue.cursor_index))
 }
 
 pub(crate) fn plan_undo(repo: &gix::Repository) -> Result<Option<Plan>> {
-    if review_blocks_undo(repo)? {
-        return Ok(None);
-    }
     let Some(queue) = load(repo)? else { return Ok(None) };
     if queue.cursor_index == 0 {
         return Ok(None);
     }
     let entry = &queue.entries[queue.cursor_index - 1];
+    if !ends_review(&entry.changes) && has_active_review(repo)? {
+        return Ok(None);
+    }
     let changes: Vec<_> = entry.changes.iter().map(RefChange::reversed).collect();
     let cursor = if queue.cursor_index == 1 {
         queue.sentinel
@@ -307,13 +327,13 @@ pub(crate) fn plan_undo(repo: &gix::Repository) -> Result<Option<Plan>> {
 }
 
 pub(crate) fn plan_redo(repo: &gix::Repository) -> Result<Option<Plan>> {
-    if review_blocks_undo(repo)? {
-        return Ok(None);
-    }
     let Some(queue) = load(repo)? else { return Ok(None) };
     let Some(entry) = queue.entries.get(queue.cursor_index) else {
         return Ok(None);
     };
+    if !ends_review(&entry.changes) && has_active_review(repo)? {
+        return Ok(None);
+    }
     Ok(Some(make_plan(
         &queue,
         entry.title.clone(),
@@ -1111,7 +1131,7 @@ mod tests {
         let review = name("refs/worktree/tix/review/1")?;
         set(&repo, review, State::Missing, State::Object(head))?;
         assert!(
-            review_blocks_undo(&repo)?,
+            has_active_review(&repo)?,
             "a valid review reference blocks the ref-only queue"
         );
         assert!(
