@@ -1,7 +1,7 @@
 use crate::Result;
 use gix_error::{ErrorExt, ResultExt};
 use gix_ref::{
-    Category, FullName,
+    Category, FullName, Target,
     transaction::{PreviousValue, RefEdit},
 };
 
@@ -80,9 +80,31 @@ impl crate::Repository {
     /// reflogs are absent. Its `deleted` field contains the branches actually deleted, just as in the success case.
     /// The remaining error chain identifies the failed cleanup phase.
     pub fn delete_local_branches(&mut self, names: impl IntoIterator<Item = FullName>) -> Result<Vec<FullName>> {
-        let mut names: Vec<_> = names.into_iter().collect();
-        names.sort();
-        names.dedup();
+        self.delete_local_branches_inner(names.into_iter().map(|name| (name, PreviousValue::Any)).collect())
+    }
+
+    /// Delete local branches only if they still have the observed `target`, and remove their local configuration.
+    ///
+    /// This performs the same reference and configuration cleanup as
+    /// [`Repository::delete_local_branches()`][crate::Repository::delete_local_branches()],
+    /// but protects a branch which was moved or replaced after the caller inspected it.
+    pub fn delete_local_branches_if_unchanged(
+        &mut self,
+        branches: impl IntoIterator<Item = (FullName, Target)>,
+    ) -> Result<()> {
+        self.delete_local_branches_inner(
+            branches
+                .into_iter()
+                .map(|(name, target)| (name, PreviousValue::MustExistAndMatch(target)))
+                .collect(),
+        )
+        .map(|_| ())
+    }
+
+    fn delete_local_branches_inner(&mut self, mut branches: Vec<(FullName, PreviousValue)>) -> Result<Vec<FullName>> {
+        branches.sort_by(|a, b| a.0.cmp(&b.0));
+        branches.dedup_by(|a, b| a.0 == b.0);
+        let names = branches.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
         if names.is_empty() {
             return Ok(names);
         }
@@ -105,9 +127,9 @@ impl crate::Repository {
             }
         }
 
-        let edits: Vec<_> = names
-            .iter()
-            .map(|name| RefEdit::delete(name.clone(), PreviousValue::Any))
+        let edits: Vec<_> = branches
+            .into_iter()
+            .map(|(name, expected)| RefEdit::delete(name, expected))
             .collect();
 
         let config_path = self.common_dir().join("config");

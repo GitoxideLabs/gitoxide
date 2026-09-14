@@ -12,6 +12,9 @@ pub use gix_worktree_stream as stream;
 /// Add linked worktrees.
 #[cfg(feature = "worktree-mutation")]
 pub mod add;
+/// Remove linked worktrees.
+#[cfg(feature = "worktree-mutation")]
+pub mod remove;
 
 use crate::{
     Repository,
