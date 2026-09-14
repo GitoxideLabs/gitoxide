@@ -136,7 +136,7 @@ impl FileTransaction {
 pub(crate) fn shared_repository_permissions(
     config: &gix_config::File,
     filter: fn(&gix_config::file::Metadata) -> bool,
-) -> Result<i32, Error> {
+) -> Result<i32, crate::config::key::GenericErrorWithValue> {
     let value = config.sections_by_name_and_filter("core", filter).and_then(|sections| {
         sections
             .filter(|section| section.header().subsection_name().is_none())
@@ -144,9 +144,7 @@ pub(crate) fn shared_repository_permissions(
             .last()
     });
     let Some(value) = value else { return Ok(0) };
-    crate::config::tree::Core::SHARED_REPOSITORY
-        .try_into_shared_repository(value)
-        .map_err(Into::into)
+    crate::config::tree::Core::SHARED_REPOSITORY.try_into_shared_repository(value)
 }
 
 impl Deref for FileTransaction {

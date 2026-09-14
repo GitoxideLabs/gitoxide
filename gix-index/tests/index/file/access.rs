@@ -11,7 +11,7 @@ mod set_path {
         assert!(!new_index_path.is_file());
         assert_eq!(file.path(), new_index_path);
 
-        file.write(Default::default())?;
+        file.write(Default::default(), 0)?;
         assert_eq!(file.path(), new_index_path);
         assert!(new_index_path.is_file());
 

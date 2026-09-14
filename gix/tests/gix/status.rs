@@ -24,6 +24,37 @@ mod into_iter {
     use crate::status::{repo, submodule_repo};
 
     #[test]
+    #[cfg(unix)]
+    fn writing_stat_updates_honors_shared_repository_permissions() -> crate::Result {
+        use std::{fs, os::unix::fs::PermissionsExt};
+
+        let (mut repo, _fixture) = crate::basic_rw_repo()?;
+        gix_testtools::git(
+            repo.workdir().expect("source checkout"),
+            "config core.sharedRepository 0640",
+        )?;
+        repo.reload()?;
+        let mut index = repo.open_index()?;
+        index.entries_mut()[0].stat = Default::default();
+        index.write(Default::default(), -0o640)?;
+        let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
+        for item in status.by_ref() {
+            item?;
+        }
+        status
+            .into_outcome()
+            .expect("status iteration is complete")
+            .write_changes()
+            .expect("the stale stat data needs to be refreshed")?;
+        assert_eq!(
+            fs::metadata(repo.index_path())?.permissions().mode() & 0o777,
+            0o640,
+            "refreshing index stat data retains the repository sharing policy"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn item_size() {
         let actual = std::mem::size_of::<Item>();
         let sha1 = 280;

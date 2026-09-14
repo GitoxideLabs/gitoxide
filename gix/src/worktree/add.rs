@@ -97,6 +97,13 @@ impl crate::Repository {
     /// `core.worktree` and a true `core.bare` setting.
     /// The new `HEAD` reflog records its initial commit when `core.logAllRefUpdates` permits it.
     ///
+    /// `core.sharedRepository` applies to repository metadata, including `HEAD`, its reflog, and the index.
+    /// Like Git when preparing `<destination>/.git`, this also applies shared permissions to newly created
+    /// destination and parent directories, as well as the common `worktrees` directory. Existing directories
+    /// retain their permissions. The private Git directory and checked-out files and subdirectories use normal
+    /// filesystem permissions, including the umask. As a deviation from Git, the linking files `.git`, `gitdir`,
+    /// `commondir`, and `locked` also receive shared permissions.
+    ///
     /// `worktree.useRelativePaths` selects relative links instead of the default absolute links. When enabled,
     /// the shared config is upgraded to repository format version 1 with `extensions.relativeWorktrees=true`.
     /// This compatibility marker remains set even if checkout fails, and requires Git 2.48 or newer.
@@ -161,7 +168,10 @@ impl crate::Repository {
         let prepared = gix_worktree::add::prepare(
             self.common_dir(),
             destination,
-            gix_worktree::add::Options { relative_paths },
+            gix_worktree::add::Options {
+                relative_paths,
+                shared_repository_permissions: self.config.shared_repository_permissions,
+            },
         )
         .map_err(Error::Prepare)?;
         let canonical_destination = std::fs::canonicalize(prepared.work_dir()).map_err(Error::Prepare)?;
@@ -243,6 +253,7 @@ impl crate::Repository {
             copy_worktree_config(
                 &self.git_dir().join("config.worktree"),
                 &prepared.git_dir().join("config.worktree"),
+                self.config.shared_repository_permissions,
             )?;
         }
 
@@ -255,6 +266,11 @@ impl crate::Repository {
             .map_err(Error::OpenWorktreeRepo)?
             .to_thread_local();
         repo.clear_namespace();
+        gix_fs::set_shared_repository_permissions(
+            &repo.git_dir().join("HEAD"),
+            repo.config.shared_repository_permissions,
+        )
+        .map_err(Error::WriteHead)?;
         // Like clone, initialize a symbolic HEAD's log without dereferencing or updating its branch.
         repo.edit_reference(RefEdit::update_with_log(
             "HEAD".try_into().expect("valid reference name"),
@@ -289,13 +305,13 @@ impl crate::Repository {
         if should_interrupt.load(Ordering::Relaxed) {
             return Err(Error::Interrupted);
         }
-        index.write(Default::default())?;
+        index.write(Default::default(), repo.config.shared_repository_permissions)?;
         prepared.persist().map_err(Error::Persist)?;
         Ok((repo, outcome))
     }
 }
 
-fn copy_worktree_config(source: &Path, destination: &Path) -> Result<(), Error> {
+fn copy_worktree_config(source: &Path, destination: &Path, shared_repository_permissions: i32) -> Result<(), Error> {
     let mut config = match gix_config::File::from_path_no_includes(source.to_owned(), gix_config::Source::Worktree) {
         Ok(config) => config,
         Err(gix_config::file::init::from_paths::Error::Io { source, .. })
@@ -315,5 +331,7 @@ fn copy_worktree_config(source: &Path, destination: &Path) -> Result<(), Error> 
     }
     config
         .write_to(&mut std::fs::File::create(destination).map_err(Error::WriteWorktreeConfig)?)
+        .map_err(Error::WriteWorktreeConfig)?;
+    gix_fs::set_shared_repository_permissions(destination, shared_repository_permissions)
         .map_err(Error::WriteWorktreeConfig)
 }

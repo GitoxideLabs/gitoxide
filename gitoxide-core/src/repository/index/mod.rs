@@ -28,7 +28,7 @@ pub fn from_tree(
                 );
             }
             index.set_path(index_path);
-            index.write(options)?;
+            index.write(options, repo.refs.shared_repository_permissions)?;
         }
         None => {
             let mut out = Vec::with_capacity(512 * 1024);
@@ -79,7 +79,7 @@ pub fn from_list(
                 );
             }
             let mut index = gix::index::File::from_state(index, index_path);
-            index.write(options)?;
+            index.write(options, 0)?;
         }
         None => {
             let index = gix::index::File::from_state(index, std::path::PathBuf::new());
