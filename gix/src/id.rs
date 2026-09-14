@@ -9,10 +9,6 @@ use crate::{Error, Id, Object, Result};
 /// An [object id][ObjectId] infused with a [`Repository`][crate::Repository].
 impl<'repo> Id<'repo> {
     /// Find the [`Object`] associated with this object id, and consider it an error if it doesn't exist.
-    ///
-    /// # Note
-    ///
-    /// There can only be one `ObjectRef` per `Easy`. To increase that limit, clone the `Easy`.
     pub fn object(&self) -> Result<Object<'repo>> {
         self.repo.find_object(self.inner)
     }
@@ -25,10 +21,6 @@ impl<'repo> Id<'repo> {
     }
 
     /// Try to find the [`Object`] associated with this object id, and return `None` if it's not available locally.
-    ///
-    /// # Note
-    ///
-    /// There can only be one `ObjectRef` per `Easy`. To increase that limit, clone the `Easy`.
     pub fn try_object(&self) -> Result<Option<Object<'repo>>> {
         self.repo.try_find_object(self.inner)
     }

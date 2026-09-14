@@ -63,8 +63,9 @@ impl crate::Repository {
     /// Delete all local branches in `names` and remove their `branch.<name>` sections from the local configuration.
     ///
     /// All names must be local branch references such as `refs/heads/topic`. The operation fails before making changes if
-    /// any name belongs to another reference category or is checked out in any worktree. Missing branches are accepted so any
-    /// associated local configuration is still removed. **It deliberately performs no merged-state check**.
+    /// any name belongs to another reference category or is checked out or reserved by bisect or rebase in any worktree.
+    /// Missing branches are accepted so any associated local configuration is still removed.
+    /// **It deliberately performs no merged-state check**.
     ///
     /// A checked-out branch rejection contains [`delete::CheckedOutError`] in its error chain, identifying the branch and
     /// the worktree directories that prevented deletion.

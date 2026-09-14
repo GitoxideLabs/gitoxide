@@ -112,7 +112,7 @@ impl Drop for PreparedWorktree {
 /// before creating the administrative files. The private Git directory is named after the sanitized destination
 /// basename, with a numeric suffix added when needed.
 ///
-/// Paths in the returned [`Prepared`] are absolute regardless of the link format selected by `options`.
+/// Paths in the returned [`PreparedWorktree`] are absolute regardless of the link format selected by `options`.
 pub fn prepare(
     common_dir: impl AsRef<Path>,
     destination_dir: impl AsRef<Path>,

@@ -7,6 +7,7 @@ use crate::{
         cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
         tree::{Core, Extensions, gitoxide},
     },
+    repository::FormatVersion,
 };
 use gix_error::{ErrorExt, ResultExt};
 
@@ -45,24 +46,27 @@ impl StageOne {
 
         let is_bare = util::config_bool_opt(&config, &Core::BARE, "core.bare", lenient)?;
         let repo_format_version = Core::REPOSITORY_FORMAT_VERSION
-            .try_into_usize(config.integer("core.repositoryFormatVersion"))?
+            .try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION))?
             .unwrap_or_default();
         let object_hash = match (repo_format_version, config.string(Extensions::OBJECT_FORMAT)) {
             // objectFormat is a repository format version 1 extension.
-            (1, Some(format)) => Extensions::OBJECT_FORMAT.try_into_object_format(format)?,
-            (0, Some(_)) => {
+            (FormatVersion::V1, Some(format)) => Extensions::OBJECT_FORMAT.try_into_object_format(format)?,
+            (FormatVersion::V0, Some(_)) => {
                 return Err(Error::from_error(gix_error::validation(
                     "extensions.objectFormat is a v1-only extension, but the repository format version is 0; set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build)",
                 )));
             }
-            (0 | 1, None) => legacy_object_hash()?,
-            (version, _) => {
-                return Err(Error::from_error(gix_error::validation(format!(
-                    "Unsupported repository format version {version}; only versions 0 and 1 are supported"
-                ))));
-            }
+            (FormatVersion::V0 | FormatVersion::V1, None) => legacy_object_hash()?,
         };
 
+        // Relative links are resolved by discovery regardless of this compatibility marker.
+        let relative_worktrees =
+            Extensions::RELATIVE_WORKTREES.enrich_error(config.boolean(Extensions::RELATIVE_WORKTREES))?;
+        if repo_format_version == FormatVersion::V0 && relative_worktrees.is_some() {
+            return Err(Error::from_error(gix_error::validation(
+                "extensions.relativeWorktrees requires core.repositoryFormatVersion=1",
+            )));
+        }
         let extension_worktree = util::config_bool(
             &config,
             &Extensions::WORKTREE_CONFIG,

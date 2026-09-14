@@ -299,8 +299,9 @@ fn semantic_validation_happens_on_reload() -> Result {
     assert!(err.is_validation(), "reload reports the semantic error: {err:?}");
     insta::assert_debug_snapshot!(err.probable_cause(), "semantic validation happens on reload", @r#"
     Message {
-        message: "Unsupported repository format version 2; only versions 0 and 1 are supported",
+        message: "Unsupported repository format version; only versions 0 and 1 are supported",
         class: Validation,
+        values: {"input": I64(2), "key": String("core.repositoryFormatVersion")},
     }
     "#);
     assert_eq!(

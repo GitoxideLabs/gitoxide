@@ -65,8 +65,11 @@ impl Core {
     /// The `core.protectNTFS` key.
     pub const PROTECT_NTFS: keys::Boolean = keys::Boolean::new_boolean("protectNTFS", &config::Tree::CORE);
     /// The `core.repositoryFormatVersion` key.
-    pub const REPOSITORY_FORMAT_VERSION: keys::UnsignedInteger =
-        keys::UnsignedInteger::new_unsigned_integer("repositoryFormatVersion", &config::Tree::CORE);
+    pub const REPOSITORY_FORMAT_VERSION: RepositoryFormatVersion = RepositoryFormatVersion::new_with_validate(
+        "repositoryFormatVersion",
+        &config::Tree::CORE,
+        validate::RepositoryFormatVersion,
+    );
     /// The `core.sharedRepository` key.
     pub const SHARED_REPOSITORY: SharedRepository =
         SharedRepository::new_with_validate("sharedRepository", &config::Tree::CORE, validate::SharedRepository);
@@ -179,6 +182,9 @@ pub type LogAllRefUpdates = keys::Any<validate::LogAllRefUpdates>;
 
 /// The `core.disambiguate` key.
 pub type Disambiguate = keys::Any<validate::Disambiguate>;
+
+/// The `core.repositoryFormatVersion` key.
+pub type RepositoryFormatVersion = keys::Any<validate::RepositoryFormatVersion>;
 
 /// The `core.sharedRepository` key.
 pub type SharedRepository = keys::Any<validate::SharedRepository>;
@@ -318,6 +324,39 @@ mod filter {
 }
 #[cfg(feature = "attributes")]
 pub use filter::*;
+
+mod repository_format_version {
+    use gix_error::ResultExt;
+
+    use crate::{
+        Error, ExnMessageResult, Result, config, config::tree::core::RepositoryFormatVersion, repository::FormatVersion,
+    };
+
+    impl RepositoryFormatVersion {
+        /// Convert an integer into a supported repository format version, preserving an absent value as `None`.
+        ///
+        /// Only versions `0` and `1` are supported. If absent, callers can use [`FormatVersion::default()`].
+        pub fn try_into_repository_format_version(
+            &'static self,
+            value: ExnMessageResult<Option<i64>>,
+        ) -> Result<Option<FormatVersion>> {
+            let Some(value) = value.or_raise(|| config::key::error(self, "Invalid repository format version"))? else {
+                return Ok(None);
+            };
+            Ok(Some(match value {
+                0 => FormatVersion::V0,
+                1 => FormatVersion::V1,
+                _ => {
+                    return Err(Error::from_error(config::key::error_with_value(
+                        self,
+                        "Unsupported repository format version; only versions 0 and 1 are supported",
+                        value,
+                    )));
+                }
+            }))
+        }
+    }
+}
 
 mod shared_repository {
     use gix_error::ResultExt;
@@ -497,7 +536,28 @@ mod abbrev {
 
 mod validate {
     use crate::{ExnResult, bstr::BStr, config::tree::keys};
-    use gix_error::ResultExt;
+    use gix_error::{ErrorExt, ResultExt};
+
+    #[derive(Clone, Copy)]
+    pub struct RepositoryFormatVersion;
+    impl keys::Validate for RepositoryFormatVersion {
+        fn validate(&self, value: &BStr) -> ExnResult {
+            super::Core::REPOSITORY_FORMAT_VERSION
+                .try_into_repository_format_version(
+                    gix_config::Integer::try_from(value)
+                        .and_then(|int| {
+                            int.to_decimal().ok_or_else(|| {
+                                gix_error::validation("integer for repository format version out of range")
+                                    .with("input", value)
+                                    .raise()
+                            })
+                        })
+                        .map(Some),
+                )
+                .or_erased()?;
+            Ok(())
+        }
+    }
 
     #[derive(Clone, Copy)]
     pub struct Disambiguate;
