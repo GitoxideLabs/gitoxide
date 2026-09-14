@@ -9,17 +9,13 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Option<ExnMessageResult<Zoned>>
         return Some(result);
     }
 
-    // Then try numeric relative dates
-    Some(subtract_pairs(now, &parse_ago(input)?))
+    Some(apply_operations(now, &parse_operations(input)?))
 }
 
-/// Parse named relative dates like "now", "today", "yesterday".
+/// Fast path for named relative dates that only subtract a fixed duration.
 fn parse_named(input: &str, now: Option<&Zoned>) -> Option<ExnMessageResult<Zoned>> {
     let input = input.trim();
     let duration = if input.eq_ignore_ascii_case("now") {
-        SignedDuration::ZERO
-    } else if input.eq_ignore_ascii_case("today") {
-        // "today" is treated the same as "now" (current time) for simplicity
         SignedDuration::ZERO
     } else if input.eq_ignore_ascii_case("yesterday") {
         SignedDuration::from_hours(24)
@@ -30,42 +26,99 @@ fn parse_named(input: &str, now: Option<&Zoned>) -> Option<ExnMessageResult<Zone
     Some(subtract_duration(now, duration))
 }
 
-/// Parse Git-style relative count-unit pairs, in input order.
-///
-/// Returns `None` if no pair is recognized.
-fn parse_ago(input: &str) -> Option<Vec<Pair<'_>>> {
-    let mut words = input
-        .as_bytes()
-        .chunk_by(|a, b| a.is_ascii_digit() == b.is_ascii_digit() && a.is_ascii_alphabetic() == b.is_ascii_alphabetic())
-        .filter(|word| word[0].is_ascii_alphanumeric())
-        .map(|word| std::str::from_utf8(word).expect("each retained chunk contains only ASCII letters or digits"))
-        .peekable();
-
-    // Git applies a unit the moment it sees one and keeps going, so `2 days 3 hours ago` is both
-    // of them. Stopping after the first pair would turn that into a plausible-looking two days.
-    let mut pairs = Vec::new();
-    let mut ago = false;
-    while let Some(word) = words.peek() {
-        if word.eq_ignore_ascii_case("ago") {
-            ago = true;
-            words.next();
-            continue;
-        }
-        let Some(units) = count(word) else {
-            words.next();
-            continue;
+/// Keep clock punctuation while separating counts from words, including adjacent pairs.
+fn tokens(mut input: &str) -> impl Iterator<Item = &str> + Clone {
+    std::iter::from_fn(move || {
+        let start = input.as_bytes().iter().position(u8::is_ascii_alphanumeric)?;
+        input = &input[start..];
+        let bytes = input.as_bytes();
+        let mut end = if bytes[0].is_ascii_digit() {
+            bytes.iter().take_while(|byte| byte.is_ascii_digit()).count()
+        } else {
+            bytes.iter().take_while(|byte| byte.is_ascii_alphabetic()).count()
         };
-        words.next();
-        let Some(period) = words.next() else { break };
-        pairs.push((period, units));
+        if bytes[0].is_ascii_digit() {
+            let digits_end = end;
+            for _ in 0..2 {
+                if bytes.get(end) != Some(&b':') || !bytes.get(end + 1).is_some_and(u8::is_ascii_digit) {
+                    break;
+                }
+                end += 1;
+                end += bytes[end..].iter().take_while(|byte| byte.is_ascii_digit()).count();
+            }
+            if end > digits_end && bytes.get(end) == Some(&b'.') && bytes.get(end + 1).is_some_and(u8::is_ascii_digit) {
+                end += 1;
+                end += bytes[end..].iter().take_while(|byte| byte.is_ascii_digit()).count();
+            }
+        }
+        // Both boundaries are next to ASCII characters, even when separators are non-ASCII.
+        let (token, rest) = input.split_at(end);
+        input = rest;
+        Some(token)
+    })
+}
+
+/// Parse relative units and clock adjustments in input order.
+fn parse_operations(input: &str) -> Option<Vec<Operation<'_>>> {
+    let mut words = tokens(input);
+    let ago = words.clone().any(|word| word.eq_ignore_ascii_case("ago"));
+    let mut operations = Vec::new();
+    let mut date_known = false;
+    while let Some(mut word) = words.next() {
+        if word.contains(':') {
+            let (clock, suffix) = word
+                .split_once('.')
+                .map_or((word, None), |(clock, suffix)| (clock, Some(suffix)));
+            operations.push(Operation::Time(Clock::parse(clock)?));
+            // Git discards fractional seconds only once all calendar fields are known.
+            // Otherwise the dot separates a new count, as in `12:34:56.3.days.ago`.
+            let Some(suffix) = suffix.filter(|_| !date_known) else {
+                continue;
+            };
+            word = suffix;
+        }
+        let operation = if word.eq_ignore_ascii_case("noon") {
+            Operation::NamedTime(12)
+        } else if word.eq_ignore_ascii_case("midnight") {
+            Operation::NamedTime(0)
+        } else if word.eq_ignore_ascii_case("tea") {
+            Operation::NamedTime(17)
+        } else if word.eq_ignore_ascii_case("yesterday") {
+            Operation::Yesterday
+        } else if word.eq_ignore_ascii_case("now") {
+            Operation::Now
+        } else if word.eq_ignore_ascii_case("today") {
+            Operation::Today
+        } else if let Some(is_pm) = meridian(word) {
+            Operation::Meridian { hour: None, is_pm }
+        } else {
+            let Some(count) = count(word) else { continue };
+            let Some(period) = words.next() else { break };
+            if let Some(is_pm) = meridian(period) {
+                Operation::Meridian {
+                    hour: (count != 0).then_some((count % 12) as i8),
+                    is_pm,
+                }
+            } else {
+                let (period, unit) = unit(period, ago)?;
+                Operation::Pair(Pair { period, count, unit })
+            }
+        };
+        date_known |= matches!(operation, Operation::Now | Operation::Yesterday | Operation::Today)
+            || matches!(&operation, Operation::Pair(pair) if pair.count != 0);
+        operations.push(operation);
     }
-    if pairs.is_empty() {
-        return None;
+    (!operations.is_empty()).then_some(operations)
+}
+
+fn meridian(input: &str) -> Option<bool> {
+    if input.eq_ignore_ascii_case("am") {
+        Some(false)
+    } else if input.eq_ignore_ascii_case("pm") {
+        Some(true)
+    } else {
+        None
     }
-    pairs
-        .into_iter()
-        .map(|(period, count)| unit(period, ago).map(|(period, unit)| Pair { period, count, unit }))
-        .collect()
 }
 
 /// The count in front of the unit, either written out in digits or spelled with one of one-ten.
@@ -93,6 +146,59 @@ struct Pair<'a> {
     count: i64,
     /// How the pair is subtracted.
     unit: Unit,
+}
+
+enum Operation<'a> {
+    Pair(Pair<'a>),
+    Time(Clock),
+    NamedTime(i8),
+    Meridian { hour: Option<i8>, is_pm: bool },
+    Yesterday,
+    Now,
+    Today,
+}
+
+/// Git permits hour 24 and second 60, deferring their rollover until date normalization.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Clock {
+    hour: i8,
+    minute: i8,
+    second: i8,
+    nanosecond: i32,
+}
+
+impl From<civil::Time> for Clock {
+    fn from(time: civil::Time) -> Self {
+        Clock {
+            hour: time.hour(),
+            minute: time.minute(),
+            second: time.second(),
+            nanosecond: time.subsec_nanosecond(),
+        }
+    }
+}
+
+impl Clock {
+    fn parse(input: &str) -> Option<Self> {
+        let mut fields = input.split(':');
+        let hour = fields.next()?.parse().ok()?;
+        let minute = fields.next()?.parse().ok()?;
+        let second = fields.next().map(str::parse).transpose().ok()?.unwrap_or(0);
+        (fields.next().is_none() && (0..=24).contains(&hour) && (0..60).contains(&minute) && (0..=60).contains(&second))
+            .then_some(Clock {
+                hour,
+                minute,
+                second,
+                nanosecond: 0,
+            })
+    }
+
+    fn duration(self) -> SignedDuration {
+        SignedDuration::new(
+            i64::from(self.hour) * 3600 + i64::from(self.minute) * 60 + i64::from(self.second),
+            self.nanosecond,
+        )
+    }
 }
 
 /// How a unit is subtracted: Git's `date.c` counts `second` through `week` as fixed numbers of
@@ -155,16 +261,19 @@ fn unit(period: &str, ago: bool) -> Option<(&str, Unit)> {
     Some((period, unit))
 }
 
-/// Subtract all `pairs` from `now`, in input order, like Git's `approxidate()` applies them.
+/// Apply `operations` to `now` in input order, like Git's `approxidate()`.
 ///
 /// Seconds-based units subtract from the timestamp, while months and years only step down the
 /// respective fields and normalize later, so that repeated units accumulate and a day beyond
 /// the end of the target month rolls over.
-fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zoned> {
+fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> ExnMessageResult<Zoned> {
     /// The calendar and clock fields for subtraction.
     struct Fields {
         year: i16,
         month: i8,
+        // Negative values are Git's unspecified day (-1) and pending previous day (-2).
+        day: i8,
+        clock: Clock,
         // Retain the last normalized instant, including its choice of offset at ambiguous local
         // times. Like Git's tm_wday, its weekday stays unchanged when month/year fields change.
         zoned: Zoned,
@@ -175,6 +284,8 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zo
             Fields {
                 year: zdt.year(),
                 month: zdt.month(),
+                day: zdt.day(),
+                clock: zdt.time().into(),
                 zoned: zdt,
             }
         }
@@ -183,27 +294,112 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zo
     impl Fields {
         /// Turn the fields back into a point in time: a day beyond the end of the month rolls over into the
         /// following month. One month before May 31st is thus May 1st, a day after April 30th.
-        fn normalize(&self) -> ExnMessageResult<Zoned> {
-            if self.year == self.zoned.year() && self.month == self.zoned.month() {
+        fn normalize(&self, day: i8) -> ExnMessageResult<Zoned> {
+            if self.year == self.zoned.year()
+                && self.month == self.zoned.month()
+                && day == self.zoned.day()
+                && self.clock == self.zoned.time().into()
+            {
                 return Ok(self.zoned.clone());
             }
             let first_of_month = civil::Date::new(self.year, self.month, 1).or_raise(|| {
                 gix_error::validation(format!("Date lies out of range: {}-{:02}", self.year, self.month))
             })?;
-            let days_beyond_first = SignedDuration::from_secs((i64::from(self.zoned.day()) - 1) * 24 * 60 * 60);
+            let days_beyond_first = SignedDuration::from_secs((i64::from(day) - 1) * 24 * 60 * 60);
             // TODO: Match Git's retained tm_isdst when changed calendar fields cross DST boundaries.
             first_of_month
                 .checked_add(days_beyond_first)
-                .or_raise(|| gix_error::validation(format!("Day {} lies out of range", self.zoned.day())))?
-                .to_datetime(self.zoned.time())
+                .or_raise(|| gix_error::validation(format!("Day {day} lies out of range")))?
+                .at(0, 0, 0, 0)
+                .checked_add(self.clock.duration())
+                .or_raise(|| gix_error::validation("Clock rollover lies out of range"))?
                 .to_zoned(self.zoned.time_zone().clone())
                 .or_raise(|| gix_error::validation("Could not convert date to a point in time"))
+        }
+
+        /// Git defers a named clock's previous-day hint until normalization. A nonzero
+        /// duration overrides that hint, so `noon 1 day ago` only goes back one day.
+        fn update(&self, reference_day: i8, mut seconds: i64) -> ExnMessageResult<Zoned> {
+            let day = if self.day < 0 {
+                if seconds == 0 && self.day < -1 {
+                    seconds = 24 * 60 * 60;
+                }
+                reference_day
+            } else {
+                self.day
+            };
+            let normalized = self.normalize(day)?;
+            let timestamp = normalized
+                .timestamp()
+                .checked_sub(SignedDuration::from_secs(seconds))
+                .or_raise(|| gix_error::validation("Relative date is out of range"))?;
+            Ok(timestamp.to_zoned(normalized.time_zone().clone()))
         }
     }
 
     let now = now.ok_or(validation("Missing current time"))?;
+    let reference_day = now.day();
+    let reference_clock = Clock::from(now.time());
     let mut fields = Fields::from(now);
-    for Pair { period, count, unit } in pairs {
+    fields.day = -1;
+    for operation in operations {
+        let Pair { period, count, unit } = match operation {
+            Operation::Time(clock) => {
+                fields.clock = *clock;
+                continue;
+            }
+            Operation::NamedTime(hour) => {
+                if fields.day < 0 && fields.clock.hour < *hour {
+                    fields.day = -2;
+                }
+                fields.clock = Clock {
+                    hour: *hour,
+                    minute: 0,
+                    second: 0,
+                    nanosecond: 0,
+                };
+                continue;
+            }
+            Operation::Meridian { hour, is_pm } => {
+                if let Some(hour) = hour {
+                    fields.clock = Clock {
+                        hour: *hour,
+                        minute: 0,
+                        second: 0,
+                        nanosecond: 0,
+                    };
+                }
+                fields.clock.hour = fields.clock.hour % 12 + if *is_pm { 12 } else { 0 };
+                continue;
+            }
+            Operation::Yesterday => {
+                fields.day = -1;
+                fields = fields.update(reference_day, 24 * 60 * 60)?.into();
+                continue;
+            }
+            Operation::Now => {
+                fields = fields.update(reference_day, 0)?.into();
+                continue;
+            }
+            Operation::Today => {
+                // Git compares the clock fields, not whether the input explicitly set a time.
+                if fields.clock.hour == reference_clock.hour
+                    && fields.clock.minute == reference_clock.minute
+                    && fields.clock.second == reference_clock.second
+                {
+                    fields.clock = Clock {
+                        hour: 0,
+                        minute: 0,
+                        second: 0,
+                        nanosecond: 0,
+                    };
+                }
+                fields.day = -1;
+                fields = fields.update(reference_day, 0)?.into();
+                continue;
+            }
+            Operation::Pair(pair) => pair,
+        };
         // Git's zero pending count never applies a unit or normalizes calendar fields.
         if *count == 0 {
             continue;
@@ -224,7 +420,7 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zo
             }
             Unit::Months(factor) => {
                 let months = count.checked_mul(*factor).ok_or_else(err)?;
-                fields = fields.normalize()?.into();
+                fields = fields.update(reference_day, 0)?.into();
                 let total = (i64::from(fields.year) * 12 + i64::from(fields.month) - 1)
                     .checked_sub(months)
                     .ok_or_else(err)?;
@@ -233,14 +429,9 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zo
                 continue;
             }
         };
-        let ts = fields
-            .normalize()?
-            .timestamp()
-            .checked_sub(SignedDuration::from_secs(seconds))
-            .or_raise(err)?;
-        fields = ts.to_zoned(fields.zoned.time_zone().clone()).into();
+        fields = fields.update(reference_day, seconds).or_raise(err)?.into();
     }
-    fields.normalize()
+    fields.update(reference_day, 0)
 }
 
 fn subtract_duration(now: Option<&Zoned>, duration: SignedDuration) -> ExnMessageResult<Zoned> {
