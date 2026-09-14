@@ -40,6 +40,14 @@ mod bstr;
 #[cfg(feature = "bstr")]
 pub use bstr::{AsBStr, AsBStrOpt};
 
+/// Return whether `byte` is whitespace according to Git's locale-independent `sane_ctype` table.
+///
+/// This includes space, horizontal tab, newline and carriage return, but excludes vertical tab and form feed.
+#[inline]
+pub const fn git_is_space(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\n' | b'\r')
+}
+
 /// A utility to do buffer-swapping with.
 ///
 /// Use `src` to read from and `dest` to write to, and after actually changing data, call [Buffers::swap()].

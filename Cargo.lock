@@ -2006,6 +2006,7 @@ dependencies = [
  "gix-features",
  "gix-path",
  "gix-testtools",
+ "gix-utils",
  "serde",
 ]
 

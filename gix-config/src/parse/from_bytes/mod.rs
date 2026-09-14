@@ -1,9 +1,8 @@
 use bstr::{BStr, ByteSlice};
 
-use crate::{
-    parse::{Comment, Error, Event, MaybeDecoded, Span, error::ParseNode, section},
-    value::is_git_whitespace,
-};
+use gix_utils::git_is_space;
+
+use crate::parse::{Comment, Error, Event, MaybeDecoded, Span, error::ParseNode, section};
 
 type ParseResult<T> = Result<T, ()>;
 
@@ -379,7 +378,7 @@ fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> Pars
                 is_in_quotes = !is_in_quotes;
                 remaining = rest;
             }
-            b if !is_git_whitespace(b) || is_in_quotes => {
+            b if !git_is_space(b) || is_in_quotes => {
                 // Non-whitespace, and even whitespace inside quotes, is value content,
                 // making whitespace after a later continuation significant.
                 value_is_empty_so_far = false;
@@ -395,7 +394,7 @@ fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> Pars
     let untrimmed_value = &value_start[..value_start.len() - remaining.len()];
     let value_len = untrimmed_value
         .iter()
-        .rposition(|b| !is_git_whitespace(*b))
+        .rposition(|b| !git_is_space(*b))
         .map_or(0, |idx| idx + 1);
     let value = untrimmed_value[..value_len].as_bstr();
     if partial_value_found {
@@ -412,7 +411,7 @@ fn take_git_whitespace1<'i>(i: &mut &'i [u8]) -> ParseResult<&'i BStr> {
     let input = *i;
     let mut remaining = input;
     while let Some((&byte, rest)) = remaining.split_first() {
-        if byte == b'\n' || byte == b'\r' && rest.starts_with(b"\n") || !is_git_whitespace(byte) {
+        if byte == b'\n' || byte == b'\r' && rest.starts_with(b"\n") || !git_is_space(byte) {
             break;
         }
         remaining = rest;

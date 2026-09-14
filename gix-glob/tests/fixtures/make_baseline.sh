@@ -163,3 +163,17 @@ aBcDeFg  abcdefg
 aBcDeFg  ABCDEFG
 aBcDeFg  AbCdEfG
 EOF
+
+# Preserve whitespace-only paths, including newline, with NUL-delimited input and output.
+# Each record contains the requested pattern followed by Git's source, line, matched pattern and path.
+# Git's [:blank:] accepts space/tab; [:space:] also accepts LF/CR, but neither accepts VT/FF.
+for ignorecase in false true; do
+  git config core.ignorecase "$ignorecase"
+  for pattern in '[[:blank:]]' '[[:space:]]'; do
+    printf '%s\n' "$pattern" > .gitignore
+    for value in ' ' $'\t' $'\n' $'\v' $'\f' $'\r'; do
+      printf '%s\0' "$pattern"
+      printf '%s\0' "$value" | git check-ignore -zvn --stdin || test "$?" = 1
+    done
+  done >"git-baseline.whitespace-$ignorecase"
+done
