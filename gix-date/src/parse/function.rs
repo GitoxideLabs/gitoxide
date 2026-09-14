@@ -85,6 +85,8 @@ use gix_error::{Exn, ResultExt};
 /// as in `2 days 3 hours ago`. A count may be spelled out from `one` to `ten`, or be `last`, and
 /// any byte that is neither a digit nor a letter separates the parts, so `1.hour.ago` is the same
 /// as `1 hour ago`. The trailing `ago` is optional.
+/// Counts and units may also touch, as in `2days`. Unlike Git, `2days3hours` applies both pairs
+/// instead of mistaking the counts for calendar fields.
 ///
 /// `<count> <unit>` pairs are applied in input order, the way Git applies them: `second` through `week` each
 /// subtract a fixed number of seconds, while `month` and `year` step down the respective calendar fields,
