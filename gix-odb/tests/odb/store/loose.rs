@@ -518,3 +518,70 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn shared_object_permissions_match_git_after_umask() -> crate::Result {
+    use gix_object::Write;
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    for mask in [0o022, 0o077] {
+        if !gix_testtools::run_with_umask(mask)? {
+            continue;
+        }
+        for (setting, permissions) in [
+            ("false", 0),
+            ("group", 0o660),
+            ("all", 0o664),
+            ("0640", -0o640),
+            ("0660", -0o660),
+        ] {
+            let dir = gix_testtools::tempfile::tempdir()?;
+            gix_testtools::git(
+                dir.path(),
+                &format!("-c core.sharedRepository={setting} init --bare git"),
+            )?;
+            let git_dir = dir.path().join("git");
+            fs::write(git_dir.join("input"), b"shared loose object")?;
+            let expected_blob_id = gix_testtools::git(&git_dir, "hash-object -w input")?;
+            let expected_blob_id = gix_hash::ObjectId::from_hex(expected_blob_id.trim().as_bytes())?;
+            let objects = dir.path().join("objects");
+            fs::create_dir(&objects)?;
+            let db = Store::at_opts(
+                &objects,
+                gix_testtools::object_hash(),
+                Options {
+                    shared_repository_permissions: permissions,
+                    ..Default::default()
+                },
+            );
+            let actual_blob_id = db.write_buf(gix_object::Kind::Blob, b"shared loose object")?;
+            assert_eq!(
+                actual_blob_id, expected_blob_id,
+                "sharing does not change object contents"
+            );
+            let actual = db.object_path(&actual_blob_id);
+            let expected =
+                Store::at(git_dir.join("objects"), gix_testtools::object_hash()).object_path(&expected_blob_id);
+            for (actual, expected) in [
+                (actual.as_path(), expected.as_path()),
+                (
+                    actual.parent().expect("fanout directory"),
+                    expected.parent().expect("fanout directory"),
+                ),
+            ] {
+                assert_eq!(
+                    fs::metadata(actual)?.permissions().mode() & 0o7777,
+                    fs::metadata(expected)?.permissions().mode() & 0o7777,
+                    "shared={setting}, umask={mask:o}: objects and fanout directories follow Git"
+                );
+            }
+            assert_eq!(
+                fs::metadata(&actual)?.permissions().mode() & 0o222,
+                0,
+                "shared immutable objects never gain write permission"
+            );
+        }
+    }
+    Ok(())
+}
