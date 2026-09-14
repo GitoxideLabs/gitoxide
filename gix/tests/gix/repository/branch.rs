@@ -10,6 +10,37 @@ fn refname(value: &str) -> FullName {
 }
 
 #[test]
+#[cfg(unix)]
+fn deleting_branch_configuration_preserves_its_permissions_like_git() -> crate::Result {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let (mut repo, _fixture) = crate::basic_rw_repo()?;
+    let work_dir = repo.workdir().expect("fixture checkout").to_owned();
+    for name in ["git-topic", "gix-topic"] {
+        gix_testtools::git(&work_dir, &format!("branch {name}"))?;
+        gix_testtools::git(&work_dir, &format!("config branch.{name}.description remove-me"))?;
+    }
+    gix_testtools::git(&work_dir, "config core.sharedRepository group")?;
+    repo.reload()?;
+    let config_path = repo.common_dir().join("config");
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))?;
+    gix_testtools::git(&work_dir, "branch -D git-topic")?;
+    let git_mode = config_path.metadata()?.permissions().mode();
+    assert_eq!(
+        git_mode & 0o777,
+        0o600,
+        "Git preserves an existing configuration's explicit mode"
+    );
+    repo.delete_local_branches([refname("refs/heads/gix-topic")])?;
+    assert_eq!(
+        config_path.metadata()?.permissions().mode(),
+        git_mode,
+        "branch cleanup preserves configuration permissions instead of reapplying sharing"
+    );
+    Ok(())
+}
+
+#[test]
 fn deletes_a_batch_and_all_of_its_local_config_without_inspecting_commits() -> crate::Result {
     let (mut repo, _tmp) = crate::repo_rw("make_references_repo.sh")?;
     let direct = refname("refs/heads/delete-direct");
