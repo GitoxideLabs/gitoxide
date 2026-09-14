@@ -165,7 +165,9 @@ without trading responsiveness for metadata that is not visible.
   default Tix view. The copy/move, fork/insert, and placement choices are required.
   Success prints the transplanted root's commit/change IDs followed by reference
   rewrites. A conflict changes nothing unless explicitly materialized into the
-  existing editable rebase continuation workflow.
+  shared rebase continuation workflow below. Bare `--materialize-conflicts` saves
+  the pause internally; `=CONTINUE` additionally exports a todo, and `=-` exports
+  to stdout. Optional filenames always require `=`.
 - `tix op`, also spelled `tix op log`, prints the current worktree's complete
   retained operation history to stdout, newest first. Each operation has a
   numbered position, `applied` or `undone` status, and its title; `@` marks the
@@ -179,8 +181,10 @@ without trading responsiveness for metadata that is not visible.
   step they report `nothing to undo` or `nothing to redo` to stderr and succeed;
   failures return an error. A new recorded operation after undo discards the
   remaining redo entries. Undo/redo reject an unresolved current index before
-  changing references, queue position, index, or files; a pending commit marker
-  or saved continuation alone does not block them once the index is resolved.
+  changing references, queue position, index, or files. A pending commit marker
+  alone does not block them once the index is resolved. A saved active rebase
+  blocks undo, redo, and clear until it completes or is stopped; its accumulated
+  changes become one undo entry at that point.
   Existing checked-reference updates, affected-worktree preflight, rollback,
   and review restrictions apply, including the review-finish exception below.
 - `tix op clear` atomically, silently, and idempotently deletes the current
@@ -271,9 +275,12 @@ without trading responsiveness for metadata that is not visible.
   is an error. The resulting `(updated-base)` plan remains actionable when saved
   unchanged. `--update-base` and an explicit `--onto` are mutually exclusive.
   `--edit-and-apply` opens the same plan with Git's configured editor and applies
-  it when the editor exits. It also accepts `--materialize-conflicts [CONTINUE]`
-  to opt into the same conflict checkout and continuation-document workflow as
-  `tix rebase apply`; the option requires `--edit-and-apply`.
+  it when the editor exits. It also accepts `--materialize-conflicts[=CONTINUE]`
+  to opt into the same saved-conflict workflow as `tix rebase apply`; the option
+  requires `--edit-and-apply`. While a rebase is paused, plain `tix rebase todo`
+  exports its saved remaining todo without requiring a hidden boundary. Its
+  `--edit-and-apply` form edits that continuation. Scope and target options are
+  rejected until the active operation is completed or stopped.
 - `tix show`, `tix ref-tree`, and `tix rebase todo` automatically inspect symbolic
   `refs/remotes/<remote>/HEAD` references. Their targets are reverse-mapped
   through each remote's fetch refspec, and existing local commit branches are
@@ -291,11 +298,47 @@ without trading responsiveness for metadata that is not visible.
   input when `FILE` is omitted or `-`. Removing its state comment or emptying the
   document cancels successfully; malformed or unsupported state is an error.
 - By default, a todo conflict changes nothing. Explicit
-  `--materialize-conflicts [CONTINUE]` accepts the partial result, checks out the
-  conflicting commit with an unmerged index, and writes a fresh editable
-  continuation todo to `CONTINUE`, or stdout when `-` is used. A terminal stdout
-  is refused. Materialization exits unsuccessfully so scripts cannot mistake the
-  incomplete rebase for completion.
+  `--materialize-conflicts[=CONTINUE]` accepts the partial result, checks out the
+  conflicting commit with an unmerged index, and saves an editable continuation
+  inside the current worktree's Git metadata. Bare opt-in needs no output file.
+  `=CONTINUE` additionally creates a new export file; `=-` explicitly writes the
+  todo to stdout. Optional filenames require `=` and never consume a positional
+  input file. Export errors prevent materialization. Materialization exits
+  unsuccessfully so scripts cannot mistake a pause for completion.
+- `tix rebase status [--porcelain]` reports the saved operation, conflict commit,
+  remaining steps (including the unresolved command and remaining folds), and
+  `conflicted`, `ready`, or `blocked` readiness. Inspection never resumes or
+  amends a commit. Porcelain output consists of one `key value` per line:
+  `state`, `operation`, `remaining`, `conflict`, and an optional `reason` with
+  escaped control characters. With no active operation it prints only
+  `state none` and succeeds. Human-readable status and todos are primary stdout
+  data; mutation guidance and diagnostics go to stderr.
+- `tix rebase continue [--materialize-conflicts[=CONTINUE]]` consumes the staged
+  resolution and resumes the saved todo without an editor or automatic staging.
+  Every subsequent conflict requires fresh materialization opt-in, too. A
+  refused conflict leaves the saved record, refs, index, and worktree unchanged.
+  Existing edited-file / `tix rebase apply FILE` workflows can continue the same
+  active operation. An unrelated todo is rejected until the operation is stopped.
+- `tix rebase stop` idempotently forgets remaining work while preserving partial
+  commits, the index, and working files. It records the accumulated operation for
+  undo and releases the active record; there is no abort/rollback command.
+  Unreadable state can also be stopped, with a diagnostic if its undo payload
+  cannot be recovered. Inspection and conflict-resolution amendments remain
+  available while paused; unrelated Tix mutations are blocked.
+- Accepted plan-rebase and transplant pauses use one active record per worktree
+  at `refs/worktree/tix/rebase`, pointing to an internal metadata commit. It stores
+  the existing continuation todo, operation label, expected HEAD identity, and
+  accumulated undo ref changes. Parent edges retain required commit objects
+  through Git GC. Metadata refs and commits stay out of selectable history.
+  State publication participates in checked history updates and rollback;
+  publication failures restore the staged resolution as well as references.
+  An unfinished publication remains visibly blocked if its rollback cannot
+  finish. Each accepted pause or Tix resolution amendment publishes a checked
+  successor record. Completion/stop publish the grouped undo entry and remove
+  the record together. Competing continuations are guarded by its expected OID;
+  a worktree-local publication lock also excludes stop through checkout and rollback.
+  Ordinary lazy replay, travel conflicts, and native Git rebases do not create
+  these shared sessions.
 - Editor-launching commands honor Git's normal editor selection and
   `GIT_EDITOR` overrides it.
 - Revisions must resolve and peel to commits. Invalid or non-commit visible
@@ -311,8 +354,9 @@ without trading responsiveness for metadata that is not visible.
   bookkeeping. `q` quits from history, including while a conflict or rebase
   continuation is suspended, except while a user background task is running;
   then it reports that Ctrl-C is required to force exit. Before a normal exit,
-  tix journals already-materialized reference progress and drops only in-memory
-  candidates; it never rolls repository state back. `q` or `Escape` in a focused
+  tix journals ordinary materialized reference progress and drops only in-memory
+  candidates; saved plan continuations remain active across either exit path.
+  Exiting never rolls repository state back. `q` or `Escape` in a focused
   changes block still returns focus to history.
 
 ## History model
@@ -1377,14 +1421,19 @@ views.
   move stays blocked with a diagnostic and can still be left with normal `q`.
   Tix's own `<enter>` amend also completes an identical-tree resolution so no
   pending marker can survive merely because the tree did not change.
-- A materialized todo conflict keeps a high-contrast `REBASE PAUSED` attention notice until
-  its in-memory continuation is consumed. The notice changes when the index is
-  resolved but always advertises `<enter>` to continue and `Esc` to stop. History,
-  changes-pane navigation, display toggles, copying, and path-diff inspection stay
-  available; repository-changing actions and refresh are blocked. Pane-local
-  `<enter>`, `Esc`, and `q` retain their inspection and focus behavior. Stopping
-  forgets only the in-memory continuation and leaves the partially applied
-  repository untouched; Ctrl-C still exits immediately.
+- A materialized todo conflict keeps a high-contrast `REBASE PAUSED` attention
+  notice until its saved continuation completes or is stopped. The TUI loads it
+  at startup, worktree activation, and reference/index changes, including pauses
+  initiated in the CLI. The notice identifies the operation and remaining work,
+  updates readiness when the index changes, and explains blocked state. `<enter>`
+  continues and `Esc` stops. History and changes-pane navigation, display toggles,
+  copying, diffs, refresh, and conflict-resolution amendments stay available;
+  unrelated mutations, including ref-tree edits, are blocked. Pane-local
+  `<enter>`, `Esc`, and `q` retain their inspection and focus behavior. Quitting,
+  including Ctrl-C, preserves an accepted session. Only detached display data is
+  kept while idle; each continuation opens a fresh repository. Session inspection
+  runs on filesystem/focus events and before mutations, not on history navigation.
+  The TUI does not stream another process's live rebase progress.
 
 ### AutoMerge
 
@@ -1855,8 +1904,9 @@ views.
   refresh are blocked. `<enter>` accepts the partial result,
   moves already-final refs, records the ours tree in the conflicting commit, and
   checks out the retained merge result with an unmerged index,
-  and retains an in-memory continuation plan. Only `Esc` discards the preview
-  without writes. Cancellation and failed materialization synchronously restore
+  and saves its continuation for either interface. Only `Esc` discards the
+  preview without writes; cancelling a subsequent preview preserves the earlier
+  saved pause. Cancellation and failed materialization synchronously restore
   the cached repository history before commit-message and changes panes resume
   loading, so the next frame cannot reference discarded in-memory objects.
   On continuation, `<enter>` stages paths that still have unresolved
@@ -1871,10 +1921,14 @@ views.
   completed drops and fold sources disappear, unapplied fold sources retain
   their actions, and the remaining todo stays editable. A conflicting fold's
   message action is already recorded on the partial result and is not applied
-  again by continuation. Applying it
-  requires only that `HEAD` names a commit and the index has no unresolved stages;
-  the index tree, including additional staged changes, becomes the resolved tree.
-  There is no hidden sequencer state or separate continue/abort command.
+  again by continuation. The index tree, including additional staged changes,
+  becomes the resolved tree. An active session requires the captured checkout
+  and expected refs. An external amendment is accepted only with unchanged HEAD
+  attachment, the same change ID and ordered parents, and a resolved index
+  matching the replacement tree. Incompatible HEAD/ref changes remain blocked;
+  they never silently retarget the saved todo. Read-only status does not finalize
+  external amendments. The next accepted continuation includes them in the
+  grouped undo operation.
 - Every interactive operation that rewrites the stack below `HEAD`, including
   todo application, runs on a scoped worker and shows its modal gauge after
   300 ms. TUI time travel also runs on a scoped worker and follows completed

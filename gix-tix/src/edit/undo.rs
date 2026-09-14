@@ -94,6 +94,7 @@ impl Plan {
     }
 
     pub(crate) fn apply_with_worktrees(self, repo: &gix::Repository) -> Result<()> {
+        super::rebase::session::ensure_idle(repo)?;
         let index = repo
             .index_or_empty()
             .context("could not inspect the index before undo/redo")?;
@@ -104,12 +105,17 @@ impl Plan {
                 .all(|entry| entry.stage() == gix::index::entry::Stage::Unconflicted),
             "cannot undo/redo with unresolved index conflicts"
         );
-        apply_with_worktrees(repo, &self.changes, self.edits)
+        apply_with_worktrees(repo, &self.changes, self.edits, None)
     }
 }
 
-fn apply_with_worktrees(repo: &gix::Repository, changes: &[RefChange], edits: Vec<RefEdit>) -> Result<()> {
-    let transitions = worktree_transitions(repo, changes)?;
+fn apply_with_worktrees(
+    repo: &gix::Repository,
+    changes: &[RefChange],
+    edits: Vec<RefEdit>,
+    restore_current_tree: Option<ObjectId>,
+) -> Result<()> {
+    let transitions = worktree_transitions(repo, changes, restore_current_tree)?;
     for transition in &transitions {
         super::delete::preflight_tree_transition(&transition.repo, &transition.workdir, transition.old, transition.new)
             .context("local changes prevent undo/redo; stash them manually and retry")?;
@@ -134,11 +140,11 @@ pub(crate) fn is_queue_ref(name: &BStr) -> bool {
     name.as_bytes() == TIP_REF.as_bytes() || name.as_bytes() == CURSOR_REF.as_bytes()
 }
 
-pub(crate) fn ref_chain_reaches_queue(repo: &gix::Repository, name: &FullNameRef) -> Result<bool> {
+pub(crate) fn ref_chain_reaches_internal(repo: &gix::Repository, name: &FullNameRef) -> Result<bool> {
     let mut name = name.to_owned();
     let mut seen = HashSet::new();
     loop {
-        if is_queue_ref(name.as_bstr()) {
+        if super::is_internal_ref(name.as_bstr()) {
             return Ok(true);
         }
         ensure!(seen.insert(name.clone()), "a symbolic reference chain contains a cycle");
@@ -153,7 +159,10 @@ pub(crate) fn ref_chain_reaches_queue(repo: &gix::Repository, name: &FullNameRef
     }
 }
 
-pub(crate) fn is_queue_commit(repo: &gix::Repository, needle: ObjectId) -> Result<bool> {
+pub(crate) fn is_internal_commit(repo: &gix::Repository, needle: ObjectId) -> Result<bool> {
+    if super::rebase::session::is_commit(repo, needle)? {
+        return Ok(true);
+    }
     let Some(mut id) = read_queue_ref(repo, TIP_REF)?.or(read_queue_ref(repo, CURSOR_REF)?) else {
         return Ok(false);
     };
@@ -202,6 +211,13 @@ fn ends_review(changes: &[RefChange]) -> bool {
 }
 
 pub(crate) fn clear(repo: &gix::Repository) -> Result<()> {
+    super::rebase::session::ensure_idle(repo)?;
+    repo.edit_references(clear_edits(repo)?)
+        .context("could not clear undo history")
+        .map(|_| ())
+}
+
+fn clear_edits(repo: &gix::Repository) -> Result<Vec<RefEdit>> {
     let mut edits = Vec::new();
     for name in [TIP_REF, CURSOR_REF] {
         let Some(reference) = repo
@@ -215,12 +231,7 @@ pub(crate) fn clear(repo: &gix::Repository) -> Result<()> {
             PreviousValue::MustExistAndMatch(reference.target().into_owned()),
         ));
     }
-    if edits.is_empty() {
-        return Ok(());
-    }
-    repo.edit_references(edits)
-        .context("could not clear undo history")
-        .map(|_| ())
+    Ok(edits)
 }
 
 pub(crate) fn apply_reversed_changes(repo: &gix::Repository, changes: &[RefChange]) -> Result<()> {
@@ -239,13 +250,17 @@ pub(crate) fn apply_reversed_changes(repo: &gix::Repository, changes: &[RefChang
 }
 
 /// Roll back a completed publication together with every checkout it affected.
-pub(crate) fn rollback_with_worktrees(repo: &gix::Repository, changes: &[RefChange]) -> Result<()> {
+pub(crate) fn rollback_with_worktrees(
+    repo: &gix::Repository,
+    changes: &[RefChange],
+    restore_current_tree: Option<ObjectId>,
+) -> Result<()> {
     let changes: Vec<_> = normalize_changes(changes.iter().cloned())?
         .into_iter()
         .map(|change| change.reversed())
         .collect();
     let edits = changes.iter().map(checked_edit).collect::<Result<Vec<_>>>()?;
-    apply_with_worktrees(repo, &changes, edits)
+    apply_with_worktrees(repo, &changes, edits, restore_current_tree)
 }
 
 pub(crate) fn state(repo: &gix::Repository, name: &FullNameRef) -> Result<State> {
@@ -272,14 +287,27 @@ pub(crate) fn changes_from_edits(edits: impl IntoIterator<Item = RefEdit>) -> Re
 ///
 /// Returns `None` when all supplied changes cancel each other out.
 pub(crate) fn record(repo: &gix::Repository, title: &str, changes: &[RefChange]) -> Result<Option<ObjectId>> {
+    let (entry, edits) = prepare_record(repo, title, changes)?;
+    if !edits.is_empty() {
+        repo.edit_references(edits)
+            .context("could not publish the undo entry")?;
+    }
+    Ok(entry)
+}
+
+/// Prepare the queue update so an operation can publish its lifecycle change in the same transaction.
+pub(super) fn prepare_record(
+    repo: &gix::Repository,
+    title: &str,
+    changes: &[RefChange],
+) -> Result<(Option<ObjectId>, Vec<RefEdit>)> {
     validate_title(title)?;
     let changes = normalize_changes(changes.iter().cloned())?;
     if changes.is_empty() {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     }
     if !ends_review(&changes) && has_active_review(repo)? {
-        clear(repo)?;
-        return Ok(None);
+        return Ok((None, clear_edits(repo)?));
     }
 
     let queue = load(repo)?;
@@ -295,12 +323,13 @@ pub(crate) fn record(repo: &gix::Repository, title: &str, changes: &[RefChange])
     let parents = retention_parents(repo, predecessor, &changes)?;
     let entry = write_commit(repo, title, &config, &parents)?;
 
-    repo.edit_references([
-        queue_update(TIP_REF, old_tip, entry)?,
-        queue_update(CURSOR_REF, old_cursor, entry)?,
-    ])
-    .context("could not publish the undo entry")?;
-    Ok(Some(entry))
+    Ok((
+        Some(entry),
+        vec![
+            queue_update(TIP_REF, old_tip, entry)?,
+            queue_update(CURSOR_REF, old_cursor, entry)?,
+        ],
+    ))
 }
 
 pub(crate) fn history(repo: &gix::Repository) -> Result<History> {
@@ -396,7 +425,7 @@ fn empty_position() -> Position {
     }
 }
 
-fn normalize_changes(changes: impl IntoIterator<Item = RefChange>) -> Result<Vec<RefChange>> {
+pub(super) fn normalize_changes(changes: impl IntoIterator<Item = RefChange>) -> Result<Vec<RefChange>> {
     let mut by_name = BTreeMap::<FullName, RefChange>::new();
     for change in changes {
         ensure!(
@@ -454,7 +483,11 @@ struct WorktreeTransition {
     new: ObjectId,
 }
 
-fn worktree_transitions(repo: &gix::Repository, changes: &[RefChange]) -> Result<Vec<WorktreeTransition>> {
+fn worktree_transitions(
+    repo: &gix::Repository,
+    changes: &[RefChange],
+    restore_current_tree: Option<ObjectId>,
+) -> Result<Vec<WorktreeTransition>> {
     let current_git_dir = gix::path::realpath(repo.git_dir()).context("could not resolve the current Git directory")?;
     let mut repos = vec![
         repo.main_repo()
@@ -490,7 +523,11 @@ fn worktree_transitions(repo: &gix::Repository, changes: &[RefChange]) -> Result
         );
         let new_id = resolve_state(&worktree_repo, &projected_head, changes, current, &mut HashSet::new())?;
         let old = tree_id(&worktree_repo, old_id).context("could not inspect the current worktree tree")?;
-        let new = tree_id(&worktree_repo, new_id).context("could not inspect the destination worktree tree")?;
+        let new = if current && let Some(tree_id) = restore_current_tree {
+            tree_id
+        } else {
+            tree_id(&worktree_repo, new_id).context("could not inspect the destination worktree tree")?
+        };
         if old == new || (worktree_repo.workdir().is_none() && worktree_repo.is_bare()) {
             continue;
         }
@@ -571,7 +608,7 @@ fn rollback_transitions(transitions: &[WorktreeTransition], mut cause: anyhow::E
     cause
 }
 
-fn checked_edit(change: &RefChange) -> Result<RefEdit> {
+pub(super) fn checked_edit(change: &RefChange) -> Result<RefEdit> {
     let expected = match &change.before {
         State::Missing => PreviousValue::MustNotExist,
         State::Object(id) => PreviousValue::MustExistAndMatch(Target::Object(*id)),
@@ -621,7 +658,7 @@ fn log_change() -> LogChange {
     }
 }
 
-fn serialize_config(changes: &[RefChange]) -> Result<File> {
+pub(super) fn serialize_config(changes: &[RefChange]) -> Result<File> {
     let mut config = File::default();
     config
         .new_section("undo", None)?
@@ -641,7 +678,7 @@ fn serialize_config(changes: &[RefChange]) -> Result<File> {
     Ok(config)
 }
 
-fn encode_state(state: &State) -> BString {
+pub(super) fn encode_state(state: &State) -> BString {
     match state {
         State::Missing => "missing".into(),
         State::Object(id) => format!("object:{id}").into(),
@@ -653,7 +690,7 @@ fn encode_state(state: &State) -> BString {
     }
 }
 
-fn parse_config(repo: &gix::Repository, body: &BStr) -> Result<Vec<RefChange>> {
+pub(super) fn parse_config(repo: &gix::Repository, body: &BStr) -> Result<Vec<RefChange>> {
     let config = File::try_from(body).context("could not parse undo metadata as Git config")?;
     let mut sections = config.sections();
     let undo = sections.next().context("undo metadata has no version section")?;
@@ -707,7 +744,7 @@ fn ensure_exact_keys(section: &gix::config::file::SectionRef<'_>, expected: &[&s
     Ok(())
 }
 
-fn parse_state(repo: &gix::Repository, value: &BStr) -> Result<State> {
+pub(super) fn parse_state(repo: &gix::Repository, value: &BStr) -> Result<State> {
     if value == b"missing" {
         return Ok(State::Missing);
     }
@@ -736,7 +773,11 @@ fn validate_title(title: &str) -> Result<()> {
     Ok(())
 }
 
-fn retention_parents(repo: &gix::Repository, predecessor: ObjectId, changes: &[RefChange]) -> Result<Vec<ObjectId>> {
+pub(super) fn retention_parents(
+    repo: &gix::Repository,
+    predecessor: ObjectId,
+    changes: &[RefChange],
+) -> Result<Vec<ObjectId>> {
     let mut parents = vec![predecessor];
     let mut seen = HashSet::from([predecessor]);
     for id in changes
@@ -763,7 +804,12 @@ fn retention_parents(repo: &gix::Repository, predecessor: ObjectId, changes: &[R
     Ok(parents)
 }
 
-fn write_commit(repo: &gix::Repository, title: &str, config: &File, parents: &[ObjectId]) -> Result<ObjectId> {
+pub(super) fn write_commit(
+    repo: &gix::Repository,
+    title: &str,
+    config: &File,
+    parents: &[ObjectId],
+) -> Result<ObjectId> {
     validate_title(title)?;
     let tree = repo
         .write_object(gix::objs::Tree::empty())

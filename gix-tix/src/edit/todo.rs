@@ -28,7 +28,7 @@ const HELP: &str = r#"
 - Prefix `pick`, `merge`, `squash`, `fixup`, or `empty` with `@` to choose the post-rebase checkout. Reference lines like `(main, topic)` point refs at the following separator or command below them; moving, adding, or removing names moves, creates, or deletes refs, including existing editable refs outside the generated todo. The current attached ref stays attached while it remains at the `@` command. Prefix one editable ref with `@` to attach HEAD to it explicitly; it must point to the `@` command.
 - Saving an unchanged document in the history-view editor applies generated autosquash groups, a changed base, or a pending rebase on the ancestry ending at `@`; otherwise it is a no-op. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. Unchanged picks whose parent stays unchanged retain their IDs; replay starts at the first pending or structurally changed commit. Changed commits through `@` are cherry-picked and re-signed, while descendants and other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Tix pins, stashes, and review refs, tags, remote-tracking refs, and symbolic refs stay unchanged and hidden. A ref checked out by another worktree may be moved but not deleted. New unreferenced leaves are pinned.
-- A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts [CONTINUE]` and writes a continuation todo. Resolve the ordinary unmerged index, then apply that todo. Concurrent ref changes still abort the update.
+- A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts[=CONTINUE]`. Accepted pauses are saved per worktree for either interface. Stage the resolution, then use `tix rebase continue` or apply an edited continuation. Each later CLI conflict also requires opt-in. `tix rebase status` inspects the pause; `tix rebase stop` keeps the partial result and forgets remaining work. Concurrent ref changes still abort the update.
 - Commit states are display-only and editing them has no effect: `🚧` means the commit is a todo, `📝` it has a note, `✔️` its tree passed checks, `✨` its current patch was refackiewed, `↻` a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, `○` means unsigned, and `🎁` means worktree state is stashed for that commit. Stashes follow rewritten commits automatically; dropping a stashed commit or combining multiple stashes into one result is rejected.
 -->
 "#;
@@ -76,6 +76,7 @@ struct State {
 pub(crate) struct Parsed {
     pub plan: rebase::Plan,
     pub tips: Vec<ObjectId>,
+    pub resolved: Option<ObjectId>,
 }
 
 struct Section {
@@ -1490,6 +1491,7 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
             selection,
         },
         tips: state.tips,
+        resolved: state.resolved,
     }))
 }
 
@@ -1584,7 +1586,7 @@ fn resolve_ref_name(
         || name.as_bstr().starts_with(crate::history::STASH_PREFIX)
         || name.as_bstr().starts_with(crate::history::REVIEW_PREFIX)
         || super::replay_refs::is_ref(name.as_bstr())
-        || super::undo::is_queue_ref(name.as_bstr())
+        || crate::edit::is_internal_ref(name.as_bstr())
         || matches!(
             name.category(),
             Some(gix::refs::Category::Tag | gix::refs::Category::RemoteBranch)

@@ -194,7 +194,7 @@ struct Pin {
     group(clap::ArgGroup::new("mode").required(true).args(["copy", "move_commits"])),
     group(clap::ArgGroup::new("connection").required(true).args(["fork", "insert"])),
     group(clap::ArgGroup::new("placement").required(true).args(["above", "below"])),
-    after_long_help = "ROOT alone selects one commit. --leaf selects the paths from ROOT to each TIP; --subtree selects all eligible descendants in the Tix view.\nConflicts change nothing by default. To materialize one and write a continuation todo:\n  tix transplant C --copy --insert --above I --materialize-conflicts=todo.continue.md\nResolve the index, then run:\n  tix rebase apply todo.continue.md\nUse --materialize-conflicts=- to write a continuation to non-terminal stdout."
+    after_long_help = "ROOT alone selects one commit. --leaf selects the paths from ROOT to each TIP; --subtree selects all eligible descendants in the Tix view.\nConflicts change nothing by default. To accept and save a pause:\n  tix transplant C --copy --insert --above I --materialize-conflicts\nResolve and stage the conflict, then run:\n  tix rebase continue\nUse --materialize-conflicts=FILE to export the saved continuation, or =- for stdout."
 )]
 struct Transplant {
     /// Revision resolving to the root of the selected commit tree.
@@ -224,15 +224,14 @@ struct Transplant {
     /// Place the selected tree directly below DEST.
     #[arg(long, value_name = "DEST")]
     below: Option<OsString>,
-    /// On conflict, materialize it and write a continuation todo to FILE, or stdout if omitted or '-'.
+    /// Accept a conflict and save its continuation; optionally export to FILE, or '-' for stdout.
     #[arg(
         long,
         value_name = "CONTINUE",
         num_args = 0..=1,
-        default_missing_value = "-",
         require_equals = true
     )]
-    materialize_conflicts: Option<PathBuf>,
+    materialize_conflicts: Option<Option<PathBuf>>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -364,6 +363,12 @@ impl Platform {
             Command::RefTree(args) => return print_ref_tree(&repository, args),
             Command::Show(args) => return show(&repository, args),
             Command::Worktrunk { command } => {
+                if matches!(
+                    &command,
+                    Some(WorktrunkCommand::Switch { .. } | WorktrunkCommand::Remove { .. })
+                ) {
+                    crate::edit::rebase::session::ensure_idle(&repository)?;
+                }
                 return match command {
                     None => crate::worktrunk::run(repository.into_sync(), None, None, false, false, quit_on_finish),
                     Some(WorktrunkCommand::Show) => crate::worktrunk::show(&repository, std::io::stdout().lock()),
@@ -393,6 +398,16 @@ impl Platform {
             }
             command => command,
         };
+        if !matches!(
+            &command,
+            Command::Amend(_)
+                | Command::Rebase(_)
+                | Command::Op {
+                    command: None | Some(op::Command::Log)
+                }
+        ) {
+            crate::edit::rebase::session::ensure_idle(&repository)?;
+        }
         match command {
             Command::RefTree(_) | Command::Show(_) => unreachable!("display commands return before logging"),
             Command::Amend(args) => {
@@ -817,7 +832,7 @@ fn transplant(repository: gix::Repository, args: Transplant) -> Result<()> {
         crate::edit::rebase::PlanPerform::Conflict(conflict) => rebase::handle_plan_conflict(
             &repository,
             conflict,
-            args.materialize_conflicts.as_deref(),
+            args.materialize_conflicts.as_ref().map(|path| path.as_deref()),
             &[],
             "transplant",
         ),
@@ -1033,6 +1048,99 @@ mod tests {
     use clap::{CommandFactory, error::ErrorKind};
 
     use super::*;
+
+    #[test]
+    fn tui_recovers_a_cli_pause_and_observes_cli_amend_continue_and_stop() -> gix_testtools::Result {
+        use crate::{
+            Action, App, refresh_rebase_session, restore_merge_conflict_resolution, stage_resolved_conflict_paths,
+        };
+
+        for stop in [false, true] {
+            let (fixture, repo, _) = crate::edit::rebase::session::tests::paused()?;
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let mut app = App::new(1);
+            assert!(
+                refresh_rebase_session(&mut app, fixture.path(), false),
+                "startup discovers a saved CLI pause"
+            );
+            let notice = app.notice().context("a paused rebase owns the notice")?;
+            assert!(
+                notice.text.contains("REBASE PAUSED · rebase · 1 remaining"),
+                "the operation and remaining work are visible"
+            );
+            assert!(
+                notice.text.contains("resolve conflicts"),
+                "the notice gives conflict-resolution guidance"
+            );
+            app.update(Action::MoveDown);
+            assert!(app.notice().is_some(), "navigation cannot dismiss the pause");
+            assert_eq!(
+                gix_testtools::repository::snapshot(fixture.path())?,
+                before,
+                "hydration is read-only"
+            );
+
+            drop(app);
+            let mut app = App::new(1);
+            refresh_rebase_session(&mut app, fixture.path(), false);
+            assert!(
+                app.rebase_continuation_pending(),
+                "reopening recovers the same operation"
+            );
+            let mut pending = None;
+            assert!(
+                !restore_merge_conflict_resolution(&mut app, fixture.path(), false, &mut pending),
+                "the saved plan owns conflict resolution"
+            );
+            std::fs::write(fixture.path().join("file"), "resolved\n")?;
+            // Enter in the TUI stages resolved conflict paths, while the CLI consumes only this staged index.
+            stage_resolved_conflict_paths(&repo)?;
+            let staged = gix_testtools::repository::snapshot(fixture.path())?;
+            for arguments in [
+                vec!["tix", "new", "--allow-empty", "-m", "unrelated"],
+                vec!["tix", "travel", "HEAD"],
+                vec!["tix", "op", "clear"],
+                vec!["tix", "worktrunk", "remove"],
+            ] {
+                let err = Cli::try_parse_from(arguments)?
+                    .platform
+                    .run(repo.clone().into_sync())
+                    .expect_err("unrelated mutations are blocked even after staging");
+                assert!(format!("{err:#}").contains("a rebase is paused"));
+            }
+            assert_eq!(
+                gix_testtools::repository::snapshot(fixture.path())?,
+                staged,
+                "refused CLI commands preserve the paused operation and its resolution"
+            );
+            crate::command::Cli::try_parse_from(["tix", "amend", "--index"])?
+                .platform
+                .run(repo.clone().into_sync())?;
+            assert!(
+                refresh_rebase_session(&mut app, fixture.path(), false),
+                "the TUI notices an amendment in the CLI"
+            );
+            assert!(
+                app.notice()
+                    .context("the pause remains")?
+                    .text
+                    .contains("ready · <enter> continue"),
+                "readiness updates without losing the continuation"
+            );
+            crate::command::Cli::try_parse_from(["tix", "rebase", if stop { "stop" } else { "continue" }])?
+                .platform
+                .run(repo.into_sync())?;
+            assert!(
+                refresh_rebase_session(&mut app, fixture.path(), false),
+                "the TUI notices lifecycle changes from the CLI"
+            );
+            assert!(
+                !app.rebase_continuation_pending(),
+                "completion and stop both release the pause"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn operation_commands_parse_without_history_view_options() -> gix_testtools::Result {
@@ -1460,7 +1568,7 @@ mod tests {
         assert_eq!(args.leaf, ["topic", "side"]);
         assert!(args.copy && args.insert);
         assert_eq!(args.above.as_deref(), Some(OsStr::new("HEAD~1")));
-        assert_eq!(args.materialize_conflicts, Some("continue.md".into()));
+        assert_eq!(args.materialize_conflicts, Some(Some("continue.md".into())));
         let Some(Command::Transplant(args)) = Cli::try_parse_from([
             "tix",
             "transplant",
@@ -1472,7 +1580,7 @@ mod tests {
             "main~1",
             "--materialize-conflicts",
         ])
-        .expect("a subtree move defaults continuation output to stdout")
+        .expect("a subtree move saves its continuation internally by default")
         .platform
         .command
         else {
@@ -1480,7 +1588,7 @@ mod tests {
         };
         assert!(args.subtree && args.move_commits && args.fork);
         assert_eq!(args.below.as_deref(), Some(OsStr::new("main~1")));
-        assert_eq!(args.materialize_conflicts, Some("-".into()));
+        assert_eq!(args.materialize_conflicts, Some(None));
         let travel = Cli::try_parse_from(["tix", "travel", "--materialize-conflicts", "HEAD~1"])
             .expect("travel parses")
             .platform
@@ -1616,8 +1724,7 @@ mod tests {
                 "--onto",
                 "next",
                 "--edit-and-apply",
-                "--materialize-conflicts",
-                "continue.md",
+                "--materialize-conflicts=continue.md",
                 "topic"
             ])
             .expect("rebase todo parses")
@@ -1651,19 +1758,26 @@ mod tests {
             "tix",
             "rebase",
             "apply",
-            "--materialize-conflicts",
-            "continue.md",
+            "--materialize-conflicts=continue.md",
             "todo.md",
         ])
         .expect("conflict materialization output parses");
         let Some(Command::Rebase(rebase::Command::Apply(args))) = parsed.platform.command else {
             panic!("rebase apply was expected")
         };
-        assert_eq!(
-            args.materialize_conflicts.as_deref(),
-            Some(std::path::Path::new("continue.md"))
-        );
+        assert_eq!(args.materialize_conflicts, Some(Some("continue.md".into())));
         assert_eq!(args.file.as_deref(), Some(std::path::Path::new("todo.md")));
+        let parsed = Cli::try_parse_from(["tix", "rebase", "apply", "--materialize-conflicts", "todo.md"])
+            .expect("bare materialization opt-in parses");
+        let Some(Command::Rebase(rebase::Command::Apply(args))) = parsed.platform.command else {
+            panic!("rebase apply was expected");
+        };
+        assert_eq!(args.materialize_conflicts, Some(None), "bare opt-in saves internally");
+        assert_eq!(
+            args.file.as_deref(),
+            Some(std::path::Path::new("todo.md")),
+            "bare opt-in never consumes the positional todo"
+        );
         assert!(
             Cli::command()
                 .render_help()
@@ -2308,7 +2422,7 @@ mod tests {
                 fork: false,
                 insert: true,
                 below: None,
-                materialize_conflicts: Some(continuation.clone()),
+                materialize_conflicts: Some(Some(continuation.clone())),
                 root: source.to_string().into(),
                 above: Some(target.to_string().into()),
             },
@@ -2323,8 +2437,15 @@ mod tests {
         );
         assert_eq!(
             crate::edit::undo::position(&repository)?.title,
-            "materialize rebase conflict",
-            "materialization is independently undoable"
+            "start of undo history",
+            "materialization belongs to the paused operation until completion or stop"
+        );
+        assert_eq!(
+            crate::edit::rebase::session::load(&repository)?
+                .context("the transplant is saved")?
+                .operation,
+            "transplant",
+            "the continuation retains its originating operation"
         );
         let unresolved = gix_testtools::git_command(path)
             .args(["diff", "--name-only", "--diff-filter=U"])
@@ -2396,7 +2517,7 @@ mod tests {
                 insert: false,
                 above: Some(destination.to_string().into()),
                 below: None,
-                materialize_conflicts: Some(first.clone()),
+                materialize_conflicts: Some(Some(first.clone())),
             },
         )
         .expect_err("the selected root conflicts with the destination");
@@ -2406,7 +2527,7 @@ mod tests {
         let err = rebase::run(
             crate::test_repository::open(path)?,
             rebase::Command::Apply(rebase::Apply {
-                materialize_conflicts: Some(second.clone()),
+                materialize_conflicts: Some(Some(second.clone())),
                 file: Some(first),
             }),
         )

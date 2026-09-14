@@ -225,6 +225,10 @@ fn perform_inner(
         rebase::Perform::Conflict(conflict)
             if pending && kind == Kind::Amend && pending_checkout == rebase::PendingCheckout::FinalizeEditedHead =>
         {
+            anyhow::ensure!(
+                repo.try_find_reference(rebase::session::REF)?.is_none(),
+                "the resolution encounters another conflict; use `tix rebase continue --materialize-conflicts` or continue in the TUI to accept it"
+            );
             conflict.persist(rebase::CheckoutOptions::default())?
         }
         performed => performed.complete()?,

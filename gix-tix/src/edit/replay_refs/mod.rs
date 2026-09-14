@@ -10,7 +10,7 @@ use gix::{
     },
 };
 
-use super::{rebase, stash, undo};
+use super::{rebase, stash};
 
 #[cfg(test)]
 mod tests;
@@ -237,7 +237,7 @@ fn unreachable_owners(
         for reference in repository.references()?.all()? {
             let reference = reference.map_err(anyhow::Error::from_boxed)?;
             let name = canonical_name(&repository, reference.name())?;
-            if is_ref(name.as_bstr()) && !is_continuation_ref(name.as_bstr()) || is_undo_ref(name.as_bstr()) {
+            if is_ref(name.as_bstr()) && !is_continuation_ref(name.as_bstr()) || is_internal_ref(name.as_bstr()) {
                 continue;
             }
             let target = canonical_target(&repository, name.as_ref(), reference.target().into_owned())?;
@@ -259,7 +259,7 @@ fn unreachable_owners(
         }
         ensure!(!edit.deref, "merge replay cleanup requires resolved reference edits");
         let name = canonical_name(repo, edit.name.as_ref())?;
-        if is_ref(name.as_bstr()) && !is_continuation_ref(name.as_bstr()) || is_undo_ref(name.as_bstr()) {
+        if is_ref(name.as_bstr()) && !is_continuation_ref(name.as_bstr()) || is_internal_ref(name.as_bstr()) {
             continue;
         }
         match edit.change.new_value() {
@@ -369,6 +369,6 @@ fn canonical_name(repo: &gix::Repository, name: &FullNameRef) -> Result<FullName
     Ok(name.to_owned())
 }
 
-fn is_undo_ref(name: &BStr) -> bool {
-    undo::is_queue_ref(unqualified_name(name))
+fn is_internal_ref(name: &BStr) -> bool {
+    crate::edit::is_internal_ref(unqualified_name(name))
 }
