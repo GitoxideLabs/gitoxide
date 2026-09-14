@@ -1,5 +1,5 @@
 use crate::Time;
-use jiff::{Zoned, civil::Date};
+use jiff::{SignedDuration, Zoned, civil::Date};
 
 /// Resolve Git's timezone abbreviations before RFC 2822 can treat an unfamiliar name as UTC.
 pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
@@ -7,8 +7,13 @@ pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
     let name_start = input.bytes().rposition(|byte| !byte.is_ascii_alphabetic())? + 1;
     let (date, name) = input.split_at(name_start);
     let date = date.trim_end();
+    let hours = named_timezone_hours(name)?;
+    Some(format!("{date} {hours:+03}00"))
+}
+
+fn named_timezone_hours(name: &str) -> Option<i32> {
     // Keep the historical meanings from Git's `date.c::timezone_names`, including daylight time.
-    let hours = match name.to_ascii_uppercase().as_str() {
+    Some(match name.to_ascii_uppercase().as_str() {
         "IDLW" => -12,
         "NT" => -11,
         "CAT" | "HST" => -10,
@@ -33,11 +38,11 @@ pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
         "NZT" | "NZST" | "IDLE" => 12,
         "NZDT" => 13,
         _ => return None,
-    };
-    Some(format!("{date} {hours:+03}00"))
+    })
 }
 
 /// Parse Git-style flexible date formats that aren't covered by standard strptime:
+/// - Complete textual dates: `February 14th, 2008 20:30:45 -0500`
 /// - Numeric dates with dots or slashes: `2008.02.14`, `14.02.2008`, `02/14/2008`, `02/14/08`
 /// - Compact ISO8601: `20080214T203045`, `20080214T20:30:45`, `20080214T2030`, `20080214T20`
 /// - Z suffix for UTC: `1970-01-01 00:00:00 Z`
@@ -46,10 +51,225 @@ pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
 /// - Subsecond precision (ignored): `20080214T203045.019-04:00`
 // TODO: this can probably be done more smartly, right now it's more of a brute force. Learn from Git here.
 //       After all, this is generated to have something quickly.
-pub fn parse_git_date_format(input: &str) -> Option<Time> {
+pub fn parse_git_date_format(input: &str, now: Option<&Zoned>) -> Option<Time> {
     parse_numeric_date(input)
+        .or_else(|| parse_textual_date(input, now))
         .or_else(|| parse_compact_iso8601(input))
         .or_else(|| parse_flexible_iso8601(input))
+}
+
+/// Git accepts case-insensitive month-name prefixes of at least three letters.
+pub(super) fn month_name(input: &str) -> Option<i8> {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    if input.len() < 3 {
+        return None;
+    }
+    MONTHS
+        .iter()
+        .position(|name| {
+            name.get(..input.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(input))
+        })
+        .map(|index| index as i8 + 1)
+}
+
+/// Recognize complete textual dates without guessing missing fields from the current time.
+fn parse_textual_date(input: &str, now: Option<&Zoned>) -> Option<Time> {
+    if input.contains('\n') {
+        return None;
+    }
+    const WEEKDAYS: [&str; 7] = [
+        "Sundays",
+        "Mondays",
+        "Tuesdays",
+        "Wednesdays",
+        "Thursdays",
+        "Fridays",
+        "Saturdays",
+    ];
+    let name_index = |word: &str, names: &[&str]| {
+        (word.len() >= 3)
+            .then(|| {
+                names.iter().position(|name| {
+                    name.get(..word.len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(word))
+                })
+            })
+            .flatten()
+    };
+    let mut words = input
+        .split(|c: char| c.is_ascii_whitespace() || c == ',')
+        .map(|word| word.trim_end_matches('.'))
+        .filter(|word| {
+            !word.is_empty()
+                && (!word.bytes().all(|byte| byte.is_ascii_alphabetic())
+                    || month_name(word).is_some()
+                    || name_index(word, &WEEKDAYS).is_some()
+                    || named_timezone_hours(word).is_some()
+                    || super::relative::meridian(word).is_some())
+        });
+    let mut first = words.next()?;
+    if name_index(first, &WEEKDAYS).is_some() {
+        // Like Git, ignore even a weekday that disagrees with the calendar date.
+        first = words.next()?;
+    }
+    let second = words.next()?;
+    let (month, day, first_field) = if let Some(month) = month_name(first) {
+        if second.contains(':') || (second.len() == 4 && second.bytes().all(|byte| byte.is_ascii_digit())) {
+            (month, None, Some(second))
+        } else {
+            (month, Some(second), None)
+        }
+    } else {
+        (month_name(second)?, Some(first), None)
+    };
+    let has_day = day.is_some();
+    let day: i64 = if let Some(day) = day {
+        let digits = day.bytes().take_while(u8::is_ascii_digit).count();
+        if !(1..=2).contains(&digits) {
+            return None;
+        }
+        let suffix = &day[digits..];
+        if !suffix.is_empty() && !["st", "nd", "rd", "th"].iter().any(|s| suffix.eq_ignore_ascii_case(s)) {
+            return None;
+        }
+        let day = day[..digits].parse().ok()?;
+        if !(1..=31).contains(&day) {
+            return None;
+        }
+        day
+    } else {
+        // Default to the named month's first day instead of normalizing Git's unset -1 sentinel.
+        1
+    };
+    let (mut year, mut clock, mut offset) = (None, None, None);
+    let mut meridian = None;
+    for word in first_field.into_iter().chain(words) {
+        if word.starts_with(['+', '-']) {
+            if offset.replace(parse_textual_offset(word)?).is_some() {
+                return None;
+            }
+        } else if let Some(hours) = named_timezone_hours(word) {
+            if offset.replace(hours * 3600).is_some() {
+                return None;
+            }
+        } else if let Some(is_pm) = super::relative::meridian(word) {
+            if clock.is_some() {
+                meridian = Some(is_pm);
+            }
+        } else if word.contains(':') {
+            let word = if let Some(start) = word.bytes().position(|byte| byte.is_ascii_alphabetic())
+                && let Some(hours) = named_timezone_hours(&word[start..])
+            {
+                if offset.replace(hours * 3600).is_some() {
+                    return None;
+                }
+                &word[..start]
+            } else {
+                word
+            };
+            if clock.replace(word).is_some() {
+                return None;
+            }
+        } else {
+            if !word.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            // match_digit() requires exactly two digits and a known day for 00..09.
+            // The relative parser's broader short-year rules must not take precedence.
+            let value = match (word.len(), word.parse::<i16>().ok()?) {
+                (4, year @ 1970..=2099) => year,
+                (2, year @ 0..=9) if has_day => year + 2000,
+                (2, year @ 70..=99) => year + 1900,
+                _ => return None,
+            };
+            if year.replace(value).is_some() {
+                return None;
+            }
+        }
+    }
+    let (year, clock) = (year?, clock?);
+    let attached_meridian = clock
+        .get(clock.len().saturating_sub(2)..)
+        .and_then(super::relative::meridian);
+    let clock = if attached_meridian.is_some() {
+        &clock[..clock.len() - 2]
+    } else {
+        clock
+    };
+    let clock = match clock.split_once('.') {
+        Some((clock, fraction)) if !fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit()) => clock,
+        Some(_) => return None,
+        None => clock,
+    };
+    // Require a colon clock. Bare numbers follow different guessing rules in Git.
+    let mut components = clock.split(':').map(|part| {
+        (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| part.parse::<i64>().ok())
+            .flatten()
+    });
+    let mut hour = components.next()??;
+    let minute = components.next()??;
+    let second = components.next().unwrap_or(Some(0))?;
+    if components.next().is_some() || hour > 24 || minute > 59 || second > 60 {
+        return None;
+    }
+    if let Some(is_pm) = meridian.or(attached_meridian) {
+        hour = hour % 12 + if is_pm { 12 } else { 0 };
+    }
+
+    // Git's tm_to_time_t() permits February 31, hour 24, and second 60. Normalize
+    // from the first of the month instead of rejecting these as invalid civil dates.
+    let datetime = Date::new(year, month, 1)
+        .ok()?
+        .at(0, 0, 0, 0)
+        .checked_add(SignedDuration::from_secs(
+            (day - 1) * 86400 + hour * 3600 + minute * 60 + second,
+        ))
+        .ok()?;
+    let zone = match offset {
+        Some(offset) => jiff::tz::Offset::from_seconds(offset).ok()?.to_time_zone(),
+        None => now.map_or(jiff::tz::TimeZone::UTC, |now| now.time_zone().clone()),
+    };
+    let zoned = datetime.to_zoned(zone).ok()?;
+    // In a spring gap, preserve the offset inferred from the supplied clock, as Git does.
+    let offset = offset.or_else(|| {
+        let civil_seconds = jiff::tz::Offset::UTC.to_timestamp(datetime).ok()?.as_second();
+        i32::try_from(civil_seconds.checked_sub(zoned.timestamp().as_second())?).ok()
+    })?;
+    Some(Time::new(zoned.timestamp().as_second(), offset))
+}
+
+fn parse_textual_offset(zone: &str) -> Option<i32> {
+    let digits = zone.strip_prefix(['+', '-'])?;
+    let valid = match digits.len() {
+        2 | 4 => digits.bytes().all(|byte| byte.is_ascii_digit()),
+        5 => {
+            digits.as_bytes()[2] == b':'
+                && digits
+                    .bytes()
+                    .enumerate()
+                    .all(|(index, byte)| index == 2 || byte.is_ascii_digit())
+        }
+        _ => false,
+    };
+    if !valid {
+        return None;
+    }
+    parse_flexible_offset(zone)
 }
 
 /// Normalize numeric dates using Git's separator-dependent month/day preference.
