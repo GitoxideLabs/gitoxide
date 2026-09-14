@@ -67,8 +67,9 @@ impl crate::Repository {
     /// Delete all local branches in `names` and remove their `branch.<name>` sections from the local configuration.
     ///
     /// All names must be local branch references such as `refs/heads/topic`. The operation fails before making changes if
-    /// any name belongs to another reference category or is checked out in any worktree. Missing branches are accepted so any
-    /// associated local configuration is still removed. **It deliberately performs no merged-state check**.
+    /// any name belongs to another reference category or is checked out or reserved by bisect or rebase in any worktree.
+    /// Missing branches are accepted so any associated local configuration is still removed.
+    /// **It deliberately performs no merged-state check**.
     ///
     /// On success, every requested reference and its reflog is absent, and every matching `branch.<name>` section has been
     /// removed from the local configuration. Return the sorted, deduplicated names of branches that existed when locked for
@@ -96,7 +97,7 @@ impl crate::Repository {
             }
         }
 
-        let checked_out = self.checked_out_branches().map_err(|err| match err {
+        let checked_out = self.checked_out_branches(self.namespace()).map_err(|err| match err {
             super::worktree::CheckedOutBranchesError::WorktreeListing(err) => delete::Error::WorktreeListing(err),
             super::worktree::CheckedOutBranchesError::OpenWorktreeRepo(err) => delete::Error::OpenWorktreeRepo(err),
             super::worktree::CheckedOutBranchesError::FollowSymref(err) => delete::Error::FollowSymref(err),

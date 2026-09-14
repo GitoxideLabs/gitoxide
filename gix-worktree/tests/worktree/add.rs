@@ -1,6 +1,31 @@
 use std::{fs, io};
 
+use gix_path::{into_bstr, to_unix_separators_on_windows};
 use gix_testtools::tempfile::tempdir;
+
+#[test]
+fn relative_input_paths_are_made_absolute() -> crate::Result {
+    let cwd = std::env::current_dir()?;
+    let tmp = gix_testtools::tempfile::tempdir_in(&cwd)?;
+    let relative = tmp.path().strip_prefix(&cwd)?;
+    let common_dir = relative.join("repo.git");
+    let destination = relative.join("worktree");
+    fs::create_dir(&common_dir)?;
+
+    let prepared = gix_worktree::add::prepare(&common_dir, &destination, Default::default())?;
+
+    assert_eq!(
+        prepared.common_dir(),
+        gix_path::realpath(common_dir)?,
+        "the common directory is absolute"
+    );
+    assert_eq!(
+        prepared.work_dir(),
+        gix_path::realpath(destination)?,
+        "the destination is absolute"
+    );
+    Ok(())
+}
 
 #[test]
 fn prepares_git_compatible_links_and_unique_sanitized_names() -> crate::Result {
@@ -16,15 +41,27 @@ fn prepares_git_compatible_links_and_unique_sanitized_names() -> crate::Result {
         Some("a-b".as_ref()),
         "the destination basename is sanitized like a reference component"
     );
+    let lock_name = gix_worktree::add::prepare(&common_dir, tmp.path().join(".lock.lock"), Default::default())?;
+    assert_eq!(
+        lock_name.git_dir().file_name(),
+        Some("-lock".as_ref()),
+        "stripping lock suffixes preserves a non-empty worktree ID, like Git"
+    );
     assert_eq!(fs::read(first.git_dir().join("locked"))?, b"initializing\n");
     assert_eq!(fs::read(first.git_dir().join("commondir"))?, b"../..\n");
     assert_eq!(
         fs::read_to_string(first.git_dir().join("gitdir"))?,
-        format!("{}\n", first.work_dir().join(".git").display())
+        format!(
+            "{}\n",
+            to_unix_separators_on_windows(into_bstr(first.work_dir().join(".git")))
+        )
     );
     assert_eq!(
         fs::read_to_string(first.work_dir().join(".git"))?,
-        format!("gitdir: {}\n", first.git_dir().display())
+        format!(
+            "gitdir: {}\n",
+            to_unix_separators_on_windows(into_bstr(first.git_dir()))
+        )
     );
 
     let second_parent = tmp.path().join("other");
@@ -161,6 +198,35 @@ fn rollback_removes_directory_symlinks_without_touching_their_target() -> crate:
         b"user data",
         "rollback does not follow the directory symlink"
     );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn linking_paths_preserve_backslashes_in_unix_filenames() -> crate::Result {
+    let tmp = tempdir()?;
+    let common_dir = tmp.path().join(r"repo\backslash.git");
+    let work_dir = tmp.path().join(r"with\backslash");
+    fs::create_dir(&common_dir)?;
+
+    for relative_paths in [false, true] {
+        let prepared =
+            gix_worktree::add::prepare(&common_dir, &work_dir, gix_worktree::add::Options { relative_paths })?;
+        let dot_git = prepared.work_dir().join(".git");
+        let git_dir = gix_discover::path::from_gitdir_file(&dot_git)?;
+        let backlink = gix_discover::path::from_plain_file_relative_to_file(&prepared.git_dir().join("gitdir"))
+            .expect("preparation writes the backlink file")?;
+        assert_eq!(
+            gix_path::realpath(git_dir)?,
+            prepared.git_dir(),
+            "relative_paths={relative_paths}: the forward link preserves backslashes in the common directory"
+        );
+        assert_eq!(
+            gix_path::realpath(backlink)?,
+            dot_git,
+            "relative_paths={relative_paths}: the backlink preserves backslashes in the destination"
+        );
+    }
     Ok(())
 }
 

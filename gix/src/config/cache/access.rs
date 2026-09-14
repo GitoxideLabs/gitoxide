@@ -338,7 +338,6 @@ impl Cache {
         attributes_source: gix_worktree::stack::state::attributes::Source,
     ) -> Result<gix_worktree_state::checkout::Options, config::checkout_options::Error> {
         use crate::config::tree::gitoxide;
-        let git_dir = repo.git_dir();
         let thread_limit = self.apply_leniency(
             crate::config::tree::Checkout::WORKERS.try_from_workers(
                 self.resolved
@@ -371,7 +370,7 @@ impl Cache {
             validate: self.protect_options()?,
             filters,
             attributes: self
-                .assemble_attribute_globals(git_dir, attributes_source, self.attributes)?
+                .assemble_attribute_globals(repo.common_dir(), attributes_source, self.attributes)?
                 .0,
             fs: capabilities,
             thread_limit,
@@ -420,11 +419,11 @@ impl Cache {
             parse_ignore,
         ))
     }
-    // TODO: at least one test, maybe related to core.attributesFile configuration.
+    /// Assemble global attributes, including `$GIT_COMMON_DIR/info/attributes`.
     #[cfg(feature = "attributes")]
     pub(crate) fn assemble_attribute_globals(
         &self,
-        git_dir: &std::path::Path,
+        common_dir: &std::path::Path,
         source: gix_worktree::stack::state::attributes::Source,
         attributes: crate::open::permissions::Attributes,
     ) -> Result<(gix_worktree::stack::state::Attributes, Vec<u8>), config::attribute_stack::Error> {
@@ -448,7 +447,7 @@ impl Cache {
             })
             .filter_map(|source| source.storage_location(&mut Self::make_source_env(self.environment)))
             .chain(configured_or_user_attributes);
-        let info_attributes_path = git_dir.join("info").join("attributes");
+        let info_attributes_path = common_dir.join("info").join("attributes");
         let mut buf = Vec::new();
         let mut collection = gix_attributes::search::MetadataCollection::default();
         let state = gix_worktree::stack::state::Attributes::new(

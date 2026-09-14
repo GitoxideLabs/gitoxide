@@ -6,6 +6,9 @@ use crate::{
 impl Extensions {
     /// The `extensions.worktreeConfig` key.
     pub const WORKTREE_CONFIG: keys::Boolean = keys::Boolean::new_boolean("worktreeConfig", &config::Tree::EXTENSIONS);
+    /// The `extensions.relativeWorktrees` key, indicating that worktrees may use relative links.
+    pub const RELATIVE_WORKTREES: keys::Boolean =
+        keys::Boolean::new_boolean("relativeWorktrees", &config::Tree::EXTENSIONS);
     /// The `extensions.objectFormat` key.
     pub const OBJECT_FORMAT: ObjectFormat =
         ObjectFormat::new_with_validate("objectFormat", &config::Tree::EXTENSIONS, validate::ObjectFormat).with_note(
@@ -46,7 +49,7 @@ impl Section for Extensions {
     }
 
     fn keys(&self) -> &[&dyn Key] {
-        &[&Self::OBJECT_FORMAT, &Self::WORKTREE_CONFIG]
+        &[&Self::OBJECT_FORMAT, &Self::WORKTREE_CONFIG, &Self::RELATIVE_WORKTREES]
     }
 }
 
