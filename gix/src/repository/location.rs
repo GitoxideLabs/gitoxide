@@ -60,6 +60,7 @@ impl crate::Repository {
                 None => crate::RefStore::at_opts(git_dir, self.object_hash(), options),
             };
             refs.namespace.clone_from(&self.refs.namespace);
+            refs.shared_repository_permissions = self.refs.shared_repository_permissions;
             let threshold = self.refs.clone().set_packed_buffer_mmap_threshold(0);
             refs.set_packed_buffer_mmap_threshold(threshold);
             Some(refs)
@@ -78,6 +79,7 @@ impl crate::Repository {
                     alloc_limit_bytes: self.config.alloc_limit_bytes,
                     current_dir: Some(current_dir.to_owned()),
                     loose_compression: self.objects.loose_compression,
+                    shared_repository_permissions: self.objects.shared_repository_permissions,
                 },
             )
             .or_raise(|| message("Could not reopen the object database with an absolute path"))?
