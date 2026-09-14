@@ -38,6 +38,12 @@ use gix_error::{ExnMessageResult, ResultExt};
 /// *   `2022-08-17 22:04:58 +0200`
 /// *   `1970-01-01 00:00:00 -0500`
 ///
+/// Numeric dates with slashes (`02/14/2008`, `2008/02/14`) or dots (`14.02.2008`,
+/// `2008.02.14`) are also accepted when followed by a time. Slashes prefer month/day
+/// and dots prefer day/month when the year is last. Short years such as `08` in
+/// `02/14/08` follow Git's ranges: `0..=37` means `2000..=2037`, and `71..=99`
+/// means `1971..=1999`. Four-digit years retain their literal value.
+///
 /// ### 5. ISO8601_STRICT Format
 ///
 /// *   `2022-08-17T21:43:13+08:00`

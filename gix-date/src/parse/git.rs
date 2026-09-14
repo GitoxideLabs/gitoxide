@@ -1,5 +1,5 @@
 use crate::Time;
-use jiff::Zoned;
+use jiff::{Zoned, civil::Date};
 
 /// Resolve Git's timezone abbreviations before RFC 2822 can treat an unfamiliar name as UTC.
 pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
@@ -35,7 +35,7 @@ pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
 }
 
 /// Parse Git-style flexible date formats that aren't covered by standard strptime:
-/// - ISO8601 with dots: `2008.02.14 20:30:45 -0500`
+/// - Numeric dates with dots or slashes: `2008.02.14`, `14.02.2008`, `02/14/2008`, `02/14/08`
 /// - Compact ISO8601: `20080214T203045`, `20080214T20:30:45`, `20080214T2030`, `20080214T20`
 /// - Z suffix for UTC: `1970-01-01 00:00:00 Z`
 /// - 2-digit hour offset: `2008-02-14 20:30:45 -05`
@@ -44,31 +44,59 @@ pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
 // TODO: this can probably be done more smartly, right now it's more of a brute force. Learn from Git here.
 //       After all, this is generated to have something quickly.
 pub fn parse_git_date_format(input: &str) -> Option<Time> {
-    parse_iso8601_dots(input)
+    parse_numeric_date(input)
         .or_else(|| parse_compact_iso8601(input))
         .or_else(|| parse_flexible_iso8601(input))
 }
 
-/// Parse ISO8601 with dots: `2008.02.14 20:30:45 -0500`
-fn parse_iso8601_dots(input: &str) -> Option<Time> {
-    // Format: YYYY.MM.DD HH:MM:SS offset
-    let input = input.trim();
-    let first_10 = input.get(..10)?;
-    if !first_10.is_ascii() || !first_10.contains('.') {
+/// Normalize numeric dates using Git's separator-dependent month/day preference.
+fn parse_numeric_date(input: &str) -> Option<Time> {
+    let (date, rest) = input.trim().split_once(char::is_whitespace)?;
+    let (first, _) = date.split_once(['.', '/'])?;
+    let (_, last) = date.rsplit_once(['.', '/'])?;
+    let formats = match (date.contains('/'), first.len() == 4, last.len() == 4) {
+        (true, true, _) => Some(["%Y/%m/%d", "%Y/%d/%m"]),
+        (false, true, _) => Some(["%Y.%m.%d", "%Y.%d.%m"]),
+        (true, false, true) => Some(["%m/%d/%Y", "%d/%m/%Y"]),
+        (false, false, true) => Some(["%d.%m.%Y", "%m.%d.%Y"]),
+        _ => None,
+    };
+    // Preserve literal four-digit years, including Jiff's wider range, before expanding short years.
+    let date = match formats {
+        Some(formats) => formats.iter().find_map(|fmt| Date::strptime(fmt, date).ok())?,
+        None => parse_numeric_date_with_short_year(date)?,
+    };
+    parse_flexible_iso8601(&format!("{date} {rest}"))
+}
+
+fn parse_numeric_date_with_short_year(date: &str) -> Option<Date> {
+    let separator = if date.contains('/') { b'/' } else { b'.' };
+    if !date.bytes().all(|byte| byte.is_ascii_digit() || byte == separator) {
+        return None;
+    }
+    let mut fields = date.split(char::from(separator)).map(str::parse::<i16>);
+    let first = fields.next()?.ok()?;
+    let second = fields.next()?.ok()?;
+    let third = fields.next()?.ok()?;
+    if fields.next().is_some() {
         return None;
     }
 
-    // Replace dots with dashes for date part only
-    let (date_part, rest) = input.split_once(' ')?;
-
-    // Validate date part has dot separators
-    if date_part.len() != 10 || date_part.chars().nth(4)? != '.' || date_part.chars().nth(7)? != '.' {
-        return None;
-    }
-
-    // Convert to standard ISO8601 format
-    let normalized = format!("{} {}", date_part.replace('.', "-"), rest);
-    parse_flexible_iso8601(&normalized)
+    let (year, month, day) = if first > 70 {
+        (first, second, third)
+    } else if separator == b'/' {
+        (third, first, second)
+    } else {
+        (third, second, first)
+    };
+    // Git's `set_date()` uses these value ranges, not strptime's conventional `%y` pivot.
+    let year = match year {
+        0..=37 => year + 2000,
+        71..=99 => year + 1900,
+        _ => return None,
+    };
+    let candidate = |month: i16, day: i16| Date::new(year, month.try_into().ok()?, day.try_into().ok()?).ok();
+    candidate(month, day).or_else(|| candidate(day, month))
 }
 
 /// Parse compact ISO8601 formats:
