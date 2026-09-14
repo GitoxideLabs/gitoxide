@@ -46,6 +46,21 @@ fn parse_header_is_not_too_lenient() {
 }
 
 #[test]
+fn named_timezones_do_not_change_relative_or_raw_inputs() -> TestResult {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(jiff::tz::TimeZone::UTC);
+    for reference in [None, Some(now)] {
+        for input in ["garbage", "14"] {
+            assert_eq!(
+                gix_date::parse(&format!("{input} CET"), reference.clone()).ok(),
+                gix_date::parse(input, reference.clone()).ok(),
+                "a zone name must not turn unknown words into a date or a day into epoch seconds"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn short() {
     assert_eq!(
         gix_date::parse("1979-02-26", Some(gix_date::Zoned::now())).unwrap(),
@@ -66,6 +81,23 @@ fn rfc2822() {
             offset: 28800,
         },
     );
+}
+
+#[test]
+fn named_zones_can_touch_a_clock() -> TestResult {
+    for input in ["2008-02-14 20:30:45CET", "Thu, 14 Feb 2008 20:30:45cet"] {
+        assert_eq!(
+            gix_date::parse(input, None)?,
+            Time::new(1_203_017_445, 3600),
+            "a zone attached to a complete clock has the same meaning as a separated zone"
+        );
+    }
+    assert_eq!(
+        gix_date::parse("Thu, 14 Feb 2008 20:30:45 UT", None)?,
+        Time::new(1_203_021_045, 0),
+        "RFC 2822 still recognizes its standard UT designator"
+    );
+    Ok(())
 }
 
 #[test]
