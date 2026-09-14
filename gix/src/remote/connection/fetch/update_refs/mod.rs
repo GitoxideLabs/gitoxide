@@ -74,7 +74,7 @@ pub(crate) fn update(
     let mut updates = Vec::new();
     let mut edit_indices_to_validate = Vec::new();
 
-    let mut checked_out_branches = repo.checked_out_branches().map_err(|err| match err {
+    let mut checked_out_branches = repo.checked_out_branches(repo.namespace()).map_err(|err| match err {
         crate::repository::worktree::CheckedOutBranchesError::WorktreeListing(err) => {
             update::Error::WorktreeListing(err)
         }

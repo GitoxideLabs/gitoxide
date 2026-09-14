@@ -608,6 +608,41 @@ mod not_a_repository {
     }
 }
 
+mod relative_worktrees_extension {
+    #[test]
+    fn requires_v1_and_a_valid_boolean() -> crate::Result {
+        for (version, value) in [("0", "false"), ("0", "true"), ("1", "invalid")] {
+            let fixture = gix_testtools::tempfile::TempDir::new()?;
+            // Format 0 requires SHA-1; the v1 case still covers the selected fixture hash.
+            gix_testtools::git(
+                fixture.path(),
+                if version == "0" {
+                    "init --object-format=sha1"
+                } else {
+                    "init"
+                },
+            )?;
+            let repo = gix::open_opts(fixture.path(), crate::restricted())?;
+            let mut config = repo.config_file_mut(repo.common_dir().join("config"))?;
+            config.set_raw_value("core.repositoryFormatVersion", version)?;
+            config.set_raw_value("extensions.relativeWorktrees", value)?;
+            config.commit()?;
+            let err = gix::open_opts(repo.git_dir(), crate::restricted())
+                .expect_err("relativeWorktrees is a v1-only boolean extension");
+            assert!(
+                matches!(
+                    err,
+                    gix::open::Error::Config(
+                        gix::config::Error::RelativeWorktreesRequiresV1 | gix::config::Error::ConfigBoolean(_)
+                    )
+                ),
+                "the invalid extension is reported: {err:?}"
+            );
+        }
+        Ok(())
+    }
+}
+
 mod object_format_extension {
     use crate::util::named_subrepo_opts;
 
