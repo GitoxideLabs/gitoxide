@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use jiff::{Zoned, civil::Date, fmt::rfc2822, tz::TimeZone};
 
-use crate::parse::git::parse_git_date_format;
+use crate::parse::git::{normalize_named_timezone, parse_git_date_format};
 use crate::parse::raw::parse_raw;
 use crate::{
     Error, OffsetInSeconds, SecondsSinceUnixEpoch, Time,
@@ -97,7 +97,10 @@ const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
 ///
 /// In any of these formats, a timezone offset wider than `±23:59` is not a timezone to Git, so it
 /// is not accepted here either.
+/// Git's named timezone abbreviations, such as `CET` and `JST`, are also understood.
 pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
+    let normalized = normalize_named_timezone(input);
+    let input = normalized.as_deref().unwrap_or(input);
     // Git accepts a leading `@` before a commit-header date: `match_object_header_date()` in
     // `date.c` takes `<seconds> ±HHMM`, while an offsetless `@<seconds>` arrives at the same
     // result through the generic loop, which skips the `@` and reads the digits as an epoch.
