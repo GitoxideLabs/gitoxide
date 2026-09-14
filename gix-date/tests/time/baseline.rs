@@ -29,7 +29,10 @@ static BASELINE: LazyLock<Vec<(String, Sample)>> = LazyLock::new(|| {
                 .expect("valid epoch value");
             let now = match lines.next().expect("five lines per baseline") {
                 "" => None,
-                seconds => Some(jiff::Timestamp::from_second(seconds.parse()?)?.to_zoned(jiff::tz::TimeZone::UTC)),
+                seconds => {
+                    let (seconds, zone) = seconds.split_once(' ').unwrap_or((seconds, "UTC"));
+                    Some(jiff::Timestamp::from_second(seconds.parse()?)?.to_zoned(jiff::tz::TimeZone::get(zone)?))
+                }
             };
             samples.push((
                 date_str.into(),
