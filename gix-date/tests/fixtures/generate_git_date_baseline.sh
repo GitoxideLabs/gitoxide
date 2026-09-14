@@ -60,9 +60,27 @@ function baseline_relative() {
 # ============================================================================
 # Tests from https://github.com/git/git/blob/master/t/t0006-date.sh
 
-# Note: SHORT format (YYYY-MM-DD) is NOT included in baseline tests because
-# Git fills in current time-of-day, making it non-reproducible for baseline comparison.
-# SHORT format is tested separately in the unit tests.
+# A date without a clock retains the current local time. Use the fixed-now helper
+# to make Git's fallback into approxidate reproducible.
+for date in 2008-12-01 2009-12-01 1979-02-26; do
+    baseline_relative "$date" '' 1251660000
+done
+
+# Intentional difference: short dates keep the requested clock using target-era rules,
+# with the earlier occurrence in folds and forward normalization in gaps. Git retains
+# the reference tm_isdst through mktime, shifting these clocks by an hour (or half an hour).
+TZ=America/New_York baseline_relative '2024-07-15' 'GIX_DIFF:-3600' 1736953200
+TZ=America/New_York baseline_relative '2024-01-15' 'GIX_DIFF:3600' 1752588000
+TZ=Australia/Lord_Howe baseline_relative '2024-01-15' 'GIX_DIFF:-1800' 1752535800
+TZ=Australia/Lord_Howe baseline_relative '2024-07-15' 'GIX_DIFF:1800' 1736895600
+TZ=America/New_York baseline_relative '2024-11-03' 'GIX_DIFF:-3600' 1736922600
+TZ=America/New_York baseline_relative '2024-11-03' '' 1752557400
+TZ=America/New_York baseline_relative '2024-03-10' '' 1736926200
+TZ=America/New_York baseline_relative '2024-03-10' 'GIX_DIFF:3600' 1752561000
+# A permanent offset change without DST must keep the target date's local clock.
+TZ=Pacific/Apia baseline_relative '2010-07-15' '' 1736888400
+# Britain used a +0100 base offset throughout 1970; keep 15:00 instead of Git's 14:00.
+TZ=Europe/London baseline_relative '1970-01-15' 'GIX_DIFF:3600' 1752588000
 
 # RFC2822 format: "Day, DD Mon YYYY HH:MM:SS +/-ZZZZ"
 baseline 'Thu, 18 Aug 2022 12:45:06 +0800' 'RFC2822'
