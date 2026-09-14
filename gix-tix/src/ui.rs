@@ -512,7 +512,10 @@ pub(crate) fn draw_with_worktree(
         });
     let worktree_path_amend = worktree_changes.is_some_and(|changes| {
         !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
-            && changes.paths.get(app.worktree_changes.selected).is_some()
+            && changes
+                .paths
+                .get(app.worktree_changes.selected)
+                .is_some_and(|change| !change.path.ends_with(b"/"))
     });
     app.set_head_edit_availability(
         selected_is_head && worktree_changes.is_some_and(|changes| !changes.paths.is_empty()),
@@ -6131,6 +6134,34 @@ mod tests {
         );
         assert!(popup.contains("discard"), "worktree paths offer discard: {popup}");
         assert!(!popup.contains("spill"), "worktree paths cannot be spilled");
+
+        worktree.paths[0].path = "target/".into();
+        worktree.paths[0].kind = ChangeKind::Added;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            super::draw_with_worktree(
+                frame,
+                area,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&worktree),
+            );
+        })?;
+        let popup = rendered_line(&terminal, 5);
+        assert!(!app.can_amend(), "collapsed directories cannot be amended as one file");
+        assert!(
+            !popup.contains("amend"),
+            "directory actions omit single-path amend: {popup}"
+        );
+        assert!(
+            popup.contains("discard"),
+            "collapsed directories can be discarded: {popup}"
+        );
+        worktree.paths[0].path = "file".into();
+        worktree.paths[0].kind = ChangeKind::Modified;
 
         app.set_worktree_head(Some(gix::ObjectId::Sha1([2; 20])), false);
         terminal.draw(|frame| {

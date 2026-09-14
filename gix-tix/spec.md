@@ -1054,6 +1054,11 @@ views.
   raw path within each group. When both groups exist, a non-selectable `↑ index ↑`
   divider scrolls between them; its dimmed label aligns with the path-kind letters
   and a green horizontal rail fills the inset content width to its right.
+- Untracked directories collapse using Git's normal status behavior: a directory
+  such as `target/` occupies one added row with a trailing slash. Tracked paths
+  remain individual entries, and ignored files stay excluded. Collapsed directories
+  have no file diff or line counts. Whole-commit operations that include untracked
+  changes still enumerate their individual files.
 - Path kinds are `A`, `M`, `D`, `R`, `C`, `T`, and `U`. The selected path is
   subtly inverted and appends its already-computed non-zero line counts.
 - Blocks are side by side when both condensed titles fit, otherwise Worktree is
@@ -1068,7 +1073,9 @@ views.
   block shows its distinct status line.
 - A selected Worktree path offers `Actions discard` (`a d`), regardless of the
   selected history entry. Unstaged changes restore that path from the index;
-  untracked and intent-to-add files are removed. Staged or conflicted changes
+  untracked and intent-to-add files are removed. Discarding a collapsed untracked
+  directory removes its untracked contents through Git and preserves ignored files.
+  Staged or conflicted changes
   reset that path in both the index and worktree to HEAD, including any unstaged
   edits to the same path. An unborn HEAD uses the empty tree. Renames restore
   their source and remove their destination; copies only remove the destination.
@@ -1269,6 +1276,8 @@ views.
   index version; an unstaged row uses its filtered worktree version. If both
   rows exist for one path, the selected row determines the version. Unresolved
   indexes cannot be amended. Unrelated staged entries retain their index state.
+  Collapsed untracked directories do not offer single-path amend; stage their
+  files first.
   The CLI intentionally supports only whole-commit amending.
 - `a Shift-S` is offered at `@` only when both staged and unstaged changes exist. It
   amends the unstaged changes into the source commit, then creates a new upper
@@ -2099,6 +2108,9 @@ views.
 - Access-only and incomplete `.lock` activity are ignored. Completed atomic
   renames, index/HEAD updates, relevant worktree paths, and backend rescan requests
   invalidate the appropriate cache.
+- Incremental status refreshes untracked child events from their top-level path
+  so collapsed directories appear and disappear consistently with a full status.
+  Tracked file events retain their precise path scopes.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.
