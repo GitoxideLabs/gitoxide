@@ -122,6 +122,15 @@ baseline '2022-01-01 12:00:00 -2400' 'GIT_ONLY'
 baseline '2022-01-01T12:00:00+24:00' 'GIT_ONLY'
 baseline '2022-01-01 12:00:00 +2559' 'GIT_ONLY'
 
+# Git's named timezone table also applies to ISO dates; RFC 2822 alone treats unfamiliar
+# abbreviations as UTC. Cover every alias, including mixed case, in both input formats.
+for zone in IDLW NT CAT HST HDT YST YDT PST PDT MST MDT CST CDT EST EDT AST ADT WAT \
+            GMT UTC UT Z WET BST CET MET MEWT MEST CEST MESZ FWT FST EET EEST \
+            WAST WADT CCT JST EAST EADT GST NZT NZST NZDT IDLE cet CeSt z; do
+    baseline "2008-02-14 20:30:45 $zone" ''
+    baseline "Thu, 14 Feb 2008 20:30:45 $zone" ''
+done
+
 # Timezone edge cases from git t0006
 baseline '1970-01-01 00:00:00 +0000' ''
 baseline '1970-01-01 01:00:00 +0100' ''

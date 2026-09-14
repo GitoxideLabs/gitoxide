@@ -1,6 +1,39 @@
 use crate::Time;
 use jiff::Zoned;
 
+/// Resolve Git's timezone abbreviations before RFC 2822 can treat an unfamiliar name as UTC.
+pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
+    let (date, name) = input.trim_end().rsplit_once(char::is_whitespace)?;
+    // Keep the historical meanings from Git's `date.c::timezone_names`, including daylight time.
+    let hours = match name.to_ascii_uppercase().as_str() {
+        "IDLW" => -12,
+        "NT" => -11,
+        "CAT" | "HST" => -10,
+        "HDT" | "YST" => -9,
+        "YDT" | "PST" => -8,
+        "PDT" | "MST" => -7,
+        "MDT" | "CST" => -6,
+        "CDT" | "EST" => -5,
+        "EDT" => -4,
+        "AST" => -3,
+        "ADT" => -2,
+        "WAT" => -1,
+        "GMT" | "UTC" | "UT" | "Z" | "WET" => 0,
+        "BST" | "CET" | "MET" | "MEWT" | "FWT" => 1,
+        "MEST" | "CEST" | "MESZ" | "FST" | "EET" => 2,
+        "EEST" => 3,
+        "WAST" => 7,
+        "WADT" | "CCT" => 8,
+        "JST" => 9,
+        "EAST" | "GST" => 10,
+        "EADT" => 11,
+        "NZT" | "NZST" | "IDLE" => 12,
+        "NZDT" => 13,
+        _ => return None,
+    };
+    Some(format!("{date} {hours:+03}00"))
+}
+
 /// Parse Git-style flexible date formats that aren't covered by standard strptime:
 /// - ISO8601 with dots: `2008.02.14 20:30:45 -0500`
 /// - Compact ISO8601: `20080214T203045`, `20080214T20:30:45`, `20080214T2030`, `20080214T20`
