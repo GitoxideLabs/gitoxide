@@ -50,8 +50,9 @@ pub(super) fn reinitialize_with_object_hash(repo: &mut crate::Repository, object
     let git_dir = repo.git_dir();
     let config_path = git_dir.join("config");
 
-    let mut config = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)
-        .or_raise(|| message("Failed to load repo-local git configuration before writing"))?;
+    let mut config = repo
+        .config_file_mut(&config_path)
+        .or_raise(|| message("Failed to update repository configuration"))?;
     // Mirror what `crate::create` writes at init time: only SHA-256 repositories get
     // `repositoryformatversion = 1` along with the `objectformat` extension.
     let is_sha256 = object_hash == gix_hash::Kind::Sha256;
@@ -68,14 +69,9 @@ pub(super) fn reinitialize_with_object_hash(repo: &mut crate::Repository, object
         // In a freshly initialized repository, this section exists solely to carry `objectformat`.
         config.remove_section("extensions", None);
     }
-    let mut lock =
-        gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None, 0)
-            .or_raise(|| message("Failed to acquire lock to write repository configuration to disk"))?;
     config
-        .write_to_filter(&mut lock, |section| section.meta().source == gix_config::Source::Local)
-        .or_raise(|| message("Failed to write repository configuration to disk"))?;
-    lock.commit()
-        .or_raise(|| message("Failed to commit lock after writing repository configuration to disk"))?;
+        .commit()
+        .or_raise(|| message("Failed to update repository configuration"))?;
 
     repo.reload()
         .or_raise(|| message("Failed to reopen the local repository after adopting the remote's object format"))?;

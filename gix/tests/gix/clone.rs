@@ -715,14 +715,21 @@ mod blocking_io {
     #[test]
     #[cfg(unix)]
     fn fetch_and_checkout_honors_shared_repository_permissions() -> TestResult {
+        for umask in [0o022, 0o077] {
+            if gix_testtools::run_with_umask(umask)? {
+                check_clone_permissions(umask)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn check_clone_permissions(umask: u32) -> TestResult {
         use std::{fs, os::unix::fs::PermissionsExt};
 
-        if gix_testtools::run_in_isolated_process()? {
-            return Ok(());
-        }
         let source_path = gix_testtools::scripted_fixture_read_only_with_args(
             "make_shared_repository_clones.sh",
-            [format!("{:04o}", gix_testtools::umask())],
+            [format!("{umask:04o}")],
         )?;
         let destinations = gix_testtools::tempfile::Builder::new()
             .prefix("clone's destinations")
@@ -1580,14 +1587,29 @@ mod blocking_io {
         );
 
         let tmp = gix_testtools::tempfile::TempDir::new()?;
-        let (repo, out) = gix::clone::PrepareFetch::new(
+        let mut prepare = gix::clone::PrepareFetch::new(
             remote,
             tmp.path(),
             gix::create::Kind::Bare,
             Default::default(),
-            restricted(),
-        )?
-        .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+            restricted().config_overrides(["core.sharedRepository=group"]),
+        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(tmp.path().join("config"), std::fs::Permissions::from_mode(0o600))?;
+        }
+        let (repo, out) = prepare.fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                repo.git_dir().join("config").metadata()?.permissions().mode() & 0o777,
+                0o600,
+                "adopting the remote object format preserves the existing configuration's mode"
+            );
+        }
 
         assert_eq!(
             repo.object_hash(),
