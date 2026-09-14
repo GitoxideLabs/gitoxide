@@ -1395,18 +1395,19 @@ views.
   the destination side after their shared ancestry; ordinary merges include all
   such parent paths, including pending sides beneath finalized merges. Finalized
   review roots, hidden boundaries, and shallow boundaries further limit replay.
-  All commits outside that scope retain their exact commit IDs and parent links,
-  even when pending. This includes older shared ancestry, off-path siblings,
-  descendants beyond the destination, and the departure unless it is also the
-  destination.
-  Pending commits outside this scope provide their existing trees without replay.
+  Older shared ancestry and unrelated branches retain their exact commit IDs and
+  parent links, even when pending. Rewritten commits lazily reparent affected
+  descendants in the loaded edit scope, including sibling branches and commits
+  beyond the destination. Their refs and pins move in the same transaction;
+  their trees and original replay bases remain available for later travel.
+  Pending commits outside the replay scope provide their existing trees without replay.
   A completed final replay does not reload history; another pass loads only the
-  rewritten path and never unrelated references.
+  remapped edit graph and replay route, never unrelated references.
   A conflict retains the ours tree, exact merge-result
   tree, conflict stages, prepared commits, and in-memory objects without changing
   the repository. The actual conflicting row is selected and centered with normal
   history-boundary clamping and shows a steady red conflict marker; `<enter>` persists
-  the prepared rebase, leaves later commits within the travel scope lazy, checks
+  the prepared rebase, leaves affected later commits lazy, checks
   out the conflicting commit at the ours tree, then checks out the merge result and derives the
   unmerged index from it. `Esc` discards the suspended operation; navigation and
   other read-only actions leave the choice armed, while repository-changing actions
@@ -1518,7 +1519,8 @@ views.
   AutoMerge or an ordinary descendant also refreshes changes made outside Tix,
   including required AutoMerges on ordinary merge paths, but only inside the
   original travel scope. Inputs outside that scope are snapshots: their current
-  trees may contribute to the merge, but travel never replays or reparents them.
+  trees may contribute to the merge, but travel never replays them. Affected
+  descendants still follow rewritten parents lazily.
   If a refreshed AutoMerge collapses to an input outside the scope, travel checks
   out that exact input, even when pending.
   Watchers only refresh display data and never initiate a remerge.

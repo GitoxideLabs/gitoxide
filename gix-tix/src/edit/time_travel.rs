@@ -817,15 +817,14 @@ pub(crate) fn perform_reporting_rebased(
     // Keep the creation name as well: rollback reverses any later association rewrites.
     let mut saved: Option<(SavedStash, gix::refs::FullName)> = None;
     let mut ref_changes = Vec::new();
-    let graph = travel_graph(&repository, graph, head_id, selected)?;
-    let graph = &graph;
+    let mut scope = travel_graph(&repository, graph, head_id, selected)?;
     let result = (|| -> Result<Perform> {
         let mut completed_graph = None;
         let mut remerge_notice = None;
         let mut original_ids = HashMap::new();
         let mut ref_rewrites = Vec::new();
-        let mut required = super::auto_merge::checkout_path(&repository, graph, Some(selected))?;
-        let mut pending = refresh_base(graph, selected, &required).or(pending_base(&repository, selected, &required)?);
+        let mut required = super::auto_merge::checkout_path(&repository, &scope, Some(selected))?;
+        let mut pending = refresh_base(&scope, selected, &required).or(pending_base(&repository, selected, &required)?);
         while let Some(base) = pending {
             let graph = completed_graph.as_ref().unwrap_or(graph);
             let mut rebased = Vec::new();
@@ -836,6 +835,7 @@ pub(crate) fn perform_reporting_rebased(
                     base,
                     checkout: selected,
                     stash_before_persist: stash_name.clone(),
+                    scope: &scope,
                 },
                 super::rebase::Signature::RedoIfNeeded,
                 super::rebase::Tree::CherryPick,
@@ -890,18 +890,13 @@ pub(crate) fn perform_reporting_rebased(
             }
             repository = open_repository(repository_path, bare, false)
                 .context("could not reopen repository after completing a pending rebase")?;
-            let mut ids = Vec::new();
-            for commit_id in graph.edit_commit_ids() {
-                let Some(mapped_commit_id) = outcome.map(commit_id) else {
-                    continue;
-                };
-                // A collapsed AutoMerge aliases an input; it does not make that input editable.
-                if outcome.collapsed.contains(&commit_id) {
-                    continue;
-                }
-                ids.push(mapped_commit_id);
-            }
-            let editable: HashSet<_> = ids.iter().copied().collect();
+            // A collapsed AutoMerge aliases an input; it does not add that input to the replay route.
+            let editable: HashSet<_> = scope
+                .edit_commit_ids()
+                .into_iter()
+                .filter(|commit_id| !outcome.collapsed.contains(commit_id))
+                .filter_map(|commit_id| outcome.map(commit_id))
+                .collect();
             required = required
                 .into_iter()
                 .filter_map(|commit_id| outcome.map(commit_id))
@@ -910,16 +905,23 @@ pub(crate) fn perform_reporting_rebased(
             pending = pending_base(&repository, selected, &required)?;
             if pending.is_some() {
                 anyhow::ensure!(
-                    rebased
-                        .iter()
-                        .any(|(commit_id, _)| outcome.map(*commit_id) != Some(*commit_id)),
+                    rebased.iter().any(|(commit_id, _)| scope.is_in_edit_scope(*commit_id)
+                        && outcome.map(*commit_id) != Some(*commit_id)),
                     "time-travel could not finish the pending destination within its route"
                 );
+                let ids: Vec<_> = graph
+                    .edit_commit_ids()
+                    .into_iter()
+                    .filter(|commit_id| !outcome.collapsed.contains(commit_id))
+                    .filter_map(|commit_id| outcome.map(commit_id))
+                    .collect();
                 let mut next_graph = history::HistoryGraph::for_commits(&repository, &ids)?;
                 next_graph.bounded_history = graph
                     .bounded_history
                     .as_ref()
                     .map(|ids| ids.iter().filter_map(|id| outcome.map(*id)).collect());
+                scope = history::HistoryGraph::for_commits(&repository, &editable.into_iter().collect::<Vec<_>>())?;
+                scope.bounded_history.clone_from(&next_graph.bounded_history);
                 completed_graph = Some(next_graph);
             }
         }
@@ -3396,6 +3398,106 @@ mod tests {
     }
 
     #[test]
+    fn time_travel_keeps_pending_descendants_above_the_replayed_destination() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let root_commit_id = repository.rev_parse_single("HEAD~2")?.detach();
+        let middle_commit_id = repository.rev_parse_single("HEAD~1")?.detach();
+        let tip_commit_id = repository.head_id()?.detach();
+        let graph = super::super::loaded_graph(&repository)?;
+        let mut root = repository.find_commit(root_commit_id)?.decode()?.into_owned()?;
+        root.tree = repository.object_hash().empty_tree();
+        git(
+            fixture.path(),
+            &["checkout", "-q", "--detach", &root_commit_id.to_string()],
+        )?;
+        let marked = super::super::rebase::perform(
+            &repository,
+            &graph,
+            super::super::rebase::Edit::Replace {
+                target: root_commit_id,
+                commit: root,
+            },
+            super::super::rebase::Signature::InvalidateExisting,
+            super::super::rebase::Tree::LeaveAsIsAndMarkDescendants,
+        )?
+        .complete()?;
+        let pending_middle_commit_id = marked.map(middle_commit_id).context("the middle remains")?;
+        let pending_tip_commit_id = marked.map(tip_commit_id).context("the tip remains")?;
+        let pending_tip = repository.find_commit(pending_tip_commit_id)?.decode()?.into_owned()?;
+        let graph = super::super::loaded_graph(&repository)?;
+        let mut reported = Vec::new();
+        let Perform::Complete {
+            selected: selected_commit_id,
+            ref_changes,
+            ..
+        } = perform_reporting_rebased(
+            repository.git_dir(),
+            false,
+            pending_middle_commit_id,
+            &graph,
+            &[],
+            &[],
+            Default::default(),
+            |commit_id| reported.push(commit_id),
+        )?
+        else {
+            return Err("removing the base file does not conflict with the middle patch".into());
+        };
+        assert_eq!(
+            reported,
+            [pending_middle_commit_id],
+            "only the destination replays eagerly"
+        );
+        let new_tip_commit_id = repository.find_reference("refs/heads/main")?.id().detach();
+        let new_tip = repository.find_commit(new_tip_commit_id)?.decode()?.into_owned()?;
+        assert_eq!(
+            new_tip.parents.as_slice(),
+            [selected_commit_id],
+            "the branch follows the replayed destination instead of retaining its old version"
+        );
+        assert_eq!(new_tip.tree, pending_tip.tree, "the descendant's tree remains lazy");
+        assert_eq!(
+            super::super::rebase::marked_parent_ref(&repository.find_commit(new_tip_commit_id)?.decode()?)?,
+            Some(Some(middle_commit_id)),
+            "the descendant retains its original replay base"
+        );
+        assert!(
+            super::super::rebase::is_pending(&new_tip),
+            "the descendant still needs replay"
+        );
+        assert!(
+            !super::super::rebase::is_pending(&repository.find_commit(selected_commit_id)?.decode()?.into_owned()?),
+            "the destination has its final tree"
+        );
+        assert!(
+            ref_changes.iter().any(|change| {
+                change.name.as_bstr() == b"refs/heads/main"
+                    && change.before == super::super::undo::State::Object(pending_tip_commit_id)
+                    && change.after == super::super::undo::State::Object(new_tip_commit_id)
+            }),
+            "the lazy descendant update participates in the travel transaction"
+        );
+        let graph = super::super::loaded_graph(&repository)?;
+        perform(
+            repository.git_dir(),
+            false,
+            new_tip_commit_id,
+            &graph,
+            &[],
+            &[],
+            Default::default(),
+        )?
+        .complete()?;
+        assert_eq!(
+            git(fixture.path(), &["ls-tree", "--name-only", "HEAD"])?,
+            b"middle\ntip\n",
+            "later travel applies both patches without restoring the removed base"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn time_travel_reports_only_the_completed_destination_path() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -3463,14 +3565,21 @@ mod tests {
             "animation follows only the completed destination path"
         );
         let repository = crate::test_repository::open(fixture.path())?;
+        let other_tip_commit_id = repository.find_reference("refs/heads/main")?.id();
+        let sibling = repository.find_commit(other_tip_commit_id)?.decode()?.into_owned()?;
+        let destination = repository.head_commit()?.decode()?.into_owned()?;
         assert_eq!(
-            repository.find_reference("refs/heads/main")?.id(),
-            pending_other_tip,
-            "travel leaves the sibling on its original history even when the destination path changes"
+            sibling.parents, destination.parents,
+            "both branches follow the rewritten common parent"
+        );
+        assert_eq!(
+            sibling.tree,
+            repository.find_commit(pending_other_tip)?.tree_id()?,
+            "the sibling's tree is retained for lazy replay"
         );
         assert!(
-            super::super::rebase::is_pending(&repository.find_commit(pending_other_tip)?.decode()?.into_owned()?),
-            "the unchanged sibling keeps its original pending state"
+            super::super::rebase::is_pending(&sibling),
+            "the reparented sibling stays pending"
         );
         Ok(())
     }
@@ -3494,7 +3603,7 @@ mod tests {
         };
         // No hidden boundary is configured. The departure's common ancestry is fixed,
         // including its old pending marker. Both pending sides leading to the merge
-        // are on the route, while a sibling and a later descendant must retain old IDs.
+        // are on the route, while affected siblings and later descendants only reparent.
         let common_commit_id = write("common pending ancestry", &[root_commit_id], true)?;
         let fork_commit_id = write("final common fork", &[common_commit_id], false)?;
         let source_commit_id = write("departure", &[fork_commit_id], false)?;
@@ -3507,13 +3616,13 @@ mod tests {
             ("common", common_commit_id),
             ("fork", fork_commit_id),
             ("source", source_commit_id),
-            ("sibling", sibling_commit_id),
-            ("later", later_commit_id),
         ];
         for (name, commit_id) in retained.into_iter().chain([
             ("left", left_commit_id),
             ("right", right_commit_id),
             ("destination", destination_commit_id),
+            ("sibling", sibling_commit_id),
+            ("later", later_commit_id),
         ]) {
             repository.reference(
                 format!("refs/heads/{name}"),
@@ -3580,6 +3689,24 @@ mod tests {
             assert!(
                 destination.parents.contains(&commit_id),
                 "the merge uses the finalized {name} side"
+            );
+        }
+        for (name, old_commit_id, parent_commit_id) in [
+            (
+                "sibling",
+                sibling_commit_id,
+                repository.find_reference("refs/heads/left")?.id().detach(),
+            ),
+            ("later", later_commit_id, selected),
+        ] {
+            let commit_id = repository.find_reference(format!("refs/heads/{name}").as_str())?.id();
+            let commit = repository.find_commit(commit_id)?.decode()?.into_owned()?;
+            assert_ne!(commit_id, old_commit_id, "{name} follows its rewritten parent");
+            assert_eq!(commit.parents.as_slice(), [parent_commit_id]);
+            assert_eq!(commit.tree, template.tree, "{name} preserves its tree");
+            assert!(
+                !super::super::rebase::is_pending(&commit),
+                "{name} needs no pending marker when its parent tree is unchanged"
             );
         }
         assert_eq!(
