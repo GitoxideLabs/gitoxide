@@ -8908,26 +8908,26 @@ fn unstaged_change(
             }
         }
         Item::DirectoryContents { entry, .. } => {
-            let mode = match entry.disk_kind {
-                Some(gix::dir::entry::Kind::File) => gix::objs::tree::EntryKind::Blob.into(),
-                Some(gix::dir::entry::Kind::Symlink) => gix::objs::tree::EntryKind::Link.into(),
-                _ => return Ok(None),
-            };
-            let path = entry.rela_path;
-            (
-                ChangeKind::Added,
-                None,
-                path.clone(),
+            let mut path = entry.rela_path;
+            let diff = if entry.disk_kind == Some(gix::dir::entry::Kind::Directory) {
+                path.push(b'/');
+                FileChange::Unavailable("untracked directories don't have a file diff; stage their files first")
+            } else {
+                let mode = match entry.disk_kind {
+                    Some(gix::dir::entry::Kind::File) => gix::objs::tree::EntryKind::Blob.into(),
+                    Some(gix::dir::entry::Kind::Symlink) => gix::objs::tree::EntryKind::Link.into(),
+                    _ => return Ok(None),
+                };
                 FileChange::Worktree {
                     old: None,
                     new: Some(DiffResource {
                         id: object_hash.null(),
                         mode,
-                        path,
+                        path: path.clone(),
                     }),
-                },
-                false,
-            )
+                }
+            };
+            (ChangeKind::Added, None, path, diff, false)
         }
         Item::Rewrite {
             source,
@@ -8959,11 +8959,14 @@ fn unstaged_change(
     )))
 }
 
-fn load_worktree_changes_without_lines(repository: &gix::Repository) -> Result<Changes> {
+fn load_worktree_changes_without_lines(
+    repository: &gix::Repository,
+    untracked: gix::status::UntrackedFiles,
+) -> Result<Changes> {
     let mut status = repository
         .status(gix::progress::Discard)
         .context("could not initialize worktree status")?
-        .untracked_files(gix::status::UntrackedFiles::Files)
+        .untracked_files(untracked)
         .index_worktree_options_mut(|options| {
             options.sorting = Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
         })
@@ -9004,7 +9007,7 @@ fn load_unstaged_changes_without_lines(repository: &gix::Repository, patterns: V
     let mut status = repository
         .status(gix::progress::Discard)
         .context("could not initialize incremental worktree status")?
-        .untracked_files(gix::status::UntrackedFiles::Files)
+        .untracked_files(gix::status::UntrackedFiles::Collapsed)
         .into_index_worktree_iter(patterns)
         .context("could not start incremental worktree status")?;
     let mut unstaged = Vec::new();
@@ -9084,7 +9087,10 @@ fn add_worktree_line_counts(mut out: Changes, line_diff_pool: &mut LineDiffPool)
 }
 
 fn load_worktree_changes(repository: &gix::Repository, line_diff_pool: &mut LineDiffPool) -> Result<Changes> {
-    add_worktree_line_counts(load_worktree_changes_without_lines(repository)?, line_diff_pool)
+    add_worktree_line_counts(
+        load_worktree_changes_without_lines(repository, gix::status::UntrackedFiles::Collapsed)?,
+        line_diff_pool,
+    )
 }
 
 fn literal_status_patterns(repository: &gix::Repository, scopes: &HashSet<BString>) -> Result<Option<Vec<BString>>> {
@@ -9170,7 +9176,24 @@ fn update_worktree_changes(
         replace_cached_changes(repository, cached, staged, |change| change.group == ChangeGroup::Staged)?;
     }
     if !parts.scopes.is_empty() {
-        let Some(patterns) = literal_status_patterns(repository, &parts.scopes)? else {
+        let index = repository
+            .index_or_empty()
+            .context("could not open index for incremental status")?;
+        let scopes = parts
+            .scopes
+            .iter()
+            .map(|scope| {
+                let mut scope = scope.clone();
+                // A child event can change whether any untracked ancestor collapses.
+                if index.entry_by_path(scope.as_bstr()).is_none()
+                    && let Some(slash) = scope.find_byte(b'/')
+                {
+                    scope.truncate(slash);
+                }
+                scope
+            })
+            .collect();
+        let Some(patterns) = literal_status_patterns(repository, &scopes)? else {
             *cached = load_worktree_changes(repository, line_diff_pool)?;
             return Ok(true);
         };
@@ -9181,8 +9204,7 @@ fn update_worktree_changes(
         let ignore_case = repository.filesystem_options()?.ignore_case;
         replace_cached_changes(repository, cached, unstaged, |change| {
             change.group == ChangeGroup::Unstaged
-                && parts
-                    .scopes
+                && scopes
                     .iter()
                     .any(|scope| path_is_in_status_scope(&change.path, scope, ignore_case))
         })?;
@@ -12508,6 +12530,84 @@ mod tests {
                 .contains("no single file diff"),
             "opening an unresolved path produces actionable feedback"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_changes_collapse_untracked_directories_like_git() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let path = fixture.path();
+        std::fs::create_dir_all(path.join("target/debug/deps"))?;
+        for index in 0..128 {
+            std::fs::write(
+                path.join(format!("target/debug/deps/artifact-{index}")),
+                "build output\n",
+            )?;
+        }
+        std::fs::write(path.join(".git/info/exclude"), "*.cache\n")?;
+        std::fs::write(path.join("target/keep.cache"), "ignored\n")?;
+        let repository = test_repository::open(path)?;
+        let mut pool = LineDiffPool::new(path, false, 2);
+        let mut cached = load_worktree_changes(&repository, &mut pool)?;
+        let git_status = gix_testtools::git_command(path)
+            .args(["status", "--porcelain=v1", "-z", "--untracked-files=normal"])
+            .output()?;
+        assert!(
+            git_status.status.success(),
+            "Git supplies the reference untracked listing"
+        );
+        let expected: Vec<BString> = git_status
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter_map(|entry| entry.strip_prefix(b"?? ").map(BString::from))
+            .collect();
+        let actual: Vec<_> = cached
+            .paths
+            .iter()
+            .filter(|change| change.group == ChangeGroup::Unstaged && change.kind == ChangeKind::Added)
+            .map(|change| change.path.clone())
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "untracked directories occupy the same single row as in Git"
+        );
+        let directory = cached
+            .paths
+            .iter()
+            .position(|change| change.path == "target/")
+            .expect("the build directory is visible");
+        assert_eq!(
+            cached.paths[directory].lines, None,
+            "directory contents are not line-diffed"
+        );
+        assert!(
+            matches!(cached.diffs[directory], FileChange::Unavailable(_)),
+            "a directory is not opened as an individual file diff"
+        );
+
+        for present in [true, false, true] {
+            let file = path.join("target/debug/deps/new-artifact");
+            if present {
+                std::fs::create_dir_all(path.join("target/debug/deps"))?;
+                std::fs::write(file, "new output\n")?;
+            } else {
+                std::fs::remove_dir_all(path.join("target/debug"))?;
+            }
+            update_worktree_changes(
+                &repository,
+                &mut cached,
+                &WorktreeStatusParts {
+                    staged: false,
+                    scopes: HashSet::from([BString::from("target/debug/deps/new-artifact")]),
+                },
+                &mut pool,
+            )?;
+            assert_eq!(
+                cached,
+                load_worktree_changes(&repository, &mut pool)?,
+                "child events preserve directory collapsing and remove directories with only ignored contents"
+            );
+        }
         Ok(())
     }
 

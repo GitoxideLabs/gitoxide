@@ -241,7 +241,7 @@ pub(crate) fn index_tree(repo: &gix::Repository, index: &gix::index::File) -> Re
 }
 
 pub(super) fn worktree_tree(repo: &gix::Repository, baseline: &gix::Tree<'_>) -> Result<ObjectId> {
-    let changes = load_worktree_changes_without_lines(repo)?;
+    let changes = load_worktree_changes_without_lines(repo, gix::status::UntrackedFiles::Files)?;
     worktree_tree_with_changes_inner(repo, baseline, &changes, None)
 }
 
@@ -250,7 +250,7 @@ fn worktree_tree_tracked(
     baseline: &gix::Tree<'_>,
     index: &gix::index::File,
 ) -> Result<ObjectId> {
-    let changes = load_worktree_changes_without_lines(repo)?;
+    let changes = load_worktree_changes_without_lines(repo, gix::status::UntrackedFiles::Files)?;
     worktree_tree_with_changes_inner(repo, baseline, &changes, Some(index))
 }
 

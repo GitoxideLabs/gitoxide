@@ -19,7 +19,7 @@ pub(crate) fn prepare(mut repo: gix::Repository, todo: bool) -> Result<Prepared>
         .head_id()
         .context("splitting requires an existing HEAD commit")?
         .detach();
-    let changes = load_worktree_changes_without_lines(&repo)?;
+    let changes = load_worktree_changes_without_lines(&repo, gix::status::UntrackedFiles::Files)?;
     if changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged) {
         anyhow::bail!("cannot split with unresolved conflicts");
     }
@@ -147,6 +147,8 @@ mod tests {
     #[test]
     fn splits_staged_and_worktree_changes_without_touching_files_during_preparation() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("split_commit.sh")?;
+        std::fs::create_dir_all(fixture.path().join("untracked-dir/nested"))?;
+        std::fs::write(fixture.path().join("untracked-dir/nested/file"), "nested untracked\n")?;
         let repository = open(fixture.path())?;
         let old = repository.head_id()?.detach();
         let old_parent = repository.find_commit(old)?.parent_ids().next().map(gix::Id::detach);
@@ -234,6 +236,14 @@ mod tests {
         assert_eq!(
             git(fixture.path(), &["show", &format!("{source}:untracked")])?,
             b"untracked\n"
+        );
+        assert_eq!(
+            git(
+                fixture.path(),
+                &["show", &format!("{source}:untracked-dir/nested/file")]
+            )?,
+            b"nested untracked\n",
+            "split includes the files inside collapsed untracked directories"
         );
         assert_eq!(git(fixture.path(), &["show", &format!("{upper}:staged")])?, b"staged\n");
         assert_eq!(repository.find_commit(source)?.message_raw()?, b"base\n".as_bstr());

@@ -338,6 +338,9 @@ mod tests {
     #[test]
     fn worktree_untracked_includes_untracked_but_not_staged_or_ignored_files() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        std::fs::create_dir_all(fixture.path().join("untracked-dir/nested"))?;
+        std::fs::write(fixture.path().join("untracked-dir/nested/file"), b"nested untracked\n")?;
+        std::fs::write(fixture.path().join("untracked-dir/nested/ignored"), b"ignored\n")?;
         std::fs::write(fixture.path().join("staged-only"), b"staged only\n")?;
         git(fixture.path(), &["add", "staged-only"])?;
         std::fs::write(fixture.path().join(".git/info/exclude"), b"ignored\n")?;
@@ -348,6 +351,15 @@ mod tests {
 
         assert_eq!(git(fixture.path(), &["show", "HEAD:tracked"])?, b"unstaged\n");
         assert_eq!(git(fixture.path(), &["show", "HEAD:untracked"])?, b"untracked\n");
+        assert_eq!(
+            git(fixture.path(), &["show", "HEAD:untracked-dir/nested/file"])?,
+            b"nested untracked\n",
+            "commit creation includes the files inside collapsed untracked directories"
+        );
+        assert!(
+            git(fixture.path(), &["cat-file", "-e", "HEAD:untracked-dir/nested/ignored"]).is_err(),
+            "ignored contents stay excluded"
+        );
         assert!(git(fixture.path(), &["cat-file", "-e", "HEAD:staged-only"]).is_err());
         assert!(git(fixture.path(), &["cat-file", "-e", "HEAD:ignored"]).is_err());
         Ok(())

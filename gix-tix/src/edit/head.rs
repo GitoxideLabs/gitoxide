@@ -238,6 +238,10 @@ fn amend_path_tree(
     change: &PathChange,
     index: &gix::index::File,
 ) -> Result<ObjectId> {
+    anyhow::ensure!(
+        !change.path.ends_with(b"/"),
+        "cannot amend an untracked directory as one path; stage its files first"
+    );
     match change.group {
         crate::ChangeGroup::Staged => {
             let index_tree = create::index_tree(repo, index)?;
@@ -949,6 +953,37 @@ pub(crate) mod tests {
                 assert!(unstaged.is_empty(), "the amended worktree version becomes clean");
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_amend_rejects_collapsed_directories() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        std::fs::create_dir_all(fixture.path().join("target/debug"))?;
+        std::fs::write(fixture.path().join("target/debug/artifact"), "build output\n")?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let selected = PathChange {
+            kind: ChangeKind::Added,
+            group: crate::ChangeGroup::Unstaged,
+            source: None,
+            path: "target/".into(),
+            lines: None,
+        };
+
+        let error = perform(repo, &graph, Kind::Amend, Some((std::slice::from_ref(&selected), None)))
+            .expect_err("a collapsed directory cannot be amended as one file");
+
+        assert!(
+            error.to_string().contains("stage its files first"),
+            "the error explains how to amend the directory"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "the repository remains unchanged"
+        );
         Ok(())
     }
 
