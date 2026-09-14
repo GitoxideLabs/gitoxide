@@ -322,3 +322,16 @@ baseline_relative 'eleven minutes ago' ''
 # `last` is a count of one, and the trailing `ago` is not required.
 baseline_relative 'last week' ''
 baseline_relative 'last day ago' ''
+
+# Digits may directly precede a unit without a separating space.
+baseline_relative '2days' ''
+baseline_relative '2DAYS' ''
+baseline_relative '2days 3hours ago' ''
+baseline_relative 'two days 3hours ago' ''
+baseline_relative '0days' ''
+baseline_relative '1month' ''
+baseline_relative '1year' ''
+# Git fails to recognize a unit followed immediately by another count, then treats
+# the numbers as calendar fields. Honor both count/unit pairs instead.
+baseline_relative '2days3hours' 'GIX_DIFF:2246400' 1251660000
+baseline_relative '2 days3 hours ago' 'GIX_DIFF:2246400' 1251660000

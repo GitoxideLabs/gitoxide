@@ -35,8 +35,10 @@ fn parse_named(input: &str, now: Option<&Zoned>) -> Option<ExnMessageResult<Zone
 /// Returns `None` if no pair is recognized.
 fn parse_ago(input: &str) -> Option<Vec<Pair<'_>>> {
     let mut words = input
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|s| !s.is_empty())
+        .as_bytes()
+        .chunk_by(|a, b| a.is_ascii_digit() == b.is_ascii_digit() && a.is_ascii_alphabetic() == b.is_ascii_alphabetic())
+        .filter(|word| word[0].is_ascii_alphanumeric())
+        .map(|word| std::str::from_utf8(word).expect("each retained chunk contains only ASCII letters or digits"))
         .peekable();
 
     // Git applies a unit the moment it sees one and keeps going, so `2 days 3 hours ago` is both

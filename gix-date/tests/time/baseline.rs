@@ -63,9 +63,9 @@ fn parse_compare_format() {
             let delta: i64 = delta.parse().expect("intentional differences are signed seconds");
             assert_eq!(*exit_code, 0, "Git accepts {pattern:?}");
             assert_eq!(
-                res.expect("gix-date preserves the more precise offset").seconds,
+                res.expect("the intentional difference case parses").seconds,
                 time_in_seconds_since_unix_epoch + delta,
-                "{pattern:?} differs from Git only by the recorded offset difference"
+                "{pattern:?} differs from Git only by the recorded timestamp difference"
             );
             continue;
         }
