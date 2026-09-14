@@ -1011,12 +1011,31 @@ pub fn main() -> Result<()> {
                             verbose,
                             core::pack::multi_index::PROGRESS_RANGE,
                             move |progress, _out, _err| {
+                                let repo = (multi_index_path
+                                    == std::path::Path::new(".git/objects/pack/multi-pack-index"))
+                                .then(|| repository(Mode::Lenient));
+                                let shared_repository_permissions = match repo {
+                                    Some(Ok(repo)) => {
+                                        let repository_index =
+                                            repo.objects.store_ref().path().join("pack/multi-pack-index");
+                                        if gix::path::realpath(&multi_index_path)?
+                                            == gix::path::realpath(repository_index)?
+                                        {
+                                            repo.refs.shared_repository_permissions
+                                        } else {
+                                            0
+                                        }
+                                    }
+                                    Some(Err(err)) if !err.is_not_found() => return Err(err),
+                                    _ => 0,
+                                };
                                 core::pack::multi_index::create(
                                     index_paths,
                                     multi_index_path,
                                     progress,
                                     &should_interrupt,
                                     object_hash,
+                                    shared_repository_permissions,
                                 )
                             },
                         ),
