@@ -3753,6 +3753,128 @@ mod tests {
     }
 
     #[test]
+    fn command_menu_input_with_many_worktree_changes() -> gix_testtools::Result {
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        use ratatui::backend::Backend;
+
+        let mut app = App::new(1);
+        app.changes_mode = Some(ChangesMode::Both);
+        let decorations = Decorations::new();
+        let mailmap = gix::mailmap::Snapshot::default();
+        let mut changes = Changes {
+            paths: (0..20_000)
+                .map(|index| crate::app::PathChange {
+                    kind: ChangeKind::Modified,
+                    group: ChangeGroup::Unstaged,
+                    source: None,
+                    path: format!("src/{}/file-{index}.rs", "directory/".repeat(8)).into(),
+                    lines: Some((1, 1)),
+                })
+                .collect(),
+            ..Changes::default()
+        };
+        let commands = command_menu::commands(&app, &decorations, false);
+        let items = crate::command_picker_items(&commands);
+        let mut menu = Menu::default();
+        menu.open(&items);
+        let mut terminal = Terminal::new(TestBackend::new(120, 40))?;
+        let mut background = None;
+        assert!(
+            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            "opening the menu requires a complete background frame"
+        );
+        let draw_full =
+            |terminal: &mut Terminal<TestBackend>, app: &mut App, menu: &mut Menu<CommandId>, changes: &Changes| {
+                let mut background = None;
+                terminal.draw(|frame| {
+                    let area = frame.area();
+                    draw_with_worktree(frame, area, app, &decorations, &mailmap, None, None, Some(changes));
+                    background = Some((area, frame.buffer_mut().clone()));
+                    if let Some(cursor) = crate::draw_active_menu(frame, area, app, menu, &decorations) {
+                        frame.set_cursor_position(cursor);
+                    }
+                    crate::prepare_terminal_frame(frame);
+                })?;
+                Ok::<_, std::convert::Infallible>(background)
+            };
+        background = draw_full(&mut terminal, &mut app, &mut menu, &changes)?;
+        let started = std::time::Instant::now();
+        for ch in "ref-tree".chars() {
+            assert_eq!(
+                crate::command_menu_input(
+                    &Event::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+                    &mut menu,
+                    &commands,
+                ),
+                crate::CommandMenuInput::Handled,
+                "typing stays inside the command menu"
+            );
+            assert!(
+                crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+                "query edits reuse the rendered worktree without traversing its changed paths"
+            );
+        }
+        eprintln!("eight palette edits over 20,000 changes: {:?}", started.elapsed());
+        assert_eq!(menu.query(), "ref-tree", "every keystroke edits the command query");
+
+        let mut expected = Terminal::new(TestBackend::new(120, 40))?;
+        let _ = draw_full(&mut expected, &mut app, &mut menu, &changes)?;
+        assert_eq!(
+            terminal.backend().buffer(),
+            expected.backend().buffer(),
+            "shrinking the menu restores the exposed background exactly"
+        );
+        assert!(
+            terminal.backend().cursor_visible(),
+            "editing keeps the query cursor visible"
+        );
+        assert_eq!(
+            terminal.backend_mut().get_cursor_position()?,
+            expected.backend_mut().get_cursor_position()?,
+            "cached redraws move the query cursor with the resized menu"
+        );
+        for _ in "ref-tree".chars() {
+            menu.backspace(&items);
+            assert!(
+                crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+                "deleting query text also reuses the background"
+            );
+        }
+        let _ = draw_full(&mut expected, &mut app, &mut menu, &changes)?;
+        assert_eq!(
+            terminal.backend().buffer(),
+            expected.backend().buffer(),
+            "growing the menu leaves no remnants of its smaller layout"
+        );
+
+        terminal.backend_mut().resize(100, 30);
+        assert!(
+            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            "a resize requires a fresh background and layout"
+        );
+        changes.paths.truncate(1);
+        background = draw_full(&mut terminal, &mut app, &mut menu, &changes)?;
+        menu.insert('d', &items);
+        assert!(
+            crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            "a complete redraw supplies a fresh background after changes and resizing"
+        );
+        expected.backend_mut().resize(100, 30);
+        let _ = draw_full(&mut expected, &mut app, &mut menu, &changes)?;
+        assert_eq!(
+            terminal.backend().buffer(),
+            expected.backend().buffer(),
+            "subsequent edits preserve the updated worktree view"
+        );
+        menu.close();
+        assert!(
+            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            "closing the menu returns to ordinary view drawing"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn command_menu_renders_filtered_numbered_results_and_a_cursor() -> Result<(), Box<dyn std::error::Error>> {
         let app = App::new(1);
         let commands = command_menu::commands(&app, &Decorations::new(), false);
