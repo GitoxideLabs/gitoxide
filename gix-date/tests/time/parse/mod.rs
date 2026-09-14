@@ -96,10 +96,22 @@ fn raw() -> Result<(), Exn<gix_date::Error>> {
         },
     );
 
-    assert!(gix_date::parse("1313584730 +1500", None).is_err());
     assert!(gix_date::parse("1313584730 +000001", None).is_err());
-    assert!(gix_date::parse("1313584730 +0001", None).is_err());
-    assert!(gix_date::parse("1313584730 +000100", None).is_err());
+    for (input, offset) in [
+        ("1313584730 +1500", 15 * 3600),
+        ("1313584730 +0001", 60),
+        ("1313584730 +000100", 60),
+        ("@1313584730 -2359", -(23 * 3600 + 59 * 60)),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, None)?,
+            Time {
+                seconds: 1313584730,
+                offset
+            },
+            "raw timestamps retain all valid hour and minute offsets"
+        );
+    }
 
     let expected = Time {
         seconds: 1660874655,
