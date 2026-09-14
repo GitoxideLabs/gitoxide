@@ -1452,6 +1452,7 @@ fn event_loop(
         app.leave_attention("worktree removed; using the common repository without worktree changes");
     }
     let mut pending_conflict_resolution = None;
+    refresh_rebase_session(&mut app, &repository_path, repository_is_bare);
     if !preview_mode {
         restore_merge_conflict_resolution(
             &mut app,
@@ -1567,8 +1568,7 @@ fn event_loop(
     let mut armed_worktree_removal = None;
     let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
     let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
-    let mut pending_todo_rebase_plan: Option<edit::rebase::Plan> = None;
-    let mut pending_todo_ref_changes = Vec::new();
+    let mut pending_todo_operation = "rebase";
     let result: Result<EventLoopExit> = (|| loop {
         if picker.as_deref_mut().is_some_and(worktrunk::Worktrees::drain_updates) {
             dirty = true;
@@ -1590,6 +1590,7 @@ fn event_loop(
             app.set_worktree_changes_available(false);
             app.set_worktree_branch(None);
             app.set_active_branch(None);
+            app.clear_rebase_continuation();
             #[cfg(feature = "blocking-network-client")]
             app.set_fetch_remote(recovered.remote_default_name(gix::remote::Direction::Fetch));
             worktree_watcher = None;
@@ -1840,7 +1841,7 @@ fn event_loop(
             if !preview_mode
                 && pending_rebase_conflict.is_none()
                 && pending_todo_rebase_conflict.is_none()
-                && pending_todo_rebase_plan.is_none()
+                && !app.rebase_continuation_pending()
                 && restore_merge_conflict_resolution(
                     &mut app,
                     &repository_path,
@@ -1850,6 +1851,19 @@ fn event_loop(
             {
                 dirty = true;
                 urgent = true;
+            }
+        }
+        if conflict_refresh_due
+            && !preview_mode
+            && pending_rebase_conflict.is_none()
+            && pending_todo_rebase_conflict.is_none()
+        {
+            if refresh_rebase_session(&mut app, &repository_path, repository_is_bare) {
+                dirty = true;
+                urgent = true;
+            }
+            if app.rebase_continuation_pending() {
+                pending_conflict_resolution = None;
             }
         }
         if conflict_refresh_due
@@ -2079,6 +2093,7 @@ fn event_loop(
                             (!repository_is_bare).then(|| decoration_head(&decorations)).flatten(),
                             false,
                         );
+                        refresh_rebase_session(&mut app, &repository_path, repository_is_bare);
                         restore_merge_conflict_resolution(
                             &mut app,
                             &repository_path,
@@ -2782,7 +2797,7 @@ fn event_loop(
                     || pending_force_push.is_some()
                     || pending_rebase_conflict.is_some()
                     || pending_todo_rebase_conflict.is_some()
-                    || pending_todo_rebase_plan.is_some()
+                    || app.rebase_continuation_pending()
                     || pending_conflict_resolution.is_some(),
             );
         let prefix_changed = if prefix_enabled {
@@ -2914,6 +2929,15 @@ fn event_loop(
             urgent = true;
             continue;
         }
+        if pending_rebase_conflict.is_none()
+            && pending_todo_rebase_conflict.is_none()
+            && matches!(&terminal_event, TerminalEvent::FocusGained)
+        {
+            dirty |= refresh_rebase_session(&mut app, &repository_path, repository_is_bare);
+            if app.rebase_continuation_pending() {
+                pending_conflict_resolution = None;
+            }
+        }
         if picker.is_some() && worktrunk_owns_input(&app, *picker_focused, focused) {
             let input = match &terminal_event {
                 TerminalEvent::Key(key) => {
@@ -2960,10 +2984,13 @@ fn event_loop(
                 urgent = true;
             }
             if let Some(input) = input {
+                if pending_rebase_conflict.is_none() && pending_todo_rebase_conflict.is_none() {
+                    dirty |= refresh_rebase_session(&mut app, &repository_path, repository_is_bare);
+                }
                 let switching_blocked = background_task.is_some()
                     || pending_rebase_conflict.is_some()
                     || pending_todo_rebase_conflict.is_some()
-                    || pending_todo_rebase_plan.is_some()
+                    || app.rebase_continuation_pending()
                     || pending_conflict_resolution.is_some()
                     || app.has_rebase_conflict();
                 let picker = picker.as_deref_mut().expect("picker presence was checked");
@@ -3164,7 +3191,7 @@ fn event_loop(
             && app.worktrunk_history_root()
             && pending_rebase_conflict.is_none()
             && pending_todo_rebase_conflict.is_none()
-            && pending_todo_rebase_plan.is_none()
+            && !app.rebase_continuation_pending()
             && pending_conflict_resolution.is_none()
             && !ref_tree.is_active()
             && !command_picker.is_open()
@@ -3216,6 +3243,22 @@ fn event_loop(
             }
             match &terminal_event {
                 TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => match ref_tree.handle_key(*key) {
+                    ref_tree::Input::PinReferences { .. }
+                    | ref_tree::Input::ResolveRemoteReferences(_)
+                    | ref_tree::Input::DeleteLocalBranches { .. }
+                    | ref_tree::Input::DeleteRemoteReferences { .. }
+                        if {
+                            pending_rebase_conflict.is_some() || pending_todo_rebase_conflict.is_some() || {
+                                dirty |= refresh_rebase_session(&mut app, &repository_path, repository_is_bare);
+                                app.rebase_continuation_pending()
+                            }
+                        } =>
+                    {
+                        ref_tree.leave_attention("a rebase is paused; continue or stop it before changing references");
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
                     ref_tree::Input::Handled => {
                         dirty = true;
                         urgent = true;
@@ -3595,6 +3638,15 @@ fn event_loop(
             dirty = true;
             urgent = true;
         }
+        if pending_rebase_conflict.is_none()
+            && pending_todo_rebase_conflict.is_none()
+            && !action_allowed_during_rebase_continuation(action.as_ref(), app.changes_focus.is_some())
+        {
+            dirty |= refresh_rebase_session(&mut app, &repository_path, repository_is_bare);
+            if app.rebase_continuation_pending() {
+                pending_conflict_resolution = None;
+            }
+        }
         let conflict_reconcile = if action == Some(Action::ForceQuit) {
             ConflictReconcileStatus::Inactive
         } else {
@@ -3723,22 +3775,27 @@ fn event_loop(
         }
         if key_pressed && pending_todo_rebase_conflict.is_some() {
             if action == Some(Action::OpenDiff) && app.changes_focus.is_none() {
-                let conflict = pending_todo_rebase_conflict
+                let mut conflict = pending_todo_rebase_conflict
                     .take()
                     .expect("a pending todo conflict was checked before accepting it");
-                let plan = conflict.continuation_plan();
-                match edit::time_travel::materialize_plan_conflict_reporting(conflict, &revisions, false) {
-                    Ok((notice, id, _, mut ref_changes)) => {
-                        pending_todo_ref_changes.append(&mut ref_changes);
-                        pending_todo_rebase_plan = Some(plan);
-                        app.begin_conflict_resolution();
-                        app.arm_rebase_continuation();
-                        app.leave_attention(format!("{notice}; resolve the index, then press <enter>"));
-                        app.select_commit_after_refresh(id);
+                let result = (|| {
+                    let tips = ref_snapshot
+                        .view_tips
+                        .iter()
+                        .filter_map(|commit_id| conflict.map(*commit_id))
+                        .collect();
+                    conflict.save_continuation(tips, pending_todo_operation)?;
+                    edit::time_travel::materialize_plan_conflict_reporting(conflict, &revisions, false)
+                })();
+                match result {
+                    Ok((notice, commit_id, _, _)) => {
+                        refresh_rebase_session(&mut app, &repository_path, repository_is_bare);
+                        app.leave_attention(format!("{notice}; continuation saved"));
+                        app.select_commit_after_refresh(commit_id);
                     }
                     Err(err) => {
-                        pending_todo_ref_changes.clear();
                         discard_todo_rebase_preview(&mut app, &ref_snapshot);
+                        refresh_rebase_session(&mut app, &repository_path, repository_is_bare);
                         app.leave_error(format!("conflict checkout: {err:#}"));
                     }
                 }
@@ -3749,20 +3806,9 @@ fn event_loop(
                 continue;
             }
             if action == Some(Action::Cancel) && app.changes_focus.is_none() {
-                let conflict = pending_todo_rebase_conflict
-                    .take()
-                    .expect("a pending todo conflict was checked before discarding it");
-                tracing::info!(commit_id = %conflict.original(), "discarded suspended todo rebase conflict");
-                let recorded = record_and_clear_pending_undo(
-                    &repository_path,
-                    repository_is_bare,
-                    "materialize rebase conflict",
-                    &mut pending_todo_ref_changes,
-                );
+                drop(pending_todo_rebase_conflict.take());
                 discard_todo_rebase_preview(&mut app, &ref_snapshot);
-                if let Err(err) = recorded {
-                    app.leave_attention(format!("cancelled rebase conflict; undo history: {err:#}"));
-                }
+                refresh_rebase_session(&mut app, &repository_path, repository_is_bare);
                 refresh_pending = true;
                 dirty = true;
                 urgent = true;
@@ -3770,7 +3816,11 @@ fn event_loop(
             }
         }
         if (pending_rebase_conflict.is_some() || pending_todo_rebase_conflict.is_some())
-            && !action_allowed_during_rebase_continuation(action.as_ref(), app.changes_focus.is_some())
+            && (!action_allowed_during_rebase_continuation(action.as_ref(), app.changes_focus.is_some())
+                || matches!(
+                    action,
+                    Some(Action::Refresh | Action::ToggleHidden | Action::ToggleRefTree)
+                ))
         {
             dirty = true;
             urgent = true;
@@ -3779,22 +3829,19 @@ fn event_loop(
         if key_pressed
             && action == Some(Action::Cancel)
             && app.changes_focus.is_none()
-            && pending_todo_rebase_plan.is_some()
+            && app.rebase_continuation_pending()
         {
-            drop(pending_todo_rebase_plan.take());
-            let recorded = record_and_clear_pending_undo(
-                &repository_path,
-                repository_is_bare,
-                "materialize rebase conflict",
-                &mut pending_todo_ref_changes,
-            );
-            app.clear_rebase_continuation();
-            let message = "stopped rebase continuation; the partially applied repository remains unchanged";
-            app.leave_attention(match recorded {
-                Ok(()) => message.into(),
-                Err(err) => format!("{message}; undo history: {err:#}"),
-            });
-            tracing::info!("stopped materialized rebase continuation without rolling back repository state");
+            let stopped = open_repository(&repository_path, repository_is_bare, false)
+                .and_then(|repository| edit::rebase::session::stop(&repository));
+            match stopped {
+                Ok(warning) => {
+                    app.clear_rebase_continuation();
+                    app.leave_attention(warning.unwrap_or_else(|| {
+                        "stopped rebase continuation; partial commits, index, and worktree preserved".into()
+                    }));
+                }
+                Err(err) => app.leave_error(format!("stop rebase: {err:#}")),
+            }
             dirty = true;
             urgent = true;
             continue;
@@ -3802,40 +3849,31 @@ fn event_loop(
         if key_pressed
             && action == Some(Action::OpenDiff)
             && app.changes_focus.is_none()
-            && pending_todo_rebase_plan.is_some()
+            && app.rebase_continuation_pending()
         {
-            let plan = pending_todo_rebase_plan
-                .take()
-                .expect("a pending continuation plan was checked before resuming it");
             let result = (|| {
                 let mut repository = open_repository(&repository_path, repository_is_bare, false)
                     .context("could not reopen repository to continue the rebase")?;
                 repository.object_cache_size(None);
+                let session =
+                    edit::rebase::session::load(&repository)?.context("no rebase is paused in this worktree")?;
+                session.current(&repository)?;
                 stage_resolved_conflict_paths(&repository)?;
+                let plan = session.parsed(&repository)?.plan;
                 let mut graph = HistoryGraph::for_commits(&repository, &plan.scope)?;
                 graph.bounded_history = history_graph.as_ref().and_then(|graph| graph.bounded_history.clone());
-                run_rebase_plan(terminal, repository.into_sync(), &graph, plan.clone(), &revisions)
+                run_rebase_plan(terminal, repository.into_sync(), &graph, plan, &revisions)
             })();
             match result {
                 Ok(edit::rebase::PlanPerform::Complete(outcome)) => {
                     app.clear_rebase_conflict();
                     app.clear_rebase_continuation();
                     app.set_worktree_conflicted(false);
-                    let mut changes = std::mem::take(&mut pending_todo_ref_changes);
-                    changes.extend(outcome.ref_changes);
-                    let message = outcome.notice.unwrap_or_else(|| "rebased history".into());
-                    leave_recorded_success(
-                        &mut app,
-                        &repository_path,
-                        repository_is_bare,
-                        "rebase history",
-                        &changes,
-                        message,
-                    );
+                    app.leave_success(outcome.notice.unwrap_or_else(|| "rebased history".into()));
                     refresh_pending = true;
                 }
                 Ok(edit::rebase::PlanPerform::Conflict(conflict)) => {
-                    let id = conflict.commit();
+                    let commit_id = conflict.commit();
                     preview_todo_rebase_conflict(
                         &mut app,
                         &conflict,
@@ -3843,12 +3881,12 @@ fn event_loop(
                         &ref_snapshot.view_tips,
                         &ref_snapshot.hidden_tips,
                     )?;
-                    app.arm_rebase_conflict(id);
-                    app.select_commit(id);
+                    app.arm_rebase_conflict(commit_id);
+                    app.select_commit(commit_id);
                     pending_todo_rebase_conflict = Some(conflict);
                 }
                 Err(err) => {
-                    pending_todo_rebase_plan = Some(plan);
+                    refresh_rebase_session(&mut app, &repository_path, repository_is_bare);
                     app.leave_error(format!("continue rebase: {err:#}"));
                 }
             }
@@ -3857,7 +3895,8 @@ fn event_loop(
             urgent = true;
             continue;
         }
-        if pending_todo_rebase_plan.is_some()
+        if app.rebase_continuation_pending()
+            && action != Some(Action::Amend)
             && !action_allowed_during_rebase_continuation(action.as_ref(), app.changes_focus.is_some())
         {
             dirty = true;
@@ -4409,7 +4448,7 @@ fn event_loop(
                         _ => None,
                     }
                     .transpose();
-                    let resolving_conflict = pending_conflict_resolution.is_some();
+                    let resolving_conflict = pending_conflict_resolution.is_some() || app.rebase_continuation_pending();
                     let result = history_graph
                         .as_ref()
                         .context("editing HEAD requires a completed history graph")
@@ -4690,6 +4729,7 @@ fn event_loop(
                             )?;
                             app.arm_rebase_conflict(id);
                             app.select_commit(id);
+                            pending_todo_operation = "rebase";
                             pending_todo_rebase_conflict = Some(conflict);
                         }
                         Ok(None) => app.leave_attention("no rebase performed: the todo was unchanged"),
@@ -4743,6 +4783,7 @@ fn event_loop(
                             )?;
                             app.arm_rebase_conflict(id);
                             app.select_commit(id);
+                            pending_todo_operation = "squash";
                             pending_todo_rebase_conflict = Some(conflict);
                         }
                         Err(err) => app.leave_error(format!("squash: {err:#}")),
@@ -4852,6 +4893,11 @@ fn event_loop(
                             )?;
                             app.arm_rebase_conflict(id);
                             app.select_commit(id);
+                            pending_todo_operation = if transplanting {
+                                "transplant"
+                            } else {
+                                "copy-insert commit"
+                            };
                             pending_todo_rebase_conflict = Some(conflict);
                         }
                         Err(err) => app.leave_error(format!("transplant: {err:#}")),
@@ -5340,18 +5386,8 @@ fn event_loop(
                     {
                         tracing::warn!(error = %err, "could not record materialized conflict before exit");
                     }
-                    let todo_pending =
-                        pending_todo_rebase_conflict.take().is_some() || pending_todo_rebase_plan.take().is_some();
-                    if todo_pending
-                        && let Err(err) = record_and_clear_pending_undo(
-                            &repository_path,
-                            repository_is_bare,
-                            "materialize rebase conflict",
-                            &mut pending_todo_ref_changes,
-                        )
-                    {
-                        tracing::warn!(error = %err, "could not record materialized rebase before exit");
-                    }
+                    // Accepted pauses are already persisted; quitting only discards a transient preview.
+                    drop(pending_todo_rebase_conflict.take());
                     return Ok(EventLoopExit::Quit(None));
                 }
             }
@@ -6228,13 +6264,28 @@ fn record_and_clear_pending_undo(
     result
 }
 
+fn refresh_rebase_session(app: &mut App, repository_path: &Path, bare: bool) -> bool {
+    let summary = if bare {
+        None
+    } else {
+        match open_repository(repository_path, bare, false).and_then(|repo| edit::rebase::session::status(&repo)) {
+            Ok(summary) => summary,
+            Err(err) => {
+                app.leave_error(format!("rebase status: {err:#}"));
+                return true;
+            }
+        }
+    };
+    app.set_rebase_session(summary)
+}
+
 fn restore_merge_conflict_resolution(
     app: &mut App,
     repository_path: &Path,
     bare: bool,
     pending: &mut Option<PendingConflictResolution>,
 ) -> bool {
-    if bare || pending.is_some() {
+    if bare || pending.is_some() || app.rebase_continuation_pending() {
         return false;
     }
     let restored = (|| -> Result<Option<PendingConflictResolution>> {
@@ -9653,7 +9704,11 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::ToggleInformation
                 | Action::ToggleAlign
                 | Action::ToggleCommit
+                | Action::ToggleActions
                 | Action::ToggleChanges
+                | Action::ToggleRefTree
+                | Action::ToggleHidden
+                | Action::Refresh
                 | Action::ToggleChangesFocus
                 | Action::CycleChangesParent
                 | Action::Copy
@@ -13702,6 +13757,10 @@ mod tests {
             Action::CycleDuplicate,
             Action::ToggleChangesFocus,
             Action::ToggleCommit,
+            Action::ToggleActions,
+            Action::Refresh,
+            Action::ToggleHidden,
+            Action::ToggleRefTree,
             Action::Copy,
             Action::ForceQuit,
         ] {
@@ -13710,10 +13769,6 @@ mod tests {
         for action in [
             Action::Undo,
             Action::Redo,
-            Action::Refresh,
-            Action::ToggleHidden,
-            Action::ToggleRefTree,
-            Action::ToggleActions,
             Action::Amend,
             Action::Spill,
             Action::Rebase,

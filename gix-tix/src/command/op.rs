@@ -22,6 +22,9 @@ pub(super) fn run(
     mut out: impl Write,
     mut err: impl Write,
 ) -> Result<()> {
+    if !matches!(command, None | Some(Command::Log)) {
+        crate::edit::rebase::session::ensure_idle(repository)?;
+    }
     match command.unwrap_or(Command::Log) {
         Command::Log => {
             let history = undo::history(repository)?;

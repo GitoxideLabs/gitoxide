@@ -21,6 +21,7 @@ use super::auto_merge;
 use crate::history::HistoryGraph;
 
 mod merge;
+pub(crate) mod session;
 
 const ORIGINAL_PARENT: &[u8] = b"tix-rebase-parent";
 
@@ -298,6 +299,21 @@ impl PlanConflict {
         self.conflict.prepared.persist_objects()
     }
 
+    pub(crate) fn save_continuation(&mut self, tips: Vec<ObjectId>, operation: &str) -> Result<Vec<u8>> {
+        self.persist_objects()?;
+        let document =
+            super::todo::prepare_continuation(self.repository(), &self.continuation_plan(), tips, true)?.document;
+        let previous = self.conflict.prepared.session.take();
+        self.conflict.prepared.session = Some(session::Publication::pause(
+            previous,
+            self.repository(),
+            self.commit(),
+            document.clone(),
+            operation,
+        )?);
+        Ok(document)
+    }
+
     pub(crate) fn map(&self, id: ObjectId) -> Option<ObjectId> {
         self.rewritten.get(&id).copied().unwrap_or(Some(id))
     }
@@ -552,6 +568,7 @@ struct Prepared {
     enrichment: Option<(&'static str, ObjectId, BString)>,
     continuation: Option<(ObjectId, Vec<ObjectId>)>,
     release_continuation: Option<(ObjectId, Vec<ObjectId>)>,
+    session: Option<session::Publication>,
 }
 
 pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[ObjectId]) -> Result<Vec<PlanRef>> {
@@ -568,7 +585,7 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[O
         if matches!(
             reference.name().category(),
             Some(Category::Tag | Category::RemoteBranch)
-        ) || super::undo::is_queue_ref(reference.name().as_bstr())
+        ) || crate::edit::is_internal_ref(reference.name().as_bstr())
             || super::replay_refs::is_ref(reference.name().as_bstr())
         {
             continue;
@@ -974,6 +991,18 @@ fn perform_inner(
     enrichment_headers: Option<EnrichmentEdit<'_>>,
     mut report: impl FnMut(Option<ObjectId>, Progress),
 ) -> Result<(Perform, Option<crate::enrich::Enrichment>)> {
+    let session = if repo.try_find_reference(session::REF)?.is_some() {
+        anyhow::ensure!(
+            matches!(&edit, Edit::Replace { target, .. } if Some(*target) == repo.head()?.id().map(gix::Id::detach))
+                && pending_checkout == PendingCheckout::FinalizeEditedHead
+                && enrichment_headers.is_none(),
+            "a rebase is paused; only conflict-resolution amendments are allowed until it is continued or stopped"
+        );
+        session::Publication::for_amend(repo)?
+    } else {
+        session::ensure_idle(repo)?;
+        None
+    };
     let mut repo = repo.clone();
     let header_only = matches!(enrichment_headers, Some(EnrichmentEdit::Patch(_)));
     let metadata_only = pending_checkout == PendingCheckout::Reject
@@ -1448,6 +1477,7 @@ fn perform_inner(
         enrichment: None,
         continuation: None,
         release_continuation: None,
+        session,
     };
     let enrichment = prepare_enrichment(&mut prepared, enrichment_headers)?;
     let perform = match conflict {
@@ -1759,6 +1789,7 @@ pub(super) fn finish_review_with_progress(
         enrichment,
         continuation: None,
         release_continuation: None,
+        session: None,
     };
     match conflict {
         Some((original, merged_tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
@@ -1784,6 +1815,7 @@ pub(crate) fn perform_plan_with_progress(
     checkout_options: CheckoutOptions<'_>,
     mut report: impl FnMut(Progress),
 ) -> Result<PlanPerform> {
+    let session = session::Publication::for_plan(repo, &mut plan)?;
     for step in &plan.steps {
         if step.commit.is_frozen() {
             let commit_id = step.commit.source().expect("a frozen step has a source");
@@ -2289,6 +2321,7 @@ pub(crate) fn perform_plan_with_progress(
             PlanCommit::Resolved(commit_id) => Some((commit_id, plan.scope.clone())),
             _ => None,
         }),
+        session,
     };
     tracing::info!(
         total = progress.total,
@@ -2488,6 +2521,7 @@ impl Prepared {
             .take_object_memory()
             .context("candidate object memory was unavailable")?;
 
+        let mut restore_current_tree = self.checkout_tree;
         let checkout_index = if checkout.is_some() {
             let selected = self
                 .selected
@@ -2500,6 +2534,7 @@ impl Prepared {
                 Some(tree_id) => tree_id,
                 None => self.repo.head_commit()?.tree_id()?.detach(),
             };
+            restore_current_tree = Some(old_tree);
             let new_tree = self.repo.find_commit(selected)?.tree_id()?.detach();
             super::delete::preflight_tree_transition(&self.repo, workdir, old_tree, new_tree)?;
             Some(IndexBackup::capture(self.repo.index_path().to_owned())?)
@@ -2578,6 +2613,7 @@ impl Prepared {
                     .collect::<Vec<_>>(),
                 checkout.and(self.selected),
             ),
+            self.session.as_mut(),
         )?;
         for (transitioned, transition) in transitions.iter().enumerate() {
             if let Err(err) = super::delete::apply_tree_transition(&transition.workdir, transition.old, transition.new)
@@ -2611,9 +2647,10 @@ impl Prepared {
             departure_stash: None,
             rewritten: std::mem::take(&mut self.rewritten),
         };
-        if let Some(options) = checkout {
-            let selected = outcome.selected.expect("checkout was preflighted");
-            let completed = (|| -> Result<()> {
+        let mut materialized_tree = None;
+        let completed = (|| -> Result<()> {
+            if let Some(options) = checkout {
+                let selected = outcome.selected.expect("checkout was preflighted");
                 let revisions: Vec<_> = options
                     .revisions
                     .iter()
@@ -2651,6 +2688,7 @@ impl Prepared {
                 )?);
                 if let Some((merged_tree, conflicts)) = materialized {
                     materialize_conflict(&self.repo, selected, merged_tree, conflicts)?;
+                    materialized_tree = Some(merged_tree);
                     outcome.notice = Some(format!(
                         "{}; ready to resolve conflicts",
                         outcome
@@ -2659,23 +2697,45 @@ impl Prepared {
                             .unwrap_or_else(|| format!("checked out {}", selected.to_hex_with_len(7)))
                     ));
                 }
-                Ok(())
-            })();
-            if let Err(mut err) = completed {
-                if let Err(rollback) = super::undo::rollback_with_worktrees(&self.repo, &outcome.ref_changes) {
-                    err = err.context(format!("operation rollback failed: {rollback:#}"));
-                }
-                for backup in index_resets
-                    .iter()
-                    .map(|reset| &reset.backup)
-                    .chain(checkout_index.as_ref())
-                {
-                    if let Err(restore) = backup.restore() {
-                        err = err.context(format!("index rollback failed: {restore}"));
-                    }
-                }
-                return Err(err);
             }
+            if let Some(session) = self.session.as_mut() {
+                session.finish(&self.repo, &outcome.ref_changes)?;
+                // The session owns undo recording across every pause and interface handoff.
+                outcome.ref_changes.clear();
+            }
+            Ok(())
+        })();
+        if let Err(mut err) = completed {
+            if let Some(merged_tree) = materialized_tree {
+                let restored = (|| -> Result<()> {
+                    self.repo
+                        .index_from_tree(&merged_tree)?
+                        .write(gix::index::write::Options::default())?;
+                    super::delete::apply_tree_transition(
+                        self.repo.workdir().context("conflict rollback requires a worktree")?,
+                        merged_tree,
+                        self.repo.head_commit()?.tree_id()?.detach(),
+                    )
+                })();
+                if let Err(restore) = restored {
+                    err = err.context(format!("conflict checkout rollback failed: {restore:#}"));
+                }
+            }
+            if let Err(rollback) =
+                super::undo::rollback_with_worktrees(&self.repo, &outcome.ref_changes, restore_current_tree)
+            {
+                err = err.context(format!("operation rollback failed: {rollback:#}"));
+            }
+            for backup in index_resets
+                .iter()
+                .map(|reset| &reset.backup)
+                .chain(checkout_index.as_ref())
+            {
+                if let Err(restore) = backup.restore() {
+                    err = err.context(format!("index rollback failed: {restore}"));
+                }
+            }
+            return Err(err);
         }
         Ok(outcome)
     }
@@ -3709,6 +3769,7 @@ fn update_refs(
     resources: (&[ObjectId], &[(gix::refs::FullName, Target)]),
     stash_edits: super::stash::RewriteEdits,
     replay_resources: (&[ObjectId], &[ObjectId], Option<ObjectId>),
+    session: Option<&mut session::Publication>,
 ) -> Result<UpdatedRefs> {
     let (pins, delete_refs) = resources;
     let mut edits = stash_edits.forward;
@@ -3746,7 +3807,7 @@ fn update_refs(
             if matches!(
                 reference.name().category(),
                 Some(Category::Tag | Category::RemoteBranch)
-            ) || super::undo::is_queue_ref(reference.name().as_bstr())
+            ) || crate::edit::is_internal_ref(reference.name().as_bstr())
                 || super::replay_refs::is_ref(reference.name().as_bstr())
             {
                 continue;
@@ -3839,6 +3900,9 @@ fn update_refs(
     )?;
     edits.extend(replay_edits.forward);
     rollback.extend(replay_edits.rollback);
+    if let Some(session) = session {
+        session.reserve(repo, &mut edits, &mut rollback)?;
+    }
     if edits.is_empty() {
         return Ok(UpdatedRefs::default());
     }
