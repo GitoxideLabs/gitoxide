@@ -94,6 +94,13 @@ impl crate::Repository {
     /// Cone patterns are supported, but a sparse index is not produced yet, left as an optimisation.
     /// The new `HEAD` reflog records its initial commit when `core.logAllRefUpdates` permits it.
     ///
+    /// `core.sharedRepository` applies to repository metadata, including `HEAD`, its reflog, and the index.
+    /// Like Git when preparing `<destination>/.git`, this also applies shared permissions to newly created
+    /// destination and parent directories, as well as the common `worktrees` directory. Existing directories
+    /// retain their permissions. The private Git directory and checked-out files and subdirectories use normal
+    /// filesystem permissions, including the umask. As a deviation from Git, the linking files `.git`, `gitdir`,
+    /// `commondir`, and `locked` also receive shared permissions.
+    ///
     /// `worktree.useRelativePaths` selects relative links instead of the default absolute links. When enabled,
     /// the shared config is upgraded to repository format version 1 with `extensions.relativeWorktrees=true`.
     /// This compatibility marker remains set even if checkout fails, and requires Git 2.48 or newer.
@@ -184,7 +191,10 @@ impl crate::Repository {
                 common_dir: repo.common_dir(),
                 git_dir: sparse_checkout_git_dir(&repo)?,
             },
-            gix_worktree::add::Options { relative_paths },
+            gix_worktree::add::Options {
+                relative_paths,
+                shared_repository_permissions: repo.config.shared_repository_permissions,
+            },
         )
         .or_raise(|| message("Could not prepare the linked worktree"))?;
         // `prepare()` already applied `gix_path::realpath()`, but that preserves component spelling.
@@ -267,6 +277,7 @@ impl crate::Repository {
             copy_worktree_config(
                 &repo.git_dir().join("config.worktree"),
                 &prepared.git_dir().join("config.worktree"),
+                repo.config.shared_repository_permissions,
             )?;
         }
 
@@ -279,6 +290,11 @@ impl crate::Repository {
             .or_raise(|| message("Could not open a worktree repository"))?
             .to_thread_local();
         repo.clear_namespace();
+        gix_fs::set_shared_repository_permissions(
+            &repo.git_dir().join("HEAD"),
+            repo.config.shared_repository_permissions,
+        )
+        .or_raise(|| message("Could not write the linked worktree HEAD"))?;
         // Like clone, initialize a symbolic HEAD's log without dereferencing or updating its branch.
         repo.edit_reference(RefEdit::update_with_log(
             "HEAD".try_into().expect("valid reference name"),
@@ -434,7 +450,7 @@ where
     bytes.show_throughput(started);
     ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
     index
-        .write(Default::default())
+        .write(Default::default(), repo.config.shared_repository_permissions)
         .or_raise(|| message("Could not write the linked worktree index"))?;
     Ok(outcome)
 }
@@ -449,7 +465,7 @@ fn sparse_checkout_git_dir(repo: &crate::Repository) -> Result<Option<&Path>> {
     Ok(is_enabled.then_some(repo.git_dir()))
 }
 
-fn copy_worktree_config(source: &Path, destination: &Path) -> Result<()> {
+fn copy_worktree_config(source: &Path, destination: &Path, shared_repository_permissions: i32) -> Result<()> {
     let mut config = match gix_config::File::from_path_no_includes(source.to_owned(), gix_config::Source::Worktree) {
         Ok(config) => config,
         Err(err) if err.is_not_found() => return Ok(()),
@@ -465,10 +481,12 @@ fn copy_worktree_config(source: &Path, destination: &Path) -> Result<()> {
     if let Ok(mut values) = config.raw_values_mut(Core::WORKTREE) {
         values.delete_all();
     }
-    let mut destination =
+    let mut destination_file =
         std::fs::File::create(destination).or_raise(|| message("Could not write the new worktree configuration"))?;
     config
-        .write_to(&mut destination)
+        .write_to(&mut destination_file)
+        .or_raise(|| message("Could not write the new worktree configuration"))?;
+    gix_fs::set_shared_repository_permissions(destination, shared_repository_permissions)
         .or_raise(|| message("Could not write the new worktree configuration"))?;
     Ok(())
 }
