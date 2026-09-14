@@ -312,7 +312,7 @@ pub(crate) mod function {
                                             }
                                         }
                                         b"blank" => {
-                                            if t_ch.is_ascii_whitespace() {
+                                            if matches!(t_ch, b' ' | b'\t') {
                                                 matched = true;
                                             }
                                         }
@@ -348,7 +348,8 @@ pub(crate) mod function {
                                             }
                                         }
                                         b"space" => {
-                                            if t_ch == b' ' {
+                                            // Git's `isspace()` uses its own `sane_ctype` table, which excludes vertical tab and form feed.
+                                            if matches!(t_ch, b' ' | b'\t' | b'\n' | b'\r') {
                                                 matched = true;
                                             }
                                         }

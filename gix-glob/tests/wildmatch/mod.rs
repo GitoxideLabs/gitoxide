@@ -298,6 +298,33 @@ fn corpus() {
 }
 
 #[test]
+fn whitespace_character_classes_match_git() {
+    // Verified against `git check-ignore`: `[:blank:]` is space and tab, while `[:space:]` additionally
+    // covers newline and carriage return, but not vertical tab or form feed.
+    let expected = [
+        (
+            "[[:blank:]]",
+            [(" ", 1u8), ("\t", 1), ("\n", 0), ("\x0b", 0), ("\x0c", 0), ("\r", 0)],
+        ),
+        (
+            "[[:space:]]",
+            [(" ", 1), ("\t", 1), ("\n", 1), ("\x0b", 0), ("\x0c", 0), ("\r", 1)],
+        ),
+    ];
+    for (pattern_text, cases) in expected {
+        for (text, is_match) in cases {
+            let (_pattern, actual) = multi_match(pattern_text, text);
+            assert!(!actual.any_panicked(), "{pattern_text} on {text:?} must not panic");
+            assert_eq!(
+                actual,
+                expect_multi(is_match, is_match, is_match, is_match),
+                "{pattern_text} on {text:?} must match what Git does"
+            );
+        }
+    }
+}
+
+#[test]
 fn brackets() {
     let (_pattern, actual) = multi_match(r"[B-a]", "A");
     assert!(!actual.any_panicked());
