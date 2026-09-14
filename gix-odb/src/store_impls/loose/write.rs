@@ -23,7 +23,7 @@ impl gix_object::Write for Store {
             .write_to(&mut to)
             .or_raise_erased(|| stream_data_error(&self.path))?;
         to.flush().or_erased()?;
-        self.finalize_object(to)
+        self.finalize_object(to, self.shared_repository_permissions)
     }
 
     /// Write the given buffer in `from` to disk in one syscall at best.
@@ -38,7 +38,7 @@ impl gix_object::Write for Store {
 
         to.write_all(from).or_raise_erased(|| stream_data_error(&self.path))?;
         to.flush().or_erased()?;
-        self.finalize_object(to)
+        self.finalize_object(to, self.shared_repository_permissions)
     }
 
     /// Write failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the temporary object
@@ -49,13 +49,44 @@ impl gix_object::Write for Store {
         from: &[u8],
         id: gix_hash::ObjectId,
     ) -> ExnResult<gix_hash::ObjectId> {
+        self.write_buf_with_known_id_and_permissions(kind, from, id, self.shared_repository_permissions)
+    }
+
+    fn write_stream(
+        &self,
+        kind: gix_object::Kind,
+        size: u64,
+        from: &mut dyn io::Read,
+    ) -> ExnResult<gix_hash::ObjectId> {
+        self.write_stream_with_permissions(kind, size, from, self.shared_repository_permissions)
+    }
+
+    fn write_stream_with_known_id(
+        &self,
+        kind: gix_object::Kind,
+        size: u64,
+        from: &mut dyn io::Read,
+        id: gix_hash::ObjectId,
+    ) -> ExnResult<gix_hash::ObjectId> {
+        self.write_stream_with_known_id_and_permissions(kind, size, from, id, self.shared_repository_permissions)
+    }
+}
+
+impl Store {
+    pub(crate) fn write_buf_with_known_id_and_permissions(
+        &self,
+        kind: gix_object::Kind,
+        from: &[u8],
+        id: gix_hash::ObjectId,
+        shared_repository_permissions: i32,
+    ) -> ExnResult<gix_hash::ObjectId> {
         let mut to = self.compressed_tempfile()?;
         to.write_all(&gix_object::encode::loose_header(kind, from.len() as u64))
             .or_raise_erased(|| write_header_error(&self.path))?;
 
         to.write_all(from).or_raise_erased(|| stream_data_error(&self.path))?;
         to.flush().or_erased()?;
-        self.finalize_object_at(id, to)
+        self.finalize_object_at(id, to, shared_repository_permissions)
     }
 
     /// Write the given stream in `from` to disk with at least one syscall.
@@ -63,11 +94,12 @@ impl gix_object::Write for Store {
     /// This will cost at least 4 IO operations.
     /// Write failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the temporary object
     /// directory.
-    fn write_stream(
+    pub(crate) fn write_stream_with_permissions(
         &self,
         kind: gix_object::Kind,
         size: u64,
         mut from: &mut dyn io::Read,
+        shared_repository_permissions: i32,
     ) -> ExnResult<gix_hash::ObjectId> {
         let mut to = self.dest()?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
@@ -75,17 +107,18 @@ impl gix_object::Write for Store {
 
         io::copy(&mut from, &mut to).or_raise_erased(|| stream_data_error(&self.path))?;
         to.flush().or_erased()?;
-        self.finalize_object(to)
+        self.finalize_object(to, shared_repository_permissions)
     }
 
     /// Write failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the temporary object
     /// directory.
-    fn write_stream_with_known_id(
+    pub(crate) fn write_stream_with_known_id_and_permissions(
         &self,
         kind: gix_object::Kind,
         size: u64,
         mut from: &mut dyn io::Read,
         id: gix_hash::ObjectId,
+        shared_repository_permissions: i32,
     ) -> ExnResult<gix_hash::ObjectId> {
         let mut to = self.compressed_tempfile()?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
@@ -93,7 +126,7 @@ impl gix_object::Write for Store {
 
         io::copy(&mut from, &mut to).or_raise_erased(|| stream_data_error(&self.path))?;
         to.flush().or_erased()?;
-        self.finalize_object_at(id, to)
+        self.finalize_object_at(id, to, shared_repository_permissions)
     }
 }
 
@@ -140,6 +173,7 @@ impl Store {
     fn finalize_object(
         &self,
         gix_hash::io::Write { hash, inner: file }: gix_hash::io::Write<CompressedTempfile>,
+        shared_repository_permissions: i32,
     ) -> ExnResult<gix_hash::ObjectId> {
         let id = hash
             .try_finalize()
@@ -147,27 +181,36 @@ impl Store {
             .or_raise_erased(|| {
                 Message::new("Could not hash temporary object file").with("path", self.path.as_path())
             })?;
-        self.finalize_object_at(id, file)
+        self.finalize_object_at(id, file, shared_repository_permissions)
     }
 
     /// Publication failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the object directory
     /// or destination file.
-    fn finalize_object_at(&self, id: gix_hash::ObjectId, file: CompressedTempfile) -> ExnResult<gix_hash::ObjectId> {
+    fn finalize_object_at(
+        &self,
+        id: gix_hash::ObjectId,
+        file: CompressedTempfile,
+        shared_repository_permissions: i32,
+    ) -> ExnResult<gix_hash::ObjectId> {
         let object_path = loose::hash_path(&id, self.path.clone());
         let object_dir = object_path
             .parent()
             .expect("each object path has a 1 hex-bytes directory");
-        if let Err(err) = fs::create_dir(object_dir) {
-            match err.kind() {
-                io::ErrorKind::AlreadyExists => {}
-                _ => {
-                    return Err(err
-                        .and_raise(Message::new("Could not create object directory").with("path", object_dir))
-                        .erased());
-                }
+        match fs::create_dir(object_dir) {
+            Ok(()) => gix_fs::set_shared_repository_permissions(object_dir, shared_repository_permissions)
+                .or_raise_erased(|| {
+                    Message::new("Could not set object directory permissions").with("path", object_dir)
+                })?,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => {
+                return Err(err
+                    .and_raise(Message::new("Could not create object directory").with("path", object_dir))
+                    .erased());
             }
         }
         let file = file.into_inner();
+        gix_fs::set_shared_repository_permissions(file.path(), shared_repository_permissions)
+            .or_raise_erased(|| Message::new("Could not set loose object permissions").with("path", file.path()))?;
         let res = file.persist(&object_path);
         // On windows, we assume that such errors are due to its special filesystem semantics,
         // on any other platform that would be a legitimate error though.
