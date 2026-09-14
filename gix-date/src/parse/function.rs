@@ -22,6 +22,9 @@ use gix_error::{Exn, ResultExt};
 /// *   `1950-12-31`
 /// *   `2024-12-31`
 ///
+/// With `now`, a short date keeps its local clock and timezone like Git. Without a reference,
+/// it resolves to midnight UTC.
+///
 /// ### 2. RFC2822 Format
 ///
 /// *   `Thu, 18 Aug 2022 12:45:06 +0800`
@@ -167,10 +170,15 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
             return Ok(Time::new(seconds, 0));
         }
     }
-    Ok(if let Ok(val) = Date::strptime(SHORT.0, input) {
-        let val = val
-            .to_zoned(TimeZone::UTC)
-            .or_raise(|| Error::new_with_input("Timezone conversion failed", input))?;
+    Ok(if let Ok(date) = Date::strptime(SHORT.0, input) {
+        let val = if let Some(now) = now.as_ref() {
+            let clock = now.time();
+            date.at(clock.hour(), clock.minute(), clock.second(), clock.subsec_nanosecond())
+                .to_zoned(now.time_zone().clone())
+        } else {
+            date.to_zoned(TimeZone::UTC)
+        }
+        .or_raise(|| Error::new_with_input("Timezone conversion failed", input))?;
         Time::new(val.timestamp().as_second(), val.offset().seconds())
     } else if let Ok(val) = rfc2822_relaxed(input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
