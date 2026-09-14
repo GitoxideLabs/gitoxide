@@ -1426,6 +1426,9 @@ pub(super) fn finish_review_with_progress(
     repo = repo.with_object_memory();
     let replay = Replay::new(&repo)?;
 
+    let prefix = super::review::inserted_parents(&repo, graph, review, tip)?;
+    let prefix_set: HashSet<_> = prefix.iter().copied().collect();
+    let root_commit_id = prefix.first().copied().unwrap_or(review);
     let review_descendants = graph
         .descendants_in_parent_order(review)
         .context("the review commit is not in the loaded history")?;
@@ -1447,7 +1450,13 @@ pub(super) fn finish_review_with_progress(
             ordinary
         })
         .collect();
-    let mut affected = review_descendants;
+    let mut affected = if prefix.is_empty() {
+        review_descendants
+    } else {
+        graph
+            .descendants_in_parent_order(root_commit_id)
+            .context("the inserted review ancestry is incomplete")?
+    };
     affected.extend(
         graph
             .descendants_in_parent_order(tip)
@@ -1456,10 +1465,10 @@ pub(super) fn finish_review_with_progress(
     let mut auto = auto_merge::prepare(&repo, graph, &mut affected, checkout.as_ref().map(|(id, _)| *id), None)?;
     let natural_ids: Vec<_> = affected
         .into_iter()
-        .filter(|id| *id != tip && !review_set.contains(id))
+        .filter(|id| *id != tip && !review_set.contains(id) && !prefix_set.contains(id))
         .collect();
     let mut progress = Progress {
-        total: review_ids.len() + natural_ids.len(),
+        total: prefix.len() + review_ids.len() + natural_ids.len(),
         ..Progress::default()
     };
     report(progress);
@@ -1493,10 +1502,10 @@ pub(super) fn finish_review_with_progress(
     let mut note_rewrites = Vec::new();
     let mut finished_review = None;
     let mut conflict = None;
-    for old in &review_ids {
+    for old in prefix.iter().chain(&review_ids) {
         let old_parents = graph.parents_of(*old).context("a review descendant is incomplete")?;
         let mut commit = repo.find_commit(*old)?.decode()?.into_owned()?;
-        let new_parents = if *old == review {
+        let new_parents = if *old == root_commit_id {
             vec![tip]
         } else {
             old_parents
@@ -1504,7 +1513,24 @@ pub(super) fn finish_review_with_progress(
                 .filter_map(|parent| rewritten.get(parent).copied().unwrap_or(Some(*parent)))
                 .collect()
         };
-        commit.parents = new_parents.into_iter().collect();
+        if prefix_set.contains(old) {
+            let replayed = replay.tree(
+                Some(*old),
+                &mut commit,
+                &old_parents,
+                &new_parents,
+                Tree::CherryPick,
+                false,
+                false,
+                Some(&mut progress),
+            )?;
+            anyhow::ensure!(
+                replayed.conflict.is_none(),
+                "added review ancestor {old} conflicts with the reviewed history; the review was left unchanged"
+            );
+        } else {
+            commit.parents = new_parents.into_iter().collect();
+        }
         if *old == review {
             super::review::remove_identity(&mut commit, review_ref.as_bstr());
             marker(&mut commit, false, None);

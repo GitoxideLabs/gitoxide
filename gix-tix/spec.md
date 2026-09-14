@@ -1509,8 +1509,14 @@ views.
   affected descendants for lazy replay. Pending ancestry below the review
   boundary remains untouched and does not block the amend.
 - `a r` finishes a selected review when status is completely clean and the current
-  worktree HEAD is the review commit or one of its successors. The
-  review commit is inserted after its reviewed tip with its exact tree, review
+  worktree HEAD is the review commit or one of its successors. Ordinary commits
+  inserted below the review, up to the first ancestor shared with its reviewed
+  tip, are transplanted oldest first onto that tip. Each keeps its own patch,
+  author, message, change ID, and notes; mutable refs and affected descendants
+  follow the rewrite. Hidden, pending, or non-single-parent additions are rejected,
+  and a conflicting transplant leaves the review and checkout unchanged. The
+  shared base may itself be a merge. The review commit follows those additions
+  (or the reviewed tip when there are none) with its exact tree, review
   header removed, updated committer, and configured signature. Review-side
   descendants retain exact trees and are signed without pending markers. With one
   review-side leaf, the reviewed tip's prior descendants are lazily reparented
