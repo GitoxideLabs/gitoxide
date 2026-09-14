@@ -1367,14 +1367,29 @@ mod blocking_io {
         );
 
         let tmp = gix_testtools::tempfile::TempDir::new()?;
-        let (repo, out) = gix::clone::PrepareFetch::new(
+        let mut prepare = gix::clone::PrepareFetch::new(
             remote,
             tmp.path(),
             gix::create::Kind::Bare,
             Default::default(),
-            restricted(),
-        )?
-        .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+            restricted().config_overrides(["core.sharedRepository=group"]),
+        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(tmp.path().join("config"), std::fs::Permissions::from_mode(0o600))?;
+        }
+        let (repo, out) = prepare.fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                repo.git_dir().join("config").metadata()?.permissions().mode() & 0o777,
+                0o600,
+                "adopting the remote object format preserves the existing configuration's mode"
+            );
+        }
 
         assert_eq!(
             repo.object_hash(),
