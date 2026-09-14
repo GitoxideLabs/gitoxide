@@ -210,7 +210,7 @@ baseline '@1466000000 -0200' ''
 # These tests use GIT_TEST_DATE_NOW=1000000000 (Sun Sep 9 01:46:40 UTC 2001)
 
 # Named
-# 'now' and 'today' don't seem to work.
+# Expiry-date treats `now` as a sentinel. `today` requires Git 2.55 (covered below).
 baseline_relative 'yesterday' ''
  
 # Seconds - from git t0006 check_relative
@@ -414,3 +414,15 @@ for now in 1251616800 1251660000; do
         baseline_relative "$date" '' "$now"
     done
 done
+
+# Git 2.55 introduced `today` with a midnight default. Probe the behavior rather
+# than the version to accommodate backports; pinned unit tests cover older hosts.
+if GIT_TEST_DATE_NOW=1251660000 git -c section.key=today config --type=expiry-date section.key 2>/dev/null | grep -qx '1251590400'; then
+    for now in 1251616800 1251660000; do
+        for date in today TODAY 'noon today' 'today at noon' '6pm today' 'today 6pm' \
+                    '6am today' 'today now' 'now today' '1 day today' 'today 1 day' \
+                    '1 month today' 'today 1 month' 'now today 12:34:56.3.days.ago' '07:20 today'; do
+            baseline_relative "$date" '' "$now"
+        done
+    done
+fi

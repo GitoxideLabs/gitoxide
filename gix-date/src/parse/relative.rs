@@ -13,13 +13,10 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Option<Result<Zoned, Exn<Error>
     Some(apply_operations(now, &parse_operations(input)?))
 }
 
-/// Parse named relative dates like "now", "today", "yesterday".
+/// Fast path for named relative dates that only subtract a fixed duration.
 fn parse_named(input: &str, now: Option<&Zoned>) -> Option<Result<Zoned, Exn<Error>>> {
     let input = input.trim();
     let duration = if input.eq_ignore_ascii_case("now") {
-        SignedDuration::ZERO
-    } else if input.eq_ignore_ascii_case("today") {
-        // "today" is treated the same as "now" (current time) for simplicity
         SignedDuration::ZERO
     } else if input.eq_ignore_ascii_case("yesterday") {
         SignedDuration::from_hours(24)
@@ -91,6 +88,8 @@ fn parse_operations(input: &str) -> Option<Vec<Operation<'_>>> {
             Operation::Yesterday
         } else if word.eq_ignore_ascii_case("now") {
             Operation::Now
+        } else if word.eq_ignore_ascii_case("today") {
+            Operation::Today
         } else if let Some(is_pm) = meridian(word) {
             Operation::Meridian { hour: None, is_pm }
         } else {
@@ -106,7 +105,7 @@ fn parse_operations(input: &str) -> Option<Vec<Operation<'_>>> {
                 Operation::Pair(Pair { period, count, unit })
             }
         };
-        date_known |= matches!(operation, Operation::Now | Operation::Yesterday)
+        date_known |= matches!(operation, Operation::Now | Operation::Yesterday | Operation::Today)
             || matches!(&operation, Operation::Pair(pair) if pair.count != 0);
         operations.push(operation);
     }
@@ -157,6 +156,7 @@ enum Operation<'a> {
     Meridian { hour: Option<i8>, is_pm: bool },
     Yesterday,
     Now,
+    Today,
 }
 
 /// Git permits hour 24 and second 60, deferring their rollover until date normalization.
@@ -339,6 +339,7 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
 
     let now = now.ok_or(ValidationError::new("Missing current time"))?;
     let reference_day = now.day();
+    let reference_clock = Clock::from(now.time());
     let mut fields = Fields::from(now);
     fields.day = -1;
     for operation in operations {
@@ -377,6 +378,23 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
                 continue;
             }
             Operation::Now => {
+                fields = fields.update(reference_day, 0)?.into();
+                continue;
+            }
+            Operation::Today => {
+                // Git compares the clock fields, not whether the input explicitly set a time.
+                if fields.clock.hour == reference_clock.hour
+                    && fields.clock.minute == reference_clock.minute
+                    && fields.clock.second == reference_clock.second
+                {
+                    fields.clock = Clock {
+                        hour: 0,
+                        minute: 0,
+                        second: 0,
+                        nanosecond: 0,
+                    };
+                }
+                fields.day = -1;
                 fields = fields.update(reference_day, 0)?.into();
                 continue;
             }

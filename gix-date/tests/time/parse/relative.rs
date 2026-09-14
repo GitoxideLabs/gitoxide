@@ -229,6 +229,64 @@ fn am_pm_adjustments_use_local_clock_components() -> gix_testtools::Result {
 }
 
 #[test]
+fn today_matches_git_2_55_and_composes_with_clocks() -> gix_testtools::Result {
+    // `today` was added in Git 2.55 by a237eacfe5. These test-tool results remain
+    // available even when the fixture-generating Git predates that capability.
+    for seconds in [1_251_616_800, 1_251_660_000] {
+        let now = jiff::Timestamp::from_second(seconds)?.to_zoned(TimeZone::UTC);
+        for (input, expected) in [
+            ("today", 1251590400),
+            ("TODAY", 1251590400),
+            ("noon today", 1251633600),
+            ("today at noon", 1251633600),
+            ("6pm today", 1251655200),
+            ("today 6pm", 1251655200),
+            ("6am today", 1251612000),
+            ("today now", 1251590400),
+            ("now today", 1251590400),
+            ("1 day today", 1251590400),
+            ("today 1 day", 1251504000),
+            ("1 month today", 1248912000),
+            ("today 1 month", 1248912000),
+            ("now today 12:34:56.3.days.ago", 1251635696),
+            (
+                "07:20 today",
+                if seconds == 1_251_616_800 {
+                    1251590400
+                } else {
+                    1251616800
+                },
+            ),
+        ] {
+            assert_eq!(
+                gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+                gix_date::Time::new(expected, 0),
+                "{input:?} from {now}: today preserves a changed clock, otherwise defaults to midnight"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn today_uses_local_midnight() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    for (input, expected) in [
+        ("today", "2009-08-31 00:00:00 +0800"),
+        ("today at noon", "2009-08-31 12:00:00 +0800"),
+        ("noon today", "2009-08-31 12:00:00 +0800"),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::parse(expected, None).map_err(gix_error::Exn::into_error)?,
+            "{input:?}: today refers to the supplied local date, not UTC"
+        );
+        assert!(gix_date::parse(input, None).is_err(), "today needs a reference date");
+    }
+    Ok(())
+}
+
+#[test]
 fn numeric_clocks_check_component_and_timestamp_ranges() {
     for input in ["25:00", "12:60", "12:00:61", "99999999999999999999:00"] {
         assert!(
@@ -445,10 +503,10 @@ mod named {
     #[test]
     fn today() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        let actual = gix_date::parse(" today ", Some(utc(now))).unwrap();
+        let actual = gix_date::parse(" today ", Some(utc(now))).expect("today resolves with a reference time");
         assert_eq!(
-            actual.seconds, 1_000_000,
-            "the input is independent of surrounding whitespace as well"
+            actual.seconds, 950_400,
+            "today is local midnight, independently of surrounding whitespace"
         );
     }
 
