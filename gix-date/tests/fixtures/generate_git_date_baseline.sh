@@ -65,6 +65,29 @@ baseline 'Fri, 13 Feb 2009 23:31:30 +0000' 'RFC2822'  # Unix timestamp 123456789
 baseline 'Wed, 15 Jun 2016 16:13:20 +0200' 'RFC2822'  # from git t0006
 baseline 'Thu, 7 Apr 2005 15:14:13 -0700' ''  # from git t0006
 
+# Complete textual dates exercise Git's month-name matching independently of RFC 2822.
+# Weekdays are ignored, and ordinal suffixes need not agree with the day number.
+for date in 'February 14, 2008' 'February 14th, 2008' '14th February 2008' \
+            'Monday, fEbRu 14st, 2008' 'Feb 29 2009' 'Feb 31 2008'; do
+    baseline "$date 20:30:45 -0500" ''
+done
+baseline 'Feb 14 20:30:45 2008 -0500' ''
+baseline 'February 14 2008 20:30 -05' ''
+baseline 'February 14 2008 20:30:45 -05:00' ''
+baseline 'February 14 2008 20:30:45 CET' ''
+baseline 'February 14 2008 20:30:45 Z' ''
+baseline 'February 14 2008 20:30:45 +2359' ''
+baseline 'February 14 2008 20:30:45 -2359' ''
+# Git's -1-minute sentinel loses this explicit offset; retain it like other numeric offsets.
+baseline 'February 14 2008 20:30:45 -0001' 'GIX_DIFF:60'
+baseline 'Feb 14 2008 24:00:00 +0000' ''
+baseline 'Feb 14 2008 23:59:60 +0000' ''
+for month in January February March April May June July August September October November December; do
+    for ((length=3; length<=${#month}; length++)); do
+        baseline "${month:0:length} 14th, 2008 20:30:45 +0000" ''
+    done
+done
+
 # GIT_RFC2822 format: like RFC2822 but with non-padded day
 baseline 'Thu, 1 Aug 2022 12:45:06 +0800' ''
 baseline 'Sat, 1 Jan 2000 00:00:00 +0000' ''

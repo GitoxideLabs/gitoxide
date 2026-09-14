@@ -215,6 +215,114 @@ mod iso8601_dots {
     }
 }
 
+mod textual_dates {
+    use gix_date::Time;
+
+    #[test]
+    fn complete_layouts_ordinals_and_offsets() -> gix_testtools::Result {
+        let now = jiff::Timestamp::from_second(1_000_000_000)?.to_zoned(jiff::tz::TimeZone::UTC);
+        for (input, seconds, offset) in [
+            ("February 14, 2008 20:30:45 -0500", 1203039045, -18000),
+            ("February 14th, 2008 20:30:45 -0500", 1203039045, -18000),
+            ("14th February 2008 20:30:45 -0500", 1203039045, -18000),
+            ("Feb 14 20:30:45 2008 -0500", 1203039045, -18000),
+            ("Monday, fEbRu 14st, 2008 20:30:45 -0500", 1203039045, -18000),
+            ("February 14 2008 20:30 -05", 1203039000, -18000),
+            ("February 14 2008 20:30:45 -05:00", 1203039045, -18000),
+            ("February 14 2008 20:30:45 CET", 1203017445, 3600),
+            ("February 14 2008 20:30:45 Z", 1203021045, 0),
+            ("February 14 2008 20:30:45 +2359", 1202934705, 86340),
+            ("February 14 2008 20:30:45 -2359", 1203107385, -86340),
+            ("February 14 2008 20:30:45 -0001", 1203021105, -60),
+        ] {
+            for reference in [None, Some(now.clone())] {
+                assert_eq!(
+                    gix_date::parse(input, reference).map_err(gix_error::Exn::into_error)?,
+                    Time::new(seconds, offset),
+                    "{input}: complete textual dates retain their offset and do not depend on now"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn month_names_accept_case_insensitive_prefixes() -> gix_testtools::Result {
+        for (index, month) in [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let expected = gix_date::parse(&format!("2008-{:02}-14 20:30:45 +0000", index + 1), None)
+                .map_err(gix_error::Exn::into_error)?;
+            for length in 3..=month.len() {
+                let input = format!("{} 14th, 2008 20:30:45 +0000", month[..length].to_ascii_uppercase());
+                assert_eq!(
+                    gix_date::parse(&input, None).map_err(gix_error::Exn::into_error)?,
+                    expected,
+                    "{input}: Git accepts every month-name prefix with at least three letters"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn calendar_and_clock_overflow_matches_git() -> gix_testtools::Result {
+        for (input, seconds) in [
+            ("Feb 29 2009 20:30:45 +0000", 1235939445),
+            ("Feb 31 2008 20:30:45 +0000", 1204489845),
+            ("Feb 14 2008 24:00:00 +0000", 1203033600),
+            ("Feb 14 2008 23:59:60 +0000", 1203033600),
+        ] {
+            assert_eq!(
+                gix_date::parse(input, None).map_err(gix_error::Exn::into_error)?,
+                Time::new(seconds, 0),
+                "{input}: Git normalizes calendar and clock overflow instead of rejecting it"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_or_malformed_dates_are_not_absolute() {
+        for input in [
+            "Fe 14 2008 20:30:45 +0000",
+            "Februbbish 14 2008 20:30:45 +0000",
+            "February14 2008 20:30:45 +0000",
+            "14-Feb-2008 20:30:45 +0000",
+            "Feb-14-2008 20:30:45 +0000",
+            "February 14 20:30:45 +0000",
+            "February 14 2008 +0000",
+            "February 32 2008 20:30:45 +0000",
+            "February 14 2008 25:00:00 +0000",
+            "February 14 2008 12:60:00 +0000",
+            "February 14 2008 12:00:61 +0000",
+            "February 14 2008 12:00:00:00 +0000",
+            "February 14 2008 20:30:45 +05::00",
+            "February 14 2008 20:30:45 +01-1",
+            "February 14\n2008 20:30:45 +0000",
+        ] {
+            assert!(
+                gix_date::parse(input, None).is_err(),
+                "{input}: outside the supported complete textual-date grammar"
+            );
+        }
+    }
+}
+
 mod numeric_dates {
     use gix_date::Time;
 

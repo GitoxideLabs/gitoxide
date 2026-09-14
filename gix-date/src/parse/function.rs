@@ -27,6 +27,14 @@ use gix_error::{Exn, ResultExt};
 /// *   `Thu, 18 Aug 2022 12:45:06 +0800`
 /// *   `Mon Oct 27 10:30:00 2023 -0800`
 ///
+/// Complete textual dates also accept month-first or day-first layouts, such as
+/// `February 14th, 2008 20:30:45 -0500` and `14 February 2008 20:30:45 CET`.
+/// They require a four-digit year, a colon-separated clock, and an explicit timezone.
+/// The year can precede or follow the clock. Month names accept case-insensitive prefixes
+/// of at least three letters, and an optional weekday does not have to match the date.
+/// Like Git, these forms normalize day overflow (February 31), hour 24, and second 60.
+/// Explicit offsets are retained, including `-0001`, which Git treats as an unspecified timezone.
+///
 /// ### 3. GIT_RFC2822 Format
 ///
 /// *   `Thu, 8 Aug 2022 12:45:06 +0800`
