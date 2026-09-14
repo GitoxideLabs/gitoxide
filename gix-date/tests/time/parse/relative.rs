@@ -174,6 +174,53 @@ fn named_clocks_use_the_reference_timezone() -> gix_testtools::Result {
 }
 
 #[test]
+fn numeric_clocks_keep_the_local_date_and_token_boundaries() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    for (input, expected) in [
+        ("15:00", "2009-08-31 15:00:00 +0800"),
+        ("24:00", "2009-09-01 00:00:00 +0800"),
+        ("23:59:60", "2009-09-01 00:00:00 +0800"),
+        ("12:34:56.3.days.ago", "2009-08-28 12:34:56 +0800"),
+        ("12:34:56\u{2003}1day", "2009-08-30 12:34:56 +0800"),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::parse(expected, None).map_err(gix_error::Exn::into_error)?,
+            "{input:?}: preserve clocks, distinguish subsequent counts, and use the local date"
+        );
+        assert!(gix_date::parse(input, None).is_err(), "a clock alone needs a date");
+    }
+    Ok(())
+}
+
+#[test]
+fn clock_assignments_clear_fractional_seconds() -> gix_testtools::Result {
+    let now = jiff::Timestamp::new(0, 500_000_000)?.to_zoned(TimeZone::UTC);
+    for input in ["midnight 1 second ago", "00:00 1 second ago"] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(-1, 0),
+            "{input:?}: assigning midnight clears the cached fractional second before subtraction"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn numeric_clocks_check_component_and_timestamp_ranges() {
+    for input in ["25:00", "12:60", "12:00:61", "99999999999999999999:00"] {
+        assert!(
+            gix_date::parse(input, Some(utc(SystemTime::UNIX_EPOCH))).is_err(),
+            "{input:?} is not a clock that Git's set_time() accepts"
+        );
+    }
+    assert!(
+        gix_date::parse("24:00", Some(jiff::Timestamp::MAX.to_zoned(TimeZone::UTC))).is_err(),
+        "clock rollover beyond the timestamp range returns an error"
+    );
+}
+
+#[test]
 fn various() {
     // A fixed timestamp (2001-09-09T01:46:40Z, like the baseline) keeps the expected values
     // reproducible: with the real current time, the month- and year-based cases would disagree

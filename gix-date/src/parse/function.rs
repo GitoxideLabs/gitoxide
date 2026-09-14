@@ -86,7 +86,12 @@ use gix_error::{Exn, ResultExt};
 /// Named clock times are `midnight` (00:00), `noon` (12:00), and `tea` (17:00), and combine
 /// with relative dates, as in `noon yesterday` or `last Friday at noon`. With no day specified,
 /// a named clock selects its most recent occurrence; `now noon` fixes the day first and can
-/// therefore select noon later today.
+/// therefore select noon later today. Explicit clocks (`HH:MM` or `HH:MM:SS`) also combine
+/// with relative dates and keep the current day even if the clock is later than `now`.
+/// At the start of an expression, `12:34:56.3.days.ago` means three days ago at 12:34:56.
+/// After `now`, `yesterday`, or a nonzero relative unit has established the date, Git instead
+/// discards a clock's dot-suffix as fractional seconds; this parser follows that distinction.
+/// Hour 24 and second 60 roll over when the date is normalized, as they do in Git.
 ///
 /// Other forms are `now`, `today`, `yesterday`, and one or more `<count> <unit>` pairs,
 /// as in `2 days 3 hours ago`. A count may be spelled out from `one` to `ten`, or be `last`, and
@@ -108,8 +113,8 @@ use gix_error::{Exn, ResultExt};
 /// A day beyond the end of the shorter target month rolls over into the following month: one month before
 /// May 31st is May 1st, not April 30th.
 ///
-/// Note that there is no way to name a time in the future: Git has none either, so `1 hour from
-/// now` is an hour in the past to it, and to this function.
+/// Count/unit pairs always subtract time, even when followed by `from now`: `1 hour from now`
+/// is an hour in the past both to Git and to this function.
 ///
 /// Formats parsed by Jiff retain its wider timezone range and second-precision offsets,
 /// even where Git ignores the offset or truncates it to minutes.

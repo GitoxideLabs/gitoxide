@@ -382,3 +382,23 @@ done
 baseline_relative 'noon' '' 1251633600 # Exactly noon does not go back a day
 baseline_relative 'tea' '' 1251651600  # Exactly tea time does not go back a day
 baseline_relative 'midnight' '' 1251590400 # Midnight is the beginning of the current day
+
+# Explicit clocks keep today's date even when the clock is later than now.
+# A dot following a relative clock starts the next count, not fractional seconds.
+for now in 1251616800 1251660000; do
+    for date in '3:00' '15:00' '23:59:59' '1:2:3' '12:34:56.3.days.ago' \
+                '03:04:05 yesterday' 'last Friday 12:34:56' '12:34:56 last Friday' \
+                '1 month 12:34:56 last Friday' '12:34:56 1 month' \
+                '15:00 06:30' '24:00' '23:59:60' '24:59:60' \
+                '11:59:60 noon' '24:00 1 day ago'; do
+        baseline_relative "$date" '' "$now"
+    done
+done
+baseline_relative '24:00' '' 1251750000 # Crossing the end of August
+# Once an operation establishes the date, Git instead discards the clock's
+# dot-suffix as fractional seconds. A zero-count unit does not establish a date.
+for date in 'now 12:34:56.3.days.ago' 'yesterday 12:34:56.3.days.ago' \
+            '1 month 12:34:56.3.days.ago' '0 days 12:34:56.3.days.ago' \
+            'now 12:34:56.123' '12:34:56.3.days.ago 1 hour'; do
+    baseline_relative "$date" '' 1251616800
+done

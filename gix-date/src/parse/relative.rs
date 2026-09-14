@@ -30,16 +30,57 @@ fn parse_named(input: &str, now: Option<&Zoned>) -> Option<Result<Zoned, Exn<Err
     Some(subtract_duration(now, duration))
 }
 
+/// Keep clock punctuation while separating counts from words, including adjacent pairs.
+fn tokens(mut input: &str) -> impl Iterator<Item = &str> + Clone {
+    std::iter::from_fn(move || {
+        let start = input.as_bytes().iter().position(u8::is_ascii_alphanumeric)?;
+        input = &input[start..];
+        let bytes = input.as_bytes();
+        let mut end = if bytes[0].is_ascii_digit() {
+            bytes.iter().take_while(|byte| byte.is_ascii_digit()).count()
+        } else {
+            bytes.iter().take_while(|byte| byte.is_ascii_alphabetic()).count()
+        };
+        if bytes[0].is_ascii_digit() {
+            let digits_end = end;
+            for _ in 0..2 {
+                if bytes.get(end) != Some(&b':') || !bytes.get(end + 1).is_some_and(u8::is_ascii_digit) {
+                    break;
+                }
+                end += 1;
+                end += bytes[end..].iter().take_while(|byte| byte.is_ascii_digit()).count();
+            }
+            if end > digits_end && bytes.get(end) == Some(&b'.') && bytes.get(end + 1).is_some_and(u8::is_ascii_digit) {
+                end += 1;
+                end += bytes[end..].iter().take_while(|byte| byte.is_ascii_digit()).count();
+            }
+        }
+        // Both boundaries are next to ASCII characters, even when separators are non-ASCII.
+        let (token, rest) = input.split_at(end);
+        input = rest;
+        Some(token)
+    })
+}
+
 /// Parse relative units and clock adjustments in input order.
 fn parse_operations(input: &str) -> Option<Vec<Operation<'_>>> {
-    let mut words = input
-        .as_bytes()
-        .chunk_by(|a, b| a.is_ascii_digit() == b.is_ascii_digit() && a.is_ascii_alphabetic() == b.is_ascii_alphabetic())
-        .filter(|word| word[0].is_ascii_alphanumeric())
-        .map(|word| std::str::from_utf8(word).expect("each retained chunk contains only ASCII letters or digits"));
+    let mut words = tokens(input);
     let ago = words.clone().any(|word| word.eq_ignore_ascii_case("ago"));
     let mut operations = Vec::new();
-    while let Some(word) = words.next() {
+    let mut date_known = false;
+    while let Some(mut word) = words.next() {
+        if word.contains(':') {
+            let (clock, suffix) = word
+                .split_once('.')
+                .map_or((word, None), |(clock, suffix)| (clock, Some(suffix)));
+            operations.push(Operation::Time(Clock::parse(clock)?));
+            // Git discards fractional seconds only once all calendar fields are known.
+            // Otherwise the dot separates a new count, as in `12:34:56.3.days.ago`.
+            let Some(suffix) = suffix.filter(|_| !date_known) else {
+                continue;
+            };
+            word = suffix;
+        }
         let operation = if word.eq_ignore_ascii_case("noon") {
             Operation::NamedTime(12)
         } else if word.eq_ignore_ascii_case("midnight") {
@@ -56,6 +97,8 @@ fn parse_operations(input: &str) -> Option<Vec<Operation<'_>>> {
             let (period, unit) = unit(period, ago)?;
             Operation::Pair(Pair { period, count, unit })
         };
+        date_known |= matches!(operation, Operation::Now | Operation::Yesterday)
+            || matches!(&operation, Operation::Pair(pair) if pair.count != 0);
         operations.push(operation);
     }
     (!operations.is_empty()).then_some(operations)
@@ -90,9 +133,53 @@ struct Pair<'a> {
 
 enum Operation<'a> {
     Pair(Pair<'a>),
+    Time(Clock),
     NamedTime(i8),
     Yesterday,
     Now,
+}
+
+/// Git permits hour 24 and second 60, deferring their rollover until date normalization.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Clock {
+    hour: i8,
+    minute: i8,
+    second: i8,
+    nanosecond: i32,
+}
+
+impl From<civil::Time> for Clock {
+    fn from(time: civil::Time) -> Self {
+        Clock {
+            hour: time.hour(),
+            minute: time.minute(),
+            second: time.second(),
+            nanosecond: time.subsec_nanosecond(),
+        }
+    }
+}
+
+impl Clock {
+    fn parse(input: &str) -> Option<Self> {
+        let mut fields = input.split(':');
+        let hour = fields.next()?.parse().ok()?;
+        let minute = fields.next()?.parse().ok()?;
+        let second = fields.next().map(str::parse).transpose().ok()?.unwrap_or(0);
+        (fields.next().is_none() && (0..=24).contains(&hour) && (0..60).contains(&minute) && (0..=60).contains(&second))
+            .then_some(Clock {
+                hour,
+                minute,
+                second,
+                nanosecond: 0,
+            })
+    }
+
+    fn duration(self) -> SignedDuration {
+        SignedDuration::new(
+            i64::from(self.hour) * 3600 + i64::from(self.minute) * 60 + i64::from(self.second),
+            self.nanosecond,
+        )
+    }
 }
 
 /// How a unit is subtracted: Git's `date.c` counts `second` through `week` as fixed numbers of
@@ -167,7 +254,7 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
         month: i8,
         // Negative values are Git's unspecified day (-1) and pending previous day (-2).
         day: i8,
-        time: civil::Time,
+        clock: Clock,
         // Retain the last normalized instant, including its choice of offset at ambiguous local
         // times. Like Git's tm_wday, its weekday stays unchanged when month/year fields change.
         zoned: Zoned,
@@ -179,7 +266,7 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
                 year: zdt.year(),
                 month: zdt.month(),
                 day: zdt.day(),
-                time: zdt.time(),
+                clock: zdt.time().into(),
                 zoned: zdt,
             }
         }
@@ -192,7 +279,7 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
             if self.year == self.zoned.year()
                 && self.month == self.zoned.month()
                 && day == self.zoned.day()
-                && self.time == self.zoned.time()
+                && self.clock == self.zoned.time().into()
             {
                 return Ok(self.zoned.clone());
             }
@@ -203,7 +290,9 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
             first_of_month
                 .checked_add(days_beyond_first)
                 .or_raise(|| Error::new(format!("Day {day} lies out of range")))?
-                .to_datetime(self.time)
+                .at(0, 0, 0, 0)
+                .checked_add(self.clock.duration())
+                .or_raise(|| Error::new("Clock rollover lies out of range"))?
                 .to_zoned(self.zoned.time_zone().clone())
                 .or_raise(|| Error::new("Could not convert date to a point in time"))
         }
@@ -234,11 +323,20 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
     fields.day = -1;
     for operation in operations {
         let Pair { period, count, unit } = match operation {
+            Operation::Time(clock) => {
+                fields.clock = *clock;
+                continue;
+            }
             Operation::NamedTime(hour) => {
-                if fields.day < 0 && fields.time.hour() < *hour {
+                if fields.day < 0 && fields.clock.hour < *hour {
                     fields.day = -2;
                 }
-                fields.time = civil::Time::new(*hour, 0, 0, 0).expect("named hours are valid");
+                fields.clock = Clock {
+                    hour: *hour,
+                    minute: 0,
+                    second: 0,
+                    nanosecond: 0,
+                };
                 continue;
             }
             Operation::Yesterday => {
