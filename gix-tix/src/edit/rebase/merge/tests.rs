@@ -191,6 +191,100 @@ fn unchanged_pending_parents_do_not_block_eager_merge_replay() -> gix_testtools:
 }
 
 #[test]
+fn travel_replays_merges_against_frozen_pending_parents_and_resolves_conflicts() -> gix_testtools::Result {
+    for conflicting in [false, true] {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_merge.sh")?;
+        let path = fixture.path();
+        let repo = crate::test_repository::open(path)?;
+        let source_commit_id = branch(&repo, "diamond")?;
+        let source = repo.find_commit(source_commit_id)?.decode()?.into_owned()?;
+        let changed_side_commit_id = changed_tree(
+            &repo,
+            source.parents[1],
+            if conflicting { "shared" } else { "right" },
+            if conflicting {
+                "changed right\n"
+            } else {
+                "right contribution\nright update\n"
+            },
+        )?;
+        let mut pending_side = repo.find_commit(changed_side_commit_id)?.decode()?.into_owned()?;
+        pending_side
+            .extra_headers
+            .push(("tix-rebase-parent".into(), pending_side.parents[0].to_string().into()));
+        let pending_side_commit_id = repo.write_object(&pending_side)?.detach();
+        repo.reference(
+            "refs/heads/frozen-side",
+            pending_side_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "retain the exact pending departure",
+        )?;
+        let parents = [source.parents[0], pending_side_commit_id];
+        let destination_commit_id = replay_merge(&repo, source_commit_id, &parents, false)?;
+        git(
+            path,
+            &["checkout", "-q", "--detach", &pending_side_commit_id.to_string()],
+        )?;
+        let graph = crate::edit::loaded_graph(&repo)?;
+        let before = gix_testtools::repository::snapshot(path)?;
+        let performed = time_travel::perform(path, false, destination_commit_id, &graph, &[], &[], Default::default())?;
+        if conflicting {
+            let time_travel::Perform::Conflict(conflict) = performed else {
+                return Err("the changed frozen parent must conflict with the recorded resolution".into());
+            };
+            assert_eq!(
+                gix_testtools::repository::snapshot(path)?,
+                before,
+                "a conflict preview keeps the frozen departure and repository untouched"
+            );
+            conflict.accept()?;
+            assert_eq!(
+                branch(&repo, "frozen-side")?,
+                pending_side_commit_id,
+                "accepting the conflict preserves the frozen input reference"
+            );
+            std::fs::write(path.join("shared"), "resolved against frozen side\n")?;
+            git(path, &["add", "shared"])?;
+            let graph = crate::edit::loaded_graph(&repo)?;
+            crate::edit::head::amend_index_reporting(repo.clone(), &graph)?
+                .context("amend finishes the accepted conflict against the same frozen parent")?;
+        } else {
+            performed.complete()?;
+        }
+        let result = repo.head_commit()?.decode()?.into_owned()?;
+        assert!(
+            !rebase::is_pending(&result),
+            "the destination merge is fully materialized"
+        );
+        assert_eq!(
+            result.parents.as_slice(),
+            parents,
+            "both clean replay and conflict resolution retain the frozen parent IDs"
+        );
+        assert_eq!(
+            branch(&repo, "frozen-side")?,
+            pending_side_commit_id,
+            "replay and resolution leave the departure reference unchanged"
+        );
+        assert_eq!(
+            repo.find_commit(pending_side_commit_id)?.decode()?.into_owned()?,
+            pending_side,
+            "the pending boundary remains byte-for-byte equivalent"
+        );
+        assert_eq!(
+            std::fs::read(path.join(if conflicting { "shared" } else { "right" }))?,
+            if conflicting {
+                b"resolved against frozen side\n".as_slice()
+            } else {
+                b"right contribution\nright update\n".as_slice()
+            },
+            "the checked-out merge uses the frozen target tree and any explicit resolution"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn travel_through_final_merges_finishes_pending_sides_before_amend() -> gix_testtools::Result {
     for with_descendant in [false, true] {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_merge.sh")?;
@@ -430,6 +524,7 @@ fn converged_parent_slots_survive_amend_and_a_saved_continuation() -> gix_testto
         &[changed_target, right_commit_id, extra_commit_id],
         true,
         true,
+        &Default::default(),
     ) {
         Err(error) => error,
         Ok(_) => return Err("a resolution cannot silently change its first replay target".into()),

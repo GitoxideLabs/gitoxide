@@ -673,7 +673,7 @@ fn ordinary_merge_ancestry_visits_every_parent_until_an_auto_merge_boundary() ->
         "AutoMerge input trees remain optional"
     );
     let mut affected = vec![ordinary_commit_id];
-    let preparation = prepare(&repo, &graph, &mut affected, Some(automatic_commit_id), None)?;
+    let preparation = prepare(&repo, &graph, &mut affected, Some(automatic_commit_id), None, true)?;
     assert!(
         preparation.optional.contains(&side_commit_id),
         "a pending secondary parent is replayed before its ordinary merge input"
@@ -1234,7 +1234,7 @@ fn change_lookup_is_bounded_and_retains_ambiguous_or_missing_inputs() -> gix_tes
     view.switch_view(&[a.commit_id, replacement_commit_id], &[base_commit_id]);
     graph.bounded_history = view.bounded_history;
     let mut affected = vec![c.commit_id];
-    let preparation = prepare(&repo, &graph, &mut affected, Some(merge_commit_id), None)?;
+    let preparation = prepare(&repo, &graph, &mut affected, Some(merge_commit_id), None, true)?;
     assert!(
         affected.contains(&merge_commit_id),
         "an exact edit outside the lookup projection still updates its merge"
@@ -1653,8 +1653,8 @@ fn travel_collapse_onto_a_hidden_pending_input_preserves_the_boundary() -> gix_t
 }
 
 #[test]
-fn travel_after_merge_collapse_restores_the_departure_and_keeps_undo_consistent() -> gix_testtools::Result {
-    for accept in [None, Some(false), Some(true)] {
+fn travel_merge_collapse_preserves_pending_departure_and_local_changes() -> gix_testtools::Result {
+    for (conflicting_base, shared_change_id) in [(false, false), (true, false), (false, true), (true, true)] {
         let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
         let path = fixture.path();
         let repo = crate::test_repository::open(path)?;
@@ -1672,7 +1672,7 @@ fn travel_after_merge_collapse_restores_the_departure_and_keeps_undo_consistent(
             &repo,
             repo.find_commit(base_commit_id)?.decode()?.into_owned()?,
             "shared",
-            if accept.is_some() { "new base\n" } else { "base\n" },
+            if conflicting_base { "new base\n" } else { "base\n" },
         )?;
         new_base.parents = [base_commit_id].into_iter().collect();
         let new_base_commit_id = repo.write_object(&new_base)?.detach();
@@ -1681,13 +1681,22 @@ fn travel_after_merge_collapse_restores_the_departure_and_keeps_undo_consistent(
         pending
             .extra_headers
             .push(("tix-rebase-parent".into(), base_commit_id.to_string().into()));
-        // Invalidating this stale signature makes the optional replay visibly rewrite the departure.
+        if shared_change_id {
+            // Valid duplicate change IDs must not turn a collapsed input into an editable successor.
+            crate::change_id::inherit(&repo, &mut pending, merge_commit_id)?;
+        }
+        // Any replay would invalidate this signature and visibly rewrite the departure.
         pending.extra_headers.push(("gpgsig".into(), "legacy signature".into()));
         let pending_commit_id = repo.write_object(&pending)?.detach();
+        assert_eq!(
+            crate::change_id::for_commit(&repo, pending_commit_id)?
+                == crate::change_id::for_commit(&repo, merge_commit_id)?,
+            shared_change_id,
+            "the external input has the intended relationship to the AutoMerge's change ID"
+        );
         repo.find_reference(a.reference.as_ref())?
             .set_target_id(pending_commit_id, "prepare the pending departure")?;
-        // The first pass collapses the merge to A, leaving a conflict-free A at HEAD.
-        // If A conflicts, that optional replay stays pending and a second, mandatory pass must report it.
+        // Removing C collapses the merge to its pending departure, which is outside HEAD..destination.
         repo.find_reference(c.reference.as_ref())?.delete()?;
         assert!(
             gix_testtools::git_command(path)
@@ -1708,7 +1717,9 @@ fn travel_after_merge_collapse_restores_the_departure_and_keeps_undo_consistent(
         std::fs::write(path.join("untracked"), b"untracked\n")?;
         let before = gix_testtools::repository::snapshot(path)?;
 
-        let performed = super::super::time_travel::perform(
+        let super::super::time_travel::Perform::Complete {
+            selected, ref_changes, ..
+        } = super::super::time_travel::perform(
             repo.git_dir(),
             false,
             merge_commit_id,
@@ -1719,85 +1730,88 @@ fn travel_after_merge_collapse_restores_the_departure_and_keeps_undo_consistent(
                 stash: true,
                 ..Default::default()
             },
-        )?;
-        let replayed_commit_id = repo.head_id()?.detach();
-        assert_ne!(
-            replayed_commit_id, pending_commit_id,
-            "the first replay already rewrote the departure"
-        );
-        let preview = gix_testtools::repository::snapshot(path)?;
+        )?
+        else {
+            panic!("collapse must not replay the departure, even when that replay would conflict")
+        };
         assert_eq!(
-            preview.index, before.index,
+            selected, pending_commit_id,
+            "collapse selects the exact departure, preserving its pending patch and signature"
+        );
+        assert_eq!(
+            repo.head_id()?,
+            pending_commit_id,
+            "the departure checkout retains its original identity"
+        );
+        assert_eq!(
+            input(&repo, "A")?.commit_id,
+            pending_commit_id,
+            "the external input reference is not rewritten"
+        );
+        assert_eq!(
+            input(&repo, "combined")?.commit_id,
+            pending_commit_id,
+            "the merge reference follows its collapse to the exact input"
+        );
+        let after = gix_testtools::repository::snapshot(path)?;
+        assert_eq!(
+            after.index, before.index,
             "travel restores the staged departure changes"
         );
         assert_eq!(
-            preview.worktree, before.worktree,
+            after.worktree, before.worktree,
             "travel restores unstaged and untracked changes"
         );
         assert!(
-            preview
+            after
                 .references
                 .iter()
                 .all(|reference| !reference.name.starts_with(crate::history::STASH_PREFIX)),
             "travel consumes the earlier departure stash before returning"
         );
 
-        let changes = match performed {
-            super::super::time_travel::Perform::Complete {
-                selected, ref_changes, ..
-            } => {
-                assert_eq!(accept, None, "only the unchanged base replays without a conflict");
-                assert_eq!(
-                    selected, replayed_commit_id,
-                    "successful collapse returns to the rewritten departure"
-                );
-                ref_changes
-            }
-            super::super::time_travel::Perform::Conflict(conflict) => {
-                assert_eq!(
-                    conflict.original(),
-                    replayed_commit_id,
-                    "the later preview targets the rewritten input"
-                );
-                if accept.context("the changed base requires a conflict decision")? {
-                    let (_, conflict_commit_id, _, changes) = conflict.accept()?;
-                    assert!(
-                        repo.try_find_reference(super::super::stash::reference(conflict_commit_id)?.as_ref())?
-                            .is_some(),
-                        "acceptance saves the restored departure again and follows its materialized rewrite"
-                    );
-                    changes
-                } else {
-                    let changes = conflict.into_ref_changes();
-                    assert!(
-                        changes
-                            .iter()
-                            .all(|change| !change.name.as_bstr().starts_with(crate::history::STASH_PREFIX)),
-                        "cancelling retains no undo changes for the consumed departure stash"
-                    );
-                    changes
-                }
-            }
-        };
-        undo::record(&repo, "time travel after merge collapse", &changes)?;
-        let undo = undo::plan_undo(&repo)?.context("the completed first replay remains undoable")?;
+        undo::record(&repo, "time travel after merge collapse", &ref_changes)?;
+        let undo = undo::plan_undo(&repo)?.context("the collapse remains undoable")?;
         for change in &undo.changes {
             assert_eq!(
                 undo::state(&repo, change.name.as_ref())?,
                 change.before,
-                "undo has a valid precondition for {} with conflict decision {:?}",
+                "undo has a valid precondition for {} with a conflicting base: {conflicting_base}",
                 change.name,
-                accept
             );
         }
-        if accept != Some(true) {
-            undo.apply(&repo)?;
+        undo.apply(&repo)?;
+        assert_eq!(
+            input(&repo, "combined")?.commit_id,
+            merge_commit_id,
+            "undo restores the original AutoMerge"
+        );
+        for commit_id in [repo.head_id()?.detach(), input(&repo, "A")?.commit_id] {
             assert_eq!(
-                repo.head_id()?,
-                pending_commit_id,
-                "undo restores the original pending departure"
+                commit_id, pending_commit_id,
+                "undo preserves the pending departure and its branch"
             );
         }
+        let undone = gix_testtools::repository::snapshot(path)?;
+        assert_eq!(undone.index, before.index, "undo preserves staged changes");
+        assert_eq!(undone.worktree, before.worktree, "undo preserves local files");
+        undo::plan_redo(&repo)?
+            .context("the collapse remains redoable")?
+            .apply(&repo)?;
+        assert_eq!(
+            input(&repo, "combined")?.commit_id,
+            pending_commit_id,
+            "redo restores the collapse to the exact input"
+        );
+        for commit_id in [repo.head_id()?.detach(), input(&repo, "A")?.commit_id] {
+            assert_eq!(
+                commit_id, pending_commit_id,
+                "redo preserves the pending departure and its branch"
+            );
+        }
+        let redone = gix_testtools::repository::snapshot(path)?;
+        assert_eq!(redone.index, before.index, "redo preserves staged changes");
+        assert_eq!(redone.worktree, before.worktree, "redo preserves local files");
     }
     Ok(())
 }
@@ -1979,6 +1993,10 @@ fn travel_refreshes_external_inputs_and_muted_replays_keep_their_original_patch(
         "travel rereads all named tips"
     );
     let input_commit_id = input(&repo, "A")?.commit_id;
+    assert_eq!(
+        input_commit_id, pending_commit_id,
+        "refreshing the merge reads the external pending input without rewriting it"
+    );
     let input_commit = repo.find_commit(input_commit_id)?.decode()?.into_owned()?;
     assert!(rebase::is_pending(&input_commit));
     assert_eq!(
@@ -2052,6 +2070,10 @@ fn travel_refreshes_external_inputs_and_muted_replays_keep_their_original_patch(
     .context("an unavailable optional input does not block returning to its AutoMerge")?
     .complete()?;
     let input_commit_id = input(&repo, "A")?.commit_id;
+    assert_eq!(
+        input_commit_id, conflict_commit_id,
+        "returning to the merge preserves the exact external conflict input"
+    );
     let input_commit = repo.find_commit(input_commit_id)?.decode()?.into_owned()?;
     assert!(rebase::is_pending(&input_commit), "the optional conflict stays pending");
     assert!(
@@ -2386,7 +2408,7 @@ fn marking_a_legacy_input_keeps_optional_pending_inputs_and_worktree_content_unc
     )?;
     let graph = graph(&repo)?;
     let mut affected = vec![a.commit_id];
-    let preparation = prepare(&repo, &graph, &mut affected, Some(merge_commit_id), None)?;
+    let preparation = prepare(&repo, &graph, &mut affected, Some(merge_commit_id), None, true)?;
     assert!(
         preparation.optional.contains(&pending_commit_id),
         "the pending input participates in ordinary AutoMerge replay preparation"
