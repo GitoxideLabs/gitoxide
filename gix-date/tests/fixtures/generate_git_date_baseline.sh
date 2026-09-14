@@ -364,6 +364,18 @@ baseline_relative '1year' ''
 baseline_relative '2days3hours' 'GIX_DIFF:2246400' 1251660000
 baseline_relative '2 days3 hours ago' 'GIX_DIFF:2246400' 1251660000
 
+# Git keeps a number pending across filler words, then consumes it as a unit
+# count or flushes it into day/month/year fields. Zero does not fill a field;
+# excessive zero-padding is ignored. Raw timestamps retain absolute precedence.
+for date in '2 long days ago' 'one or two days ago' '2 hours 3' \
+            '5 noon' '5 6 noon' '5 6 2008 noon' '5 6 08 noon' '5 6 38 noon' \
+            '5 6 00 noon' '5 6 70 noon' '37 noon' two '2 nonsense' \
+            '12345 florx ago' '0 nonsense' '008 days' '2 now' '2 yesterday' \
+            '12:34:56.008 days' '12:34:56.08 days' \
+            '5 6 2008 12:34:56.3.days.ago'; do
+    baseline_relative "$date" '' 1251660000
+done
+
 # Counted weekdays select the nth strictly previous occurrence, keeping the clock.
 # Use Git's t0006 reference Sunday so requesting Sunday must go back a full week.
 # Git accepts case-insensitive prefixes of at least three letters, including plurals.
