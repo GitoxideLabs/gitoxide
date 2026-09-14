@@ -402,3 +402,15 @@ for date in 'now 12:34:56.3.days.ago' 'yesterday 12:34:56.3.days.ago' \
             'now 12:34:56.123' '12:34:56.3.days.ago 1 hour'; do
     baseline_relative "$date" '' 1251616800
 done
+
+# AM/PM can follow an hour or a full clock, or adjust the current clock by itself.
+# A zero hour acts like no hour: it retains the current minutes and seconds.
+for now in 1251616800 1251660000; do
+    for date in '6am yesterday' '6pm yesterday' 'yesterday 6PM' \
+                '6:30pm' '06:30:45 PM' '12am' '12pm' '12:30am' '12:30pm' \
+                '0am' '0pm' am PM 'two pm' 'last am' '24am' '25pm' \
+                '11:59:60 pm' 'last Friday 6pm' '6pm last Friday' \
+                '1 month 6pm' '6am noon' '6pm am' '1 hour pm' '6pm 1 hour ago'; do
+        baseline_relative "$date" '' "$now"
+    done
+done

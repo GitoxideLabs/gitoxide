@@ -92,6 +92,9 @@ use gix_error::{Exn, ResultExt};
 /// After `now`, `yesterday`, or a nonzero relative unit has established the date, Git instead
 /// discards a clock's dot-suffix as fractional seconds; this parser follows that distinction.
 /// Hour 24 and second 60 roll over when the date is normalized, as they do in Git.
+/// `AM` and `PM` can follow an hour or a clock (`6pm`, `6:30pm`, `6am yesterday`), or adjust
+/// the current clock by themselves. They are case-insensitive; `12am` selects midnight and
+/// `12pm` selects noon. Like Git, a zero hour (`0pm`) adjusts the current clock instead.
 ///
 /// Other forms are `now`, `today`, `yesterday`, and one or more `<count> <unit>` pairs,
 /// as in `2 days 3 hours ago`. A count may be spelled out from `one` to `ten`, or be `last`, and

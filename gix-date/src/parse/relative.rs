@@ -91,17 +91,36 @@ fn parse_operations(input: &str) -> Option<Vec<Operation<'_>>> {
             Operation::Yesterday
         } else if word.eq_ignore_ascii_case("now") {
             Operation::Now
+        } else if let Some(is_pm) = meridian(word) {
+            Operation::Meridian { hour: None, is_pm }
         } else {
             let Some(count) = count(word) else { continue };
             let Some(period) = words.next() else { break };
-            let (period, unit) = unit(period, ago)?;
-            Operation::Pair(Pair { period, count, unit })
+            if let Some(is_pm) = meridian(period) {
+                Operation::Meridian {
+                    hour: (count != 0).then_some((count % 12) as i8),
+                    is_pm,
+                }
+            } else {
+                let (period, unit) = unit(period, ago)?;
+                Operation::Pair(Pair { period, count, unit })
+            }
         };
         date_known |= matches!(operation, Operation::Now | Operation::Yesterday)
             || matches!(&operation, Operation::Pair(pair) if pair.count != 0);
         operations.push(operation);
     }
     (!operations.is_empty()).then_some(operations)
+}
+
+fn meridian(input: &str) -> Option<bool> {
+    if input.eq_ignore_ascii_case("am") {
+        Some(false)
+    } else if input.eq_ignore_ascii_case("pm") {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 /// The count in front of the unit, either written out in digits or spelled with one of one-ten.
@@ -135,6 +154,7 @@ enum Operation<'a> {
     Pair(Pair<'a>),
     Time(Clock),
     NamedTime(i8),
+    Meridian { hour: Option<i8>, is_pm: bool },
     Yesterday,
     Now,
 }
@@ -337,6 +357,18 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
                     second: 0,
                     nanosecond: 0,
                 };
+                continue;
+            }
+            Operation::Meridian { hour, is_pm } => {
+                if let Some(hour) = hour {
+                    fields.clock = Clock {
+                        hour: *hour,
+                        minute: 0,
+                        second: 0,
+                        nanosecond: 0,
+                    };
+                }
+                fields.clock.hour = fields.clock.hour % 12 + if *is_pm { 12 } else { 0 };
                 continue;
             }
             Operation::Yesterday => {

@@ -196,12 +196,34 @@ fn numeric_clocks_keep_the_local_date_and_token_boundaries() -> gix_testtools::R
 #[test]
 fn clock_assignments_clear_fractional_seconds() -> gix_testtools::Result {
     let now = jiff::Timestamp::new(0, 500_000_000)?.to_zoned(TimeZone::UTC);
-    for input in ["midnight 1 second ago", "00:00 1 second ago"] {
+    for input in ["midnight 1 second ago", "00:00 1 second ago", "12am 1 second ago"] {
         assert_eq!(
             gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
             gix_date::Time::new(-1, 0),
             "{input:?}: assigning midnight clears the cached fractional second before subtraction"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn am_pm_adjustments_use_local_clock_components() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    for (input, expected) in [
+        ("6pm", "2009-08-31 18:00:00 +0800"),
+        ("6:30:45pm", "2009-08-31 18:30:45 +0800"),
+        ("12am", "2009-08-31 00:00:00 +0800"),
+        ("12pm", "2009-08-31 12:00:00 +0800"),
+        ("PM", "2009-08-31 15:20:00 +0800"),
+        ("0pm", "2009-08-31 15:20:00 +0800"),
+        ("6am yesterday", "2009-08-30 06:00:00 +0800"),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::parse(expected, None).map_err(gix_error::Exn::into_error)?,
+            "{input:?}: AM/PM adjusts the local hour and only clears minutes/seconds with an explicit nonzero hour"
+        );
+        assert!(gix_date::parse(input, None).is_err(), "AM/PM still needs a date");
     }
     Ok(())
 }
