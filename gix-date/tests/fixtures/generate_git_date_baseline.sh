@@ -87,6 +87,17 @@ for date in 2008/02/14 02/14/2008 14.02.2008 02/03/2008 02.03.2008 \
     baseline "$date 20:30:45 -0500" ''
 done
 
+# Short numeric years use Git's 00..37 / 71..99 mapping, not strptime's pivot.
+# The date precedes the clock so these complete dates don't depend on "now".
+for date in 02/03/08 02.03.08 14/02/08 02.14.08 \
+            02/14/00 02/14/10 02/14/37 02/14/71 02/14/99 \
+            99/02/14 99/14/02 71.02.14 71.14.02 08/02/14 08.02.14 \
+            2/14/0 2/14/8 14.2.000 14.2.008 2/14/071 071/2/14; do
+    baseline "$date 20:30:45 +0000" ''
+done
+baseline '02/14/08 20:30:45 -0500' ''
+baseline '14.02.08 20:30:45 -0500' ''
+
 # ISO8601_STRICT format: "YYYY-MM-DDTHH:MM:SS+ZZ:ZZ"
 baseline '2022-08-17T21:43:13+08:00' 'ISO8601_STRICT'
 baseline '2000-01-01T00:00:00+00:00' 'ISO8601_STRICT'

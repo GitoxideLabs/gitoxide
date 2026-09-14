@@ -215,6 +215,132 @@ mod iso8601_dots {
     }
 }
 
+mod numeric_dates {
+    use gix_date::Time;
+
+    #[test]
+    fn short_year_mapping_is_value_based() {
+        for (year, seconds) in [
+            ("0", 950560245),
+            ("00", 950560245),
+            ("000", 950560245),
+            ("8", 1203021045),
+            ("08", 1203021045),
+            ("008", 1203021045),
+            ("10", 1266179445),
+            ("37", 2118256245),
+            ("71", 35411445),
+            ("071", 35411445),
+            ("99", 919024245),
+        ] {
+            for date in [format!("2/14/{year}"), format!("14.2.{year}")] {
+                let input = format!("{date} 20:30:45 +0000");
+                assert_eq!(
+                    gix_date::parse(&input, None).expect("complete numeric dates need no reference time"),
+                    Time::new(seconds, 0),
+                    "{input}: Git expands numeric years by value, not a conventional two-digit-year pivot"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn separator_preference_fallback_and_year_first() {
+        for (date, seconds) in [
+            ("02/03/08", 1202070645),
+            ("02.03.08", 1204489845),
+            ("14/02/08", 1203021045),
+            ("02.14.08", 1203021045),
+            ("99/02/14", 919024245),
+            ("99/14/02", 919024245),
+            ("71.02.14", 35411445),
+            ("71.14.02", 35411445),
+            ("071/2/14", 35411445),
+            ("08/02/14", 1407011445),
+            ("08.02.14", 1391891445),
+        ] {
+            let input = format!("{date} 20:30:45 +0000");
+            assert_eq!(
+                gix_date::parse(&input, None).expect("all three numeric date fields and a clock are present"),
+                Time::new(seconds, 0),
+                "{input}: only a first value greater than 70 takes precedence as the year"
+            );
+        }
+        for date in ["02/14/08", "14.02.08"] {
+            let input = format!("{date} 20:30:45 -0500");
+            assert_eq!(
+                gix_date::parse(&input, None).expect("short years accept the existing time and offset syntax"),
+                Time::new(1203039045, -18000),
+                "{input}: normalizing the date preserves the instant and explicit offset"
+            );
+        }
+    }
+
+    #[test]
+    fn four_digit_years_keep_existing_interpretation() {
+        for date in [
+            "2008/02/14",
+            "2008.02.14",
+            "2008/14/02",
+            "2008.14.02",
+            "02/14/2008",
+            "14/02/2008",
+            "14.02.2008",
+            "02.14.2008",
+        ] {
+            let input = format!("{date} 20:30:45 -0500");
+            assert_eq!(
+                gix_date::parse(&input, None).expect("four-digit dates retain both field orderings"),
+                Time::new(1203039045, -18000),
+                "{input}: short-year support does not change existing four-digit dates"
+            );
+        }
+        for year in ["0008", "1950", "2100"] {
+            let expected = gix_date::parse(&format!("{year}-02-14 20:30:45 +0000"), None)
+                .expect("ISO dates retain Jiff's wider year range");
+            for date in [format!("{year}/02/14"), format!("14.02.{year}")] {
+                let input = format!("{date} 20:30:45 +0000");
+                assert_eq!(
+                    gix_date::parse(&input, None).expect("four-digit years remain literal"),
+                    expected,
+                    "{input}: previously accepted four-digit years are not expanded or restricted to Git's range"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_years_and_malformed_dates_are_rejected() {
+        for date in [
+            "02/14/38",
+            "02/14/69",
+            "02/14/70",
+            "14.02.38",
+            "14.02.70",
+            "02/14/100",
+            "02/14/32768",
+            "32768/02/14",
+            "02/14/+08",
+            "02/14/-08",
+            "02/14/08/01",
+            "02.14/08",
+            "02/00/08",
+            "00/14/08",
+            "02/29/01",
+        ] {
+            let input = format!("{date} 20:30:45 +0000");
+            assert!(
+                gix_date::parse(&input, None).is_err(),
+                "{input}: short-year support does not guess individual tokens or normalize invalid calendar dates"
+            );
+        }
+        assert!(
+            gix_date::parse("02/14/08", None).is_err(),
+            "a numeric date without a clock does not acquire one from the current time"
+        );
+    }
+}
+
 /// Tests for flexible timezone offset formats
 mod flexible_offset;
 

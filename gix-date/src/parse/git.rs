@@ -35,7 +35,7 @@ pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
 }
 
 /// Parse Git-style flexible date formats that aren't covered by standard strptime:
-/// - Numeric dates with dots or slashes: `2008.02.14`, `14.02.2008`, `02/14/2008`
+/// - Numeric dates with dots or slashes: `2008.02.14`, `14.02.2008`, `02/14/2008`, `02/14/08`
 /// - Compact ISO8601: `20080214T203045`, `20080214T20:30:45`, `20080214T2030`, `20080214T20`
 /// - Z suffix for UTC: `1970-01-01 00:00:00 Z`
 /// - 2-digit hour offset: `2008-02-14 20:30:45 -05`
@@ -55,14 +55,48 @@ fn parse_numeric_date(input: &str) -> Option<Time> {
     let (first, _) = date.split_once(['.', '/'])?;
     let (_, last) = date.rsplit_once(['.', '/'])?;
     let formats = match (date.contains('/'), first.len() == 4, last.len() == 4) {
-        (true, true, _) => ["%Y/%m/%d", "%Y/%d/%m"],
-        (false, true, _) => ["%Y.%m.%d", "%Y.%d.%m"],
-        (true, false, true) => ["%m/%d/%Y", "%d/%m/%Y"],
-        (false, false, true) => ["%d.%m.%Y", "%m.%d.%Y"],
+        (true, true, _) => Some(["%Y/%m/%d", "%Y/%d/%m"]),
+        (false, true, _) => Some(["%Y.%m.%d", "%Y.%d.%m"]),
+        (true, false, true) => Some(["%m/%d/%Y", "%d/%m/%Y"]),
+        (false, false, true) => Some(["%d.%m.%Y", "%m.%d.%Y"]),
+        _ => None,
+    };
+    // Preserve literal four-digit years, including Jiff's wider range, before expanding short years.
+    let date = match formats {
+        Some(formats) => formats.iter().find_map(|fmt| Date::strptime(fmt, date).ok())?,
+        None => parse_numeric_date_with_short_year(date)?,
+    };
+    parse_flexible_iso8601(&format!("{date} {rest}"))
+}
+
+fn parse_numeric_date_with_short_year(date: &str) -> Option<Date> {
+    let separator = if date.contains('/') { b'/' } else { b'.' };
+    if !date.bytes().all(|byte| byte.is_ascii_digit() || byte == separator) {
+        return None;
+    }
+    let mut fields = date.split(char::from(separator)).map(str::parse::<i16>);
+    let first = fields.next()?.ok()?;
+    let second = fields.next()?.ok()?;
+    let third = fields.next()?.ok()?;
+    if fields.next().is_some() {
+        return None;
+    }
+
+    let (year, month, day) = if first > 70 {
+        (first, second, third)
+    } else if separator == b'/' {
+        (third, first, second)
+    } else {
+        (third, second, first)
+    };
+    // Git's `set_date()` uses these value ranges, not strptime's conventional `%y` pivot.
+    let year = match year {
+        0..=37 => year + 2000,
+        71..=99 => year + 1900,
         _ => return None,
     };
-    let date = formats.iter().find_map(|fmt| Date::strptime(fmt, date).ok())?;
-    parse_flexible_iso8601(&format!("{date} {rest}"))
+    let candidate = |month: i16, day: i16| Date::new(year, month.try_into().ok()?, day.try_into().ok()?).ok();
+    candidate(month, day).or_else(|| candidate(day, month))
 }
 
 /// Parse compact ISO8601 formats:
