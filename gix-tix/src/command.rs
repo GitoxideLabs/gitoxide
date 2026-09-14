@@ -12,6 +12,7 @@ use ratatui::text::Line;
 
 mod enrich;
 mod new;
+mod op;
 mod rebase;
 mod reword;
 mod travel;
@@ -47,9 +48,11 @@ enum Command {
     /// Print the complete history view without opening the terminal UI.
     #[command(visible_alias = "status")]
     Show(Show),
-    /// Perform repository maintenance.
-    #[command(subcommand)]
-    Admin(Admin),
+    /// Inspect operation history (the default), undo, redo, or clear it.
+    Op {
+        #[command(subcommand)]
+        command: Option<op::Command>,
+    },
     /// Manage commit and tree enrichments.
     #[command(subcommand)]
     Enrich(enrich::Command),
@@ -124,12 +127,6 @@ enum WorktrunkCommand {
         #[arg(value_enum)]
         shell: crate::worktrunk::shell::Shell,
     },
-}
-
-#[derive(Debug, clap::Subcommand)]
-enum Admin {
-    /// Clear this worktree's undo and redo history.
-    ClearUndo,
 }
 
 #[derive(Debug, clap::Args)]
@@ -444,7 +441,9 @@ impl Platform {
             }
             Command::Pin(args) => pin(&repository, args)?,
             Command::Transplant(args) => return transplant(repository, args),
-            Command::Admin(Admin::ClearUndo) => crate::edit::undo::clear(&repository)?,
+            Command::Op { command } => {
+                return op::run(&repository, command, std::io::stdout().lock(), std::io::stderr().lock());
+            }
             Command::Travel(args) => return travel::run(repository, args),
             Command::Reword(args) => return reword::run(repository, args),
             Command::New(args) => return new::run(repository, args),
@@ -1036,6 +1035,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn operation_commands_parse_without_history_view_options() -> gix_testtools::Result {
+        for arguments in [
+            &["tix", "op"][..],
+            &["tix", "op", "log"][..],
+            &["tix", "op", "undo"][..],
+            &["tix", "op", "redo"][..],
+            &["tix", "op", "clear"][..],
+        ] {
+            let platform = Cli::try_parse_from(arguments)?.platform;
+            assert!(
+                platform.command.is_some(),
+                "{arguments:?} selects a command, not revisions"
+            );
+            platform.validate_command_options()?;
+        }
+        for arguments in [
+            &["tix", "--no-alt-screen", "op"][..],
+            &["tix", "--quit-on-finish", "op", "log"][..],
+            &["tix", "-x", "main", "op", "undo"][..],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments)?
+                    .platform
+                    .validate_command_options()
+                    .is_err(),
+                "{arguments:?} cannot mix history-view options with operation commands"
+            );
+        }
+        for arguments in [
+            &["tix", "op", "undo", "2"][..],
+            &["tix", "op", "redo", "--steps", "2"][..],
+            &["tix", "op", "list"][..],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments).is_err(),
+                "{arguments:?} is not supported"
+            );
+        }
+        assert!(
+            Cli::try_parse_from(["tix", "admin", "clear-undo"])?
+                .platform
+                .command
+                .is_none(),
+            "the removed admin group has no compatibility alias"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn rewritten_ref_lines_are_sorted_and_show_the_commit_mapping() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -1380,13 +1428,6 @@ mod tests {
                 .platform
                 .command,
             Some(Command::Stash)
-        ));
-        assert!(matches!(
-            Cli::try_parse_from(["tix", "admin", "clear-undo"])
-                .expect("clear-undo parses")
-                .platform
-                .command,
-            Some(Command::Admin(Admin::ClearUndo))
         ));
         let pin = Cli::try_parse_from(["tix", "pin", "main", "HEAD~2"])
             .expect("one or more pin revisions parse")
@@ -2533,8 +2574,11 @@ mod tests {
             &["transplant"],
             &["travel"],
             &["reword"],
-            &["admin"],
-            &["admin", "clear-undo"],
+            &["op"],
+            &["op", "log"],
+            &["op", "undo"],
+            &["op", "redo"],
+            &["op", "clear"],
             &["enrich"],
             &["enrich", "commit"],
             &["enrich", "commit", "todo"],
@@ -2712,7 +2756,9 @@ mod tests {
             no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
-            command: Some(Command::Admin(Admin::ClearUndo)),
+            command: Some(Command::Op {
+                command: Some(op::Command::Clear),
+            }),
             revisions: Vec::new(),
         }
         .run(linked.into_sync())?;
@@ -2735,7 +2781,9 @@ mod tests {
             no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
-            command: Some(Command::Admin(Admin::ClearUndo)),
+            command: Some(Command::Op {
+                command: Some(op::Command::Clear),
+            }),
             revisions: Vec::new(),
         }
         .run(linked.into_sync())?;

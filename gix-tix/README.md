@@ -23,6 +23,14 @@ These shortcuts also work directly, without a prefix:
 See the [full keyboard reference](spec.md#navigation-and-display-controls) for
 navigation and the remaining direct shortcuts.
 
+## Undo and redo
+
+`tix op` (or `tix op log`) shows this worktree's operation history, newest first,
+with `@` marking the current position. `tix op undo` and `tix op redo` move one
+operation at a time without confirmation. `tix op clear` discards this
+worktree's history without reversing its operations. These commands also work
+under `gix tix`.
+
 ## Marking reviewed patches
 
 Press `n r` to mark the selected patch **refackiewed** (refactored and reviewed)

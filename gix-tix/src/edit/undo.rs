@@ -69,6 +69,14 @@ pub(crate) struct Position {
     pub redo: usize,
 }
 
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) struct History {
+    /// Recorded operation titles, oldest first, excluding the sentinel.
+    pub titles: Vec<String>,
+    /// Number of operations currently applied, regardless of whether replay is available.
+    pub applied: usize,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Plan {
     /// The operation crossed by this step. `position.title` is the title at the destination.
@@ -86,6 +94,16 @@ impl Plan {
     }
 
     pub(crate) fn apply_with_worktrees(self, repo: &gix::Repository) -> Result<()> {
+        let index = repo
+            .index_or_empty()
+            .context("could not inspect the index before undo/redo")?;
+        ensure!(
+            index
+                .entries()
+                .iter()
+                .all(|entry| entry.stage() == gix::index::entry::Stage::Unconflicted),
+            "cannot undo/redo with unresolved index conflicts"
+        );
         apply_with_worktrees(repo, &self.changes, self.edits)
     }
 }
@@ -283,6 +301,16 @@ pub(crate) fn record(repo: &gix::Repository, title: &str, changes: &[RefChange])
     ])
     .context("could not publish the undo entry")?;
     Ok(Some(entry))
+}
+
+pub(crate) fn history(repo: &gix::Repository) -> Result<History> {
+    let Some(queue) = load(repo)? else {
+        return Ok(History::default());
+    };
+    Ok(History {
+        titles: queue.entries.into_iter().map(|entry| entry.title).collect(),
+        applied: queue.cursor_index,
+    })
 }
 
 pub(crate) fn position(repo: &gix::Repository) -> Result<Position> {
@@ -968,6 +996,7 @@ mod tests {
     #[test]
     fn undo_and_redo_apply_checked_ref_and_cursor_edits() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
+        assert_eq!(history(&repo)?, History::default(), "a missing queue has no operations");
         let branch = name("refs/heads/undo-test")?;
         let head = repo.head_id()?.detach();
         set(&repo, branch.clone(), State::Missing, State::Object(head))?;
@@ -1000,12 +1029,21 @@ mod tests {
             "undo deletes the created branch"
         );
         assert_eq!(position(&repo)?.redo, 1, "the operation can be redone");
+        assert_eq!(
+            history(&repo)?,
+            History {
+                titles: vec!["create branch".into()],
+                applied: 0,
+            },
+            "the sentinel is represented by the applied count, not an operation"
+        );
 
         let redo = plan_redo(&repo)?.expect("one operation can be redone");
         assert_eq!(redo.position.title, "create branch");
         redo.apply(&repo)?;
         assert_eq!(repo.find_reference(branch.as_ref())?.id(), head);
         assert!(plan_redo(&repo)?.is_none(), "the tip has no redo operation");
+        assert_eq!(history(&repo)?.applied, 1, "redo advances the history cursor");
         Ok(())
     }
 
@@ -1037,7 +1075,23 @@ mod tests {
                 after: State::Object(discarded),
             }],
         )?;
+        assert_eq!(
+            history(&repo)?,
+            History {
+                titles: vec!["first".into(), "discarded".into()],
+                applied: 2,
+            },
+            "recorded history is ordered oldest first"
+        );
         plan_undo(&repo)?.expect("second entry exists").apply(&repo)?;
+        assert_eq!(
+            history(&repo)?,
+            History {
+                titles: vec!["first".into(), "discarded".into()],
+                applied: 1,
+            },
+            "undo keeps the redo tail visible behind the cursor"
+        );
 
         set(&repo, branch.clone(), State::Object(first), State::Object(replacement))?;
         record(
@@ -1059,6 +1113,77 @@ mod tests {
         let at_tip = position(&repo)?;
         assert_eq!((at_tip.title.as_str(), at_tip.undo, at_tip.redo), ("replacement", 2, 0));
         assert!(plan_redo(&repo)?.is_none(), "the old redo tail is no longer reachable");
+        assert_eq!(
+            history(&repo)?,
+            History {
+                titles: vec!["first".into(), "replacement".into()],
+                applied: 2,
+            },
+            "recording behind the tip replaces the discarded redo tail"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ref_only_undo_rejects_unmerged_index_but_preserves_staged_resolution() -> gix_testtools::Result {
+        let (fixture, _) = super::super::head::tests::merge_conflict_fixture()?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let head_commit_id = repo.head_id()?.detach();
+        let branch = name("refs/heads/undo-test")?;
+        set(&repo, branch.clone(), State::Missing, State::Object(head_commit_id))?;
+        record(
+            &repo,
+            "create branch during conflict",
+            &[RefChange {
+                name: branch.clone(),
+                before: State::Missing,
+                after: State::Object(head_commit_id),
+            }],
+        )?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let err = plan_undo(&repo)?
+            .expect("an unmerged index does not prevent planning")
+            .apply(&repo)
+            .expect_err("even reference-only undo must reject an unmerged index");
+        assert!(
+            err.to_string().contains("unresolved index conflicts"),
+            "the diagnostic identifies the blocking index state: {err:#}"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "rejecting undo preserves references, cursor, index, and worktree"
+        );
+
+        std::fs::write(fixture.path().join("file"), "tip\n")?;
+        let status = gix_testtools::git_command(fixture.path())
+            .args(["add", "file"])
+            .status()?;
+        assert!(status.success(), "the resolution is staged");
+        let commit = repo.find_commit(head_commit_id)?.decode()?.into_owned()?;
+        assert!(
+            super::super::rebase::has_merge_replay(&commit) && crate::patch_id::is_unavailable(&commit),
+            "staging does not finalize the conflicted commit"
+        );
+        let staged = gix_testtools::repository::snapshot(fixture.path())?;
+        plan_undo(&repo)?
+            .expect("the branch creation can be undone")
+            .apply(&repo)?;
+        assert!(
+            repo.try_find_reference(branch.as_ref())?.is_none(),
+            "undo removes the branch after staging the resolution"
+        );
+        assert_eq!(position(&repo)?.redo, 1, "undo advances the cursor");
+        plan_redo(&repo)?
+            .expect("the branch creation can be redone")
+            .apply(&repo)?;
+        assert_eq!(repo.find_reference(branch.as_ref())?.id(), head_commit_id);
+        assert_eq!(position(&repo)?.undo, 1, "redo restores the cursor");
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            staged,
+            "the conflict marker permits undo/redo without changing the staged resolution"
+        );
         Ok(())
     }
 
@@ -1143,6 +1268,14 @@ mod tests {
             empty_position(),
             "the blocked queue is not presented as available"
         );
+        assert_eq!(
+            history(&repo)?,
+            History {
+                titles: vec!["before review".into()],
+                applied: 1,
+            },
+            "recorded history remains inspectable while a review blocks replay"
+        );
 
         let during_review = name("refs/heads/during-review")?;
         set(&repo, during_review.clone(), State::Missing, State::Object(head))?;
@@ -1166,6 +1299,11 @@ mod tests {
         assert!(
             repo.try_find_reference(CURSOR_REF)?.is_none(),
             "the old queue cursor is discarded atomically"
+        );
+        assert_eq!(
+            history(&repo)?,
+            History::default(),
+            "clearing the queue removes its history"
         );
         Ok(())
     }

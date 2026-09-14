@@ -10480,6 +10480,7 @@ mod tests {
             "the final merge resolution releases continuation state"
         );
         let repo = test_repository::open(fixture.path())?;
+        let resolved_commit_id = repo.head_id()?.detach();
         edit::undo::plan_undo(&repo)?
             .context("both external amends are recorded together")?
             .apply(&repo)?;
@@ -10491,6 +10492,31 @@ mod tests {
         assert!(
             edit::undo::plan_undo(&repo)?.is_none(),
             "both merge phases form one undo action"
+        );
+        edit::undo::plan_redo(&repo)?
+            .context("the complete external resolution remains available for redo")?
+            .apply(&repo)?;
+        assert_eq!(
+            repo.head_id()?,
+            resolved_commit_id,
+            "redo restores the final merge resolution"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.path().join("file"))?,
+            "resolved\n",
+            "redo restores the final resolved worktree contents"
+        );
+        let status = gix_testtools::git_command(fixture.path())
+            .args(["status", "--porcelain"])
+            .output()?;
+        assert!(status.status.success(), "Git can inspect the restored checkout");
+        assert!(
+            status.stdout.is_empty(),
+            "the index and worktree match the final resolved HEAD after redo"
+        );
+        assert!(
+            edit::undo::plan_redo(&repo)?.is_none(),
+            "both merge phases form one redo action"
         );
         Ok(())
     }
