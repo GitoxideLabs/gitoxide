@@ -6,8 +6,8 @@ use crate::{SecondsSinceUnixEpoch, Time};
 ///
 /// - The timezone offset must be present.
 /// - The timezone offset must have a sign; either `+` or `-`.
-/// - The timezone offset hours must be less than or equal to 14.
-/// - The timezone offset minutes must be exactly 0, 15, 30, or 45.
+/// - The timezone offset hours must be less than 24.
+/// - The timezone offset minutes must be less than 60.
 /// - The timezone offset seconds may be present, but 0 is the only valid value.
 /// - Only whitespace may suffix the timezone offset.
 ///
@@ -24,7 +24,7 @@ pub fn parse_raw(input: &str) -> Option<Time> {
         return None;
     }
     let offset_len = offset_str.len();
-    if offset_len != 5 && offset_len != 7 {
+    if (offset_len != 5 && offset_len != 7) || !offset_str.as_bytes()[1..].iter().all(u8::is_ascii_digit) {
         return None;
     }
     let sign: i32 = match offset_str.get(..1)? {
@@ -39,7 +39,7 @@ pub fn parse_raw(input: &str) -> Option<Time> {
     } else {
         0
     };
-    if hours > 14 || (minutes != 0 && minutes != 15 && minutes != 30 && minutes != 45) || offset_seconds != 0 {
+    if hours > 23 || minutes > 59 || offset_seconds != 0 {
         return None;
     }
     let offset: i32 = sign * ((hours as i32) * 3600 + (minutes as i32) * 60);
@@ -96,8 +96,8 @@ mod tests {
                 "123456 + 600",
                 "extra spaces between sign and offset (which also is too short)",
             ),
-            ("123456 -1500", "negative offset hours out of bounds"),
-            ("123456 +1500", "positive offset hours out of bounds"),
+            ("123456 -2400", "negative offset hours out of bounds"),
+            ("123456 +2400", "positive offset hours out of bounds"),
             ("123456 +6600", "positive offset hours out of bounds"),
             ("123456 +0660", "invalid offset minutes"),
             ("123456 +060010", "positive offset seconds is allowed but only if zero"),
