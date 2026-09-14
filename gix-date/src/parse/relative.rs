@@ -13,9 +13,14 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Option<Result<Zoned, Exn<Error>
     Some(apply_operations(now, &parse_operations(input)?))
 }
 
-/// Fast path for named relative dates that only subtract a fixed duration.
+/// Fast path for standalone epoch and fixed-duration names.
 fn parse_named(input: &str, now: Option<&Zoned>) -> Option<Result<Zoned, Exn<Error>>> {
     let input = input.trim();
+    if input.eq_ignore_ascii_case("never") {
+        return Some(Ok(
+            jiff::Timestamp::UNIX_EPOCH.to_zoned(now.map_or(jiff::tz::TimeZone::UTC, |now| now.time_zone().clone()))
+        ));
+    }
     let duration = if input.eq_ignore_ascii_case("now") {
         SignedDuration::ZERO
     } else if input.eq_ignore_ascii_case("yesterday") {
@@ -90,12 +95,17 @@ fn parse_operations(input: &str) -> Option<Vec<Operation<'_>>> {
             Operation::Now
         } else if word.eq_ignore_ascii_case("today") {
             Operation::Today
+        } else if word.eq_ignore_ascii_case("never") {
+            Operation::Never
         } else if let Some(is_pm) = meridian(word) {
             Operation::Meridian { hour: None, is_pm }
         } else {
             let Some(count) = count(word) else { continue };
             let Some(period) = words.next() else { break };
-            if let Some(is_pm) = meridian(period) {
+            if period.eq_ignore_ascii_case("never") {
+                // date_never() discards a pending count instead of applying it.
+                Operation::Never
+            } else if let Some(is_pm) = meridian(period) {
                 Operation::Meridian {
                     hour: (count != 0).then_some((count % 12) as i8),
                     is_pm,
@@ -105,8 +115,10 @@ fn parse_operations(input: &str) -> Option<Vec<Operation<'_>>> {
                 Operation::Pair(Pair { period, count, unit })
             }
         };
-        date_known |= matches!(operation, Operation::Now | Operation::Yesterday | Operation::Today)
-            || matches!(&operation, Operation::Pair(pair) if pair.count != 0);
+        date_known |= matches!(
+            operation,
+            Operation::Now | Operation::Yesterday | Operation::Today | Operation::Never
+        ) || matches!(&operation, Operation::Pair(pair) if pair.count != 0);
         operations.push(operation);
     }
     (!operations.is_empty()).then_some(operations)
@@ -157,6 +169,7 @@ enum Operation<'a> {
     Yesterday,
     Now,
     Today,
+    Never,
 }
 
 /// Git permits hour 24 and second 60, deferring their rollover until date normalization.
@@ -396,6 +409,12 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
                 }
                 fields.day = -1;
                 fields = fields.update(reference_day, 0)?.into();
+                continue;
+            }
+            Operation::Never => {
+                fields = jiff::Timestamp::UNIX_EPOCH
+                    .to_zoned(fields.zoned.time_zone().clone())
+                    .into();
                 continue;
             }
             Operation::Pair(pair) => pair,

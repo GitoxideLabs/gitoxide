@@ -99,7 +99,7 @@ use gix_error::{Exn, ResultExt};
 /// therefore select noon later today. Explicit clocks (`HH:MM` or `HH:MM:SS`) also combine
 /// with relative dates and keep the current day even if the clock is later than `now`.
 /// At the start of an expression, `12:34:56.3.days.ago` means three days ago at 12:34:56.
-/// After `now`, `today`, `yesterday`, or a nonzero relative unit has established the date, Git instead
+/// After `now`, `today`, `yesterday`, `never`, or a nonzero relative unit has established the date, Git instead
 /// discards a clock's dot-suffix as fractional seconds; this parser follows that distinction.
 /// Hour 24 and second 60 roll over when the date is normalized, as they do in Git.
 /// `AM` and `PM` can follow an hour or a clock (`6pm`, `6:30pm`, `6am yesterday`), or adjust
@@ -107,6 +107,10 @@ use gix_error::{Exn, ResultExt};
 /// `12pm` selects noon. Like Git, a zero hour (`0pm`) adjusts the current clock instead.
 /// `today` defaults to local midnight, following Git 2.55, and combines with clocks as in
 /// `today at noon`. If the clock fields have changed from `now`, `today` preserves them.
+/// `never` resets the date to the Unix epoch, expressed in the timezone of `now`, and allows
+/// subsequent adjustments such as `never noon`. Standalone `never` needs no reference time;
+/// without one it returns the epoch in UTC. Expiry-configuration aliases like `false` and `all`
+/// are not date expressions and are not handled here.
 ///
 /// Other forms are `now`, `today`, `yesterday`, and one or more `<count> <unit>` pairs,
 /// as in `2 days 3 hours ago`. A count may be spelled out from `one` to `ten`, or be `last`, and

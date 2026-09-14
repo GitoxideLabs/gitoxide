@@ -243,6 +243,13 @@ baseline '@1466000000 -0200' ''
 # Named
 # Expiry-date treats `now` as a sentinel. `today` requires Git 2.55 (covered below).
 baseline_relative 'yesterday' ''
+
+# `never` resets all calendar/clock fields and clears a pending count. These cases
+# avoid named clocks after a fixed date, whose behavior changed in Git 2.55.
+for date in never NEVER '1 day never' '1 never' 1never 'noon never' 'never now' 'now never' \
+            'never 12:34:56.3.days.ago'; do
+    baseline_relative "$date" '' 1251660000
+done
  
 # Seconds - from git t0006 check_relative
 baseline_relative '1 second ago' ''
@@ -452,7 +459,8 @@ if GIT_TEST_DATE_NOW=1251660000 git -c section.key=today config --type=expiry-da
     for now in 1251616800 1251660000; do
         for date in today TODAY 'noon today' 'today at noon' '6pm today' 'today 6pm' \
                     '6am today' 'today now' 'now today' '1 day today' 'today 1 day' \
-                    '1 month today' 'today 1 month' 'now today 12:34:56.3.days.ago' '07:20 today'; do
+                    '1 month today' 'today 1 month' 'now today 12:34:56.3.days.ago' '07:20 today' \
+                    'today never' 'never today' 'never noon'; do
             baseline_relative "$date" '' "$now"
         done
     done
