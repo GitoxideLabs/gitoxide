@@ -2257,6 +2257,7 @@ dependencies = [
  "gix-diff",
  "gix-error",
  "gix-features",
+ "gix-fs",
  "gix-hash",
  "gix-hashtable",
  "gix-object",
