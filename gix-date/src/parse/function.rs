@@ -101,6 +101,8 @@ use gix_error::{ResultExt, bail};
 /// even where Git ignores the offset or truncates it to minutes.
 /// Git's named timezone abbreviations, such as `CET` and `JST`, are also understood.
 pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
+    let original_input = input;
+    let input = input.trim();
     let normalized = normalize_named_timezone(input);
     // Only absolute parsers see rewritten zones; raw and relative inputs retain their meaning.
     let absolute_input = normalized.as_deref().unwrap_or(input);
@@ -116,7 +118,7 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
     Ok(if let Ok(val) = Date::strptime(SHORT.0, input) {
         let val = val
             .to_zoned(TimeZone::UTC)
-            .or_raise(|| validation("Timezone conversion failed").with_input(input.as_bytes()))?;
+            .or_raise(|| validation("Timezone conversion failed").with_input(original_input.as_bytes()))?;
         Time::new(val.timestamp().as_second(), val.offset().seconds())
     } else if let Ok(val) = rfc2822_relaxed(absolute_input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
@@ -140,7 +142,7 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
         // Format::Raw
         val
     } else {
-        bail!(validation("Unknown date format").with_input(input.as_bytes()));
+        bail!(validation("Unknown date format").with_input(original_input.as_bytes()));
     })
 }
 
