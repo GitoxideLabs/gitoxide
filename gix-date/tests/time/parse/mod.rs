@@ -23,15 +23,28 @@ fn parse_header_is_not_too_lenient() {
 }
 
 #[test]
-fn short() {
+fn short() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1251660000)?.to_zoned(jiff::tz::TimeZone::UTC);
+    for (input, seconds) in [
+        ("2008-12-01", 1228159200),
+        ("2009-12-01", 1259695200),
+        ("1979-02-26", 288904800),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            Time { seconds, offset: 0 },
+            "a short date retains the reference clock like Git"
+        );
+    }
     assert_eq!(
-        gix_date::parse("1979-02-26", Some(gix_date::Zoned::now())).unwrap(),
+        gix_date::parse("1979-02-26", None).map_err(gix_error::Exn::into_error)?,
         Time {
             seconds: 288835200,
             offset: 0,
         },
-        "could not parse with SHORT format"
+        "without a reference, a short date continues to use UTC midnight"
     );
+    Ok(())
 }
 
 #[test]

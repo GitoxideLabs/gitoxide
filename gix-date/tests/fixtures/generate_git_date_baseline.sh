@@ -56,9 +56,11 @@ function baseline_relative() {
 # ============================================================================
 # Tests from https://github.com/git/git/blob/master/t/t0006-date.sh
 
-# Note: SHORT format (YYYY-MM-DD) is NOT included in baseline tests because
-# Git fills in current time-of-day, making it non-reproducible for baseline comparison.
-# SHORT format is tested separately in the unit tests.
+# A date without a clock retains the current local time. Use the fixed-now helper
+# to make Git's fallback into approxidate reproducible.
+for date in 2008-12-01 2009-12-01 1979-02-26; do
+    baseline_relative "$date" '' 1251660000
+done
 
 # RFC2822 format: "Day, DD Mon YYYY HH:MM:SS +/-ZZZZ"
 baseline 'Thu, 18 Aug 2022 12:45:06 +0800' 'RFC2822'
