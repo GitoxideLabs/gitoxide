@@ -37,6 +37,10 @@ use gix_error::{Exn, ResultExt};
 /// *   `2022-08-17 22:04:58 +0200`
 /// *   `1970-01-01 00:00:00 -0500`
 ///
+/// Numeric dates with slashes (`02/14/2008`, `2008/02/14`) or dots (`14.02.2008`,
+/// `2008.02.14`) are also accepted when followed by a time. Slashes prefer month/day
+/// and dots prefer day/month when the year is last; the year must have four digits.
+///
 /// ### 5. ISO8601_STRICT Format
 ///
 /// *   `2022-08-17T21:43:13+08:00`

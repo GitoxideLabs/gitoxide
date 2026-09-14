@@ -80,6 +80,13 @@ baseline '2016-06-15 16:13:20 +0200' 'ISO8601'  # from git t0006
 # ISO8601 with dots: "YYYY.MM.DD HH:MM:SS +/-ZZZZ" from git t0006
 baseline '2008.02.14 20:30:45 -0500' ''
 
+# Git prefers month/day with slashes and day/month with dots, and accepts year-first
+# variants. Include ambiguous dates and cases requiring the alternate ordering.
+for date in 2008/02/14 02/14/2008 14.02.2008 02/03/2008 02.03.2008 \
+            14/02/2008 02.14.2008 2008/14/02 2008.14.02 2008/2/3 3.2.2008; do
+    baseline "$date 20:30:45 -0500" ''
+done
+
 # ISO8601_STRICT format: "YYYY-MM-DDTHH:MM:SS+ZZ:ZZ"
 baseline '2022-08-17T21:43:13+08:00' 'ISO8601_STRICT'
 baseline '2000-01-01T00:00:00+00:00' 'ISO8601_STRICT'

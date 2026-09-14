@@ -1,5 +1,5 @@
 use crate::Time;
-use jiff::Zoned;
+use jiff::{Zoned, civil::Date};
 
 /// Resolve Git's timezone abbreviations before RFC 2822 can treat an unfamiliar name as UTC.
 pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
@@ -35,7 +35,7 @@ pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
 }
 
 /// Parse Git-style flexible date formats that aren't covered by standard strptime:
-/// - ISO8601 with dots: `2008.02.14 20:30:45 -0500`
+/// - Numeric dates with dots or slashes: `2008.02.14`, `14.02.2008`, `02/14/2008`
 /// - Compact ISO8601: `20080214T203045`, `20080214T20:30:45`, `20080214T2030`, `20080214T20`
 /// - Z suffix for UTC: `1970-01-01 00:00:00 Z`
 /// - 2-digit hour offset: `2008-02-14 20:30:45 -05`
@@ -44,31 +44,25 @@ pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
 // TODO: this can probably be done more smartly, right now it's more of a brute force. Learn from Git here.
 //       After all, this is generated to have something quickly.
 pub fn parse_git_date_format(input: &str) -> Option<Time> {
-    parse_iso8601_dots(input)
+    parse_numeric_date(input)
         .or_else(|| parse_compact_iso8601(input))
         .or_else(|| parse_flexible_iso8601(input))
 }
 
-/// Parse ISO8601 with dots: `2008.02.14 20:30:45 -0500`
-fn parse_iso8601_dots(input: &str) -> Option<Time> {
-    // Format: YYYY.MM.DD HH:MM:SS offset
-    let input = input.trim();
-    let first_10 = input.get(..10)?;
-    if !first_10.is_ascii() || !first_10.contains('.') {
-        return None;
-    }
-
-    // Replace dots with dashes for date part only
-    let (date_part, rest) = input.split_once(' ')?;
-
-    // Validate date part has dot separators
-    if date_part.len() != 10 || date_part.chars().nth(4)? != '.' || date_part.chars().nth(7)? != '.' {
-        return None;
-    }
-
-    // Convert to standard ISO8601 format
-    let normalized = format!("{} {}", date_part.replace('.', "-"), rest);
-    parse_flexible_iso8601(&normalized)
+/// Normalize numeric dates using Git's separator-dependent month/day preference.
+fn parse_numeric_date(input: &str) -> Option<Time> {
+    let (date, rest) = input.trim().split_once(char::is_whitespace)?;
+    let (first, _) = date.split_once(['.', '/'])?;
+    let (_, last) = date.rsplit_once(['.', '/'])?;
+    let formats = match (date.contains('/'), first.len() == 4, last.len() == 4) {
+        (true, true, _) => ["%Y/%m/%d", "%Y/%d/%m"],
+        (false, true, _) => ["%Y.%m.%d", "%Y.%d.%m"],
+        (true, false, true) => ["%m/%d/%Y", "%d/%m/%Y"],
+        (false, false, true) => ["%d.%m.%Y", "%m.%d.%Y"],
+        _ => return None,
+    };
+    let date = formats.iter().find_map(|fmt| Date::strptime(fmt, date).ok())?;
+    parse_flexible_iso8601(&format!("{date} {rest}"))
 }
 
 /// Parse compact ISO8601 formats:
