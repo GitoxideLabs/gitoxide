@@ -46,6 +46,22 @@ fn parse_header_is_not_too_lenient() {
 }
 
 #[test]
+fn parse_errors_retain_original_input() -> TestResult {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(jiff::tz::TimeZone::UTC);
+    for input in ["  not a date  ", "  garbage CET  ", "\tinvalid 🕰 \n", "  "] {
+        for reference in [None, Some(now.clone())] {
+            let err = gix_date::parse(input, reference).expect_err("these inputs contain no date");
+            assert_eq!(
+                err.metadata().next().and_then(|values| values.get("input")),
+                Some(&gix_error::MetadataValue::Bytes(input.as_bytes().into())),
+                "parsing a trimmed copy must not alter the caller's bytes in errors"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn named_timezones_do_not_change_relative_or_raw_inputs() -> TestResult {
     let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(jiff::tz::TimeZone::UTC);
     for reference in [None, Some(now)] {
